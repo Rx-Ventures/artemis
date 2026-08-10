@@ -1,0 +1,39 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../.tsbuild/renderer",
+
+    /* `@/*` → renderer/src. Mirrored in three places, all three required:
+       here (what `tsc -b` and the editor use), in ../tsconfig.json (what the
+       shadcn CLI reads next to components.json), and in
+       ../electron.vite.config.ts `renderer.resolve.alias` (what the bundler
+       uses). Changing one without the others is the classic "editor cannot
+       resolve @/components/ui/button" failure.
+
+       No `baseUrl`: TypeScript 7 removed the option outright. `paths` entries
+       are now always resolved relative to the directory holding this file,
+       which is what the "./src/*" below already assumed. */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    "tsBuildInfoFile": "../.tsbuild/renderer/.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+
+    /* No "node" here, deliberately. The renderer is a browser context: it has no
+       fs, no process, no electron, and no secrets. Everything it can do goes
+       through the preload bridge described by @libra/protocol. */
+    "types": ["vite/client"],
+
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "*.d.ts", "src/**/*.d.ts"],
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"],
+  "references": [{ "path": "../../../packages/protocol" }]
+}

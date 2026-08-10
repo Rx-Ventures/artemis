@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  `class="dark"` is set here rather than toggled at runtime. Libra ships a
+  single dark theme, and `index.css` declares `@custom-variant dark` against
+  this class, so shadcn components' `dark:` variants resolve statically — no
+  flash of the wrong palette before React mounts, and no theme provider.
+-->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content-Security-Policy for the renderer. No remote code, no eval, no
+      remote fonts. Vite's dev server injects its own client over the same
+      origin, which `'self'` covers.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*"
+    />
+    <title>Libra</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

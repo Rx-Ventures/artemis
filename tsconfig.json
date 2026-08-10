@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Solution file. Contains no inputs of its own — it only wires the project graph together so `tsc -b` at the repo root typechecks everything in dependency order.",
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/core" },
+    { "path": "./apps/desktop/main" },
+    { "path": "./apps/desktop/preload" },
+    { "path": "./apps/desktop/renderer" },
+    { "path": "./scripts" }
+  ]
+}

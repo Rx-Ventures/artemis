@@ -1,0 +1,32 @@
+node_modules/
+dist/
+out/
+release/
+build/
+.tsbuild/
+*.tsbuildinfo
+
+# Vite / electron-vite
+.vite/
+apps/desktop/out/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local env. Libra keeps real secrets in the OS keychain via safeStorage, never
+# in files, but keep this ignored so nobody is tempted.
+.env
+.env.*
+!.env.example
+
+# Local test/profile scratch data
+.libra-dev/
+coverage/

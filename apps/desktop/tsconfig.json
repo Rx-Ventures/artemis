@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Solution file for the desktop app. The three Electron layers are separate TS projects on purpose: it is the type system, not convention, that stops the renderer from reaching into main-process code.",
+  "//paths": "The `@/*` alias is declared here as well as in ./renderer/tsconfig.json. This copy is not used for compilation (this project has no inputs) — it exists so tooling that resolves aliases from the nearest tsconfig at the app root, notably the shadcn CLI reading ./components.json, lands on renderer/src. Keep the two in sync; they must point at the same directory.",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./renderer/src/*"]
+    }
+  },
+  "files": [],
+  "references": [
+    { "path": "./main" },
+    { "path": "./preload" },
+    { "path": "./renderer" }
+  ]
+}

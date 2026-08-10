@@ -1,0 +1,542 @@
+/*
+ * Libra — renderer design system.
+ * ============================================================================
+ *
+ * Tailwind v4 is CSS-first: there is no `tailwind.config.js`, and this file is
+ * the single source of truth for the whole app's look. It has four parts, in
+ * this order, and the order matters:
+ *
+ *   1. `@import`s          — Tailwind, tw-animate-css, shadcn's utility layer.
+ *   2. `:root`             — every raw design token, as a plain CSS variable.
+ *   3. `@theme` / `@theme inline` — what turns those tokens into utility
+ *                            classes (`--color-panel` → `bg-panel`).
+ *   4. `@layer base` / `@layer components` — element defaults and the handful
+ *                            of multi-rule patterns that are not one utility.
+ *
+ * Raw tokens live at `:root`, NOT inside `@layer base`. A `@layer` has lower
+ * cascade priority than unlayered CSS, and Tailwind emits its own variables
+ * unlayered; putting ours in a layer makes overriding them from a component
+ * behave differently depending on which file loaded first. `:root` is also
+ * where the shadcn registry expects to find `--background`, `--primary` and
+ * friends, so a component copied from the registry works unmodified.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PALETTE — "graphite and brass"
+ * ---------------------------------------------------------------------------
+ *
+ * A cold graphite-petrol substrate (every surface sits on hue 235 at very low
+ * chroma) lit by one warm brass accent — the balance-scale reading of "Libra".
+ * Three semantic hues carry meaning and nothing else: cyan for machine work,
+ * sage for the model's private thinking, mint/amber/signal for the three
+ * outcomes.
+ *
+ * There is no violet, no gradient, and no glow anywhere in this file, and that
+ * is deliberate. It is also not an imitation of any terminal-agent CLI: the
+ * substrate is blue-cold rather than warm-neutral, the accent is metallic
+ * rather than orange, and the chrome is flat.
+ *
+ * Dark only, on purpose. A tool that gets stared at for eight hours is better
+ * off with one surface tuned properly than two tuned adequately. The structure
+ * is still light-theme-ready: every token resolves at `:root`, so a future
+ * light theme is one `.light { ... }` block overriding the same names — no
+ * component changes.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO NAMING SYSTEMS, ON PURPOSE
+ * ---------------------------------------------------------------------------
+ *
+ * Libra names   (`--panel`, `--ink-muted`, `--brass`, `--signal`)
+ *     Physical. What the colour *is*. Use these for app chrome and for the
+ *     transcript, where "the thinking block is sage" is the actual design
+ *     intent and there is no generic role that captures it.
+ *
+ * shadcn names  (`--background`, `--muted-foreground`, `--primary`)
+ *     Semantic. What the colour is *for*. Every component under
+ *     `components/ui/` speaks only this vocabulary, which is what lets a file
+ *     be pasted in from the registry and immediately look like Libra.
+ *
+ * The second set is defined entirely in terms of the first, so there is still
+ * exactly one place a colour is chosen.
+ */
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+/*
+ * `dark:` resolves off the `.dark` class on <html>, not the OS media query.
+ * The app is dark-only today, but registry components ship `dark:` variants
+ * that carry real adjustments; without this variant they would silently never
+ * apply. Matching `.dark` itself as well as its descendants means a portalled
+ * overlay attached to <body> is still covered.
+ */
+@custom-variant dark (&:is(.dark, .dark *));
+
+/* ==========================================================================
+   1. RAW TOKENS
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Substrate ------------------------------------------------------
+     Six steps of elevation. Anything that floats above the page uses
+     `--float`; anything recessed into it uses `--inset`. */
+  --abyss: oklch(15.5% 0.012 235); /* window background                */
+  --panel: oklch(19% 0.014 235); /* chrome: bars, sidebars, cards    */
+  --raised: oklch(23% 0.016 235); /* inputs, secondary fills, hover   */
+  --float: oklch(25.5% 0.017 235); /* popovers, menus, tooltips        */
+  --inset: oklch(13% 0.012 235); /* code wells, scroll troughs       */
+  --line: oklch(28.5% 0.016 235); /* hairlines                        */
+  --line-strong: oklch(38% 0.02 235); /* emphasised edges, thumbs      */
+
+  /* ---- Ink ------------------------------------------------------------ */
+  --ink: oklch(93% 0.008 235);
+  --ink-muted: oklch(70% 0.014 235);
+  --ink-faint: oklch(54% 0.014 235);
+
+  /* ---- Accents --------------------------------------------------------
+     Brass is the only accent that means "act". The rest are semantic and
+     are never used decoratively. */
+  --brass: oklch(80% 0.135 78); /* primary action, focus ring       */
+  --brass-dim: oklch(62% 0.11 78);
+  --brass-ink: oklch(20% 0.04 78); /* text on a brass fill             */
+  --cyan: oklch(78% 0.11 200); /* tools / machine activity         */
+  --sage: oklch(74% 0.055 165); /* thinking                         */
+  --mint: oklch(78% 0.14 155); /* success                          */
+  /* Pushed to a true orange rather than the gold it started as. Warning sits
+     next to the primary accent constantly — in a badge row, in a status strip
+     — and at hue 70 it was within eight degrees of brass and read as the same
+     colour. Hue 52 puts real daylight between them without colliding with
+     `--signal` at 22. */
+  --amber: oklch(79% 0.155 52); /* warning                          */
+  --signal: oklch(70% 0.17 22); /* error / denial                   */
+  --signal-ink: oklch(16% 0.03 22); /* text on a signal fill            */
+
+  /* ---- Shape ----------------------------------------------------------
+     7px reads as "engineered" at this density — softer than a terminal,
+     far tighter than a marketing site. shadcn derives sm/md/lg/xl from it
+     in the `@theme inline` block below. */
+  --radius: 0.4375rem;
+
+  /* ======================================================================
+     shadcn/ui semantic tokens.
+     Defined only in terms of the tokens above — never a literal colour.
+     ====================================================================== */
+
+  --background: var(--abyss);
+  --foreground: var(--ink);
+
+  --card: var(--panel);
+  --card-foreground: var(--ink);
+
+  --popover: var(--float);
+  --popover-foreground: var(--ink);
+
+  --primary: var(--brass);
+  --primary-foreground: var(--brass-ink);
+
+  --secondary: var(--raised);
+  --secondary-foreground: var(--ink);
+
+  --muted: var(--raised);
+  --muted-foreground: var(--ink-muted);
+
+  /* `accent` is shadcn's hover/selected surface — menu item under the
+     cursor, active tab, highlighted command row. Not an accent *colour*. */
+  --accent: var(--float);
+  --accent-foreground: var(--ink);
+
+  --destructive: var(--signal);
+  --destructive-foreground: var(--signal-ink);
+
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--brass);
+
+  /* Charts. Ordered so the first two are maximally distinguishable, and
+     chosen from the semantic hues so a chart never introduces a colour the
+     rest of the app does not already use. */
+  --chart-1: var(--cyan);
+  --chart-2: var(--brass);
+  --chart-3: var(--mint);
+  --chart-4: var(--sage);
+  --chart-5: var(--signal);
+
+  /* Sidebar. Libra's own sidebar is hand-built from the physical tokens below
+     (`bg-panel`, `border-line`) rather than from these, because it is app
+     chrome and not a registry component. These stay defined because the shadcn
+     registry's components reference `--sidebar-*` unconditionally, and a future
+     `add sidebar` would otherwise land unstyled — mapped onto the same chrome
+     surface, so the two would agree. */
+  --sidebar: var(--panel);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--brass);
+  --sidebar-primary-foreground: var(--brass-ink);
+  --sidebar-accent: var(--raised);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--brass);
+}
+
+/* ==========================================================================
+   2. TOKENS → UTILITIES
+   ========================================================================== */
+
+/*
+ * `@theme inline` rather than `@theme`: the values here are `var(...)`
+ * references, and `inline` tells Tailwind to substitute the reference at the
+ * use site instead of emitting `--color-background: var(--background)` as a
+ * second indirection. That is what keeps `bg-background/60` resolving to a
+ * `color-mix` on the real colour.
+ */
+@theme inline {
+  /* ---- shadcn semantic scale ------------------------------------------ */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* ---- Libra physical scale -------------------------------------------
+     `bg-panel`, `text-ink-muted`, `border-line`, `text-sage`, … */
+  --color-abyss: var(--abyss);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-float: var(--float);
+  --color-inset: var(--inset);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-brass: var(--brass);
+  --color-brass-dim: var(--brass-dim);
+  --color-brass-ink: var(--brass-ink);
+  --color-cyan: var(--cyan);
+  --color-sage: var(--sage);
+  --color-mint: var(--mint);
+  --color-amber: var(--amber);
+  --color-signal: var(--signal);
+  --color-signal-ink: var(--signal-ink);
+
+  /* ---- Radius ---------------------------------------------------------
+     shadcn's derived scale, driven by the single `--radius` above. */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/*
+ * Type. A plain `@theme` block: these are literal values, not references.
+ *
+ * No webfonts, and not only for taste — the renderer's CSP sets
+ * `font-src 'self' data:`, so a Google Fonts or CDN `@import` would be blocked
+ * at runtime and the app would silently fall back anyway. System stacks it is.
+ *
+ * The scale is compact and tops out low: `text-base` is 14px because this is a
+ * tool, not a blog, and `text-2xs` (11px) is the workhorse for chrome labels.
+ */
+@theme {
+  --font-sans:
+    ui-sans-serif, -apple-system, 'Inter', 'Segoe UI', system-ui, 'Helvetica Neue', sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+
+  --text-2xs: 0.6875rem; /* 11 */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem; /* 12 */
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem; /* 13 */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem; /* 14 */
+  --text-base--line-height: 1.4375rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+}
+
+/* ==========================================================================
+   3. BASE
+   ========================================================================== */
+
+@layer base {
+  /*
+   * shadcn's two defaults. `border-border` matters more than it looks: every
+   * registry component writes `border` with no colour and inherits from here.
+   */
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* The window is the scroll container's parent, never a scroller itself. */
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--brass) 35%, transparent);
+    color: var(--ink);
+  }
+
+  /*
+   * Keyboard focus, for everything that does not style its own.
+   *
+   * shadcn components manage focus themselves with `focus-visible:ring-*` and
+   * neutralise the UA outline as they do it, so this rule only reaches plain
+   * elements — a bare <a>, a hand-rolled row, an element made focusable with
+   * tabindex. `:where()` keeps specificity at zero so anything can override it.
+   */
+  :where(:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+    border-radius: var(--radius-sm);
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Thin, quiet scrollbars that only assert themselves on hover. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--line-strong);
+    background-clip: content-box;
+  }
+
+  /* The window chrome is drawn by the app, so nothing here is a drag handle
+     unless it opts in. `app-region` is Electron-specific and has no Tailwind
+     utility. */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
+/* ==========================================================================
+   4. COMPONENT PATTERNS
+   ==========================================================================
+   Only things that are genuinely several rules deep and are applied to
+   content the app does not author (rendered markdown) or that need keyframes.
+   Everything else is a utility or a component in `components/ui/`. */
+
+@layer components {
+  /*
+   * Markdown inside a finished assistant block.
+   *
+   * Monospace, deliberately: transcript content is code-adjacent and column
+   * alignment carries meaning. Chrome stays sans. Hand-written rather than
+   * `@tailwindcss/typography`, whose defaults are tuned for prose pages at
+   * 16px, not a 13px transcript pane.
+   */
+  .md {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .md > * + * {
+    margin-top: 0.7em;
+  }
+  .md h1,
+  .md h2,
+  .md h3,
+  .md h4 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--ink);
+  }
+  .md h1 {
+    font-size: 1.15em;
+  }
+  .md h2 {
+    font-size: 1.08em;
+  }
+  .md h3,
+  .md h4 {
+    font-size: 1em;
+  }
+  .md a {
+    color: var(--brass);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .md ul,
+  .md ol {
+    padding-left: 1.35em;
+  }
+  .md ul {
+    list-style: disc;
+  }
+  .md ol {
+    list-style: decimal;
+  }
+  .md li + li {
+    margin-top: 0.25em;
+  }
+  .md code {
+    background: var(--inset);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.05em 0.32em;
+    font-size: 0.94em;
+  }
+  .md pre {
+    background: var(--inset);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    padding: 0.7em 0.85em;
+    overflow-x: auto;
+  }
+  .md pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: 0.94em;
+  }
+  .md blockquote {
+    border-left: 2px solid var(--line-strong);
+    padding-left: 0.8em;
+    color: var(--ink-muted);
+  }
+  .md table {
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+  }
+  .md th,
+  .md td {
+    border: 1px solid var(--line);
+    padding: 0.25em 0.55em;
+    text-align: left;
+  }
+  .md th {
+    background: var(--raised);
+  }
+  .md hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  /* The caret that trails streaming text. */
+  .caret::after {
+    content: '';
+    display: inline-block;
+    width: 0.5em;
+    height: 1em;
+    margin-left: 1px;
+    vertical-align: text-bottom;
+    background: var(--brass);
+    animation: libra-blink 1.1s steps(1) infinite;
+  }
+
+  /* Indeterminate progress hairline, used on the run status strip. */
+  .runbar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, var(--brass) 70%, transparent),
+      transparent
+    );
+    animation: libra-sweep 1.5s linear infinite;
+  }
+}
+
+@keyframes libra-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes libra-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret::after,
+  .runbar::after {
+    animation: none;
+  }
+}

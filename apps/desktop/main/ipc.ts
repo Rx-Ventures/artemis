@@ -1,0 +1,522 @@
+/**
+ * The IPC layer.
+ *
+ * `@libra/protocol` defines the channels, the request and response types, and
+ * the rule that handlers resolve an {@link IpcResult} instead of rejecting.
+ * This file is the main-process half of that contract, and it adds three things
+ * the type system cannot express:
+ *
+ *  1. **Sender verification.** Every message must come from Libra's own
+ *     top-level frame at an allowed URL. A nested frame cannot reach these
+ *     handlers.
+ *  2. **Validation.** Payloads arrive as `unknown` and are checked and rebuilt
+ *     by `./validate.ts` before any of them reaches the engine.
+ *  3. **A leak tripwire.** Every response is scanned by `./redact.ts` on its way
+ *     out. A handler that returns a `Profile` where the contract says
+ *     `ProfileMetadata` throws here rather than shipping a credential to the
+ *     renderer.
+ *
+ * (3) is the reason this file exists as a chokepoint rather than as one
+ * `ipcMain.handle` call per channel scattered through the bootstrap. There is
+ * exactly one path from a handler's return value to the renderer, and the
+ * assertion sits on it.
+ *
+ * ### One event channel, not one per run
+ *
+ * Agent events are pushed on the single {@link IPC_PUSH.agentEvent} channel
+ * defined by the protocol, and the renderer demultiplexes on `event.runId`.
+ * A channel per run would force the preload to build channel names out of
+ * renderer-supplied strings, which is precisely the dynamic-channel pattern the
+ * preload is forbidden to have. The protocol's `LibraBridge.runs.onEvent` is
+ * likewise a single global subscription, so one channel is also what the
+ * contract asks for.
+ */
+
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+  type OpenDialogOptions,
+  type WebContents,
+} from 'electron';
+
+import {
+  IPC,
+  IPC_CHANNELS,
+  IPC_PUSH,
+  ipcFail,
+  ipcOk,
+  type AgentEvent,
+  type IpcChannel,
+  type IpcHandlerResult,
+  type IpcRequest,
+  type IpcResponse,
+  type Unsubscribe,
+  type WorkspacePickDirectoryRequest,
+} from '@libra/protocol';
+
+import { checkWorkingDirectory } from '@libra/core';
+
+import type { EngineHost } from './engine.js';
+import {
+  SecretStoreUnavailableError,
+  toIpcError,
+  UntrustedSenderError,
+  WorkspaceError,
+} from './errors.js';
+import { createLogger } from './log.js';
+import { assertNoSecrets, EVENT_SCAN_POLICY, RESPONSE_SCAN_POLICY } from './redact.js';
+import type { SecretStore } from './secrets.js';
+import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import {
+  validateProfilesCreate,
+  validateProfilesDelete,
+  validateProfilesList,
+  validateProfilesUpdate,
+  validateProvidersList,
+  validateRunsDispose,
+  validateRunsInterrupt,
+  validateRunsList,
+  validateRunsRespondPermission,
+  validateRunsSend,
+  validateRunsStart,
+  validateSessionsList,
+  validateSessionsListAll,
+  validateSessionsMessages,
+  validateUsagePlan,
+  validateWorkspacePickDirectory,
+} from './validate.js';
+import { DIRECTORY_PICKER_PROPERTIES, readPickedDirectory } from './workspace.js';
+
+const log = createLogger('ipc');
+
+/**
+ * One channel's implementation: how to check the request, and what to do with
+ * it once checked.
+ *
+ * Written as a mapped type over {@link IpcChannel} so that the object literal
+ * below is exhaustive by construction — adding a channel to the protocol breaks
+ * this file's build until it is handled, which is the point.
+ */
+type ChannelHandlers = {
+  readonly [C in IpcChannel]: {
+    readonly validate: (raw: unknown) => IpcRequest<C>;
+    readonly handle: (request: IpcRequest<C>, context: HandlerContext) => Promise<IpcResponse<C>>;
+  };
+};
+
+/**
+ * What a handler knows about *where* a request came from, beyond its payload.
+ *
+ * Deliberately not the `IpcMainInvokeEvent` itself. A handler with the raw
+ * event can reach `event.sender` and from there most of Electron, which is a
+ * much wider surface than any of these handlers needs — and the one thing they
+ * do need is modest: a native dialog has to be parented to the window that
+ * asked for it, or it opens detached from the app (and, on macOS, is not
+ * sheeted to the window that will be blocked while it is open).
+ */
+export interface HandlerContext {
+  /**
+   * The window the request came from, or `null` when it has already been
+   * destroyed — which is routine for an in-flight call during a reload or a
+   * quit, and never worth failing over.
+   */
+  readonly window: BrowserWindow | null;
+}
+
+export interface IpcLayerOptions {
+  readonly engine: EngineHost;
+  readonly secrets: SecretStore;
+  readonly policy: SecurityPolicy;
+}
+
+/** Handle for tearing the IPC layer down again. */
+export interface IpcLayer {
+  dispose(): void;
+}
+
+/**
+ * Register every channel in the protocol.
+ *
+ * Returns a disposer; `ipcMain.handle` throws if a channel is registered twice,
+ * so a hot-reloaded main process has to be able to unregister.
+ */
+export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
+  const { engine, secrets, policy } = options;
+
+  /**
+   * Refuse a credential write when there is nowhere safe to put it.
+   *
+   * The engine would fail on this too, but failing here means the error names
+   * the real problem ("no keyring") rather than surfacing as a storage error
+   * three layers down, and it means the plaintext key is discarded immediately.
+   */
+  const assertCanStoreSecrets = (apiKey: string | null | undefined): void => {
+    if (apiKey === undefined || apiKey === null) return;
+    if (secrets.isAvailable()) return;
+    throw new SecretStoreUnavailableError(
+      'encryption_unavailable',
+      secrets.unavailableReason() ??
+        'Libra cannot encrypt API keys on this machine, so it will not store one. No key was saved.',
+    );
+  };
+
+  const handlers: ChannelHandlers = {
+    /* ---------------------------------------------------------------- */
+    /* Profiles                                                         */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.profilesList]: {
+      validate: validateProfilesList,
+      handle: async (request) => ({
+        profiles: await engine.require().listProfiles({ providerId: request.providerId }),
+      }),
+    },
+
+    [IPC.profilesCreate]: {
+      validate: validateProfilesCreate,
+      handle: async (request) => {
+        assertCanStoreSecrets(request.draft.apiKey);
+        // `draft.apiKey` is the one plaintext credential in the whole IPC
+        // surface, and it only ever travels this way: renderer → main → the
+        // encrypted store. What comes back is metadata with a masked hint.
+        return { profile: await engine.require().createProfile(request.draft) };
+      },
+    },
+
+    [IPC.profilesUpdate]: {
+      validate: validateProfilesUpdate,
+      handle: async (request) => {
+        assertCanStoreSecrets(request.patch.apiKey);
+        return { profile: await engine.require().updateProfile(request.id, request.patch) };
+      },
+    },
+
+    [IPC.profilesDelete]: {
+      validate: validateProfilesDelete,
+      handle: async (request) =>
+        engine.require().deleteProfile(request.id, { deleteConfigDir: request.deleteConfigDir }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Providers                                                        */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.providersList]: {
+      validate: validateProvidersList,
+      handle: async (request) => ({
+        providers: await engine.require().listProviders({ refresh: request.refresh }),
+      }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Runs                                                             */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.runsStart]: {
+      validate: validateRunsStart,
+      handle: async (request) => ({ run: await engine.require().startRun(request.input) }),
+    },
+
+    [IPC.runsSend]: {
+      validate: validateRunsSend,
+      handle: async (request) => {
+        const result = await engine.require().sendToRun(request.runId, request.text);
+        return { runId: request.runId, deliveredImmediately: result.deliveredImmediately };
+      },
+    },
+
+    [IPC.runsInterrupt]: {
+      validate: validateRunsInterrupt,
+      handle: async (request) => {
+        const result = await engine.require().interruptRun(request.runId);
+        return result.stillQueued
+          ? { runId: request.runId, stillQueued: result.stillQueued }
+          : { runId: request.runId };
+      },
+    },
+
+    [IPC.runsRespondPermission]: {
+      validate: validateRunsRespondPermission,
+      handle: async (request) => {
+        await engine.require().respondToPermission(request.runId, request.requestId, request.decision);
+        return { requestId: request.requestId };
+      },
+    },
+
+    [IPC.runsDispose]: {
+      validate: validateRunsDispose,
+      handle: async (request) => {
+        await engine.require().disposeRun(request.runId);
+        return { runId: request.runId };
+      },
+    },
+
+    [IPC.runsList]: {
+      validate: validateRunsList,
+      handle: async (request) => ({ runs: await engine.require().listRuns({ cwd: request.cwd }) }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Sessions                                                         */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.sessionsList]: {
+      validate: validateSessionsList,
+      handle: async (request) =>
+        engine.require().listSessions({
+          providerId: request.providerId,
+          profileId: request.profileId,
+          cwd: request.cwd,
+          limit: request.limit,
+          offset: request.offset,
+        }),
+    },
+
+    [IPC.sessionsListAll]: {
+      validate: validateSessionsListAll,
+      handle: async (request) =>
+        engine.require().listAllSessions({
+          providerId: request.providerId,
+          limit: request.limit,
+          offset: request.offset,
+        }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Workspace                                                        */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.workspacePickDirectory]: {
+      validate: validateWorkspacePickDirectory,
+      handle: async (request, context) => ({
+        path: await pickDirectory(request, context.window),
+      }),
+    },
+
+    [IPC.sessionsMessages]: {
+      validate: validateSessionsMessages,
+      handle: async (request) => engine.require().getSessionMessages(request),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Plan usage                                                       */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * The cheap half of the pair: synchronous, no provider contact, may be
+     * null. The renderer opens its popover on this and never waits.
+     */
+    [IPC.usagePlanCached]: {
+      validate: validateUsagePlan,
+      handle: async (request) => ({ usage: engine.require().cachedPlanUsage(request.profileId) }),
+    },
+
+    /**
+     * The expensive half: spawns a provider subprocess. Costs no model tokens
+     * — see the adapter's `fetchPlanUsage` — but takes a second or two, which
+     * is exactly why it is a separate channel from the cached read.
+     */
+    [IPC.usagePlanRefresh]: {
+      validate: validateUsagePlan,
+      handle: async (request) => ({
+        usage: await engine.require().refreshPlanUsage({ profileId: request.profileId }),
+      }),
+    },
+  };
+
+  /**
+   * Validate, run, scan, wrap.
+   *
+   * Generic in the channel so that `validate`'s output and `handle`'s input are
+   * the same type — the map above is what proves they line up.
+   */
+  const dispatch = async <C extends IpcChannel>(
+    channel: C,
+    event: IpcMainInvokeEvent,
+    raw: unknown,
+  ): Promise<IpcHandlerResult<C>> => {
+    try {
+      assertTrustedSender(event, policy);
+
+      const implementation = handlers[channel];
+      const request = implementation.validate(raw);
+      const value = await implementation.handle(request, {
+        window: BrowserWindow.fromWebContents(event.sender),
+      });
+
+      // The tripwire. Everything above this line is "we believe the response is
+      // renderer-safe"; this line is what makes it true.
+      assertNoSecrets(value, channel, RESPONSE_SCAN_POLICY);
+
+      return ipcOk(toCloneable(value, channel));
+    } catch (error) {
+      // The full error — stack and all — stays here. What crosses is a code and
+      // a scrubbed message.
+      log.error(`Handler for ${channel} failed`, error);
+      return ipcFail(toIpcError(error, channel));
+    }
+  };
+
+  const register = <C extends IpcChannel>(channel: C): void => {
+    ipcMain.handle(channel, (event, raw: unknown) => dispatch(channel, event, raw));
+  };
+
+  for (const channel of IPC_CHANNELS) register(channel);
+
+  log.info(`Registered ${IPC_CHANNELS.length} IPC channels.`);
+
+  return {
+    dispose(): void {
+      for (const channel of IPC_CHANNELS) ipcMain.removeHandler(channel);
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Directory picker                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Ask the OS for a directory.
+ *
+ * Parented to the requesting window when there is one, so the dialog is modal
+ * to Libra rather than floating free (and, on macOS, sheets onto the window it
+ * is blocking). A destroyed window falls back to an app-modal dialog instead of
+ * failing: the user asked for a folder, and losing the parent is not a reason
+ * to refuse.
+ *
+ * The result is validated twice, for two different failure modes:
+ *
+ *  1. {@link readPickedDirectory} — is this a path at all, or a cancel?
+ *  2. `checkWorkingDirectory` — is it a directory that exists and can be
+ *     entered *right now*? A picker makes that near-certain, but "near" is not
+ *     "certain": the user can create a folder in the dialog on a volume that
+ *     unmounts, or pick one over a network mount that has just dropped. The
+ *     alternative is finding out at `spawn` time, where a bad cwd raises the
+ *     same `ENOENT` as a missing binary and gets blamed on the binary.
+ *
+ * Cancelling resolves `null`, which is an ordinary success. Only a genuinely
+ * unusable path is an error.
+ */
+async function pickDirectory(
+  request: WorkspacePickDirectoryRequest,
+  window: BrowserWindow | null,
+): Promise<string | null> {
+  const options: OpenDialogOptions = {
+    title: 'Choose a working directory',
+    buttonLabel: 'Use this folder',
+    // Spread from the shared constant so the two properties that make this a
+    // *directory* picker cannot drift.
+    properties: [...DIRECTORY_PICKER_PROPERTIES],
+    ...(request.defaultPath === undefined ? {} : { defaultPath: request.defaultPath }),
+  };
+
+  const outcome =
+    window === null || window.isDestroyed()
+      ? await dialog.showOpenDialog(options)
+      : await dialog.showOpenDialog(window, options);
+
+  const picked = readPickedDirectory(outcome);
+  if (picked === null) return null;
+
+  const check = await checkWorkingDirectory(picked);
+  if (!check.ok) throw new WorkspaceError(check.message);
+  return check.path;
+}
+
+/**
+ * Reduce a response to plain, structured-cloneable data.
+ *
+ * Electron clones every IPC payload anyway, so this changes nothing the
+ * renderer sees. What it changes is *where a mistake surfaces*: if a handler
+ * returns a class instance, a `Map`, or an object carrying a method, Electron's
+ * own clone fails inside `invoke` and the renderer receives an opaque
+ * `An object could not be cloned` rejection with no indication of which channel
+ * or field caused it. Doing it here names the channel and keeps the diagnosis
+ * in the main process.
+ *
+ * It is also a second, structural scrub: a getter that would have recomputed a
+ * secret cannot survive a clone.
+ */
+function toCloneable<T>(value: T, channel: IpcChannel): T {
+  try {
+    return structuredClone(value);
+  } catch (error) {
+    throw new Error(
+      `The handler for ${channel} returned a value that cannot cross IPC. ` +
+        'Responses must be plain JSON-like data — no class instances, Maps, Sets or functions. ' +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+}
+
+/**
+ * Reject anything that is not Libra's own top-level frame.
+ *
+ * `senderFrame` can be null when the frame died between sending and being
+ * handled, and reading `.url` on a destroyed frame throws — both are treated as
+ * untrusted, because there is nothing useful to do with a message whose origin
+ * cannot be established.
+ */
+function assertTrustedSender(event: IpcMainInvokeEvent, policy: SecurityPolicy): void {
+  const frame = event.senderFrame;
+  if (!frame) throw new UntrustedSenderError('the sending frame no longer exists');
+
+  let isMainFrame = false;
+  let url: string | undefined;
+  try {
+    isMainFrame = frame === event.sender.mainFrame;
+    url = frame.url;
+  } catch {
+    throw new UntrustedSenderError('the sending frame could not be inspected');
+  }
+
+  if (!isTrustedFrame(url, isMainFrame, policy)) {
+    throw new UntrustedSenderError(isMainFrame ? 'the frame is at an unexpected URL' : 'the sender is a subframe');
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Event forwarding                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Push the engine's event stream at every open window.
+ *
+ * Events are scanned before they are sent, with the looser
+ * {@link EVENT_SCAN_POLICY}: model output and tool results are content and are
+ * exempt from the credential patterns, but no profile field may appear on an
+ * event at any depth.
+ *
+ * A failing event is dropped rather than thrown, and the failure is logged.
+ * Dropping one event degrades a transcript; letting a credential-bearing event
+ * through does not degrade anything, it just leaks.
+ */
+export function forwardAgentEvents(engine: EngineHost): Unsubscribe {
+  if (!engine.ready) return () => undefined;
+
+  const send = (event: AgentEvent): void => {
+    try {
+      assertNoSecrets(event, IPC_PUSH.agentEvent, EVENT_SCAN_POLICY);
+    } catch (error) {
+      log.error(`Dropped a ${event.type} event that failed its credential-safety check`, error);
+      return;
+    }
+
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed()) continue;
+      const contents: WebContents = window.webContents;
+      if (contents.isDestroyed()) continue;
+      try {
+        contents.send(IPC_PUSH.agentEvent, event);
+      } catch (error) {
+        // A window closing mid-send is routine, not exceptional.
+        log.debug('Failed to deliver an agent event to a window', error);
+      }
+    }
+  };
+
+  return engine.require().subscribe(send);
+}

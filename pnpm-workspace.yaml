@@ -1,0 +1,14 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# pnpm blocks dependency lifecycle scripts by default. These need theirs:
+# esbuild fetches its platform binary, electron fetches the Electron runtime,
+# electron-winstaller builds Windows installer bits.
+allowBuilds:
+  electron: true
+  esbuild: true
+  electron-winstaller: true
+
+minimumReleaseAgeExclude:
+  - tsx@4.23.12

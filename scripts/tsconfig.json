@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "//": "Standalone Node scripts. Declaration-only emit into .tsbuild — nothing here is imported by another package, the build exists purely so `tsc -b` at the root typechecks these files too.",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../.tsbuild/scripts",
+    "tsBuildInfoFile": "../.tsbuild/scripts/.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"],
+  "references": [{ "path": "../packages/protocol" }, { "path": "../packages/core" }]
+}

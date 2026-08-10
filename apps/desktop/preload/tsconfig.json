@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../.tsbuild/preload",
+    "tsBuildInfoFile": "../.tsbuild/preload/.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": false
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts"],
+  "references": [{ "path": "../../../packages/protocol" }]
+}

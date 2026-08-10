@@ -1,0 +1,70 @@
+/**
+ * The visible error surface.
+ *
+ * IPC never rejects — it resolves a typed failure — which means a failure that
+ * is not rendered is a failure nobody ever sees. Everything the store learns
+ * about lands here: a failed handler, a `run.end` carrying an error, a run the
+ * main process refused to start.
+ *
+ * Banners, not toasts, and that is a decision rather than an omission. A toast
+ * disappears; these describe a state the user has to act on ("pick a profile",
+ * "the provider fell over") and they stay until dismissed. Sonner is mounted
+ * for the transient case — see `components/providers.tsx` — and is deliberately
+ * not used for anything that is still true after four seconds.
+ */
+
+import type { ReactElement } from 'react';
+import { InfoIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
+
+import { dismissBanner, useApp, type Banner } from '../state/store';
+import { IconButton } from './disabled-reason';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { cn } from '@/lib/utils';
+
+export function ErrorSurface(): ReactElement | null {
+  const banners = useApp((s) => s.banners);
+  if (banners.length === 0) return null;
+  return (
+    <div className="flex shrink-0 flex-col gap-px border-b border-line">
+      {banners.map((banner) => (
+        <BannerRow key={banner.id} banner={banner} />
+      ))}
+    </div>
+  );
+}
+
+const LEVEL_STYLES: Record<Banner['level'], string> = {
+  error: 'bg-signal/10 text-signal',
+  warn: 'bg-amber/10 text-amber',
+  info: 'bg-raised text-ink-muted',
+};
+
+function BannerRow({ banner }: { readonly banner: Banner }): ReactElement {
+  return (
+    <Alert
+      // Square, borderless and full-bleed: these stack into a strip under the
+      // top bar, and a rounded card per banner would read as a pile of toasts.
+      className={cn('rounded-none border-0 px-3 py-1.5', LEVEL_STYLES[banner.level])}
+    >
+      {banner.level === 'info' ? <InfoIcon /> : <TriangleAlertIcon />}
+      <AlertTitle className="font-mono text-2xs leading-snug break-words whitespace-normal">
+        {banner.message}
+      </AlertTitle>
+      {banner.detail ? (
+        <AlertDescription className="font-mono text-2xs leading-snug text-ink-faint">
+          {banner.detail}
+        </AlertDescription>
+      ) : null}
+      <AlertAction className="top-1 right-1">
+        <IconButton
+          label="Dismiss"
+          size="icon-xs"
+          onClick={() => dismissBanner(banner.id)}
+          className="text-current"
+        >
+          <XIcon />
+        </IconButton>
+      </AlertAction>
+    </Alert>
+  );
+}

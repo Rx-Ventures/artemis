@@ -1,0 +1,40 @@
+# The NSIS installer stamps this onto the Start Menu shortcut as its AUMID.
+# `APP_USER_MODEL_ID` in main/index.ts must match it exactly, or Windows treats
+# the running window and the installed shortcut as two different applications.
+appId: dev.libra.app
+productName: Libra
+copyright: Libra contributors
+
+directories:
+  output: release
+  buildResources: build
+
+# `out/` is the electron-vite build output. Runtime dependencies that must not
+# be bundled (the Claude Agent SDK spawns processes and reads from disk) are
+# shipped as real node_modules alongside it.
+files:
+  - out/**/*
+  - package.json
+
+asarUnpack:
+  - '**/node_modules/@anthropic-ai/claude-agent-sdk/**'
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  entitlementsInherit: build/entitlements.mac.plist
+
+win:
+  target:
+    - nsis
+
+linux:
+  category: Development
+  target:
+    - AppImage
+    - deb
+
+npmRebuild: false
