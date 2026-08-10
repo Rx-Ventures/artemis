@@ -58,6 +58,9 @@ import {
   type SessionsListRequest,
   type Unsubscribe,
   type SessionsMessagesRequest,
+  type AuthSignInRequest,
+  type AuthSignOutRequest,
+  type AuthStatusRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
 } from '@libra/protocol';
@@ -279,6 +282,12 @@ const bridge: LibraBridge = Object.freeze({
    * provider answers: `cached` returns immediately from memory, `refresh`
    * spawns a subprocess.
    */
+  auth: Object.freeze({
+    status: (request: AuthStatusRequest) => invoke(IPC.authStatus, request),
+    signIn: (request: AuthSignInRequest) => invoke(IPC.authSignIn, request),
+    signOut: (request: AuthSignOutRequest) => invoke(IPC.authSignOut, request),
+  }),
+
   usagePlan: Object.freeze({
     cached: (request: UsagePlanRequest) => invoke(IPC.usagePlanCached, request),
     refresh: (request: UsagePlanRequest) => invoke(IPC.usagePlanRefresh, request),

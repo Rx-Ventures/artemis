@@ -84,6 +84,13 @@ export const IPC = {
   usagePlanCached: 'libra:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
   usagePlanRefresh: 'libra:usage:plan-refresh',
+
+  /** Read a profile's login state from its own config directory. */
+  authStatus: 'libra:auth:status',
+  /** Run the provider's interactive login against a profile's config directory. */
+  authSignIn: 'libra:auth:sign-in',
+  /** Sign a profile out, clearing the credentials in its config directory. */
+  authSignOut: 'libra:auth:sign-out',
 } as const;
 
 /**
@@ -388,6 +395,55 @@ export interface SessionsMessagesResponse {
 }
 
 /** Which profile's plan to report on. Plan limits belong to an account. */
+/**
+ * A profile's login state, as reported by the provider's own CLI.
+ *
+ * Libra never sees a credential: the provider's login writes into the profile's
+ * isolated config directory, and this is the only view of what landed there.
+ * Every field past `loggedIn` is optional because a signed-out directory has
+ * none of them, and because which ones appear depends on the login method.
+ */
+export interface AuthStatusInfo {
+  readonly loggedIn: boolean;
+  /** `claude.ai` for a subscription, `console` for API billing, `none` signed out. */
+  readonly authMethod?: string;
+  /** Shown so two accounts can be told apart. */
+  readonly email?: string;
+  readonly orgName?: string;
+  /** `pro`, `max`, `team`, `enterprise` — absent on Console logins. */
+  readonly subscriptionType?: string;
+  /**
+   * Set when the status could not be read *at all*.
+   *
+   * Distinct from `loggedIn: false`, which is a successful read of a signed-out
+   * directory. Collapsing the two would report a broken CLI as "signed out" and
+   * send the user to a login that cannot work.
+   */
+  readonly error?: string;
+}
+
+/** How a profile should authenticate. */
+export type AuthMode = 'subscription' | 'console';
+
+export interface AuthStatusRequest {
+  readonly profileId: ProfileId;
+}
+
+export interface AuthSignInRequest {
+  readonly profileId: ProfileId;
+  /** Defaults to `subscription` — the plan-billed login. */
+  readonly mode?: AuthMode;
+}
+
+export interface AuthSignOutRequest {
+  readonly profileId: ProfileId;
+}
+
+/** Every auth channel answers with the resulting state, so the UI never guesses. */
+export interface AuthStatusResponse {
+  readonly status: AuthStatusInfo;
+}
+
 export interface UsagePlanRequest {
   readonly profileId: ProfileId;
 }
@@ -427,6 +483,9 @@ export type IpcRequestMap = {
   [IPC.sessionsMessages]: SessionsMessagesRequest;
   [IPC.usagePlanCached]: UsagePlanRequest;
   [IPC.usagePlanRefresh]: UsagePlanRequest;
+  [IPC.authStatus]: AuthStatusRequest;
+  [IPC.authSignIn]: AuthSignInRequest;
+  [IPC.authSignOut]: AuthSignOutRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -448,6 +507,9 @@ export type IpcResponseMap = {
   [IPC.sessionsMessages]: SessionsMessagesResponse;
   [IPC.usagePlanCached]: UsagePlanResponse;
   [IPC.usagePlanRefresh]: UsagePlanResponse;
+  [IPC.authStatus]: AuthStatusResponse;
+  [IPC.authSignIn]: AuthStatusResponse;
+  [IPC.authSignOut]: AuthStatusResponse;
 };
 
 /** Request type for a channel. */
@@ -583,6 +645,28 @@ export interface LibraBridge {
     cached(request: UsagePlanRequest): Promise<IpcResult<UsagePlanResponse>>;
     /** Fetch from the provider and store the result. Costs no tokens. */
     refresh(request: UsagePlanRequest): Promise<IpcResult<UsagePlanResponse>>;
+  };
+
+  /**
+   * Per-profile authentication.
+   *
+   * The whole surface, because this is the *only* way a profile is
+   * authenticated: the provider's own CLI login runs against the profile's
+   * isolated config directory, and no credential ever passes through Libra —
+   * there is nothing here that takes a key or a token.
+   */
+  readonly auth: {
+    /** Read the profile's current login state. Cheap; safe to poll on mount. */
+    status(request: AuthStatusRequest): Promise<IpcResult<AuthStatusResponse>>;
+    /**
+     * Run the provider's interactive login for this profile.
+     *
+     * Long-running: the user completes it in a browser, so callers must expect
+     * to wait minutes and should keep the UI cancellable rather than blocked.
+     */
+    signIn(request: AuthSignInRequest): Promise<IpcResult<AuthStatusResponse>>;
+    /** Clear the credentials in this profile's config directory. */
+    signOut(request: AuthSignOutRequest): Promise<IpcResult<AuthStatusResponse>>;
   };
 }
 

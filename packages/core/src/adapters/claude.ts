@@ -213,13 +213,39 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
   extraManagedEnvKeys: ['ANTHROPIC_AUTH_TOKEN', CLAUDE_OAUTH_TOKEN_ENV],
   authModes: [
     {
-      id: 'api-key',
-      label: 'API key',
-      note: 'Metered API usage, billed to the key’s account.',
-      requiresSecret: true,
-      secretEnvVar: CLAUDE_API_KEY_ENV,
+      id: 'console',
+      label: 'Console account',
+      note: 'Metered API usage, billed to the signed-in Console account.',
+      /*
+        Also no stored secret — the same CLI login, with `--console` instead of
+        `--claudeai`.
+
+        This replaced a pasted-API-key mode. Two things were wrong with that:
+        the key sat in Libra's own store, and `ANTHROPIC_API_KEY` *overrides* a
+        subscription login, so a profile meant to bill a plan would silently
+        bill API credit instead. Neither is fixable while Libra holds the
+        credential, so it no longer does.
+      */
+      requiresSecret: false,
+      backends: ['anthropic'],
       secretHowTo:
-        'Create a key at console.anthropic.com under Settings → API keys. It starts with sk-ant-.',
+        'Sign in with the button above. Libra runs `claude auth login --console` against this profile’s own config directory; the browser flow happens in Anthropic’s CLI and no credential passes through Libra.',
+    },
+    {
+      id: 'cloud',
+      label: 'Cloud credentials',
+      note: 'Billed by the cloud account. Uses that provider’s own credential chain.',
+      /*
+        The cloud backends do not authenticate through Anthropic at all: Bedrock
+        reads the AWS chain, Vertex the Google one, Foundry the Azure one, each
+        from ambient configuration Libra does not manage. So there is nothing to
+        sign in to here and nothing to store — the mode exists to say that
+        plainly, rather than leaving these backends with no selectable mode.
+      */
+      requiresSecret: false,
+      backends: ['bedrock', 'vertex', 'foundry'],
+      secretHowTo:
+        'Nothing to enter. Configure the cloud provider’s own credentials as you normally would — AWS for Bedrock, gcloud for Vertex, Azure for Foundry — and Libra’s run inherits them.',
     },
     {
       id: 'subscription',

@@ -67,10 +67,14 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 }
 
 describe('resolveEnv — backends', () => {
-  it('puts the decrypted key in ANTHROPIC_API_KEY for the anthropic backend', async () => {
+  it('emits no credential for the anthropic backend — the config dir is the credential', async () => {
+    // Libra holds no credential for Claude any more: the CLI login writes into
+    // the profile's own config directory, and that directory is the only thing
+    // resolveEnv points at. A stored secret is present here and still ignored.
     const env = await resolveEnv(makeProfile({ backend: 'anthropic' }), secrets, ENV_OPTS);
 
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
+    expect(env[CLAUDE_CONFIG_DIR_ENV]).toBeDefined();
     expect(env['CLAUDE_CODE_USE_BEDROCK']).toBeUndefined();
     expect(env['CLAUDE_CODE_USE_VERTEX']).toBeUndefined();
     expect(env['CLAUDE_CODE_USE_FOUNDRY']).toBeUndefined();
@@ -78,7 +82,8 @@ describe('resolveEnv — backends', () => {
 
   it('treats an absent backend as anthropic', async () => {
     const env = await resolveEnv(makeProfile(), secrets, ENV_OPTS);
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env['CLAUDE_CODE_USE_BEDROCK']).toBeUndefined();
+    expect(env[CLAUDE_CONFIG_DIR_ENV]).toBeDefined();
   });
 
   const cloudBackends: ReadonlyArray<[ProviderBackend, string]> = [
@@ -101,19 +106,16 @@ describe('resolveEnv — backends', () => {
     });
   }
 
-  it('refuses to start an anthropic profile with no stored key', async () => {
+  it('starts an anthropic profile with no stored secret, because none is needed', async () => {
+    // This used to throw: api-key mode required a key before a run could start.
+    // Sign-in now lives in the profile's config directory and is the CLI's
+    // business, so resolveEnv has nothing to demand — a profile that has never
+    // signed in resolves fine, and the CLI reports the auth failure itself.
     await secrets.delete(SECRET_REF);
-    const error = await resolveEnv(makeProfile(), secrets, ENV_OPTS).catch((e: unknown) => e);
+    const env = await resolveEnv(makeProfile(), secrets, ENV_OPTS);
 
-    expect(error).toBeInstanceOf(ProfileError);
-    expect((error as ProfileError).code).toBe('auth');
-  });
-
-  it('treats a whitespace-only key as no key', async () => {
-    await secrets.set(SECRET_REF, '   ');
-    await expect(resolveEnv(makeProfile(), secrets, ENV_OPTS)).rejects.toBeInstanceOf(
-      ProfileError,
-    );
+    expect(env[CLAUDE_CONFIG_DIR_ENV]).toBeDefined();
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
   });
 
   it('rejects an unknown backend from a hand-edited profile', async () => {
@@ -174,25 +176,25 @@ describe('resolveEnv — auth modes', () => {
     expect(env[CLAUDE_CONFIG_DIR_ENV]).toBeDefined();
   });
 
-  it('BILLING: never sets CLAUDE_CODE_OAUTH_TOKEN in api-key mode, so an ambient token cannot bill a subscription', async () => {
-    // The mirror image, and the reason the scrub is mode-specific rather than
-    // one-directional: a token sitting in the user's shell must not quietly
-    // move an api-key profile's usage onto their plan.
-    const env = await resolveEnv(makeProfile({ authMode: 'api-key' }), secrets, {
+  it('BILLING: never sets CLAUDE_CODE_OAUTH_TOKEN in console mode, so an ambient token cannot bill a subscription', async () => {
+    // The mirror image, and the reason the scrub is not one-directional: a
+    // token sitting in the user's shell must not quietly move a console
+    // profile's usage onto their plan.
+    const env = await resolveEnv(makeProfile({ authMode: 'console' }), secrets, {
       ...ENV_OPTS,
       baseEnv: { [CLAUDE_OAUTH_TOKEN_ENV]: 'sk-ant-oat01-from-the-shell' },
     });
 
     expect(env).not.toHaveProperty(CLAUDE_OAUTH_TOKEN_ENV);
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
   });
 
-  it('defaults to api-key when the profile names no mode', async () => {
+  it('defaults to console when the profile names no mode', async () => {
     // Absent must mean the metered, explicit-consent option. A profile written
     // before this axis existed keeps billing exactly the way it always did.
     const env = await resolveEnv(makeProfile(), secrets, ENV_OPTS);
 
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
     expect(env).not.toHaveProperty(CLAUDE_OAUTH_TOKEN_ENV);
   });
 
@@ -216,7 +218,7 @@ describe('resolveEnv — auth modes', () => {
 
     expect(error).toBeInstanceOf(ProfileError);
     expect((error as ProfileError).code).toBe('invalid_request');
-    expect((error as ProfileError).message).toContain('api-key, subscription');
+    expect((error as ProfileError).message).toContain('console, cloud, subscription');
   });
 
   it('resolves a subscription profile with no stored token, because it needs none', async () => {
@@ -256,7 +258,7 @@ describe('resolveEnv — auth modes', () => {
 
   it('reads no credential at all for a cloud backend, whatever the mode says', async () => {
     const env = await resolveEnv(
-      makeProfile({ backend: 'bedrock', authMode: 'api-key' }),
+      makeProfile({ backend: 'bedrock', authMode: 'cloud' }),
       secrets,
       ENV_OPTS,
     );
@@ -344,7 +346,7 @@ describe('resolveEnv — merging', () => {
     expect(env['PATH']).toBe('/usr/bin');
     expect(env['HOME']).toBe('/Users/someone');
     expect(env).not.toHaveProperty('UNSET');
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
     expect(env['CLAUDE_CODE_USE_BEDROCK']).toBeUndefined();
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
     expect(env[CLAUDE_CONFIG_DIR_ENV]).toBe(path.join(userDataDir, 'profiles', 'work-p1'));
@@ -362,7 +364,7 @@ describe('resolveEnv — merging', () => {
     });
     const env = await resolveEnv(profile, secrets, ENV_OPTS);
 
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
     expect(env['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
     expect(env['MY_TOKEN']).toBeUndefined();
     expect(env[CLAUDE_CONFIG_DIR_ENV]).toBe(path.join(userDataDir, 'profiles', 'work-p1'));
@@ -390,7 +392,7 @@ describe('resolveEnv — merging', () => {
     });
     const env = await resolveEnv(profile, secrets, ENV_OPTS);
 
-    expect(env[ANTHROPIC_API_KEY_ENV]).toBe(API_KEY);
+    expect(env[ANTHROPIC_API_KEY_ENV]).toBeUndefined();
     expect(env['ANTHROPIC_BASE_URL']).toBeUndefined();
     expect(env['ANTHROPIC_CUSTOM_HEADERS']).toBeUndefined();
     expect(env['HTTPS_PROXY']).toBeUndefined();
@@ -553,8 +555,11 @@ describe('resolveStoreEnv', () => {
     const env = await resolveStoreEnv(profile, STORE_OPTS);
     expect(env[CLAUDE_CONFIG_DIR_ENV]).toBe(path.join(userDataDir, 'profiles', 'keyless-1'));
 
-    // The same profile is still refused on the run path, where a key is real.
-    await expect(resolveEnv(profile, empty, ENV_OPTS)).rejects.toBeInstanceOf(ProfileError);
+    // The run path no longer refuses it either: with no credential to supply,
+    // a profile that has never signed in still resolves, and the CLI is what
+    // reports the auth failure — from the same config directory.
+    const runEnv = await resolveEnv(profile, empty, ENV_OPTS);
+    expect(runEnv[CLAUDE_CONFIG_DIR_ENV]).toBe(path.join(userDataDir, 'profiles', 'keyless-1'));
   });
 
   it('carries no credential and creates nothing', async () => {
@@ -643,7 +648,7 @@ describe('toMetadata', () => {
   it('exposes only renderer-safe fields', () => {
     const profile = makeProfile({
       backend: 'bedrock',
-      authMode: 'api-key',
+      authMode: 'console',
       publicEnv: { AWS_REGION: 'us-east-1' },
       configDirName: 'work-p1',
       secretRef: 'profile-super-secret-ref',
@@ -663,7 +668,7 @@ describe('toMetadata', () => {
       label: 'Work',
       providerId: 'claude',
       backend: 'bedrock',
-      authMode: 'api-key',
+      authMode: 'console',
       keyHint: 'sk-ant-...4f2a',
     });
 

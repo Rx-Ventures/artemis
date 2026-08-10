@@ -20,3 +20,4 @@ export * from './env.js';
 export * from './mapper.js';
 export * from './claude.js';
 export * from './registry.js';
+export * from './signIn.js';
