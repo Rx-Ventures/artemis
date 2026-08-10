@@ -121,6 +121,14 @@ export function Composer(): ReactElement {
     [history, recall],
   );
 
+  // Nothing renders under the input row, deliberately: two rows lived there —
+  // a resume banner and a keyboard-hint strip — and both were permanent chrome
+  // restating what a user learns once.
+  //
+  // One real control went with them: the fork toggle. Fork is still settable
+  // from the command palette, but it is no longer visible or reversible here,
+  // so a session set to fork gives no sign of it until it branches. If that
+  // bites, the toggle needs its own home; don't bring the whole row back.
   return (
     <div className="shrink-0 border-t border-line bg-panel">
       {live ? (
@@ -219,18 +227,6 @@ export function Composer(): ReactElement {
         </ReasonButton>
       </div>
 
-      /*
-       * There is deliberately nothing under the input row.
-       *
-       * Two rows lived here — a resume banner and a keyboard-hint strip — and
-       * both were permanent chrome restating things a user learns once.
-       *
-       * One real control went with them: the fork toggle. Fork is still
-       * settable from the command palette, but it is no longer visible or
-       * reversible here, so a session set to fork gives no sign of it until it
-       * branches. If that bites, the toggle needs its own home; do not bring
-       * the whole row back for it.
-       */
     </div>
   );
 }
