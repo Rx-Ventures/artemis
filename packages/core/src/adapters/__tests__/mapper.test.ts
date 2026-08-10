@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent, SessionStartedEvent, TextCompleteEvent, TextDeltaEvent, ThinkingDeltaEvent, ToolEndEvent, ToolStartEvent, RunEndEvent, UsageEvent } from '@apollo/protocol';
+import type { AgentEvent, SessionStartedEvent, TextCompleteEvent, TextDeltaEvent, ThinkingDeltaEvent, ToolEndEvent, ToolStartEvent, RunEndEvent, UsageEvent } from '@rx-apollo/protocol';
 import type { SDKMessage, SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import {

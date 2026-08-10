@@ -8,7 +8,7 @@
  * control renders disabled *with an explanation*, never silently missing.
  */
 
-import type { Capabilities, PermissionMode } from '@apollo/protocol';
+import type { Capabilities, PermissionMode } from '@rx-apollo/protocol';
 import { useApp, activeCapabilities, activeProviderLabel } from '../state/store';
 
 /** The boolean fields of {@link Capabilities}. */

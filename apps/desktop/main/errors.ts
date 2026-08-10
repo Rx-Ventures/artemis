@@ -12,7 +12,7 @@
  * {@link scrubSecrets}.
  */
 
-import type { AgentErrorCode, IpcChannel, IpcError } from '@apollo/protocol';
+import type { AgentErrorCode, IpcChannel, IpcError } from '@rx-apollo/protocol';
 import { scrubSecrets, SecretLeakError } from './redact.js';
 
 /**
@@ -33,7 +33,7 @@ export class ValidationError extends Error {
   }
 }
 
-/** The engine (`@apollo/core`) could not be loaded or failed to start. */
+/** The engine (`@rx-apollo/core`) could not be loaded or failed to start. */
 export class EngineUnavailableError extends Error {
   constructor(detail: string) {
     super(`Apollo's engine is unavailable: ${detail}`);
@@ -99,7 +99,7 @@ function isAgentErrorCode(value: unknown): value is AgentErrorCode {
 /**
  * True when `value` already carries the normalized error shape.
  *
- * Adapters in `@apollo/core` are expected to classify their own failures — they
+ * Adapters in `@rx-apollo/core` are expected to classify their own failures — they
  * are the only layer that knows what a provider's 429 actually means. When they
  * have done so, this function lets that classification survive instead of being
  * flattened to `unknown` here.

@@ -8,10 +8,10 @@ importers:
 
   .:
     devDependencies:
-      '@apollo/core':
+      '@rx-apollo/core':
         specifier: workspace:*
         version: link:packages/core
-      '@apollo/protocol':
+      '@rx-apollo/protocol':
         specifier: workspace:*
         version: link:packages/protocol
       '@types/node':
@@ -35,10 +35,10 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.226
         version: 0.3.226(@anthropic-ai/sdk@0.116.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.4.3))(zod@4.4.3)
-      '@apollo/core':
+      '@rx-apollo/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@apollo/protocol':
+      '@rx-apollo/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       electron-store:
@@ -147,7 +147,7 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.226
         version: 0.3.226(@anthropic-ai/sdk@0.116.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@4.4.3))(zod@4.4.3)
-      '@apollo/protocol':
+      '@rx-apollo/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:

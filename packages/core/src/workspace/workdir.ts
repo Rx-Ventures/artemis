@@ -28,7 +28,7 @@
  * the question once, in one place, with a message a person can act on, and the
  * run registry asks it before an adapter is ever handed the input.
  *
- * ## Why it lives in `@apollo/core` and not in `@apollo/protocol`
+ * ## Why it lives in `@rx-apollo/core` and not in `@rx-apollo/protocol`
  *
  * It touches the filesystem. Protocol has zero dependencies and does no I/O —
  * it is loaded in the renderer's browser sandbox, where `node:fs` does not

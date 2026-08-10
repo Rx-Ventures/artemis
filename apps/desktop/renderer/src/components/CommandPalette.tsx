@@ -71,7 +71,7 @@ import {
   SquareTerminalIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { ProviderId, SessionSummary } from '@apollo/protocol';
+import type { ProviderId, SessionSummary } from '@rx-apollo/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';

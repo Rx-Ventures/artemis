@@ -3,7 +3,7 @@
  *
  * This is a browser context: no Node, no Electron, no filesystem. Everything
  * the UI can do goes through `window.apollo`, the contextBridge surface
- * described by `ApolloBridge` in `@apollo/protocol`.
+ * described by `ApolloBridge` in `@rx-apollo/protocol`.
  */
 
 import { StrictMode } from 'react';

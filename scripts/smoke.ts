@@ -1,5 +1,5 @@
 /**
- * Headless end-to-end smoke test for `@apollo/core`.
+ * Headless end-to-end smoke test for `@rx-apollo/core`.
  *
  * Runs the entire engine with no Electron anywhere in the process:
  *
@@ -23,7 +23,7 @@
  *
  * ```sh
  * export ANTHROPIC_API_KEY=sk-ant-…
- * pnpm build:libs          # smoke.ts imports @apollo/core's built output
+ * pnpm build:libs          # smoke.ts imports @rx-apollo/core's built output
  * pnpm smoke               # or: npx tsx scripts/smoke.ts "your prompt here"
  * ```
  *
@@ -48,8 +48,8 @@ import {
   ProfileStore,
   resolveEnv,
   RunRegistry,
-} from '@apollo/core';
-import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@apollo/protocol';
+} from '@rx-apollo/core';
+import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@rx-apollo/protocol';
 
 /** How long to wait for a run to finish before giving up and tearing down. */
 const RUN_TIMEOUT_MS = 120_000;

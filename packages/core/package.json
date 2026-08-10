@@ -1,5 +1,5 @@
 {
-  "name": "@apollo/core",
+  "name": "@rx-apollo/core",
   "version": "0.1.0",
   "private": true,
   "description": "Apollo's headless engine: provider adapters, profile/env resolution and session bookkeeping. Must never import electron.",
@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.226",
-    "@apollo/protocol": "workspace:*"
+    "@rx-apollo/protocol": "workspace:*"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

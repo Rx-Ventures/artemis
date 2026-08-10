@@ -14,7 +14,7 @@
  * picker and the permission-mode picker already follow.
  *
  * The resolution below deliberately mirrors what the credential resolver in
- * `@apollo/core` does when it decides which environment variable a secret is
+ * `@rx-apollo/core` does when it decides which environment variable a secret is
  * written to. It has to: if the editor shows one mode and the resolver picks
  * another, the user is told the wrong account is being billed. The core copy is
  * authoritative — this one exists so the form can *explain* the choice, and it
@@ -25,7 +25,7 @@ import type {
   ProviderAuthModeOption,
   ProviderBackendOption,
   ProviderDescriptor,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 /**
  * The modes a provider offers.

@@ -9,7 +9,7 @@
  * in the main process when a run is starting, and never leaves.
  *
  * Which *variable* a secret is later emitted as is the profile's auth mode, and
- * that decision lives in `@apollo/core`'s `resolveEnv`. This file stores an
+ * that decision lives in `@rx-apollo/core`'s `resolveEnv`. This file stores an
  * opaque string and has no opinion about what kind of credential it is.
  *
  * ### Where the ciphertext lives
@@ -56,12 +56,12 @@ const log = createLogger('secrets');
  * ref is a handle stored *on* the profile record, so rotating a credential or
  * moving a profile between backends never has to touch this file's key space.
  *
- * This interface is what the main process hands to `@apollo/core` — core builds
+ * This interface is what the main process hands to `@rx-apollo/core` — core builds
  * the agent's env bundle by reading through it and never sees the file, the
  * encryption backend, or anything else Electron-shaped.
  */
 export interface SecretStore {
-  /* -- the three methods `@apollo/core`'s `SecretStore` seam requires -------- */
+  /* -- the three methods `@rx-apollo/core`'s `SecretStore` seam requires -------- */
 
   /** Store `secret` under `ref`, replacing any previous value. */
   set(ref: string, secret: string): Promise<void>;
@@ -161,7 +161,7 @@ const FILE_VERSION = 1 as const;
 /**
  * Legal shape for a `secretRef`.
  *
- * Refs are map keys, not paths — but they arrive from `@apollo/core` and, one
+ * Refs are map keys, not paths — but they arrive from `@rx-apollo/core` and, one
  * refactor from now, could arrive from somewhere less trustworthy. Constraining
  * them means a ref can never be `../../id_rsa` and can never be `__proto__`.
  */

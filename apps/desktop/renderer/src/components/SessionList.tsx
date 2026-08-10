@@ -68,7 +68,7 @@ import {
   type ReactNode,
 } from 'react';
 import { GitBranchIcon, InboxIcon, SearchIcon, SquareTerminalIcon } from 'lucide-react';
-import type { ProfileId, SessionSummary } from '@apollo/protocol';
+import type { ProfileId, SessionSummary } from '@rx-apollo/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { formatRelative, oneLine } from '../lib/format';

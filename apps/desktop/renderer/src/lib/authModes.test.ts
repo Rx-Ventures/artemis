@@ -3,7 +3,7 @@
  *
  * These rules decide which billing arrangement the profile editor *claims* a
  * profile uses, so getting them wrong tells the user the wrong account is being
- * charged. They mirror the credential resolver in `@apollo/core`; this file is
+ * charged. They mirror the credential resolver in `@rx-apollo/core`; this file is
  * where the mirror is held still.
  *
  * Nothing here names a real provider. The descriptors are invented, because the
@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ProviderDescriptor } from '@apollo/protocol';
+import type { ProviderDescriptor } from '@rx-apollo/protocol';
 
 import {
   authModeSupportsBackend,

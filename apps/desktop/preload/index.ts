@@ -15,7 +15,7 @@
  *     arbitrary page script.
  *
  *  2. **No dynamic channel names.** Every function below closes over a constant
- *     from `@apollo/protocol`. Nothing the renderer passes is ever concatenated
+ *     from `@rx-apollo/protocol`. Nothing the renderer passes is ever concatenated
  *     into a channel name, so the set of reachable channels is fixed at build
  *     time and readable in one screen.
  *
@@ -61,7 +61,7 @@ import {
   type SessionsMessagesRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Request/response                                                           */

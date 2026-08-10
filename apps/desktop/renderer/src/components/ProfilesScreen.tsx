@@ -48,13 +48,13 @@
 
 import { useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { PlusIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
-import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@apollo/protocol';
+import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@rx-apollo/protocol';
 import type {
   ProfileMetadata,
   ProviderAuthModeOption,
   ProviderBackend,
   ProviderId,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 import {
   authModeSupportsBackend,

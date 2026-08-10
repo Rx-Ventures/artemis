@@ -61,7 +61,7 @@ import {
   type SessionsMessagesRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 import { ValidationError } from './errors.js';
 
@@ -321,7 +321,7 @@ function optionalJsonObject(
 /**
  * Non-sensitive environment variables for a profile.
  *
- * The checks here duplicate `@apollo/core`'s. That is deliberate: `publicEnv` is
+ * The checks here duplicate `@rx-apollo/core`'s. That is deliberate: `publicEnv` is
  * written to an unencrypted config file, so "someone pasted
  * `ANTHROPIC_AUTH_TOKEN` into the extra-env box" has to be caught before the
  * value reaches any layer that might persist it.

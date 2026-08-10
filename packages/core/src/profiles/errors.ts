@@ -1,5 +1,5 @@
 /**
- * Error primitives for `@apollo/core`.
+ * Error primitives for `@rx-apollo/core`.
  *
  * Two problems this solves:
  *
@@ -15,7 +15,7 @@
  * and neither may depend on the session machinery.
  */
 
-import type { AgentError, AgentErrorCode, JsonValue } from '@apollo/protocol';
+import type { AgentError, AgentErrorCode, JsonValue } from '@rx-apollo/protocol';
 
 /** Every {@link AgentErrorCode}, for validating error-shaped values at runtime. */
 const AGENT_ERROR_CODES = [

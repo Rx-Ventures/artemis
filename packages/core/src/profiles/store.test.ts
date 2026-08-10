@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ProfileDraft } from '@apollo/protocol';
+import type { ProfileDraft } from '@rx-apollo/protocol';
 
 import { CLAUDE_CREDENTIALS } from '../adapters/claude.js';
 import { managedEnvKeys } from '../adapters/types.js';

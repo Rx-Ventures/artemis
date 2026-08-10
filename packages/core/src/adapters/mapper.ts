@@ -61,8 +61,8 @@ import type {
   ToolEndStatus,
   UsageScope,
   UsageSnapshot,
-} from '@apollo/protocol';
-import { isPermissionMode } from '@apollo/protocol';
+} from '@rx-apollo/protocol';
+import { isPermissionMode } from '@rx-apollo/protocol';
 
 import type {
   ModelUsage,

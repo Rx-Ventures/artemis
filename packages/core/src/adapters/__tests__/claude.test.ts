@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, PermissionRequestEvent, RunEndEvent } from '@apollo/protocol';
+import type { AgentEvent, PermissionRequestEvent, RunEndEvent } from '@rx-apollo/protocol';
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const sdkMock = vi.hoisted(() => ({

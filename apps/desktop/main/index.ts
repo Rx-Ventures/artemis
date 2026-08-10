@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
 
-import { profilesRoot } from '@apollo/core';
+import { profilesRoot } from '@rx-apollo/core';
 
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
@@ -59,8 +59,8 @@ const APP_USER_MODEL_ID = 'dev.apollo.app';
  * Set before anything reads a path.
  *
  * `app.getPath('userData')` is derived from the app name, and the package is
- * called `@apollo/desktop` — which would put user data in a nested
- * `@apollo/desktop` directory and name the OS keychain entry after it. Naming
+ * called `@rx-apollo/desktop` — which would put user data in a nested
+ * `@rx-apollo/desktop` directory and name the OS keychain entry after it. Naming
  * the app here keeps the credential store's identity stable and legible.
  */
 app.setName('Apollo');
@@ -159,7 +159,12 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     // Painting the window before the renderer has anything to show produces a
     // white flash on a dark desktop. Start hidden, reveal on `ready-to-show`.
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0b0d' : '#ffffff',
+    // Hex, and the one colour in this app that lives outside index.css: it is
+    // read by Chromium before any stylesheet exists, so it cannot be a token.
+    // Keep it equal to `--abyss` — it is what fills the window for the frame or
+    // two before the renderer paints, and a mismatch shows up as a flash of the
+    // wrong dark.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0a09' : '#ffffff',
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: windowSecurityPreferences(preloadPath, [
       `--apollo-version=${app.getVersion()}`,

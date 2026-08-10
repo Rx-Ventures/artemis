@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES, PERMISSION_MODES } from '@apollo/protocol';
+import { NO_CAPABILITIES, PERMISSION_MODES } from '@rx-apollo/protocol';
 import type {
   AgentEvent,
   Capabilities,
   PermissionDecision,
   RunEndEvent,
   RunInput,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 import type {
   InterruptResult,

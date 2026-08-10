@@ -7,7 +7,7 @@
  * fix is a new IPC channel rather than a tsconfig edit.
  */
 
-import type { IpcResult, ApolloBridge } from '@apollo/protocol';
+import type { IpcResult, ApolloBridge } from '@rx-apollo/protocol';
 import { createMockBridge } from './mockBridge';
 
 export type BridgeMode =

@@ -175,7 +175,7 @@ directory, which hosting backends it offers, and which auth modes it supports
 is valid on). `resolveEnv` reads that spec rather than any provider's variable
 names, and the profile editor builds both its backend picker and its auth-mode
 picker from it, so a second provider does not need a change anywhere outside its
-own adapter. Nothing in `@apollo/protocol` names a backend or a mode; it defines
+own adapter. Nothing in `@rx-apollo/protocol` names a backend or a mode; it defines
 the shape and the adapter supplies the contents.
 
 ### The path a prompt takes
@@ -254,9 +254,9 @@ scripts/smoke.ts       headless end-to-end run, no Electron
 
 Three boundaries are enforced by the type system rather than by convention:
 
-- `@apollo/protocol` compiles with `"types": []` — no ambient Node, so it cannot
+- `@rx-apollo/protocol` compiles with `"types": []` — no ambient Node, so it cannot
   reach for a filesystem.
-- `@apollo/core` has no dependency on `electron` and must never gain one; it
+- `@rx-apollo/core` has no dependency on `electron` and must never gain one; it
   runs under plain Node and under vitest with no Electron present. A test
   (`packages/core/src/no-electron.test.ts`) fails the build if that changes.
 - `apps/desktop/renderer` compiles without `@types/node`, so `fs`, `process`

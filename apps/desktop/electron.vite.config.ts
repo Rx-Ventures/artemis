@@ -65,7 +65,7 @@ function stripDevCspMeta(): Plugin {
 // widen from the literal `'cjs'` to `string` and stop matching `ModuleFormat`.
 export default defineConfig(async (): Promise<UserConfig> => ({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@apollo/core', '@apollo/protocol'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@rx-apollo/core', '@rx-apollo/protocol'] })],
     build: {
       outDir: 'out/main',
       rollupOptions: { input: here('./main/index.ts') },
@@ -73,7 +73,7 @@ export default defineConfig(async (): Promise<UserConfig> => ({
   },
 
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@apollo/protocol'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@rx-apollo/protocol'] })],
     build: {
       outDir: 'out/preload',
       rollupOptions: {

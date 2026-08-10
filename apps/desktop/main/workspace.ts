@@ -55,7 +55,7 @@ const NUL = '\u0000';
  *
  * The path is returned as the OS gave it, with only surrounding whitespace
  * removed. It is deliberately *not* checked for existence here: that is
- * `checkWorkingDirectory`'s job in `@apollo/core`, and the caller runs it so
+ * `checkWorkingDirectory`'s job in `@rx-apollo/core`, and the caller runs it so
  * that a picked path and a typed path are held to exactly the same standard.
  */
 export function readPickedDirectory(outcome: OpenDialogOutcome | null | undefined): string | null {

@@ -75,8 +75,8 @@ import type {
   SessionId,
   SessionSummary,
   SystemPromptSpec,
-} from '@apollo/protocol';
-import { NO_CAPABILITIES } from '@apollo/protocol';
+} from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';

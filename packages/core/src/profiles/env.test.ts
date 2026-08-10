@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Profile, ProviderBackend } from '@apollo/protocol';
+import type { Profile, ProviderBackend } from '@rx-apollo/protocol';
 
 import {
   CLAUDE_CONFIG_DIR_ENV,

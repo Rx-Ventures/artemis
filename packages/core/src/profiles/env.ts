@@ -34,8 +34,8 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isCredentialRoutingEnvKey, isSecretEnvKey, maskApiKey } from '@apollo/protocol';
-import type { Profile, ProfileMetadata, ProviderAuthMode, ProviderBackend } from '@apollo/protocol';
+import { isCredentialRoutingEnvKey, isSecretEnvKey, maskApiKey } from '@rx-apollo/protocol';
+import type { Profile, ProfileMetadata, ProviderAuthMode, ProviderBackend } from '@rx-apollo/protocol';
 
 import { defaultAuthMode, managedEnvKeys } from '../adapters/types.js';
 import type {

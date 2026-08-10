@@ -27,7 +27,7 @@
  *    replaying one would offer the user a decision that cannot be made.
  */
 
-import type { AgentEvent, RunId, SessionId } from '@apollo/protocol';
+import type { AgentEvent, RunId, SessionId } from '@rx-apollo/protocol';
 
 import { toJsonObject, toJsonValue } from './mapper.js';
 

@@ -1,5 +1,5 @@
 /**
- * `@apollo/core/adapters` — the provider seam and its implementations.
+ * `@rx-apollo/core/adapters` — the provider seam and its implementations.
  *
  * | Module       | Contents                                                       |
  * | ------------ | -------------------------------------------------------------- |

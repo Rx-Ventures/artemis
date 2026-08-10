@@ -33,7 +33,7 @@ import type {
   StopReason,
   ToolEndStatus,
   UsageSnapshot,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Items                                                                      */

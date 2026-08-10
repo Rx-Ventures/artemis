@@ -1,7 +1,7 @@
 /**
  * The provider-adapter seam.
  *
- * This is the single most important design element in `@apollo/core`. Apollo
+ * This is the single most important design element in `@rx-apollo/core`. Apollo
  * drives *agentic coding CLIs*, and the three we plan to support have three
  * completely unrelated transports:
  *
@@ -15,7 +15,7 @@
  *
  *  1. **Everything a provider produces is normalized before it crosses the
  *     seam.** An adapter's only output is the nine-variant
- *     {@link import('@apollo/protocol').AgentEvent} union. Nothing
+ *     {@link import('@rx-apollo/protocol').AgentEvent} union. Nothing
  *     provider-specific — no SDK message, no JSONL line, no HTTP body — is
  *     visible above this file.
  *  2. **Everything a provider *cannot* do is declared up front.** Adapters
@@ -27,7 +27,7 @@
  *
  * Note what is *not* here. `ProviderAdapter` and `Run` describe live objects —
  * async iterables, deferred permission prompts, disposal semantics — which is
- * exactly why they live in core rather than in `@apollo/protocol`: they never
+ * exactly why they live in core rather than in `@rx-apollo/protocol`: they never
  * cross the Electron IPC boundary. Protocol supplies every type they are built
  * from; this file assembles those into an interface an adapter implements.
  *
@@ -60,7 +60,7 @@ import type {
   RunStatus,
   SessionId,
   SessionSummary,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Environment                                                                */

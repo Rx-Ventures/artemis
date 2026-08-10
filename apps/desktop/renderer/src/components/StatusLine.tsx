@@ -99,7 +99,7 @@ import {
   SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { PermissionMode, ProfileId, ProviderModelOption } from '@apollo/protocol';
+import type { PermissionMode, ProfileId, ProviderModelOption } from '@rx-apollo/protocol';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';

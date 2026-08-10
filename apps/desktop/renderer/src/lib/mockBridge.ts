@@ -14,7 +14,7 @@
  * would.
  */
 
-import { maskApiKey } from '@apollo/protocol';
+import { maskApiKey } from '@rx-apollo/protocol';
 import type {
   AgentEvent,
   Capabilities,
@@ -31,7 +31,7 @@ import type {
   RunsStartRequest,
   SessionSummary,
   Unsubscribe,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });

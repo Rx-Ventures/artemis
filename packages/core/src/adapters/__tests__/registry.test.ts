@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import {

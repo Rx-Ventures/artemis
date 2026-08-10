@@ -1,7 +1,7 @@
 /**
  * The IPC layer.
  *
- * `@apollo/protocol` defines the channels, the request and response types, and
+ * `@rx-apollo/protocol` defines the channels, the request and response types, and
  * the rule that handlers resolve an {@link IpcResult} instead of rejecting.
  * This file is the main-process half of that contract, and it adds three things
  * the type system cannot express:
@@ -54,9 +54,9 @@ import {
   type IpcResponse,
   type Unsubscribe,
   type WorkspacePickDirectoryRequest,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
-import { checkWorkingDirectory } from '@apollo/core';
+import { checkWorkingDirectory } from '@rx-apollo/core';
 
 import type { EngineHost } from './engine.js';
 import {

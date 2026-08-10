@@ -39,7 +39,7 @@
 
 import type { ReactElement } from 'react';
 import { ShieldIcon } from 'lucide-react';
-import type { PermissionMode } from '@apollo/protocol';
+import type { PermissionMode } from '@rx-apollo/protocol';
 
 import { WithReason } from '../disabled-reason';
 import { usePermissionModes } from '../../hooks/useCapability';

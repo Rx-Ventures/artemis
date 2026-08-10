@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand';
-import { NO_CAPABILITIES } from '@apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 import type {
   AgentError,
   AgentEvent,
@@ -40,7 +40,7 @@ import type {
   SessionSummary,
   TokenUsage,
   UsageSnapshot,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   listSessionsEverywhere,

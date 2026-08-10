@@ -510,7 +510,7 @@ export type IpcHandlerResult<C extends IpcChannel> = IpcResult<IpcResponseMap[C]
 /**
  * Signature of a main-process handler.
  *
- * Deliberately has no `IpcMainInvokeEvent` parameter: `@apollo/protocol` has
+ * Deliberately has no `IpcMainInvokeEvent` parameter: `@rx-apollo/protocol` has
  * zero dependencies and must never import electron. The main process wraps
  * these when it registers them.
  */
@@ -549,7 +549,7 @@ export type Unsubscribe = () => void;
  *
  * ```ts
  * // apps/desktop/renderer/src/global.d.ts
- * import type { ApolloBridge } from '@apollo/protocol'
+ * import type { ApolloBridge } from '@rx-apollo/protocol'
  * declare global {
  *   interface Window { readonly apollo: ApolloBridge }
  * }

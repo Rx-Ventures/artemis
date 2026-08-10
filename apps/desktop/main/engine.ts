@@ -1,5 +1,5 @@
 /**
- * The composition root: where Electron's resources meet `@apollo/core`.
+ * The composition root: where Electron's resources meet `@rx-apollo/core`.
  *
  * Core is deliberately incapable of doing this itself. It must never import
  * `electron` — it has to run in a plain Node process and under vitest — so
@@ -61,7 +61,7 @@ import type {
   SessionSummary,
   Unsubscribe,
   PlanUsage,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 import {
   createDefaultProviderRegistry,
@@ -74,7 +74,7 @@ import {
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
-} from '@apollo/core';
+} from '@rx-apollo/core';
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';

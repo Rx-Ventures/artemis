@@ -28,8 +28,8 @@
  * out rather than drop it.
  */
 
-import type { ProviderDescriptor, ProviderId } from '@apollo/protocol';
-import { NO_CAPABILITIES, PROVIDER_IDS } from '@apollo/protocol';
+import type { ProviderDescriptor, ProviderId } from '@rx-apollo/protocol';
+import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-apollo/protocol';
 
 import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';

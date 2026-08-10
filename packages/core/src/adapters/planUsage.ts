@@ -23,7 +23,7 @@
  * instead of throwing. When it stabilises, this list is the only thing to edit.
  */
 
-import type { PlanUsage, PlanUsageWindow, PlanUsageWindowId } from '@apollo/protocol';
+import type { PlanUsage, PlanUsageWindow, PlanUsageWindowId } from '@rx-apollo/protocol';
 
 /**
  * Method names to try on the query object, newest first.

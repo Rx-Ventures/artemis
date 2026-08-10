@@ -3,7 +3,7 @@
  *
  * The single most important invariant in Apollo is that **a secret never crosses
  * the IPC boundary into the renderer**. The profile handlers are written to
- * return {@link import('@apollo/protocol').ProfileMetadata}, never `Profile` —
+ * return {@link import('@rx-apollo/protocol').ProfileMetadata}, never `Profile` —
  * but "written to" is a property of today's code, not of tomorrow's refactor.
  * This module is the tripwire that makes the invariant hold mechanically.
  *
@@ -133,7 +133,7 @@ export interface ScanPolicy {
 }
 
 /**
- * The `Profile` fields that {@link import('@apollo/protocol').ProfileMetadata}
+ * The `Profile` fields that {@link import('@rx-apollo/protocol').ProfileMetadata}
  * deliberately omits, plus the obvious credential field names.
  *
  * Seeing any of these in a renderer-bound payload means the wrong type was
@@ -162,7 +162,7 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
- * Scan policy for pushed {@link import('@apollo/protocol').AgentEvent}s.
+ * Scan policy for pushed {@link import('@rx-apollo/protocol').AgentEvent}s.
  *
  * Looser on values, because an agent event is almost entirely model output and
  * tool results, and just as strict on structure — no profile field has any

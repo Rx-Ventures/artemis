@@ -1,5 +1,5 @@
 /**
- * `@apollo/protocol` — the shared contract.
+ * `@rx-apollo/protocol` — the shared contract.
  *
  * Every other package in this repo imports from here and none of them import
  * from each other's internals. The package has **zero runtime dependencies**
@@ -24,7 +24,7 @@
  * | `ipc`           | channel constants, request/response maps, `ApolloBridge`    |
  *
  * What does *not* live here: the `ProviderAdapter` / `Run` interfaces. Those
- * are the engine's seam and live in `@apollo/core/adapters`, because they
+ * are the engine's seam and live in `@rx-apollo/core/adapters`, because they
  * describe live objects with async iterables and disposal semantics — things
  * that never cross IPC. They are built out of the types in this package.
  */

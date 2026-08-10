@@ -15,7 +15,7 @@
  * file is readable plaintext by design, and there is nothing in it worth
  * stealing.
  *
- * `@apollo/core` must not import `electron`, so the store takes its user-data
+ * `@rx-apollo/core` must not import `electron`, so the store takes its user-data
  * directory and its secret storage as constructor arguments rather than
  * reaching for `app.getPath('userData')`.
  *
@@ -33,7 +33,7 @@ import {
   isProviderBackend,
   isProviderId,
   isSecretEnvKey,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 import type {
   Profile,
   ProfileDraft,
@@ -43,7 +43,7 @@ import type {
   ProviderAuthMode,
   ProviderBackend,
   ProviderId,
-} from '@apollo/protocol';
+} from '@rx-apollo/protocol';
 
 import { ProfileError } from './errors.js';
 import { assertBareDirName, profileConfigDir, profilesRoot, readMetadata } from './env.js';

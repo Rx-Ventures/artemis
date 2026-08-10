@@ -31,7 +31,7 @@
  * someone changed their mind, so cancellation gets its own status and no copy.
  */
 
-import type { ProfileId, ProviderId, SessionSummary } from '@apollo/protocol';
+import type { ProfileId, ProviderId, SessionSummary } from '@rx-apollo/protocol';
 import { call, resolveBridge } from './bridge';
 
 /* -------------------------------------------------------------------------- */

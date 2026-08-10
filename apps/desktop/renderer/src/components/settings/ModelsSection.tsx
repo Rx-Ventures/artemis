@@ -42,7 +42,7 @@
 
 import type { ReactElement } from 'react';
 import { BoxesIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
-import type { ProviderModelOption } from '@apollo/protocol';
+import type { ProviderModelOption } from '@rx-apollo/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ToneBadge } from '../primitives';
