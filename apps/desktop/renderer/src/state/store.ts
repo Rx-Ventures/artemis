@@ -131,6 +131,16 @@ export interface AppState {
 
   readonly run: RunState | null;
   /**
+   * Context window size per model, learned as runs finish.
+   *
+   * The provider only reveals a model's window in the `final` usage snapshot at
+   * run end, and `run` resets every turn — so without somewhere durable to keep
+   * it, the context readout can never render while a turn is streaming. Keyed
+   * by model because the number is a property of the model, not the session:
+   * switching models must not show the previous one's window.
+   */
+  readonly contextWindows: Readonly<Record<string, number>>;
+  /**
    * Permission requests still awaiting an answer.
    *
    * Kept alongside the transcript's own permission items, which carry the
@@ -247,6 +257,7 @@ export const useApp = create<AppState>(() => ({
   sessionsError: null,
 
   run: null,
+  contextWindows: {},
   permissionQueue: [],
   banners: [],
 
@@ -1206,9 +1217,17 @@ export function handleAgentEvent(event: AgentEvent): void {
       break;
 
     case 'usage':
-      useApp.setState((s) => ({
-        run: s.run ? { ...s.run, usage: mergeUsage(s.run.usage, event.usage) } : s.run,
-      }));
+      useApp.setState((s) => {
+        if (!s.run) return { run: s.run };
+        const model = s.run.model;
+        const learned = event.usage.contextWindow;
+        return {
+          run: { ...s.run, usage: mergeUsage(s.run.usage, event.usage) },
+          ...(learned !== undefined && model !== undefined && s.contextWindows[model] !== learned
+            ? { contextWindows: { ...s.contextWindows, [model]: learned } }
+            : {}),
+        };
+      });
       break;
 
     case 'run.end': {
