@@ -262,6 +262,71 @@ describe('assistant text', () => {
     });
   });
 
+  it('keeps the completed message on the streamed id when the raw id is missing', () => {
+    // The two halves of a streamed turn derive identity independently: the
+    // stream anchors on `message_start`'s id, the completed message on
+    // `message.id || uuid`. When that fallback fires they disagree, and the
+    // renderer — which keys blocks by (messageId, blockIndex) — has no way to
+    // tell it is the same block. It inserts a second one, and the user sees
+    // the answer twice.
+    const state = makeState();
+    const events = run(state, [
+      INIT,
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u1',
+        session_id: 'sess-abc',
+        event: { type: 'message_start', message: { id: 'msg_01' } },
+      },
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u2',
+        session_id: 'sess-abc',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Received.' } },
+      },
+      assistantMessage({ id: '', content: [{ type: 'text', text: 'Received.', citations: null }] }),
+    ]);
+
+    const deltas = events.filter((e): e is TextDeltaEvent => e.type === 'text.delta');
+    const complete = events.find((e): e is TextCompleteEvent => e.type === 'text.complete');
+
+    expect(deltas[0]?.messageId).toBe('msg_01');
+    // Not 'uuid-assistant': the completed message must land on the block the
+    // deltas already built.
+    expect(complete?.messageId).toBe('msg_01');
+  });
+
+  it('does not lend the streamed id to a later message that was never streamed', () => {
+    // The mirror of the bug above. The streamed id is only valid for the turn
+    // it opened; if it outlived that turn, an unstreamed message with no id
+    // would merge *into* the previous message's blocks and overwrite them.
+    const state = makeState();
+    const events = run(state, [
+      INIT,
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u1',
+        session_id: 'sess-abc',
+        event: { type: 'message_start', message: { id: 'msg_01' } },
+      },
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u2',
+        session_id: 'sess-abc',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } },
+      },
+      assistantMessage({ id: '', content: [{ type: 'text', text: 'first' }] }),
+      assistantMessage({ id: '', uuid: 'uuid-second', content: [{ type: 'text', text: 'second' }] }),
+    ]);
+
+    const completes = events.filter((e): e is TextCompleteEvent => e.type === 'text.complete');
+    expect(completes.map((c) => c.messageId)).toEqual(['msg_01', 'uuid-second']);
+  });
+
   it('drops deltas that arrive before message_start rather than guessing a messageId', () => {
     const state = makeState();
     const events = run(state, [

@@ -27,6 +27,27 @@ function assistant(content: unknown, uuid = 'msg_1'): StoredMessage {
 }
 
 describe('replayStoredMessage', () => {
+  it('keys replayed blocks on the provider message id, not the envelope uuid', () => {
+    // The live mapper keys blocks on `message.id`. If replay keyed on the
+    // envelope `uuid` instead, a turn that was both replayed and live could
+    // never merge — the transcript would show it twice.
+    const [event] = replayStoredMessage(
+      { type: 'assistant', uuid: 'envelope-uuid', message: { id: 'msg_01', content: [{ type: 'text', text: 'hi' }] } },
+      ctx(),
+    );
+
+    expect(event).toMatchObject({ messageId: 'msg_01' });
+  });
+
+  it('falls back to the envelope uuid when a record carries no message id', () => {
+    const [event] = replayStoredMessage(
+      { type: 'assistant', uuid: 'envelope-uuid', message: { content: [{ type: 'text', text: 'hi' }] } },
+      ctx(),
+    );
+
+    expect(event).toMatchObject({ messageId: 'envelope-uuid' });
+  });
+
   it('replays assistant text as a completed block, flagged as replay', () => {
     const [event] = replayStoredMessage(assistant([{ type: 'text', text: 'hello' }]), ctx());
 

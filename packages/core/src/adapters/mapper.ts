@@ -570,7 +570,14 @@ function mapAssistantMessage(
   state: ClaudeMapperState,
 ): readonly AgentEvent[] {
   const events: AgentEvent[] = [];
-  const messageId: MessageId = message.message.id || message.uuid;
+  // Identity has to agree with whatever the stream already published, because
+  // the renderer keys blocks by (messageId, blockIndex): disagree, and the
+  // completed message opens a *second* block instead of finalising the one the
+  // deltas built, and the user reads the answer twice. `message.id` is the
+  // shared anchor when present; when it is missing, the streamed id is the
+  // right fallback and `uuid` — which the stream never saw — is the last
+  // resort, for turns that were never streamed at all.
+  const messageId: MessageId = message.message.id || state.streamMessageId || message.uuid;
   // Claude does not hand out a subagent id on assistant messages, but the tool
   // call that spawned the subagent identifies it uniquely and stably — which is
   // exactly what protocol's `AgentId` is for ("nest a subagent's work under the
@@ -694,6 +701,11 @@ function mapAssistantMessage(
       usage: { scope: 'delta', tokens: usage, contextTokens },
     });
   }
+
+  // The streamed id belongs to the turn that just closed. Leaving it set would
+  // let a *later* message with no id of its own inherit it and merge into this
+  // message's blocks — the same duplication bug wearing the opposite mask.
+  state.streamMessageId = undefined;
 
   return events;
 }

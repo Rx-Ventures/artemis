@@ -77,6 +77,17 @@ function asString(value: unknown): string | undefined {
 }
 
 /**
+ * The provider's message id out of a stored record, when it has one.
+ *
+ * Deliberately narrow: only a non-empty string counts, so a malformed record
+ * falls back to the envelope uuid rather than keying blocks on `undefined`.
+ */
+function storedMessageId(stored: StoredMessage): string | undefined {
+  if (typeof stored.message !== 'object' || stored.message === null) return undefined;
+  return asString((stored.message as { readonly id?: unknown }).id);
+}
+
+/**
  * Turn one stored message into the events it would have emitted live.
  *
  * Returns an empty array for anything unrecognised rather than throwing: a
@@ -100,7 +111,12 @@ export function replayStoredMessage(
 
   // The provider's own message id, so replayed blocks from one message group
   // together exactly as live ones do.
-  const messageId = stored.uuid;
+  //
+  // This has to be `message.id` and not the envelope's `uuid`, because the live
+  // mapper keys blocks on `message.id`. Keying replay on `uuid` gave every
+  // replayed turn an identity its live counterpart could never match, so a turn
+  // that was both replayed and live rendered twice.
+  const messageId = storedMessageId(stored) ?? stored.uuid;
 
   contentBlocks(stored.message).forEach((block, blockIndex) => {
     const type = asString(block.type);
