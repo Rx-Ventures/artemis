@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand';
-import { NO_CAPABILITIES } from '@libra/protocol';
+import { NO_CAPABILITIES } from '@apollo/protocol';
 import type {
   AgentError,
   AgentEvent,
@@ -40,7 +40,7 @@ import type {
   SessionSummary,
   TokenUsage,
   UsageSnapshot,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   listSessionsEverywhere,
@@ -145,7 +145,7 @@ export interface AppState {
    * been fetched.
    *
    * Separate from the provider descriptor's static `models` because the two
-   * answer different questions: the descriptor says what this build of Libra
+   * answer different questions: the descriptor says what this build of Apollo
    * knows about, this says what the installed CLI, signed in as this profile,
    * is willing to run. {@link activeModels} prefers this and falls back to the
    * descriptor, so no caller has to know which one it got.
@@ -242,7 +242,7 @@ export interface AppState {
 /* Preferences                                                                */
 /* -------------------------------------------------------------------------- */
 
-const PREFS_KEY = 'libra.prefs.v1';
+const PREFS_KEY = 'apollo.prefs.v1';
 
 /** Sidebar width bounds. Narrower than the minimum stops being a list. */
 export const SIDEBAR_MIN_WIDTH = 200;
@@ -539,7 +539,7 @@ export function selectedModelOption(state: AppState): ProviderModelOption | unde
  * Whether the fast-mode toggle should be offered at all.
  *
  * False when no model is explicitly selected, and that is deliberate rather
- * than conservative-by-accident: with the provider default in force Libra does
+ * than conservative-by-accident: with the provider default in force Apollo does
  * not know which model will run, so it cannot know whether the flag would be
  * honoured. An enabled toggle that the run silently ignores is worse than a
  * disabled one with a reason attached — the user believes it took effect.

@@ -1,5 +1,5 @@
 /**
- * The composition root: where Electron's resources meet `@libra/core`.
+ * The composition root: where Electron's resources meet `@apollo/core`.
  *
  * Core is deliberately incapable of doing this itself. It must never import
  * `electron` — it has to run in a plain Node process and under vitest — so
@@ -20,7 +20,7 @@
  * did not match its signature. The seam between main and core is exactly where
  * type checking earns its keep, so it is checked.
  *
- * The "a failed engine must not stop Libra from launching" property is
+ * The "a failed engine must not stop Apollo from launching" property is
  * preserved where it actually belongs — in {@link EngineHost.start}, which
  * catches construction failures and reports them through
  * {@link EngineHost.failureMessage}.
@@ -61,7 +61,7 @@ import type {
   SessionSummary,
   Unsubscribe,
   PlanUsage,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 import {
   createDefaultProviderRegistry,
@@ -74,7 +74,7 @@ import {
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
-} from '@libra/core';
+} from '@apollo/core';
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';
@@ -103,7 +103,7 @@ export interface EngineOptions {
    * is why a profile record stores a bare directory name rather than a path.
    */
   readonly userDataDir: string;
-  /** Libra's version, for any provider that wants a user-agent string. */
+  /** Apollo's version, for any provider that wants a user-agent string. */
   readonly appVersion: string;
 }
 
@@ -113,7 +113,7 @@ export interface EngineOptions {
  * Every method takes and returns renderer-safe protocol types, because each one
  * is a single step from an IPC response. Nothing here returns a `Profile`.
  */
-export interface LibraEngine {
+export interface ApolloEngine {
   listProviders(options: { readonly refresh?: boolean }): Promise<readonly ProviderDescriptor[]>;
 
   /**
@@ -233,7 +233,7 @@ export interface LibraEngine {
  * @throws {EngineUnavailableError} — but only through {@link EngineHost.start},
  *         which is the sole caller and catches everything.
  */
-function createEngine(options: EngineOptions): LibraEngine {
+function createEngine(options: EngineOptions): ApolloEngine {
   const { secrets, userDataDir } = options;
 
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
@@ -323,7 +323,7 @@ function createEngine(options: EngineOptions): LibraEngine {
      * which is precisely the cross-profile leak the isolated config directory
      * exists to prevent.
      *
-     * Every branch resolves. A provider Libra cannot drive, an adapter that
+     * Every branch resolves. A provider Apollo cannot drive, an adapter that
      * cannot enumerate, or a fetch that failed are all "here is the built-in
      * list, and no, the account did not confirm it" — the caller renders a
      * picker either way and labels it from `live`.
@@ -590,15 +590,15 @@ function createEngine(options: EngineOptions): LibraEngine {
  *
  * IPC handlers call {@link require}, which either returns a live engine or
  * throws {@link EngineUnavailableError}. That is normalized into a
- * `provider_not_found` result, so the UI can say "Libra's engine failed to
+ * `provider_not_found` result, so the UI can say "Apollo's engine failed to
  * start" instead of waiting on a promise that never settles.
  */
 export class EngineHost {
-  #engine: LibraEngine | null = null;
+  #engine: ApolloEngine | null = null;
   #failure: EngineUnavailableError | null = null;
 
   /** The live engine, or a descriptive throw. */
-  require(): LibraEngine {
+  require(): ApolloEngine {
     if (this.#engine) return this.#engine;
     throw this.#failure ?? new EngineUnavailableError('the engine has not been started yet.');
   }

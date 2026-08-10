@@ -2,11 +2,11 @@
  * Controls that explain themselves when they are unavailable.
  * ============================================================================
  *
- * Libra drives several agent CLIs over unrelated transports, and not all of
+ * Apollo drives several agent CLIs over unrelated transports, and not all of
  * them can do everything. The design rule that falls out of that is absolute:
  * **a control that cannot be used is shown, disabled, with a sentence saying
  * why** — never hidden, never disabled in silence. A user who cannot find the
- * fork button assumes Libra is broken; a user who sees a dimmed fork button
+ * fork button assumes Apollo is broken; a user who sees a dimmed fork button
  * saying "Codex does not support forking a session" has learnt something.
  *
  * This module is the mechanism for that rule, and it is deliberately free of

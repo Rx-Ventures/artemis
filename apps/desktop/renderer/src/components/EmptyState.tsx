@@ -69,7 +69,7 @@ export function EmptyState(): ReactElement {
           <LogoMark size={34} className="text-brass/70" />
         </EmptyMedia>
         <EmptyTitle className="font-sans text-lg font-semibold tracking-tight text-ink">
-          Libra
+          Apollo
         </EmptyTitle>
         <EmptyDescription className="text-xs leading-relaxed text-ink-muted">
           A desk for agentic coding CLIs. Currently pointed at{' '}

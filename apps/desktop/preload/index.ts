@@ -1,7 +1,7 @@
 /**
  * The contextBridge preload.
  *
- * This file is the entire attack surface between Libra's UI and its privileged
+ * This file is the entire attack surface between Apollo's UI and its privileged
  * main process. Everything the renderer can do, it does through the object
  * exposed here — there is no `require`, no `process`, no `ipcRenderer` on the
  * other side, and `contextIsolation` keeps this script's scope in a separate
@@ -15,12 +15,12 @@
  *     arbitrary page script.
  *
  *  2. **No dynamic channel names.** Every function below closes over a constant
- *     from `@libra/protocol`. Nothing the renderer passes is ever concatenated
+ *     from `@apollo/protocol`. Nothing the renderer passes is ever concatenated
  *     into a channel name, so the set of reachable channels is fixed at build
  *     time and readable in one screen.
  *
  *  3. **Exactly the contract, nothing more.** The exposed object is typed as
- *     {@link LibraBridge}; if it grows a method the protocol does not define,
+ *     {@link ApolloBridge}; if it grows a method the protocol does not define,
  *     the build fails.
  *
  * The bridge also never rejects. `ipcRenderer.invoke` rejects when a main
@@ -42,7 +42,7 @@ import {
   type IpcRequest,
   type IpcResponse,
   type IpcResult,
-  type LibraBridge,
+  type ApolloBridge,
   type ProfilesCreateRequest,
   type ProfilesDeleteRequest,
   type ProfilesListRequest,
@@ -61,7 +61,7 @@ import {
   type SessionsMessagesRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Request/response                                                           */
@@ -164,7 +164,7 @@ function handlePushedEvent(_event: unknown, payload: unknown): void {
 
 function subscribeToAgentEvents(listener: (event: AgentEvent) => void): Unsubscribe {
   if (typeof listener !== 'function') {
-    throw new TypeError('libra.runs.onEvent expects a function');
+    throw new TypeError('apollo.runs.onEvent expects a function');
   }
 
   subscribers.add(listener);
@@ -205,7 +205,7 @@ window.addEventListener('beforeunload', () => {
 /**
  * Read a value the main process passed through `webPreferences.additionalArguments`.
  *
- * `LibraBridge.version` and `.platform` are synchronous properties, so they
+ * `ApolloBridge.version` and `.platform` are synchronous properties, so they
  * cannot be fetched over `invoke`. `sendSync` would block the renderer's first
  * paint on an IPC round-trip. Passing them as process arguments costs nothing
  * and is available before the page loads.
@@ -221,10 +221,10 @@ function readArgument(name: string, fallback: string): string {
   return fallback;
 }
 
-function resolvePlatform(): LibraBridge['platform'] {
-  const reported = readArgument('libra-platform', String(process.platform));
+function resolvePlatform(): ApolloBridge['platform'] {
+  const reported = readArgument('apollo-platform', String(process.platform));
   if (reported === 'darwin' || reported === 'win32' || reported === 'linux') return reported;
-  // Libra ships for these three. Anything else (freebsd, say) gets the
+  // Apollo ships for these three. Anything else (freebsd, say) gets the
   // keyboard-hint behaviour closest to it rather than an undefined branch.
   return 'linux';
 }
@@ -234,12 +234,12 @@ function resolvePlatform(): LibraBridge['platform'] {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Exactly {@link LibraBridge} — the annotation is load-bearing. An extra method
+ * Exactly {@link ApolloBridge} — the annotation is load-bearing. An extra method
  * here is a compile error, which is what keeps "expose only what the contract
  * defines" from being a comment nobody checks.
  */
-const bridge: LibraBridge = Object.freeze({
-  version: readArgument('libra-version', '0.0.0'),
+const bridge: ApolloBridge = Object.freeze({
+  version: readArgument('apollo-version', '0.0.0'),
   platform: resolvePlatform(),
 
   profiles: Object.freeze({
@@ -292,4 +292,4 @@ const bridge: LibraBridge = Object.freeze({
   }),
 });
 
-contextBridge.exposeInMainWorld('libra', bridge);
+contextBridge.exposeInMainWorld('apollo', bridge);

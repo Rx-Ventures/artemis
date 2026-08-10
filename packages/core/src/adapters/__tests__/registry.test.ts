@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@libra/protocol';
+import { NO_CAPABILITIES } from '@apollo/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import {
@@ -96,7 +96,7 @@ describe('describe()', () => {
       id: 'codex',
       label: 'Codex',
       available: false,
-      unavailableReason: 'Not supported in this version of Libra yet.',
+      unavailableReason: 'Not supported in this version of Apollo yet.',
       capabilities: NO_CAPABILITIES,
     });
   });

@@ -1,7 +1,7 @@
 /**
  * The provider-adapter seam.
  *
- * This is the single most important design element in `@libra/core`. Libra
+ * This is the single most important design element in `@apollo/core`. Apollo
  * drives *agentic coding CLIs*, and the three we plan to support have three
  * completely unrelated transports:
  *
@@ -15,7 +15,7 @@
  *
  *  1. **Everything a provider produces is normalized before it crosses the
  *     seam.** An adapter's only output is the nine-variant
- *     {@link import('@libra/protocol').AgentEvent} union. Nothing
+ *     {@link import('@apollo/protocol').AgentEvent} union. Nothing
  *     provider-specific — no SDK message, no JSONL line, no HTTP body — is
  *     visible above this file.
  *  2. **Everything a provider *cannot* do is declared up front.** Adapters
@@ -27,7 +27,7 @@
  *
  * Note what is *not* here. `ProviderAdapter` and `Run` describe live objects —
  * async iterables, deferred permission prompts, disposal semantics — which is
- * exactly why they live in core rather than in `@libra/protocol`: they never
+ * exactly why they live in core rather than in `@apollo/protocol`: they never
  * cross the Electron IPC boundary. Protocol supplies every type they are built
  * from; this file assembles those into an interface an adapter implements.
  *
@@ -60,7 +60,7 @@ import type {
   RunStatus,
   SessionId,
   SessionSummary,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Environment                                                                */
@@ -88,7 +88,7 @@ export type EnvBundle = Readonly<Record<string, string | undefined>>;
  *               what enables `CLAUDE.md` loading for the Claude provider.
  * - `local`   — the machine-local project overrides (`.claude/settings.local.json`).
  *
- * **The default is the empty list.** Libra ships as a third-party app; running
+ * **The default is the empty list.** Apollo ships as a third-party app; running
  * with the user's personal agent configuration silently merged in would make
  * behaviour unreproducible and could pull in hooks, MCP servers and permission
  * rules the user never intended to grant to *this* app. Opting in is an
@@ -537,11 +537,11 @@ export interface ProviderBackendSpec extends ProviderBackendOption {
 export interface ProviderAuthModeSpec extends ProviderAuthModeOption {
   /**
    * Variable the profile's stored secret is written into when this mode is
-   * selected. Every mode's variable is managed by Libra, so a mode that is
+   * selected. Every mode's variable is managed by Apollo, so a mode that is
    * *not* selected has its variable stripped rather than merely left unset.
    *
    * **Omitted for a mode that stores no secret.** Some credentials are not
-   * Libra's to hold: a provider CLI can own its own login, scoped to the
+   * Apollo's to hold: a provider CLI can own its own login, scoped to the
    * profile's config directory, in which case there is no value to emit and no
    * variable to emit it as. Emitting one anyway would be worse than useless —
    * an explicitly-set credential variable *overrides* whatever the config
@@ -599,14 +599,14 @@ export interface ProviderCredentialSpec {
   readonly authModes: readonly ProviderAuthModeSpec[];
 
   /**
-   * Extra variables Libra owns outright for this provider, beyond
+   * Extra variables Apollo owns outright for this provider, beyond
    * {@link apiKeyVar}, {@link configDirVar}, the backend flags and every auth
    * mode's {@link ProviderAuthModeSpec.secretEnvVar}.
    *
    * These are stripped from the inherited environment and rejected in
    * `publicEnv`, so a profile's credentials are decided by the profile and by
-   * nothing else. Claude lists the credential variables Libra does *not*
-   * support here, which is what makes "Libra cannot be authenticated by
+   * nothing else. Claude lists the credential variables Apollo does *not*
+   * support here, which is what makes "Apollo cannot be authenticated by
    * accident" structural rather than merely unimplemented.
    */
   readonly extraManagedEnvKeys: readonly string[];
@@ -618,7 +618,7 @@ export interface ProviderCredentialSpec {
  * The union of the key variable, the config-directory variable, each backend
  * flag, **each auth mode's secret variable**, and anything the adapter named
  * explicitly. Callers use it both to scrub the inherited environment and to
- * reject `publicEnv` entries that would override Libra's own choices.
+ * reject `publicEnv` entries that would override Apollo's own choices.
  *
  * Every mode's variable is in the union, not just the selected one, and that is
  * the point: a profile in subscription mode must have `ANTHROPIC_API_KEY`
@@ -687,7 +687,7 @@ export function defaultAuthMode(spec: ProviderCredentialSpec): ProviderAuthModeS
 }
 
 /**
- * A provider Libra can drive.
+ * A provider Apollo can drive.
  *
  * Adapters are **stateless singletons with respect to runs**: one adapter
  * instance serves every run for its provider, and all per-run state lives on
@@ -788,7 +788,7 @@ export interface ProviderAdapter {
    * failing and no way to notice from the UI. A flag whose correctness depends
    * on nobody ever copying an array is not a flag, it is a landmine. This is
    * the mechanism by which the settings screen tells the user "this is the
-   * built-in list, Libra could not reach the CLI" — it has to be robust, or it
+   * built-in list, Apollo could not reach the CLI" — it has to be robust, or it
    * is worse than absent.
    */
   listModels?(query: ModelListQuery): Promise<ModelCatalogue>;
@@ -901,7 +901,7 @@ export interface ProviderAdapter {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The set of providers this Libra build can drive. See `./registry.ts` for the
+ * The set of providers this Apollo build can drive. See `./registry.ts` for the
  * implementation and for the one-line registration point.
  */
 export interface ProviderRegistry {

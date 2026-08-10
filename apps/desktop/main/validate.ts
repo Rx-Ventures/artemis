@@ -2,7 +2,7 @@
  * Inbound IPC validation.
  *
  * The renderer is untrusted by construction. Not because we expect the user to
- * attack their own app, but because the renderer is the one process in Libra
+ * attack their own app, but because the renderer is the one process in Apollo
  * that displays attacker-influenced content: a transcript, a tool result, a
  * file the agent read. If anything ever achieves script execution there, this
  * file is the wall between it and the main process's filesystem access,
@@ -61,7 +61,7 @@ import {
   type SessionsMessagesRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 import { ValidationError } from './errors.js';
 
@@ -321,7 +321,7 @@ function optionalJsonObject(
 /**
  * Non-sensitive environment variables for a profile.
  *
- * The checks here duplicate `@libra/core`'s. That is deliberate: `publicEnv` is
+ * The checks here duplicate `@apollo/core`'s. That is deliberate: `publicEnv` is
  * written to an unencrypted config file, so "someone pasted
  * `ANTHROPIC_AUTH_TOKEN` into the extra-env box" has to be caught before the
  * value reaches any layer that might persist it.
@@ -358,7 +358,7 @@ function optionalPublicEnv(value: unknown, field: string): Record<string, string
       throw new ValidationError(
         `${field}.${key}`,
         'controls where the profile’s credential is sent. Endpoint, proxy and TLS-trust ' +
-          'variables are decided by Libra, not by a profile',
+          'variables are decided by Apollo, not by a profile',
       );
     }
     out[key] = requireString(source[key], `${field}.${key}`, LIMITS.envValue);
@@ -713,7 +713,7 @@ export function validateProvidersList(raw: unknown): ProvidersListRequest {
  *
  * `cwd` is optional here but absolute when present. The provider resolves its
  * configuration relative to it, so a relative path would be resolved against
- * the main process's `process.cwd()` — an artefact of how Libra was launched,
+ * the main process's `process.cwd()` — an artefact of how Apollo was launched,
  * and never what the renderer meant.
  */
 export function validateProvidersModels(raw: unknown): ProvidersModelsRequest {
@@ -804,7 +804,7 @@ export function validateSessionsListAll(raw: unknown): SessionsListAllRequest {
  * `defaultPath` only decides where the dialog opens; the user still has to
  * choose. It is required to be absolute all the same — a relative path would
  * be resolved against the main process's `process.cwd()`, which is an
- * implementation detail of how Libra was launched and has nothing to do with
+ * implementation detail of how Apollo was launched and has nothing to do with
  * anything the user can see.
  *
  * The dialog's title and button text are deliberately **not** accepted. They

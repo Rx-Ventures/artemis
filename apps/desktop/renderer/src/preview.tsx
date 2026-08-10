@@ -26,7 +26,7 @@ import {
   TrashIcon,
 } from 'lucide-react';
 
-import { LibraProviders } from './components/providers';
+import { ApolloProviders } from './components/providers';
 import { IconButton, ReasonButton, WithReason } from './components/disabled-reason';
 import { CodeBlock, Row, StatusDot, ToneBadge, type Tone } from './components/primitives';
 
@@ -116,7 +116,7 @@ function Gallery(): ReactElement {
     <div className="h-full overflow-auto bg-abyss">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 p-8">
         <header className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold tracking-tight text-ink">Libra design system</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-ink">Apollo design system</h1>
           <p className="text-sm text-ink-muted">
             Graphite and brass. Dark only, dense, no gradients.
           </p>
@@ -327,7 +327,7 @@ function Gallery(): ReactElement {
               </div>
               <div className="p-2.5">
                 <Row label="Run">01JD8K2QW9</Row>
-                {/* "Claude", not "Claude Code": Libra names the provider, never
+                {/* "Claude", not "Claude Code": Apollo names the provider, never
                     Anthropic's product. */}
                 <Row label="Provider" mono={false}>
                   Claude
@@ -418,12 +418,12 @@ function Gallery(): ReactElement {
 }
 
 const container = document.getElementById('root');
-if (!container) throw new Error('Libra preview: #root is missing from preview.html');
+if (!container) throw new Error('Apollo preview: #root is missing from preview.html');
 
 createRoot(container).render(
   <StrictMode>
-    <LibraProviders>
+    <ApolloProviders>
       <Gallery />
-    </LibraProviders>
+    </ApolloProviders>
   </StrictMode>,
 );

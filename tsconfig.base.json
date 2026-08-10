@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "display": "Libra base",
+  "display": "Apollo base",
   "compilerOptions": {
     /* Language + emit */
     "target": "ES2023",

@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { GaugeIcon, RefreshCwIcon } from 'lucide-react';
 
-import { bindingWindow, type PlanUsage, type PlanUsageWindow } from '@libra/protocol';
+import { bindingWindow, type PlanUsage, type PlanUsageWindow } from '@apollo/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';

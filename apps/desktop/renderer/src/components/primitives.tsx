@@ -1,8 +1,8 @@
 /**
- * Libra-specific primitives.
+ * Apollo-specific primitives.
  *
  * The small pieces that have no shadcn registry equivalent, or where the
- * registry's version does not carry Libra's semantics. Everything here is
+ * registry's version does not carry Apollo's semantics. Everything here is
  * built on the same tokens as `components/ui/`, so it sits inside the design
  * system rather than beside it.
  *

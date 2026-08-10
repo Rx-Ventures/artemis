@@ -33,7 +33,7 @@ import type {
   StopReason,
   ToolEndStatus,
   UsageSnapshot,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Items                                                                      */
@@ -248,12 +248,12 @@ export class TranscriptModel {
    * {@link pushUserMessage} renders the prompt before the round-trip returns
    * and flags it `pending`, which the UI draws dimmed. Something has to clear
    * that flag, and the provider echo cannot: the Claude mapper deliberately
-   * drops the echo of Libra's own prompt (the renderer already drew it), so
+   * drops the echo of Apollo's own prompt (the renderer already drew it), so
    * `completeUserText`'s reconciliation branch never runs for a live turn and
    * every message the user ever sent would stay dimmed for the life of the
    * window, with its id accumulating in `unconfirmedUser` forever.
    *
-   * So confirmation happens at the point Libra actually knows the text was
+   * So confirmation happens at the point Apollo actually knows the text was
    * delivered — when `runs.start` / `runs.send` resolves. A prompt whose call
    * *failed* is deliberately left pending: dimmed then means what it says.
    */

@@ -16,7 +16,7 @@
  * where a disabled row is easy to skip past silently — so a gated group here
  * keeps its heading and replaces its items with the sentence explaining why
  * there are none. A user who cannot find "Resume session" learns that this
- * provider cannot resume one, instead of concluding Libra lost the feature.
+ * provider cannot resume one, instead of concluding Apollo lost the feature.
  *
  * Two capabilities gate the session entries and they are genuinely independent:
  *
@@ -71,7 +71,7 @@ import {
   SquareTerminalIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { ProviderId, SessionSummary } from '@libra/protocol';
+import type { ProviderId, SessionSummary } from '@apollo/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
@@ -297,7 +297,7 @@ function RootPage({
         </CommandItem>
         <GatedItem
           supported={models.length > 0}
-          reason="This provider does not offer a model choice, so Libra sends no model and the provider picks its own."
+          reason="This provider does not offer a model choice, so Apollo sends no model and the provider picks its own."
           onSelect={() => onPage('models')}
         >
           <CpuIcon />
@@ -449,7 +449,7 @@ function GatedItem({
  * Deliberately *not* grouped the way the sidebar groups them: `cmdk` filters a
  * flat list, and folding rows under headings would hide matches from the search
  * that is the whole point of this surface. The project and the profile are put
- * on each row instead, and into the row's search value, so "libra auth" and
+ * on each row instead, and into the row's search value, so "apollo auth" and
  * "work account" both find something.
  */
 function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactElement {

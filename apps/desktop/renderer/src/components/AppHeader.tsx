@@ -3,7 +3,7 @@
  * ============================================================================
  *
  *     ┌──────────────────────────────────────────────────────────────────┐
- *     │ ●●●  [◧]  libra › Wire the adapter seam            [+]  [⚙]      │
+ *     │ ●●●  [◧]  apollo › Wire the adapter seam            [+]  [⚙]      │
  *     └──────────────────────────────────────────────────────────────────┘
  *       ↑     ↑    ↑                                        ↑    ↑
  *       │     │    └ what this window is pointed at         │    └ settings
@@ -33,7 +33,7 @@
  *
  * ## The whole bar is an Electron drag region
  *
- * `.drag-region` / `.no-drag` are Libra utilities (`index.css`) over
+ * `.drag-region` / `.no-drag` are Apollo utilities (`index.css`) over
  * `-webkit-app-region`, which has no Tailwind equivalent. The rule that bites:
  * a drag region swallows clicks, so **every interactive child needs
  * `.no-drag`** or it becomes decoration that drags the window instead of

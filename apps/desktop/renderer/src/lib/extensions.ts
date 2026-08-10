@@ -2,7 +2,7 @@
  * The two bridge calls the sidebar is built on.
  * ============================================================================
  *
- * Both arrived with this layout and both are now first-class on `LibraBridge`:
+ * Both arrived with this layout and both are now first-class on `ApolloBridge`:
  *
  *  - `sessions.listAll` — every profile's history, in every project it has run
  *    in, in one call. The sidebar groups by `cwd` and labels by `profileId`,
@@ -31,7 +31,7 @@
  * someone changed their mind, so cancellation gets its own status and no copy.
  */
 
-import type { ProfileId, ProviderId, SessionSummary } from '@libra/protocol';
+import type { ProfileId, ProviderId, SessionSummary } from '@apollo/protocol';
 import { call, resolveBridge } from './bridge';
 
 /* -------------------------------------------------------------------------- */

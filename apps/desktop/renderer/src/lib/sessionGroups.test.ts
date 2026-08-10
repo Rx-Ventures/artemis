@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ProfileId, SessionSummary } from '@libra/protocol';
+import type { ProfileId, SessionSummary } from '@apollo/protocol';
 import {
   flattenGroups,
   groupSessionsByProject,

@@ -5,7 +5,7 @@
  * transcripts under `$CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<id>.jsonl`,
  * isolating a profile's credentials also isolates its history — for free.
  * Sessions are therefore partitioned by (profile × project), and both
- * coordinates are recoverable without any bookkeeping of Libra's own: the
+ * coordinates are recoverable without any bookkeeping of Apollo's own: the
  * profile is *which* config directory a session was found in, and the project
  * is the {@link SessionSummary.cwd} recorded inside the session.
  *

@@ -10,10 +10,10 @@
  * inherits nothing has no `PATH`, no `HOME`, no `TMPDIR`; it cannot find `git`
  * or a shell and is useless for coding work.
  *
- * **Problem 2 — you cannot just inherit everything either.** Libra's whole
+ * **Problem 2 — you cannot just inherit everything either.** Apollo's whole
  * account-switching model is that a profile is a *complete* credential
  * environment. If the user happens to have `ANTHROPIC_API_KEY` exported in the
- * shell that launched Libra, a Bedrock profile would silently authenticate
+ * shell that launched Apollo, a Bedrock profile would silently authenticate
  * against the first-party API instead — the user would be billed on an account
  * they did not choose, and the isolated `CLAUDE_CONFIG_DIR` would be bypassed.
  *
@@ -22,7 +22,7 @@
  * profile does not set is genuinely unset.
  *
  * The scrub list holds *every* credential variable Claude understands, not just
- * the one the profile happens to use. Both of Libra's auth modes are in it —
+ * the one the profile happens to use. Both of Apollo's auth modes are in it —
  * `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` — because either one
  * arriving from the shell would change which account is billed. The API key is
  * the sharper edge of the two: the CLI prefers it over a subscription token, so

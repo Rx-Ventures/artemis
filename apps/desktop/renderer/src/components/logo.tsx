@@ -1,12 +1,12 @@
 /**
- * Libra's mark.
+ * Apollo's mark.
  *
  * The only hand-drawn icon left in the app. Everything else comes from
  * `lucide-react`, which is what the shadcn registry components already import —
  * two icon sets in one tree is the same mistake as two component systems.
  *
  * This one stays hand-drawn because it is the product's identity: a balance
- * beam, for "Libra". No icon library has it, and it must never be swapped for a
+ * beam, for "Apollo". No icon library has it, and it must never be swapped for a
  * generic sparkle or a borrowed logo.
  */
 

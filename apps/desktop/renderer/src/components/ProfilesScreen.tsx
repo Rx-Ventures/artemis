@@ -12,7 +12,7 @@
  *     time, passed straight to the bridge, and the field is cleared in the same
  *     tick. It is never in React state, never in a store, never in a re-render.
  *
- *  2. **Libra never performs a login.** There is no OAuth flow here, no browser
+ *  2. **Apollo never performs a login.** There is no OAuth flow here, no browser
  *     handoff, no token refresh. Every credential — API key or subscription
  *     token — is one the *user* obtained in their own terminal and pasted in.
  *     The subscription mode's instructions say so in as many words, because
@@ -48,13 +48,13 @@
 
 import { useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { PlusIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
-import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@libra/protocol';
+import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@apollo/protocol';
 import type {
   ProfileMetadata,
   ProviderAuthModeOption,
   ProviderBackend,
   ProviderId,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 import {
   authModeSupportsBackend,
@@ -117,7 +117,7 @@ export function ProfilesSection(): ReactElement {
   return (
     <SettingsPane
       title="Profiles"
-      description="Each profile is its own credential and its own isolated history. Switching is manual — Libra never pools accounts or rotates them for you."
+      description="Each profile is its own credential and its own isolated history. Switching is manual — Apollo never pools accounts or rotates them for you."
       actions={
         creating ? null : (
           <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
@@ -245,7 +245,7 @@ function ProfileCard({
 
         {/*
           A modal rather than the inline `Alert` this used to be. Deleting a
-          profile destroys a credential the user cannot get back from Libra, and
+          profile destroys a credential the user cannot get back from Apollo, and
           an inline panel inside a scrolling list can be confirmed with a stray
           click on a row that has since moved. `AlertDialog` takes the focus,
           traps it, and makes Escape mean cancel — which is the behaviour an
@@ -373,7 +373,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   /**
    * Worth warning about only when a stored credential is actually in play.
    * On a backend with an ambient credential chain the mode is still recorded
-   * but nothing Libra holds is read, so "your credential will not be migrated"
+   * but nothing Apollo holds is read, so "your credential will not be migrated"
    * would be a warning about an event that cannot happen.
    */
   const changingMode =
@@ -396,7 +396,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       // process rejects these regardless — this only turns a round-trip error
       // into an immediate one.
       if (isCredentialRoutingEnvKey(name)) {
-        return `${name} controls where your credential is sent, which Libra decides. Remove it.`;
+        return `${name} controls where your credential is sent, which Apollo decides. Remove it.`;
       }
       env[name] = trimmed.slice(eq + 1).trim();
     }
@@ -586,7 +586,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
               <FieldDescription className="text-2xs">
                 {editing
                   ? 'Leave blank to keep the stored credential. Anything typed here replaces it.'
-                  : 'Sent straight to encrypted storage. Libra shows you a masked hint afterwards and cannot read it back.'}
+                  : 'Sent straight to encrypted storage. Apollo shows you a masked hint afterwards and cannot read it back.'}
               </FieldDescription>
               {selectedMode?.secretHowTo ? (
                 <FieldDescription className="text-2xs text-ink-muted">
@@ -722,7 +722,7 @@ function AuthModeField({
       </Select>
 
       {/* On an ambient-chain backend the mode is still recorded, but nothing
-          Libra stores is read and the mode's billing note would describe an
+          Apollo stores is read and the mode's billing note would describe an
           account that is not being charged. Say which it is. */}
       {!secretRequired ? (
         <FieldDescription className="text-2xs text-ink-muted">
@@ -742,23 +742,23 @@ function AuthModeField({
 
       {/*
         The one place a user might reasonably expect a "Sign in with Claude"
-        button. There is not one today: Libra holds credentials the user
+        button. There is not one today: Apollo holds credentials the user
         brought, and performs no interactive login of any kind.
 
         This is contingent, not architectural. Anthropic's Agent SDK terms do
         not permit a third-party product to offer claude.ai login or
         subscription rate limits "unless previously approved" — so the bar is
-        approval, not feasibility. If Libra obtains that approval, an in-app
+        approval, not feasibility. If Apollo obtains that approval, an in-app
         login becomes legitimate and this decision should be revisited.
 
         Two things would change with it, and both are the reason paste-a-token
-        is the better default until then: Libra would have to run the OAuth
+        is the better default until then: Apollo would have to run the OAuth
         handshake, and it would have to store and refresh a refresh token
         rather than holding one long-lived credential in the keychain.
       */}
       {secretRequired ? (
         <FieldDescription className="text-2xs">
-          Libra does not sign you in. Obtain the credential yourself and paste it below — nothing on
+          Apollo does not sign you in. Obtain the credential yourself and paste it below — nothing on
           this screen opens a browser or talks to an account.
         </FieldDescription>
       ) : null}

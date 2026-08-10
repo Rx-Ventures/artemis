@@ -1,7 +1,7 @@
 /**
  * Profile persistence.
  *
- * Profiles live in a single JSON document under Libra's user-data directory:
+ * Profiles live in a single JSON document under Apollo's user-data directory:
  *
  * ```
  * <userDataDir>/profiles.json          the records  (no secrets, ever)
@@ -15,7 +15,7 @@
  * file is readable plaintext by design, and there is nothing in it worth
  * stealing.
  *
- * `@libra/core` must not import `electron`, so the store takes its user-data
+ * `@apollo/core` must not import `electron`, so the store takes its user-data
  * directory and its secret storage as constructor arguments rather than
  * reaching for `app.getPath('userData')`.
  *
@@ -33,7 +33,7 @@ import {
   isProviderBackend,
   isProviderId,
   isSecretEnvKey,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 import type {
   Profile,
   ProfileDraft,
@@ -43,7 +43,7 @@ import type {
   ProviderAuthMode,
   ProviderBackend,
   ProviderId,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 
 import { ProfileError } from './errors.js';
 import { assertBareDirName, profileConfigDir, profilesRoot, readMetadata } from './env.js';
@@ -66,15 +66,15 @@ interface PersistedDocument {
 
 /** Construction options for {@link ProfileStore}. */
 export interface ProfileStoreOptions {
-  /** Libra's user-data directory. Injected — core cannot ask Electron for it. */
+  /** Apollo's user-data directory. Injected — core cannot ask Electron for it. */
   readonly userDataDir: string;
   /** Encrypted credential storage supplied by the host process. */
   readonly secrets: SecretStore;
   /**
-   * Variable names Libra sets itself, across every registered provider —
+   * Variable names Apollo sets itself, across every registered provider —
    * normally the union of `managedEnvKeys(adapter.credentials)`.
    *
-   * Used to reject `publicEnv` entries that would override Libra's own
+   * Used to reject `publicEnv` entries that would override Apollo's own
    * credential and isolation choices. It is a *denylist*, so the union is the
    * right shape: over-rejecting a name one provider manages costs a user
    * nothing, while under-rejecting one silently breaks account isolation.
@@ -143,7 +143,7 @@ export class ProfileStore {
     this.#newId = options.newId ?? (() => randomUUID());
   }
 
-  /** Libra's user-data directory, as given. */
+  /** Apollo's user-data directory, as given. */
   get userDataDir(): string {
     return this.#userDataDir;
   }
@@ -502,7 +502,7 @@ function requireAuthMode(authMode: ProviderAuthMode): ProviderAuthMode {
  *     key into the very same bundle. Accepting one would let anything that can
  *     write a profile redirect the key off-box without a secret ever crossing
  *     IPC. See {@link isCredentialRoutingEnvKey}.
- *  3. **Anything Libra manages itself**, which the profile's backend decides.
+ *  3. **Anything Apollo manages itself**, which the profile's backend decides.
  */
 export function sanitizePublicEnv(
   env: Readonly<Record<string, string>>,
@@ -525,13 +525,13 @@ export function sanitizePublicEnv(
     if (isCredentialRoutingEnvKey(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} controls where the profile's credential is sent, which Libra decides rather than the profile. It cannot be set in publicEnv.`,
+        `${key} controls where the profile's credential is sent, which Apollo decides rather than the profile. It cannot be set in publicEnv.`,
       );
     }
     if (managedEnvKeys.includes(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} is set by Libra from the profile's backend and cannot be overridden in publicEnv`,
+        `${key} is set by Apollo from the profile's backend and cannot be overridden in publicEnv`,
       );
     }
     if (typeof value !== 'string') {
@@ -586,7 +586,7 @@ function assertUnusedDirName(name: string, existing: readonly Profile[]): string
 
 function parseDocument(value: unknown, file: string): readonly Profile[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ProfileError('unknown', `${file} is not a Libra profile document`);
+    throw new ProfileError('unknown', `${file} is not a Apollo profile document`);
   }
   const document = value as { version?: unknown; profiles?: unknown };
 

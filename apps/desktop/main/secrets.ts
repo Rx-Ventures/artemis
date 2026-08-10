@@ -1,7 +1,7 @@
 /**
  * Encrypted credential storage.
  *
- * Every credential Libra holds is one the user obtained and pasted in — an API
+ * Every credential Apollo holds is one the user obtained and pasted in — an API
  * key, or a subscription token their own CLI printed. There is no OAuth flow
  * here and there never will be: nothing in this file mints, refreshes or
  * negotiates a credential, it only encrypts one. That makes it the whole of the
@@ -9,7 +9,7 @@
  * in the main process when a run is starting, and never leaves.
  *
  * Which *variable* a secret is later emitted as is the profile's auth mode, and
- * that decision lives in `@libra/core`'s `resolveEnv`. This file stores an
+ * that decision lives in `@apollo/core`'s `resolveEnv`. This file stores an
  * opaque string and has no opinion about what kind of credential it is.
  *
  * ### Where the ciphertext lives
@@ -28,7 +28,7 @@
  * `safeStorage.setUsePlainTextEncryption(true)` to make the API "work" anyway;
  * it stores credentials in something barely better than plaintext.
  *
- * **Libra never calls it.** The store reports itself unusable, the failure is
+ * **Apollo never calls it.** The store reports itself unusable, the failure is
  * surfaced to the user with an actionable message, and profile writes fail
  * loudly. Silently degrading to plaintext would mean a user believes their key
  * is encrypted when it is not, which is worse than not storing it at all.
@@ -56,12 +56,12 @@ const log = createLogger('secrets');
  * ref is a handle stored *on* the profile record, so rotating a credential or
  * moving a profile between backends never has to touch this file's key space.
  *
- * This interface is what the main process hands to `@libra/core` — core builds
+ * This interface is what the main process hands to `@apollo/core` — core builds
  * the agent's env bundle by reading through it and never sees the file, the
  * encryption backend, or anything else Electron-shaped.
  */
 export interface SecretStore {
-  /* -- the three methods `@libra/core`'s `SecretStore` seam requires -------- */
+  /* -- the three methods `@apollo/core`'s `SecretStore` seam requires -------- */
 
   /** Store `secret` under `ref`, replacing any previous value. */
   set(ref: string, secret: string): Promise<void>;
@@ -115,8 +115,8 @@ export function probeEncryption(): EncryptionProbe {
           available: false,
           detail:
             process.platform === 'darwin'
-              ? 'macOS Keychain is not available to Libra. Unlock your login keychain and restart the app.'
-              : 'Windows DPAPI is not available to Libra. Sign in to your Windows user account and restart the app.',
+              ? 'macOS Keychain is not available to Apollo. Unlock your login keychain and restart the app.'
+              : 'Windows DPAPI is not available to Apollo. Sign in to your Windows user account and restart the app.',
         };
   }
 
@@ -134,8 +134,8 @@ export function probeEncryption(): EncryptionProbe {
       available: false,
       backend,
       detail:
-        'No system keyring was found, so Libra cannot encrypt API keys on this machine. ' +
-        'Install and start gnome-keyring or KWallet, then restart Libra.',
+        'No system keyring was found, so Apollo cannot encrypt API keys on this machine. ' +
+        'Install and start gnome-keyring or KWallet, then restart Apollo.',
     };
   }
 
@@ -145,8 +145,8 @@ export function probeEncryption(): EncryptionProbe {
         available: false,
         backend,
         detail:
-          'The system keyring is locked or unavailable, so Libra cannot encrypt API keys. ' +
-          'Unlock your keyring (gnome-keyring or KWallet) and restart Libra.',
+          'The system keyring is locked or unavailable, so Apollo cannot encrypt API keys. ' +
+          'Unlock your keyring (gnome-keyring or KWallet) and restart Apollo.',
       };
 }
 
@@ -161,7 +161,7 @@ const FILE_VERSION = 1 as const;
 /**
  * Legal shape for a `secretRef`.
  *
- * Refs are map keys, not paths — but they arrive from `@libra/core` and, one
+ * Refs are map keys, not paths — but they arrive from `@apollo/core` and, one
  * refactor from now, could arrive from somewhere less trustworthy. Constraining
  * them means a ref can never be `../../id_rsa` and can never be `__proto__`.
  */
@@ -284,7 +284,7 @@ class SafeStorageSecretStore implements SecretStore {
     throw new SecretStoreUnavailableError(
       this.#probe.backend === 'basic_text' ? 'plaintext_backend' : 'encryption_unavailable',
       this.#probe.detail ??
-        'Libra cannot encrypt API keys on this machine, so it will not store them. ' +
+        'Apollo cannot encrypt API keys on this machine, so it will not store them. ' +
           'No credential has been written to disk.',
     );
   }
@@ -304,7 +304,7 @@ class SafeStorageSecretStore implements SecretStore {
         return empty;
       }
       log.error('Failed to read the secret store', error);
-      throw new SecretStoreUnavailableError('io_error', 'Libra could not read its credential store.');
+      throw new SecretStoreUnavailableError('io_error', 'Apollo could not read its credential store.');
     }
 
     const entries = new Map<string, string>();
@@ -326,7 +326,7 @@ class SafeStorageSecretStore implements SecretStore {
       // beats a clean file with their credentials silently deleted.
       throw new SecretStoreUnavailableError(
         'corrupt_store',
-        `Libra's credential store at ${this.#filePath} could not be parsed. ` +
+        `Apollo's credential store at ${this.#filePath} could not be parsed. ` +
           'Move it aside and re-enter your API keys to start fresh.',
       );
     }
@@ -385,7 +385,7 @@ class SafeStorageSecretStore implements SecretStore {
       // The cache no longer reflects disk; drop it so the next read re-syncs.
       this.#cache = null;
       log.error('Failed to write the secret store', error);
-      throw new SecretStoreUnavailableError('io_error', 'Libra could not save the API key to its credential store.');
+      throw new SecretStoreUnavailableError('io_error', 'Apollo could not save the API key to its credential store.');
     }
   }
 }

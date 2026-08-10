@@ -27,7 +27,7 @@
  * back to a block replacement rather than locking the frame.
  */
 
-import type { JsonObject, JsonValue } from '@libra/protocol';
+import type { JsonObject, JsonValue } from '@apollo/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Shapes                                                                     */

@@ -99,7 +99,7 @@ import {
   SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { PermissionMode, ProfileId, ProviderModelOption } from '@libra/protocol';
+import type { PermissionMode, ProfileId, ProviderModelOption } from '@apollo/protocol';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';
@@ -475,7 +475,7 @@ function ModelSegment(): ReactElement {
         label="Model"
         icon={<CpuIcon className="size-3 shrink-0" aria-hidden="true" />}
         text={running ?? 'model'}
-        reason={`${providerLabel} does not offer a model choice, so Libra sends no model and the provider picks its own.`}
+        reason={`${providerLabel} does not offer a model choice, so Apollo sends no model and the provider picks its own.`}
       />
     );
   }
@@ -554,7 +554,7 @@ function ModelSegment(): ReactElement {
  *
  * All three, because they answer three different questions and only the first
  * is guessable from the trigger. `resolvedModel` in particular is what an alias
- * like `sonnet` actually resolves to today — Libra offers aliases rather than
+ * like `sonnet` actually resolves to today — Apollo offers aliases rather than
  * dated snapshots, so without it the menu never says which model that is, and
  * "which snapshot am I on" is a question people ask a bill about.
  *
@@ -627,7 +627,7 @@ function modelName(model: ProviderModelOption): string {
  * The store keeps the flag on across a model switch on purpose, but the control
  * shows off, because showing it on next to a model that ignores it would be a
  * lie about what the next run does. Saying so is what stops that reading as a
- * setting Libra quietly threw away.
+ * setting Apollo quietly threw away.
  */
 export function fastModeReason(
   model: ProviderModelOption | undefined,
@@ -635,7 +635,7 @@ export function fastModeReason(
 ): string | undefined {
   const kept = on ? ' It stays on and applies again on a model that offers it.' : '';
   if (model === undefined) {
-    return `Fast mode belongs to a specific model, and “provider default” means Libra does not know which one will run — so it will not offer a switch whose effect it cannot promise. Choose a model.${kept}`;
+    return `Fast mode belongs to a specific model, and “provider default” means Apollo does not know which one will run — so it will not offer a switch whose effect it cannot promise. Choose a model.${kept}`;
   }
   if (model.supportsFastMode !== true) {
     return `${modelName(model)} does not offer fast mode.${kept}`;
@@ -650,7 +650,7 @@ export function ultracodeReason(
 ): string | undefined {
   const kept = on ? ' It stays on and applies again on a model that offers it.' : '';
   if (model === undefined) {
-    return `Ultracode belongs to a specific model, and “provider default” means Libra does not know which one will run. Choose a model.${kept}`;
+    return `Ultracode belongs to a specific model, and “provider default” means Apollo does not know which one will run. Choose a model.${kept}`;
   }
   if (model.supportsUltracode !== true) {
     return `${modelName(model)} does not offer ultracode — it needs a model that can think at xhigh effort.${kept}`;
@@ -1131,7 +1131,7 @@ function LocationSegment(): ReactElement {
           )}
           {branch ? (
             <span className="mt-1 block text-ink-faint">
-              Branch “{branch}” is the last one recorded in this directory’s session history — Libra
+              Branch “{branch}” is the last one recorded in this directory’s session history — Apollo
               cannot read the working tree, so it may be out of date.
             </span>
           ) : null}

@@ -1,11 +1,11 @@
 /**
- * Error primitives for `@libra/core`.
+ * Error primitives for `@apollo/core`.
  *
  * Two problems this solves:
  *
  *  1. **`Error` does not survive structured clone.** Anything that can fail on
  *     its way to the renderer has to be reducible to a plain
- *     {@link AgentError}. {@link LibraError.toAgentError} is that reduction.
+ *     {@link AgentError}. {@link ApolloError.toAgentError} is that reduction.
  *  2. **Errors get rendered and logged.** A stack trace or a provider message
  *     that happens to contain an API key would leak it into the UI and into
  *     log files. Every message that passes through here is scrubbed.
@@ -15,7 +15,7 @@
  * and neither may depend on the session machinery.
  */
 
-import type { AgentError, AgentErrorCode, JsonValue } from '@libra/protocol';
+import type { AgentError, AgentErrorCode, JsonValue } from '@apollo/protocol';
 
 /** Every {@link AgentErrorCode}, for validating error-shaped values at runtime. */
 const AGENT_ERROR_CODES = [
@@ -61,7 +61,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 /**
  * Replace anything that looks like a credential with a placeholder.
  *
- * Applied to every message that becomes a {@link LibraError} or an
+ * Applied to every message that becomes a {@link ApolloError} or an
  * {@link AgentError}. Safe to call on arbitrary text; it never throws.
  *
  * Deliberately not exported: the adapters layer publishes its own scrubber for
@@ -79,8 +79,8 @@ function scrubSecrets(text: string): string {
   return out;
 }
 
-/** Extra detail attached to a {@link LibraError}. */
-export interface LibraErrorOptions {
+/** Extra detail attached to a {@link ApolloError}. */
+export interface ApolloErrorOptions {
   /** The underlying failure, kept for logs in the main process only. */
   readonly cause?: unknown;
   /** Structured diagnostics. Must be JSON-cloneable and secret-free. */
@@ -100,14 +100,14 @@ export interface LibraErrorOptions {
  * IPC boundary, so the main process can map it to an `IpcFail` without
  * guessing at a code.
  */
-export class LibraError extends Error {
+export class ApolloError extends Error {
   readonly code: AgentErrorCode;
   readonly details: JsonValue | undefined;
   readonly retryable: boolean | undefined;
   readonly providerCode: string | undefined;
   readonly httpStatus: number | undefined;
 
-  constructor(code: AgentErrorCode, message: string, options: LibraErrorOptions = {}) {
+  constructor(code: AgentErrorCode, message: string, options: ApolloErrorOptions = {}) {
     super(scrubSecrets(message), options.cause === undefined ? undefined : { cause: options.cause });
     this.name = new.target.name;
     this.code = code;
@@ -137,11 +137,11 @@ export class LibraError extends Error {
 }
 
 /** A profile could not be read, written, validated or credentialed. */
-export class ProfileError extends LibraError {}
+export class ProfileError extends ApolloError {}
 
 /** True for anything thrown by core that already carries a normalized code. */
-export function isLibraError(value: unknown): value is LibraError {
-  return value instanceof LibraError;
+export function isApolloError(value: unknown): value is ApolloError {
+  return value instanceof ApolloError;
 }
 
 /** True for a plain object that already satisfies {@link AgentError}. */
@@ -162,7 +162,7 @@ function isAgentErrorLike(value: unknown): value is AgentError {
  * @param fallback code to use when nothing better can be inferred
  */
 export function normalizeAgentError(error: unknown, fallback: AgentErrorCode = 'unknown'): AgentError {
-  if (isLibraError(error)) return error.toAgentError();
+  if (isApolloError(error)) return error.toAgentError();
   if (isAgentErrorLike(error)) return { ...error, message: scrubSecrets(error.message) };
 
   // The adapters layer throws `AdapterError`, which carries a fully-formed

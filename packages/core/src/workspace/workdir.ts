@@ -3,7 +3,7 @@
  *
  * ## Why this module exists
  *
- * Every agentic CLI Libra drives is ultimately a subprocess, and Node's
+ * Every agentic CLI Apollo drives is ultimately a subprocess, and Node's
  * `child_process.spawn` raises **`ENOENT` when the `cwd` is bad**, not when the
  * executable is missing. The two failures are indistinguishable from the errno
  * alone, and at least one provider SDK guesses wrong: given a perfectly healthy
@@ -15,7 +15,7 @@
  * — a libc diagnostic, on macOS, about a directory typo. Verified directly:
  *
  * ```
- * spawn(bin, ['--version'], { cwd: '/Users/atlas/libra' })  → status 0
+ * spawn(bin, ['--version'], { cwd: '/Users/atlas/apollo' })  → status 0
  * spawn(bin, ['--version'], { cwd: '/does/not/exist' })     → ENOENT
  * spawn(bin, ['--version'], { cwd: 'relative/path' })       → ENOENT
  * spawn(bin, ['--version'], { cwd: valid, env: {} })        → status 0
@@ -28,7 +28,7 @@
  * the question once, in one place, with a message a person can act on, and the
  * run registry asks it before an adapter is ever handed the input.
  *
- * ## Why it lives in `@libra/core` and not in `@libra/protocol`
+ * ## Why it lives in `@apollo/core` and not in `@apollo/protocol`
  *
  * It touches the filesystem. Protocol has zero dependencies and does no I/O —
  * it is loaded in the renderer's browser sandbox, where `node:fs` does not
@@ -53,7 +53,7 @@ import { isAbsolute } from 'node:path';
  * Why a path cannot be used as a working directory.
  *
  * Kept small and *distinguishable*: the UI wants to say something different for
- * each one ("that folder does not exist" invites a retry, "Libra cannot read
+ * each one ("that folder does not exist" invites a retry, "Apollo cannot read
  * that folder" invites a permissions fix), which is exactly what the libc
  * message failed to do.
  *
@@ -125,7 +125,7 @@ export async function checkWorkingDirectory(cwd: unknown): Promise<WorkingDirect
       path: typeof cwd === 'string' ? cwd : '',
       problem: 'not_absolute',
       message:
-        'No working directory was given. Choose the folder the agent should work in — Libra needs a full path such as /Users/you/projects/app.',
+        'No working directory was given. Choose the folder the agent should work in — Apollo needs a full path such as /Users/you/projects/app.',
     };
   }
 
@@ -169,7 +169,7 @@ export async function checkWorkingDirectory(cwd: unknown): Promise<WorkingDirect
           ok: false,
           path: cwd,
           problem: 'not_readable',
-          message: `Libra is not allowed to open that directory: ${cwd}. Check its permissions.`,
+          message: `Apollo is not allowed to open that directory: ${cwd}. Check its permissions.`,
           errno,
         };
       default:
@@ -200,7 +200,7 @@ export async function checkWorkingDirectory(cwd: unknown): Promise<WorkingDirect
       ok: false,
       path: cwd,
       problem: 'not_readable',
-      message: `Libra is not allowed to open that directory: ${cwd}. Check its permissions.`,
+      message: `Apollo is not allowed to open that directory: ${cwd}. Check its permissions.`,
       ...(errno === undefined ? {} : { errno }),
     };
   }

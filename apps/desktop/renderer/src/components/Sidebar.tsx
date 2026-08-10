@@ -3,10 +3,10 @@
  * ============================================================================
  *
  *      ╭────────────────────────────────╮
- *      │ ▣ libra                     [◧]│  ← the repo this window is in
+ *      │ ▣ apollo                     [◧]│  ← the repo this window is in
  *      │                                │
  *      │ [ + New session          ⌘N ]  │  ← the thing you came here to do
- *      │ ~/code/libra                   │  ← and where it will happen
+ *      │ ~/code/apollo                   │  ← and where it will happen
  *      ├────────────────────────────────┤
  *      │ SESSIONS · 22                  │
  *      │  Wire the adapter seam         │  ← this project only

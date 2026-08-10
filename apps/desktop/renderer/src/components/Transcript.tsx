@@ -353,7 +353,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
       <Bubble
         align="end"
         variant="tinted"
-        // Dimmed means "Libra has not confirmed delivery" — a prompt whose
+        // Dimmed means "Apollo has not confirmed delivery" — a prompt whose
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
       >

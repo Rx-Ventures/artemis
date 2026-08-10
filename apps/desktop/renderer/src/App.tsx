@@ -5,12 +5,12 @@
  * A header over a floating sidebar and a working column, over one status line:
  *
  *     +------------------------------------------------------------------+
- *     | [◧]  libra › Wire the adapter seam              [+]  [⚙]  HEADER  |
+ *     | [◧]  apollo › Wire the adapter seam              [+]  [⚙]  HEADER  |
  *     +------------------------------------------------------------------+
  *     |  ╭──────────────────╮ |                                          |
- *     |  │ ▣ libra       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
+ *     |  │ ▣ apollo       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
  *     |  │ [ + New session ]│ |                                          |
- *     |  │ ~/code/libra     │ |                                          |
+ *     |  │ ~/code/apollo     │ |                                          |
  *     |  │ ── SESSIONS ──   │ +------------------------------------------+
  *     |  │  this project    │ |  COMPOSER                                |
  *     |  │ ⌂ All projects ▴ │ |------------------------------------------|
@@ -207,10 +207,10 @@ function DeadEnd(): ReactElement {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-abyss px-8 text-center">
       <LogoMark size={30} className="text-signal" />
-      <h1 className="text-lg font-semibold tracking-tight text-ink">Libra could not start</h1>
+      <h1 className="text-lg font-semibold tracking-tight text-ink">Apollo could not start</h1>
       <p className="max-w-md text-xs leading-relaxed text-ink-muted">
         The preload bridge is missing, so this window has no way to reach the main process. Nothing
-        in the interface would work. Restart Libra; if it keeps happening, the app’s preload script
+        in the interface would work. Restart Apollo; if it keeps happening, the app’s preload script
         failed to load.
       </p>
     </div>

@@ -1,17 +1,17 @@
 /**
- * Access to `window.libra`.
+ * Access to `window.apollo`.
  *
  * Everything the renderer can do to the outside world goes through this
  * module. There is no `require`, no `ipcRenderer`, no `process` — if a
- * capability is not on `LibraBridge`, the renderer does not have it, and the
+ * capability is not on `ApolloBridge`, the renderer does not have it, and the
  * fix is a new IPC channel rather than a tsconfig edit.
  */
 
-import type { IpcResult, LibraBridge } from '@libra/protocol';
+import type { IpcResult, ApolloBridge } from '@apollo/protocol';
 import { createMockBridge } from './mockBridge';
 
 export type BridgeMode =
-  /** The preload script ran and `window.libra` is real. */
+  /** The preload script ran and `window.apollo` is real. */
   | 'preload'
   /** Dev only: no preload, so a scripted fake is standing in. */
   | 'mock'
@@ -20,7 +20,7 @@ export type BridgeMode =
 
 export interface BridgeBinding {
   readonly mode: BridgeMode;
-  readonly bridge: LibraBridge | null;
+  readonly bridge: ApolloBridge | null;
 }
 
 let binding: BridgeBinding | null = null;
@@ -29,7 +29,7 @@ let binding: BridgeBinding | null = null;
 export function resolveBridge(): BridgeBinding {
   if (binding) return binding;
 
-  const injected = typeof window === 'undefined' ? undefined : window.libra;
+  const injected = typeof window === 'undefined' ? undefined : window.apollo;
   if (injected) {
     binding = { mode: 'preload', bridge: injected };
   } else if (import.meta.env.DEV) {

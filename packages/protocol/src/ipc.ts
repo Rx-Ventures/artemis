@@ -2,7 +2,7 @@
  * The IPC contract.
  *
  * Channel names, a typed request/response map, and the shape the preload script
- * exposes on `window.libra`. Main and renderer both compile against this file,
+ * exposes on `window.apollo`. Main and renderer both compile against this file,
  * so a mismatch is a build error rather than a runtime surprise.
  *
  * Two structural decisions worth understanding before you extend this:
@@ -40,52 +40,52 @@ import type { PlanUsage } from './usage.js';
 /**
  * Request/response channels, used with `ipcMain.handle` / `ipcRenderer.invoke`.
  *
- * Names are namespaced under `libra:` so they cannot collide with anything
+ * Names are namespaced under `apollo:` so they cannot collide with anything
  * Electron or a dependency registers.
  */
 export const IPC = {
   /** List profiles as renderer-safe metadata. */
-  profilesList: 'libra:profiles:list',
+  profilesList: 'apollo:profiles:list',
   /** Create a profile; the only call that accepts a plaintext credential. */
-  profilesCreate: 'libra:profiles:create',
+  profilesCreate: 'apollo:profiles:create',
   /** Update a profile's label, backend, env or credential. */
-  profilesUpdate: 'libra:profiles:update',
+  profilesUpdate: 'apollo:profiles:update',
   /** Delete a profile, its stored credential and (optionally) its config dir. */
-  profilesDelete: 'libra:profiles:delete',
+  profilesDelete: 'apollo:profiles:delete',
 
   /** Enumerate providers and their capability descriptors. */
-  providersList: 'libra:providers:list',
+  providersList: 'apollo:providers:list',
   /** Ask one provider's installed CLI what models it actually offers. */
-  providersModels: 'libra:providers:models',
+  providersModels: 'apollo:providers:models',
 
   /** Start a run. */
-  runsStart: 'libra:runs:start',
+  runsStart: 'apollo:runs:start',
   /** Send another message into a live run. */
-  runsSend: 'libra:runs:send',
+  runsSend: 'apollo:runs:send',
   /** Ask a live run to stop what it is doing. */
-  runsInterrupt: 'libra:runs:interrupt',
+  runsInterrupt: 'apollo:runs:interrupt',
   /** Answer an outstanding permission request. */
-  runsRespondPermission: 'libra:runs:respond-permission',
+  runsRespondPermission: 'apollo:runs:respond-permission',
   /** Tear a run down and release its resources. */
-  runsDispose: 'libra:runs:dispose',
+  runsDispose: 'apollo:runs:dispose',
   /** Re-sync live runs after a renderer reload. */
-  runsList: 'libra:runs:list',
+  runsList: 'apollo:runs:list',
 
   /** List historical sessions for a provider + profile + cwd. */
-  sessionsList: 'libra:sessions:list',
+  sessionsList: 'apollo:sessions:list',
   /** List historical sessions across every profile and every project. */
-  sessionsListAll: 'libra:sessions:list-all',
+  sessionsListAll: 'apollo:sessions:list-all',
 
   /** Ask the OS for a directory, via a native picker. */
-  workspacePickDirectory: 'libra:workspace:pick-directory',
+  workspacePickDirectory: 'apollo:workspace:pick-directory',
 
   /** One stored session's messages, replayed as events. */
-  sessionsMessages: 'libra:sessions:messages',
+  sessionsMessages: 'apollo:sessions:messages',
 
   /** Last-known plan usage for a profile, served from cache without fetching. */
-  usagePlanCached: 'libra:usage:plan-cached',
+  usagePlanCached: 'apollo:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
-  usagePlanRefresh: 'libra:usage:plan-refresh',
+  usagePlanRefresh: 'apollo:usage:plan-refresh',
 } as const;
 
 /**
@@ -94,7 +94,7 @@ export const IPC = {
  */
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
-  agentEvent: 'libra:push:agent-event',
+  agentEvent: 'apollo:push:agent-event',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -133,7 +133,7 @@ export interface IpcFail {
  *
  * @example
  * ```ts
- * const res = await window.libra.profiles.list({})
+ * const res = await window.apollo.profiles.list({})
  * if (!res.ok) return showError(res.error.message)
  * setProfiles(res.value.profiles)
  * ```
@@ -204,7 +204,7 @@ export interface ProvidersListResponse {
  * Ask a provider for its *live* model catalogue.
  *
  * Separate from {@link ProvidersListRequest} because it is a different kind of
- * read. `providers:list` is a description of what Libra can drive — static,
+ * read. `providers:list` is a description of what Apollo can drive — static,
  * cheap, and answered out of the registry. This one contacts the installed CLI
  * with a profile's credential to find out which models that account actually
  * has, which costs a subprocess and can fail. Folding it into the descriptor
@@ -390,7 +390,7 @@ export interface SessionsListAllResponse {
 /**
  * Open the OS's own directory picker.
  *
- * Exists because a typed path is the single most error-prone input in Libra: a
+ * Exists because a typed path is the single most error-prone input in Apollo: a
  * directory that does not exist reaches `spawn`, and `spawn`'s `ENOENT` for a
  * bad *cwd* is indistinguishable from its `ENOENT` for a missing *binary* —
  * which is how a folder typo ends up reported as a libc mismatch. A picker
@@ -510,7 +510,7 @@ export type IpcHandlerResult<C extends IpcChannel> = IpcResult<IpcResponseMap[C]
 /**
  * Signature of a main-process handler.
  *
- * Deliberately has no `IpcMainInvokeEvent` parameter: `@libra/protocol` has
+ * Deliberately has no `IpcMainInvokeEvent` parameter: `@apollo/protocol` has
  * zero dependencies and must never import electron. The main process wraps
  * these when it registers them.
  */
@@ -537,7 +537,7 @@ export type IpcPush<C extends IpcPushChannel> = IpcPushMap[C];
 export type Unsubscribe = () => void;
 
 /**
- * The object the preload script exposes as `window.libra`.
+ * The object the preload script exposes as `window.apollo`.
  *
  * This is the renderer's entire view of the outside world. If a capability is
  * not on this interface, the renderer does not have it — no `require`, no
@@ -549,14 +549,14 @@ export type Unsubscribe = () => void;
  *
  * ```ts
  * // apps/desktop/renderer/src/global.d.ts
- * import type { LibraBridge } from '@libra/protocol'
+ * import type { ApolloBridge } from '@apollo/protocol'
  * declare global {
- *   interface Window { readonly libra: LibraBridge }
+ *   interface Window { readonly apollo: ApolloBridge }
  * }
  * ```
  */
-export interface LibraBridge {
-  /** Libra's version, for the about panel and bug reports. */
+export interface ApolloBridge {
+  /** Apollo's version, for the about panel and bug reports. */
   readonly version: string;
   /** Host platform, so the UI can render the right modifier keys. */
   readonly platform: 'darwin' | 'win32' | 'linux';

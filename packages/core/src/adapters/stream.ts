@@ -6,7 +6,7 @@
  *  - {@link AsyncQueue} — a push-driven, unbounded, single-consumer async
  *    iterable. It is the backbone of {@link import('./types.js').Run.events}
  *    (the adapter pushes normalized events, the main process pulls them) and
- *    of the Claude adapter's *input pump* (Libra pushes user messages, the
+ *    of the Claude adapter's *input pump* (Apollo pushes user messages, the
  *    Agent SDK pulls them as the `prompt` iterable). A subprocess adapter would
  *    use one per direction too.
  *  - {@link createDeferred} — a promise whose settlement is handed to someone

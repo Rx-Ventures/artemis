@@ -1,7 +1,7 @@
 /**
  * The secret-storage seam.
  *
- * `@libra/core` must never import `electron`, and Electron's `safeStorage`
+ * `@apollo/core` must never import `electron`, and Electron's `safeStorage`
  * (the thing that actually encrypts a credential against the OS keychain)
  * only exists in the main process. So core does not store secrets: it stores
  * *handles* to them, and calls out through this interface.

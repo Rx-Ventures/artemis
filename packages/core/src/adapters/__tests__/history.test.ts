@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { RunId, SessionId } from '@libra/protocol';
+import type { RunId, SessionId } from '@apollo/protocol';
 import { replayStoredMessage, replayStoredSession, type StoredMessage } from '../history.js';
 
 const TS = 1_700_000_000_000;

@@ -8,7 +8,7 @@
  * ## Streaming input is not optional
  *
  * `query()` accepts either a `string` prompt or an `AsyncIterable<SDKUserMessage>`.
- * Libra must always use the iterable form, for two reasons that are easy to miss
+ * Apollo must always use the iterable form, for two reasons that are easy to miss
  * from the type signature alone:
  *
  *  1. **There is no `send()` on `Query`.** Multi-turn input works by pushing
@@ -31,7 +31,7 @@
  *
  * ## Configuration isolation
  *
- * `settingSources` defaults to `[]`. Libra is a third-party desktop app, and
+ * `settingSources` defaults to `[]`. Apollo is a third-party desktop app, and
  * silently merging the user's `~/.claude` configuration would import their
  * hooks, MCP servers and permission rules into an app they never granted them
  * to. Callers opt in per run. `./env.ts` does the matching job for environment
@@ -75,8 +75,8 @@ import type {
   SessionId,
   SessionSummary,
   SystemPromptSpec,
-} from '@libra/protocol';
-import { NO_CAPABILITIES } from '@libra/protocol';
+} from '@apollo/protocol';
+import { NO_CAPABILITIES } from '@apollo/protocol';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
@@ -160,7 +160,7 @@ export const CLAUDE_API_KEY_ENV = 'ANTHROPIC_API_KEY';
  * Env var carrying a Claude subscription token.
  *
  * Minted by the user running `claude setup-token` in Anthropic's own CLI, which
- * opens a browser and prints a long-lived token. **Libra never does this**: it
+ * opens a browser and prints a long-lived token. **Apollo never does this**: it
  * implements no OAuth flow, opens no browser for login, and never refreshes the
  * token. The user pastes in what their own CLI printed.
  */
@@ -195,7 +195,7 @@ export const CLAUDE_OAUTH_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
  * `resolveEnv` writes back only the selected mode's.
  *
  * `ANTHROPIC_AUTH_TOKEN` stays managed-and-always-stripped: it is a third
- * credential path Libra does not expose, and leaving it inheritable would let
+ * credential path Apollo does not expose, and leaving it inheritable would let
  * ambient state pick an account no profile named.
  */
 export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
@@ -205,14 +205,14 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
     Always stripped, never set.
 
     `CLAUDE_CODE_OAUTH_TOKEN` moved here when subscription mode stopped
-    emitting it. Libra no longer produces this variable in any mode — the CLI's
+    emitting it. Apollo no longer produces this variable in any mode — the CLI's
     own per-profile login supplies the credential — but it must still be
     removed from the inherited environment, because an explicitly-set token
     outranks the config directory's login. Left alone, a token sitting in the
     user's shell would silently decide which account a profile uses.
 
     `ANTHROPIC_AUTH_TOKEN` is here for the same reason: a third credential path
-    Libra does not expose, which ambient state must not be able to select.
+    Apollo does not expose, which ambient state must not be able to select.
   */
   extraManagedEnvKeys: ['ANTHROPIC_AUTH_TOKEN', CLAUDE_OAUTH_TOKEN_ENV],
   authModes: [
@@ -233,7 +233,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
         No stored secret, by design.
 
         The credential is created by `claude auth login` run with this
-        profile's `CLAUDE_CONFIG_DIR`, and it lives with the CLI — Libra never
+        profile's `CLAUDE_CONFIG_DIR`, and it lives with the CLI — Apollo never
         sees, stores or emits it. Verified on macOS: three config directories
         report three independent answers, so the login genuinely scopes to the
         profile and multiple accounts still work.
@@ -248,7 +248,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
       // contradiction rather than an unsupported feature.
       backends: ['anthropic'],
       secretHowTo:
-        'Sign in with the button above. Libra runs `claude auth login` against this profile’s own config directory, so the browser flow happens in Anthropic’s CLI and the credential never passes through Libra.',
+        'Sign in with the button above. Apollo runs `claude auth login` against this profile’s own config directory, so the browser flow happens in Anthropic’s CLI and the credential never passes through Apollo.',
     },
   ],
   backends: [
@@ -381,7 +381,7 @@ export interface ClaudeModelQuery {
  * the picker use aliases instead of dated snapshots, taken one step further: a
  * hard-coded list is wrong the day a model ships, and no amount of diligence
  * fixes that from inside this file. The CLI already knows the answer, including
- * the things Libra cannot infer — the provider's own display names, which
+ * the things Apollo cannot infer — the provider's own display names, which
  * effort levels each model really accepts, and which support fast mode.
  *
  * ## Why this opens a query it never prompts
@@ -430,7 +430,7 @@ export async function fetchClaudeModels(
       hostEnv: request.hostEnv,
       scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
     });
-    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'libra';
+    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
 
     sdkQuery = query({
       prompt: idlePrompt,
@@ -659,7 +659,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
      * `cwd` out of the transcript rather than from the directory name. That
      * matters: the directory name is a lossy encoding of the path (every
      * non-alphanumeric character becomes `-`), so reconstructing a cwd from it
-     * would be a guess. Since every Libra profile has its own
+     * would be a guess. Since every Apollo profile has its own
      * `CLAUDE_CONFIG_DIR`, one such call per profile covers the whole
      * (profile × project) space, and a session's profile falls out of *which*
      * config directory it was found in — no extra bookkeeping anywhere.
@@ -921,9 +921,9 @@ export function buildClaudeOptions(
     scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
   });
 
-  // Identify Libra in the provider's User-Agent, unless the profile already
+  // Identify Apollo in the provider's User-Agent, unless the profile already
   // chose an identifier.
-  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'libra';
+  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
 
   const permissionMode = input.permissionMode;
 
@@ -988,7 +988,7 @@ export function buildClaudeOptions(
  * `Settings`, which `Options.settings` loads into the flag layer (the same one
  * the CLI's `--settings` flag feeds, and the highest-priority user-controlled
  * tier). Both are session-scoped by design: the SDK documents that interactive
- * ultracode toggles never persist, which matches Libra's model exactly, since
+ * ultracode toggles never persist, which matches Apollo's model exactly, since
  * every run is configured from the status line rather than from a config file.
  *
  * Returns `undefined` rather than `{}` when neither is set. Passing an empty
@@ -1440,7 +1440,7 @@ class ClaudeRun implements Run {
     };
   }
 
-  /** Libra's own intent outranks whatever the transport reports. */
+  /** Apollo's own intent outranks whatever the transport reports. */
   #exitReason(fallback: RunEndReason): RunEndReason {
     if (this.#state.disposeRequested) return 'disposed';
     if (this.#state.interruptRequested) return 'interrupted';
@@ -1565,7 +1565,7 @@ class ClaudeRun implements Run {
  *
  * The SDK's standalone `listSessions()` takes no config-directory option — it
  * resolves the store from the ambient `process.env.CLAUDE_CONFIG_DIR` (falling
- * back to `~/.claude`). Libra's whole per-profile isolation model depends on
+ * back to `~/.claude`). Apollo's whole per-profile isolation model depends on
  * pointing it somewhere else, so the variable has to be swapped around the
  * call and restored afterwards.
  *

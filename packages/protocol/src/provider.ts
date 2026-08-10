@@ -1,7 +1,7 @@
 /**
  * Providers and their capability descriptors.
  *
- * The whole point of this file is that Libra's UI must never assume every
+ * The whole point of this file is that Apollo's UI must never assume every
  * provider can do everything. Three planned providers have three completely
  * different transports:
  *
@@ -18,7 +18,7 @@
 import type { PermissionMode } from './permissions.js';
 
 /**
- * The set of agent backends Libra can drive.
+ * The set of agent backends Apollo can drive.
  *
  * Only `claude` is implemented today; the other two are declared here so the
  * seam is designed against three transports rather than retrofitted to them.
@@ -220,7 +220,7 @@ export interface ProviderAuthModeOption {
    * How the user obtains the credential for this mode, in one or two sentences.
    * Shown next to the secret field. Absent when the mode needs no secret.
    *
-   * Libra never runs an interactive login of its own, so for anything other
+   * Apollo never runs an interactive login of its own, so for anything other
    * than a pasted API key this is the *only* instruction the user gets.
    */
   readonly secretHowTo?: string;
@@ -262,7 +262,7 @@ export interface ProviderModelOption {
    * The canonical wire id this option resolves to, e.g. `sonnet` →
    * `claude-sonnet-5`.
    *
-   * Libra offers *aliases* rather than dated snapshots on purpose (see the
+   * Apollo offers *aliases* rather than dated snapshots on purpose (see the
    * Claude adapter's model list), which means the id it sends does not identify
    * the model that actually ran. This carries the resolution so the UI can
    * match a persisted explicit id back to the alias row that covers it, and so

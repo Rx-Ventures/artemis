@@ -24,7 +24,7 @@ let good: string;
 let file: string;
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'libra-workdir-'));
+  root = await mkdtemp(join(tmpdir(), 'apollo-workdir-'));
   good = join(root, 'project');
   file = join(root, 'notes.txt');
   await mkdir(good);

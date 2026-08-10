@@ -1,9 +1,9 @@
 /**
  * Outbound leak detection.
  *
- * The single most important invariant in Libra is that **a secret never crosses
+ * The single most important invariant in Apollo is that **a secret never crosses
  * the IPC boundary into the renderer**. The profile handlers are written to
- * return {@link import('@libra/protocol').ProfileMetadata}, never `Profile` —
+ * return {@link import('@apollo/protocol').ProfileMetadata}, never `Profile` —
  * but "written to" is a property of today's code, not of tomorrow's refactor.
  * This module is the tripwire that makes the invariant hold mechanically.
  *
@@ -34,7 +34,7 @@
  * patterns) and {@link ScanPolicy.opaqueKeys} (not descended into at all,
  * because a tool result can be megabytes of arbitrary JSON).
  *
- * The distinction is what makes the check usable: everything Libra itself
+ * The distinction is what makes the check usable: everything Apollo itself
  * assembles is scanned strictly, and only provider/user content is exempt.
  */
 
@@ -66,9 +66,9 @@ export class SecretLeakError extends Error {
  * Deliberately anchored on recognisable prefixes rather than entropy: an
  * entropy heuristic would flag base64 tool output constantly, and a check that
  * cries wolf gets deleted. These are the shapes that actually appear in a
- * credential Libra could plausibly hold.
+ * credential Apollo could plausibly hold.
  *
- * The `sk-` rule is the one named in Libra's security brief; the rest are
+ * The `sk-` rule is the one named in Apollo's security brief; the rest are
  * defence in depth for the Bedrock / Vertex / Foundry backends.
  */
 const SECRET_VALUE_RULES: readonly { readonly rule: string; readonly pattern: RegExp }[] = [
@@ -125,7 +125,7 @@ export interface ScanPolicy {
   readonly contentKeys: ReadonlySet<string>;
   /**
    * Keys whose subtree is not walked at all: arbitrarily large, arbitrarily
-   * shaped provider data that Libra did not author.
+   * shaped provider data that Apollo did not author.
    */
   readonly opaqueKeys: ReadonlySet<string>;
   readonly maxDepth: number;
@@ -133,7 +133,7 @@ export interface ScanPolicy {
 }
 
 /**
- * The `Profile` fields that {@link import('@libra/protocol').ProfileMetadata}
+ * The `Profile` fields that {@link import('@apollo/protocol').ProfileMetadata}
  * deliberately omits, plus the obvious credential field names.
  *
  * Seeing any of these in a renderer-bound payload means the wrong type was
@@ -141,7 +141,7 @@ export interface ScanPolicy {
  */
 const PROFILE_LEAK_KEYS = ['secretref', 'apikey', 'api_key', 'publicenv', 'configdirname'];
 
-/** Scan policy for `ipcMain.handle` responses. Strict: Libra authors these. */
+/** Scan policy for `ipcMain.handle` responses. Strict: Apollo authors these. */
 export const RESPONSE_SCAN_POLICY: ScanPolicy = {
   forbiddenKeys: new Set([
     ...PROFILE_LEAK_KEYS,
@@ -162,7 +162,7 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
- * Scan policy for pushed {@link import('@libra/protocol').AgentEvent}s.
+ * Scan policy for pushed {@link import('@apollo/protocol').AgentEvent}s.
  *
  * Looser on values, because an agent event is almost entirely model output and
  * tool results, and just as strict on structure — no profile field has any

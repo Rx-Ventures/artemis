@@ -1,10 +1,10 @@
 /**
- * A fake `LibraBridge`, for developing the renderer without a main process.
+ * A fake `ApolloBridge`, for developing the renderer without a main process.
  *
  * This exists so the UI can be exercised — streaming, permissions, capability
  * degradation, errors — before the Electron layers are wired up, and so a
  * contributor can run the renderer alone. It is installed **only** when
- * `import.meta.env.DEV` is set and `window.libra` is absent, and when it is
+ * `import.meta.env.DEV` is set and `window.apollo` is absent, and when it is
  * active the status bar says so in as many words. It never masquerades as a
  * real bridge and it is dead code in a packaged build.
  *
@@ -14,12 +14,12 @@
  * would.
  */
 
-import { maskApiKey } from '@libra/protocol';
+import { maskApiKey } from '@apollo/protocol';
 import type {
   AgentEvent,
   Capabilities,
   IpcResult,
-  LibraBridge,
+  ApolloBridge,
   PermissionDecision,
   PermissionRequest,
   PlanUsage,
@@ -31,7 +31,7 @@ import type {
   RunsStartRequest,
   SessionSummary,
   Unsubscribe,
-} from '@libra/protocol';
+} from '@apollo/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -84,7 +84,7 @@ const CODEX_CAPS: Capabilities = {
  * So the spread is chosen, not incidental:
  *
  * - `default` carries no flags at all — it is the "let the provider decide"
- *   row, and Libra cannot know what will run, so the fast-mode and ultracode
+ *   row, and Apollo cannot know what will run, so the fast-mode and ultracode
  *   toggles must come up disabled next to it.
  * - `sonnet` supports fast mode but not ultracode, and `fable` the reverse, so
  *   the two toggles are visibly independent rather than one switch drawn twice.
@@ -157,7 +157,7 @@ const FINAL_USAGE = {
   contextWindow: 200_000,
 } as const;
 
-export function createMockBridge(): LibraBridge {
+export function createMockBridge(): ApolloBridge {
   const listeners = new Set<(event: AgentEvent) => void>();
   const runs = new Map<string, MockRun>();
   const handles = new Map<string, RunHandle>();
@@ -276,7 +276,7 @@ export function createMockBridge(): LibraBridge {
       toolCallId: readCall,
       name: 'Read',
       status: 'ok',
-      resultText: '{\n  "name": "libra",\n  "private": true\n}',
+      resultText: '{\n  "name": "apollo",\n  "private": true\n}',
       durationMs: 420,
     });
 
@@ -313,7 +313,7 @@ export function createMockBridge(): LibraBridge {
       toolName: 'Bash',
       input: { command: 'pnpm -r test', description: 'Run the workspace test suite' },
       toolCallId: bashCall,
-      title: 'Libra wants to run a shell command',
+      title: 'Apollo wants to run a shell command',
       displayName: 'Run command',
       description: 'Executes `pnpm -r test` in the working directory.',
       reason: 'Bash is not on the allow-list for this project.',
@@ -379,7 +379,7 @@ export function createMockBridge(): LibraBridge {
   const minutes = (n: number): number => Date.now() - n * 60_000;
 
   const PROJECTS: readonly (readonly [string, number])[] = [
-    ['/Users/dev/code/libra', 22],
+    ['/Users/dev/code/apollo', 22],
     ['/Users/dev/code/api-gateway', 9],
     ['/Users/dev/scratch/spike-rope', 3],
     ['/Users/dev/work/very/deeply/nested/monorepo/packages/renderer', 4],
@@ -454,7 +454,7 @@ export function createMockBridge(): LibraBridge {
           requiresSecret: true,
           backends: ['anthropic'],
           secretHowTo:
-            'Run `claude setup-token` in Anthropic’s own CLI. It opens a browser, then prints a token — paste that here. Libra never performs the login itself.',
+            'Run `claude setup-token` in Anthropic’s own CLI. It opens a browser, then prints a token — paste that here. Apollo never performs the login itself.',
         },
       ],
       // Same pattern again for the status line's model and thinking pickers:

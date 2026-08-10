@@ -1,8 +1,8 @@
 {
-  "name": "@libra/core",
+  "name": "@apollo/core",
   "version": "0.1.0",
   "private": true,
-  "description": "Libra's headless engine: provider adapters, profile/env resolution and session bookkeeping. Must never import electron.",
+  "description": "Apollo's headless engine: provider adapters, profile/env resolution and session bookkeeping. Must never import electron.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.226",
-    "@libra/protocol": "workspace:*"
+    "@apollo/protocol": "workspace:*"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

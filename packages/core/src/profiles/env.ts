@@ -34,8 +34,8 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isCredentialRoutingEnvKey, isSecretEnvKey, maskApiKey } from '@libra/protocol';
-import type { Profile, ProfileMetadata, ProviderAuthMode, ProviderBackend } from '@libra/protocol';
+import { isCredentialRoutingEnvKey, isSecretEnvKey, maskApiKey } from '@apollo/protocol';
+import type { Profile, ProfileMetadata, ProviderAuthMode, ProviderBackend } from '@apollo/protocol';
 
 import { defaultAuthMode, managedEnvKeys } from '../adapters/types.js';
 import type {
@@ -50,7 +50,7 @@ import type { SecretStore } from './secrets.js';
 export const PROFILES_DIR_NAME = 'profiles';
 
 /**
- * Variables Libra sets itself for this provider, as a set.
+ * Variables Apollo sets itself for this provider, as a set.
  *
  * Managed variables are stripped from the inherited environment and rejected in
  * `publicEnv`, so a profile's credentials are decided by the profile and by
@@ -114,7 +114,7 @@ const VENDOR_PREFIX = /^[A-Za-z]{2,8}-[A-Za-z]{2,8}-/;
  * Delegates to the protocol's {@link maskApiKey} so the hint format is defined
  * in exactly one place (`sk-ant-...4f2a`), then tightens it: when the key has
  * no recognisable vendor prefix, `maskApiKey` falls back to showing the first
- * three characters, and those *are* key material. Libra's rule is stricter —
+ * three characters, and those *are* key material. Apollo's rule is stricter —
  * nothing beyond a vendor label and the last four characters is ever revealed.
  *
  * Never throws. Empty, whitespace-only, absent and very short secrets all
@@ -190,7 +190,7 @@ export async function readMetadata(profile: Profile, secrets: SecretStore): Prom
 
 /** Options for {@link resolveEnv}. */
 export interface ResolveEnvOptions {
-  /** Libra's user-data directory. The config directory is resolved under it. */
+  /** Apollo's user-data directory. The config directory is resolved under it. */
   readonly userDataDir: string;
   /**
    * The provider's credential vocabulary — normally
@@ -221,7 +221,7 @@ export interface ResolveEnvOptions {
 
 /** Options for {@link resolveStoreEnv}. */
 export interface ResolveStoreEnvOptions {
-  /** Libra's user-data directory. The config directory is resolved under it. */
+  /** Apollo's user-data directory. The config directory is resolved under it. */
   readonly userDataDir: string;
   /** The provider's credential vocabulary, for its config-directory variable. */
   readonly credentials: ProviderCredentialSpec;
@@ -417,7 +417,7 @@ function competingSecretEnvVars(
  *  2. `profile.publicEnv`, minus every managed key, anything that looks like a
  *     credential, and anything that decides where a credential is sent. A
  *     hand-edited profile file cannot smuggle an API key in through the "extra
- *     env vars" box, nor point the one Libra decrypts at another host.
+ *     env vars" box, nor point the one Apollo decrypts at another host.
  *  3. The backend selection and the credential, in the variable the profile's
  *     **auth mode** names — with every competing credential variable removed
  *     first.
@@ -484,7 +484,7 @@ export async function resolveEnv(
   for (const key of competingSecretEnvVars(credentials, authMode)) delete env[key];
 
   /*
-    A mode with no `secretEnvVar` owns no credential Libra can emit.
+    A mode with no `secretEnvVar` owns no credential Apollo can emit.
 
     That is not a gap — it is the mode working. The provider CLI holds its own
     login, scoped to the `CLAUDE_CONFIG_DIR` set above, so the correct action
