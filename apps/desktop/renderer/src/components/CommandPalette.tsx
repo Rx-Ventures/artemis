@@ -595,7 +595,7 @@ function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElem
                   {provider.label}
                 </span>
                 {provider.id === activeId ? (
-                  <span className="ml-auto font-mono text-2xs text-brass">active</span>
+                  <span className="ml-auto font-mono text-2xs text-ember">active</span>
                 ) : null}
               </span>
               {provider.available ? null : (
@@ -635,7 +635,7 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
             <CpuIcon className="size-3 shrink-0" aria-hidden="true" />
             <span className="text-xs text-ink">Provider default</span>
             {current === null ? (
-              <span className="ml-auto font-mono text-2xs text-brass">selected</span>
+              <span className="ml-auto font-mono text-2xs text-ember">selected</span>
             ) : null}
           </span>
         </CommandItem>
@@ -667,12 +667,12 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
               ) : null}
               {model.supportsUltracode === true ? (
                 <SparklesIcon
-                  className="size-3 shrink-0 text-brass"
+                  className="size-3 shrink-0 text-ember"
                   aria-label="offers ultracode"
                 />
               ) : null}
               {current === model.id ? (
-                <span className="ml-auto font-mono text-2xs text-brass">selected</span>
+                <span className="ml-auto font-mono text-2xs text-ember">selected</span>
               ) : null}
             </span>
             <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>

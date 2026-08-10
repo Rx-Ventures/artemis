@@ -160,7 +160,7 @@ function ProjectTitle(): ReactElement {
   return (
     <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-2">
       <FolderIcon
-        className={cn('size-3.5 shrink-0', name === null ? 'text-amber' : 'text-brass')}
+        className={cn('size-3.5 shrink-0', name === null ? 'text-amber' : 'text-ember')}
         aria-hidden="true"
       />
       <h2
@@ -393,7 +393,7 @@ function ResizeHandle({
           setSidebarWidth(width + KEYBOARD_STEP);
         }
       }}
-      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-brass/30 focus-visible:bg-brass/40"
+      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-ember/30 focus-visible:bg-ember/40"
     />
   );
 }

@@ -409,7 +409,7 @@ function ModelRow({
     <Item
       variant="outline"
       size="sm"
-      className={cn('items-start bg-panel', selected ? 'border-brass/45' : 'border-line')}
+      className={cn('items-start bg-panel', selected ? 'border-ember/45' : 'border-line')}
     >
       <ItemMedia className="pt-0.5">
         <Checkbox
@@ -425,7 +425,7 @@ function ModelRow({
       <ItemContent>
         <ItemTitle className="flex-wrap text-xs text-ink">
           {name}
-          {selected ? <ToneBadge tone="brass">in use</ToneBadge> : null}
+          {selected ? <ToneBadge tone="ember">in use</ToneBadge> : null}
           {model.supportsFastMode ? <ToneBadge tone="mint">fast mode</ToneBadge> : null}
           {model.supportsUltracode ? <ToneBadge tone="cyan">ultracode</ToneBadge> : null}
           {model.adaptiveThinking ? <ToneBadge tone="sage">adaptive</ToneBadge> : null}

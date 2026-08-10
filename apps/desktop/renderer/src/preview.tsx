@@ -92,7 +92,7 @@ function Section({ title, children }: { title: string; children: ReactNode }): R
   );
 }
 
-const TONES: readonly Tone[] = ['neutral', 'brass', 'cyan', 'sage', 'mint', 'amber', 'signal'];
+const TONES: readonly Tone[] = ['neutral', 'ember', 'cyan', 'sage', 'mint', 'amber', 'signal'];
 
 const SWATCHES: readonly (readonly [string, string])[] = [
   ['abyss', 'bg-abyss'],
@@ -101,7 +101,7 @@ const SWATCHES: readonly (readonly [string, string])[] = [
   ['float', 'bg-float'],
   ['inset', 'bg-inset'],
   ['line', 'bg-line'],
-  ['brass', 'bg-brass'],
+  ['ember', 'bg-ember'],
   ['cyan', 'bg-cyan'],
   ['sage', 'bg-sage'],
   ['mint', 'bg-mint'],
@@ -118,7 +118,7 @@ function Gallery(): ReactElement {
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight text-ink">Apollo design system</h1>
           <p className="text-sm text-ink-muted">
-            Graphite and brass. Dark only, dense, no gradients.
+            Graphite and ember. Dark only, dense, no gradients.
           </p>
         </header>
 
@@ -203,7 +203,7 @@ function Gallery(): ReactElement {
           {TONES.map((tone) => (
             <StatusDot key={tone} tone={tone} />
           ))}
-          <StatusDot tone="brass" pulse />
+          <StatusDot tone="ember" pulse />
         </Section>
 
         <Section title="Form controls">

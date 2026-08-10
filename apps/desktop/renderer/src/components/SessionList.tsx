@@ -175,7 +175,7 @@ export function SessionList(): ReactElement {
           <button
             type="button"
             onClick={() => void refreshSessions()}
-            className="mt-1 block text-2xs text-brass underline-offset-2 hover:underline"
+            className="mt-1 block text-2xs text-ember underline-offset-2 hover:underline"
           >
             Try again
           </button>
@@ -285,7 +285,7 @@ const Row = memo(function Row({
         onClick={() => resumeSession(session)}
         className={cn(
           'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
-          active && 'border-brass/70 bg-raised/60',
+          active && 'border-ember/70 bg-raised/60',
         )}
       >
         {/* `shrink-0` on both lines: see note 2 in the file header. Without it

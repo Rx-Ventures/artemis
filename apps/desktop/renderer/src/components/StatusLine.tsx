@@ -47,7 +47,7 @@
  * Both are gated on the selected model's `supportsFastMode` /
  * `supportsUltracode`, and — like everything else here — an unsupported one is
  * rendered dead with the reason rather than removed. They are styled as
- * run-shaping settings (cyan and brass, the same weight as thinking effort),
+ * run-shaping settings (cyan and ember, the same weight as thinking effort),
  * deliberately *not* as hazards: `bypassPermissions` is the only control on
  * this bar that gets the signal colour, and diluting it would cost the thing
  * that makes it work.
@@ -415,7 +415,7 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
           <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
           {credential ? (
             <ToneBadge
-              tone={credential.usesStoredSecret ? 'brass' : 'neutral'}
+              tone={credential.usesStoredSecret ? 'ember' : 'neutral'}
               className="shrink-0"
             >
               {credential.label}
@@ -576,7 +576,7 @@ function ModelRow({ model }: { readonly model: ProviderModelOption }): ReactElem
           ) : null}
           {model.supportsUltracode === true ? (
             <>
-              <SparklesIcon className="size-2.5 shrink-0 text-brass" aria-hidden="true" />
+              <SparklesIcon className="size-2.5 shrink-0 text-ember" aria-hidden="true" />
               <span className="sr-only">offers ultracode</span>
             </>
           ) : null}
@@ -685,7 +685,7 @@ function RunShapeToggles(): ReactElement {
         short="ultra"
         icon={<SparklesIcon className="size-2.5 shrink-0" aria-hidden="true" />}
         hint="Think as hard as the model can before writing. Slower, and worth it on a design you cannot easily undo."
-        activeClass="border-brass/40 text-brass aria-pressed:bg-brass/10 data-[state=on]:bg-brass/10 hover:bg-brass/15 hover:text-brass"
+        activeClass="border-ember/40 text-ember aria-pressed:bg-ember/10 data-[state=on]:bg-ember/10 hover:bg-ember/15 hover:text-ember"
         pressed={ultraOk && ultra}
         reason={ultraOk ? undefined : ultracodeReason(model, ultra)}
         onPressedChange={setUltracode}
@@ -794,7 +794,7 @@ function ModelOptionItems(): ReactElement {
       <OptionItem
         name="Ultracode"
         note="Think as hard as the model can before writing."
-        icon={<SparklesIcon className="size-3 shrink-0 text-brass" aria-hidden="true" />}
+        icon={<SparklesIcon className="size-3 shrink-0 text-ember" aria-hidden="true" />}
         checked={ultraOk && ultra}
         reason={ultraOk ? undefined : ultracodeReason(model, ultra)}
         onCheckedChange={setUltracode}

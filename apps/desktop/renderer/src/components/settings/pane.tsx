@@ -212,7 +212,7 @@ export function ChoiceList<T extends string>({
               'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors outline-none',
               'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
               checked
-                ? 'border-brass/45 bg-brass/5'
+                ? 'border-ember/45 bg-ember/5'
                 : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
               choice.disabled && 'cursor-not-allowed opacity-50',
             )}
@@ -225,10 +225,10 @@ export function ChoiceList<T extends string>({
               aria-hidden="true"
               className={cn(
                 'mt-[3px] flex size-3.5 shrink-0 items-center justify-center rounded-full border',
-                checked ? 'border-brass' : 'border-line-strong',
+                checked ? 'border-ember' : 'border-line-strong',
               )}
             >
-              {checked ? <span className="size-1.5 rounded-full bg-brass" /> : null}
+              {checked ? <span className="size-1.5 rounded-full bg-ember" /> : null}
             </span>
             <span className="flex min-w-0 flex-col gap-0.5">
               <span

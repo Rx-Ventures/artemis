@@ -188,11 +188,11 @@ function ProfileCard({
   const credential = describeCredential(backend, authMode);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-brass/50' : 'ring-line')}>
+    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-ink">{profile.label}</span>
-          {active ? <ToneBadge tone="brass">active</ToneBadge> : null}
+          {active ? <ToneBadge tone="ember">active</ToneBadge> : null}
           <ToneBadge>{profile.providerId}</ToneBadge>
           {backend ? <ToneBadge tone="cyan">{backend.label}</ToneBadge> : null}
           {credential ? (
@@ -458,7 +458,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-brass/35">
+    <Card size="sm" className="bg-panel ring-1 ring-ember/35">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">
