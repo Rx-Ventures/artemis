@@ -30,3 +30,6 @@ pnpm-debug.log*
 # Local test/profile scratch data
 .libra-dev/
 coverage/
+
+# Worktrees created by other sessions
+.claude/worktrees/

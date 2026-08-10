@@ -1142,7 +1142,22 @@ function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
  * nonsense, so the scope is honoured rather than inferred.
  */
 function mergeUsage(previous: UsageSnapshot | undefined, next: UsageSnapshot): UsageSnapshot {
-  if (next.scope !== 'delta' || !previous) return next;
+  if (next.scope !== 'delta' || !previous) {
+    if (!previous) return next;
+    // A `final` snapshot replaces the accumulated deltas, because its totals are
+    // authoritative. But the two halves of the context readout arrive on
+    // opposite sides of that swap: deltas know `contextTokens` (the size of the
+    // prompt), and only `final` knows `contextWindow` (a property of the model).
+    // Replacing wholesale means the readout never has both at once and renders
+    // "no run yet" forever. The last delta's `contextTokens` is the real prompt
+    // size, so it survives the swap.
+    return {
+      ...next,
+      ...(next.contextTokens === undefined && previous.contextTokens !== undefined
+        ? { contextTokens: previous.contextTokens }
+        : {}),
+    };
+  }
   return {
     ...next,
     scope: 'cumulative',
