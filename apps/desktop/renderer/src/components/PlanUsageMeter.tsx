@@ -287,37 +287,22 @@ function PlanWindows({
  * It has no reset time by design: a context window empties when you start a
  * new session, not on a clock.
  */
-/**
- * A provisional context window for a model we have never finished a turn on.
- *
- * Deliberately just the one standard Claude figure rather than a table of
- * per-model numbers: the provider reports the true window at run end, so this
- * only has to survive the first turn, and a table of half-remembered specs
- * would go stale silently and show a confidently wrong denominator. Anything
- * unrecognised returns undefined, which the row renders as "no run yet" — an
- * honest blank beats an invented total.
- */
-const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
-
-function defaultContextWindow(model: string | undefined): number | undefined {
-  if (model === undefined) return undefined;
-  return /claude|opus|sonnet|haiku/i.test(model) ? CLAUDE_DEFAULT_CONTEXT_WINDOW : undefined;
-}
-
 function ContextWindowRow(): ReactElement {
   const usage = useApp((s) => s.run?.usage);
   const reporting = useApp((s) => activeCapabilities(s).usageReporting);
   const providerLabel = useApp(activeProviderLabel);
 
   // The live run only learns its window at run end, so during a turn we fall
-  // back to what the model reported last time, and then to the provider's
-  // standard window. That last step is a *provisional* number — the real one
-  // replaces it as soon as a turn finishes — but it means a fresh session shows
-  // "0 of 200k" from the first frame instead of nothing at all.
+  // back to what this model reported last time. That memory is persisted, so
+  // after the first ever run on a model the total is known from launch.
+  //
+  // Deliberately no hardcoded default: a model's window is the provider's fact
+  // to state, and a table of specs here would go stale silently and show a
+  // confidently wrong denominator. Unknown stays blank until the model says.
   const model = useApp((s) => s.run?.model);
   const running = useApp((s) => s.run !== null);
   const remembered = useApp((s) => (model === undefined ? undefined : s.contextWindows[model]));
-  const window = usage?.contextWindow ?? remembered ?? defaultContextWindow(model);
+  const window = usage?.contextWindow ?? remembered;
 
   // Before the first usage event a started session genuinely holds no context
   // beyond its prompt, so 0 is the honest reading — not "unknown".

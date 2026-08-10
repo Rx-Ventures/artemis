@@ -201,6 +201,15 @@ interface Prefs {
   effort?: string | null;
   sidebarCollapsed?: boolean;
   sidebarWidth?: number;
+  /**
+   * Context windows learned from completed runs, keyed by model.
+   *
+   * Persisted because the provider only reports a model's window at run end.
+   * Without this the first turn after every launch would have no total to show
+   * — the alternative being a hardcoded table of model specs, which would go
+   * stale silently and show a confidently wrong denominator.
+   */
+  contextWindows?: Record<string, number>;
 }
 
 function loadPrefs(): Prefs {
@@ -223,6 +232,7 @@ function savePrefs(): void {
     effort: s.effort,
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
+    contextWindows: s.contextWindows,
   };
   try {
     globalThis.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -257,7 +267,7 @@ export const useApp = create<AppState>(() => ({
   sessionsError: null,
 
   run: null,
-  contextWindows: {},
+  contextWindows: prefs.contextWindows ?? {},
   permissionQueue: [],
   banners: [],
 
