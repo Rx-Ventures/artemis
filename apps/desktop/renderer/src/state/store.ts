@@ -196,6 +196,16 @@ export interface AppState {
 
   readonly run: RunState | null;
   /**
+   * Context window size per model, learned as runs finish.
+   *
+   * The provider only reveals a model's window in the `final` usage snapshot at
+   * run end, and `run` resets every turn — so without somewhere durable to keep
+   * it, the context readout can never render while a turn is streaming. Keyed
+   * by model because the number is a property of the model, not the session:
+   * switching models must not show the previous one's window.
+   */
+  readonly contextWindows: Readonly<Record<string, number>>;
+  /**
    * Permission requests still awaiting an answer.
    *
    * Kept alongside the transcript's own permission items, which carry the
@@ -281,6 +291,15 @@ interface Prefs {
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
+  /**
+   * Context windows learned from completed runs, keyed by model.
+   *
+   * Persisted because the provider only reports a model's window at run end.
+   * Without this the first turn after every launch would have no total to show
+   * — the alternative being a hardcoded table of model specs, which would go
+   * stale silently and show a confidently wrong denominator.
+   */
+  contextWindows?: Record<string, number>;
 }
 
 /**
@@ -308,6 +327,23 @@ function boolOrUndefined(value: unknown): boolean | undefined {
 function stringList(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * Keep only the entries whose value is a usable positive number.
+ *
+ * `contextWindows` becomes the denominator of the context readout, so a
+ * `null`, a string, or a `0` that survived out of the blob would render `NaN%`
+ * or divide by zero on a gauge the user reads to decide whether to compact.
+ * Same rule as every other non-string field here.
+ */
+function numberMap(value: unknown): Record<string, number> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'number' && Number.isFinite(entry) && entry > 0) out[key] = entry;
+  }
+  return out;
 }
 
 function loadPrefs(): Prefs {
@@ -345,6 +381,7 @@ function loadPrefs(): Prefs {
     fastMode: fastMode === true && ultracode === true ? false : fastMode,
     ultracode,
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
+    contextWindows: numberMap(raw['contextWindows']),
   };
 }
 
@@ -364,6 +401,7 @@ function savePrefs(): void {
     fastMode: s.fastMode,
     ultracode: s.ultracode,
     conversationWidth: s.conversationWidth,
+    contextWindows: s.contextWindows,
   };
   try {
     globalThis.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -406,6 +444,7 @@ export const useApp = create<AppState>(() => ({
   sessionsError: null,
 
   run: null,
+  contextWindows: prefs.contextWindows ?? {},
   permissionQueue: [],
   banners: [],
 
@@ -1598,7 +1637,22 @@ function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
  * nonsense, so the scope is honoured rather than inferred.
  */
 function mergeUsage(previous: UsageSnapshot | undefined, next: UsageSnapshot): UsageSnapshot {
-  if (next.scope !== 'delta' || !previous) return next;
+  if (next.scope !== 'delta' || !previous) {
+    if (!previous) return next;
+    // A `final` snapshot replaces the accumulated deltas, because its totals are
+    // authoritative. But the two halves of the context readout arrive on
+    // opposite sides of that swap: deltas know `contextTokens` (the size of the
+    // prompt), and only `final` knows `contextWindow` (a property of the model).
+    // Replacing wholesale means the readout never has both at once and renders
+    // "no run yet" forever. The last delta's `contextTokens` is the real prompt
+    // size, so it survives the swap.
+    return {
+      ...next,
+      ...(next.contextTokens === undefined && previous.contextTokens !== undefined
+        ? { contextTokens: previous.contextTokens }
+        : {}),
+    };
+  }
   return {
     ...next,
     scope: 'cumulative',
@@ -1647,9 +1701,17 @@ export function handleAgentEvent(event: AgentEvent): void {
       break;
 
     case 'usage':
-      useApp.setState((s) => ({
-        run: s.run ? { ...s.run, usage: mergeUsage(s.run.usage, event.usage) } : s.run,
-      }));
+      useApp.setState((s) => {
+        if (!s.run) return { run: s.run };
+        const model = s.run.model;
+        const learned = event.usage.contextWindow;
+        return {
+          run: { ...s.run, usage: mergeUsage(s.run.usage, event.usage) },
+          ...(learned !== undefined && model !== undefined && s.contextWindows[model] !== learned
+            ? { contextWindows: { ...s.contextWindows, [model]: learned } }
+            : {}),
+        };
+      });
       break;
 
     case 'run.end': {

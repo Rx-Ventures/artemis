@@ -191,11 +191,16 @@ describe('createDefaultProviderRegistry', () => {
   it('publishes Claude’s auth modes so the profile editor can build a picker', async () => {
     const [claude] = await createDefaultProviderRegistry().describe();
 
-    expect(claude?.authModes?.map((mode) => mode.id)).toEqual(['api-key', 'subscription']);
+    expect(claude?.authModes?.map((mode) => mode.id)).toEqual(['console', 'cloud', 'subscription']);
     // The first entry is the default, and it must be the metered one: a user
     // who never opens the picker should not land on subscription billing.
-    expect(claude?.authModes?.[0]).toMatchObject({ id: 'api-key', requiresSecret: true });
-    expect(claude?.authModes?.[1]).toMatchObject({
+    //
+    // Every mode is `requiresSecret: false` now — Apollo stores no credential at
+    // all. Console and subscription are the same `claude auth login` with a
+    // different flag, and cloud defers to the cloud provider's own chain.
+    expect(claude?.authModes?.[0]).toMatchObject({ id: 'console', requiresSecret: false });
+    expect(claude?.authModes?.every((mode) => mode.requiresSecret !== true)).toBe(true);
+    expect(claude?.authModes?.[2]).toMatchObject({
       id: 'subscription',
       // No stored secret: the credential is created by `claude auth login`
       // against this profile's own config directory and stays with the CLI.
@@ -205,7 +210,10 @@ describe('createDefaultProviderRegistry', () => {
     });
     // The editor still needs to tell the user how to authenticate — it just
     // points at the in-app sign-in now rather than at a token to paste.
-    expect(claude?.authModes?.[1]?.secretHowTo).toContain('claude auth login');
+    // Both Anthropic-billed modes point at the in-app sign-in rather than at a
+    // token to paste. Cloud is exempt: it has nothing to sign in to.
+    expect(claude?.authModes?.[0]?.secretHowTo).toContain('claude auth login');
+    expect(claude?.authModes?.[2]?.secretHowTo).toContain('claude auth login');
   });
 
   it('does not publish which variable a mode’s secret is written into', async () => {

@@ -85,6 +85,9 @@ import {
   validateSessionsList,
   validateSessionsListAll,
   validateSessionsMessages,
+  validateAuthSignIn,
+  validateAuthSignOut,
+  validateAuthStatus,
   validateUsagePlan,
   validateWorkspacePickDirectory,
 } from './validate.js';
@@ -356,6 +359,38 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async (request) => ({
         usage: await engine.require().refreshPlanUsage({ profileId: request.profileId }),
       }),
+    },
+
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Auth. Note what is *absent*: no channel accepts a key, token or password.
+     * The provider's own CLI performs the login against the profile's isolated
+     * config directory, so a credential never crosses this boundary — which is
+     * also why none of these responses need scrubbing beyond the usual scan.
+     */
+    [IPC.authStatus]: {
+      validate: validateAuthStatus,
+      handle: async (request) => ({ status: await engine.require().authStatus(request.profileId) }),
+    },
+
+    /**
+     * Long-running by nature: the user finishes this in a browser, and the CLI
+     * waits for them. The renderer must stay responsive rather than modal.
+     */
+    [IPC.authSignIn]: {
+      validate: validateAuthSignIn,
+      handle: async (request) => ({
+        status: await engine.require().signIn({
+          profileId: request.profileId,
+          ...(request.mode === undefined ? {} : { mode: request.mode }),
+        }),
+      }),
+    },
+
+    [IPC.authSignOut]: {
+      validate: validateAuthSignOut,
+      handle: async (request) => ({ status: await engine.require().signOut(request.profileId) }),
     },
   };
 

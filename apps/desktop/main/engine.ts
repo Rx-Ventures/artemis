@@ -61,15 +61,21 @@ import type {
   SessionSummary,
   Unsubscribe,
   PlanUsage,
+  AuthMode,
+  AuthStatusInfo,
 } from '@rx-apollo/protocol';
 
 import {
+  checkAuthStatus,
   createDefaultProviderRegistry,
   managedEnvKeys,
   ProfileStore,
+  profileConfigDir,
   resolveEnv,
   resolveStoreEnv,
   RunRegistry,
+  signIn as cliSignIn,
+  signOut as cliSignOut,
   type EnvBundle,
   type ProviderCredentialSpec,
   type ProviderRegistry,
@@ -171,6 +177,21 @@ export interface ApolloEngine {
    * the caller supply both invites the two disagreeing.
    */
   refreshPlanUsage(options: { readonly profileId: ProfileId }): Promise<PlanUsage>;
+
+  /**
+   * Per-profile authentication, delegated entirely to the provider's own CLI.
+   *
+   * This is the only way a profile is authenticated. There is deliberately no
+   * method here that accepts a key or a token: the provider's login writes
+   * credentials into the profile's isolated config directory, so no credential
+   * is ever handled by, stored by, or reachable from Apollo. That is also what
+   * makes multiple accounts work — the config directory *is* the account
+   * boundary.
+   */
+  authStatus(profileId: ProfileId): Promise<AuthStatusInfo>;
+  /** Long-running: the user completes this in a browser. */
+  signIn(options: { readonly profileId: ProfileId; readonly mode?: AuthMode }): Promise<AuthStatusInfo>;
+  signOut(profileId: ProfileId): Promise<AuthStatusInfo>;
 
   listSessions(options: {
     readonly providerId: ProviderId;
@@ -439,6 +460,31 @@ function createEngine(options: EngineOptions): ApolloEngine {
 
       planUsageCache.set(query.profileId, usage);
       return usage;
+    },
+
+    authStatus: async (profileId) => {
+      const profile = await profiles.require(profileId);
+      return checkAuthStatus({ configDir: profileConfigDir(userDataDir, profile), hostEnv: process.env });
+    },
+
+    signIn: async (options) => {
+      const profile = await profiles.require(options.profileId);
+      return cliSignIn({
+        configDir: profileConfigDir(userDataDir, profile),
+        hostEnv: process.env,
+        ...(options.mode === undefined ? {} : { mode: options.mode }),
+      });
+    },
+
+    signOut: async (profileId) => {
+      const profile = await profiles.require(profileId);
+      const configDir = profileConfigDir(userDataDir, profile);
+      await cliSignOut({ configDir, hostEnv: process.env });
+      // Report what the directory *actually* says afterwards rather than
+      // assuming the logout took: a failed sign-out that renders as signed-out
+      // would leave the user's real credential in place while the UI claims
+      // otherwise.
+      return checkAuthStatus({ configDir, hostEnv: process.env });
     },
 
     getSessionMessages: async (query) => {

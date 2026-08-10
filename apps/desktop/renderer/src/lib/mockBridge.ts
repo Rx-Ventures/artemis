@@ -17,6 +17,7 @@
 import { maskApiKey } from '@rx-apollo/protocol';
 import type {
   AgentEvent,
+  AuthStatusInfo,
   Capabilities,
   IpcResult,
   ApolloBridge,
@@ -156,6 +157,8 @@ const FINAL_USAGE = {
   contextTokens: 18_930,
   contextWindow: 200_000,
 } as const;
+
+let mockAuth: AuthStatusInfo = { loggedIn: false, authMethod: 'none' };
 
 export function createMockBridge(): ApolloBridge {
   const listeners = new Set<(event: AgentEvent) => void>();
@@ -677,6 +680,30 @@ export function createMockBridge(): ApolloBridge {
      * point — it is what makes the loading state reachable in dev, and the
      * whole reason the two calls are separate channels.
      */
+    /**
+     * Auth starts *signed out*, because that is the state the profile screen
+     * has to handle well and the one a mock that always returns "signed in"
+     * would hide. `signIn` flips it after a beat, standing in for the browser
+     * round trip.
+     */
+    auth: {
+      status: async () => ok({ status: mockAuth }),
+      signIn: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        mockAuth = {
+          loggedIn: true,
+          authMethod: 'claude.ai',
+          email: 'demo@example.com',
+          subscriptionType: 'max',
+        };
+        return ok({ status: mockAuth });
+      },
+      signOut: async () => {
+        mockAuth = { loggedIn: false, authMethod: 'none' };
+        return ok({ status: mockAuth });
+      },
+    },
+
     usagePlan: {
       cached: async () => ok({ usage: mockPlanUsage(Date.now() - 4 * 60_000, 0) }),
       refresh: async () => {

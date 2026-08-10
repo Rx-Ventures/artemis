@@ -292,8 +292,21 @@ function ContextWindowRow(): ReactElement {
   const reporting = useApp((s) => activeCapabilities(s).usageReporting);
   const providerLabel = useApp(activeProviderLabel);
 
-  const tokens = usage?.contextTokens;
-  const window = usage?.contextWindow;
+  // The live run only learns its window at run end, so during a turn we fall
+  // back to what this model reported last time. That memory is persisted, so
+  // after the first ever run on a model the total is known from launch.
+  //
+  // Deliberately no hardcoded default: a model's window is the provider's fact
+  // to state, and a table of specs here would go stale silently and show a
+  // confidently wrong denominator. Unknown stays blank until the model says.
+  const model = useApp((s) => s.run?.model);
+  const running = useApp((s) => s.run !== null);
+  const remembered = useApp((s) => (model === undefined ? undefined : s.contextWindows[model]));
+  const window = usage?.contextWindow ?? remembered;
+
+  // Before the first usage event a started session genuinely holds no context
+  // beyond its prompt, so 0 is the honest reading — not "unknown".
+  const tokens = usage?.contextTokens ?? (running && window !== undefined ? 0 : undefined);
   const pct =
     reporting && tokens !== undefined && window ? Math.min(100, (tokens / window) * 100) : null;
 

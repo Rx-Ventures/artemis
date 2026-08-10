@@ -59,6 +59,9 @@ import {
   type SessionsListRequest,
   type SystemPromptSpec,
   type SessionsMessagesRequest,
+  type AuthSignInRequest,
+  type AuthSignOutRequest,
+  type AuthStatusRequest,
   type UsagePlanRequest,
   type WorkspacePickDirectoryRequest,
 } from '@rx-apollo/protocol';
@@ -832,6 +835,30 @@ export function validateSessionsMessages(raw: unknown): SessionsMessagesRequest 
 }
 
 /** Plan usage is per-account, so a profile id is the whole request. */
+export function validateAuthStatus(raw: unknown): AuthStatusRequest {
+  const request = requireRequest(raw);
+  return { profileId: requireId(request['profileId'], 'profileId') };
+}
+
+export function validateAuthSignIn(raw: unknown): AuthSignInRequest {
+  const request = requireRequest(raw);
+  const mode = request['mode'];
+  // Only the two the provider actually offers. An unrecognised mode would be
+  // passed to the CLI as a flag and fail there, far from the cause.
+  if (mode !== undefined && mode !== 'subscription' && mode !== 'console') {
+    throw new ValidationError('mode', 'must be "subscription" or "console"');
+  }
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    ...(mode === undefined ? {} : { mode }),
+  };
+}
+
+export function validateAuthSignOut(raw: unknown): AuthSignOutRequest {
+  const request = requireRequest(raw);
+  return { profileId: requireId(request['profileId'], 'profileId') };
+}
+
 export function validateUsagePlan(raw: unknown): UsagePlanRequest {
   const request = requireRequest(raw);
   return {
