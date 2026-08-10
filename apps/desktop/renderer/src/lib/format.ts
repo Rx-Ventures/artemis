@@ -1,4 +1,4 @@
-import type { JsonValue, TokenUsage, UsageSnapshot } from '@libra/protocol';
+import type { JsonValue, TokenUsage, UsageSnapshot } from '@rx-apollo/protocol';
 
 /** `1234` → `1.2k`. Token counts get large and column width does not. */
 export function formatTokens(n: number | undefined): string {

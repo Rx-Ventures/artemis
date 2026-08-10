@@ -1,9 +1,9 @@
 /**
- * Libra — Electron main process.
+ * Apollo — Electron main process.
  *
  * This process owns everything the renderer is not allowed to touch: decrypted
  * API keys, the filesystem, and the engine that drives agent runs. It is the
- * only place in Libra where a credential exists in plaintext, and then only for
+ * only place in Apollo where a credential exists in plaintext, and then only for
  * as long as it takes to hand it to a provider's environment bundle.
  *
  * Startup order matters and is deliberate:
@@ -16,17 +16,18 @@
  *     window is ever briefly unprotected.
  *  4. Start the engine, register IPC, and only then open a window.
  *
- * A failure at step 2 or 4 does not stop the app. Libra opens anyway and tells
+ * A failure at step 2 or 4 does not stop the app. Apollo opens anyway and tells
  * the user what is wrong — an app that refuses to launch cannot explain itself.
  */
 
+import { existsSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
 
-import { profilesRoot } from '@libra/core';
+import { profilesRoot } from '@rx-apollo/core';
 
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
@@ -52,17 +53,65 @@ const log = createLogger('main');
  * other, or Windows treats the running app and its installed shortcut as two
  * unrelated applications.
  */
-const APP_USER_MODEL_ID = 'dev.libra.app';
+const APP_USER_MODEL_ID = 'dev.apollo.app';
 
 /**
  * Set before anything reads a path.
  *
  * `app.getPath('userData')` is derived from the app name, and the package is
- * called `@libra/desktop` — which would put user data in a nested
- * `@libra/desktop` directory and name the OS keychain entry after it. Naming
+ * called `@rx-apollo/desktop` — which would put user data in a nested
+ * `@rx-apollo/desktop` directory and name the OS keychain entry after it. Naming
  * the app here keeps the credential store's identity stable and legible.
  */
-app.setName('Libra');
+app.setName('Apollo');
+
+/**
+ * Adopt the user data left behind by the previous name.
+ *
+ * The app used to be called Libra, and `app.getPath('userData')` is derived
+ * from the app name — so renaming it silently pointed the app at an empty
+ * directory and lost every profile and every session history the user had.
+ * This moves the old directory across, once, on the first launch that finds one.
+ *
+ * ## The credentials cannot come with it, and that is not a bug to fix here
+ *
+ * `safeStorage` encrypts against a keychain item named after the app, so an
+ * Apollo build cannot decrypt ciphertext a Libra build wrote — the file would
+ * arrive intact and undecryptable. Carrying it over would turn a clean "this
+ * profile needs a credential" into a decrypt error on every read, so
+ * `secrets.v1.json` is deliberately left behind. Profiles arrive with their
+ * names, backends, auth modes and config directories — the parts worth
+ * keeping — and each asks for its key again.
+ *
+ * A two-phase decrypt-under-the-old-identity-then-re-encrypt migration was
+ * considered and rejected: it is boot-order code that runs exactly once, is
+ * near-impossible to test, and corrupts the secret store if it half-fails.
+ * Re-pasting a key is a smaller cost than that risk.
+ *
+ * Runs before `app.whenReady()` and synchronously, because everything that
+ * follows reads `userData`. A failure is logged and swallowed — a migration
+ * that cannot complete must not stop the app from starting, it must only mean
+ * the user starts fresh.
+ */
+function adoptPreviousUserData(): void {
+  const current = app.getPath('userData');
+  const previous = join(dirname(current), 'Libra');
+  if (previous === current) return;
+
+  try {
+    if (existsSync(current) || !existsSync(previous)) return;
+    renameSync(previous, current);
+    // Leaving this behind would be worse than deleting it: it decrypts to
+    // nothing under this app's keychain identity. See above.
+    rmSync(join(current, 'secrets.v1.json'), { force: true });
+    log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
+    log.info('Stored credentials were not carried over; each profile will ask for its key again.');
+  } catch (error) {
+    log.error('Could not adopt user data from the previous app name', error);
+  }
+}
+
+adoptPreviousUserData();
 
 /**
  * Force the sandbox on for every renderer, including any created later by code
@@ -106,15 +155,20 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     height: 860,
     minWidth: 720,
     minHeight: 480,
-    title: 'Libra',
+    title: 'Apollo',
     // Painting the window before the renderer has anything to show produces a
     // white flash on a dark desktop. Start hidden, reveal on `ready-to-show`.
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0b0d' : '#ffffff',
+    // Hex, and the one colour in this app that lives outside index.css: it is
+    // read by Chromium before any stylesheet exists, so it cannot be a token.
+    // Keep it equal to `--abyss` — it is what fills the window for the frame or
+    // two before the renderer paints, and a mismatch shows up as a flash of the
+    // wrong dark.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0a09' : '#ffffff',
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: windowSecurityPreferences(preloadPath, [
-      `--libra-version=${app.getVersion()}`,
-      `--libra-platform=${process.platform}`,
+      `--apollo-version=${app.getVersion()}`,
+      `--apollo-platform=${process.platform}`,
     ]),
   });
 
@@ -151,7 +205,7 @@ function focusExistingWindow(): void {
  * Tell the user, in a dialog, when credentials cannot be stored.
  *
  * This is the surfaced half of the "never silently fall back to plaintext"
- * rule. Libra could make key storage *appear* to work by calling
+ * rule. Apollo could make key storage *appear* to work by calling
  * `safeStorage.setUsePlainTextEncryption(true)`; it does not, so the user has to
  * be told why the profile editor is going to refuse their key.
  */
@@ -159,9 +213,9 @@ function reportEncryptionProblem(probe: EncryptionProbe): void {
   if (probe.available) return;
   log.error(`Encrypted credential storage is unavailable: ${probe.detail ?? 'unknown reason'}`);
   dialog.showErrorBox(
-    'Libra cannot store API keys securely',
+    'Apollo cannot store API keys securely',
     `${probe.detail ?? 'This machine has no usable credential store.'}\n\n` +
-      'Libra will not save an API key in plaintext, so profiles cannot be created until this is fixed. ' +
+      'Apollo will not save an API key in plaintext, so profiles cannot be created until this is fixed. ' +
       'Everything else in the app will continue to work.',
   );
 }
@@ -171,9 +225,9 @@ function reportEngineProblem(): void {
   const detail = engineHost.failureMessage ?? 'The engine did not start.';
   log.error(`Engine unavailable: ${detail}`);
   dialog.showErrorBox(
-    'Libra could not start its engine',
+    'Apollo could not start its engine',
     `${detail}\n\nRuns and profiles are unavailable. If you are running from source, build the workspace ` +
-      'packages first (`pnpm build:libs`) and restart Libra.',
+      'packages first (`pnpm build:libs`) and restart Apollo.',
   );
 }
 
@@ -182,11 +236,11 @@ function reportEngineProblem(): void {
 /* -------------------------------------------------------------------------- */
 
 /**
- * A second `libra` process should raise the first one's window, not open a
+ * A second `apollo` process should raise the first one's window, not open a
  * second copy with a second engine writing the same profile file.
  */
 if (!app.requestSingleInstanceLock()) {
-  log.info('Another Libra instance is already running; exiting.');
+  log.info('Another Apollo instance is already running; exiting.');
   app.quit();
 } else {
   app.on('second-instance', focusExistingWindow);

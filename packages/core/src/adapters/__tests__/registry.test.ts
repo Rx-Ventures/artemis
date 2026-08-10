@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@libra/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import {
@@ -96,7 +96,7 @@ describe('describe()', () => {
       id: 'codex',
       label: 'Codex',
       available: false,
-      unavailableReason: 'Not supported in this version of Libra yet.',
+      unavailableReason: 'Not supported in this version of Apollo yet.',
       capabilities: NO_CAPABILITIES,
     });
   });
@@ -195,7 +195,7 @@ describe('createDefaultProviderRegistry', () => {
     // The first entry is the default, and it must be the metered one: a user
     // who never opens the picker should not land on subscription billing.
     //
-    // Every mode is `requiresSecret: false` now — Libra stores no credential at
+    // Every mode is `requiresSecret: false` now — Apollo stores no credential at
     // all. Console and subscription are the same `claude auth login` with a
     // different flag, and cloud defers to the cloud provider's own chain.
     expect(claude?.authModes?.[0]).toMatchObject({ id: 'console', requiresSecret: false });

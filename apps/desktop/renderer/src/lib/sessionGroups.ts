@@ -31,7 +31,7 @@
  * id, and duplicate React keys inside one list silently drop a row.
  */
 
-import type { ProfileId, SessionSummary } from '@libra/protocol';
+import type { ProfileId, SessionSummary } from '@rx-apollo/protocol';
 
 export interface SessionGroup {
   /** The project directory. The group's identity and its `key`. */

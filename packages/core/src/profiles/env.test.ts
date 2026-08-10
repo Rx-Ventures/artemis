@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Profile, ProviderBackend } from '@libra/protocol';
+import type { Profile, ProviderBackend } from '@rx-apollo/protocol';
 
 import {
   CLAUDE_CONFIG_DIR_ENV,
@@ -29,7 +29,7 @@ const API_KEY = 'sk-ant-api03-0123456789abcdef4f2a';
 
 /**
  * These tests exercise `resolveEnv` through Claude's credential spec, because
- * that is the one Libra ships. The point of the parameter is that the variable
+ * that is the one Apollo ships. The point of the parameter is that the variable
  * names below come *from the adapter* rather than from `resolveEnv` itself.
  */
 const ANTHROPIC_API_KEY_ENV = CLAUDE_CREDENTIALS.apiKeyVar;
@@ -43,7 +43,7 @@ let ENV_OPTS: { userDataDir: string; credentials: typeof CLAUDE_CREDENTIALS };
 let STORE_OPTS: { userDataDir: string; credentials: typeof CLAUDE_CREDENTIALS };
 
 beforeEach(async () => {
-  userDataDir = await mkdtemp(path.join(tmpdir(), 'libra-env-'));
+  userDataDir = await mkdtemp(path.join(tmpdir(), 'apollo-env-'));
   secrets = new InMemorySecretStore();
   await secrets.set(SECRET_REF, API_KEY);
   ENV_OPTS = { userDataDir, credentials: CLAUDE_CREDENTIALS };
@@ -68,7 +68,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 
 describe('resolveEnv — backends', () => {
   it('emits no credential for the anthropic backend — the config dir is the credential', async () => {
-    // Libra holds no credential for Claude any more: the CLI login writes into
+    // Apollo holds no credential for Claude any more: the CLI login writes into
     // the profile's own config directory, and that directory is the only thing
     // resolveEnv points at. A stored secret is present here and still ignored.
     const env = await resolveEnv(makeProfile({ backend: 'anthropic' }), secrets, ENV_OPTS);
@@ -157,7 +157,7 @@ describe('resolveEnv — auth modes', () => {
   it('BILLING: emits NO credential at all in subscription mode, so the CLI login decides', async () => {
     /*
       The credential is created by `claude auth login` run against this
-      profile's `CLAUDE_CONFIG_DIR`, and it stays with the CLI. Libra emitting
+      profile's `CLAUDE_CONFIG_DIR`, and it stays with the CLI. Apollo emitting
       any credential variable here would *override* that login — an explicitly
       set value outranks whatever the config directory holds — so a stale token
       would silently beat a good sign-in and could bill the wrong account.

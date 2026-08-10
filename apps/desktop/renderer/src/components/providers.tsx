@@ -17,7 +17,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 
-export function LibraProviders({ children }: { readonly children: ReactNode }): ReactElement {
+export function ApolloProviders({ children }: { readonly children: ReactNode }): ReactElement {
   return (
     /*
      * 250ms before the first tooltip, then none while the pointer stays in the

@@ -17,13 +17,13 @@
  *
  * with a docstring saying it may change or be removed in any release without
  * notice, and that the name *will* change once it stabilises. Calling that
- * directly from anywhere else in Libra would put a status-line widget on a
+ * directly from anywhere else in Apollo would put a status-line widget on a
  * foundation that can vanish in a patch bump. So it is reached through a
  * tolerant lookup here, in one file, and a rename degrades to "unavailable"
  * instead of throwing. When it stabilises, this list is the only thing to edit.
  */
 
-import type { PlanUsage, PlanUsageWindow, PlanUsageWindowId } from '@libra/protocol';
+import type { PlanUsage, PlanUsageWindow, PlanUsageWindowId } from '@rx-apollo/protocol';
 
 /**
  * Method names to try on the query object, newest first.

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES, PERMISSION_MODES } from '@libra/protocol';
+import { NO_CAPABILITIES, PERMISSION_MODES } from '@rx-apollo/protocol';
 import type {
   AgentEvent,
   Capabilities,
   PermissionDecision,
   RunEndEvent,
   RunInput,
-} from '@libra/protocol';
+} from '@rx-apollo/protocol';
 
 import type {
   InterruptResult,
@@ -316,7 +316,7 @@ describe('RunRegistry — starting', () => {
     ],
     [
       'a directory it cannot read',
-      { problem: 'not_readable' as const, message: 'Libra is not allowed to open that directory: /gone' },
+      { problem: 'not_readable' as const, message: 'Apollo is not allowed to open that directory: /gone' },
     ],
   ])('refuses %s, with the checker’s own message', async (_label, failure) => {
     const { registry, resolved } = harness({

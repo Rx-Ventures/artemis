@@ -1,5 +1,5 @@
 /*
- * Libra — renderer design system.
+ * Apollo — renderer design system.
  * ============================================================================
  *
  * Tailwind v4 is CSS-first: there is no `tailwind.config.js`, and this file is
@@ -21,19 +21,35 @@
  * friends, so a component copied from the registry works unmodified.
  *
  * ---------------------------------------------------------------------------
- * THE PALETTE — "graphite and brass"
+ * THE PALETTE — "charcoal and ember"
  * ---------------------------------------------------------------------------
  *
- * A cold graphite-petrol substrate (every surface sits on hue 235 at very low
- * chroma) lit by one warm brass accent — the balance-scale reading of "Libra".
- * Three semantic hues carry meaning and nothing else: cyan for machine work,
+ * A neutral charcoal substrate (every surface sits at hue 60 with chroma at or
+ * under 0.008 — warm enough to belong with the accent, far too low to read as a
+ * colour) lit by one pastel orange accent: `--ember`, the sun, for "Apollo".
+ * Five semantic hues carry meaning and nothing else: cyan for machine work,
  * sage for the model's private thinking, mint/amber/signal for the three
  * outcomes.
  *
  * There is no violet, no gradient, and no glow anywhere in this file, and that
- * is deliberate. It is also not an imitation of any terminal-agent CLI: the
- * substrate is blue-cold rather than warm-neutral, the accent is metallic
- * rather than orange, and the chrome is flat.
+ * is deliberate. The substrate recedes and the accent does the work.
+ *
+ * ### The hues were re-derived, not recoloured
+ *
+ * This palette replaces a graphite-and-brass one, and the swap was not a
+ * substitution. The old accent was a metallic gold at hue 78, which forced
+ * *warning* out to hue 52 to get clear of it — a decision that file recorded at
+ * length. Moving the accent into orange inverted that constraint, so warning
+ * went the other way, to a true yellow at 100, and every other semantic hue was
+ * re-placed around the new accent rather than left where the old one had pushed
+ * it.
+ *
+ * Every value below was checked rather than eyed: all 18 colours fall inside
+ * sRGB with no clipping, minimum hue separation across the accent and the five
+ * semantics is 40°, and every ink and semantic colour clears WCAG AA text
+ * contrast on both `--abyss` and `--panel`. `--ink-faint` is the one that moved
+ * for that reason alone — the old token sat at 3.87 on the window background,
+ * below AA, while being the workhorse for 11px chrome labels.
  *
  * Dark only, on purpose. A tool that gets stared at for eight hours is better
  * off with one surface tuned properly than two tuned adequately. The structure
@@ -45,7 +61,7 @@
  * TWO NAMING SYSTEMS, ON PURPOSE
  * ---------------------------------------------------------------------------
  *
- * Libra names   (`--panel`, `--ink-muted`, `--brass`, `--signal`)
+ * Apollo names   (`--panel`, `--ink-muted`, `--ember`, `--signal`)
  *     Physical. What the colour *is*. Use these for app chrome and for the
  *     transcript, where "the thinking block is sage" is the actual design
  *     intent and there is no generic role that captures it.
@@ -53,7 +69,7 @@
  * shadcn names  (`--background`, `--muted-foreground`, `--primary`)
  *     Semantic. What the colour is *for*. Every component under
  *     `components/ui/` speaks only this vocabulary, which is what lets a file
- *     be pasted in from the registry and immediately look like Libra.
+ *     be pasted in from the registry and immediately look like Apollo.
  *
  * The second set is defined entirely in terms of the first, so there is still
  * exactly one place a colour is chosen.
@@ -81,37 +97,54 @@
 
   /* ---- Substrate ------------------------------------------------------
      Six steps of elevation. Anything that floats above the page uses
-     `--float`; anything recessed into it uses `--inset`. */
-  --abyss: oklch(15.5% 0.012 235); /* window background                */
-  --panel: oklch(19% 0.014 235); /* chrome: bars, sidebars, cards    */
-  --raised: oklch(23% 0.016 235); /* inputs, secondary fills, hover   */
-  --float: oklch(25.5% 0.017 235); /* popovers, menus, tooltips        */
-  --inset: oklch(13% 0.012 235); /* code wells, scroll troughs       */
-  --line: oklch(28.5% 0.016 235); /* hairlines                        */
-  --line-strong: oklch(38% 0.02 235); /* emphasised edges, thumbs      */
+     `--float`; anything recessed into it uses `--inset`.
 
-  /* ---- Ink ------------------------------------------------------------ */
-  --ink: oklch(93% 0.008 235);
-  --ink-muted: oklch(70% 0.014 235);
-  --ink-faint: oklch(54% 0.014 235);
+     Hue 60 at chroma <= 0.008 is neutral in every practical sense — it is
+     there so the greys sit in the same family as the accent rather than
+     opposing it. The previous palette put these on hue 235 at four times the
+     chroma, which read as deliberate under a metallic accent and fought a
+     warm one. */
+  --abyss: oklch(14.5% 0.004 60); /* window background                */
+  --panel: oklch(18% 0.005 60); /* chrome: bars, sidebars, cards    */
+  --raised: oklch(22% 0.006 60); /* inputs, secondary fills, hover   */
+  --float: oklch(25% 0.006 60); /* popovers, menus, tooltips        */
+  --inset: oklch(12% 0.004 60); /* code wells, scroll troughs       */
+  --line: oklch(28% 0.006 60); /* hairlines                        */
+  --line-strong: oklch(38% 0.008 60); /* emphasised edges, thumbs     */
+
+  /* ---- Ink ------------------------------------------------------------
+     `--ink-faint` is 59%, not the 54% it was. At 54% it measured 3.87 against
+     `--abyss` — under the 4.5 AA needs — and it is the token 11px chrome
+     labels use, which is the worst place to be a little too quiet. 59% clears
+     AA on both `--abyss` and `--panel` and is still plainly the faintest of
+     the three. */
+  --ink: oklch(94% 0.003 60);
+  --ink-muted: oklch(71% 0.005 60);
+  --ink-faint: oklch(59% 0.005 60);
 
   /* ---- Accents --------------------------------------------------------
-     Brass is the only accent that means "act". The rest are semantic and
-     are never used decoratively. */
-  --brass: oklch(80% 0.135 78); /* primary action, focus ring       */
-  --brass-dim: oklch(62% 0.11 78);
-  --brass-ink: oklch(20% 0.04 78); /* text on a brass fill             */
-  --cyan: oklch(78% 0.11 200); /* tools / machine activity         */
-  --sage: oklch(74% 0.055 165); /* thinking                         */
-  --mint: oklch(78% 0.14 155); /* success                          */
-  /* Pushed to a true orange rather than the gold it started as. Warning sits
-     next to the primary accent constantly — in a badge row, in a status strip
-     — and at hue 70 it was within eight degrees of brass and read as the same
-     colour. Hue 52 puts real daylight between them without colliding with
-     `--signal` at 22. */
-  --amber: oklch(79% 0.155 52); /* warning                          */
-  --signal: oklch(70% 0.17 22); /* error / denial                   */
-  --signal-ink: oklch(16% 0.03 22); /* text on a signal fill            */
+     Ember is the only accent that means "act". The rest are semantic and
+     are never used decoratively.
+
+     Chroma 0.10 is what makes it pastel. Past roughly 0.14 at this lightness
+     it stops reading as a soft orange and starts reading as safety orange,
+     which is a different instruction entirely. */
+  --ember: oklch(80% 0.1 55); /* primary action, focus ring       */
+  --ember-dim: oklch(64% 0.09 55);
+  --ember-ink: oklch(20% 0.03 55); /* text on an ember fill            */
+  --cyan: oklch(76% 0.1 245); /* tools / machine activity         */
+  --sage: oklch(75% 0.05 195); /* thinking                         */
+  --mint: oklch(80% 0.12 155); /* success                          */
+  /* A true yellow, and the one hue that had to move furthest. The old palette
+     sat warning at 52 to escape a gold accent at 78; with the accent now at
+     55, that same reasoning points the opposite way. Hue 100 leaves 45° to the
+     accent and 90° to `--signal`, so a badge row reads at a glance. */
+  --amber: oklch(86% 0.13 100); /* warning                          */
+  /* Rose-red rather than the orange-red an error usually gets. An orange-red
+     would sit ~25° from the accent and blur against it exactly where the two
+     appear together; this keeps 45° and still reads unmistakably as "stop". */
+  --signal: oklch(70% 0.15 10); /* error / denial                   */
+  --signal-ink: oklch(16% 0.03 10); /* text on a signal fill            */
 
   /* ---- Shape ----------------------------------------------------------
      7px reads as "engineered" at this density — softer than a terminal,
@@ -133,8 +166,8 @@
   --popover: var(--float);
   --popover-foreground: var(--ink);
 
-  --primary: var(--brass);
-  --primary-foreground: var(--brass-ink);
+  --primary: var(--ember);
+  --primary-foreground: var(--ember-ink);
 
   --secondary: var(--raised);
   --secondary-foreground: var(--ink);
@@ -152,18 +185,18 @@
 
   --border: var(--line);
   --input: var(--line);
-  --ring: var(--brass);
+  --ring: var(--ember);
 
   /* Charts. Ordered so the first two are maximally distinguishable, and
      chosen from the semantic hues so a chart never introduces a colour the
      rest of the app does not already use. */
   --chart-1: var(--cyan);
-  --chart-2: var(--brass);
+  --chart-2: var(--ember);
   --chart-3: var(--mint);
   --chart-4: var(--sage);
   --chart-5: var(--signal);
 
-  /* Sidebar. Libra's own sidebar is hand-built from the physical tokens below
+  /* Sidebar. Apollo's own sidebar is hand-built from the physical tokens below
      (`bg-panel`, `border-line`) rather than from these, because it is app
      chrome and not a registry component. These stay defined because the shadcn
      registry's components reference `--sidebar-*` unconditionally, and a future
@@ -171,12 +204,12 @@
      surface, so the two would agree. */
   --sidebar: var(--panel);
   --sidebar-foreground: var(--ink);
-  --sidebar-primary: var(--brass);
-  --sidebar-primary-foreground: var(--brass-ink);
+  --sidebar-primary: var(--ember);
+  --sidebar-primary-foreground: var(--ember-ink);
   --sidebar-accent: var(--raised);
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
-  --sidebar-ring: var(--brass);
+  --sidebar-ring: var(--ember);
 }
 
 /* ==========================================================================
@@ -225,7 +258,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* ---- Libra physical scale -------------------------------------------
+  /* ---- Apollo physical scale -------------------------------------------
      `bg-panel`, `text-ink-muted`, `border-line`, `text-sage`, … */
   --color-abyss: var(--abyss);
   --color-panel: var(--panel);
@@ -237,9 +270,9 @@
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-ink-faint: var(--ink-faint);
-  --color-brass: var(--brass);
-  --color-brass-dim: var(--brass-dim);
-  --color-brass-ink: var(--brass-ink);
+  --color-ember: var(--ember);
+  --color-ember-dim: var(--ember-dim);
+  --color-ember-ink: var(--ember-ink);
   --color-cyan: var(--cyan);
   --color-sage: var(--sage);
   --color-mint: var(--mint);
@@ -321,7 +354,7 @@
   }
 
   ::selection {
-    background: color-mix(in oklch, var(--brass) 35%, transparent);
+    background: color-mix(in oklch, var(--ember) 35%, transparent);
     color: var(--ink);
   }
 
@@ -396,6 +429,14 @@
    * alignment carries meaning. Chrome stays sans. Hand-written rather than
    * `@tailwindcss/typography`, whose defaults are tuned for prose pages at
    * 16px, not a 13px transcript pane.
+   *
+   * Nothing here is bubble-aware, and that is a decision rather than an
+   * oversight. The agent's turn is a `ghost` bubble, which zeroes the fill, the
+   * radius and the padding, so `.md` still renders straight onto the page
+   * substrate — the wells below can go on assuming `--abyss` behind them. If a
+   * future variant ever puts markdown on a *filled* bubble, `--inset` code
+   * wells and `--line` rules will be the first things to stop reading, and they
+   * are the things to fix.
    */
   .md {
     font-family: var(--font-mono);
@@ -426,7 +467,7 @@
     font-size: 1em;
   }
   .md a {
-    color: var(--brass);
+    color: var(--ember);
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -495,8 +536,30 @@
     height: 1em;
     margin-left: 1px;
     vertical-align: text-bottom;
-    background: var(--brass);
-    animation: libra-blink 1.1s steps(1) infinite;
+    background: var(--ember);
+    animation: apollo-blink 1.1s steps(1) infinite;
+  }
+
+  /*
+   * A conversation turn arriving.
+   *
+   * Only the two *speech* rows use this — a user prompt and an agent answer.
+   * Tool calls and thinking blocks land in bursts of five and ten, and animating
+   * those turns a working transcript into a slot machine.
+   *
+   * Deliberately a transform and an opacity, never a height or a margin: the
+   * transcript's tail-follower is a `ResizeObserver` on the content box, and
+   * anything that animates layout size would make it recompute `scrollTop` for
+   * the whole duration while the user is trying to read. A composited transform
+   * does not change the box at all.
+   *
+   * `both` holds the end state so a row cannot be caught mid-fade if the
+   * animation is interrupted. It plays exactly once per turn: React keeps the
+   * DOM node across the re-renders that stream text into it, and CSS animations
+   * restart on node creation, not on attribute changes.
+   */
+  .turn-in {
+    animation: apollo-turn-in 160ms ease-out both;
   }
 
   /* Indeterminate progress hairline, used on the run status strip. */
@@ -507,14 +570,14 @@
     background: linear-gradient(
       90deg,
       transparent,
-      color-mix(in oklch, var(--brass) 70%, transparent),
+      color-mix(in oklch, var(--ember) 70%, transparent),
       transparent
     );
-    animation: libra-sweep 1.5s linear infinite;
+    animation: apollo-sweep 1.5s linear infinite;
   }
 }
 
-@keyframes libra-blink {
+@keyframes apollo-blink {
   0%,
   49% {
     opacity: 1;
@@ -525,7 +588,7 @@
   }
 }
 
-@keyframes libra-sweep {
+@keyframes apollo-sweep {
   from {
     transform: translateX(-100%);
   }
@@ -534,9 +597,29 @@
   }
 }
 
+/* 3px, not 8. The gesture only has to say "this is new"; any further and a fast
+   provider's back-and-forth reads as the whole column sliding. */
+@keyframes apollo-turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * `.turn-in` is listed with the rest rather than left alone, even though a
+ * 160ms fade is mild: reduced motion is a request, not a severity threshold.
+ * `animation: none` on a `both`-filled animation leaves the element in its
+ * natural state, which is the finished state — so the turn simply appears.
+ */
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
-  .runbar::after {
+  .runbar::after,
+  .turn-in {
     animation: none;
   }
 }

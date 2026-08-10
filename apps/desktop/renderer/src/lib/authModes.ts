@@ -14,7 +14,7 @@
  * picker and the permission-mode picker already follow.
  *
  * The resolution below deliberately mirrors what the credential resolver in
- * `@libra/core` does when it decides which environment variable a secret is
+ * `@rx-apollo/core` does when it decides which environment variable a secret is
  * written to. It has to: if the editor shows one mode and the resolver picks
  * another, the user is told the wrong account is being billed. The core copy is
  * authoritative — this one exists so the form can *explain* the choice, and it
@@ -25,7 +25,7 @@ import type {
   ProviderAuthModeOption,
   ProviderBackendOption,
   ProviderDescriptor,
-} from '@libra/protocol';
+} from '@rx-apollo/protocol';
 
 /**
  * The modes a provider offers.
@@ -112,7 +112,7 @@ export interface CredentialSummary {
   readonly label: string;
   /** One sentence on what this arrangement bills. */
   readonly note: string;
-  /** False when nothing Libra stores is used to authenticate. */
+  /** False when nothing Apollo stores is used to authenticate. */
   readonly usesStoredSecret: boolean;
 }
 
@@ -121,7 +121,7 @@ export interface CredentialSummary {
  *
  * This exists because naming the auth mode unconditionally lies. A profile on a
  * backend with an ambient credential chain still resolves to some mode — the
- * first one legal there — but Libra's stored credential is never read and the
+ * first one legal there — but Apollo's stored credential is never read and the
  * mode's billing note ("billed to the key's account") describes an account that
  * is not being charged. On those backends the honest answer is the backend's
  * own note, so that is what comes back.

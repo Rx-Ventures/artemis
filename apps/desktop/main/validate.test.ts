@@ -235,7 +235,7 @@ describe('validateRunsRespondPermission', () => {
     ).toThrow(ValidationError);
   });
 
-  it('rejects the SDK-only cliArg destination, which Libra must never produce', () => {
+  it('rejects the SDK-only cliArg destination, which Apollo must never produce', () => {
     expect(() =>
       validateRunsRespondPermission({
         runId: 'r1',

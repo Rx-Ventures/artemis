@@ -1,5 +1,5 @@
 /**
- * The composition root: where Electron's resources meet `@libra/core`.
+ * The composition root: where Electron's resources meet `@rx-apollo/core`.
  *
  * Core is deliberately incapable of doing this itself. It must never import
  * `electron` — it has to run in a plain Node process and under vitest — so
@@ -20,7 +20,7 @@
  * did not match its signature. The seam between main and core is exactly where
  * type checking earns its keep, so it is checked.
  *
- * The "a failed engine must not stop Libra from launching" property is
+ * The "a failed engine must not stop Apollo from launching" property is
  * preserved where it actually belongs — in {@link EngineHost.start}, which
  * catches construction failures and reports them through
  * {@link EngineHost.failureMessage}.
@@ -53,6 +53,7 @@ import type {
   ProfilePatch,
   ProviderDescriptor,
   ProviderId,
+  ProviderModelOption,
   RunHandle,
   RunId,
   SessionId,
@@ -62,7 +63,7 @@ import type {
   PlanUsage,
   AuthMode,
   AuthStatusInfo,
-} from '@libra/protocol';
+} from '@rx-apollo/protocol';
 
 import {
   checkAuthStatus,
@@ -79,7 +80,7 @@ import {
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
-} from '@libra/core';
+} from '@rx-apollo/core';
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';
@@ -108,7 +109,7 @@ export interface EngineOptions {
    * is why a profile record stores a bare directory name rather than a path.
    */
   readonly userDataDir: string;
-  /** Libra's version, for any provider that wants a user-agent string. */
+  /** Apollo's version, for any provider that wants a user-agent string. */
   readonly appVersion: string;
 }
 
@@ -118,8 +119,28 @@ export interface EngineOptions {
  * Every method takes and returns renderer-safe protocol types, because each one
  * is a single step from an IPC response. Nothing here returns a `Profile`.
  */
-export interface LibraEngine {
+export interface ApolloEngine {
   listProviders(options: { readonly refresh?: boolean }): Promise<readonly ProviderDescriptor[]>;
+
+  /**
+   * One provider's model catalogue, read from the installed CLI where it can
+   * be, from the adapter's static list where it cannot.
+   *
+   * Separate from {@link listProviders} because it spawns a subprocess and
+   * takes a credential, exactly like {@link refreshPlanUsage} is separate from
+   * {@link cachedPlanUsage}. Descriptors must stay instant; this one is allowed
+   * to be slow.
+   *
+   * Takes both ids for the same reason {@link listSessions} does: the provider
+   * decides *which* adapter answers, and the profile decides *as whom*. Never
+   * throws for a provider that cannot enumerate models — that is an answer
+   * (`live: false`), not a fault.
+   */
+  listProviderModels(options: {
+    readonly providerId: ProviderId;
+    readonly profileId: ProfileId;
+    readonly cwd?: string;
+  }): Promise<{ readonly models: readonly ProviderModelOption[]; readonly live: boolean }>;
 
   listProfiles(options: { readonly providerId?: ProviderId }): Promise<readonly ProfileMetadata[]>;
   createProfile(draft: ProfileDraft): Promise<ProfileMetadata>;
@@ -163,7 +184,7 @@ export interface LibraEngine {
    * This is the only way a profile is authenticated. There is deliberately no
    * method here that accepts a key or a token: the provider's login writes
    * credentials into the profile's isolated config directory, so no credential
-   * is ever handled by, stored by, or reachable from Libra. That is also what
+   * is ever handled by, stored by, or reachable from Apollo. That is also what
    * makes multiple accounts work — the config directory *is* the account
    * boundary.
    */
@@ -233,7 +254,7 @@ export interface LibraEngine {
  * @throws {EngineUnavailableError} — but only through {@link EngineHost.start},
  *         which is the sole caller and catches everything.
  */
-function createEngine(options: EngineOptions): LibraEngine {
+function createEngine(options: EngineOptions): ApolloEngine {
   const { secrets, userDataDir } = options;
 
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
@@ -312,6 +333,50 @@ function createEngine(options: EngineOptions): LibraEngine {
 
   return {
     listProviders: (query) => providers.describe({ refresh: query.refresh }),
+
+    /**
+     * Ask a provider what models this account really has.
+     *
+     * The credential-bearing `envFor` — the same resolution a run gets — is
+     * deliberate and not interchangeable with `storeEnvFor`. A catalogue is a
+     * property of the account, so a bundle with no key in it would either be
+     * refused or would answer for whatever account the CLI finds on its own,
+     * which is precisely the cross-profile leak the isolated config directory
+     * exists to prevent.
+     *
+     * Every branch resolves. A provider Apollo cannot drive, an adapter that
+     * cannot enumerate, or a fetch that failed are all "here is the built-in
+     * list, and no, the account did not confirm it" — the caller renders a
+     * picker either way and labels it from `live`.
+     */
+    listProviderModels: async (query) => {
+      const adapter = providers.get(query.providerId);
+      // Not registered at all: there is no static list to fall back *to*, so
+      // the honest answer is nothing rather than another provider's models.
+      if (adapter === undefined) return { models: [], live: false };
+
+      const fallback = adapter.models ?? [];
+      if (adapter.listModels === undefined) return { models: fallback, live: false };
+
+      try {
+        // `live` comes back from the adapter rather than being inferred here.
+        // `listModels` resolves on failure by contract, so a fallback is
+        // indistinguishable from a real answer by inspection — the adapter is
+        // the only party that knows which it returned, so it is the only party
+        // that can say. See `ProviderAdapter.listModels`.
+        return await adapter.listModels({
+          env: await envFor(query.profileId, query.providerId),
+          // The query has to start somewhere that exists. userData always does;
+          // the user's chosen workspace may not be set yet.
+          cwd: query.cwd ?? userDataDir,
+        });
+      } catch (error) {
+        // The contract says it should not reject; if one does, that is a bug in
+        // the adapter and not a reason to leave the picker empty.
+        log.error(`Provider "${query.providerId}" threw while listing models`, error);
+        return { models: fallback, live: false };
+      }
+    },
 
     listProfiles: (query) => profiles.listMetadata(query.providerId),
 
@@ -571,15 +636,15 @@ function createEngine(options: EngineOptions): LibraEngine {
  *
  * IPC handlers call {@link require}, which either returns a live engine or
  * throws {@link EngineUnavailableError}. That is normalized into a
- * `provider_not_found` result, so the UI can say "Libra's engine failed to
+ * `provider_not_found` result, so the UI can say "Apollo's engine failed to
  * start" instead of waiting on a promise that never settles.
  */
 export class EngineHost {
-  #engine: LibraEngine | null = null;
+  #engine: ApolloEngine | null = null;
   #failure: EngineUnavailableError | null = null;
 
   /** The live engine, or a descriptive throw. */
-  require(): LibraEngine {
+  require(): ApolloEngine {
     if (this.#engine) return this.#engine;
     throw this.#failure ?? new EngineUnavailableError('the engine has not been started yet.');
   }

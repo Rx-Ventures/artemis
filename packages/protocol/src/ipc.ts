@@ -2,7 +2,7 @@
  * The IPC contract.
  *
  * Channel names, a typed request/response map, and the shape the preload script
- * exposes on `window.libra`. Main and renderer both compile against this file,
+ * exposes on `window.apollo`. Main and renderer both compile against this file,
  * so a mismatch is a build error rather than a runtime surprise.
  *
  * Two structural decisions worth understanding before you extend this:
@@ -28,7 +28,7 @@ import type { AgentError } from './errors.js';
 import type { PermissionDecision } from './permissions.js';
 import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js';
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
-import type { ProviderDescriptor, ProviderId } from './provider.js';
+import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
 import type { SessionSummary } from './session.js';
 import type { PlanUsage } from './usage.js';
@@ -40,57 +40,59 @@ import type { PlanUsage } from './usage.js';
 /**
  * Request/response channels, used with `ipcMain.handle` / `ipcRenderer.invoke`.
  *
- * Names are namespaced under `libra:` so they cannot collide with anything
+ * Names are namespaced under `apollo:` so they cannot collide with anything
  * Electron or a dependency registers.
  */
 export const IPC = {
   /** List profiles as renderer-safe metadata. */
-  profilesList: 'libra:profiles:list',
+  profilesList: 'apollo:profiles:list',
   /** Create a profile; the only call that accepts a plaintext credential. */
-  profilesCreate: 'libra:profiles:create',
+  profilesCreate: 'apollo:profiles:create',
   /** Update a profile's label, backend, env or credential. */
-  profilesUpdate: 'libra:profiles:update',
+  profilesUpdate: 'apollo:profiles:update',
   /** Delete a profile, its stored credential and (optionally) its config dir. */
-  profilesDelete: 'libra:profiles:delete',
+  profilesDelete: 'apollo:profiles:delete',
 
   /** Enumerate providers and their capability descriptors. */
-  providersList: 'libra:providers:list',
+  providersList: 'apollo:providers:list',
+  /** Ask one provider's installed CLI what models it actually offers. */
+  providersModels: 'apollo:providers:models',
 
   /** Start a run. */
-  runsStart: 'libra:runs:start',
+  runsStart: 'apollo:runs:start',
   /** Send another message into a live run. */
-  runsSend: 'libra:runs:send',
+  runsSend: 'apollo:runs:send',
   /** Ask a live run to stop what it is doing. */
-  runsInterrupt: 'libra:runs:interrupt',
+  runsInterrupt: 'apollo:runs:interrupt',
   /** Answer an outstanding permission request. */
-  runsRespondPermission: 'libra:runs:respond-permission',
+  runsRespondPermission: 'apollo:runs:respond-permission',
   /** Tear a run down and release its resources. */
-  runsDispose: 'libra:runs:dispose',
+  runsDispose: 'apollo:runs:dispose',
   /** Re-sync live runs after a renderer reload. */
-  runsList: 'libra:runs:list',
+  runsList: 'apollo:runs:list',
 
   /** List historical sessions for a provider + profile + cwd. */
-  sessionsList: 'libra:sessions:list',
+  sessionsList: 'apollo:sessions:list',
   /** List historical sessions across every profile and every project. */
-  sessionsListAll: 'libra:sessions:list-all',
+  sessionsListAll: 'apollo:sessions:list-all',
 
   /** Ask the OS for a directory, via a native picker. */
-  workspacePickDirectory: 'libra:workspace:pick-directory',
+  workspacePickDirectory: 'apollo:workspace:pick-directory',
 
   /** One stored session's messages, replayed as events. */
-  sessionsMessages: 'libra:sessions:messages',
+  sessionsMessages: 'apollo:sessions:messages',
 
   /** Last-known plan usage for a profile, served from cache without fetching. */
-  usagePlanCached: 'libra:usage:plan-cached',
+  usagePlanCached: 'apollo:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
-  usagePlanRefresh: 'libra:usage:plan-refresh',
+  usagePlanRefresh: 'apollo:usage:plan-refresh',
 
   /** Read a profile's login state from its own config directory. */
-  authStatus: 'libra:auth:status',
+  authStatus: 'apollo:auth:status',
   /** Run the provider's interactive login against a profile's config directory. */
-  authSignIn: 'libra:auth:sign-in',
+  authSignIn: 'apollo:auth:sign-in',
   /** Sign a profile out, clearing the credentials in its config directory. */
-  authSignOut: 'libra:auth:sign-out',
+  authSignOut: 'apollo:auth:sign-out',
 } as const;
 
 /**
@@ -99,7 +101,7 @@ export const IPC = {
  */
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
-  agentEvent: 'libra:push:agent-event',
+  agentEvent: 'apollo:push:agent-event',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -138,7 +140,7 @@ export interface IpcFail {
  *
  * @example
  * ```ts
- * const res = await window.libra.profiles.list({})
+ * const res = await window.apollo.profiles.list({})
  * if (!res.ok) return showError(res.error.message)
  * setProfiles(res.value.profiles)
  * ```
@@ -203,6 +205,50 @@ export interface ProvidersListRequest {
 
 export interface ProvidersListResponse {
   readonly providers: readonly ProviderDescriptor[];
+}
+
+/**
+ * Ask a provider for its *live* model catalogue.
+ *
+ * Separate from {@link ProvidersListRequest} because it is a different kind of
+ * read. `providers:list` is a description of what Apollo can drive — static,
+ * cheap, and answered out of the registry. This one contacts the installed CLI
+ * with a profile's credential to find out which models that account actually
+ * has, which costs a subprocess and can fail. Folding it into the descriptor
+ * call would make opening any provider menu wait on a spawn.
+ *
+ * It names a profile rather than only a provider for the same reason
+ * {@link UsagePlanRequest} does: the answer is a property of the *account*.
+ * Two profiles on the same provider can be on different plans and see
+ * different lineups.
+ */
+export interface ProvidersModelsRequest {
+  readonly providerId: ProviderId;
+  /** Whose credential to ask with. Decides which account the CLI answers as. */
+  readonly profileId: ProfileId;
+  /**
+   * An absolute directory to run the query in. Optional: providers resolve
+   * their configuration relative to a working directory, so the answer can
+   * differ per project, but the user may not have chosen one yet — main
+   * substitutes a directory that always exists rather than failing.
+   */
+  readonly cwd?: string;
+}
+
+export interface ProvidersModelsResponse {
+  /** In display order, first = default — the same contract as `ProviderDescriptor.models`. */
+  readonly models: readonly ProviderModelOption[];
+  /**
+   * True when this came off the installed CLI, false when it is the provider's
+   * built-in fallback list.
+   *
+   * The handler never fails — a missing binary, a missing credential or an
+   * offline machine all resolve with the fallback — so `ok: true` alone does
+   * not tell the renderer whether it is looking at reality. This does, which is
+   * what lets the settings screen label a stale list instead of presenting a
+   * hard-coded lineup as though the account had confirmed it.
+   */
+  readonly live: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -351,7 +397,7 @@ export interface SessionsListAllResponse {
 /**
  * Open the OS's own directory picker.
  *
- * Exists because a typed path is the single most error-prone input in Libra: a
+ * Exists because a typed path is the single most error-prone input in Apollo: a
  * directory that does not exist reaches `spawn`, and `spawn`'s `ENOENT` for a
  * bad *cwd* is indistinguishable from its `ENOENT` for a missing *binary* —
  * which is how a folder typo ends up reported as a libc mismatch. A picker
@@ -398,7 +444,7 @@ export interface SessionsMessagesResponse {
 /**
  * A profile's login state, as reported by the provider's own CLI.
  *
- * Libra never sees a credential: the provider's login writes into the profile's
+ * Apollo never sees a credential: the provider's login writes into the profile's
  * isolated config directory, and this is the only view of what landed there.
  * Every field past `loggedIn` is optional because a signed-out directory has
  * none of them, and because which ones appear depends on the login method.
@@ -471,6 +517,7 @@ export type IpcRequestMap = {
   [IPC.profilesUpdate]: ProfilesUpdateRequest;
   [IPC.profilesDelete]: ProfilesDeleteRequest;
   [IPC.providersList]: ProvidersListRequest;
+  [IPC.providersModels]: ProvidersModelsRequest;
   [IPC.runsStart]: RunsStartRequest;
   [IPC.runsSend]: RunsSendRequest;
   [IPC.runsInterrupt]: RunsInterruptRequest;
@@ -495,6 +542,7 @@ export type IpcResponseMap = {
   [IPC.profilesUpdate]: ProfilesUpdateResponse;
   [IPC.profilesDelete]: ProfilesDeleteResponse;
   [IPC.providersList]: ProvidersListResponse;
+  [IPC.providersModels]: ProvidersModelsResponse;
   [IPC.runsStart]: RunsStartResponse;
   [IPC.runsSend]: RunsSendResponse;
   [IPC.runsInterrupt]: RunsInterruptResponse;
@@ -524,7 +572,7 @@ export type IpcHandlerResult<C extends IpcChannel> = IpcResult<IpcResponseMap[C]
 /**
  * Signature of a main-process handler.
  *
- * Deliberately has no `IpcMainInvokeEvent` parameter: `@libra/protocol` has
+ * Deliberately has no `IpcMainInvokeEvent` parameter: `@rx-apollo/protocol` has
  * zero dependencies and must never import electron. The main process wraps
  * these when it registers them.
  */
@@ -551,7 +599,7 @@ export type IpcPush<C extends IpcPushChannel> = IpcPushMap[C];
 export type Unsubscribe = () => void;
 
 /**
- * The object the preload script exposes as `window.libra`.
+ * The object the preload script exposes as `window.apollo`.
  *
  * This is the renderer's entire view of the outside world. If a capability is
  * not on this interface, the renderer does not have it — no `require`, no
@@ -563,14 +611,14 @@ export type Unsubscribe = () => void;
  *
  * ```ts
  * // apps/desktop/renderer/src/global.d.ts
- * import type { LibraBridge } from '@libra/protocol'
+ * import type { ApolloBridge } from '@rx-apollo/protocol'
  * declare global {
- *   interface Window { readonly libra: LibraBridge }
+ *   interface Window { readonly apollo: ApolloBridge }
  * }
  * ```
  */
-export interface LibraBridge {
-  /** Libra's version, for the about panel and bug reports. */
+export interface ApolloBridge {
+  /** Apollo's version, for the about panel and bug reports. */
   readonly version: string;
   /** Host platform, so the UI can render the right modifier keys. */
   readonly platform: 'darwin' | 'win32' | 'linux';
@@ -584,6 +632,17 @@ export interface LibraBridge {
 
   readonly providers: {
     list(request: ProvidersListRequest): Promise<IpcResult<ProvidersListResponse>>;
+    /**
+     * The live model catalogue for one profile, with the built-in list as a
+     * fallback.
+     *
+     * Kept off {@link list} because it spawns a provider subprocess: the
+     * descriptor call must stay instant. Resolves `{ live: false }` rather
+     * than failing when the provider cannot be reached, so the model picker
+     * always has something to render — check `value.live`, not `res.ok`, to
+     * find out whether the account confirmed the list.
+     */
+    models(request: ProvidersModelsRequest): Promise<IpcResult<ProvidersModelsResponse>>;
   };
 
   readonly runs: {
@@ -652,7 +711,7 @@ export interface LibraBridge {
    *
    * The whole surface, because this is the *only* way a profile is
    * authenticated: the provider's own CLI login runs against the profile's
-   * isolated config directory, and no credential ever passes through Libra —
+   * isolated config directory, and no credential ever passes through Apollo —
    * there is nothing here that takes a key or a token.
    */
   readonly auth: {

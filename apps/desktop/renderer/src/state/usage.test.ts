@@ -5,8 +5,8 @@
  * shape — one of the pair going missing, leaving the readout permanently blank.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { NO_CAPABILITIES } from '@libra/protocol';
-import type { AgentEvent, RunId, UsageSnapshot } from '@libra/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+import type { AgentEvent, RunId, UsageSnapshot } from '@rx-apollo/protocol';
 
 import { handleAgentEvent, useApp, type RunState } from './store';
 

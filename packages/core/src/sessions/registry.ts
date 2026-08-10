@@ -48,7 +48,7 @@ import type {
   RunId,
   RunInput,
   Unsubscribe,
-} from '@libra/protocol';
+} from '@rx-apollo/protocol';
 
 import type {
   ConfigSource,
@@ -144,7 +144,7 @@ export interface RunRegistryOptions {
   /**
    * Whether a run's `cwd` is a real, readable directory.
    *
-   * Defaults to the filesystem check in `@libra/core/workspace`. Runs are
+   * Defaults to the filesystem check in `@rx-apollo/core/workspace`. Runs are
    * rejected before {@link RunResolver} is called, so a bad directory costs
    * neither a credential decryption nor a subprocess — and, more importantly,
    * never reaches `spawn`, where a bad cwd surfaces as an `ENOENT` that

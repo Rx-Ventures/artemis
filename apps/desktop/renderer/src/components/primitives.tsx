@@ -1,8 +1,8 @@
 /**
- * Libra-specific primitives.
+ * Apollo-specific primitives.
  *
  * The small pieces that have no shadcn registry equivalent, or where the
- * registry's version does not carry Libra's semantics. Everything here is
+ * registry's version does not carry Apollo's semantics. Everything here is
  * built on the same tokens as `components/ui/`, so it sits inside the design
  * system rather than beside it.
  *
@@ -33,12 +33,12 @@ import { cn } from '@/lib/utils';
  * them a union rather than free-form class strings is what stops a fourteenth
  * shade of green appearing in a feature component six months from now.
  */
-export type Tone = 'neutral' | 'brass' | 'cyan' | 'sage' | 'mint' | 'amber' | 'signal';
+export type Tone = 'neutral' | 'ember' | 'cyan' | 'sage' | 'mint' | 'amber' | 'signal';
 
 /** Foreground + border, for outline treatments. */
 const TONE_OUTLINE: Record<Tone, string> = {
   neutral: 'border-line text-ink-muted',
-  brass: 'border-brass/40 text-brass',
+  ember: 'border-ember/40 text-ember',
   cyan: 'border-cyan/40 text-cyan',
   sage: 'border-sage/40 text-sage',
   mint: 'border-mint/40 text-mint',
@@ -49,7 +49,7 @@ const TONE_OUTLINE: Record<Tone, string> = {
 /** Solid fill, for dots and rules. */
 const TONE_FILL: Record<Tone, string> = {
   neutral: 'bg-ink-faint',
-  brass: 'bg-brass',
+  ember: 'bg-ember',
   cyan: 'bg-cyan',
   sage: 'bg-sage',
   mint: 'bg-mint',
@@ -60,7 +60,7 @@ const TONE_FILL: Record<Tone, string> = {
 /** Text only. */
 const TONE_TEXT: Record<Tone, string> = {
   neutral: 'text-ink-muted',
-  brass: 'text-brass',
+  ember: 'text-ember',
   cyan: 'text-cyan',
   sage: 'text-sage',
   mint: 'text-mint',

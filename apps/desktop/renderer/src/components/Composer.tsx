@@ -159,7 +159,7 @@ export function Composer(): ReactElement {
                     ? 'Steer the run…'
                     : resuming
                       ? 'Continue the selected session…'
-                      : 'Ask Libra to do something…'
+                      : 'Ask Apollo to do something…'
             }
             onChange={(event) => {
               setText(event.target.value);

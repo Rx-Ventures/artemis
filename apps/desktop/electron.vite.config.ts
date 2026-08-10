@@ -27,7 +27,7 @@ const here = (path: string): string => fileURLToPath(new URL(path, import.meta.u
  */
 function stripDevCspMeta(): Plugin {
   return {
-    name: 'libra:strip-dev-csp-meta',
+    name: 'apollo:strip-dev-csp-meta',
     apply: 'serve',
     transformIndexHtml: {
       order: 'pre',
@@ -65,7 +65,7 @@ function stripDevCspMeta(): Plugin {
 // widen from the literal `'cjs'` to `string` and stop matching `ModuleFormat`.
 export default defineConfig(async (): Promise<UserConfig> => ({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@libra/core', '@libra/protocol'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@rx-apollo/core', '@rx-apollo/protocol'] })],
     build: {
       outDir: 'out/main',
       rollupOptions: { input: here('./main/index.ts') },
@@ -73,14 +73,14 @@ export default defineConfig(async (): Promise<UserConfig> => ({
   },
 
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@libra/protocol'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@rx-apollo/protocol'] })],
     build: {
       outDir: 'out/preload',
       rollupOptions: {
         input: here('./preload/index.ts'),
         // CommonJS, deliberately. The app package is `"type": "module"`, so the
         // default output would be `.mjs` — and Electron only loads an ESM
-        // preload when `sandbox` is disabled. Libra keeps the sandbox on, so
+        // preload when `sandbox` is disabled. Apollo keeps the sandbox on, so
         // the preload is emitted as CJS and referenced as `index.cjs` from
         // `BrowserWindow`'s `webPreferences.preload`.
         output: { format: 'cjs', entryFileNames: 'index.cjs' },

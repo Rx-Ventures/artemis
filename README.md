@@ -1,8 +1,8 @@
-# Libra
+# Apollo
 
 A desktop UI for agentic coding CLIs.
 
-Libra is an open-source Electron app that puts a real interface in front of
+Apollo is an open-source Electron app that puts a real interface in front of
 command-line coding agents: a readable transcript, an approval surface you can
 actually reason about, isolated accounts you can switch between, and session
 history you can browse. Claude is the first provider. The architecture is built
@@ -24,7 +24,7 @@ protocol and appear in the UI as unavailable; neither adapter exists.
 
 ## Authentication
 
-**Libra never performs a login.** It has no OAuth flow, opens no browser to sign
+**Apollo never performs a login.** It has no OAuth flow, opens no browser to sign
 you in, and refreshes no tokens. Every credential it uses is one you obtained
 yourself and pasted into a profile.
 
@@ -45,24 +45,24 @@ To get a subscription token, run Anthropic's own CLI yourself:
 claude setup-token     # opens a browser, then prints a long-lived token
 ```
 
-Libra does not run that command for you and does not know when the token
+Apollo does not run that command for you and does not know when the token
 expires; when it stops working, mint a new one and paste it in.
 
 ### Why the mode is stored on the profile
 
 `ANTHROPIC_API_KEY` **overrides** a subscription token when both are set — the
 run is billed as metered API usage even though you chose your plan. So a mode is
-not just a label for which box to type into. Libra strips every Claude
+not just a label for which box to type into. Apollo strips every Claude
 credential variable out of the environment it inherits from your shell and then
 writes back exactly the one your profile's mode names. Whichever mode you pick,
 the other credential cannot reach the agent, whether it came from your shell,
 another profile, or a hand-edited config file.
 
-### If you are distributing Libra
+### If you are distributing Apollo
 
 Anthropic's Agent SDK documentation states that third-party developers may not
 offer claude.ai login or subscription rate limits for their products without
-prior approval from Anthropic. If you are shipping a build of Libra to other
+prior approval from Anthropic. If you are shipping a build of Apollo to other
 people with subscription mode enabled, seek that approval first. Running your
 own build against your own subscription is a separate matter from distributing
 one.
@@ -87,7 +87,7 @@ pnpm smoke       # headless end-to-end run, no Electron (see below)
 
 ### Adding a credential
 
-Libra has no credentials of its own and cannot do anything until you give it a
+Apollo has no credentials of its own and cannot do anything until you give it a
 profile.
 
 1. Launch the app (`pnpm dev`) and open **Profiles** — the "add one" link on the
@@ -109,19 +109,19 @@ profile.
    `sk-ant-...4f2a`.
 5. Set a working directory in the top bar, type a prompt, and send.
 
-Each profile gets its own isolated `CLAUDE_CONFIG_DIR` under Libra's user-data
+Each profile gets its own isolated `CLAUDE_CONFIG_DIR` under Apollo's user-data
 directory, so two profiles never share credentials *or* history. Switching
-between them is manual: Libra does not pool accounts, does not fail over
+between them is manual: Apollo does not pool accounts, does not fail over
 between them, and does not rotate them when one hits a rate limit.
 
-If your machine has no usable credential store, Libra says so at startup and
+If your machine has no usable credential store, Apollo says so at startup and
 refuses to save a key rather than silently writing one in plaintext.
 
 ## Architecture
 
 ### Why a seam, not an integration
 
-The three providers Libra targets have nothing in common at the transport
+The three providers Apollo targets have nothing in common at the transport
 layer:
 
 | Provider | Transport                            |
@@ -175,7 +175,7 @@ directory, which hosting backends it offers, and which auth modes it supports
 is valid on). `resolveEnv` reads that spec rather than any provider's variable
 names, and the profile editor builds both its backend picker and its auth-mode
 picker from it, so a second provider does not need a change anywhere outside its
-own adapter. Nothing in `@libra/protocol` names a backend or a mode; it defines
+own adapter. Nothing in `@rx-apollo/protocol` names a backend or a mode; it defines
 the shape and the adapter supplies the contents.
 
 ### The path a prompt takes
@@ -184,13 +184,13 @@ the shape and the adapter supplies the contents.
   renderer          submitPrompt() mints a runId, paints optimistic UI
      │              and starts matching events before start() resolves
      ▼
-  window.libra      preload/index.ts — the whole attack surface.
+  window.apollo      preload/index.ts — the whole attack surface.
      │              12 fixed channels, no ipcRenderer passthrough,
      ▼              no channel name ever built from renderer input
   ipcMain           main/ipc.ts — verify sender, validate and rebuild the
      │              payload, dispatch, then scan the response for secrets
      ▼
-  LibraEngine       main/engine.ts — the composition root
+  ApolloEngine       main/engine.ts — the composition root
      │
      ▼
   RunRegistry       core/sessions — mints or accepts the run id, resolves
@@ -254,9 +254,9 @@ scripts/smoke.ts       headless end-to-end run, no Electron
 
 Three boundaries are enforced by the type system rather than by convention:
 
-- `@libra/protocol` compiles with `"types": []` — no ambient Node, so it cannot
+- `@rx-apollo/protocol` compiles with `"types": []` — no ambient Node, so it cannot
   reach for a filesystem.
-- `@libra/core` has no dependency on `electron` and must never gain one; it
+- `@rx-apollo/core` has no dependency on `electron` and must never gain one; it
   runs under plain Node and under vitest with no Electron present. A test
   (`packages/core/src/no-electron.test.ts`) fails the build if that changes.
 - `apps/desktop/renderer` compiles without `@types/node`, so `fs`, `process`
@@ -279,13 +279,13 @@ also how you check that a subscription token actually works before wiring it
 into a profile.
 
 Everything it writes lives in one `mkdtemp` directory that is deleted on exit;
-it never touches your real Libra profiles. If the smoke test works and the app
+it never touches your real Apollo profiles. If the smoke test works and the app
 does not, the fault is in the Electron plumbing. If the smoke test fails, the
 fault is in core and you can attach a debugger to it.
 
 ## Naming
 
-The product is **Libra**. It is an independent open-source project: not
+The product is **Apollo**. It is an independent open-source project: not
 affiliated with, endorsed by, or a distribution of any vendor's CLI, and not a
 reimplementation of one's interface. "Powered by Claude" is the extent of the
 attribution. Contributions must not introduce another product's branding,

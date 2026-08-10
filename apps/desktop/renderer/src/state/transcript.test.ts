@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@libra/protocol';
+import type { AgentEvent } from '@rx-apollo/protocol';
 import { TranscriptModel, syncScheduler, type AssistantItem, type ToolItem } from './transcript';
 
 const RUN = 'run_1';

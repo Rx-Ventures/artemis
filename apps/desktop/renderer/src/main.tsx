@@ -2,26 +2,26 @@
  * Renderer entry point.
  *
  * This is a browser context: no Node, no Electron, no filesystem. Everything
- * the UI can do goes through `window.libra`, the contextBridge surface
- * described by `LibraBridge` in `@libra/protocol`.
+ * the UI can do goes through `window.apollo`, the contextBridge surface
+ * described by `ApolloBridge` in `@rx-apollo/protocol`.
  */
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { LibraProviders } from './components/providers';
+import { ApolloProviders } from './components/providers';
 import './index.css';
 
 const container = document.getElementById('root');
-if (!container) throw new Error('Libra: #root is missing from index.html');
+if (!container) throw new Error('Apollo: #root is missing from index.html');
 
 createRoot(container).render(
   <StrictMode>
     {/* Tooltip context and the toast outlet. Above `App`, not inside it, so a
         rewrite of the feature tree cannot take the design system's context
         with it — see `components/providers.tsx`. */}
-    <LibraProviders>
+    <ApolloProviders>
       <App />
-    </LibraProviders>
+    </ApolloProviders>
   </StrictMode>,
 );

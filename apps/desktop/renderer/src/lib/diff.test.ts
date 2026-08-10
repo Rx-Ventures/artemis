@@ -38,7 +38,7 @@ describe('detection', () => {
 
   /**
    * The property that keeps this provider-neutral. `apply_patch` with
-   * `before`/`after` is not a tool Libra ships today; it is the shape a
+   * `before`/`after` is not a tool Apollo ships today; it is the shape a
    * different CLI would plausibly use, and it must work without a code change.
    */
   it('recognises an unfamiliar tool that uses a known argument shape', () => {

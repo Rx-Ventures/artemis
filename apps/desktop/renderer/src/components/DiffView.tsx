@@ -76,7 +76,7 @@ export function DiffView({ edit }: { readonly edit: FileEdit }): ReactElement {
 
       {edit.truncated ? (
         <p className="border-t border-line px-2.5 py-1 font-mono text-2xs text-amber">
-          Diff clipped — this edit is larger than Libra will render inline.
+          Diff clipped — this edit is larger than Apollo will render inline.
         </p>
       ) : null}
     </div>

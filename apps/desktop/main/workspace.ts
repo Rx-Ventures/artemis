@@ -3,7 +3,7 @@
  *
  * `dialog.showOpenDialog` lives in `./ipc.ts`, where `electron` is already
  * imported. What lives here is the part worth testing on its own: reading a
- * dialog result and deciding whether it is something Libra is willing to hand
+ * dialog result and deciding whether it is something Apollo is willing to hand
  * back as a working directory.
  *
  * ## Why a dialog result gets validated at all
@@ -36,7 +36,7 @@ export interface OpenDialogOutcome {
  * `openDirectory` selects folders rather than files. `createDirectory` gives
  * the user a "New Folder" button inside the dialog — which matters more than it
  * looks: without it, starting work in a folder that does not exist yet means
- * cancelling, leaving Libra, creating the folder, and coming back. That detour
+ * cancelling, leaving Apollo, creating the folder, and coming back. That detour
  * is exactly what leads people to type a path by hand instead, which is the
  * input this picker exists to replace.
  */
@@ -55,7 +55,7 @@ const NUL = '\u0000';
  *
  * The path is returned as the OS gave it, with only surrounding whitespace
  * removed. It is deliberately *not* checked for existence here: that is
- * `checkWorkingDirectory`'s job in `@libra/core`, and the caller runs it so
+ * `checkWorkingDirectory`'s job in `@rx-apollo/core`, and the caller runs it so
  * that a picked path and a typed path are held to exactly the same standard.
  */
 export function readPickedDirectory(outcome: OpenDialogOutcome | null | undefined): string | null {

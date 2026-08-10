@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ProfileDraft } from '@libra/protocol';
+import type { ProfileDraft } from '@rx-apollo/protocol';
 
 import { CLAUDE_CREDENTIALS } from '../adapters/claude.js';
 import { managedEnvKeys } from '../adapters/types.js';
@@ -20,7 +20,7 @@ let store: ProfileStore;
 let counter: number;
 
 beforeEach(async () => {
-  userDataDir = await mkdtemp(path.join(tmpdir(), 'libra-store-'));
+  userDataDir = await mkdtemp(path.join(tmpdir(), 'apollo-store-'));
   secrets = new InMemorySecretStore();
   counter = 0;
   store = new ProfileStore({
@@ -166,7 +166,7 @@ describe('ProfileStore — create', () => {
     });
   });
 
-  it('refuses env Libra manages itself', async () => {
+  it('refuses env Apollo manages itself', async () => {
     for (const key of ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK']) {
       await expect(store.create(draft({ publicEnv: { [key]: '1' } }))).rejects.toBeInstanceOf(
         ProfileError,

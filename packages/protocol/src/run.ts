@@ -3,7 +3,7 @@
  *
  * A *run* is one `createRun()` call: a prompt, the stream of events it
  * produces, and the handful of control operations available while it is alive.
- * It is Libra's unit of work, and it is not the same thing as a provider
+ * It is Apollo's unit of work, and it is not the same thing as a provider
  * session — one session can be resumed by many runs over its lifetime.
  */
 
@@ -30,7 +30,7 @@ export type SystemPromptSpec =
  * How much reasoning effort a run should ask the model for.
  *
  * **Deliberately opaque**, exactly like `ProviderBackend` and
- * `ProviderAuthMode`. The levels Libra ships today are Claude's
+ * `ProviderAuthMode`. The levels Apollo ships today are Claude's
  * (`low`…`max`), and naming them here would make one provider's scale a
  * universal fact. Each adapter declares its own and publishes them as
  * {@link import('./provider.js').ProviderDescriptor.effortLevels}; the UI
@@ -117,6 +117,37 @@ export interface RunInput {
    * preference does not become an error when the user switches provider.
    */
   readonly effort?: ProviderEffort;
+
+  /**
+   * Trade reasoning depth for latency on models that offer it.
+   *
+   * Only meaningful when the selected model advertises
+   * {@link import('./provider.js').ProviderModelOption.supportsFastMode}.
+   * Ignored — not rejected — otherwise, for the same reason {@link effort} is:
+   * a stored preference must not become an error when the user switches model.
+   *
+   * Whether it actually engaged is a *separate* fact from whether it was asked
+   * for. A provider may decline (no entitlement, a model that does not allow
+   * it, a cooldown after heavy use), so the UI must report the state the run
+   * comes back with rather than echoing the request.
+   */
+  readonly fastMode?: boolean;
+
+  /**
+   * Spend materially more compute on this run: maximum reasoning effort plus,
+   * on providers that have it, standing multi-agent orchestration.
+   *
+   * The inverse of {@link fastMode}, and mutually exclusive with it in spirit
+   * though not by contract — a provider that is handed both is free to resolve
+   * the conflict, and Apollo's UI does not offer them together.
+   *
+   * Only meaningful when the selected model advertises
+   * {@link import('./provider.js').ProviderModelOption.supportsUltracode}.
+   * Providers may impose further preconditions of their own (Claude requires an
+   * xhigh-capable model with workflows enabled); those are the provider's to
+   * enforce, and this flag being set is a request rather than a guarantee.
+   */
+  readonly ultracode?: boolean;
 
   /**
    * Permission mode to start in. Must be one of the provider's

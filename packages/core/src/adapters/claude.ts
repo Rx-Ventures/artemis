@@ -8,7 +8,7 @@
  * ## Streaming input is not optional
  *
  * `query()` accepts either a `string` prompt or an `AsyncIterable<SDKUserMessage>`.
- * Libra must always use the iterable form, for two reasons that are easy to miss
+ * Apollo must always use the iterable form, for two reasons that are easy to miss
  * from the type signature alone:
  *
  *  1. **There is no `send()` on `Query`.** Multi-turn input works by pushing
@@ -31,7 +31,7 @@
  *
  * ## Configuration isolation
  *
- * `settingSources` defaults to `[]`. Libra is a third-party desktop app, and
+ * `settingSources` defaults to `[]`. Apollo is a third-party desktop app, and
  * silently merging the user's `~/.claude` configuration would import their
  * hooks, MCP servers and permission rules into an app they never granted them
  * to. Callers opt in per run. `./env.ts` does the matching job for environment
@@ -51,10 +51,12 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
+  ModelInfo,
   Options,
   PermissionResult,
   Query,
   SDKUserMessage,
+  Settings,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -73,8 +75,8 @@ import type {
   SessionId,
   SessionSummary,
   SystemPromptSpec,
-} from '@libra/protocol';
-import { NO_CAPABILITIES } from '@libra/protocol';
+} from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
@@ -107,6 +109,8 @@ import type {
   AllSessionsQuery,
   EnvBundle,
   InterruptResult,
+  ModelCatalogue,
+  ModelListQuery,
   PlanUsageQuery,
   ProviderAdapter,
   ProviderCredentialSpec,
@@ -156,7 +160,7 @@ export const CLAUDE_API_KEY_ENV = 'ANTHROPIC_API_KEY';
  * Env var carrying a Claude subscription token.
  *
  * Minted by the user running `claude setup-token` in Anthropic's own CLI, which
- * opens a browser and prints a long-lived token. **Libra never does this**: it
+ * opens a browser and prints a long-lived token. **Apollo never does this**: it
  * implements no OAuth flow, opens no browser for login, and never refreshes the
  * token. The user pastes in what their own CLI printed.
  */
@@ -191,7 +195,7 @@ export const CLAUDE_OAUTH_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
  * `resolveEnv` writes back only the selected mode's.
  *
  * `ANTHROPIC_AUTH_TOKEN` stays managed-and-always-stripped: it is a third
- * credential path Libra does not expose, and leaving it inheritable would let
+ * credential path Apollo does not expose, and leaving it inheritable would let
  * ambient state pick an account no profile named.
  */
 export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
@@ -201,14 +205,14 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
     Always stripped, never set.
 
     `CLAUDE_CODE_OAUTH_TOKEN` moved here when subscription mode stopped
-    emitting it. Libra no longer produces this variable in any mode — the CLI's
+    emitting it. Apollo no longer produces this variable in any mode — the CLI's
     own per-profile login supplies the credential — but it must still be
     removed from the inherited environment, because an explicitly-set token
     outranks the config directory's login. Left alone, a token sitting in the
     user's shell would silently decide which account a profile uses.
 
     `ANTHROPIC_AUTH_TOKEN` is here for the same reason: a third credential path
-    Libra does not expose, which ambient state must not be able to select.
+    Apollo does not expose, which ambient state must not be able to select.
   */
   extraManagedEnvKeys: ['ANTHROPIC_AUTH_TOKEN', CLAUDE_OAUTH_TOKEN_ENV],
   authModes: [
@@ -221,15 +225,15 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
         `--claudeai`.
 
         This replaced a pasted-API-key mode. Two things were wrong with that:
-        the key sat in Libra's own store, and `ANTHROPIC_API_KEY` *overrides* a
+        the key sat in Apollo's own store, and `ANTHROPIC_API_KEY` *overrides* a
         subscription login, so a profile meant to bill a plan would silently
-        bill API credit instead. Neither is fixable while Libra holds the
+        bill API credit instead. Neither is fixable while Apollo holds the
         credential, so it no longer does.
       */
       requiresSecret: false,
       backends: ['anthropic'],
       secretHowTo:
-        'Sign in with the button above. Libra runs `claude auth login --console` against this profile’s own config directory; the browser flow happens in Anthropic’s CLI and no credential passes through Libra.',
+        'Sign in with the button above. Apollo runs `claude auth login --console` against this profile’s own config directory; the browser flow happens in Anthropic’s CLI and no credential passes through Apollo.',
     },
     {
       id: 'cloud',
@@ -238,14 +242,14 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
       /*
         The cloud backends do not authenticate through Anthropic at all: Bedrock
         reads the AWS chain, Vertex the Google one, Foundry the Azure one, each
-        from ambient configuration Libra does not manage. So there is nothing to
+        from ambient configuration Apollo does not manage. So there is nothing to
         sign in to here and nothing to store — the mode exists to say that
         plainly, rather than leaving these backends with no selectable mode.
       */
       requiresSecret: false,
       backends: ['bedrock', 'vertex', 'foundry'],
       secretHowTo:
-        'Nothing to enter. Configure the cloud provider’s own credentials as you normally would — AWS for Bedrock, gcloud for Vertex, Azure for Foundry — and Libra’s run inherits them.',
+        'Nothing to enter. Configure the cloud provider’s own credentials as you normally would — AWS for Bedrock, gcloud for Vertex, Azure for Foundry — and Apollo’s run inherits them.',
     },
     {
       id: 'subscription',
@@ -255,7 +259,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
         No stored secret, by design.
 
         The credential is created by `claude auth login` run with this
-        profile's `CLAUDE_CONFIG_DIR`, and it lives with the CLI — Libra never
+        profile's `CLAUDE_CONFIG_DIR`, and it lives with the CLI — Apollo never
         sees, stores or emits it. Verified on macOS: three config directories
         report three independent answers, so the login genuinely scopes to the
         profile and multiple accounts still work.
@@ -270,7 +274,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
       // contradiction rather than an unsupported feature.
       backends: ['anthropic'],
       secretHowTo:
-        'Sign in with the button above. Libra runs `claude auth login` against this profile’s own config directory, so the browser flow happens in Anthropic’s CLI and the credential never passes through Libra.',
+        'Sign in with the button above. Apollo runs `claude auth login` against this profile’s own config directory, so the browser flow happens in Anthropic’s CLI and the credential never passes through Apollo.',
     },
   ],
   backends: [
@@ -306,12 +310,26 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
 };
 
 /**
- * Models the picker offers, in display order. First entry is the default.
+ * Models the picker falls back to, in display order. First entry is the default.
+ *
+ * **This list is a fallback, not the catalogue.** The authoritative list comes
+ * off the installed CLI at runtime via {@link fetchClaudeModels}, which asks
+ * the SDK's `supportedModels()` and gets back the real lineup with the
+ * provider's own display names, per-model effort levels and per-model fast-mode
+ * support. That is the list the UI should show.
+ *
+ * This exists because the fetch can fail — no binary, no credential, an offline
+ * machine — and a model picker that renders empty is worse than one that
+ * renders slightly stale. Everything here is therefore deliberately
+ * conservative: aliases rather than dated snapshots, and capability flags set
+ * only where they are structural rather than guessed. Live data overwrites all
+ * of it, field by field.
  *
  * **Aliases, not dated snapshot ids.** `sonnet` resolves to whatever the
  * installed CLI considers the current Sonnet; `claude-sonnet-4-5-20250929` is
  * frozen and goes stale in a way nobody notices until a run fails. A picker
- * that has to be edited on every model release is a picker that will be wrong.
+ * that has to be edited on every model release is a picker that will be wrong —
+ * which is the same reasoning that makes the live fetch the primary path.
  *
  * This list is what the UI *offers*. It is not an allow-list: `RunInput.model`
  * stays open, so a user or a future settings screen can still name a specific
@@ -322,24 +340,192 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
   {
     id: 'default',
     label: 'Default',
-    note: 'Whatever the installed Claude CLI selects — usually the current Sonnet.',
+    note: 'Whatever the installed Claude CLI selects.',
+  },
+  {
+    id: 'fable',
+    label: 'Fable 5',
+    displayName: 'Claude Fable 5',
+    resolvedModel: 'claude-fable-5',
+    note: 'Highest reasoning ceiling. Takes every effort level, including max.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'opus',
-    label: 'Opus',
-    note: 'The most capable model. Slowest and most expensive per token.',
+    label: 'Opus 5',
+    displayName: 'Claude Opus 5',
+    resolvedModel: 'claude-opus-5',
+    note: 'The most capable general model. Slowest and most expensive per token.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsFastMode: true,
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'sonnet',
-    label: 'Sonnet',
+    label: 'Sonnet 5',
+    displayName: 'Claude Sonnet 5',
+    resolvedModel: 'claude-sonnet-5',
     note: 'The balanced default: strong on code, much cheaper than Opus.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'haiku',
-    label: 'Haiku',
+    label: 'Haiku 4.5',
+    displayName: 'Claude Haiku 4.5',
+    resolvedModel: 'claude-haiku-4-5-20251001',
     note: 'Fastest and cheapest. Best for small, mechanical edits.',
   },
 ];
+
+/** How long {@link fetchClaudeModels} waits for the CLI before giving up. */
+const MODEL_FETCH_TIMEOUT_MS = 15_000;
+
+/** What {@link fetchClaudeModels} needs in order to reach the CLI. */
+export interface ClaudeModelQuery {
+  /** Profile environment. Decides which account the CLI answers as. */
+  readonly env: EnvBundle;
+  /** An absolute directory to run in. The CLI resolves config relative to it. */
+  readonly cwd: string;
+  /** See {@link ResolvedRunInput.inheritHostEnv}. */
+  readonly inheritHostEnv?: boolean;
+  /** See {@link ClaudeAdapterOptions.hostEnv}. */
+  readonly hostEnv?: EnvBundle;
+  /** Override the default timeout. Mostly for tests. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Ask the installed CLI what models it actually offers.
+ *
+ * This is the authoritative catalogue and {@link CLAUDE_MODELS} is the
+ * fallback, not the other way round. The reasoning is the same one that made
+ * the picker use aliases instead of dated snapshots, taken one step further: a
+ * hard-coded list is wrong the day a model ships, and no amount of diligence
+ * fixes that from inside this file. The CLI already knows the answer, including
+ * the things Apollo cannot infer — the provider's own display names, which
+ * effort levels each model really accepts, and which support fast mode.
+ *
+ * ## Why this opens a query it never prompts
+ *
+ * `supportedModels()` is a *control request*, and the SDK only serves control
+ * requests over a streaming session — there is no one-shot "describe yourself"
+ * call, and `startup()`'s `WarmQuery` exposes only `query()` and `close()`.
+ * So the cheapest legal path is to open a query whose prompt stream never
+ * yields, ask on the control channel, and tear it down. No turn is ever
+ * started, nothing is billed, and the subprocess lives for the length of one
+ * round-trip.
+ *
+ * ## It resolves rather than throws
+ *
+ * Every failure path returns {@link CLAUDE_MODELS} instead of rejecting. This
+ * runs on the boot path of a desktop app whose model picker must render
+ * *something*: a machine with no CLI installed, no credential, or no network is
+ * a machine where the user still needs to see a list and change a setting. The
+ * diagnostic sink is told what went wrong; the UI is handed a usable list.
+ */
+export async function fetchClaudeModels(
+  request: ClaudeModelQuery,
+  onDiagnostic?: (message: string, detail?: unknown) => void,
+): Promise<ModelCatalogue> {
+  const abort = new AbortController();
+
+  /*
+   * A prompt stream that yields nothing and never returns. Returning instead
+   * would close the input channel and let the CLI decide the session is over
+   * before the control request lands; this parks until `abort` tears it down.
+   */
+  const idlePrompt = (async function* (): AsyncGenerator<SDKUserMessage> {
+    await new Promise<void>((resolve) => {
+      if (abort.signal.aborted) {
+        resolve();
+        return;
+      }
+      abort.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+  })();
+
+  let sdkQuery: Query | undefined;
+  try {
+    const env = composeProviderEnv(request.env, {
+      inheritHostEnv: request.inheritHostEnv,
+      hostEnv: request.hostEnv,
+      scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
+    });
+    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
+
+    sdkQuery = query({
+      prompt: idlePrompt,
+      options: {
+        cwd: request.cwd,
+        env,
+        abortController: abort,
+        // Same isolation rule as a run: no filesystem settings are inherited.
+        settingSources: [],
+        // Nothing is going to be displayed, so do not pay for token streaming.
+        includePartialMessages: false,
+      },
+    });
+
+    const infos = await withTimeout(
+      sdkQuery.supportedModels(),
+      request.timeoutMs ?? MODEL_FETCH_TIMEOUT_MS,
+    );
+
+    const mapped = infos.map(toModelOption).filter((m) => m.id.length > 0);
+    if (mapped.length === 0) {
+      onDiagnostic?.('The Claude CLI reported an empty model list; using the built-in list.');
+      return { models: CLAUDE_MODELS, live: false };
+    }
+    return { models: mapped, live: true };
+  } catch (error) {
+    onDiagnostic?.(`Could not read the model list from the Claude CLI: ${describe(error)}`, error);
+    return { models: CLAUDE_MODELS, live: false };
+  } finally {
+    abort.abort();
+    // `interrupt`/`return` on a query that never ran a turn can itself throw;
+    // this is best-effort cleanup and must not mask the result above.
+    try {
+      await sdkQuery?.return?.(undefined);
+    } catch {
+      /* the abort above is what actually reclaims the subprocess */
+    }
+  }
+}
+
+/**
+ * Translate one SDK `ModelInfo` into the descriptor the UI builds pickers from.
+ *
+ * Two derivations are worth naming:
+ *
+ *  - **`label` strips the "Claude " prefix.** Every row would otherwise start
+ *    with the same eight characters, in a status-line segment that truncates at
+ *    fifteen. The full name survives on `displayName`, which is what the
+ *    settings catalogue shows.
+ *  - **`supportsUltracode` is derived from `xhigh`,** because that is the
+ *    provider's own stated precondition ("requires an xhigh-capable model")
+ *    rather than a guess. There is no dedicated flag on `ModelInfo` to read.
+ */
+function toModelOption(info: ModelInfo): ProviderModelOption {
+  const levels = info.supportedEffortLevels;
+  return {
+    id: info.value,
+    label: info.displayName.replace(/^Claude\s+/i, '').trim() || info.value,
+    displayName: info.displayName,
+    resolvedModel: info.resolvedModel,
+    note: info.description,
+    // `supportsEffort: false` means "takes no effort setting", which is an
+    // empty array here — distinct from `undefined`, which means "every level".
+    effortLevels: info.supportsEffort === false ? [] : levels ? [...levels] : undefined,
+    supportsFastMode: info.supportsFastMode ?? false,
+    supportsUltracode: levels?.includes('xhigh') ?? false,
+    adaptiveThinking: info.supportsAdaptiveThinking ?? false,
+  };
+}
 
 /**
  * Reasoning-effort levels, least to most.
@@ -425,6 +611,29 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     models: CLAUDE_MODELS,
     effortLevels: CLAUDE_EFFORT_LEVELS,
 
+    /*
+     * The live counterpart to `models` above. Present because Claude *can*
+     * enumerate itself; see `fetchClaudeModels` for why it opens a query it
+     * never prompts, and `ProviderAdapter.listModels` for the two obligations
+     * it is meeting (no model tokens, and resolve rather than reject).
+     *
+     * The adapter's own diagnostic sink is passed through, so a machine that
+     * cannot reach the CLI leaves a trace explaining why the picker is showing
+     * the built-in list — without that, a silent fallback is indistinguishable
+     * from a working fetch that happens to agree with it.
+     */
+    async listModels(query: ModelListQuery): Promise<ModelCatalogue> {
+      return fetchClaudeModels(
+        {
+          env: query.env,
+          cwd: query.cwd,
+          inheritHostEnv: query.inheritHostEnv,
+          hostEnv,
+        },
+        diagnostic,
+      );
+    },
+
     async createRun(input: ResolvedRunInput): Promise<Run> {
       validateRunInput(input);
       const run = new ClaudeRun(input, { now, hostEnv, diagnostic });
@@ -476,7 +685,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
      * `cwd` out of the transcript rather than from the directory name. That
      * matters: the directory name is a lossy encoding of the path (every
      * non-alphanumeric character becomes `-`), so reconstructing a cwd from it
-     * would be a guess. Since every Libra profile has its own
+     * would be a guess. Since every Apollo profile has its own
      * `CLAUDE_CONFIG_DIR`, one such call per profile covers the whole
      * (profile × project) space, and a session's profile falls out of *which*
      * config directory it was found in — no extra bookkeeping anywhere.
@@ -738,9 +947,9 @@ export function buildClaudeOptions(
     scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
   });
 
-  // Identify Libra in the provider's User-Agent, unless the profile already
+  // Identify Apollo in the provider's User-Agent, unless the profile already
   // chose an identifier.
-  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'libra';
+  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
 
   const permissionMode = input.permissionMode;
 
@@ -762,6 +971,11 @@ export function buildClaudeOptions(
     // levels, so this cast narrows a checked value rather than asserting an
     // unchecked one.
     effort: input.effort as Options['effort'],
+    // Fast mode and ultracode are *settings*, not top-level options, so they
+    // ride the flag-settings layer. Absent when neither was asked for: an empty
+    // object here is not inert — it is a flag-settings layer that exists, and
+    // the layer has the highest priority among user-controlled settings.
+    settings: buildFlagSettings(input),
     permissionMode,
     // The SDK gates `bypassPermissions` behind an explicit opt-in. Passing it
     // only when the user picked that mode keeps the dangerous flag tied to a
@@ -791,6 +1005,35 @@ export function buildClaudeOptions(
     systemPrompt: mapSystemPrompt(input.systemPrompt),
     title: input.title,
   };
+}
+
+/**
+ * Assemble the flag-settings layer from the run's speed/depth knobs.
+ *
+ * `fastMode` and `ultracode` are not top-level `Options` fields — they live in
+ * `Settings`, which `Options.settings` loads into the flag layer (the same one
+ * the CLI's `--settings` flag feeds, and the highest-priority user-controlled
+ * tier). Both are session-scoped by design: the SDK documents that interactive
+ * ultracode toggles never persist, which matches Apollo's model exactly, since
+ * every run is configured from the status line rather than from a config file.
+ *
+ * Returns `undefined` rather than `{}` when neither is set. Passing an empty
+ * object would still *establish* a flag-settings layer, and a layer that exists
+ * but says nothing is not the same as no layer at all — this keeps a run that
+ * asked for neither knob byte-identical to one from before they existed.
+ *
+ * Nothing here checks whether the selected model supports either flag. That is
+ * the UI's job (it has the model descriptor and can disable the control with a
+ * reason) and the provider's job (it resolves entitlement, cooldown and model
+ * eligibility server-side). Duplicating the check here would mean maintaining a
+ * third, staler copy of a fact the other two already own — the same argument
+ * that keeps per-model effort tables out of this file.
+ */
+export function buildFlagSettings(input: ResolvedRunInput): Settings | undefined {
+  const settings: Settings = {};
+  if (input.fastMode === true) settings.fastMode = true;
+  if (input.ultracode === true) settings.ultracode = true;
+  return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
 /**
@@ -1223,7 +1466,7 @@ class ClaudeRun implements Run {
     };
   }
 
-  /** Libra's own intent outranks whatever the transport reports. */
+  /** Apollo's own intent outranks whatever the transport reports. */
   #exitReason(fallback: RunEndReason): RunEndReason {
     if (this.#state.disposeRequested) return 'disposed';
     if (this.#state.interruptRequested) return 'interrupted';
@@ -1348,7 +1591,7 @@ class ClaudeRun implements Run {
  *
  * The SDK's standalone `listSessions()` takes no config-directory option — it
  * resolves the store from the ambient `process.env.CLAUDE_CONFIG_DIR` (falling
- * back to `~/.claude`). Libra's whole per-profile isolation model depends on
+ * back to `~/.claude`). Apollo's whole per-profile isolation model depends on
  * pointing it somewhere else, so the variable has to be swapped around the
  * call and restored afterwards.
  *

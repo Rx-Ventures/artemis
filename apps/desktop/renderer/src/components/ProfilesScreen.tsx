@@ -12,7 +12,7 @@
  *     time, passed straight to the bridge, and the field is cleared in the same
  *     tick. It is never in React state, never in a store, never in a re-render.
  *
- *  2. **Libra never performs a login.** There is no OAuth flow here, no browser
+ *  2. **Apollo never performs a login.** There is no OAuth flow here, no browser
  *     handoff, no token refresh. Every credential — API key or subscription
  *     token — is one the *user* obtained in their own terminal and pasted in.
  *     The subscription mode's instructions say so in as many words, because
@@ -29,17 +29,32 @@
  *     different environment variables and one silently overrides the other, so
  *     the profile must say which it means and the user must be able to see
  *     which they chose without guessing.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS IS A SECTION, NOT A SCREEN
+ * ---------------------------------------------------------------------------
+ *
+ * It used to own the window: `absolute inset-0`, its own header, its own close
+ * button, its own scroll container. It is now one pane inside the settings
+ * dialog (`components/settings/`), which supplies all four. What is left here
+ * is the body — and only the body, because a pane that drew its own scroller
+ * inside the dialog's would trap the wheel at a boundary the user cannot see.
+ *
+ * The file kept its name and its path deliberately. Everything above this
+ * paragraph is credential-handling code that is right for reasons that are not
+ * obvious, and moving 600 lines of it into a new directory to gain a tidier
+ * filename would have turned a reviewable diff into a re-read.
  */
 
 import { useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { KeyRoundIcon, PlusIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react';
-import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@libra/protocol';
+import { PlusIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@rx-apollo/protocol';
 import type {
   ProfileMetadata,
   ProviderAuthModeOption,
   ProviderBackend,
   ProviderId,
-} from '@libra/protocol';
+} from '@rx-apollo/protocol';
 
 import {
   authModeSupportsBackend,
@@ -49,10 +64,22 @@ import {
   resolveAuthMode,
   resolveBackend,
 } from '../lib/authModes';
-import { createProfile, deleteProfile, setScreen, updateProfile, useApp } from '../state/store';
+import { createProfile, deleteProfile, updateProfile, useApp } from '../state/store';
 import { IconButton, WithReason } from './disabled-reason';
 import { ToneBadge } from './primitives';
+import { SettingsPane } from './settings/pane';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -63,7 +90,6 @@ import {
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
   SelectContent,
@@ -75,69 +101,66 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
-export function ProfilesScreen(): ReactElement {
+export function ProfilesSection(): ReactElement {
   const profiles = useApp((s) => s.profiles);
   const activeId = useApp((s) => s.activeProfileId);
   const [editing, setEditing] = useState<string | null>(null);
+  /**
+   * Open the create form immediately when there are none.
+   *
+   * The first-run case: an empty pane with a "New profile" button is a dead end
+   * for a user who has no idea what a profile is, and every other pane in this
+   * dialog needs one to exist before it can answer anything.
+   */
   const [creating, setCreating] = useState(profiles.length === 0);
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-abyss">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
-        <KeyRoundIcon className="size-3.5 text-brass" aria-hidden="true" />
-        <h1 className="text-sm font-semibold tracking-tight text-ink">Profiles</h1>
-        <p className="ml-2 hidden text-2xs text-ink-faint md:block">
-          Each profile is its own credential and its own isolated history. Switching is manual —
-          Libra never pools accounts or rotates them for you.
-        </p>
-        <IconButton label="Close (Esc)" className="ml-auto" onClick={() => setScreen('chat')}>
-          <XIcon />
-        </IconButton>
-      </header>
+    <SettingsPane
+      title="Profiles"
+      description="Each profile is its own credential and its own isolated history. Switching is manual — Apollo never pools accounts or rotates them for you."
+      actions={
+        creating ? null : (
+          <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
+            <PlusIcon />
+            New profile
+          </Button>
+        )
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {profiles.length === 0 && !creating ? (
+          <p className="text-xs text-ink-muted">No profiles yet.</p>
+        ) : null}
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-5">
-          {profiles.length === 0 && !creating ? (
-            <p className="text-xs text-ink-muted">No profiles yet.</p>
-          ) : null}
-
-          {profiles.map((profile) =>
-            editing === profile.id ? (
-              <ProfileForm
-                key={profile.id}
-                profile={profile}
-                onDone={() => setEditing(null)}
-                onCancel={() => setEditing(null)}
-              />
-            ) : (
-              <ProfileCard
-                key={profile.id}
-                profile={profile}
-                active={profile.id === activeId}
-                onEdit={() => setEditing(profile.id)}
-              />
-            ),
-          )}
-
-          {creating ? (
-            <ProfileForm onDone={() => setCreating(false)} onCancel={() => setCreating(false)} />
+        {profiles.map((profile) =>
+          editing === profile.id ? (
+            <ProfileForm
+              key={profile.id}
+              profile={profile}
+              onDone={() => setEditing(null)}
+              onCancel={() => setEditing(null)}
+            />
           ) : (
-            <div>
-              <Button variant="outline" onClick={() => setCreating(true)}>
-                <PlusIcon />
-                New profile
-              </Button>
-            </div>
-          )}
+            <ProfileCard
+              key={profile.id}
+              profile={profile}
+              active={profile.id === activeId}
+              onEdit={() => setEditing(profile.id)}
+            />
+          ),
+        )}
 
-          <p className="mt-2 text-2xs leading-relaxed text-ink-faint">
-            Credentials are stored by the main process in the operating system’s encrypted
-            credential store. The interface you are looking at only ever receives a masked hint — it
-            has no way to read one back, and nothing on this screen can be reversed into one.
-          </p>
-        </div>
-      </ScrollArea>
-    </div>
+        {creating ? (
+          <ProfileForm onDone={() => setCreating(false)} onCancel={() => setCreating(false)} />
+        ) : null}
+
+        <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
+          Credentials are stored by the main process in the operating system’s encrypted credential
+          store. The interface you are looking at only ever receives a masked hint — it has no way
+          to read one back, and nothing on this screen can be reversed into one.
+        </p>
+      </div>
+    </SettingsPane>
   );
 }
 
@@ -165,11 +188,11 @@ function ProfileCard({
   const credential = describeCredential(backend, authMode);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-brass/50' : 'ring-line')}>
+    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-ink">{profile.label}</span>
-          {active ? <ToneBadge tone="brass">active</ToneBadge> : null}
+          {active ? <ToneBadge tone="ember">active</ToneBadge> : null}
           <ToneBadge>{profile.providerId}</ToneBadge>
           {backend ? <ToneBadge tone="cyan">{backend.label}</ToneBadge> : null}
           {credential ? (
@@ -181,11 +204,18 @@ function ProfileCard({
             <Button size="xs" variant="ghost" onClick={onEdit}>
               Edit
             </Button>
+            {/*
+              Not an `AlertDialogTrigger asChild`: `IconButton` renders a
+              tooltip-wrapped button, and `asChild` needs a single element that
+              forwards a ref to the DOM — a Radix `Tooltip.Root` is not one. The
+              dialog is controlled instead, which costs one boolean and keeps
+              the button's accessible name and tooltip intact.
+            */}
             <IconButton
               label="Delete profile"
               size="icon-xs"
               className="text-signal"
-              onClick={() => setConfirming((v) => !v)}
+              onClick={() => setConfirming(true)}
             >
               <Trash2Icon />
             </IconButton>
@@ -213,41 +243,67 @@ function ProfileCard({
           <p className="text-2xs leading-snug text-ink-faint">{credential.note}</p>
         ) : null}
 
-        {confirming ? (
-          <Alert variant="destructive" className="mt-1 border-signal/40 bg-signal/5">
-            <TriangleAlertIcon />
-            <AlertTitle className="text-2xs">Delete “{profile.label}”?</AlertTitle>
-            <AlertDescription className="text-2xs text-signal/90">
-              <p>The stored credential is destroyed immediately and cannot be recovered.</p>
-              <div className="mt-1.5 flex items-center gap-2">
-                <Switch
-                  id={`delete-history-${profile.id}`}
-                  size="sm"
-                  checked={alsoHistory}
-                  onCheckedChange={setAlsoHistory}
-                />
-                <Label
-                  htmlFor={`delete-history-${profile.id}`}
-                  className="text-2xs font-normal text-ink-muted"
-                >
-                  also delete this profile’s isolated config directory and its session history
-                </Label>
-              </div>
-              <div className="mt-2 flex gap-2">
-                <Button
-                  size="xs"
-                  variant="destructive"
-                  onClick={() => void deleteProfile(profile.id, alsoHistory)}
-                >
-                  Delete profile
-                </Button>
-                <Button size="xs" variant="ghost" onClick={() => setConfirming(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </AlertDescription>
-          </Alert>
-        ) : null}
+        {/*
+          A modal rather than the inline `Alert` this used to be. Deleting a
+          profile destroys a credential the user cannot get back from Apollo, and
+          an inline panel inside a scrolling list can be confirmed with a stray
+          click on a row that has since moved. `AlertDialog` takes the focus,
+          traps it, and makes Escape mean cancel — which is the behaviour an
+          irreversible action is owed.
+
+          `alsoHistory` is reset on close, not only on confirm: leaving it on
+          would carry a much larger deletion over to whichever profile the user
+          opened this on next.
+        */}
+        <AlertDialog
+          open={confirming}
+          onOpenChange={(next) => {
+            setConfirming(next);
+            if (!next) setAlsoHistory(false);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogMedia className="bg-signal/10 text-signal">
+                <TriangleAlertIcon />
+              </AlertDialogMedia>
+              <AlertDialogTitle className="text-sm text-ink">
+                Delete “{profile.label}”?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-2xs leading-relaxed">
+                The stored credential is destroyed immediately and cannot be recovered. You would
+                have to obtain a new one and paste it in again.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <div className="flex items-start gap-2 rounded-lg border border-line bg-inset/60 px-3 py-2">
+              <Switch
+                id={`delete-history-${profile.id}`}
+                size="sm"
+                className="mt-px"
+                checked={alsoHistory}
+                onCheckedChange={setAlsoHistory}
+              />
+              <Label
+                htmlFor={`delete-history-${profile.id}`}
+                className="text-2xs leading-relaxed font-normal text-ink-muted"
+              >
+                Also delete this profile’s isolated config directory and its session history.
+              </Label>
+            </div>
+
+            <AlertDialogFooter>
+              <AlertDialogCancel size="sm">Keep it</AlertDialogCancel>
+              <AlertDialogAction
+                size="sm"
+                variant="destructive"
+                onClick={() => void deleteProfile(profile.id, alsoHistory)}
+              >
+                Delete profile
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );
@@ -317,7 +373,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   /**
    * Worth warning about only when a stored credential is actually in play.
    * On a backend with an ambient credential chain the mode is still recorded
-   * but nothing Libra holds is read, so "your credential will not be migrated"
+   * but nothing Apollo holds is read, so "your credential will not be migrated"
    * would be a warning about an event that cannot happen.
    */
   const changingMode =
@@ -340,7 +396,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       // process rejects these regardless — this only turns a round-trip error
       // into an immediate one.
       if (isCredentialRoutingEnvKey(name)) {
-        return `${name} controls where your credential is sent, which Libra decides. Remove it.`;
+        return `${name} controls where your credential is sent, which Apollo decides. Remove it.`;
       }
       env[name] = trimmed.slice(eq + 1).trim();
     }
@@ -402,7 +458,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-brass/35">
+    <Card size="sm" className="bg-panel ring-1 ring-ember/35">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">
@@ -530,7 +586,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
               <FieldDescription className="text-2xs">
                 {editing
                   ? 'Leave blank to keep the stored credential. Anything typed here replaces it.'
-                  : 'Sent straight to encrypted storage. Libra shows you a masked hint afterwards and cannot read it back.'}
+                  : 'Sent straight to encrypted storage. Apollo shows you a masked hint afterwards and cannot read it back.'}
               </FieldDescription>
               {selectedMode?.secretHowTo ? (
                 <FieldDescription className="text-2xs text-ink-muted">
@@ -666,7 +722,7 @@ function AuthModeField({
       </Select>
 
       {/* On an ambient-chain backend the mode is still recorded, but nothing
-          Libra stores is read and the mode's billing note would describe an
+          Apollo stores is read and the mode's billing note would describe an
           account that is not being charged. Say which it is. */}
       {!secretRequired ? (
         <FieldDescription className="text-2xs text-ink-muted">
@@ -686,23 +742,23 @@ function AuthModeField({
 
       {/*
         The one place a user might reasonably expect a "Sign in with Claude"
-        button. There is not one today: Libra holds credentials the user
+        button. There is not one today: Apollo holds credentials the user
         brought, and performs no interactive login of any kind.
 
         This is contingent, not architectural. Anthropic's Agent SDK terms do
         not permit a third-party product to offer claude.ai login or
         subscription rate limits "unless previously approved" — so the bar is
-        approval, not feasibility. If Libra obtains that approval, an in-app
+        approval, not feasibility. If Apollo obtains that approval, an in-app
         login becomes legitimate and this decision should be revisited.
 
         Two things would change with it, and both are the reason paste-a-token
-        is the better default until then: Libra would have to run the OAuth
+        is the better default until then: Apollo would have to run the OAuth
         handshake, and it would have to store and refresh a refresh token
         rather than holding one long-lived credential in the keychain.
       */}
       {secretRequired ? (
         <FieldDescription className="text-2xs">
-          Libra does not sign you in. Obtain the credential yourself and paste it below — nothing on
+          Apollo does not sign you in. Obtain the credential yourself and paste it below — nothing on
           this screen opens a browser or talks to an account.
         </FieldDescription>
       ) : null}

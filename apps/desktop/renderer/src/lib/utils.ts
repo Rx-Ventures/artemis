@@ -10,7 +10,7 @@
  * result they asked for rather than whichever rule happens to sit later in the
  * generated stylesheet.
  *
- * tailwind-merge is configured, not used bare: Libra's type scale adds a
+ * tailwind-merge is configured, not used bare: Apollo's type scale adds a
  * `text-2xs` step and a `text-2xs--line-height`, and the default config has no
  * way to know that `2xs` is a font size rather than a colour. Left unregistered
  * it would treat `text-2xs` and `text-ink-muted` as the same conflict group and

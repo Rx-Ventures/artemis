@@ -1,14 +1,14 @@
 /**
  * Signing a profile in, by driving Anthropic's own CLI.
  *
- * ## Why Libra performs no login of its own
+ * ## Why Apollo performs no login of its own
  *
- * Libra never sees a credential under this design. `claude auth login` opens
+ * Apollo never sees a credential under this design. `claude auth login` opens
  * the browser, completes the OAuth exchange, and writes the token into the
- * profile's own config directory. Libra supplies one environment variable —
+ * profile's own config directory. Apollo supplies one environment variable —
  * `CLAUDE_CONFIG_DIR` — and reads a boolean back. There is no token to paste,
  * store, encrypt, mask or leak, and no `ANTHROPIC_API_KEY` /
- * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Libra stops
+ * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Apollo stops
  * setting either.
  *
  * ## Why this preserves multiple accounts
@@ -19,7 +19,7 @@
  *     (ambient)                 →  { loggedIn: true,  subscriptionType: 'max' }
  *
  * `CLAUDE_CONFIG_DIR` isolates the *credential*, not merely settings — so a
- * login performed with it set belongs to that directory alone. Libra already
+ * login performed with it set belongs to that directory alone. Apollo already
  * gives every profile its own directory, which is the whole mechanism: one
  * profile, one folder, one account.
  *

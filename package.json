@@ -1,8 +1,8 @@
 {
-  "name": "libra",
+  "name": "rx-apollo",
   "version": "0.1.0",
   "private": true,
-  "description": "Libra — a desktop UI for agentic coding CLIs.",
+  "description": "Apollo — a desktop UI for agentic coding CLIs.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
@@ -11,8 +11,8 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "dev": "pnpm run build:libs && pnpm --filter @libra/desktop dev",
-    "build": "pnpm run build:libs && pnpm --filter @libra/desktop build",
+    "dev": "pnpm run build:libs && pnpm --filter @rx-apollo/desktop dev",
+    "build": "pnpm run build:libs && pnpm --filter @rx-apollo/desktop build",
     "build:libs": "tsc -b packages/protocol packages/core",
     "typecheck": "tsc -b --pretty",
     "typecheck:clean": "tsc -b --clean && tsc -b --pretty",
@@ -22,8 +22,8 @@
     "clean": "tsc -b --clean && rimraf --glob \"**/dist\" \"**/out\" \"**/.tsbuild\" \"**/*.tsbuildinfo\""
   },
   "devDependencies": {
-    "@libra/core": "workspace:*",
-    "@libra/protocol": "workspace:*",
+    "@rx-apollo/core": "workspace:*",
+    "@rx-apollo/protocol": "workspace:*",
     "@types/node": "^26.2.0",
     "rimraf": "^6.1.3",
     "tsx": "^4.23.12",

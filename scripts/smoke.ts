@@ -1,5 +1,5 @@
 /**
- * Headless end-to-end smoke test for `@libra/core`.
+ * Headless end-to-end smoke test for `@rx-apollo/core`.
  *
  * Runs the entire engine with no Electron anywhere in the process:
  *
@@ -23,14 +23,14 @@
  *
  * ```sh
  * export ANTHROPIC_API_KEY=sk-ant-…
- * pnpm build:libs          # smoke.ts imports @libra/core's built output
+ * pnpm build:libs          # smoke.ts imports @rx-apollo/core's built output
  * pnpm smoke               # or: npx tsx scripts/smoke.ts "your prompt here"
  * ```
  *
  * Everything it writes — the profile store, the credential, the isolated config
  * directory and the working directory the agent is pointed at — lives in one
  * `mkdtemp` directory that is removed on the way out. It never touches your real
- * Libra data, and the key it uses is the one already in your environment: no
+ * Apollo data, and the key it uses is the one already in your environment: no
  * credential is written anywhere except that temporary directory, encrypted by
  * nothing, which is why it is deleted.
  *
@@ -48,8 +48,8 @@ import {
   ProfileStore,
   resolveEnv,
   RunRegistry,
-} from '@libra/core';
-import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@libra/protocol';
+} from '@rx-apollo/core';
+import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@rx-apollo/protocol';
 
 /** How long to wait for a run to finish before giving up and tearing down. */
 const RUN_TIMEOUT_MS = 120_000;
@@ -125,7 +125,7 @@ async function main(): Promise<number> {
   if (!credential) {
     console.error(
       'No credential in the environment.\n' +
-        'Libra never performs a login of its own, so this script needs one of:\n\n' +
+        'Apollo never performs a login of its own, so this script needs one of:\n\n' +
         '  export ANTHROPIC_API_KEY=sk-ant-…          metered API usage\n' +
         '  export CLAUDE_CODE_OAUTH_TOKEN=…           billed to a Claude subscription\n\n' +
         'A subscription token is printed by `claude setup-token` in Anthropic’s CLI.\n',
@@ -135,16 +135,16 @@ async function main(): Promise<number> {
 
   const prompt = process.argv.slice(2).join(' ').trim() || DEFAULT_PROMPT;
 
-  // One disposable directory for everything: Libra's "user data", and the
+  // One disposable directory for everything: Apollo's "user data", and the
   // working directory the agent is pointed at.
-  const root = await mkdtemp(join(tmpdir(), 'libra-smoke-'));
+  const root = await mkdtemp(join(tmpdir(), 'apollo-smoke-'));
   const userDataDir = join(root, 'userData');
   const workdir = join(root, 'workspace');
   const { mkdir } = await import('node:fs/promises');
   await mkdir(userDataDir, { recursive: true });
   await mkdir(workdir, { recursive: true });
 
-  console.log(`Libra smoke test`);
+  console.log(`Apollo smoke test`);
   console.log(`  scratch : ${root}`);
   console.log(`  workdir : ${workdir}`);
   console.log(`  auth    : ${authMode}`);

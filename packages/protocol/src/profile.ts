@@ -1,7 +1,7 @@
 /**
  * Profiles: named environment-variable bundles.
  *
- * A profile is how Libra switches accounts. It bundles a credential, a backend
+ * A profile is how Apollo switches accounts. It bundles a credential, a backend
  * selection, and an isolated config directory. Providers that key their session
  * store on that directory — Claude keys it on `$CLAUDE_CONFIG_DIR` — give each
  * profile isolated credentials *and* isolated history in one move.
@@ -14,7 +14,7 @@
  *
  * Two rules govern this file, and they are not negotiable:
  *
- *  1. **Libra never performs an interactive login.** A profile holds a
+ *  1. **Apollo never performs an interactive login.** A profile holds a
  *     credential the *user* obtained and pasted in. There is no OAuth flow
  *     here, no browser handoff, no token refresh, and no code that could grow
  *     into one. Which kinds of credential a provider accepts is the provider's
@@ -74,7 +74,7 @@ export function isProviderBackend(value: unknown): value is ProviderBackend {
  * How a profile's credential authenticates — and therefore what gets billed.
  *
  * **Deliberately opaque, for the same reason {@link ProviderBackend} is.** The
- * modes Libra ships today are Claude's (`api-key` and `subscription`), and
+ * modes Apollo ships today are Claude's (`api-key` and `subscription`), and
  * naming them in this package would make them universal facts about every
  * provider rather than one adapter's vocabulary. Each adapter declares its own
  * list and publishes it as `ProviderDescriptor.authModes`; the UI builds its
@@ -130,13 +130,13 @@ export interface Profile {
    * This decides which variable {@link secretRef}'s value is emitted as, and
    * therefore which account is billed. It is a property of the *profile* on
    * purpose: billing must never be decided by whatever happens to be exported
-   * in the shell that launched Libra.
+   * in the shell that launched Apollo.
    */
   readonly authMode?: ProviderAuthMode;
 
   /**
    * Directory name (not a full path) for this profile's isolated provider
-   * config directory. Resolved against Libra's user-data directory. Keeping it
+   * config directory. Resolved against Apollo's user-data directory. Keeping it
    * a bare name means a profile record can never point at an arbitrary
    * location on disk.
    *
@@ -158,7 +158,7 @@ export interface Profile {
    * Validate with {@link isSecretEnvKey} *and*
    * {@link isCredentialRoutingEnvKey} before writing: anything that looks like
    * a credential belongs in the secret store, and anything that decides where
-   * the credential is *sent* belongs to Libra rather than to the profile.
+   * the credential is *sent* belongs to Apollo rather than to the profile.
    */
   readonly publicEnv: Readonly<Record<string, string>>;
 
@@ -223,7 +223,7 @@ export interface ProfileDraft {
    * backends that authenticate from an ambient credential chain.
    *
    * Named `apiKey` for continuity, but it is whatever the mode expects — an API
-   * key, or a subscription token the user minted themselves. Libra does not
+   * key, or a subscription token the user minted themselves. Apollo does not
    * mint it either way.
    */
   readonly apiKey?: string;
@@ -394,7 +394,7 @@ export function isSecretEnvKey(name: string): boolean {
  *    the provider process, which holds the plaintext key in memory.
  *
  * A profile legitimately needs none of these: region and model selection go in
- * `publicEnv`, but *routing* is Libra's to decide. Enforced at the IPC boundary
+ * `publicEnv`, but *routing* is Apollo's to decide. Enforced at the IPC boundary
  * and again in the profile store, so a hand-edited `profiles.json` is covered
  * too.
  *

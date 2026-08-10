@@ -143,7 +143,7 @@ export type StopReason =
  * A finished text block.
  *
  * Emitted for assistant output and, when a provider echoes them, for user
- * messages that Libra did not originate (replayed history, synthetic turns).
+ * messages that Apollo did not originate (replayed history, synthetic turns).
  * `text` is the complete block: a consumer that ignored every delta and read
  * only `text.complete` would still render the full transcript.
  */

@@ -2,28 +2,45 @@
  * The application shell.
  * ============================================================================
  *
- * A sidebar and a working column, over one status line:
+ * A header over a floating sidebar and a working column, over one status line:
  *
- *     +------------------+----------------------------------+
- *     | [ + New session ]|  TRANSCRIPT   (scrolls, streams)  |
- *     |  ~/code/libra    |                                   |
- *     |  ── sessions ──  |                                   |
- *     |  grouped by      +----------------------------------+
- *     |  project         |  COMPOSER                         |
- *     +------------------+----------------------------------+
- *     |  STATUS LINE  (profile · model · thinking · mode · ~)|
- *     +------------------------------------------------------+
+ *     +------------------------------------------------------------------+
+ *     | [◧]  apollo › Wire the adapter seam              [+]  [⚙]  HEADER  |
+ *     +------------------------------------------------------------------+
+ *     |  ╭──────────────────╮ |                                          |
+ *     |  │ ▣ apollo       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
+ *     |  │ [ + New session ]│ |                                          |
+ *     |  │ ~/code/apollo     │ |                                          |
+ *     |  │ ── SESSIONS ──   │ +------------------------------------------+
+ *     |  │  this project    │ |  COMPOSER                                |
+ *     |  │ ⌂ All projects ▴ │ |------------------------------------------|
+ *     |  ╰──────────────────╯ |  STATUS  (profile · model · effort · ~)   |
+ *     +------------------------------------------------------------------+
  *
- * ## The status line spans the full width, deliberately
+ * ## The header exists so that hiding the sidebar is reversible
  *
- * Every segment on it — profile, model, thinking effort, permission mode,
- * working directory — describes what the *next run* will do. None of it is a
- * property of the transcript pane, and all of it applies just as much when a
- * session is picked in the sidebar as when a prompt is typed in the composer.
- * Scoping it to the right-hand column would have implied otherwise, and would
- * have left a dead corner under the sidebar. Running it edge to edge also gives
- * the sidebar toggle a permanent home, so a collapsed sidebar is always one
- * click from coming back.
+ * `Sidebar` renders `null` when collapsed — not a rail, not a sliver — so its
+ * own close button cannot bring it back. That control has to live somewhere
+ * always-mounted, and "somewhere always-mounted" used to mean the status line,
+ * which is the bar describing *what the next prompt will do*. Whether a pane is
+ * showing is not that; it is a property of the window. So the window has a bar
+ * of its own now, carrying the pane toggle, the name of what this window is
+ * pointed at, and the way into settings. It is also the Electron drag region.
+ *
+ * ## The sidebar floats
+ *
+ * It is a card with a margin, a border and a shadow, sitting on the window
+ * background rather than being a column welded to the frame. Everything in it
+ * is scoped to one project — that is the point of the redesign — and other
+ * projects are reached through an explicit switcher rather than by scrolling
+ * past them.
+ *
+ * ## The status line belongs to the composer, not to the window
+ *
+ * Profile, model, thinking effort, permission mode, working directory: every
+ * segment describes what the *next run* will do, so the bar lines up with the
+ * input's edges inside the working column instead of spanning the app. See
+ * `StatusLine`'s own header.
  *
  * ## What stayed where it was
  *
@@ -32,7 +49,7 @@
  *                                          failed decision is reported
  *                                          somewhere the user is looking
  *  - run facts and the capability matrix → the run inspector dialog
- *  - every command, and session search   → still ⌘K. Sessions now live in the
+ *  - every command, and session search   → still ⌘K. Sessions live in the
  *                                          sidebar as well; the palette remains
  *                                          the keyboard route to them.
  *
@@ -42,30 +59,33 @@
  * it reads the transcript store. Streaming deltas are delivered to leaf rows by
  * an external store React never sees (`state/transcript.ts`), so adding a
  * persistent pane put no work on the per-token path. Do not lift transcript
- * state up into this component to share it with the sidebar.
+ * state up into this component to share it with the sidebar. The header follows
+ * the same rule: it names the session, never its contents.
  */
 
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useHotkeys } from './hooks/useHotkeys';
+import { AppHeader } from './components/AppHeader';
 import { CommandPalette } from './components/CommandPalette';
 import { Composer } from './components/Composer';
 import { ErrorSurface } from './components/ErrorSurface';
-import { ProfilesScreen } from './components/ProfilesScreen';
 import { RunInfoDialog } from './components/RunInfoDialog';
+import { SettingsDialog } from './components/settings';
 import { Sidebar } from './components/Sidebar';
 import { StatusLine } from './components/StatusLine';
 import { Transcript } from './components/Transcript';
 import { LogoMark } from './components/logo';
 import {
   bootstrap,
+  closeSettings,
   denyPendingPermission,
   installEventBridge,
   interruptRun,
   isLive,
   newSession,
+  openSettings,
   setInfo,
   setPalette,
-  setScreen,
   toggleSidebar,
   togglePalette,
   useApp,
@@ -74,7 +94,6 @@ import {
 export function App(): ReactElement {
   const bridgeMode = useApp((s) => s.bridgeMode);
   const booted = useApp((s) => s.booted);
-  const screen = useApp((s) => s.screen);
   const started = useRef(false);
 
   /**
@@ -120,14 +139,24 @@ export function App(): ReactElement {
         return;
       }
       if (state.screen === 'profiles') {
-        setScreen('chat');
+        closeSettings();
         return;
       }
       if (isLive(state)) void interruptRun();
     },
     'mod+n': newSession,
     'mod+b': toggleSidebar,
-    'mod+,': () => setScreen(useApp.getState().screen === 'profiles' ? 'chat' : 'profiles'),
+    /*
+     * `screen === 'profiles'` still means "the settings surface is open" — the
+     * value kept its historical name so that every existing call site stayed
+     * correct. Which pane it shows is the separate `settingsSection`, and
+     * `openSettings()` with no argument deliberately leaves that alone so the
+     * shortcut reopens wherever the user last was.
+     */
+    'mod+,': () => {
+      if (useApp.getState().screen === 'profiles') closeSettings();
+      else openSettings();
+    },
     'mod+i': () => setInfo(!useApp.getState().infoOpen),
   });
 
@@ -135,6 +164,7 @@ export function App(): ReactElement {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-abyss">
+      <AppHeader />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <main className="flex min-w-0 min-h-0 flex-1 flex-col">
@@ -154,7 +184,14 @@ export function App(): ReactElement {
 
       <CommandPalette />
       <RunInfoDialog />
-      {screen === 'profiles' ? <ProfilesScreen /> : null}
+      {/*
+        Mounted unconditionally, unlike the full-screen profiles surface it
+        replaces. It is a Radix dialog and reads its own open state off the
+        store (`screen === 'profiles'` — see the `mod+,` note above), so
+        gating it here would unmount it mid-transition and cost the close
+        animation.
+      */}
+      <SettingsDialog />
     </div>
   );
 }
@@ -170,10 +207,10 @@ function DeadEnd(): ReactElement {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-abyss px-8 text-center">
       <LogoMark size={30} className="text-signal" />
-      <h1 className="text-lg font-semibold tracking-tight text-ink">Libra could not start</h1>
+      <h1 className="text-lg font-semibold tracking-tight text-ink">Apollo could not start</h1>
       <p className="max-w-md text-xs leading-relaxed text-ink-muted">
         The preload bridge is missing, so this window has no way to reach the main process. Nothing
-        in the interface would work. Restart Libra; if it keeps happening, the app’s preload script
+        in the interface would work. Restart Apollo; if it keeps happening, the app’s preload script
         failed to load.
       </p>
     </div>

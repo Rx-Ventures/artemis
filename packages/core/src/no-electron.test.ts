@@ -1,7 +1,7 @@
 /**
  * The hard constraint, enforced.
  *
- * `@libra/core` must never import `electron` — not directly, not transitively.
+ * `@rx-apollo/core` must never import `electron` — not directly, not transitively.
  * It has to run in a plain Node process (`scripts/smoke.ts`), under vitest, and
  * one day under a CLI or a server. Everything genuinely Electron-shaped is
  * injected as an interface instead: `SecretStore` for encrypted storage,
@@ -54,7 +54,7 @@ async function sourceFiles(dir: string): Promise<string[]> {
   return files.flat();
 }
 
-describe('@libra/core never imports electron', () => {
+describe('@rx-apollo/core never imports electron', () => {
   it('has no electron import in any source file', async () => {
     const files = await sourceFiles(SRC_DIR);
 

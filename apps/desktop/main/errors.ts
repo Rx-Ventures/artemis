@@ -12,13 +12,13 @@
  * {@link scrubSecrets}.
  */
 
-import type { AgentErrorCode, IpcChannel, IpcError } from '@libra/protocol';
+import type { AgentErrorCode, IpcChannel, IpcError } from '@rx-apollo/protocol';
 import { scrubSecrets, SecretLeakError } from './redact.js';
 
 /**
  * A malformed request from the renderer.
  *
- * The renderer is untrusted by construction — it is the one part of Libra
+ * The renderer is untrusted by construction — it is the one part of Apollo
  * running attacker-reachable content (a markdown transcript, a tool result). A
  * validation failure is a normal, expected outcome, not an exception.
  */
@@ -33,10 +33,10 @@ export class ValidationError extends Error {
   }
 }
 
-/** The engine (`@libra/core`) could not be loaded or failed to start. */
+/** The engine (`@rx-apollo/core`) could not be loaded or failed to start. */
 export class EngineUnavailableError extends Error {
   constructor(detail: string) {
-    super(`Libra's engine is unavailable: ${detail}`);
+    super(`Apollo's engine is unavailable: ${detail}`);
     this.name = 'EngineUnavailableError';
   }
 }
@@ -99,7 +99,7 @@ function isAgentErrorCode(value: unknown): value is AgentErrorCode {
 /**
  * True when `value` already carries the normalized error shape.
  *
- * Adapters in `@libra/core` are expected to classify their own failures — they
+ * Adapters in `@rx-apollo/core` are expected to classify their own failures — they
  * are the only layer that knows what a provider's 429 actually means. When they
  * have done so, this function lets that classification survive instead of being
  * flattened to `unknown` here.
@@ -160,7 +160,7 @@ function classify(error: unknown): IpcError {
     // tripwire looks for. It is logged in full on this side.
     return {
       code: 'unknown',
-      message: 'Libra blocked a response that failed its credential-safety check. This is a bug; please report it.',
+      message: 'Apollo blocked a response that failed its credential-safety check. This is a bug; please report it.',
       retryable: false,
     };
   }

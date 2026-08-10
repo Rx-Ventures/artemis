@@ -1,7 +1,7 @@
 /**
- * `@libra/core` — the headless engine.
+ * `@rx-apollo/core` — the headless engine.
  *
- * Everything Libra does that is not drawing pixels or talking to Electron
+ * Everything Apollo does that is not drawing pixels or talking to Electron
  * happens here: provider adapters, profile and credential resolution, and the
  * registry of live runs.
  *
@@ -32,7 +32,7 @@
  *     `ProfileMetadata`, which carries a masked hint and nothing else.
  *
  * Types shared with the renderer — events, capabilities, IPC payloads — live
- * in `@libra/protocol` and are re-exported from nowhere: import them from
+ * in `@rx-apollo/protocol` and are re-exported from nowhere: import them from
  * there directly.
  */
 
