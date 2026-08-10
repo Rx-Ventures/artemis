@@ -1,62 +1,108 @@
 /**
- * The left sidebar.
+ * The sidebar — a floating card, scoped to one project.
  * ============================================================================
  *
- *     ┌──────────────────────────────┐
- *     │ [ + New session         ⌘N ] │  ← first, and the most prominent thing
- *     │ ~/code/libra              ⌄  │  ← where the next run will happen
- *     ├──────────────────────────────┤
- *     │ [ filter 41 sessions…      ] │
- *     │ ~/code/libra              3  │  ← sticky, one per project
- *     │   fix auth        2m   ·Work │
- *     │   …                          │
- *     └──────────────────────────────┘
+ *      ╭────────────────────────────────╮
+ *      │ ▣ libra                     [◧]│  ← the repo this window is in
+ *      │                                │
+ *      │ [ + New session          ⌘N ]  │  ← the thing you came here to do
+ *      │ ~/code/libra                   │  ← and where it will happen
+ *      ├────────────────────────────────┤
+ *      │ SESSIONS · 22                  │
+ *      │  Wire the adapter seam         │  ← this project only
+ *      │  4m ⌥ main            ·Work    │
+ *      │  …                             │
+ *      ├────────────────────────────────┤
+ *      │ ⌂ All projects · 7          ▴  │  ← jump to another repo
+ *      ╰────────────────────────────────╯
  *
- * Persistent, collapsible, and resizable. Three decisions worth keeping:
+ * ## It is a card sitting on the window, not a column bolted to its edge
  *
- * ## New Session is the first element
+ * The pane used to be a full-height bordered column flush against the left and
+ * bottom of the window, which made it read as part of the frame — furniture.
+ * As a detached card with its own border and shadow it reads as *a thing about
+ * the current project*, which is what it now is: everything in it is scoped to
+ * one directory, and the way to another one is an explicit switcher at the
+ * bottom rather than more headers further down the same list.
  *
- * Not a logo, not a header, not a search field. It is the thing a person opens
- * this app to do, so it is the first thing under the cursor and the first thing
- * in the tab order. The collapse control shares its row rather than sitting
- * above it, because a chrome row above the primary action would demote it.
+ * The `<aside>` still owns the full width, including the margin. The card is a
+ * child inset by the aside's padding. Keeping the outer element the full width
+ * means resizing, which measures the aside, is unchanged by the visual change —
+ * and it puts the drag handle in the gutter between the card and the transcript
+ * instead of on top of the card's rounded edge.
+ *
+ * ## New Session is still the first control
+ *
+ * Under the repo title, which is a label rather than a control and so does not
+ * compete with it. It is what a person opens this app to do, so it stays the
+ * first thing in the tab order after the collapse button.
  *
  * ## Resizing writes to the DOM, then to the store
  *
- * A drag that called `setState` per `pointermove` would re-render the whole
- * session list sixty times a second. The handle writes `style.width` straight
- * onto the element while dragging and commits the final value to the store on
- * release — the store is the persistence layer here, not the animation loop.
+ * A drag that called `setState` per `pointermove` would re-render the session
+ * list sixty times a second. The handle writes `style.width` straight onto the
+ * `<aside>` while dragging and commits the final value to the store on release
+ * — the store is the persistence layer here, not the animation loop. Both the
+ * live write and the committed measurement are the aside's *border-box* width,
+ * margin included, so the two agree and a resize never drifts.
  *
  * ## Nothing here subscribes to the transcript
  *
  * See `SessionList`. Streaming text never reaches this subtree, so a persistent
  * pane costs nothing per token.
+ *
+ * ## Collapsed still renders nothing
+ *
+ * Not a rail, not a sliver — `null`. The control that brings it back lives in
+ * `AppHeader`, which is always mounted; that is the whole reason the app grew a
+ * header.
  */
 
 import {
   useCallback,
+  useMemo,
   useRef,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type RefObject,
 } from 'react';
-import { PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
+import { FolderIcon, FolderTreeIcon, PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
+import { useCapability } from '../hooks/useCapability';
+import { formatRelative } from '../lib/format';
+import { inferHomeDirectory, lastSegment, shortenPath } from '../lib/paths';
+import { groupSessionsByProject } from '../lib/sessionGroups';
 import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   newSession,
+  setCwd,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
 } from '../state/store';
 import { SessionList } from './SessionList';
 import { WorkingDirectoryButton } from './WorkingDirectory';
-import { IconButton } from './disabled-reason';
+import { IconButton, ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from '@/components/ui/item';
+import { cn } from '@/lib/utils';
 
 export function Sidebar(): ReactElement | null {
   const collapsed = useApp((s) => s.sidebarCollapsed);
@@ -70,33 +116,198 @@ export function Sidebar(): ReactElement | null {
       ref={asideRef}
       style={{ width }}
       aria-label="Sessions"
-      className="relative flex shrink-0 flex-col border-r border-line bg-panel"
+      className="relative flex shrink-0 flex-col p-2 pt-0"
     >
-      <div className="flex items-center gap-1 px-2 pt-2">
-        <Button size="sm" onClick={newSession} className="min-w-0 flex-1 justify-start gap-1.5">
-          <PlusIcon />
-          <span className="truncate">New session</span>
-          <span aria-hidden="true" className="ml-auto font-mono text-2xs opacity-60">
-            {keyLabel('mod+n')}
-          </span>
-        </Button>
-        <IconButton
-          label={`Collapse the sidebar (${keyLabel('mod+b')})`}
-          onClick={() => setSidebarCollapsed(true)}
-          className="shrink-0 text-ink-faint"
-        >
-          <PanelLeftCloseIcon />
-        </IconButton>
-      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5">
+        <ProjectTitle />
 
-      <div className="px-2 pt-1.5 pb-2">
-        <WorkingDirectoryButton />
-      </div>
+        <div className="flex flex-col gap-1.5 px-2.5 pb-2.5">
+          <Button size="sm" onClick={newSession} className="min-w-0 justify-start gap-1.5">
+            <PlusIcon />
+            <span className="truncate">New session</span>
+            <span aria-hidden="true" className="ml-auto font-mono text-2xs opacity-60">
+              {keyLabel('mod+n')}
+            </span>
+          </Button>
+          <WorkingDirectoryButton />
+        </div>
 
-      <SessionList />
+        <SessionList />
+        <ProjectSwitcher />
+      </div>
 
       <ResizeHandle target={asideRef} />
     </aside>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Repo title                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The card's title: the name of the repository this window is pointed at.
+ *
+ * The *basename* rather than the path, because that is what a person calls the
+ * project. The full path is one hover away, and it is also spelled out in full
+ * on the working-directory control directly below — so nothing is hidden, and
+ * the title is not two lines of `/Users/...` boilerplate.
+ */
+function ProjectTitle(): ReactElement {
+  const cwd = useApp((s) => s.cwd);
+  const name = cwd.trim().length > 0 ? lastSegment(cwd) : null;
+
+  return (
+    <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-2">
+      <FolderIcon
+        className={cn('size-3.5 shrink-0', name === null ? 'text-amber' : 'text-brass')}
+        aria-hidden="true"
+      />
+      <h2
+        title={name === null ? 'No working directory set' : cwd}
+        className={cn(
+          'min-w-0 flex-1 truncate text-sm font-medium tracking-tight',
+          name === null ? 'text-amber' : 'text-ink',
+        )}
+      >
+        {name ?? 'No project'}
+      </h2>
+      <IconButton
+        label={`Hide the sidebar (${keyLabel('mod+b')})`}
+        onClick={() => setSidebarCollapsed(true)}
+        size="icon-xs"
+        className="shrink-0 text-ink-faint"
+      >
+        <PanelLeftCloseIcon />
+      </IconButton>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* All-projects switcher                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Jump to another repository without leaving the sidebar.
+ *
+ * The session list above shows one project, so this is the only way from here
+ * to the rest of the history — which makes its degraded states worth spelling
+ * out rather than hiding. There are three, and each renders the button disabled
+ * with its reason attached, per the app-wide rule:
+ *
+ *   - the provider cannot list sessions at all;
+ *   - it can, but only for the current directory (`sessionsScope === 'cwd'`),
+ *     so no other project is even enumerated;
+ *   - it listed everything and there genuinely is only one project.
+ *
+ * ## Choosing a project starts a fresh session in it
+ *
+ * A session id only resolves against the directory it ran in — see
+ * `resumeSession` in the store. Carrying a resume target across a directory
+ * change would aim the next prompt at a session the provider cannot find, so
+ * the switch clears it first and lands the user on that project's list, where
+ * picking a session is one click and does the full, correct switch.
+ */
+function ProjectSwitcher(): ReactElement {
+  const sessions = useApp((s) => s.sessions);
+  const cwd = useApp((s) => s.cwd);
+  const platform = useApp((s) => s.platform);
+  const scope = useApp((s) => s.sessionsScope);
+  const listing = useCapability('listSessions');
+
+  const groups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
+  const home = useMemo(
+    () => inferHomeDirectory([...sessions.map((s) => s.cwd), cwd], platform),
+    [sessions, cwd, platform],
+  );
+
+  const others = groups.filter((group) => group.cwd !== cwd);
+
+  const reason = !listing.supported
+    ? `${listing.reason} Without a listing there is no way to enumerate other projects.`
+    : scope === 'cwd'
+      ? 'This build lists sessions for the current directory only, so other projects are never enumerated. Set the working directory above to move to one.'
+      : others.length === 0
+        ? 'No other project has a recorded session yet. Set the working directory above to start one somewhere else.'
+        : undefined;
+
+  const label = (
+    <>
+      <FolderTreeIcon className="size-3 shrink-0" aria-hidden="true" />
+      <span className="truncate">All projects</span>
+      {reason === undefined ? (
+        <span className="ml-auto font-mono text-2xs tabular-nums text-ink-faint">
+          {others.length}
+        </span>
+      ) : null}
+    </>
+  );
+
+  const className =
+    'h-7 w-full justify-start gap-1.5 rounded-none border-t border-line px-2.5 text-2xs font-normal text-ink-muted';
+
+  if (reason !== undefined) {
+    return (
+      <ReasonButton
+        variant="ghost"
+        size="sm"
+        disabled
+        disabledReason={reason}
+        tooltipSide="top"
+        className={className}
+      >
+        {label}
+      </ReasonButton>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className={className}>
+          {label}
+        </Button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="start" side="top" className="w-80 max-w-[min(20rem,90vw)]">
+        <DropdownMenuLabel className="text-2xs text-ink-faint">
+          Switch project — newest activity first
+        </DropdownMenuLabel>
+        {others.map((group) => (
+          <DropdownMenuItem
+            key={group.cwd}
+            onSelect={() => {
+              // Order matters: clear the resume target *before* the directory
+              // moves, so no intermediate state pairs a session with a
+              // directory it never ran in.
+              newSession();
+              setCwd(group.cwd);
+            }}
+          >
+            <Item size="xs" className="w-full">
+              <ItemMedia variant="icon">
+                <FolderIcon className="size-3.5 text-ink-faint" aria-hidden="true" />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle className="text-xs text-ink">{lastSegment(group.cwd)}</ItemTitle>
+                {/* Full path on hover; the label elides its middle. */}
+                <ItemDescription
+                  title={group.cwd}
+                  className="font-mono text-2xs text-ink-faint"
+                >
+                  {shortenPath(group.cwd, { home, platform, max: 34 })}
+                </ItemDescription>
+              </ItemContent>
+              <ItemActions className="gap-1.5 font-mono text-2xs text-ink-faint">
+                <span>{formatRelative(group.updatedAt)}</span>
+                <span className="tabular-nums">{group.sessions.length}</span>
+              </ItemActions>
+            </Item>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -113,6 +324,10 @@ const KEYBOARD_STEP = 16;
  * A real `separator` with keyboard support, not a bare div: a pane the user can
  * only resize with a mouse is a pane a keyboard user cannot resize at all, and
  * the arrow-key path is four lines.
+ *
+ * It sits *inside* the aside's right padding rather than straddling its edge,
+ * so the grab target is the gutter between the floating card and the transcript
+ * and never lands on the card's rounded corner.
  */
 function ResizeHandle({
   target,
@@ -178,7 +393,7 @@ function ResizeHandle({
           setSidebarWidth(width + KEYBOARD_STEP);
         }
       }}
-      className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-brass/30 focus-visible:bg-brass/40"
+      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-brass/30 focus-visible:bg-brass/40"
     />
   );
 }

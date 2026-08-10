@@ -396,6 +396,14 @@
    * alignment carries meaning. Chrome stays sans. Hand-written rather than
    * `@tailwindcss/typography`, whose defaults are tuned for prose pages at
    * 16px, not a 13px transcript pane.
+   *
+   * Nothing here is bubble-aware, and that is a decision rather than an
+   * oversight. The agent's turn is a `ghost` bubble, which zeroes the fill, the
+   * radius and the padding, so `.md` still renders straight onto the page
+   * substrate — the wells below can go on assuming `--abyss` behind them. If a
+   * future variant ever puts markdown on a *filled* bubble, `--inset` code
+   * wells and `--line` rules will be the first things to stop reading, and they
+   * are the things to fix.
    */
   .md {
     font-family: var(--font-mono);
@@ -499,6 +507,28 @@
     animation: libra-blink 1.1s steps(1) infinite;
   }
 
+  /*
+   * A conversation turn arriving.
+   *
+   * Only the two *speech* rows use this — a user prompt and an agent answer.
+   * Tool calls and thinking blocks land in bursts of five and ten, and animating
+   * those turns a working transcript into a slot machine.
+   *
+   * Deliberately a transform and an opacity, never a height or a margin: the
+   * transcript's tail-follower is a `ResizeObserver` on the content box, and
+   * anything that animates layout size would make it recompute `scrollTop` for
+   * the whole duration while the user is trying to read. A composited transform
+   * does not change the box at all.
+   *
+   * `both` holds the end state so a row cannot be caught mid-fade if the
+   * animation is interrupted. It plays exactly once per turn: React keeps the
+   * DOM node across the re-renders that stream text into it, and CSS animations
+   * restart on node creation, not on attribute changes.
+   */
+  .turn-in {
+    animation: libra-turn-in 160ms ease-out both;
+  }
+
   /* Indeterminate progress hairline, used on the run status strip. */
   .runbar::after {
     content: '';
@@ -534,9 +564,29 @@
   }
 }
 
+/* 3px, not 8. The gesture only has to say "this is new"; any further and a fast
+   provider's back-and-forth reads as the whole column sliding. */
+@keyframes libra-turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * `.turn-in` is listed with the rest rather than left alone, even though a
+ * 160ms fade is mild: reduced motion is a request, not a severity threshold.
+ * `animation: none` on a `both`-filled animation leaves the element in its
+ * natural state, which is the finished state — so the turn simply appears.
+ */
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
-  .runbar::after {
+  .runbar::after,
+  .turn-in {
     animation: none;
   }
 }

@@ -33,6 +33,23 @@
  * sub-page (sessions, providers, a directory prompt) rather than a nested menu,
  * because `cmdk` filters a flat list and a submenu would hide matches from the
  * search that is the whole point of the surface.
+ *
+ * ## Settings has one command per section, not one command
+ *
+ * The settings surface has four panes, and the palette is a search box: a user
+ * who types "appearance" or "permissions" is naming a *destination*, and a
+ * single "Open settings…" row would match neither. So each section gets its own
+ * row through `openSettings(section)`, with a plain "Settings…" above them that
+ * reopens wherever the user last was — the same thing `mod+,` does, which is
+ * why that row is the one carrying the shortcut.
+ *
+ * ## Run-shaping flags are commands too
+ *
+ * Fast mode and ultracode are toggles on the status line, and this is the
+ * keyboard route to the same pair. They are gated exactly as they are there —
+ * the availability selectors and the reason strings both come from
+ * `StatusLine`, so the two surfaces cannot drift into disagreeing about whether
+ * a model offers something.
  */
 
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from 'react';
@@ -44,10 +61,15 @@ import {
   InfoIcon,
   KeyRoundIcon,
   MessageSquarePlusIcon,
+  PaintbrushIcon,
   PanelLeftIcon,
   PlugIcon,
   RefreshCwIcon,
+  SettingsIcon,
+  ShieldIcon,
+  SparklesIcon,
   SquareTerminalIcon,
+  ZapIcon,
 } from 'lucide-react';
 import type { ProviderId, SessionSummary } from '@libra/protocol';
 
@@ -57,19 +79,28 @@ import { formatRelative, oneLine } from '../lib/format';
 import { shortenPath } from '../lib/paths';
 import {
   activeModels,
+  fastModeAvailable,
   newSession,
+  openSettings,
   refreshProviders,
   refreshSessions,
   resumeSession,
+  selectedModelOption,
+  setFastMode,
   setForkOnResume,
   setInfo,
   setModel,
   setPalette,
   setProvider,
-  setScreen,
+  setUltracode,
   toggleSidebar,
+  ultracodeAvailable,
   useApp,
 } from '../state/store';
+// Only the reason strings come from the bar, so the palette's disabled
+// explanations and the bar's cannot drift. The setters are the store's own —
+// the exclusion between the two flags lives in the actions, not in a wrapper.
+import { fastModeReason, ultracodeReason } from './StatusLine';
 import { DirectoryChooser } from './WorkingDirectory';
 import {
   Command,
@@ -182,6 +213,11 @@ function RootPage({
   const forkOnResume = useApp((s) => s.forkOnResume);
   const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
   const models = useApp(activeModels);
+  const model = useApp(selectedModelOption);
+  const fastOk = useApp(fastModeAvailable);
+  const ultraOk = useApp(ultracodeAvailable);
+  const fast = useApp((s) => s.fastMode);
+  const ultra = useApp((s) => s.ultracode);
 
   return (
     <>
@@ -259,11 +295,6 @@ function RootPage({
           {sidebarCollapsed ? 'Show the session sidebar' : 'Hide the session sidebar'}
           <CommandShortcut>{keyLabel('mod+b')}</CommandShortcut>
         </CommandItem>
-        <CommandItem onSelect={() => setScreen('profiles')}>
-          <KeyRoundIcon />
-          Manage profiles…
-          <CommandShortcut>{keyLabel('mod+,')}</CommandShortcut>
-        </CommandItem>
         <GatedItem
           supported={models.length > 0}
           reason="This provider does not offer a model choice, so Libra sends no model and the provider picks its own."
@@ -272,9 +303,79 @@ function RootPage({
           <CpuIcon />
           Switch model…
         </GatedItem>
+        {/*
+         * Both flags are offered as *toggles*, never as "turn on". A one-way
+         * command would let a mis-click change what the next run costs with no
+         * way back from the same surface — and the palette closes behind it, so
+         * the change would not even be on screen. The same argument as the fork
+         * command above.
+         *
+         * Turning either on turns the other off; `setFastMode` carries
+         * that rule and says why.
+         */}
+        <GatedItem
+          supported={fastOk}
+          reason={fastModeReason(model, fast) ?? ''}
+          onSelect={() => {
+            setFastMode(!fast);
+            onClose();
+          }}
+        >
+          <ZapIcon />
+          {fast ? 'Turn fast mode off' : 'Turn fast mode on'}
+        </GatedItem>
+        <GatedItem
+          supported={ultraOk}
+          reason={ultracodeReason(model, ultra) ?? ''}
+          onSelect={() => {
+            setUltracode(!ultra);
+            onClose();
+          }}
+        >
+          <SparklesIcon />
+          {ultra ? 'Turn ultracode off' : 'Turn ultracode on'}
+        </GatedItem>
         <CommandItem onSelect={() => onPage('providers')}>
           <PlugIcon />
           Switch provider…
+        </CommandItem>
+      </CommandGroup>
+
+      <CommandSeparator />
+
+      <CommandGroup heading="Settings">
+        <CommandItem onSelect={() => openSettings()}>
+          <SettingsIcon />
+          Settings…
+          <CommandShortcut>{keyLabel('mod+,')}</CommandShortcut>
+        </CommandItem>
+        <CommandItem
+          value="settings profiles credentials accounts billing"
+          onSelect={() => openSettings('profiles')}
+        >
+          <KeyRoundIcon />
+          Profiles and credentials…
+        </CommandItem>
+        <CommandItem
+          value="settings models catalogue quick access fast mode ultracode"
+          onSelect={() => openSettings('models')}
+        >
+          <CpuIcon />
+          Models and defaults…
+        </CommandItem>
+        <CommandItem
+          value="settings appearance width density theme motion"
+          onSelect={() => openSettings('appearance')}
+        >
+          <PaintbrushIcon />
+          Appearance…
+        </CommandItem>
+        <CommandItem
+          value="settings permissions tools allow deny directories"
+          onSelect={() => openSettings('permissions')}
+        >
+          <ShieldIcon />
+          Permissions and tools…
         </CommandItem>
       </CommandGroup>
 
@@ -538,10 +639,20 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
             ) : null}
           </span>
         </CommandItem>
+        {/*
+          This page lists the whole catalogue, not the quick-access subset the
+          status-line picker shows. The two surfaces are for different things:
+          that one is a shortlist you reach with the mouse, and this is the one
+          you reach by typing four characters of a name you already know. A
+          shortlist you have to search is not a search.
+        */}
         {models.map((model) => (
           <CommandItem
             key={model.id}
-            value={`${model.label} ${model.id}`}
+            // Everything a user might type: short label, full name, alias and
+            // the wire id it resolves to. "sonnet" and "claude-sonnet-5" should
+            // both find the same row.
+            value={`${model.label} ${model.displayName ?? ''} ${model.id} ${model.resolvedModel ?? ''}`}
             className="flex-col items-start gap-0.5"
             onSelect={() => {
               setModel(model.id);
@@ -550,12 +661,26 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
           >
             <span className="flex w-full items-center gap-2">
               <CpuIcon className="size-3 shrink-0" aria-hidden="true" />
-              <span className="text-xs text-ink">{model.label}</span>
+              <span className="text-xs text-ink">{model.displayName ?? model.label}</span>
+              {model.supportsFastMode === true ? (
+                <ZapIcon className="size-3 shrink-0 text-cyan" aria-label="offers fast mode" />
+              ) : null}
+              {model.supportsUltracode === true ? (
+                <SparklesIcon
+                  className="size-3 shrink-0 text-brass"
+                  aria-label="offers ultracode"
+                />
+              ) : null}
               {current === model.id ? (
                 <span className="ml-auto font-mono text-2xs text-brass">selected</span>
               ) : null}
             </span>
             <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>
+            {model.resolvedModel ? (
+              <span className="pl-5 font-mono text-2xs text-ink-faint/75">
+                {model.resolvedModel}
+              </span>
+            ) : null}
           </CommandItem>
         ))}
       </CommandGroup>

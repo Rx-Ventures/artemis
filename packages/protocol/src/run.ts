@@ -119,6 +119,37 @@ export interface RunInput {
   readonly effort?: ProviderEffort;
 
   /**
+   * Trade reasoning depth for latency on models that offer it.
+   *
+   * Only meaningful when the selected model advertises
+   * {@link import('./provider.js').ProviderModelOption.supportsFastMode}.
+   * Ignored — not rejected — otherwise, for the same reason {@link effort} is:
+   * a stored preference must not become an error when the user switches model.
+   *
+   * Whether it actually engaged is a *separate* fact from whether it was asked
+   * for. A provider may decline (no entitlement, a model that does not allow
+   * it, a cooldown after heavy use), so the UI must report the state the run
+   * comes back with rather than echoing the request.
+   */
+  readonly fastMode?: boolean;
+
+  /**
+   * Spend materially more compute on this run: maximum reasoning effort plus,
+   * on providers that have it, standing multi-agent orchestration.
+   *
+   * The inverse of {@link fastMode}, and mutually exclusive with it in spirit
+   * though not by contract — a provider that is handed both is free to resolve
+   * the conflict, and Libra's UI does not offer them together.
+   *
+   * Only meaningful when the selected model advertises
+   * {@link import('./provider.js').ProviderModelOption.supportsUltracode}.
+   * Providers may impose further preconditions of their own (Claude requires an
+   * xhigh-capable model with workflows enabled); those are the provider's to
+   * enforce, and this flag being set is a request rather than a guarantee.
+   */
+  readonly ultracode?: boolean;
+
+  /**
    * Permission mode to start in. Must be one of the provider's
    * {@link Capabilities.permissionModes}; adapters reject anything else rather
    * than silently downgrading, because silently downgrading a permission mode

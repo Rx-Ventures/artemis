@@ -28,7 +28,7 @@ import type { AgentError } from './errors.js';
 import type { PermissionDecision } from './permissions.js';
 import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js';
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
-import type { ProviderDescriptor, ProviderId } from './provider.js';
+import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
 import type { SessionSummary } from './session.js';
 import type { PlanUsage } from './usage.js';
@@ -55,6 +55,8 @@ export const IPC = {
 
   /** Enumerate providers and their capability descriptors. */
   providersList: 'libra:providers:list',
+  /** Ask one provider's installed CLI what models it actually offers. */
+  providersModels: 'libra:providers:models',
 
   /** Start a run. */
   runsStart: 'libra:runs:start',
@@ -196,6 +198,50 @@ export interface ProvidersListRequest {
 
 export interface ProvidersListResponse {
   readonly providers: readonly ProviderDescriptor[];
+}
+
+/**
+ * Ask a provider for its *live* model catalogue.
+ *
+ * Separate from {@link ProvidersListRequest} because it is a different kind of
+ * read. `providers:list` is a description of what Libra can drive — static,
+ * cheap, and answered out of the registry. This one contacts the installed CLI
+ * with a profile's credential to find out which models that account actually
+ * has, which costs a subprocess and can fail. Folding it into the descriptor
+ * call would make opening any provider menu wait on a spawn.
+ *
+ * It names a profile rather than only a provider for the same reason
+ * {@link UsagePlanRequest} does: the answer is a property of the *account*.
+ * Two profiles on the same provider can be on different plans and see
+ * different lineups.
+ */
+export interface ProvidersModelsRequest {
+  readonly providerId: ProviderId;
+  /** Whose credential to ask with. Decides which account the CLI answers as. */
+  readonly profileId: ProfileId;
+  /**
+   * An absolute directory to run the query in. Optional: providers resolve
+   * their configuration relative to a working directory, so the answer can
+   * differ per project, but the user may not have chosen one yet — main
+   * substitutes a directory that always exists rather than failing.
+   */
+  readonly cwd?: string;
+}
+
+export interface ProvidersModelsResponse {
+  /** In display order, first = default — the same contract as `ProviderDescriptor.models`. */
+  readonly models: readonly ProviderModelOption[];
+  /**
+   * True when this came off the installed CLI, false when it is the provider's
+   * built-in fallback list.
+   *
+   * The handler never fails — a missing binary, a missing credential or an
+   * offline machine all resolve with the fallback — so `ok: true` alone does
+   * not tell the renderer whether it is looking at reality. This does, which is
+   * what lets the settings screen label a stale list instead of presenting a
+   * hard-coded lineup as though the account had confirmed it.
+   */
+  readonly live: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -415,6 +461,7 @@ export type IpcRequestMap = {
   [IPC.profilesUpdate]: ProfilesUpdateRequest;
   [IPC.profilesDelete]: ProfilesDeleteRequest;
   [IPC.providersList]: ProvidersListRequest;
+  [IPC.providersModels]: ProvidersModelsRequest;
   [IPC.runsStart]: RunsStartRequest;
   [IPC.runsSend]: RunsSendRequest;
   [IPC.runsInterrupt]: RunsInterruptRequest;
@@ -436,6 +483,7 @@ export type IpcResponseMap = {
   [IPC.profilesUpdate]: ProfilesUpdateResponse;
   [IPC.profilesDelete]: ProfilesDeleteResponse;
   [IPC.providersList]: ProvidersListResponse;
+  [IPC.providersModels]: ProvidersModelsResponse;
   [IPC.runsStart]: RunsStartResponse;
   [IPC.runsSend]: RunsSendResponse;
   [IPC.runsInterrupt]: RunsInterruptResponse;
@@ -522,6 +570,17 @@ export interface LibraBridge {
 
   readonly providers: {
     list(request: ProvidersListRequest): Promise<IpcResult<ProvidersListResponse>>;
+    /**
+     * The live model catalogue for one profile, with the built-in list as a
+     * fallback.
+     *
+     * Kept off {@link list} because it spawns a provider subprocess: the
+     * descriptor call must stay instant. Resolves `{ live: false }` rather
+     * than failing when the provider cannot be reached, so the model picker
+     * always has something to render — check `value.live`, not `res.ok`, to
+     * find out whether the account confirmed the list.
+     */
+    models(request: ProvidersModelsRequest): Promise<IpcResult<ProvidersModelsResponse>>;
   };
 
   readonly runs: {

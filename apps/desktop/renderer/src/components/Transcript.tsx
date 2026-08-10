@@ -39,6 +39,45 @@
  * affordable — an expanded row's open state is local to the row, and the row is
  * memoised on its own id, so opening one cannot re-render the rest and a
  * streaming sibling cannot collapse it.
+ *
+ * ============================================================================
+ * THE LAYOUT: A SPINE, AND TWO SIDES OF A CONVERSATION
+ *
+ * Every row is a `Message` from `components/ui/message`, so the whole pane is
+ * one grid: a fixed label gutter (the *spine*) and a content column. The spine
+ * carries the tone system — `tool` in cyan, `thinking` in sage, `end` in mint
+ * or amber or signal — which is how the pane stays scannable at a glance now
+ * that the content column is much wider than it used to be.
+ *
+ * `Message`'s `align` flips the whole row, gutter included, so a user turn puts
+ * its label on the right where the bubble is. That is the back-and-forth: the
+ * user speaks from the right in a filled brass bubble, everything the agent
+ * does answers from the left.
+ *
+ * Three choices inside that worth stating, because each had an obvious
+ * alternative:
+ *
+ *  - **The user bubble is `tinted`, not `default`.** `default` fills with
+ *    `--primary`, which here is brass at 80% lightness. A one-line prompt would
+ *    survive that; a pasted twenty-line spec is a floodlight in a dark room
+ *    someone is sitting in for eight hours. `tinted` is the same brass hue at
+ *    30% lightness — unmistakably "yours", legible in `--ink`, and quiet.
+ *  - **The agent bubble is `ghost`.** Agent output here is code-heavy markdown
+ *    — fenced blocks, tables, diff-adjacent prose — not chat banter. A filled
+ *    80%-wide blob would both squeeze the code and fight `.md`, which already
+ *    draws its own wells and rules. Ghost strips the chrome and lets the answer
+ *    read as full-width prose, which is what it is.
+ *  - **No `MessageGroup` / `BubbleGroup`, and no avatars.** Grouping
+ *    consecutive turns would require a row to know about its neighbours, and
+ *    rule 1 says the list only ever hands down an id — a row cannot see the row
+ *    before it without the list reading items, which is the exact thing that
+ *    makes streaming O(items). Avatars were dropped separately: a repeated
+ *    glyph on every turn costs horizontal room in a pane whose whole point is
+ *    now to be wide, and the spine already says who is talking.
+ *
+ * Thinking, tool calls, permissions, notices and run-ends are NOT conversation
+ * turns and are not bubbles. They stay the compact rows that expand in place,
+ * aligned onto the same spine so the column reads as one thread.
  */
 
 import {
@@ -64,7 +103,7 @@ import {
 
 import { useTranscriptIds, useTranscriptItem } from '../hooks/useTranscript';
 import { detectFileEdit } from '../lib/diff';
-import { activeCapabilities, useApp } from '../state/store';
+import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
 import {
   formatClock,
   formatDuration,
@@ -87,14 +126,41 @@ import { DiffView } from './DiffView';
 import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
+import { Message, MessageContent } from '@/components/ui/message';
 import { cn } from '@/lib/utils';
 
 /** Markdown parsing is skipped above this size; the cost is not worth it. */
 const MARKDOWN_LIMIT = 80_000;
 
+/**
+ * How wide the conversation column is allowed to get.
+ *
+ * A static lookup, NOT `` `max-w-${width}` ``: Tailwind v4 finds classes by
+ * scanning source text for literals, so an interpolated name is never generated
+ * and the column would silently fall back to full-bleed. Every value here has
+ * to appear verbatim somewhere in the file, and this object is that somewhere.
+ *
+ * `comfortable` is deliberately *wider* than the `max-w-4xl` this pane used
+ * before the overhaul. The ask was a wider conversation, and the setting most
+ * people never touch is the one that has to deliver it; the two steps above it
+ * are for people who want more. `full` is uncapped on purpose — at that point
+ * the reader has explicitly said they want the whole window, and second-guessing
+ * them with a hidden prose measure would make the setting a lie.
+ */
+const COLUMN_MAX: Record<ConversationWidth, string> = {
+  comfortable: 'max-w-5xl',
+  wide: 'max-w-7xl',
+  full: 'max-w-none',
+};
+
 export function Transcript(): ReactElement {
   const ids = useTranscriptIds();
+  // A scalar the user changes from Appearance, not transcript state — reading
+  // it here costs one subscription that fires roughly never, and does not go
+  // near rule 4 (which is about streaming text, not preferences).
+  const width = useApp((s) => s.conversationWidth);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -113,6 +179,12 @@ export function Transcript(): ReactElement {
    * Follow the tail while the user is at the bottom, and stop the moment they
    * scroll up. Observing the content box catches streaming growth, which no
    * React-level signal would.
+   *
+   * The turn-entry animation also grows the box for ~160ms after a turn
+   * appears, so this fires a handful of extra times per turn. That is fine —
+   * the handler only assigns `scrollTop` — but it is why the animation is a
+   * short translate rather than a height transition, which would fight the
+   * follower for as long as it ran.
    */
   useEffect(() => {
     const viewport = scrollRef.current;
@@ -140,7 +212,12 @@ export function Transcript(): ReactElement {
         onScroll={onScroll}
         className="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
       >
-        <div ref={contentRef} className="mx-auto flex w-full max-w-4xl flex-col py-3">
+        {/* Horizontal padding lives here rather than on each row so every row —
+            bubble or machinery — shares one left edge for its gutter. */}
+        <div
+          ref={contentRef}
+          className={cn('mx-auto flex w-full flex-col gap-1.5 px-4 py-4', COLUMN_MAX[width])}
+        >
           {ids.length === 0 ? <EmptyState /> : ids.map((id) => <Row key={id} id={id} />)}
           <Working />
         </div>
@@ -217,23 +294,38 @@ const Row = memo(function Row({ id }: { readonly id: string }): ReactElement | n
   }
 });
 
-/** Shared row chrome: a narrow label rail and a content column. */
+/**
+ * Shared row chrome: the label gutter and the content column.
+ *
+ * `w-14` is not arbitrary. `formatClock` produces `HH:MM:SS` — eight monospace
+ * characters, ~53px at `text-2xs` — and the clock has to fit on one line under
+ * the label or the gutter reflows on hover and shoves every row down by a line.
+ * 3.5rem is the first Tailwind step that clears it.
+ *
+ * The gutter follows `align`: `Message` reverses the row for `end`, so a user
+ * turn's label lands on the right next to its bubble. The text alignment has to
+ * flip with it, hence the `group-data-[align=end]/message` override — without
+ * it the label would be right-aligned against the window edge, hanging off the
+ * bubble it names.
+ */
 function Line({
   label,
   tone = 'neutral',
   ts,
+  align = 'start',
   children,
   className,
 }: {
   readonly label: string;
   readonly tone?: Tone;
   readonly ts?: number;
+  readonly align?: 'start' | 'end';
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement {
   return (
-    <div className={cn('group flex gap-3 px-4 py-1', className)}>
-      <div className="w-16 shrink-0 pt-[3px] text-right">
+    <Message align={align} className={cn('group', className)}>
+      <div className="w-14 shrink-0 pt-px text-right group-data-[align=end]/message:text-left">
         <div className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}>
           {label}
         </div>
@@ -243,8 +335,11 @@ function Line({
           </div>
         )}
       </div>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+      {/* `gap-2.5` is `MessageContent`'s default and is tuned for a chat app
+          with one bubble per turn; the transcript stacks a bubble against a
+          badge, so it wants a tighter rhythm. */}
+      <MessageContent className="gap-1">{children}</MessageContent>
+    </Message>
   );
 }
 
@@ -254,45 +349,63 @@ function Line({
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   return (
-    <Line label="you" tone="brass" ts={item.ts} className="mt-2">
-      <div
-        className={cn(
-          'rounded-md border-l-2 border-brass/60 bg-raised/50 px-3 py-1.5 font-mono text-sm break-words whitespace-pre-wrap text-ink',
-          // Dimmed means "Libra has not confirmed delivery" — a prompt whose
-          // call failed stays dimmed on purpose.
-          item.pending && 'opacity-70',
-        )}
+    <Line label="you" tone="brass" ts={item.ts} align="end" className="turn-in mt-3">
+      <Bubble
+        align="end"
+        variant="tinted"
+        // Dimmed means "Libra has not confirmed delivery" — a prompt whose
+        // call failed stays dimmed on purpose.
+        className={cn(item.pending && 'opacity-70')}
       >
-        {item.text}
-      </div>
+        {/* Monospace, matching the composer the text was typed into: a prompt
+            that contains a path or a shell fragment should look the same after
+            it is sent as it did before. `rounded-br-sm` is the tail — the one
+            square corner points back at the author, which is what makes an
+            aligned bubble read as *from* someone rather than merely offset. */}
+        <BubbleContent className="rounded-2xl rounded-br-sm border-brass/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
+          {item.text}
+        </BubbleContent>
+      </Bubble>
     </Line>
   );
 }
 
 function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement {
   return (
-    <Line label={item.agentId ? 'subagent' : 'agent'} tone="neutral" ts={item.ts}>
-      <div className="min-w-0">
-        {item.streaming || item.text.length > MARKDOWN_LIMIT ? (
-          <div
-            className={cn(
-              'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink',
-              item.streaming && 'caret',
-            )}
-          >
-            {item.text}
-          </div>
-        ) : (
-          <div className="md text-ink">
-            <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
-          </div>
-        )}
-        {item.stopReason && item.stopReason !== 'end_turn' && item.stopReason !== 'tool_use' ? (
-          <div className="mt-1">
-            <ToneBadge tone="amber">stop: {item.stopReason}</ToneBadge>
-          </div>
-        ) : null}
-      </div>
+    <Line
+      label={item.agentId ? 'subagent' : 'agent'}
+      tone="neutral"
+      ts={item.ts}
+      className="turn-in"
+    >
+      {/* `ghost` zeroes the padding and the fill, so `.md` renders against the
+          page exactly as it did before the bubbles landed and needs no
+          bubble-specific overrides. `w-full` replaces `BubbleContent`'s default
+          `w-fit`: a shrink-wrapped answer would let one long line decide how
+          wide the tables and code blocks below it are allowed to be. */}
+      <Bubble variant="ghost">
+        <BubbleContent className="w-full">
+          {item.streaming || item.text.length > MARKDOWN_LIMIT ? (
+            <div
+              className={cn(
+                'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink',
+                item.streaming && 'caret',
+              )}
+            >
+              {item.text}
+            </div>
+          ) : (
+            <div className="md text-ink">
+              <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+            </div>
+          )}
+        </BubbleContent>
+      </Bubble>
+      {item.stopReason && item.stopReason !== 'end_turn' && item.stopReason !== 'tool_use' ? (
+        <ToneBadge tone="amber" className="w-fit">
+          stop: {item.stopReason}
+        </ToneBadge>
+      ) : null}
     </Line>
   );
 }
@@ -339,6 +452,11 @@ const TOOL_TONE: Record<ToolItem['status'], Tone> = {
  * output — and, when the call edits a file, a diff instead of two walls of
  * quoted string.
  *
+ * Not a bubble, and that is the point: a tool call is not something anyone
+ * said. It sits on the same spine as the agent's turns so the thread reads
+ * continuously, but it keeps card chrome so the eye can tell work from speech
+ * without reading a word.
+ *
  * Open state is local, which is what lets it survive the re-renders driven by
  * the external transcript store: this row is memoised on its own id, so a
  * `text.delta` on a sibling never reaches it and cannot fold it shut.
@@ -358,7 +476,7 @@ function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
     <Line label="tool" tone="cyan" ts={item.ts}>
       <div
         className={cn(
-          'rounded-md border bg-panel/60',
+          'rounded-lg border bg-panel/60',
           failed ? 'border-signal/35' : 'border-line',
           open && 'border-line-strong',
         )}
@@ -367,7 +485,7 @@ function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <TerminalIcon
             className={cn(
@@ -503,10 +621,10 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement {
   const usage = item.usage;
   const failed = item.reason === 'error';
   return (
-    <Line label="end" tone={tone} ts={item.ts} className="mb-3">
+    <Line label="end" tone={tone} ts={item.ts} className="mb-4">
       <div
         className={cn(
-          'rounded-md border px-2.5 py-1.5',
+          'rounded-lg border px-2.5 py-1.5',
           failed ? 'border-signal/40 bg-signal/5' : 'border-line bg-panel/60',
         )}
       >

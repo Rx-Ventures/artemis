@@ -48,6 +48,7 @@ import {
   type ProfilesListRequest,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
+  type ProvidersModelsRequest,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
   type RunsListRequest,
@@ -248,8 +249,14 @@ const bridge: LibraBridge = Object.freeze({
     remove: (request: ProfilesDeleteRequest) => invoke(IPC.profilesDelete, request),
   }),
 
+  /**
+   * Two channels, for the same reason `usagePlan` has two: `list` is answered
+   * out of the registry and is instant, `models` spawns a provider subprocess.
+   * A picker that opened on the slow one would stall on every render.
+   */
   providers: Object.freeze({
     list: (request: ProvidersListRequest) => invoke(IPC.providersList, request),
+    models: (request: ProvidersModelsRequest) => invoke(IPC.providersModels, request),
   }),
 
   runs: Object.freeze({

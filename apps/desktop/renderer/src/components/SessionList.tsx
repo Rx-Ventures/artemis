@@ -1,37 +1,46 @@
 /**
- * The sidebar's session history.
+ * This project's session history.
  * ============================================================================
  *
- *     ~/code/libra                   3  ← sticky group header, one per project
- *       fix auth failure     2m   ·Work
- *       refactor adapters    1h   ·Work
- *     ~/code/api                     1
- *       triage flaky test    3d   ·Home
+ *     SESSIONS · 22            [ filter… ]
+ *       Wire the adapter seam
+ *       4m ago  ⌥ main            ·Work
+ *       Profile store encryption
+ *       52m ago                   ·Home
  *
- * Grouping, ordering and filtering are pure functions in `lib/sessionGroups.ts`;
- * this file renders them. Four things here are load-bearing.
+ * One project, flat. The sidebar is scoped to the working directory now, and
+ * other projects are reached through the switcher at the foot of the card
+ * rather than by scrolling past them here. That is the change that matters:
+ * this list used to interleave every repository under sticky per-project
+ * headers, which meant the answer to "what was I doing in *this* repo" was
+ * somewhere in the middle of a thousand rows.
  *
- * ## 1. It is virtualised, and that is why the headers are drawn twice
+ * ## 1. It is still virtualised, and now trivially so
  *
- * A history spanning twenty repositories is thousands of rows, and mounting all
- * of them costs a visible hitch every time the list refreshes — which happens at
- * the end of every run. So the flat row list is windowed: rows are absolutely
- * positioned inside a spacer of the full height, and only the slice inside the
- * viewport (plus overscan) is mounted.
+ * Even one project's history can run to hundreds of rows, and mounting all of
+ * them costs a visible hitch every time the list refreshes — which happens at
+ * the end of every run. So rows are absolutely positioned inside a spacer of
+ * the full height and only the slice inside the viewport (plus overscan) is
+ * mounted.
  *
- * Absolute positioning rules out `position: sticky`, which needs normal flow.
- * The sticky header is therefore a *second*, opaque copy of the current group's
- * header pinned to the top of the viewport and translated upward as the next
- * group's real header arrives, so the two swap places the way a native sectioned
- * list does. That is why `ListRow` carries a `group` index: the pinned header is
- * resolved from the scroll offset alone.
+ * With the group headers gone every row is the same height, so an offset is
+ * `index * ROW_HEIGHT` and the visible window is two divisions. The previous
+ * version needed prefix sums, a binary search, and a second copy of each header
+ * pinned to the top of the viewport to fake `position: sticky` inside an
+ * absolutely-positioned list. None of that has to exist any more.
  *
- * ## 2. Row heights are constants, not measurements
+ * ## 2. `ROW_HEIGHT` is a constant, and it is not arbitrary
  *
- * Every row is a fixed two-line shape and every header a fixed one-line shape,
- * so offsets are arithmetic rather than a measure-then-place pass. If a row ever
- * grows a third line, change the constant — do not start measuring, or the list
- * acquires a layout cycle per scroll frame.
+ * A row is two lines: a 12px title on an 18px leading and an 11px meta line on
+ * a 16px leading, 2px apart — 36px of text. Add the button's 12px of vertical
+ * padding and the 4px gap between rows and you get 52; 54 leaves two pixels of
+ * slack. Getting this wrong is not cosmetic: a row that is *slightly* too short
+ * squeezes the flex children, and because the title also carries `truncate`
+ * (`overflow: hidden`) the glyphs are then clipped horizontally through the
+ * middle. That was a real, shipped bug — the title line was being compressed
+ * from 18px to 12px and every session title was sliced. Both lines now carry
+ * `shrink-0`, so even if this arithmetic goes stale the text will overflow
+ * visibly rather than be quietly cut in half.
  *
  * ## 3. Rows take primitives, so `memo` actually works
  *
@@ -58,26 +67,21 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { FolderIcon, GitBranchIcon, SearchIcon, SquareTerminalIcon } from 'lucide-react';
+import { GitBranchIcon, InboxIcon, SearchIcon, SquareTerminalIcon } from 'lucide-react';
 import type { ProfileId, SessionSummary } from '@libra/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { formatRelative, oneLine } from '../lib/format';
-import { inferHomeDirectory, shortenPath, type Platform } from '../lib/paths';
-import {
-  flattenGroups,
-  groupSessionsByProject,
-  type ListRow,
-  type SessionGroup,
-} from '../lib/sessionGroups';
+import { groupSessionsByProject, sessionKey } from '../lib/sessionGroups';
 import { refreshSessions, resumeSession, useApp } from '../state/store';
 import { CapabilityButton } from './capability-button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
-const HEADER_HEIGHT = 24;
-const ROW_HEIGHT = 44;
+/** See note 2 in the file header before changing this. */
+const ROW_HEIGHT = 54;
 /** Rows kept mounted beyond each edge, so a fast flick does not show gaps. */
 const OVERSCAN = 6;
 /**
@@ -95,9 +99,7 @@ export function SessionList(): ReactElement {
   const sessions = useApp((s) => s.sessions);
   const loading = useApp((s) => s.sessionsLoading);
   const error = useApp((s) => s.sessionsError);
-  const scope = useApp((s) => s.sessionsScope);
   const profiles = useApp((s) => s.profiles);
-  const platform = useApp((s) => s.platform);
   const cwd = useApp((s) => s.cwd);
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
@@ -109,38 +111,47 @@ export function SessionList(): ReactElement {
     [profiles],
   );
 
-  const groups = useMemo(
-    () => groupSessionsByProject(sessions, { query, profileLabel }),
-    [sessions, query, profileLabel],
-  );
-  const rows = useMemo(() => flattenGroups(groups), [groups]);
+  /*
+   * Grouping is reused rather than re-implemented, even though only one group
+   * is wanted. `groupSessionsByProject` owns the query matching, the recency
+   * order and the id tie-break, and it is the part of this feature that has
+   * tests. Filtering by `cwd` here instead would have quietly forked all three.
+   */
+  const rows = useMemo(() => {
+    const groups = groupSessionsByProject(sessions, { query, profileLabel });
+    return groups.find((group) => group.cwd === cwd)?.sessions ?? [];
+  }, [sessions, query, profileLabel, cwd]);
 
-  // The home directory is guessed from the paths themselves — the renderer has
-  // no `$HOME`. Every shortened path also carries the full one on hover, so a
-  // wrong guess costs a hover and never hides anything. See `lib/paths.ts`.
-  const home = useMemo(
-    () => inferHomeDirectory([...sessions.map((s) => s.cwd), cwd], platform),
-    [sessions, cwd, platform],
+  /** Unfiltered, so the section count does not jump around while typing. */
+  const total = useMemo(
+    () => sessions.reduce((count, session) => (session.cwd === cwd ? count + 1 : count), 0),
+    [sessions, cwd],
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {sessions.length > FILTER_THRESHOLD ? (
-        <div className="relative px-2 pb-1.5">
-          <SearchIcon
-            className="pointer-events-none absolute top-1/2 left-3.5 size-3 -translate-y-1/2 text-ink-faint"
-            aria-hidden="true"
-          />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={`Filter ${sessions.length} sessions…`}
-            aria-label="Filter sessions"
-            spellCheck={false}
-            className="h-6 rounded-md pl-7 text-2xs md:text-2xs"
-          />
-        </div>
-      ) : null}
+    <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+      <div className="flex items-center gap-2 px-2.5 pt-2 pb-1.5">
+        <span className="shrink-0 text-2xs tracking-wider text-ink-faint uppercase">Sessions</span>
+        {total > 0 ? (
+          <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{total}</span>
+        ) : null}
+        {total > FILTER_THRESHOLD ? (
+          <div className="relative ml-auto min-w-0 flex-1">
+            <SearchIcon
+              className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-ink-faint"
+              aria-hidden="true"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter…"
+              aria-label="Filter this project’s sessions"
+              spellCheck={false}
+              className="h-6 rounded-md pl-6.5 text-2xs md:text-2xs"
+            />
+          </div>
+        ) : null}
+      </div>
 
       {/*
        * Listing and resuming are independent capabilities and are gated
@@ -172,21 +183,10 @@ export function SessionList(): ReactElement {
       ) : loading && sessions.length === 0 ? (
         <LoadingRows />
       ) : rows.length === 0 ? (
-        <Note tone="faint">
-          {sessions.length === 0
-            ? 'No past sessions yet. Anything you start shows up here, grouped by project.'
-            : `Nothing matches “${query.trim()}”.`}
-        </Note>
+        <NothingHere filtered={total > 0} query={query} />
       ) : (
-        <VirtualRows rows={rows} groups={groups} home={home} platform={platform} />
+        <VirtualRows rows={rows} />
       )}
-
-      {scope === 'cwd' && listing.supported ? (
-        <p className="border-t border-line px-2.5 py-1.5 text-2xs leading-snug text-ink-faint">
-          Showing the current directory only — this build has no cross-project session listing, so
-          other projects’ history is not enumerated here.
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -195,32 +195,10 @@ export function SessionList(): ReactElement {
 /* Virtualiser                                                                */
 /* -------------------------------------------------------------------------- */
 
-function VirtualRows({
-  rows,
-  groups,
-  home,
-  platform,
-}: {
-  readonly rows: readonly ListRow[];
-  readonly groups: readonly SessionGroup[];
-  readonly home: string | undefined;
-  readonly platform: Platform;
-}): ReactElement {
+function VirtualRows({ rows }: { readonly rows: readonly SessionSummary[] }): ReactElement {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
-
-  /** Prefix sums: `offsets[i]` is the top of row `i`; the last entry is the total. */
-  const offsets = useMemo(() => {
-    const out = new Array<number>(rows.length + 1);
-    let y = 0;
-    for (let i = 0; i < rows.length; i += 1) {
-      out[i] = y;
-      y += rows[i]?.kind === 'header' ? HEADER_HEIGHT : ROW_HEIGHT;
-    }
-    out[rows.length] = y;
-    return out;
-  }, [rows]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -231,8 +209,9 @@ function VirtualRows({
     return () => observer.disconnect();
   }, []);
 
-  // A filter keystroke can leave the scroller parked past the end of a much
-  // shorter list, which would show an empty window until the user scrolled.
+  // A filter keystroke — or a project switch — can leave the scroller parked
+  // past the end of a much shorter list, which would show an empty window until
+  // the user scrolled.
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || element.scrollTop === 0) return;
@@ -243,130 +222,37 @@ function VirtualRows({
   }, [rows]);
 
   const height = viewport > 0 ? viewport : ASSUMED_VIEWPORT;
-  const total = offsets[rows.length] ?? 0;
+  const total = rows.length * ROW_HEIGHT;
 
-  const first = Math.max(0, indexAt(offsets, scrollTop) - OVERSCAN);
-  const last = Math.min(rows.length - 1, indexAt(offsets, scrollTop + height) + OVERSCAN);
-
-  // Which project the top edge is inside, and how far the next group's real
-  // header has already pushed the pinned copy off the top.
-  const anchor = indexAt(offsets, scrollTop);
-  const pinnedGroup = groups[rows[anchor]?.group ?? 0];
-  const nextHeader = nextHeaderIndex(rows, anchor);
-  const push =
-    nextHeader === -1 ? 0 : Math.min(0, (offsets[nextHeader] ?? 0) - scrollTop - HEADER_HEIGHT);
+  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(rows.length - 1, Math.floor((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
 
   const visible: ReactElement[] = [];
   for (let i = first; i <= last; i += 1) {
-    const row = rows[i];
-    if (!row) continue;
-    const top = offsets[i] ?? 0;
-    visible.push(
-      row.kind === 'header' ? (
-        <GroupHeader
-          key={row.key}
-          top={top}
-          cwd={row.cwd}
-          count={row.count}
-          home={home}
-          platform={platform}
-        />
-      ) : (
-        <Row key={row.key} top={top} session={row.session} />
-      ),
-    );
+    const session = rows[i];
+    if (!session) continue;
+    // `sessionKey`, not `session.id`: an id is unique inside the profile that
+    // owns it, not globally, and two profiles surfacing the same id would
+    // collide into one React key and silently drop a row.
+    visible.push(<Row key={sessionKey(session)} top={i * ROW_HEIGHT} session={session} />);
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
-      <div
-        ref={scrollRef}
-        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        className="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
-      >
-        <div className="relative" style={{ height: total }}>
-          {visible}
-        </div>
+    <div
+      ref={scrollRef}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+    >
+      <div className="relative" style={{ height: total }}>
+        {visible}
       </div>
-
-      {/*
-       * The pinned copy. Opaque and positioned over the real header it stands in
-       * for, so the two are indistinguishable when a group's own header happens
-       * to be at the top of the viewport. Hidden from assistive technology —
-       * the real header is already in the list.
-       */}
-      {pinnedGroup ? (
-        <GroupHeader
-          pinnedCopy
-          top={push}
-          cwd={pinnedGroup.cwd}
-          count={pinnedGroup.sessions.length}
-          home={home}
-          platform={platform}
-        />
-      ) : null}
     </div>
   );
-}
-
-/** Index of the last row starting at or before `y`. Binary search over prefix sums. */
-function indexAt(offsets: readonly number[], y: number): number {
-  let low = 0;
-  let high = offsets.length - 2;
-  if (high < 0) return 0;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if ((offsets[mid] ?? 0) <= y) low = mid;
-    else high = mid - 1;
-  }
-  return low;
-}
-
-function nextHeaderIndex(rows: readonly ListRow[], from: number): number {
-  for (let i = from + 1; i < rows.length; i += 1) {
-    if (rows[i]?.kind === 'header') return i;
-  }
-  return -1;
 }
 
 /* -------------------------------------------------------------------------- */
 /* Rows                                                                       */
 /* -------------------------------------------------------------------------- */
-
-const GroupHeader = memo(function GroupHeader({
-  cwd,
-  count,
-  home,
-  platform,
-  top,
-  pinnedCopy = false,
-}: {
-  readonly cwd: string;
-  readonly count: number;
-  readonly home: string | undefined;
-  readonly platform: Platform;
-  readonly top: number;
-  readonly pinnedCopy?: boolean;
-}): ReactElement {
-  return (
-    <div
-      style={{ top, height: HEADER_HEIGHT }}
-      aria-hidden={pinnedCopy || undefined}
-      className={cn(
-        'absolute inset-x-0 flex items-center gap-1.5 bg-panel px-2.5 text-2xs',
-        pinnedCopy && 'z-10 border-b border-line/60',
-      )}
-    >
-      <FolderIcon className="size-2.5 shrink-0 text-ink-faint" aria-hidden="true" />
-      {/* Full path on hover. The label elides its middle, and its tail is the
-          project name, so it is the head a reader may need back. */}
-      <span title={cwd} className="min-w-0 flex-1 truncate font-mono tracking-wide text-ink-muted">
-        {shortenPath(cwd, { home, platform, max: 30 })}
-      </span>
-      <span className="shrink-0 font-mono tabular-nums text-ink-faint">{count}</span>
-    </div>
-  );
-});
 
 const Row = memo(function Row({
   session,
@@ -384,10 +270,7 @@ const Row = memo(function Row({
   const orphaned = profile === undefined;
 
   return (
-    <div
-      style={{ top, height: ROW_HEIGHT }}
-      className="absolute inset-x-0 flex items-center px-1.5"
-    >
+    <div style={{ top, height: ROW_HEIGHT }} className="absolute inset-x-0 px-2 py-0.5">
       <CapabilityButton
         capability="resumeSession"
         variant="ghost"
@@ -397,18 +280,26 @@ const Row = memo(function Row({
             ? 'The profile that created this session no longer exists, so its transcript cannot be reached.'
             : undefined
         }
-        tooltip={`Resume in ${session.cwd}${profile ? ` — ${profile.label}` : ''}`}
+        tooltip={`Resume — ${session.cwd}${profile ? ` — ${profile.label}` : ''}`}
         tooltipSide="right"
         onClick={() => resumeSession(session)}
         className={cn(
-          'h-10 w-full flex-col items-start justify-center gap-0.5 rounded-md border-l-2 border-transparent px-2 py-1 text-left font-normal',
+          'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
           active && 'border-brass/70 bg-raised/60',
         )}
       >
-        <span className={cn('w-full truncate text-xs', active ? 'text-ink' : 'text-ink-muted')}>
+        {/* `shrink-0` on both lines: see note 2 in the file header. Without it
+            a row one pixel too short compresses the line box and `truncate`
+            clips the glyphs through the middle. */}
+        <span
+          className={cn(
+            'w-full shrink-0 truncate text-xs',
+            active ? 'text-ink' : 'text-ink-muted',
+          )}
+        >
           {session.title}
         </span>
-        <span className="flex w-full items-center gap-1.5 font-mono text-2xs text-ink-faint">
+        <span className="flex w-full shrink-0 items-center gap-1.5 font-mono text-2xs text-ink-faint">
           <SquareTerminalIcon className="size-2.5 shrink-0" aria-hidden="true" />
           <span className="shrink-0">{formatRelative(session.updatedAt)}</span>
           {session.gitBranch ? (
@@ -418,9 +309,9 @@ const Row = memo(function Row({
             </span>
           ) : null}
           {/*
-           * The profile marker, per row rather than per group: two profiles can
-           * hold sessions in the same project, and which account a resume will
-           * bill is not something to leave to inference.
+           * The profile marker, per row rather than per project: two profiles
+           * can hold sessions in the same directory, and which account a resume
+           * will bill is not something to leave to inference.
            */}
           <span
             title={
@@ -439,6 +330,39 @@ const Row = memo(function Row({
 /* -------------------------------------------------------------------------- */
 /* States                                                                     */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Nothing to show.
+ *
+ * Two different sentences, because the two cases call for different next
+ * actions: an empty project is waiting for a first session, whereas an empty
+ * *filter* means the sessions are there and the query is wrong.
+ */
+function NothingHere({
+  filtered,
+  query,
+}: {
+  readonly filtered: boolean;
+  readonly query: string;
+}): ReactElement {
+  return (
+    <Empty className="gap-2 px-3 py-6">
+      <EmptyHeader className="gap-1.5">
+        <EmptyMedia variant="icon" className="mb-0 size-7 bg-raised/70">
+          <InboxIcon className="size-3.5 text-ink-faint" aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle className="text-xs text-ink-muted">
+          {filtered ? 'No match' : 'No sessions yet'}
+        </EmptyTitle>
+        <EmptyDescription className="text-2xs leading-snug text-ink-faint">
+          {filtered
+            ? `Nothing in this project matches “${query.trim()}”.`
+            : 'Anything you start in this project shows up here. Other projects are under “All projects” below.'}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
 
 function Note({
   tone,

@@ -25,6 +25,7 @@ import type {
   PlanUsage,
   ProfileMetadata,
   ProviderDescriptor,
+  ProviderModelOption,
   RunEndReason,
   RunHandle,
   RunsStartRequest,
@@ -70,6 +71,75 @@ const CODEX_CAPS: Capabilities = {
   costReporting: false,
   planUsageReporting: false,
 };
+
+/**
+ * The catalogue `providers.models` hands back for Claude.
+ *
+ * Shaped after what the real CLI reports rather than after the descriptor's
+ * static list, because the interesting cases are the *differences* between
+ * rows: the flags and effort levels vary per model, and every gated control in
+ * the redesigned UI reads them off the selected row. A uniform list would make
+ * all of that render identically and hide the states worth checking.
+ *
+ * So the spread is chosen, not incidental:
+ *
+ * - `default` carries no flags at all — it is the "let the provider decide"
+ *   row, and Libra cannot know what will run, so the fast-mode and ultracode
+ *   toggles must come up disabled next to it.
+ * - `sonnet` supports fast mode but not ultracode, and `fable` the reverse, so
+ *   the two toggles are visibly independent rather than one switch drawn twice.
+ * - `haiku` declares `effortLevels: []` — no effort setting at all — which is
+ *   the case that must disable the effort picker rather than shrink it.
+ *
+ * A module constant so the reference is stable: the store keeps this array in
+ * state and derives selectors from it by identity.
+ */
+const MOCK_LIVE_MODELS: readonly ProviderModelOption[] = [
+  {
+    id: 'default',
+    label: 'Default',
+    note: 'Whatever the installed CLI selects.',
+  },
+  {
+    id: 'fable',
+    label: 'Fable 5',
+    displayName: 'Claude Fable 5',
+    resolvedModel: 'claude-fable-5',
+    note: 'Highest reasoning ceiling. Takes every effort level, including max.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsUltracode: true,
+    adaptiveThinking: true,
+  },
+  {
+    id: 'opus',
+    label: 'Opus 5',
+    displayName: 'Claude Opus 5',
+    resolvedModel: 'claude-opus-5',
+    note: 'The most capable general model. Slowest and most expensive per token.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsFastMode: true,
+    supportsUltracode: true,
+    adaptiveThinking: true,
+  },
+  {
+    id: 'sonnet',
+    label: 'Sonnet 5',
+    displayName: 'Claude Sonnet 5',
+    resolvedModel: 'claude-sonnet-5',
+    note: 'The balanced default: strong on code, much cheaper than Opus.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh'],
+    supportsFastMode: true,
+    adaptiveThinking: true,
+  },
+  {
+    id: 'haiku',
+    label: 'Haiku 4.5',
+    displayName: 'Claude Haiku 4.5',
+    resolvedModel: 'claude-haiku-4-5-20251001',
+    note: 'Fastest and cheapest. Best for small, mechanical edits.',
+    effortLevels: [],
+  },
+];
 
 interface MockRun {
   readonly runId: string;
@@ -396,10 +466,16 @@ export function createMockBridge(): LibraBridge {
         { id: 'sonnet', label: 'Sonnet', note: 'Balanced: strong on code, much cheaper.' },
         { id: 'haiku', label: 'Haiku', note: 'Fastest and cheapest.' },
       ],
+      // Every level any row in `MOCK_LIVE_MODELS` names has to exist here, or
+      // the per-model narrowing has nothing to narrow *to*: a model's
+      // `effortLevels` are ids into this list, and one that resolves to nothing
+      // would render as a missing option rather than as a constrained picker.
       effortLevels: [
         { id: 'low', label: 'Low', note: 'Minimal thinking. Fastest, least reliable.' },
         { id: 'medium', label: 'Medium', note: 'Moderate thinking for routine work.' },
         { id: 'high', label: 'High', note: 'Deep reasoning. The default.' },
+        { id: 'xhigh', label: 'Extra high', note: 'More reasoning than most work needs.' },
+        { id: 'max', label: 'Max', note: 'The ceiling. Slow and expensive by design.' },
       ],
       available: true,
     },
@@ -458,7 +534,30 @@ export function createMockBridge(): LibraBridge {
       },
     },
 
-    providers: { list: async () => ok({ providers }) },
+    providers: {
+      list: async () => ok({ providers }),
+      /**
+       * Answers with {@link MOCK_LIVE_MODELS} and `live: true` for Claude.
+       *
+       * There is no CLI behind the mock, so this is a fiction either way; the
+       * question is which fiction is more useful to develop against. Returning
+       * the descriptor's four-row static list with `live: false` would leave
+       * every model-aware surface — the catalogue in settings, the
+       * quick-access picker, the per-model fast-mode and ultracode gating —
+       * with nothing to gate *on*, because none of those rows carry the flags.
+       * So the mock plays the part of a provider that answered: real display
+       * names, per-model effort levels, and a deliberate mix of models that do
+       * and do not support each flag, which is the only way the
+       * disabled-with-a-reason states become visible in a browser.
+       *
+       * Codex stays unregistered and still gets the empty `live: false`
+       * fallback, so the "nobody confirmed this list" branch is also reachable.
+       */
+      models: async ({ providerId }) =>
+        providerId === 'claude'
+          ? ok({ models: MOCK_LIVE_MODELS, live: true })
+          : ok({ models: providers.find((p) => p.id === providerId)?.models ?? [], live: false }),
+    },
 
     runs: {
       start: async (request) => {

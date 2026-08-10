@@ -343,6 +343,52 @@ export interface PlanUsageQuery {
   readonly cwd: string;
 }
 
+/**
+ * What a live model-catalogue read needs.
+ *
+ * The same shape as {@link PlanUsageQuery} minus the profile id, and for the
+ * same reason it has an environment at all: the catalogue is a property of the
+ * *account*, so the credential is what selects the answer. The profile id is
+ * absent because nothing is stamped with it — unlike a session summary or a
+ * usage reading, a model list is not attributed back to whoever asked.
+ *
+ * {@link inheritHostEnv} is here rather than assumed because the adapter's own
+ * host-environment merge is what scrubs credential variables out of the
+ * launching shell. Passing the run's setting through means the query reaches
+ * the same account the next run will, instead of a differently-configured one.
+ */
+export interface ModelListQuery {
+  /** The profile's resolved environment — this is what selects the account. */
+  readonly env: EnvBundle;
+  /**
+   * Where to run the query. Providers resolve configuration relative to a
+   * working directory, so this can change the answer; it must exist, so
+   * callers pass somewhere known-good rather than an unset workspace.
+   */
+  readonly cwd: string;
+  /** See {@link ResolvedRunInput.inheritHostEnv}. */
+  readonly inheritHostEnv?: boolean;
+}
+
+/**
+ * A model catalogue, plus whether the provider actually confirmed it.
+ *
+ * The flag is not decoration. {@link ProviderAdapter.listModels} is required to
+ * resolve rather than reject, so a machine with no CLI, no credential or no
+ * network produces a perfectly well-formed result that happens to be a guess.
+ * Without `live`, the UI has no way to distinguish that from a lineup the
+ * account really reported, and would present a hard-coded list as fact.
+ */
+export interface ModelCatalogue {
+  /** In display order, first = default. Never empty. */
+  readonly models: readonly ProviderModelOption[];
+  /**
+   * True only when this came back from the provider itself. False for every
+   * fallback path, including ones that failed for benign reasons.
+   */
+  readonly live: boolean;
+}
+
 /** What reading one session's stored messages needs. */
 export interface SessionMessagesQuery {
   readonly profileId: ProfileId;
@@ -689,6 +735,63 @@ export interface ProviderAdapter {
    * its reason rather than disappearing.
    */
   readonly effortLevels?: readonly ProviderEffortOption[];
+
+  /**
+   * Ask the installed provider what models it *actually* offers, right now.
+   *
+   * The live counterpart to the static {@link models} list, and the reason the
+   * two are separate properties rather than one: {@link models} is a constant
+   * the registry can republish in a descriptor without touching a subprocess,
+   * while this contacts the provider with a real credential and can take
+   * seconds. A UI that needs a list immediately reads the descriptor; a UI that
+   * wants the truth calls this and swaps.
+   *
+   * Present **iff** the provider can enumerate its own catalogue. A provider
+   * that cannot omits the property entirely — it does not implement it as a
+   * stub returning {@link models}, because the caller reports *which* list the
+   * user is looking at (`ProvidersModelsResponse.live`) and a stub would make
+   * the built-in list claim to be confirmed by the account. With the method
+   * absent, the static list stands and is labelled as such.
+   *
+   * Deliberately not paired with a {@link Capabilities} flag, unlike
+   * {@link listSessions}. A capability flag exists so the UI can degrade
+   * *before* calling — hide a history pane, disable a picker. There is nothing
+   * to degrade here: the model picker renders from the descriptor either way,
+   * and the only difference this makes is whether a background refresh
+   * improves it. `typeof adapter.listModels === 'function'` is the whole test,
+   * and it is made in exactly one place.
+   *
+   * Two obligations:
+   *
+   *  1. **Must not consume model tokens.** This runs on a boot path and may run
+   *     again whenever a profile changes. Implementations use a control channel
+   *     or a metadata call, never a turn.
+   *  2. **Must resolve rather than reject.** No binary, no credential, no
+   *     network — all of those are ordinary states of a desktop machine, and a
+   *     model picker that renders empty is worse than one that renders slightly
+   *     stale. Return the provider's own fallback list instead of throwing; the
+   *     caller cannot tell a rejection apart from a crash and has no better
+   *     list to substitute than the one you already have.
+   *
+   * ### Say which list you returned
+   *
+   * Obligation 2 has a consequence: because failure resolves, the caller cannot
+   * otherwise tell a catalogue the account confirmed from one the adapter
+   * guessed. So the return is a {@link ModelCatalogue} carrying an explicit
+   * `live` flag rather than a bare array.
+   *
+   * An earlier draft signalled this with *reference identity* — fall back by
+   * returning the very same array instance as {@link models}, and let the
+   * caller compare. It worked, and it was one line shorter. It was also a trap:
+   * `return [...FALLBACK]` is an utterly reasonable edit that would have
+   * silently relabelled the built-in list as account-confirmed, with no test
+   * failing and no way to notice from the UI. A flag whose correctness depends
+   * on nobody ever copying an array is not a flag, it is a landmine. This is
+   * the mechanism by which the settings screen tells the user "this is the
+   * built-in list, Libra could not reach the CLI" — it has to be robust, or it
+   * is worse than absent.
+   */
+  listModels?(query: ModelListQuery): Promise<ModelCatalogue>;
 
   /**
    * Start a run.

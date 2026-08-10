@@ -47,6 +47,7 @@ import {
   type ProfilesListRequest,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
+  type ProvidersModelsRequest,
   type RunInput,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
@@ -699,6 +700,31 @@ export function validateProfilesDelete(raw: unknown): ProfilesDeleteRequest {
 export function validateProvidersList(raw: unknown): ProvidersListRequest {
   const request = requireRequest(raw);
   return compact<ProvidersListRequest>({ refresh: optionalBoolean(request['refresh'], 'refresh') });
+}
+
+/**
+ * The live model catalogue.
+ *
+ * `providerId` and `profileId` get the same treatment they get in
+ * {@link validateSessionsList}, and for the same reason: together they decide
+ * which adapter runs and which credential it runs with. A `profileId` that is
+ * merely well-formed is still checked against the store downstream, so this
+ * only has to reject the shapes that would reach an adapter as garbage.
+ *
+ * `cwd` is optional here but absolute when present. The provider resolves its
+ * configuration relative to it, so a relative path would be resolved against
+ * the main process's `process.cwd()` — an artefact of how Libra was launched,
+ * and never what the renderer meant.
+ */
+export function validateProvidersModels(raw: unknown): ProvidersModelsRequest {
+  const request = requireRequest(raw);
+  const providerId = request['providerId'];
+  if (!isProviderId(providerId)) throw new ValidationError('providerId', 'is not a known provider');
+  return compact<ProvidersModelsRequest>({
+    providerId,
+    profileId: requireId(request['profileId'], 'profileId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+  });
 }
 
 export function validateRunsStart(raw: unknown): RunsStartRequest {

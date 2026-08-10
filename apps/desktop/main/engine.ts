@@ -53,6 +53,7 @@ import type {
   ProfilePatch,
   ProviderDescriptor,
   ProviderId,
+  ProviderModelOption,
   RunHandle,
   RunId,
   SessionId,
@@ -114,6 +115,26 @@ export interface EngineOptions {
  */
 export interface LibraEngine {
   listProviders(options: { readonly refresh?: boolean }): Promise<readonly ProviderDescriptor[]>;
+
+  /**
+   * One provider's model catalogue, read from the installed CLI where it can
+   * be, from the adapter's static list where it cannot.
+   *
+   * Separate from {@link listProviders} because it spawns a subprocess and
+   * takes a credential, exactly like {@link refreshPlanUsage} is separate from
+   * {@link cachedPlanUsage}. Descriptors must stay instant; this one is allowed
+   * to be slow.
+   *
+   * Takes both ids for the same reason {@link listSessions} does: the provider
+   * decides *which* adapter answers, and the profile decides *as whom*. Never
+   * throws for a provider that cannot enumerate models — that is an answer
+   * (`live: false`), not a fault.
+   */
+  listProviderModels(options: {
+    readonly providerId: ProviderId;
+    readonly profileId: ProfileId;
+    readonly cwd?: string;
+  }): Promise<{ readonly models: readonly ProviderModelOption[]; readonly live: boolean }>;
 
   listProfiles(options: { readonly providerId?: ProviderId }): Promise<readonly ProfileMetadata[]>;
   createProfile(draft: ProfileDraft): Promise<ProfileMetadata>;
@@ -291,6 +312,50 @@ function createEngine(options: EngineOptions): LibraEngine {
 
   return {
     listProviders: (query) => providers.describe({ refresh: query.refresh }),
+
+    /**
+     * Ask a provider what models this account really has.
+     *
+     * The credential-bearing `envFor` — the same resolution a run gets — is
+     * deliberate and not interchangeable with `storeEnvFor`. A catalogue is a
+     * property of the account, so a bundle with no key in it would either be
+     * refused or would answer for whatever account the CLI finds on its own,
+     * which is precisely the cross-profile leak the isolated config directory
+     * exists to prevent.
+     *
+     * Every branch resolves. A provider Libra cannot drive, an adapter that
+     * cannot enumerate, or a fetch that failed are all "here is the built-in
+     * list, and no, the account did not confirm it" — the caller renders a
+     * picker either way and labels it from `live`.
+     */
+    listProviderModels: async (query) => {
+      const adapter = providers.get(query.providerId);
+      // Not registered at all: there is no static list to fall back *to*, so
+      // the honest answer is nothing rather than another provider's models.
+      if (adapter === undefined) return { models: [], live: false };
+
+      const fallback = adapter.models ?? [];
+      if (adapter.listModels === undefined) return { models: fallback, live: false };
+
+      try {
+        // `live` comes back from the adapter rather than being inferred here.
+        // `listModels` resolves on failure by contract, so a fallback is
+        // indistinguishable from a real answer by inspection — the adapter is
+        // the only party that knows which it returned, so it is the only party
+        // that can say. See `ProviderAdapter.listModels`.
+        return await adapter.listModels({
+          env: await envFor(query.profileId, query.providerId),
+          // The query has to start somewhere that exists. userData always does;
+          // the user's chosen workspace may not be set yet.
+          cwd: query.cwd ?? userDataDir,
+        });
+      } catch (error) {
+        // The contract says it should not reject; if one does, that is a bug in
+        // the adapter and not a reason to leave the picker empty.
+        log.error(`Provider "${query.providerId}" threw while listing models`, error);
+        return { models: fallback, live: false };
+      }
+    },
 
     listProfiles: (query) => profiles.listMetadata(query.providerId),
 

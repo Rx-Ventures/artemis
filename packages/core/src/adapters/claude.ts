@@ -51,10 +51,12 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
+  ModelInfo,
   Options,
   PermissionResult,
   Query,
   SDKUserMessage,
+  Settings,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -107,6 +109,8 @@ import type {
   AllSessionsQuery,
   EnvBundle,
   InterruptResult,
+  ModelCatalogue,
+  ModelListQuery,
   PlanUsageQuery,
   ProviderAdapter,
   ProviderCredentialSpec,
@@ -280,12 +284,26 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
 };
 
 /**
- * Models the picker offers, in display order. First entry is the default.
+ * Models the picker falls back to, in display order. First entry is the default.
+ *
+ * **This list is a fallback, not the catalogue.** The authoritative list comes
+ * off the installed CLI at runtime via {@link fetchClaudeModels}, which asks
+ * the SDK's `supportedModels()` and gets back the real lineup with the
+ * provider's own display names, per-model effort levels and per-model fast-mode
+ * support. That is the list the UI should show.
+ *
+ * This exists because the fetch can fail — no binary, no credential, an offline
+ * machine — and a model picker that renders empty is worse than one that
+ * renders slightly stale. Everything here is therefore deliberately
+ * conservative: aliases rather than dated snapshots, and capability flags set
+ * only where they are structural rather than guessed. Live data overwrites all
+ * of it, field by field.
  *
  * **Aliases, not dated snapshot ids.** `sonnet` resolves to whatever the
  * installed CLI considers the current Sonnet; `claude-sonnet-4-5-20250929` is
  * frozen and goes stale in a way nobody notices until a run fails. A picker
- * that has to be edited on every model release is a picker that will be wrong.
+ * that has to be edited on every model release is a picker that will be wrong —
+ * which is the same reasoning that makes the live fetch the primary path.
  *
  * This list is what the UI *offers*. It is not an allow-list: `RunInput.model`
  * stays open, so a user or a future settings screen can still name a specific
@@ -296,24 +314,192 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
   {
     id: 'default',
     label: 'Default',
-    note: 'Whatever the installed Claude CLI selects — usually the current Sonnet.',
+    note: 'Whatever the installed Claude CLI selects.',
+  },
+  {
+    id: 'fable',
+    label: 'Fable 5',
+    displayName: 'Claude Fable 5',
+    resolvedModel: 'claude-fable-5',
+    note: 'Highest reasoning ceiling. Takes every effort level, including max.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'opus',
-    label: 'Opus',
-    note: 'The most capable model. Slowest and most expensive per token.',
+    label: 'Opus 5',
+    displayName: 'Claude Opus 5',
+    resolvedModel: 'claude-opus-5',
+    note: 'The most capable general model. Slowest and most expensive per token.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsFastMode: true,
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'sonnet',
-    label: 'Sonnet',
+    label: 'Sonnet 5',
+    displayName: 'Claude Sonnet 5',
+    resolvedModel: 'claude-sonnet-5',
     note: 'The balanced default: strong on code, much cheaper than Opus.',
+    effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    supportsUltracode: true,
+    adaptiveThinking: true,
   },
   {
     id: 'haiku',
-    label: 'Haiku',
+    label: 'Haiku 4.5',
+    displayName: 'Claude Haiku 4.5',
+    resolvedModel: 'claude-haiku-4-5-20251001',
     note: 'Fastest and cheapest. Best for small, mechanical edits.',
   },
 ];
+
+/** How long {@link fetchClaudeModels} waits for the CLI before giving up. */
+const MODEL_FETCH_TIMEOUT_MS = 15_000;
+
+/** What {@link fetchClaudeModels} needs in order to reach the CLI. */
+export interface ClaudeModelQuery {
+  /** Profile environment. Decides which account the CLI answers as. */
+  readonly env: EnvBundle;
+  /** An absolute directory to run in. The CLI resolves config relative to it. */
+  readonly cwd: string;
+  /** See {@link ResolvedRunInput.inheritHostEnv}. */
+  readonly inheritHostEnv?: boolean;
+  /** See {@link ClaudeAdapterOptions.hostEnv}. */
+  readonly hostEnv?: EnvBundle;
+  /** Override the default timeout. Mostly for tests. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Ask the installed CLI what models it actually offers.
+ *
+ * This is the authoritative catalogue and {@link CLAUDE_MODELS} is the
+ * fallback, not the other way round. The reasoning is the same one that made
+ * the picker use aliases instead of dated snapshots, taken one step further: a
+ * hard-coded list is wrong the day a model ships, and no amount of diligence
+ * fixes that from inside this file. The CLI already knows the answer, including
+ * the things Libra cannot infer — the provider's own display names, which
+ * effort levels each model really accepts, and which support fast mode.
+ *
+ * ## Why this opens a query it never prompts
+ *
+ * `supportedModels()` is a *control request*, and the SDK only serves control
+ * requests over a streaming session — there is no one-shot "describe yourself"
+ * call, and `startup()`'s `WarmQuery` exposes only `query()` and `close()`.
+ * So the cheapest legal path is to open a query whose prompt stream never
+ * yields, ask on the control channel, and tear it down. No turn is ever
+ * started, nothing is billed, and the subprocess lives for the length of one
+ * round-trip.
+ *
+ * ## It resolves rather than throws
+ *
+ * Every failure path returns {@link CLAUDE_MODELS} instead of rejecting. This
+ * runs on the boot path of a desktop app whose model picker must render
+ * *something*: a machine with no CLI installed, no credential, or no network is
+ * a machine where the user still needs to see a list and change a setting. The
+ * diagnostic sink is told what went wrong; the UI is handed a usable list.
+ */
+export async function fetchClaudeModels(
+  request: ClaudeModelQuery,
+  onDiagnostic?: (message: string, detail?: unknown) => void,
+): Promise<ModelCatalogue> {
+  const abort = new AbortController();
+
+  /*
+   * A prompt stream that yields nothing and never returns. Returning instead
+   * would close the input channel and let the CLI decide the session is over
+   * before the control request lands; this parks until `abort` tears it down.
+   */
+  const idlePrompt = (async function* (): AsyncGenerator<SDKUserMessage> {
+    await new Promise<void>((resolve) => {
+      if (abort.signal.aborted) {
+        resolve();
+        return;
+      }
+      abort.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+  })();
+
+  let sdkQuery: Query | undefined;
+  try {
+    const env = composeProviderEnv(request.env, {
+      inheritHostEnv: request.inheritHostEnv,
+      hostEnv: request.hostEnv,
+      scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
+    });
+    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'libra';
+
+    sdkQuery = query({
+      prompt: idlePrompt,
+      options: {
+        cwd: request.cwd,
+        env,
+        abortController: abort,
+        // Same isolation rule as a run: no filesystem settings are inherited.
+        settingSources: [],
+        // Nothing is going to be displayed, so do not pay for token streaming.
+        includePartialMessages: false,
+      },
+    });
+
+    const infos = await withTimeout(
+      sdkQuery.supportedModels(),
+      request.timeoutMs ?? MODEL_FETCH_TIMEOUT_MS,
+    );
+
+    const mapped = infos.map(toModelOption).filter((m) => m.id.length > 0);
+    if (mapped.length === 0) {
+      onDiagnostic?.('The Claude CLI reported an empty model list; using the built-in list.');
+      return { models: CLAUDE_MODELS, live: false };
+    }
+    return { models: mapped, live: true };
+  } catch (error) {
+    onDiagnostic?.(`Could not read the model list from the Claude CLI: ${describe(error)}`, error);
+    return { models: CLAUDE_MODELS, live: false };
+  } finally {
+    abort.abort();
+    // `interrupt`/`return` on a query that never ran a turn can itself throw;
+    // this is best-effort cleanup and must not mask the result above.
+    try {
+      await sdkQuery?.return?.(undefined);
+    } catch {
+      /* the abort above is what actually reclaims the subprocess */
+    }
+  }
+}
+
+/**
+ * Translate one SDK `ModelInfo` into the descriptor the UI builds pickers from.
+ *
+ * Two derivations are worth naming:
+ *
+ *  - **`label` strips the "Claude " prefix.** Every row would otherwise start
+ *    with the same eight characters, in a status-line segment that truncates at
+ *    fifteen. The full name survives on `displayName`, which is what the
+ *    settings catalogue shows.
+ *  - **`supportsUltracode` is derived from `xhigh`,** because that is the
+ *    provider's own stated precondition ("requires an xhigh-capable model")
+ *    rather than a guess. There is no dedicated flag on `ModelInfo` to read.
+ */
+function toModelOption(info: ModelInfo): ProviderModelOption {
+  const levels = info.supportedEffortLevels;
+  return {
+    id: info.value,
+    label: info.displayName.replace(/^Claude\s+/i, '').trim() || info.value,
+    displayName: info.displayName,
+    resolvedModel: info.resolvedModel,
+    note: info.description,
+    // `supportsEffort: false` means "takes no effort setting", which is an
+    // empty array here — distinct from `undefined`, which means "every level".
+    effortLevels: info.supportsEffort === false ? [] : levels ? [...levels] : undefined,
+    supportsFastMode: info.supportsFastMode ?? false,
+    supportsUltracode: levels?.includes('xhigh') ?? false,
+    adaptiveThinking: info.supportsAdaptiveThinking ?? false,
+  };
+}
 
 /**
  * Reasoning-effort levels, least to most.
@@ -398,6 +584,29 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     credentials: CLAUDE_CREDENTIALS,
     models: CLAUDE_MODELS,
     effortLevels: CLAUDE_EFFORT_LEVELS,
+
+    /*
+     * The live counterpart to `models` above. Present because Claude *can*
+     * enumerate itself; see `fetchClaudeModels` for why it opens a query it
+     * never prompts, and `ProviderAdapter.listModels` for the two obligations
+     * it is meeting (no model tokens, and resolve rather than reject).
+     *
+     * The adapter's own diagnostic sink is passed through, so a machine that
+     * cannot reach the CLI leaves a trace explaining why the picker is showing
+     * the built-in list — without that, a silent fallback is indistinguishable
+     * from a working fetch that happens to agree with it.
+     */
+    async listModels(query: ModelListQuery): Promise<ModelCatalogue> {
+      return fetchClaudeModels(
+        {
+          env: query.env,
+          cwd: query.cwd,
+          inheritHostEnv: query.inheritHostEnv,
+          hostEnv,
+        },
+        diagnostic,
+      );
+    },
 
     async createRun(input: ResolvedRunInput): Promise<Run> {
       validateRunInput(input);
@@ -736,6 +945,11 @@ export function buildClaudeOptions(
     // levels, so this cast narrows a checked value rather than asserting an
     // unchecked one.
     effort: input.effort as Options['effort'],
+    // Fast mode and ultracode are *settings*, not top-level options, so they
+    // ride the flag-settings layer. Absent when neither was asked for: an empty
+    // object here is not inert — it is a flag-settings layer that exists, and
+    // the layer has the highest priority among user-controlled settings.
+    settings: buildFlagSettings(input),
     permissionMode,
     // The SDK gates `bypassPermissions` behind an explicit opt-in. Passing it
     // only when the user picked that mode keeps the dangerous flag tied to a
@@ -765,6 +979,35 @@ export function buildClaudeOptions(
     systemPrompt: mapSystemPrompt(input.systemPrompt),
     title: input.title,
   };
+}
+
+/**
+ * Assemble the flag-settings layer from the run's speed/depth knobs.
+ *
+ * `fastMode` and `ultracode` are not top-level `Options` fields — they live in
+ * `Settings`, which `Options.settings` loads into the flag layer (the same one
+ * the CLI's `--settings` flag feeds, and the highest-priority user-controlled
+ * tier). Both are session-scoped by design: the SDK documents that interactive
+ * ultracode toggles never persist, which matches Libra's model exactly, since
+ * every run is configured from the status line rather than from a config file.
+ *
+ * Returns `undefined` rather than `{}` when neither is set. Passing an empty
+ * object would still *establish* a flag-settings layer, and a layer that exists
+ * but says nothing is not the same as no layer at all — this keeps a run that
+ * asked for neither knob byte-identical to one from before they existed.
+ *
+ * Nothing here checks whether the selected model supports either flag. That is
+ * the UI's job (it has the model descriptor and can disable the control with a
+ * reason) and the provider's job (it resolves entitlement, cooldown and model
+ * eligibility server-side). Duplicating the check here would mean maintaining a
+ * third, staler copy of a fact the other two already own — the same argument
+ * that keeps per-model effort tables out of this file.
+ */
+export function buildFlagSettings(input: ResolvedRunInput): Settings | undefined {
+  const settings: Settings = {};
+  if (input.fastMode === true) settings.fastMode = true;
+  if (input.ultracode === true) settings.ultracode = true;
+  return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
 /**

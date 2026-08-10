@@ -243,8 +243,32 @@ export interface ProviderAuthModeOption {
 export interface ProviderModelOption {
   /** Sent as `RunInput.model`. Opaque to everything above the adapter. */
   readonly id: string;
-  /** Human-readable name for the picker, e.g. "Sonnet". */
+  /**
+   * Short name for dense chrome — a status-line segment, a menu row, e.g.
+   * "Sonnet 5". Kept distinct from {@link displayName} because the bar this
+   * appears on is 20px tall and "Claude Sonnet 5 (latest)" does not fit in it.
+   */
   readonly label: string;
+  /**
+   * The provider's own full name for the model, e.g. "Claude Sonnet 5".
+   *
+   * Absent when the provider does not publish one, in which case {@link label}
+   * is all there is and the UI must fall back to it rather than rendering a
+   * blank. Shown wherever there is room to be unambiguous: the settings
+   * catalogue, the model picker's expanded rows.
+   */
+  readonly displayName?: string;
+  /**
+   * The canonical wire id this option resolves to, e.g. `sonnet` →
+   * `claude-sonnet-5`.
+   *
+   * Libra offers *aliases* rather than dated snapshots on purpose (see the
+   * Claude adapter's model list), which means the id it sends does not identify
+   * the model that actually ran. This carries the resolution so the UI can
+   * match a persisted explicit id back to the alias row that covers it, and so
+   * a run can report the concrete model without a second lookup.
+   */
+  readonly resolvedModel?: string;
   /** One line on what this model is for, shown under the picker. */
   readonly note: string;
   /**
@@ -257,6 +281,28 @@ export interface ProviderModelOption {
    * setting the run silently ignores.
    */
   readonly effortLevels?: readonly string[];
+  /**
+   * This model accepts {@link RunInput.fastMode}.
+   *
+   * Absent means unknown, which the UI must treat as *not supported* rather
+   * than as permission: offering a toggle that the provider ignores is worse
+   * than not offering it, because the user believes it took effect.
+   */
+  readonly supportsFastMode?: boolean;
+  /**
+   * This model accepts {@link RunInput.ultracode}.
+   *
+   * Separate from {@link supportsFastMode} and not derivable from it. The two
+   * pull in opposite directions — one buys latency, the other spends it — and a
+   * provider may offer either, both or neither on a given model.
+   */
+  readonly supportsUltracode?: boolean;
+  /**
+   * The model decides its own thinking depth, so an explicit effort level is a
+   * hint rather than an instruction. Purely informational: the UI uses it to
+   * explain why the effort picker may not visibly change anything.
+   */
+  readonly adaptiveThinking?: boolean;
 }
 
 /**

@@ -75,6 +75,7 @@ import {
   validateProfilesList,
   validateProfilesUpdate,
   validateProvidersList,
+  validateProvidersModels,
   validateRunsDispose,
   validateRunsInterrupt,
   validateRunsList,
@@ -208,6 +209,38 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async (request) => ({
         providers: await engine.require().listProviders({ refresh: request.refresh }),
       }),
+    },
+
+    /**
+     * The one handler in this file that deliberately swallows its failure.
+     *
+     * Everywhere else, a fault becomes an `IpcFail` and the UI says so. Here
+     * the UI cannot usefully say anything: the caller is a model picker, and
+     * "Libra could not read your model list" leaves the user staring at an
+     * empty menu with no way to change a setting. The engine already resolves
+     * the adapter's built-in list for every ordinary failure — no CLI, no
+     * credential, no network — so the only thing left to catch is the engine
+     * itself being down, and an empty list is the truthful answer to that.
+     *
+     * `live: false` is what keeps this from being a lie. It is the difference
+     * between the renderer showing a catalogue and the renderer showing a
+     * catalogue it knows the account never confirmed, which the settings
+     * screen labels.
+     */
+    [IPC.providersModels]: {
+      validate: validateProvidersModels,
+      handle: async (request) => {
+        try {
+          return await engine.require().listProviderModels({
+            providerId: request.providerId,
+            profileId: request.profileId,
+            ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+          });
+        } catch (error) {
+          log.error(`Could not read the model list for provider "${request.providerId}"`, error);
+          return { models: [], live: false };
+        }
+      },
     },
 
     /* ---------------------------------------------------------------- */

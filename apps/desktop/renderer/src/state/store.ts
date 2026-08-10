@@ -61,6 +61,30 @@ export const transcript = new TranscriptModel();
 
 export type Screen = 'chat' | 'profiles';
 
+/**
+ * Which pane of the settings surface is showing.
+ *
+ * Deliberately *not* folded into {@link Screen}. `screen` stays
+ * `'chat' | 'profiles'` — where `'profiles'` has come to mean "settings is
+ * open" rather than "the profiles screen is open" — because every existing
+ * `setScreen('profiles')` call site is a correct request to open settings, and
+ * renaming the value would have churned files owned by four different people
+ * for no behavioural gain. The section is the second axis: `screen` says
+ * whether settings is up, this says what it is showing.
+ */
+export type SettingsSection = 'profiles' | 'models' | 'appearance' | 'permissions';
+
+/**
+ * How wide the transcript column is allowed to grow.
+ *
+ * A named set rather than a number, because the three values are not just
+ * sizes — they are different reading modes (a measure tuned for prose, a
+ * measure tuned for diffs, and "use the window"), and each maps to a Tailwind
+ * max-width class. A free number would put an arbitrary value in front of a
+ * class-name lookup, which is exactly the read that has to be validated.
+ */
+export type ConversationWidth = 'comfortable' | 'wide' | 'full';
+
 /** Renderer-side view of the live run. Mirrors `RunHandle` plus stream facts. */
 export interface RunState {
   readonly runId: RunId;
@@ -117,6 +141,47 @@ export interface AppState {
   readonly resumeSessionId: SessionId | null;
 
   /**
+   * The model catalogue the *account* actually offers, or `[]` before one has
+   * been fetched.
+   *
+   * Separate from the provider descriptor's static `models` because the two
+   * answer different questions: the descriptor says what this build of Libra
+   * knows about, this says what the installed CLI, signed in as this profile,
+   * is willing to run. {@link activeModels} prefers this and falls back to the
+   * descriptor, so no caller has to know which one it got.
+   *
+   * Never persisted. A catalogue is a fact about a remote account at a moment
+   * in time; caching one across restarts would show models an expired
+   * subscription no longer has.
+   */
+  readonly models: readonly ProviderModelOption[];
+  readonly modelsLoading: boolean;
+  /**
+   * Why the last catalogue fetch failed, or `null`.
+   *
+   * Set *alongside* whatever catalogue is already loaded rather than instead of
+   * it — see {@link refreshModels}. The UI shows this as a note on a list that
+   * is still there, not as an empty state.
+   */
+  readonly modelsError: string | null;
+  /**
+   * Model ids the user pinned to the status-line picker, in no particular
+   * order — display order comes from the catalogue, not from this.
+   *
+   * Empty means "not curated", which {@link quickModels} renders as the whole
+   * catalogue. That is not the same as "pinned nothing": a user who has never
+   * opened settings must still get a usable picker, so there is no way to
+   * express an intentionally empty quick list and no need for one.
+   */
+  readonly quickModelIds: readonly string[];
+  /** Ask the next run to trade reasoning depth for latency, where supported. */
+  readonly fastMode: boolean;
+  /** Ask the next run to spend materially more compute, where supported. */
+  readonly ultracode: boolean;
+  /** How wide the transcript column may grow. */
+  readonly conversationWidth: ConversationWidth;
+
+  /**
    * Every session the listing returned, ungrouped and unsorted.
    *
    * Spans every project directory when the aggregated listing channel exists —
@@ -142,6 +207,14 @@ export interface AppState {
   readonly banners: readonly Banner[];
 
   readonly screen: Screen;
+  /**
+   * The settings pane to show while `screen === 'profiles'`.
+   *
+   * Persisted, so reopening settings lands where the user left it. Kept
+   * meaningful even when settings is closed — the value is a *preference*, not
+   * a transient — which is why it is not reset by {@link closeSettings}.
+   */
+  readonly settingsSection: SettingsSection;
   /** Whether the ⌘K command palette is open. */
   readonly paletteOpen: boolean;
   /** Whether the run/capability inspector dialog is open. */
@@ -182,6 +255,18 @@ export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
 }
 
+/** The default reading width, and the fallback for a value that fails validation. */
+export const DEFAULT_CONVERSATION_WIDTH: ConversationWidth = 'comfortable';
+
+const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'profiles',
+  'models',
+  'appearance',
+  'permissions',
+];
+
+const CONVERSATION_WIDTHS: readonly ConversationWidth[] = ['comfortable', 'wide', 'full'];
+
 interface Prefs {
   cwd?: string;
   activeProfileId?: string | null;
@@ -191,15 +276,76 @@ interface Prefs {
   effort?: string | null;
   sidebarCollapsed?: boolean;
   sidebarWidth?: number;
+  settingsSection?: SettingsSection;
+  quickModelIds?: readonly string[];
+  fastMode?: boolean;
+  ultracode?: boolean;
+  conversationWidth?: ConversationWidth;
+}
+
+/**
+ * Coerce one persisted value to a member of a known set, or `undefined`.
+ *
+ * Prefs are a JSON blob in localStorage: a hand edit, a downgrade to an older
+ * build, or a half-written record all produce values that satisfy the `Prefs`
+ * type only because `JSON.parse` was cast. `conversationWidth` in particular
+ * reaches a Tailwind class-name lookup, so `"banana"` getting that far would
+ * render an unstyled column rather than throw — a bug nobody would trace back
+ * to a preferences file. Everything read out of the blob that is not a free
+ * string goes through a guard.
+ */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
+}
+
+function boolOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/** Keep only the string members, so one corrupt entry does not void the list. */
+function stringList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === 'string');
 }
 
 function loadPrefs(): Prefs {
+  let raw: Record<string, unknown>;
   try {
-    const raw = globalThis.localStorage?.getItem(PREFS_KEY);
-    return raw ? (JSON.parse(raw) as Prefs) : {};
+    const text = globalThis.localStorage?.getItem(PREFS_KEY);
+    if (!text) return {};
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    raw = parsed as Record<string, unknown>;
   } catch {
     return {};
   }
+
+  // The older fields keep their historical treatment: each is resolved against
+  // live data at the point of use — `model` and `effort` against the
+  // descriptor, `activeProfileId` against the profile list, `sidebarWidth`
+  // through `clampSidebarWidth` — so a bad value there is already inert. The
+  // fields added below have no such second gate, which is why they get one
+  // here.
+  const fastMode = boolOrUndefined(raw['fastMode']);
+  const ultracode = boolOrUndefined(raw['ultracode']);
+
+  return {
+    ...(raw as Prefs),
+    settingsSection: oneOf(raw['settingsSection'], SETTINGS_SECTIONS),
+    quickModelIds: stringList(raw['quickModelIds']),
+    // `setFastMode` / `setUltracode` keep these mutually exclusive, but that
+    // only governs values this build writes. A file left behind by a build
+    // whose exclusion lived in the controls, or one edited by hand, can carry
+    // both — and a contradiction restored at boot is indistinguishable to the
+    // user from one the app created. Ultracode wins arbitrarily; what matters
+    // is that the pair is coerced to something coherent before anything reads
+    // it, not which side of a request the user cannot remember making is kept.
+    fastMode: fastMode === true && ultracode === true ? false : fastMode,
+    ultracode,
+    conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
+  };
 }
 
 function savePrefs(): void {
@@ -213,6 +359,11 @@ function savePrefs(): void {
     effort: s.effort,
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
+    settingsSection: s.settingsSection,
+    quickModelIds: s.quickModelIds,
+    fastMode: s.fastMode,
+    ultracode: s.ultracode,
+    conversationWidth: s.conversationWidth,
   };
   try {
     globalThis.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -241,6 +392,14 @@ export const useApp = create<AppState>(() => ({
   forkOnResume: false,
   resumeSessionId: null,
 
+  models: [],
+  modelsLoading: false,
+  modelsError: null,
+  quickModelIds: prefs.quickModelIds ?? [],
+  fastMode: prefs.fastMode ?? false,
+  ultracode: prefs.ultracode ?? false,
+  conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
+
   sessions: [],
   sessionsScope: 'all',
   sessionsLoading: false,
@@ -251,6 +410,7 @@ export const useApp = create<AppState>(() => ({
   banners: [],
 
   screen: 'chat',
+  settingsSection: prefs.settingsSection ?? 'profiles',
   paletteOpen: false,
   infoOpen: false,
   promptHistory: [],
@@ -308,12 +468,89 @@ const NO_OPTIONS: readonly never[] = Object.freeze([]);
 /**
  * Models the active provider offers.
  *
- * Empty means "no model choice", which the picker renders as a disabled
- * segment with that as its reason rather than as an empty menu — the same rule
- * every other capability-driven control follows.
+ * Prefers the live catalogue the account actually reported and falls back to
+ * the descriptor's built-in list. That order is the point of the whole
+ * catalogue path: the built-in list is a hand-maintained guess that goes stale
+ * the moment the provider ships a model, so it is the *fallback*, never the
+ * answer when a better one exists.
+ *
+ * The emptiness check is on `state.models` rather than a `live` flag because a
+ * fetch that succeeded and returned nothing is indistinguishable from one that
+ * never happened, and in both cases the descriptor is the better list to show.
+ *
+ * Empty after both means "no model choice", which the picker renders as a
+ * disabled segment with that as its reason rather than as an empty menu — the
+ * same rule every other capability-driven control follows.
  */
 export function activeModels(state: AppState): readonly ProviderModelOption[] {
+  if (state.models.length > 0) return state.models;
   return activeProvider(state)?.models ?? NO_OPTIONS;
+}
+
+/**
+ * The catalogue narrowed to the user's pinned models, in catalogue order.
+ *
+ * Memoised on the identity of its two inputs, and that is not an optimisation.
+ * This is read through `useApp(selector)`, which decides whether to re-render
+ * by comparing the result to the last one by identity; a `filter` returns a
+ * fresh array every call, so an unmemoised version would report a change on
+ * every store read and React would loop until it hit its update-depth ceiling.
+ * Same hazard the {@link NO_OPTIONS} note describes, one level up.
+ */
+let quickCatalogue: readonly ProviderModelOption[] | null = null;
+let quickIds: readonly string[] | null = null;
+let quickResult: readonly ProviderModelOption[] = NO_OPTIONS;
+
+export function quickModels(state: AppState): readonly ProviderModelOption[] {
+  const catalogue = activeModels(state);
+  const ids = state.quickModelIds;
+  if (catalogue === quickCatalogue && ids === quickIds) return quickResult;
+
+  // No picks means "not curated", not "picked nothing" — a user who has never
+  // opened settings still needs a usable picker, so the whole catalogue stands
+  // in. Filtering to nothing would leave the status line with a menu that opens
+  // onto an empty list and no way to fix it from there.
+  const next = ids.length === 0 ? catalogue : catalogue.filter((m) => ids.includes(m.id));
+
+  quickCatalogue = catalogue;
+  quickIds = ids;
+  // A pinned set that matches nothing in the current catalogue (the ids came
+  // from another provider, or the models were withdrawn) falls back the same
+  // way an uncurated one does, for the same reason.
+  quickResult = next.length === 0 ? catalogue : next;
+  return quickResult;
+}
+
+/**
+ * The catalogue entry for the selected model, or `undefined` for "provider
+ * default".
+ *
+ * A second name for {@link activeModel}, kept because the two are asked
+ * different questions: `activeModel` is "what will the next run use", this is
+ * "what is the settings UI describing". They resolve identically today and are
+ * expected to stay that way; the alias exists so a caller reading model
+ * *properties* does not read as if it were about to start a run.
+ */
+export function selectedModelOption(state: AppState): ProviderModelOption | undefined {
+  return activeModel(state);
+}
+
+/**
+ * Whether the fast-mode toggle should be offered at all.
+ *
+ * False when no model is explicitly selected, and that is deliberate rather
+ * than conservative-by-accident: with the provider default in force Libra does
+ * not know which model will run, so it cannot know whether the flag would be
+ * honoured. An enabled toggle that the run silently ignores is worse than a
+ * disabled one with a reason attached — the user believes it took effect.
+ */
+export function fastModeAvailable(state: AppState): boolean {
+  return selectedModelOption(state)?.supportsFastMode === true;
+}
+
+/** The same question for ultracode. Separate flag, separate answer. */
+export function ultracodeAvailable(state: AppState): boolean {
+  return selectedModelOption(state)?.supportsUltracode === true;
 }
 
 /** Reasoning-effort levels the active provider offers, least to most. */
@@ -433,6 +670,12 @@ export async function bootstrap(): Promise<void> {
   await adoptExistingRun();
   await refreshSessions();
   useApp.setState({ booted: true });
+
+  // Deliberately after `booted`, and deliberately not awaited. Fetching the
+  // catalogue spawns a provider subprocess; blocking the first paint on it
+  // would trade a working window for a slightly better-labelled model picker,
+  // and the picker has the descriptor's list to render in the meantime.
+  void refreshModels();
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -471,6 +714,77 @@ export async function refreshProfiles(): Promise<void> {
         : (profiles.find((p) => p.providerId === s.activeProviderId)?.id ?? profiles[0]?.id ?? null),
   }));
   savePrefs();
+}
+
+/**
+ * Guards against an out-of-order catalogue response.
+ *
+ * The fetch spawns a provider subprocess, so it is slow enough that a user can
+ * switch profile twice before the first answer lands. Without a token the
+ * slower reply wins by arriving last and the picker ends up showing an account
+ * the user is no longer signed in as — the same staleness `loadSessionHistory`
+ * guards against, with a counter instead of an id because there is no id here.
+ */
+let modelsRequestToken = 0;
+
+/**
+ * Fetch the model catalogue for the active provider and profile.
+ *
+ * Never throws and never leaves `modelsLoading` set. The failure path
+ * deliberately keeps whatever catalogue is already loaded: this runs on every
+ * profile switch, and a transient failure that emptied the list would take the
+ * model picker away from under the user's cursor and replace it with a
+ * "no models" state that is not true.
+ */
+export async function refreshModels(): Promise<void> {
+  const { bridge } = resolveBridge();
+  const state = useApp.getState();
+
+  // No profile means no credential, and the catalogue is a property of the
+  // account rather than of the binary — there is nothing to authenticate as, so
+  // there is nothing to ask. The descriptor's built-in list stands until a
+  // profile exists.
+  const profileId = state.activeProfileId;
+  if (!bridge || !profileId) return;
+
+  const token = ++modelsRequestToken;
+  useApp.setState({ modelsLoading: true, modelsError: null });
+
+  try {
+    const result = await call(() =>
+      bridge.providers.models({
+        providerId: state.activeProviderId,
+        profileId,
+        ...(state.cwd.trim().length > 0 ? { cwd: state.cwd } : {}),
+      }),
+    );
+
+    if (token !== modelsRequestToken) return;
+
+    if (!result.ok) {
+      // Not a banner. The picker still has a list to render — either a stale
+      // live one or the descriptor's — so this is a footnote on a working
+      // control, not an error the user has to dismiss.
+      useApp.setState({ modelsError: result.error.message });
+      return;
+    }
+
+    // `live: false` is the handler saying "this is the built-in list, nobody
+    // confirmed it". Storing it anyway would make `activeModels` prefer a copy
+    // of the descriptor over the descriptor, which is harmless but makes
+    // "did the account answer?" unanswerable downstream. So only a confirmed
+    // catalogue is stored, and the fallback stays the descriptor's own list.
+    if (result.value.live) {
+      useApp.setState({ models: result.value.models, modelsError: null });
+    } else {
+      useApp.setState({ modelsError: null });
+    }
+  } finally {
+    // In a `finally` because an early `return` above still has to clear the
+    // spinner; only the newest request owns it, or a superseded reply would
+    // stop the indicator for a fetch that is still running.
+    if (token === modelsRequestToken) useApp.setState({ modelsLoading: false });
+  }
 }
 
 /** Re-attach to a run the main process still considers live after a reload. */
@@ -515,15 +829,27 @@ export function setProvider(providerId: ProviderId): void {
         ? s.activeProfileId
         : (s.profiles.find((p) => p.providerId === providerId)?.id ?? null),
     sessions: [],
+    // Cleared, unlike on a profile switch: a catalogue belongs to a provider,
+    // and leaving the old one loaded would have `activeModels` hand the new
+    // provider's picker a list of models it cannot run. The descriptor's own
+    // list covers the gap until the fetch lands.
+    models: [],
+    modelsError: null,
   }));
   savePrefs();
   void refreshSessions();
+  void refreshModels();
 }
 
 export function setProfile(profileId: ProfileId): void {
   useApp.setState({ activeProfileId: profileId });
   savePrefs();
   void refreshSessions();
+  // The catalogue is not cleared first. The provider is the same, so the loaded
+  // list is still the right shape of answer and is very likely the same one;
+  // showing it until the new account replies beats flashing the picker back to
+  // the built-in list and forward again.
+  void refreshModels();
 }
 
 export function setCwd(cwd: string): void {
@@ -589,6 +915,113 @@ export function setForkOnResume(fork: boolean): void {
 
 export function setScreen(screen: Screen): void {
   useApp.setState({ screen, paletteOpen: false });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Settings                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Open the settings surface, optionally on a specific pane.
+ *
+ * Omitting the section reopens wherever the user was last, which is the right
+ * default for the generic "⌘, / gear" entry points. Passing one is for the
+ * deep links — "manage models" under the model picker, "permissions" from a
+ * denied tool call — where the whole point of the click was a destination.
+ */
+export function openSettings(section?: SettingsSection): void {
+  useApp.setState({
+    screen: 'profiles',
+    paletteOpen: false,
+    ...(section === undefined ? {} : { settingsSection: section }),
+  });
+  savePrefs();
+}
+
+/** Close settings and go back to the conversation. */
+export function closeSettings(): void {
+  // `settingsSection` is left alone on purpose: it is a preference for where to
+  // land next time, not a piece of the open dialog's state.
+  useApp.setState({ screen: 'chat' });
+}
+
+export function setSettingsSection(section: SettingsSection): void {
+  useApp.setState({ settingsSection: section });
+  savePrefs();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Model preferences                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pin or unpin one model from the status-line picker.
+ *
+ * Stores the id rather than the option, for the same reason {@link AppState.model}
+ * does: the list is persisted and survives provider switches and catalogue
+ * changes, where the option object may no longer exist. Ids that match nothing
+ * are simply filtered out at read time — see {@link quickModels} — so there is
+ * no cleanup pass and no way for a stale pin to break the picker.
+ */
+export function toggleQuickModel(id: string): void {
+  useApp.setState((s) => ({
+    quickModelIds: s.quickModelIds.includes(id)
+      ? s.quickModelIds.filter((existing) => existing !== id)
+      : [...s.quickModelIds, id],
+  }));
+  savePrefs();
+}
+
+/** Replace the whole pinned set — for a settings pane that edits it as a list. */
+export function setQuickModels(ids: readonly string[]): void {
+  useApp.setState({ quickModelIds: [...ids] });
+  savePrefs();
+}
+
+/**
+ * Turn fast mode on or off for the next run.
+ *
+ * Stored unconditionally, even when the selected model does not support it.
+ * The flag is a standing preference and the model is not — a user who enables
+ * fast mode, switches to a model without it and switches back should find it
+ * still on. {@link fastModeAvailable} gates the *control*, and
+ * {@link submitPrompt} gates what is actually sent; neither erases the choice.
+ *
+ * ## Turning this on turns ultracode off, here rather than in the controls
+ *
+ * Fast mode buys latency by spending depth; ultracode does the exact reverse.
+ * Asking for both is not a stronger request, it is a contradiction, and the
+ * only thing an adapter can do with it is pick one silently — after which the
+ * status line is reporting a setting the run did not use.
+ *
+ * The exclusion lives in the *action* because that is the only place it cannot
+ * be bypassed. It was briefly implemented as a wrapper next to the status-line
+ * toggles instead, on the reasoning that the exclusion is a property of how
+ * that pair of controls behaves rather than of either setting, and that a
+ * settings pane editing defaults as a form might legitimately want to set one
+ * without disturbing the other. That is exactly what went wrong: the settings
+ * pane called the plain setters, and the app happily reached a state with both
+ * flags on and the bar advertising both. An invariant that each new surface has
+ * to remember to opt into is not an invariant.
+ */
+export function setFastMode(on: boolean): void {
+  useApp.setState(on ? { fastMode: true, ultracode: false } : { fastMode: false });
+  savePrefs();
+}
+
+/** The same, for ultracode. @see setFastMode for why the two are exclusive. */
+export function setUltracode(on: boolean): void {
+  useApp.setState(on ? { ultracode: true, fastMode: false } : { ultracode: false });
+  savePrefs();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Appearance                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export function setConversationWidth(width: ConversationWidth): void {
+  useApp.setState({ conversationWidth: width });
+  savePrefs();
 }
 
 export function setPalette(open: boolean): void {
@@ -708,6 +1141,10 @@ export function resumeSession(session: SessionSummary): void {
     forkOnResume: false,
     permissionQueue: [],
     paletteOpen: false,
+    // Same rule as `setProvider`: a catalogue belongs to a provider, so
+    // landing on a different one has to drop it rather than show the previous
+    // provider's models under the new one's name.
+    ...(state.activeProviderId === session.providerId ? {} : { models: [], modelsError: null }),
   });
   savePrefs();
 
@@ -726,6 +1163,7 @@ export function resumeSession(session: SessionSummary): void {
 
   void loadSessionHistory(session);
   void refreshSessions();
+  void refreshModels();
 }
 
 /**
@@ -875,6 +1313,18 @@ export async function submitPrompt(text: string): Promise<void> {
   const model = activeModel(state);
   const effort = activeEffort(state);
 
+  // The same rule one level down, applied per *model* rather than per provider.
+  // `fastMode` and `ultracode` are persisted standing preferences, so either can
+  // be on while the currently selected model does not accept it — and a model
+  // that does not accept a flag ignores it silently rather than rejecting it.
+  // Sending one anyway is precisely the failure `fastModeAvailable` /
+  // `ultracodeAvailable` exist to keep off the screen, so the send is gated on
+  // the same fact the toggles are. When a model *does* support the flag the
+  // value is forwarded either way, including `false`: with the toggle visible,
+  // off is a choice the user made, not an absence of one.
+  const supportsFast = model?.supportsFastMode === true;
+  const supportsUltra = model?.supportsUltracode === true;
+
   const input: RunInput = {
     providerId: state.activeProviderId,
     profileId: state.activeProfileId,
@@ -884,6 +1334,8 @@ export async function submitPrompt(text: string): Promise<void> {
     includePartialMessages: capabilities.partialMessages,
     ...(model ? { model: model.id } : {}),
     ...(effort ? { effort: effort.id } : {}),
+    ...(supportsFast ? { fastMode: state.fastMode } : {}),
+    ...(supportsUltra ? { ultracode: state.ultracode } : {}),
     ...(capabilities.permissionModes.includes(state.permissionMode)
       ? { permissionMode: state.permissionMode }
       : {}),
@@ -1082,6 +1534,10 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
   await refreshProfiles();
   useApp.setState({ activeProfileId: result.value.profile.id });
   savePrefs();
+  // A new profile is a new account, and the catalogue is a property of the
+  // account — the freshly created one may well be the first that can answer at
+  // all, since `refreshModels` no-ops without a profile.
+  void refreshModels();
   return true;
 }
 
