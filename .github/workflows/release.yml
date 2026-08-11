@@ -88,13 +88,17 @@ jobs:
         with:
           name: ${{ matrix.name }}
           if-no-files-found: error
+          # Only what someone or something consumes: dmg and setup.exe for
+          # people, zip for the mac updater's swap, latest-mac-*.yml as its
+          # feed. Blockmaps are electron-updater's differential-download index
+          # — our updater downloads whole archives and never reads them — and
+          # latest.yml is the Windows feed, which nothing consumes until a
+          # Windows updater exists.
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
-            apps/desktop/release/*.blockmap
-            apps/desktop/release/*.yml
-            !apps/desktop/release/builder-debug.yml
+            apps/desktop/release/latest-mac-*.yml
 
   publish:
     needs: build
