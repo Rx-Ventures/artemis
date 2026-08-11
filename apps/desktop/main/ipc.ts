@@ -56,7 +56,7 @@ import {
   type WorkspacePickDirectoryRequest,
 } from '@rx-apollo/protocol';
 
-import { checkWorkingDirectory } from '@rx-apollo/core';
+import { checkWorkingDirectory, describeWorkspace } from '@rx-apollo/core';
 
 import type { EngineHost } from './engine.js';
 import {
@@ -87,6 +87,7 @@ import {
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
+  validateWorkspaceDescribe,
   validateWorkspacePickDirectory,
 } from './validate.js';
 import { DIRECTORY_PICKER_PROPERTIES, readPickedDirectory } from './workspace.js';
@@ -311,6 +312,18 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async (request, context) => ({
         path: await pickDirectory(request, context.window),
       }),
+    },
+
+    /**
+     * Name a directory for the sidebar's header.
+     *
+     * Does not go through the engine: it reads the filesystem and needs no
+     * provider, no profile and no adapter, so routing it through the engine
+     * would make a label depend on a booted engine for no reason.
+     */
+    [IPC.workspaceDescribe]: {
+      validate: validateWorkspaceDescribe,
+      handle: async (request) => describeWorkspace(request.path),
     },
 
     [IPC.sessionsMessages]: {

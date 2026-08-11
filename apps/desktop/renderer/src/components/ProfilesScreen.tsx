@@ -49,11 +49,13 @@ import {
   CheckIcon,
   CopyIcon,
   FolderSearchIcon,
+  PaletteIcon,
   PlusIcon,
   Trash2Icon,
   TriangleAlertIcon,
+  XIcon,
 } from 'lucide-react';
-import { configDirProblem } from '@rx-apollo/protocol';
+import { configDirProblem, normalizeProfileColor, profileColorProblem } from '@rx-apollo/protocol';
 import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-apollo/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
@@ -68,7 +70,7 @@ import {
   useApp,
 } from '../state/store';
 import { IconButton, ReasonButton } from './disabled-reason';
-import { CodeBlock, ToneBadge } from './primitives';
+import { CodeBlock, ProfileSwatch, ToneBadge } from './primitives';
 import { SettingsPane } from './settings/pane';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -252,6 +254,7 @@ function ProfileCard({
     <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
+          <ProfileSwatch color={profile.color} className="size-2.5" />
           <span className="text-sm font-medium text-ink">{profile.label}</span>
           {active ? <ToneBadge tone="ember">active</ToneBadge> : null}
           {known ? (
@@ -509,6 +512,127 @@ function SignInStep({
 }
 
 /* -------------------------------------------------------------------------- */
+/* Colour                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Starting points for a profile that has no colour yet.
+ *
+ * Not a palette the user is confined to — the picker below is the OS's own and
+ * reaches all sixteen million — just somewhere to begin that is not black.
+ * Black is what an `<input type="color">` defaults to, and "pick a colour"
+ * opening on the one colour nobody wants is a small hostility.
+ *
+ * Six hues, far enough apart to stay distinguishable at 8px, and picked by a
+ * hash of the label so the same profile name always opens on the same colour.
+ * Deterministic rather than random because a suggestion that changed every time
+ * the form mounted would look like a bug.
+ */
+const COLOR_SUGGESTIONS: readonly string[] = [
+  '#7c8cff',
+  '#4fb286',
+  '#e0913a',
+  '#d2607a',
+  '#3fa9c9',
+  '#a071d8',
+];
+
+function suggestColor(label: string): string {
+  let hash = 0;
+  for (let i = 0; i < label.length; i += 1) hash = (hash * 31 + label.charCodeAt(i)) >>> 0;
+  return COLOR_SUGGESTIONS[hash % COLOR_SUGGESTIONS.length] as string;
+}
+
+/**
+ * Pick a colour, or none.
+ *
+ * Three states, because "no colour" is a real state and the ordinary one:
+ *
+ *  - **Unset** — a dashed button. Not a colour input showing some default,
+ *    which would render a profile with no colour identically to a profile
+ *    someone deliberately coloured periwinkle. Pressing it adopts a suggestion
+ *    and moves to the state below, where the real picker is.
+ *  - **Set** — the native `<input type="color">`, which is the OS's own picker
+ *    and therefore full RGB (and an eyedropper, and whatever else the platform
+ *    offers) for free, beside a hex field for anyone who has the value written
+ *    down somewhere. Neither is a shortlist of swatches: the point of letting a
+ *    user colour a profile is that *they* know which colour means "work".
+ *  - **Cleared** — the × next to it, which is the only way back to unset and
+ *    so is always present once a colour exists.
+ *
+ * The hex field holds the user's literal keystrokes, not the normalised value;
+ * normalising on every change would rewrite `#7c8` to `#77cc88` under a cursor
+ * that was two characters from finishing `#7c8cff`. It is normalised on submit
+ * and on blur into the colour input, which are the two moments the value is
+ * actually used.
+ */
+function ColorField({
+  value,
+  seed,
+  onChange,
+}: {
+  readonly value: string;
+  /** The profile's name, which the opening suggestion is derived from. */
+  readonly seed: string;
+  readonly onChange: (next: string) => void;
+}): ReactElement {
+  const normalized = normalizeProfileColor(value);
+
+  if (normalized === null && value.trim().length === 0) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0 gap-1.5 border-dashed text-2xs text-ink-muted"
+        onClick={() => onChange(suggestColor(seed))}
+      >
+        <PaletteIcon />
+        Colour
+      </Button>
+    );
+  }
+
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {/*
+        A bare `<input type="color">`, restyled. The browser draws it as an
+        inset swatch with a border of its own; the pseudo-element rules strip
+        that back to a plain square so it matches the swatch the sidebar
+        renders. It falls back to the suggestion when the typed hex is not yet
+        valid, because this element cannot display an invalid value — it would
+        silently show black and look like it had eaten the input.
+      */}
+      <input
+        type="color"
+        aria-label="Profile colour"
+        value={normalized ?? suggestColor(seed)}
+        onChange={(event) => onChange(event.target.value)}
+        className="size-8 shrink-0 cursor-pointer appearance-none rounded-md border border-line bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
+      />
+      <Input
+        value={value}
+        spellCheck={false}
+        autoComplete="off"
+        aria-label="Profile colour, as hex"
+        aria-invalid={normalized === null}
+        placeholder="#7c8cff"
+        onChange={(event) => onChange(event.target.value)}
+        className="w-24 shrink-0 font-mono text-xs md:text-xs"
+      />
+      <IconButton
+        label="Remove the colour"
+        size="icon-xs"
+        className="shrink-0 text-ink-faint"
+        onClick={() => onChange('')}
+      >
+        <XIcon />
+      </IconButton>
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Form                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -525,6 +649,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
 
   const [label, setLabel] = useState(profile?.label ?? '');
   const [configDir, setConfigDir] = useState(profile?.configDir ?? '');
+  const [color, setColor] = useState(profile?.color ?? '');
   const [envText, setEnvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -601,6 +726,15 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       return;
     }
 
+    // Refused rather than dropped. The store would discard an unparseable
+    // colour and save the rest, which would look to the user like the form had
+    // simply ignored a field they filled in.
+    const colorTrouble = profileColorProblem(color);
+    if (colorTrouble !== null) {
+      setError(colorTrouble);
+      return;
+    }
+
     const env = parseEnv();
     if (typeof env === 'string') {
       setError(env);
@@ -612,6 +746,10 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       const ok = await updateProfile(profile.id, {
         label: label.trim(),
         configDir: configDir.trim(),
+        // Always sent, empty string included: that is how a patch says "remove
+        // the colour", and omitting it when the user cleared the swatch would
+        // silently keep the old one. See `ProfilePatch.color`.
+        color: normalizeProfileColor(color) ?? '',
         ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
       });
       setBusy(false);
@@ -623,6 +761,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       label: label.trim(),
       providerId,
       configDir: configDir.trim(),
+      ...(normalizeProfileColor(color) === null ? {} : { color }),
       ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
     });
     setBusy(false);
@@ -650,15 +789,23 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
               <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">
                 Name
               </FieldLabel>
-              <Input
-                id="profile-label"
-                value={label}
-                placeholder="Work"
-                autoComplete="off"
-                autoFocus={!editing}
-                onChange={(event) => setLabel(event.target.value)}
-                className="text-xs md:text-xs"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  id="profile-label"
+                  value={label}
+                  placeholder="Work"
+                  autoComplete="off"
+                  autoFocus={!editing}
+                  onChange={(event) => setLabel(event.target.value)}
+                  className="min-w-0 flex-1 text-xs md:text-xs"
+                />
+                <ColorField value={color} seed={label} onChange={setColor} />
+              </div>
+              <FieldDescription className="text-2xs">
+                The colour is optional. Give one and it appears as a small square wherever this
+                profile is named — the session list, the profile picker — which is how you tell at a
+                glance which account the next prompt will bill.
+              </FieldDescription>
             </Field>
 
             <Field>

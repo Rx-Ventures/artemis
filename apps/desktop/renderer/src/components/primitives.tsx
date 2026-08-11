@@ -133,6 +133,52 @@ export function StatusDot({ tone = 'neutral', pulse = false, className }: Status
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* ProfileSwatch                                                              */
+/* -------------------------------------------------------------------------- */
+
+export interface ProfileSwatchProps {
+  /** `#rrggbb`, or absent. Absent renders nothing at all. */
+  readonly color: string | undefined;
+  readonly className?: string;
+}
+
+/**
+ * The little square that says which profile this is.
+ *
+ * Deliberately *not* a {@link StatusDot} with a colour prop. A status dot draws
+ * from the semantic palette, where each hue is a meaning — signal is a denial,
+ * amber is a warning — and a user-chosen colour has no meaning in that
+ * vocabulary. Rendering an arbitrary red next to a session row through the same
+ * component that renders "this was denied" would make one look like the other.
+ * A square rather than a circle, for the same reason: the shape itself says
+ * "swatch, not state".
+ *
+ * Renders `null` without a colour, which is the ordinary case — a profile has
+ * no colour unless someone picked one — so every call site can pass
+ * `profile?.color` and get correct layout either way rather than reserving a
+ * gap for a swatch that is not there.
+ *
+ * Decorative. The colour is never the only thing distinguishing two profiles:
+ * the label is always beside it, which is what a screen reader reads and what
+ * anyone who cannot tell the two hues apart reads too.
+ */
+export function ProfileSwatch({ color, className }: ProfileSwatchProps): ReactElement | null {
+  if (!color) return null;
+  return (
+    <span
+      aria-hidden="true"
+      style={{ backgroundColor: color }}
+      className={cn(
+        // A hairline ring, because a dark swatch on the dark panel and a pale
+        // one on the light theme both otherwise dissolve into the background.
+        'inline-block size-2 shrink-0 rounded-[3px] ring-1 ring-foreground/15',
+        className,
+      )}
+    />
+  );
+}
+
 /*
  * REMOVED: `PaneHeader`.
  *

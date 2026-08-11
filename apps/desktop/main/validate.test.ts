@@ -125,6 +125,31 @@ describe('validateProfilesCreate', () => {
     ).toThrow(ValidationError);
   });
 
+  it('normalises a colour, and rejects one that is not hex', () => {
+    const result = validateProfilesCreate({
+      draft: {
+        label: 'Work',
+        providerId: 'claude',
+        configDir: '/Users/me/.claude',
+        color: '#ABC',
+      },
+    });
+    expect(result.draft.color).toBe('#aabbcc');
+
+    // Rejected rather than dropped: silently discarding it would show the user
+    // a colour they picked and save a profile without it.
+    expect(() =>
+      validateProfilesCreate({
+        draft: {
+          label: 'Work',
+          providerId: 'claude',
+          configDir: '/Users/me/.claude',
+          color: 'url(javascript:alert(1))',
+        },
+      }),
+    ).toThrow(ValidationError);
+  });
+
   it('rejects a credential hiding in publicEnv', () => {
     // `publicEnv` is persisted unencrypted, so this has to fail before it is
     // written anywhere.
@@ -217,6 +242,16 @@ describe('validateProfilesUpdate', () => {
     expect(() => validateProfilesUpdate({ id: 'p1', patch: { configDir: 'relative' } })).toThrow(
       ValidationError,
     );
+  });
+
+  it('keeps an empty colour as the empty string, which is how a patch clears it', () => {
+    // Coercing it to `undefined` here would turn "remove the colour" into
+    // "leave it alone", and the swatch would come back after every save.
+    const cleared = validateProfilesUpdate({ id: 'p1', patch: { color: '' } });
+    expect(cleared.patch.color).toBe('');
+
+    const untouched = validateProfilesUpdate({ id: 'p1', patch: { label: 'Renamed' } });
+    expect('color' in untouched.patch).toBe(false);
   });
 });
 

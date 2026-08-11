@@ -1,8 +1,9 @@
 /**
- * The two bridge calls the sidebar is built on.
+ * The three bridge calls the sidebar is built on.
  * ============================================================================
  *
- * Both arrived with this layout and both are now first-class on `ApolloBridge`:
+ * All three arrived with this layout and all three are first-class on
+ * `ApolloBridge`:
  *
  *  - `sessions.listAll` — every profile's history, in every project it has run
  *    in, in one call. The sidebar groups by `cwd` and labels by `profileId`,
@@ -10,8 +11,10 @@
  *  - `workspace.pickDirectory` — the OS's own folder chooser, so "set working
  *    directory" is not a typed path that fails as an `ENOENT` from `spawn`
  *    twenty seconds later.
+ *  - `workspace.describe` — what the directory is *called*, which for anyone
+ *    working in a repository is the repository's name and not the folder's.
  *
- * This module exists because neither call is used raw. Each has one behaviour
+ * This module exists because none of them is used raw. Each has one behaviour
  * the call sites must not get wrong, and putting that behaviour here means it
  * is written once:
  *
@@ -29,6 +32,13 @@
  * `pickDirectory` resolves `{ ok: true, value: { path: null } }` when the user
  * closes the dialog. Reading that as a failure would flash an error every time
  * someone changed their mind, so cancellation gets its own status and no copy.
+ *
+ * ## `describe` has no failure the UI needs to hear about
+ *
+ * Every unhappy path collapses to `null`, because its caller already has a
+ * perfectly good answer without it — the last segment of the path. A header
+ * that said "could not determine repository" would be a worse label than the
+ * folder name it replaced.
  */
 
 import type { ProfileId, ProviderId, SessionSummary } from '@rx-apollo/protocol';
@@ -170,4 +180,45 @@ export async function pickDirectory(defaultPath: string): Promise<DirectoryChoic
 
   const path = result.value.path;
   return path === null ? { status: 'cancelled' } : { status: 'chosen', path };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Naming the working directory                                               */
+/* -------------------------------------------------------------------------- */
+
+/** What to call a directory, as far as the renderer can be told. */
+export interface WorkspaceNames {
+  /** The directory's own name — its last path segment. */
+  readonly name: string;
+  /** The repository's name, when the directory is inside one. */
+  readonly repoName?: string;
+  /** Absolute path to that repository's root. */
+  readonly repoRoot?: string;
+}
+
+/**
+ * Ask what a directory is called.
+ *
+ * Returns `null` for every unhappy path — an empty cwd, a build with no
+ * `describe` channel, a rejected call — because there is exactly one caller and
+ * it has a good answer for "unknown": the last segment of the path, which is
+ * what the sidebar showed before this channel existed. A repository name is an
+ * improvement on that, never a prerequisite for rendering.
+ *
+ * Deliberately the third `lib/extensions` entry rather than a store action:
+ * like the other two, it is feature-detected because a packaged build's preload
+ * can be older than the renderer talking to it.
+ */
+export async function describeWorkspace(path: string): Promise<WorkspaceNames | null> {
+  const trimmed = path.trim();
+  if (trimmed.length === 0) return null;
+
+  const { bridge } = resolveBridge();
+  if (typeof bridge?.workspace?.describe !== 'function') return null;
+
+  const result = await call(() => bridge.workspace.describe({ path: trimmed }));
+  if (!result.ok) return null;
+
+  const { name, repoName, repoRoot } = result.value;
+  return { name, repoName, repoRoot };
 }

@@ -34,6 +34,8 @@ import {
   isProviderEffort,
   isProviderId,
   isSecretEnvKey,
+  normalizeProfileColor,
+  profileColorProblem,
   type JsonObject,
   type JsonValue,
   type PermissionDecision,
@@ -62,6 +64,7 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
 } from '@rx-apollo/protocol';
 
@@ -493,7 +496,28 @@ function validateProfileDraft(value: unknown, field: string): ProfileDraft {
     providerId,
     configDir: requireConfigDir(draft['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(draft['publicEnv'], `${field}.publicEnv`),
+    color: optionalColor(draft['color'], `${field}.color`),
   });
+}
+
+/**
+ * Validate a swatch colour, normalised to `#rrggbb`.
+ *
+ * A rejection rather than a silent drop, even though the store would drop it
+ * anyway and nothing breaks either way. This boundary's job is to say what the
+ * renderer got wrong; quietly discarding a field would show the user a colour
+ * they picked, save a profile without it, and give them nothing to go on.
+ *
+ * The empty string survives as the empty string — that is `ProfilePatch`'s way
+ * of clearing a colour, and turning it into `undefined` here would silently
+ * change "remove the colour" into "leave it alone".
+ */
+function optionalColor(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string' && value.trim().length === 0) return '';
+  const problem = profileColorProblem(value);
+  if (problem !== null) throw new ValidationError(field, problem);
+  return normalizeProfileColor(value) ?? undefined;
 }
 
 /**
@@ -525,6 +549,7 @@ function validateProfilePatch(value: unknown, field: string): ProfilePatch {
     label: optionalString(patch['label'], `${field}.label`, LIMITS.label),
     configDir: optionalConfigDir(patch['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(patch['publicEnv'], `${field}.publicEnv`),
+    color: optionalColor(patch['color'], `${field}.color`),
   });
 }
 
@@ -781,6 +806,12 @@ export function validateWorkspacePickDirectory(raw: unknown): WorkspacePickDirec
   return compact<WorkspacePickDirectoryRequest>({
     defaultPath: optionalAbsolutePath(request['defaultPath'], 'defaultPath'),
   });
+}
+
+/** Naming a directory. Absolute, because there is nothing to resolve against. */
+export function validateWorkspaceDescribe(raw: unknown): WorkspaceDescribeRequest {
+  const request = requireRequest(raw);
+  return { path: requireAbsolutePath(request['path'], 'path') };
 }
 
 /** Opening a stored session: which profile, which session, which run to stamp. */
