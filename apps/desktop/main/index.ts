@@ -20,7 +20,7 @@
  * the user what is wrong — an app that refuses to launch cannot explain itself.
  */
 
-import { existsSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -271,7 +271,12 @@ async function bootstrap(): Promise<void> {
     log.error('Could not create the profiles directory', error);
   });
 
-  await engineHost.start({ userDataDir, appVersion: app.getVersion() });
+  const sdkExecutablePath = bundledSdkExecutablePath();
+  await engineHost.start({
+    userDataDir,
+    appVersion: app.getVersion(),
+    ...(sdkExecutablePath === undefined ? {} : { sdkExecutablePath }),
+  });
 
   // The updater exists before the IPC layer because the layer's handlers
   // close over it; it *starts* after the window exists so its first push has
@@ -299,6 +304,41 @@ async function bootstrap(): Promise<void> {
     // macOS: clicking the dock icon with no windows open should reopen one.
     if (BrowserWindow.getAllWindows().length === 0) createWindow(policy);
   });
+}
+
+/**
+ * The Claude Agent SDK's bundled CLI binary, at its real on-disk path.
+ *
+ * The SDK resolves its platform package relative to its own module, which in
+ * a packaged app is a virtual `app.asar/...` path — readable through
+ * Electron's patched `fs`, but not spawnable: `child_process.spawn` is not
+ * patched, so the raw syscall hits `app.asar` (a file) as a path component
+ * and fails with `ENOTDIR`. Both the SDK and its platform package are shipped
+ * under `app.asar.unpacked` (see `asarUnpack` in electron-builder.yml); this
+ * finds the binary there so the engine can hand the SDK a path that exists on
+ * the actual filesystem.
+ *
+ * Returns undefined in dev (no asar; the SDK's own resolution is correct) and
+ * when the binary is missing (the SDK then fails with its own message, which
+ * names the real problem instead of a misleading ENOTDIR).
+ */
+function bundledSdkExecutablePath(): string | undefined {
+  if (!app.isPackaged) return undefined;
+  const packageDir = join(
+    process.resourcesPath,
+    'app.asar.unpacked',
+    'node_modules',
+    '@anthropic-ai',
+    `claude-agent-sdk-${process.platform}-${process.arch}`,
+  );
+  try {
+    const binary = readdirSync(packageDir).find(
+      (name) => name === 'claude' || name === 'claude.exe',
+    );
+    return binary === undefined ? undefined : join(packageDir, binary);
+  } catch {
+    return undefined;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
