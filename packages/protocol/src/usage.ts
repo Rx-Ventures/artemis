@@ -141,6 +141,48 @@ export interface PlanUsage {
  * average of "5% of weekly, 98% of 5-hourly" reads as comfortable when you are
  * about to be cut off.
  */
+/**
+ * Which window a single-number readout should show.
+ *
+ * `model` is a family rather than one id: the per-model buckets a plan meters
+ * separately vary by account (`model_scoped:Fable` and friends), so the choice
+ * has to name the family and let {@link focusedWindow} pick within it.
+ */
+export type PlanMeterFocus = 'five_hour' | 'seven_day' | 'model';
+
+/** True for the per-model weekly buckets. @see PlanMeterFocus */
+export function isModelScoped(id: string): boolean {
+  return id === 'model_scoped' || id.startsWith('model_scoped:');
+}
+
+/**
+ * The window a meter set to `focus` should report, or `null` if the plan has
+ * no such window.
+ *
+ * Within the `model` family the most-consumed bucket wins, for the same reason
+ * {@link bindingWindow} exists: the one closest to full is the one that will
+ * stop you, and averaging several models' weeklies would describe none of them.
+ *
+ * Note this answers *only* the chosen window. A plan can be comfortable on the
+ * focused one and nearly out on another, so the number here is not a promise
+ * that nothing is about to run out — that is what the full list is for.
+ */
+export function focusedWindow(
+  usage: PlanUsage | null | undefined,
+  focus: PlanMeterFocus,
+): PlanUsageWindow | null {
+  if (!usage?.available) return null;
+  if (focus === 'model') {
+    let worst: PlanUsageWindow | null = null;
+    for (const window of usage.windows) {
+      if (!isModelScoped(window.id) || window.utilization === null) continue;
+      if (worst === null || window.utilization > (worst.utilization ?? -1)) worst = window;
+    }
+    return worst;
+  }
+  return usage.windows.find((w) => w.id === focus) ?? null;
+}
+
 export function bindingWindow(usage: PlanUsage | null | undefined): PlanUsageWindow | null {
   if (!usage?.available) return null;
   let worst: PlanUsageWindow | null = null;

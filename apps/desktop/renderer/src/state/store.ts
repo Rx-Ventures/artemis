@@ -24,6 +24,7 @@ import type {
   PermissionMode,
   PermissionRequest,
   PermissionScope,
+  PlanMeterFocus,
   ProfileDraft,
   ProfileId,
   ProfileMetadata,
@@ -100,6 +101,8 @@ export type ConversationWidth = 'comfortable' | 'wide' | 'full';
  * saying it failed is a bug report we would never receive.
  */
 export type RunSummary = 'always' | 'failures' | 'never';
+
+export type { PlanMeterFocus };
 
 /** Renderer-side view of the live run. Mirrors `RunHandle` plus stream facts. */
 export interface RunState {
@@ -211,6 +214,8 @@ export interface AppState {
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
   readonly runSummary: RunSummary;
+  /** Which plan-limit window the status-bar meter reports. */
+  readonly planMeterFocus: PlanMeterFocus;
 
   /**
    * Every session the listing returned, ungrouped and unsorted.
@@ -313,6 +318,17 @@ export const DEFAULT_RUN_SUMMARY: RunSummary = 'always';
 
 const RUN_SUMMARIES: readonly RunSummary[] = ['always', 'failures', 'never'];
 
+/**
+ * The 5-hour window, because it is the one that actually interrupts work.
+ *
+ * A weekly limit is a budgeting fact you act on over days; the 5-hour window is
+ * the one that stops you mid-task, so it is what a permanently-visible meter
+ * should be counting down.
+ */
+export const DEFAULT_PLAN_METER_FOCUS: PlanMeterFocus = 'five_hour';
+
+const PLAN_METER_FOCUSES: readonly PlanMeterFocus[] = ['five_hour', 'seven_day', 'model'];
+
 interface Prefs {
   cwd?: string;
   activeProfileId?: string | null;
@@ -328,6 +344,7 @@ interface Prefs {
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
   runSummary?: RunSummary;
+  planMeterFocus?: PlanMeterFocus;
   /**
    * Context windows learned from completed runs, keyed by model.
    *
@@ -419,6 +436,7 @@ function loadPrefs(): Prefs {
     ultracode,
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
+    planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
     contextWindows: numberMap(raw['contextWindows']),
   };
 }
@@ -440,6 +458,7 @@ function savePrefs(): void {
     ultracode: s.ultracode,
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
+    planMeterFocus: s.planMeterFocus,
     contextWindows: s.contextWindows,
   };
   try {
@@ -478,6 +497,7 @@ export const useApp = create<AppState>(() => ({
   ultracode: prefs.ultracode ?? false,
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
+  planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
 
   sessions: [],
   sessionsScope: 'all',
@@ -1284,6 +1304,11 @@ export function setConversationWidth(width: ConversationWidth): void {
 
 export function setRunSummary(summary: RunSummary): void {
   useApp.setState({ runSummary: summary });
+  savePrefs();
+}
+
+export function setPlanMeterFocus(focus: PlanMeterFocus): void {
+  useApp.setState({ planMeterFocus: focus });
   savePrefs();
 }
 

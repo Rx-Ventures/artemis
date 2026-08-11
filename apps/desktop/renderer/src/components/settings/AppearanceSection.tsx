@@ -28,11 +28,13 @@ import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
 import {
   SIDEBAR_DEFAULT_WIDTH,
   setConversationWidth,
+  setPlanMeterFocus,
   setRunSummary,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
   type ConversationWidth,
+  type PlanMeterFocus,
   type RunSummary,
 } from '../../state/store';
 import {
@@ -96,9 +98,39 @@ const RUN_SUMMARIES: readonly Choice<RunSummary>[] = [
   },
 ];
 
+/**
+ * Which limit the status-bar meter counts down.
+ *
+ * One window, not all of them: the meter is a single bar in a status line, and
+ * the version that showed "whichever is closest to full" never understated the
+ * pressure but also never answered a specific question — the number could be
+ * any window at any moment, so it could not be watched.
+ *
+ * The trade is stated in the last note rather than hidden: a comfortable
+ * focused window says nothing about the others.
+ */
+const METERS: readonly Choice<PlanMeterFocus>[] = [
+  {
+    id: 'five_hour',
+    label: '5-hour limit',
+    note: 'The one that interrupts work. A weekly limit is something you budget around over days; this is the one that stops you mid-task.',
+  },
+  {
+    id: 'seven_day',
+    label: 'Weekly limit',
+    note: 'The whole plan’s 7-day window. Worth watching in the back half of a heavy week.',
+  },
+  {
+    id: 'model',
+    label: 'Per-model weekly',
+    note: 'The weekly window for the model closest to full — Fable and Opus are metered separately from the plan total on some accounts. Shows a dash if your plan has no per-model limits.',
+  },
+];
+
 export function AppearanceSection(): ReactElement {
   const width = useApp((s) => s.conversationWidth);
   const runSummary = useApp((s) => s.runSummary);
+  const planMeterFocus = useApp((s) => s.planMeterFocus);
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
 
@@ -123,6 +155,19 @@ export function AppearanceSection(): ReactElement {
           choices={RUN_SUMMARIES}
           onChange={setRunSummary}
         />
+      </SettingsGroup>
+
+      <SettingsGroup label="Plan meter">
+        <ChoiceList
+          label="Plan meter"
+          value={planMeterFocus}
+          choices={METERS}
+          onChange={setPlanMeterFocus}
+        />
+        <p className="mt-2 text-2xs leading-relaxed text-ink-faint">
+          The meter reports this one window. Being comfortable here does not mean the others are —
+          click it for every limit your plan reports.
+        </p>
       </SettingsGroup>
 
       <SettingsGroup label="Sidebar">

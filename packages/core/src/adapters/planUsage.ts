@@ -37,22 +37,76 @@ const USAGE_METHOD_NAMES = [
   'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET',
 ] as const;
 
-/** Display order and labels. Anything unrecognised is appended, not dropped. */
+/**
+ * Display order and labels. Anything unrecognised is appended, not dropped.
+ *
+ * `model_scoped` is deliberately absent: it is not one window. See
+ * {@link expandModelScoped}.
+ */
 const KNOWN_WINDOWS: readonly { id: PlanUsageWindowId; label: string }[] = [
   { id: 'five_hour', label: '5 hours' },
   { id: 'seven_day', label: '7 days' },
   { id: 'seven_day_opus', label: '7 days · Opus' },
   { id: 'seven_day_sonnet', label: '7 days · Sonnet' },
   { id: 'seven_day_oauth_apps', label: '7 days · apps' },
-  { id: 'model_scoped', label: 'Model' },
   { id: 'extra_usage', label: 'Extra usage' },
 ];
+
+/** One entry of the `model_scoped` array — a per-model weekly bucket. */
+interface RawModelScoped {
+  display_name?: string | null;
+  utilization?: number | null;
+  resets_at?: string | null;
+}
 
 /** The shape we need off the SDK response, without depending on its types. */
 interface RawUsageResponse {
   subscription_type?: string | null;
   rate_limits_available?: boolean;
-  rate_limits?: Record<string, { utilization?: number | null; resets_at?: string | null } | null> | null;
+  rate_limits?: Record<
+    string,
+    // Not `readonly` on the array member: `Array.isArray` does not narrow a
+    // union whose array side is readonly, and the two guards below depend on
+    // it doing so. This is a description of a wire payload we only read.
+    { utilization?: number | null; resets_at?: string | null } | RawModelScoped[] | null
+  > | null;
+}
+
+/**
+ * `model_scoped` is an array of per-model weekly buckets, not a window.
+ *
+ * The provider sends one entry per model it meters separately — `display_name`
+ * is the bucket's own name, e.g. `Fable` — and the set varies by plan, so the
+ * buckets cannot be enumerated here the way the fixed windows above are.
+ *
+ * This was previously read as if it were a single `{ utilization, resets_at }`
+ * object like its siblings. An array has neither property, so every account
+ * with per-model limits got one row labelled "Model" reporting `null` — a limit
+ * that looked broken and, worse, hid the real per-model numbers inside it.
+ *
+ * Each bucket becomes its own window, keyed `model_scoped:<name>` so the id
+ * stays stable across reads and a caller can recognise the family by prefix.
+ */
+function expandModelScoped(value: unknown): PlanUsageWindow[] {
+  if (!Array.isArray(value)) return [];
+  const out: PlanUsageWindow[] = [];
+  for (const entry of value as readonly RawModelScoped[]) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const name =
+      typeof entry.display_name === 'string' && entry.display_name !== ''
+        ? entry.display_name
+        : null;
+    // A bucket with no name cannot be told apart from any other, and an
+    // anonymous per-model limit is worse than none: the user cannot act on it.
+    if (name === null) continue;
+    out.push({
+      id: `model_scoped:${name}`,
+      label: `7 days · ${name}`,
+      utilization: clampUtilization(entry.utilization),
+      resetsAt: parseResetsAt(entry.resets_at),
+    });
+  }
+  return out;
 }
 
 /**
@@ -124,7 +178,7 @@ export function mapPlanUsage(raw: unknown, fetchedAt: number): PlanUsage {
   // Known windows first, in a deliberate display order.
   for (const { id, label } of KNOWN_WINDOWS) {
     const entry = limits[id];
-    if (!entry) continue;
+    if (!entry || Array.isArray(entry)) continue;
     windows.push({
       id,
       label,
@@ -133,12 +187,19 @@ export function mapPlanUsage(raw: unknown, fetchedAt: number): PlanUsage {
     });
   }
 
+  // Then the per-model buckets, which are a list rather than a window.
+  windows.push(...expandModelScoped(limits['model_scoped']));
+
   // Then anything the provider has added since this file was written. Passing
   // an unrecognised window through unlabelled beats hiding a limit the user is
   // actually being held to.
   for (const [id, entry] of Object.entries(limits)) {
     if (!entry) continue;
+    if (id === 'model_scoped') continue;
     if (KNOWN_WINDOWS.some((w) => w.id === id)) continue;
+    // An unfamiliar *array* cannot be rendered as one window — that mistake is
+    // what `model_scoped` was. Skip it rather than emit a row of nulls.
+    if (Array.isArray(entry)) continue;
     windows.push({
       id,
       label: id.replace(/_/g, ' '),

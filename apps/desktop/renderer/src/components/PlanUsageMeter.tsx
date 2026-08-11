@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { GaugeIcon, RefreshCwIcon } from 'lucide-react';
 
-import { bindingWindow, type PlanUsage, type PlanUsageWindow } from '@rx-apollo/protocol';
+import { focusedWindow, isModelScoped, type PlanUsage, type PlanUsageWindow } from '@rx-apollo/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
@@ -106,7 +106,7 @@ function resetLabel(resetsAt: number | null, now: number): string {
  * without needing a code change.
  */
 function isShown(id: string): boolean {
-  return id === 'five_hour' || id.startsWith('seven_day') || id === 'model_scoped';
+  return id === 'five_hour' || id.startsWith('seven_day') || isModelScoped(id);
 }
 
 /** Order: overall limits first, then per-model. */
@@ -184,6 +184,7 @@ export function PlanUsageMeter(): ReactElement | null {
   const profileId = useApp((s) => s.activeProfileId);
   const supported = useApp((s) => activeCapabilities(s).planUsageReporting);
   const providerLabel = useApp(activeProviderLabel);
+  const focus = useApp((s) => s.planMeterFocus);
 
   const [open, setOpen] = useState(false);
   const { usage, refreshing, load } = usePlanUsage(
@@ -206,6 +207,12 @@ export function PlanUsageMeter(): ReactElement | null {
 
   if (!supported) {
     return (
+      /*
+        Still the gauge glyph here, deliberately, now that the live meter is a
+        bar: an empty bar is indistinguishable from a bar at 0%, and "this
+        provider cannot report limits" must not read as "you have used none of
+        them". A different shape is the point.
+      */
       <WithReason reason={`${providerLabel} does not report plan usage.`} side="top">
         <span aria-disabled="true" className="px-1 text-ink-faint opacity-60">
           <GaugeIcon className="size-3" aria-hidden="true" />
@@ -214,22 +221,49 @@ export function PlanUsageMeter(): ReactElement | null {
     );
   }
 
-  const binding = bindingWindow(usage);
+  const shown = focusedWindow(usage, focus);
+  const pct = shown?.utilization ?? null;
   const now = Date.now();
 
+  /*
+    A bar rather than a gauge glyph.
+
+    The icon was a picture of a meter next to a number, which is a label for a
+    reading rather than the reading itself — nothing about it moved as usage
+    climbed, so the only signal was the digits and their colour. A bar is read
+    at a glance and in peripheral vision, which is the whole job of a status
+    line: you notice it filling without having to look at it.
+
+    It reports one window, chosen in settings — see `planMeterFocus`. That is a
+    deliberate narrowing: this used to show whichever window was closest to
+    full, which never understated the pressure but also never answered "how
+    long until my 5-hour resets", because the number could be any window at
+    any moment. The cost is that a comfortable focused window says nothing
+    about the others, so `aria-label` names the window and the popover still
+    lists them all.
+  */
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        aria-label="Plan usage"
+        aria-label={
+          shown === null
+            ? 'Plan usage'
+            : `Plan usage — ${shown.label}${pct === null ? '' : ` at ${String(Math.round(pct))}%`}`
+        }
         className={cn(
-          'flex items-center gap-1 rounded px-1 py-0.5 hover:bg-line/40',
-          toneFor(binding?.utilization ?? null),
+          'flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-line/40',
+          toneFor(pct),
         )}
       >
-        <GaugeIcon className="size-3 shrink-0" aria-hidden="true" />
-        {binding?.utilization !== null && binding !== null ? (
-          <span className="font-mono text-2xs tabular-nums">{Math.round(binding.utilization!)}%</span>
-        ) : null}
+        <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-line/60">
+          <span
+            className={cn('block h-full rounded-full transition-[width]', barToneFor(pct))}
+            style={{ width: `${pct ?? 0}%` }}
+          />
+        </span>
+        <span className="font-mono text-2xs tabular-nums">
+          {pct === null ? '—' : `${Math.round(pct)}%`}
+        </span>
       </PopoverTrigger>
 
       <PopoverContent align="start" side="top" className="w-72 p-3">

@@ -734,6 +734,20 @@ function mockPlanUsage(fetchedAt: number, drift: number): PlanUsage {
         utilization: 44 + drift,
         resetsAt: fetchedAt + 71 * hour,
       },
+      /*
+        A per-model bucket, in the shape `expandModelScoped` produces. The
+        provider sends these as an array under one `model_scoped` key rather
+        than as sibling windows, and reading that array as if it were a single
+        window is what used to render one row labelled "Model" reporting
+        nothing. Keeping a realistic one here means the UI is developed against
+        the case that was broken.
+      */
+      {
+        id: 'model_scoped:Fable',
+        label: '7 days · Fable',
+        utilization: 78 + drift,
+        resetsAt: fetchedAt + 71 * hour,
+      },
     ],
   };
 }
