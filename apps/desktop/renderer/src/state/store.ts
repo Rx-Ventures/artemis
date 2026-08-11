@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand';
-import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import { isSameModel, NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type {
   AuthStatusInfo,
   AgentError,
@@ -703,6 +703,34 @@ export function ultracodeAvailable(state: AppState): boolean {
   return selectedModelOption(state)?.supportsUltracode === true;
 }
 
+/**
+ * Does this provider have the *concept* of fast mode at all?
+ *
+ * A different question from {@link fastModeAvailable}, and the difference is
+ * what decides between hiding a control and disabling it.
+ *
+ * `fastModeAvailable` is about the selected model, and a false answer there is
+ * **actionable**: another model on the same ladder does offer it, so the control
+ * stays on screen, disabled, and switching models lights it up. This one is
+ * about the whole catalogue. A false answer here means no model this provider
+ * offers has ever heard of the flag — Codex has no fast mode and no ultracode —
+ * so there is nothing to switch to and the control can never light up. A
+ * permanently dead switch teaches the user nothing except that part of the app
+ * is broken, so it is not rendered.
+ *
+ * That is the one carve-out from this app's hide-nothing rule, and it is narrow
+ * on purpose: hidden when the *provider* cannot, disabled-and-explained when the
+ * *model* cannot.
+ */
+export function providerOffersFastMode(state: AppState): boolean {
+  return activeModels(state).some((m) => m.supportsFastMode === true);
+}
+
+/** The same question for ultracode. See {@link providerOffersFastMode}. */
+export function providerOffersUltracode(state: AppState): boolean {
+  return activeModels(state).some((m) => m.supportsUltracode === true);
+}
+
 /** Reasoning-effort levels the active provider offers, least to most. */
 export function activeEffortLevels(state: AppState): readonly ProviderEffortOption[] {
   return activeProvider(state)?.effortLevels ?? NO_OPTIONS;
@@ -792,12 +820,19 @@ export interface ThinkingLevel {
  * model accepts (`ProviderModelOption.effortLevels`), with ultracode appended
  * when the model supports it. A model that takes no effort setting at all
  * (`effortLevels: []`) yields an empty ladder and the control renders dead.
+ *
+ * The ultracode rung is appended only when *some* model in the catalogue offers
+ * it, and disabled when the selected one does not — the hidden/disabled split
+ * {@link providerOffersUltracode} explains. On Codex, which has no such concept,
+ * the ladder simply ends at its top effort level instead of carrying a rung that
+ * could never be reached.
  */
 export function thinkingLevels(state: AppState): readonly ThinkingLevel[] {
   const provider = activeEffortLevels(state);
   if (provider.length === 0) return NO_THINKING;
 
   const model = selectedModelOption(state);
+  const offersUltra = providerOffersUltracode(state);
 
   /*
    * Memoised on input identity, and not for speed.
@@ -814,7 +849,8 @@ export function thinkingLevels(state: AppState): readonly ThinkingLevel[] {
     thinkingCache !== null &&
     thinkingCache.provider === provider &&
     thinkingCache.model === model &&
-    thinkingCache.ultra === (model?.supportsUltracode === true)
+    thinkingCache.ultra === (model?.supportsUltracode === true) &&
+    thinkingCache.offersUltra === offersUltra
   ) {
     return thinkingCache.out;
   }
@@ -828,20 +864,23 @@ export function thinkingLevels(state: AppState): readonly ThinkingLevel[] {
   const out: readonly ThinkingLevel[] =
     rungs.length === 0
       ? NO_THINKING
-      : [
-          ...rungs,
-          {
-            id: ULTRACODE_LEVEL,
-            label: 'Ultracode',
-            note: 'Maximum effort plus standing multi-agent orchestration. The most compute this model will spend on one turn.',
-            available: model?.supportsUltracode === true,
-          },
-        ];
+      : offersUltra
+        ? [
+            ...rungs,
+            {
+              id: ULTRACODE_LEVEL,
+              label: 'Ultracode',
+              note: 'Maximum effort plus standing multi-agent orchestration. The most compute this model will spend on one turn.',
+              available: model?.supportsUltracode === true,
+            },
+          ]
+        : rungs;
 
   thinkingCache = {
     provider,
     model,
     ultra: model?.supportsUltracode === true,
+    offersUltra,
     out,
   };
   return out;
@@ -851,6 +890,7 @@ let thinkingCache: {
   readonly provider: readonly ProviderEffortOption[];
   readonly model: ProviderModelOption | undefined;
   readonly ultra: boolean;
+  readonly offersUltra: boolean;
   readonly out: readonly ThinkingLevel[];
 } | null = null;
 
@@ -1037,14 +1077,31 @@ export async function refreshProfiles(): Promise<void> {
     return;
   }
   const profiles = result.value.profiles;
-  useApp.setState((s) => ({
-    profiles,
-    activeProfileId:
-      s.activeProfileId && profiles.some((p) => p.id === s.activeProfileId)
-        ? s.activeProfileId
-        : (profiles.find((p) => p.providerId === s.activeProviderId)?.id ?? profiles[0]?.id ?? null),
-  }));
+  /*
+   * Re-picking the active profile carries the provider with it, for the reason
+   * `setProfile` gives. The last resort here is a profile belonging to some
+   * *other* provider — the only account left after the active provider's were
+   * all deleted — and adopting one of those without also moving
+   * `activeProviderId` would point the app at an account its adapter has never
+   * heard of. Preferring the active provider's own profiles first means that
+   * fallback is reached only when there is genuinely nothing else.
+   */
+  useApp.setState((s) => {
+    const current = s.activeProfileId;
+    const kept = current !== null && profiles.some((p) => p.id === current);
+    if (kept) return { profiles, activeProfileId: current };
+
+    const adopted =
+      profiles.find((p) => p.providerId === s.activeProviderId) ?? profiles[0] ?? null;
+    return {
+      profiles,
+      activeProfileId: adopted?.id ?? null,
+      activeProviderId: adopted?.providerId ?? s.activeProviderId,
+    };
+  });
   savePrefs();
+  invalidateSessions();
+  void refreshSessions();
 }
 
 /**
@@ -1057,6 +1114,68 @@ export async function refreshProfiles(): Promise<void> {
  * guards against, with a counter instead of an id because there is no id here.
  */
 let modelsRequestToken = 0;
+
+/**
+ * Follow one persisted model id from the catalogue it was chosen in into the
+ * one replacing it.
+ *
+ * Ids are the app's handle on a model everywhere they are stored — the pinned
+ * shortlist, the selected model — and they are *not stable across catalogues*.
+ * The built-in list calls Fable `fable`; the live one the CLI publishes calls it
+ * `claude-fable-5[1m]`. So the moment a live catalogue lands, every id stored
+ * against the built-in list stops matching, and the models the user pinned drop
+ * out of their own picker with no error and nothing to click.
+ *
+ * That is not hypothetical — it is what took Fable out of the composer's
+ * picker while it sat plainly in the settings catalogue, since that pane lists
+ * the whole catalogue and the picker lists the pins.
+ *
+ * The swap is the only moment both lists exist, which is why the fix lives here
+ * rather than in the read path: `resolvedModel` can match the two rows to each
+ * other (see `isSameModel`), but nothing can match a bare `fable` against a list
+ * that has never heard the word.
+ *
+ * An id already in the new catalogue is left exactly as it is, and so is one the
+ * old catalogue never had — a pin belonging to another provider survives a
+ * switch, which is the behaviour `quickModels` documents.
+ */
+function carryModelId(
+  id: string,
+  from: readonly ProviderModelOption[],
+  to: readonly ProviderModelOption[],
+): string {
+  if (to.some((m) => m.id === id)) return id;
+  const previous = from.find((m) => m.id === id);
+  if (previous === undefined) return id;
+  return to.find((m) => isSameModel(previous, m))?.id ?? id;
+}
+
+/**
+ * The same, for the pinned shortlist.
+ *
+ * Deduplicates, because two stale ids can land on one row — `opus` and
+ * `opus[1m]` both become whatever the new list calls Opus — and a shortlist that
+ * lists a model twice looks broken.
+ *
+ * Returns the original array when nothing moved, and that is not a micro
+ * optimisation: `quickModels` memoises on this array's identity, so handing it a
+ * fresh copy on every background refresh would defeat the memo and put a new
+ * array through a zustand selector on every store read. Same hazard the
+ * `NO_OPTIONS` note describes.
+ */
+function carryModelIds(
+  ids: readonly string[],
+  from: readonly ProviderModelOption[],
+  to: readonly ProviderModelOption[],
+): readonly string[] {
+  const carried: string[] = [];
+  for (const id of ids) {
+    const next = carryModelId(id, from, to);
+    if (!carried.includes(next)) carried.push(next);
+  }
+  const unchanged = carried.length === ids.length && carried.every((id, i) => id === ids[i]);
+  return unchanged ? ids : carried;
+}
 
 /**
  * Fetch the model catalogue for the active provider and profile.
@@ -1106,7 +1225,19 @@ export async function refreshModels(): Promise<void> {
     // "did the account answer?" unanswerable downstream. So only a confirmed
     // catalogue is stored, and the fallback stays the descriptor's own list.
     if (result.value.live) {
-      useApp.setState({ models: result.value.models, modelsError: null });
+      // Read once, before the swap: `carryModelId` needs the outgoing catalogue,
+      // and after `setState` there is no way back to it.
+      const before = useApp.getState();
+      const outgoing = activeModels(before);
+      const models = result.value.models;
+      const quickModelIds = carryModelIds(before.quickModelIds, outgoing, models);
+      const model = before.model === null ? null : carryModelId(before.model, outgoing, models);
+
+      useApp.setState({ models, modelsError: null, quickModelIds, model });
+      // Only when something actually moved. Persisting the carried ids is what
+      // stops the migration from running again on every launch, and skipping the
+      // write in the common case keeps a background refresh silent.
+      if (quickModelIds !== before.quickModelIds || model !== before.model) savePrefs();
     } else {
       useApp.setState({ modelsError: null });
     }
@@ -1168,18 +1299,53 @@ export function setProvider(providerId: ProviderId): void {
     modelsError: null,
   }));
   savePrefs();
+  invalidateSessions();
   void refreshSessions();
   void refreshModels();
 }
 
+/**
+ * Point the app at an account.
+ *
+ * ## The provider moves with it
+ *
+ * A profile belongs to exactly one CLI, so selecting one selects that CLI too.
+ * This is the same rule `createProfile` states at length, and it is stated in
+ * both places because both are routes to "which account runs" — leaving a Codex
+ * profile active while `activeProviderId` still said `claude` would ask the
+ * Claude adapter to answer for an account it has never heard of.
+ *
+ * Reading the provider off the profile rather than requiring the caller to move
+ * the two together is what makes the picker able to span providers. It used to
+ * be scoped to the active provider *because* selecting across one would have
+ * desynced them, and that scoping was the bug: creating a Codex profile moved
+ * the app to Codex, at which point every Claude account vanished from the only
+ * picker on screen and the provider list in the palette was the sole way back.
+ *
+ * An unknown id is ignored rather than applied. It can only come from a stale
+ * render of a profile that has since been deleted, and honouring it would point
+ * the app at an account that is not there.
+ */
 export function setProfile(profileId: ProfileId): void {
-  useApp.setState({ activeProfileId: profileId });
+  const state = useApp.getState();
+  const profile = state.profiles.find((p) => p.id === profileId);
+  if (!profile) return;
+
+  const switched = state.activeProviderId !== profile.providerId;
+  useApp.setState({
+    activeProfileId: profileId,
+    activeProviderId: profile.providerId,
+    // Cleared only when the provider actually changes, for the reason
+    // `setProvider` gives — a catalogue and a session list both belong to the
+    // provider they came from. Within one provider the catalogue is *not*
+    // cleared: the loaded list is still the right shape of answer and is very
+    // likely the same one, so showing it until the new account replies beats
+    // flashing the picker back to the built-in list and forward again.
+    ...(switched ? { sessions: [], models: [], modelsError: null } : {}),
+  });
   savePrefs();
+  invalidateSessions();
   void refreshSessions();
-  // The catalogue is not cleared first. The provider is the same, so the loaded
-  // list is still the right shape of answer and is very likely the same one;
-  // showing it until the new account replies beats flashing the picker back to
-  // the built-in list and forward again.
   void refreshModels();
 }
 
@@ -1233,6 +1399,7 @@ export function setCwd(cwd: string): void {
 
   useApp.setState({ cwd: next });
   savePrefs();
+  invalidateSessions();
   void refreshSessions();
   void refreshWorkspace();
 
@@ -1488,8 +1655,51 @@ const SESSION_PAGE_SIZE = 500;
  * which routinely coincide, and every listing reads the same directories off
  * disk. A second concurrent read cannot see anything the first will not, so it
  * is dropped rather than stacked.
+ *
+ * That last sentence is only true while the *question* stays the same, which is
+ * what `sessionsGeneration` below tracks.
  */
 let sessionsInFlight = false;
+
+/**
+ * Which selection the in-flight listing is answering for.
+ *
+ * A listing is a question about a specific (provider, profile, directory), read
+ * once at the top of `refreshSessions` and answered several hundred milliseconds
+ * later. Between those two moments the user can change any of the three, and
+ * both halves of that race were visibly wrong:
+ *
+ *  - **The answer outlived the question.** The resolved listing wrote the *old*
+ *    provider's sessions over a list that had already been cleared for the new
+ *    one. The sidebar repopulated with history that did not belong to the
+ *    account it was now pointed at, and stayed that way until the next poll —
+ *    up to `SESSION_POLL_IDLE_MS` — at which point the rows vanished again.
+ *  - **The new question was never asked.** `setProvider` and friends clear the
+ *    list and immediately call back here, which the re-entrancy guard dropped
+ *    on the floor because a poll happened to be running. Nothing re-read until
+ *    the timer came round, so the sidebar sat empty for twenty seconds having
+ *    been told to refill instantly.
+ *
+ * A counter fixes both. It is bumped by every selection change, a listing
+ * captures it, and a listing whose capture no longer matches is discarded on
+ * arrival rather than written. `sessionsQueued` then re-runs the read for the
+ * selection that superseded it.
+ */
+let sessionsGeneration = 0;
+
+/** Set when a refresh was asked for while one was in flight. */
+let sessionsQueued = false;
+
+/**
+ * Invalidate any listing still in flight, and note that a new one is owed.
+ *
+ * Called by everything that changes which sessions the sidebar should be
+ * showing. Cheap enough to call unconditionally — the cost of a spurious bump is
+ * one extra directory read.
+ */
+function invalidateSessions(): void {
+  sessionsGeneration += 1;
+}
 
 export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
@@ -1503,8 +1713,16 @@ export async function refreshSessions(): Promise<void> {
     return;
   }
 
-  if (sessionsInFlight) return;
+  // Coalesced rather than dropped. A concurrent read cannot see anything the
+  // one already running will not — but only if it is asking the same question,
+  // and the caller may well be here *because* the question just changed. The
+  // flag makes the in-flight read run again on the way out.
+  if (sessionsInFlight) {
+    sessionsQueued = true;
+    return;
+  }
   sessionsInFlight = true;
+  const generation = sessionsGeneration;
 
   /*
    * The spinner is only raised on the *first* listing. Afterwards this runs on
@@ -1524,6 +1742,12 @@ export async function refreshSessions(): Promise<void> {
       limit: SESSION_PAGE_SIZE,
     });
 
+    // The selection moved while this was reading. Every field below describes
+    // an account or a directory the sidebar is no longer pointed at, so the
+    // whole listing is dropped — including `sessionsLoading`, which belongs to
+    // the newer read now. The queued re-run below is what fills the list.
+    if (generation !== sessionsGeneration) return;
+
     useApp.setState((s) => ({
       sessionsLoading: false,
       // Reference-stable when nothing changed. `sessions` is the sidebar's
@@ -1535,6 +1759,19 @@ export async function refreshSessions(): Promise<void> {
     }));
   } finally {
     sessionsInFlight = false;
+    /*
+     * Re-run for whatever superseded this read.
+     *
+     * Also covers the discarded-generation path above: a stale listing returns
+     * without writing anything, and if nothing re-read after it the sidebar
+     * would keep the empty list its caller cleared. Both routes out of the
+     * `try` pass through here, which is why this lives in the `finally` — a
+     * listing that threw still owes the queued caller an answer.
+     */
+    if (sessionsQueued) {
+      sessionsQueued = false;
+      void refreshSessions();
+    }
   }
 }
 
@@ -1748,6 +1985,7 @@ export function resumeSession(session: SessionSummary): void {
   }
 
   void loadSessionHistory(session);
+  invalidateSessions();
   void refreshSessions();
   void refreshModels();
   // This function writes `cwd` itself rather than going through `setCwd`, and
@@ -2127,8 +2365,32 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
     return false;
   }
   await refreshProfiles();
-  useApp.setState({ activeProfileId: result.value.profile.id });
+
+  /*
+   * The new profile becomes the active one, and the app follows it to its
+   * provider.
+   *
+   * Those two have to move together. A profile belongs to exactly one CLI, so
+   * making a Codex profile active while `activeProviderId` still says `claude`
+   * asks the Claude adapter to answer for an account it has never heard of —
+   * every catalogue fetch, session list and run would go to the wrong binary.
+   * It could not happen while the create form silently used the active provider;
+   * it can now that the form asks.
+   */
+  const created = result.value.profile;
+  const switched = useApp.getState().activeProviderId !== created.providerId;
+  useApp.setState({
+    activeProfileId: created.id,
+    activeProviderId: created.providerId,
+    // Cleared on a provider change for the reason `setProvider` gives: a
+    // catalogue and a session list both belong to the provider they came from.
+    ...(switched ? { sessions: [], models: [], modelsError: null } : {}),
+  });
   savePrefs();
+  if (switched) {
+    invalidateSessions();
+    void refreshSessions();
+  }
   // A new profile is a new account, and the catalogue is a property of the
   // account — the freshly created one may well be the first that can answer at
   // all, since `refreshModels` no-ops without a profile.

@@ -28,7 +28,13 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { GaugeIcon, RefreshCwIcon } from 'lucide-react';
 
-import { focusedWindow, isModelScoped, type PlanUsage, type PlanUsageWindow } from '@rx-artemis/protocol';
+import {
+  bindingWindow,
+  focusedWindow,
+  isModelScoped,
+  type PlanUsage,
+  type PlanUsageWindow,
+} from '@rx-artemis/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
@@ -94,26 +100,42 @@ function resetLabel(resetsAt: number | null, now: number): string {
 }
 
 /**
- * The windows worth showing, in this order.
+ * Windows that answer questions nobody asks mid-run.
  *
- * Deliberately a shortlist rather than everything the provider returns. The
- * payload also carries `seven_day_oauth_apps` and `extra_usage`, which answer
- * questions nobody asks mid-run; showing seven bars would bury the two that
- * actually stop you.
+ * Claude's payload carries these alongside the limits that actually stop you,
+ * and showing seven bars would bury the two that matter.
+ */
+const NOT_WORTH_A_BAR: ReadonlySet<string> = new Set(['seven_day_oauth_apps', 'extra_usage']);
+
+/**
+ * Is this window worth a bar?
  *
- * Model-scoped weeklies are matched by prefix so a window for a model that did
- * not exist when this was written — Fable being exactly that case — appears
- * without needing a code change.
+ * A deny-list, and it used to be an allow-list — `five_hour`, `seven_day*`,
+ * model-scoped — which quietly made this component Claude-only. Codex reports
+ * its windows as `primary` and `secondary`, matched none of those names, and so
+ * a plan whose usage had been fetched perfectly well rendered as "No limits
+ * reported for this plan". `PlanUsageWindowId` is documented as open-ended
+ * precisely so a provider can contribute its own vocabulary; an allow-list of
+ * one provider's names is the opposite of honouring that.
+ *
+ * So: everything is shown unless it is known noise. A window this file has never
+ * heard of is far more likely to be a new limit worth seeing than a new kind of
+ * clutter, and the failure modes are not symmetric — one extra bar is a
+ * cosmetic problem, a missing bar is a plan that runs out without warning.
  */
 function isShown(id: string): boolean {
-  return id === 'five_hour' || id.startsWith('seven_day') || isModelScoped(id);
+  return !NOT_WORTH_A_BAR.has(id);
 }
 
-/** Order: overall limits first, then per-model. */
+/** Order: overall limits first, then per-model, then a provider's own names. */
 function displayRank(id: string): number {
   if (id === 'five_hour') return 0;
   if (id === 'seven_day') return 1;
-  return 2;
+  if (id.startsWith('seven_day') || isModelScoped(id)) return 2;
+  // Unfamiliar ids sort last rather than into the middle of Claude's ladder —
+  // they are shown now (see `isShown`), and where they belong is unknowable
+  // from the id alone.
+  return 3;
 }
 
 function ageHint(fetchedAt: number, now: number): string {
@@ -221,7 +243,19 @@ export function PlanUsageMeter(): ReactElement | null {
     );
   }
 
-  const shown = focusedWindow(usage, focus);
+  /*
+   * The chosen window, or the binding one when this plan has no such window.
+   *
+   * `planMeterFocus` names Claude's windows — five-hourly, weekly, per-model —
+   * because those are the ones worth choosing between. A provider that meters
+   * differently matches none of them, and the strict answer (`null`) rendered as
+   * a permanent "—" next to an empty bar on an account whose usage had been read
+   * successfully. Falling back to the window closest to full is the same answer
+   * this meter gave before the focus setting existed, and it stays honest
+   * because the bar is unlabelled: `aria-label` and the popover both name the
+   * window actually being reported.
+   */
+  const shown = focusedWindow(usage, focus) ?? bindingWindow(usage);
   const pct = shown?.utilization ?? null;
   const now = Date.now();
 

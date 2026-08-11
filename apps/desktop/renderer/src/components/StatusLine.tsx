@@ -50,6 +50,11 @@
  * when the user can act on the reason; here it is always "this model does not
  * do that", which the disabled state already says.
  *
+ * On a provider with no fast mode at all it is not rendered, and neither is the
+ * ultracode rung — the narrow carve-out from "never hide a control", taken
+ * because there is no model to switch to and so nothing the user could do about
+ * it. See `providerOffersFastMode`.
+ *
  * ## The profile segment is the reason this work exists
  *
  * It names the profile, whether that profile is signed in, and the account it
@@ -81,7 +86,14 @@
  * now — it is always present, so this bar no longer needs a second copy.
  */
 
-import { useMemo, useState, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import {
+  Fragment,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import {
   BrainIcon,
   ChevronsUpDownIcon,
@@ -95,7 +107,14 @@ import {
   SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { PermissionMode, ProfileId, ProviderModelOption } from '@rx-artemis/protocol';
+import type {
+  PermissionMode,
+  ProfileId,
+  ProfileMetadata,
+  ProviderDescriptor,
+  ProviderId,
+  ProviderModelOption,
+} from '@rx-artemis/protocol';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';
@@ -106,7 +125,6 @@ import {
   activeModel,
   activeModels,
   activeProfile,
-  activeProvider,
   activeProviderLabel,
   activeThinkingLevel,
   fastModeAvailable,
@@ -114,6 +132,7 @@ import {
   lastKnownBranch,
   learnedContextWindow,
   openSettings,
+  providerOffersFastMode,
   quickModels,
   setFastMode,
   setModel,
@@ -311,14 +330,57 @@ function DeadSegment({
 /* Profile                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Every profile, grouped by the provider that owns it.
+ *
+ * Providers keep their catalogue order — the order `providers:list` reported —
+ * so the sections do not reshuffle as accounts are added. A profile whose
+ * provider is not in that list still gets a section, keyed by its raw id: an
+ * account is not worth hiding because the build it belongs to is missing, and
+ * that is exactly when someone needs to see it.
+ */
+function profilesByProvider(
+  profiles: readonly ProfileMetadata[],
+  providers: readonly ProviderDescriptor[],
+): readonly { readonly id: ProviderId; readonly label: string; readonly profiles: readonly ProfileMetadata[] }[] {
+  const order = new Map<ProviderId, string>();
+  for (const provider of providers) order.set(provider.id, provider.label);
+  for (const profile of profiles) {
+    if (!order.has(profile.providerId)) order.set(profile.providerId, profile.providerId);
+  }
+
+  const sections = [];
+  for (const [id, label] of order) {
+    const owned = profiles.filter((p) => p.providerId === id);
+    if (owned.length > 0) sections.push({ id, label, profiles: owned });
+  }
+  return sections;
+}
+
+/**
+ * Which account runs — across every provider, not just the active one.
+ *
+ * ## The list is not scoped to the active provider
+ *
+ * It was, and that was a trap. A profile belongs to exactly one CLI, so the
+ * provider follows the account rather than being chosen beside it (`setProfile`
+ * has the long version). Filtering to the active provider meant that anything
+ * moving the provider — creating a Codex profile does, deliberately — emptied
+ * this menu of every Claude account at the same moment, and the only other
+ * provider control in the app is a page in the command palette. Someone who did
+ * not know that page existed had no way back to their own accounts.
+ *
+ * Grouping by provider is what makes one flat list readable, and it also puts
+ * the fact that switching account can switch CLI in front of the person doing
+ * it, at the moment they do it.
+ */
 function ProfileSegment(): ReactElement {
   const profiles = useApp((s) => s.profiles);
-  const providerId = useApp((s) => s.activeProviderId);
+  const providers = useApp((s) => s.providers);
   const activeId = useApp((s) => s.activeProfileId);
   const profile = useApp(activeProfile);
-  const provider = useApp(activeProvider);
 
-  const forProvider = profiles.filter((p) => p.providerId === providerId);
+  const sections = useMemo(() => profilesByProvider(profiles, providers), [profiles, providers]);
   const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
 
   // Amber only for a profile that has been *checked* and is signed out. An
@@ -355,18 +417,35 @@ function ProfileSegment(): ReactElement {
           Profile — which account runs
         </DropdownMenuLabel>
 
-        {forProvider.length === 0 ? (
+        {sections.length === 0 ? (
           <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
-            No profile exists for this provider yet. A run needs an account, which comes from a
-            profile.
+            No profile exists yet. A run needs an account, which comes from a profile.
           </p>
         ) : (
           <DropdownMenuRadioGroup
             value={activeId ?? ''}
             onValueChange={(value) => setProfile(value as ProfileId)}
           >
-            {forProvider.map((candidate) => (
-              <ProfileItem key={candidate.id} id={candidate.id} />
+            {sections.map((section, index) => (
+              <Fragment key={section.id}>
+                {/*
+                 * The heading is dropped when there is only one provider, where
+                 * it would label a distinction the user does not have. It
+                 * appears the moment a second one exists, which is also the
+                 * moment picking a profile starts changing which CLI runs.
+                 */}
+                {sections.length > 1 ? (
+                  <>
+                    {index > 0 ? <DropdownMenuSeparator /> : null}
+                    <DropdownMenuLabel className="text-2xs text-ink-faint">
+                      {section.label}
+                    </DropdownMenuLabel>
+                  </>
+                ) : null}
+                {section.profiles.map((candidate) => (
+                  <ProfileItem key={candidate.id} id={candidate.id} />
+                ))}
+              </Fragment>
             ))}
           </DropdownMenuRadioGroup>
         )}
@@ -375,9 +454,13 @@ function ProfileSegment(): ReactElement {
         <DropdownMenuItem className="text-2xs" onSelect={() => openSettings('profiles')}>
           Manage profiles…
         </DropdownMenuItem>
+        {/*
+          Not "Claude's own CLI" any more. This menu spans providers, so naming
+          one of them here would be wrong for every row under the other heading.
+        */}
         <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-ink-faint">
-          Each profile’s account lives in its own config directory, signed in with Claude’s own CLI.
-          Artemis stores no credential.
+          Each profile’s account lives in its own config directory, signed in with its provider’s
+          own CLI. Artemis stores no credential.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -655,10 +738,16 @@ function ThinkingRow(): ReactElement | null {
  * right when the user could *act* on it. Here they cannot: the answer is always
  * "this model does not do that", which the disabled state already says, and
  * spelling it out on a row this small is noise. Switch models and it lights up.
+ *
+ * Absent entirely on a provider with no fast mode at all. That is a different
+ * question — see `providerOffersFastMode` — and it is the one case where "switch
+ * models and it lights up" is false, because there is no model to switch to.
  */
-function FastModeRow(): ReactElement {
+function FastModeRow(): ReactElement | null {
   const on = useApp((s) => s.fastMode);
   const available = useApp(fastModeAvailable);
+  const offered = useApp(providerOffersFastMode);
+  if (!offered) return null;
   return (
     <ShapeRow label="Fast mode">
       <Switch

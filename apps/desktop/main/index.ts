@@ -29,6 +29,7 @@ import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
 
 import { profilesRoot } from '@rx-artemis/core';
 
+import { APP_NAME, previousUserDataDir } from './appNames.js';
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
@@ -55,37 +56,17 @@ const log = createLogger('main');
 const APP_USER_MODEL_ID = 'dev.artemis.app';
 
 /**
- * Set before anything reads a path.
- *
- * `app.getPath('userData')` is derived from the app name, and the package is
- * called `@rx-artemis/desktop` — which would put user data in a nested
- * `@rx-artemis/desktop` directory and name the OS keychain entry after it. Naming
- * the app here keeps the credential store's identity stable and legible.
+ * Set before anything reads a path. See `appNames.ts` for why the name matters
+ * and for the rule that governs changing it.
  */
-app.setName('Artemis');
-
-/**
- * Every name this app has shipped under, newest first.
- *
- * `app.getPath('userData')` is derived from the app name, so each rename
- * silently pointed the app at an empty directory and lost every profile and
- * every session history the user had. This list is how the current build finds
- * the one it left behind.
- *
- * **Append to the front, never edit or remove an entry.** A user who skipped a
- * version upgrades straight from whichever name they last ran, and dropping an
- * entry is indistinguishable from deleting their data. Libra is two names back
- * and still has to be here for exactly that reason.
- */
-const PREVIOUS_APP_NAMES = ['Artemis', 'Libra'] as const;
+app.setName(APP_NAME);
 
 /**
  * Adopt the user data left behind by a previous name.
  *
  * Moves the newest surviving directory across, once, on the first launch that
- * finds one — newest first, because someone who ran Artemis *and* Libra has
- * stale Libra data sitting beside the directory they actually care about, and
- * taking the older one would silently roll them back.
+ * finds one. Which one that is, and why the list of candidates only ever grows,
+ * is in `appNames.ts`.
  *
  * ## `secrets.v1.json` is deleted rather than carried
  *
@@ -108,21 +89,13 @@ function adoptPreviousUserData(): void {
   const current = app.getPath('userData');
 
   try {
-    // Never overwrite data this name already has: whatever is here now is
-    // newer than anything an older name left behind.
-    if (existsSync(current)) return;
+    const previous = previousUserDataDir(dirname(current), current, existsSync, join);
+    if (previous === null) return;
 
-    const parent = dirname(current);
-    for (const name of PREVIOUS_APP_NAMES) {
-      const previous = join(parent, name);
-      if (previous === current || !existsSync(previous)) continue;
-
-      renameSync(previous, current);
-      // Nothing reads this any more, and nothing can. See above.
-      rmSync(join(current, 'secrets.v1.json'), { force: true });
-      log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
-      return;
-    }
+    renameSync(previous, current);
+    // Nothing reads this any more, and nothing can. See above.
+    rmSync(join(current, 'secrets.v1.json'), { force: true });
+    log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
   } catch (error) {
     log.error('Could not adopt user data from the previous app name', error);
   }

@@ -203,7 +203,7 @@ export function SessionList(): ReactElement {
           ) : null}
 
           {!listing.supported ? (
-            <Note tone="amber">{listing.reason} There is no history to list for it.</Note>
+            <Note tone="muted">{listing.reason} There is no history to list for it.</Note>
           ) : error ? (
             <Note tone="signal">
               {/* The backend's own sentence — a paraphrase would lose the cause. */}
@@ -524,11 +524,21 @@ function NothingHere({
   );
 }
 
+/**
+ * A line of prose where the session list would be.
+ *
+ * `signal` is for a failure the user can retry. `muted` and `faint` are both
+ * neutral, and neither is a warning colour — a capability this provider does not
+ * have is a fact about the product, not something going wrong, and amber made
+ * "Codex cannot list past sessions" read as an error the user had caused. Same
+ * move as the alert cards, where the icon carries the warning and the card does
+ * not.
+ */
 function Note({
   tone,
   children,
 }: {
-  readonly tone: 'faint' | 'amber' | 'signal';
+  readonly tone: 'faint' | 'muted' | 'signal';
   readonly children: ReactNode;
 }): ReactElement {
   return (
@@ -536,7 +546,7 @@ function Note({
       className={cn(
         'px-2.5 py-3 text-2xs leading-snug',
         tone === 'faint' && 'text-ink-faint',
-        tone === 'amber' && 'text-amber',
+        tone === 'muted' && 'text-ink-muted',
         tone === 'signal' && 'text-signal',
       )}
     >
