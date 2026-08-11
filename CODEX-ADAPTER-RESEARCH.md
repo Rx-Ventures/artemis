@@ -126,6 +126,8 @@ export const CODEX_CAPABILITIES: Capabilities = {
   midRunSteering: true,           // turn/steer
   forkSession: true,              // thread/fork
   listSessions: true,             // thread/list
+  renameSession: true,            // thread/name/set
+  deleteSession: true,            // thread/delete — removes the rollout file
   resumeSession: true,            // thread/resume
   usageReporting: true,           // thread/tokenUsage/updated
   planUsageReporting: true,       // account/rateLimits/read

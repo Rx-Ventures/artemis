@@ -23,6 +23,7 @@ import {
   CODEX_CREDENTIAL_ENVS,
   CODEX_HOME_ENV,
   createCodexAdapter,
+  isMissingRollout,
   parseCodexAuthStatus,
   parseModelList,
   parseRateLimitWindows,
@@ -77,6 +78,32 @@ describe('capabilities', () => {
       imageInput: true,
       fileInput: true,
     });
+  });
+
+  it('claims deletion and renaming', () => {
+    // `thread/delete` removes the rollout file outright, which is the promise
+    // the capability makes — `thread/archive` would only hide it. Renaming
+    // writes the same `name` field Codex's own UI does, via `thread/name/set`.
+    expect(CODEX_CAPABILITIES.deleteSession).toBe(true);
+    expect(CODEX_CAPABILITIES.renameSession).toBe(true);
+  });
+});
+
+describe('isMissingRollout', () => {
+  it('recognises the wording Codex uses for an unknown thread id', () => {
+    // Verbatim from codex-cli 0.147: a JSON-RPC -32600 whose message names the
+    // missing rollout. The code is shared with malformed requests, so only the
+    // message distinguishes "already gone" from "broken".
+    expect(
+      isMissingRollout(
+        new Error('thread/delete failed: no rollout found for thread id 0000 (code -32600)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not mistake other failures for absence', () => {
+    expect(isMissingRollout(new Error('The Codex app server did not answer.'))).toBe(false);
+    expect(isMissingRollout(new Error('thread/delete failed: permission denied'))).toBe(false);
   });
 });
 
