@@ -406,11 +406,7 @@ function ProfileSegment(): ReactElement {
         </SegmentTrigger>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" side="top" className="w-96 max-w-[min(24rem,90vw)]">
-        <DropdownMenuLabel className="text-2xs text-ink-faint">
-          Profile — which account runs
-        </DropdownMenuLabel>
-
+      <DropdownMenuContent align="start" side="top" className="w-56 max-w-[min(14rem,90vw)]">
         {sections.length === 0 ? (
           <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
             No profile exists yet. A run needs an account, which comes from a profile.
@@ -446,57 +442,51 @@ function ProfileSegment(): ReactElement {
 
         <DropdownMenuSeparator />
         <DropdownMenuItem className="text-2xs" onSelect={() => openSettings('profiles')}>
-          Manage profiles…
+          Manage
         </DropdownMenuItem>
-        {/*
-          Not "Claude's own CLI" any more. This menu spans providers, so naming
-          one of them here would be wrong for every row under the other heading.
-        */}
-        <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-ink-faint">
-          Each profile’s account lives in its own config directory, signed in with its provider’s
-          own CLI. Artemis stores no credential.
-        </p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/** One profile row: label, sign-in state, config directory. */
+/**
+ * One profile row: swatch, label, sign-in state.
+ *
+ * One line, not two. The account and its config directory used to sit stacked,
+ * which doubled the height of every row to show a path nobody picks a profile
+ * by — the swatch and the name are what identify it. Both the directory and
+ * the signed-in email survive as the row's tooltip, which is where a detail
+ * belongs when it is wanted rarely and never at a glance.
+ */
 function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
   const status = useApp((s) => s.authByProfile[id]);
   const platform = useApp((s) => s.platform);
   if (!profile) return null;
 
-  const signedOut = status !== undefined && !status.loggedIn;
+  const path = shortenPath(profile.configDir, { platform, max: 60 });
 
   return (
-    <DropdownMenuRadioItem value={profile.id} className="items-start gap-2 text-2xs">
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {/*
-         * `min-w-0 flex-1` on the label and `shrink-0` on the badge, in that
-         * combination. Without it the badge — which has its own intrinsic width
-         * and no reason to yield — squeezes the label to nothing, and a profile
-         * row ends up showing its sign-in state and no name at all. Which of
-         * the two the user needs more is not a close call.
-         */}
-        <span className="flex min-w-0 items-center gap-1.5">
-          <ProfileSwatch color={profile.color} />
-          <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
-          {status ? (
-            <ToneBadge tone={status.loggedIn ? 'sage' : 'amber'} className="shrink-0">
-              {status.loggedIn ? (status.subscriptionType ?? 'signed in') : 'signed out'}
-            </ToneBadge>
-          ) : null}
-        </span>
-        <span
-          className={cn('truncate font-mono text-2xs', signedOut ? 'text-amber' : 'text-ink-faint')}
-          title={profile.configDir}
-        >
-          {signedOut
-            ? 'not signed in — open Manage profiles'
-            : (status?.email ?? shortenPath(profile.configDir, { platform, max: 40 }))}
-        </span>
+    <DropdownMenuRadioItem
+      value={profile.id}
+      className="gap-2 text-2xs"
+      title={status?.email ? `${status.email} — ${path}` : path}
+    >
+      {/*
+       * `min-w-0 flex-1` on the label and `shrink-0` on the badge, in that
+       * combination. Without it the badge — which has its own intrinsic width
+       * and no reason to yield — squeezes the label to nothing, and a profile
+       * row ends up showing its sign-in state and no name at all. Which of
+       * the two the user needs more is not a close call.
+       */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <ProfileSwatch color={profile.color} />
+        <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
+        {status ? (
+          <ToneBadge tone={status.loggedIn ? 'sage' : 'amber'} className="shrink-0">
+            {status.loggedIn ? (status.subscriptionType ?? 'signed in') : 'signed out'}
+          </ToneBadge>
+        ) : null}
       </span>
     </DropdownMenuRadioItem>
   );
