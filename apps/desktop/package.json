@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Artemis desktop application — Electron main, preload bridge and React renderer.",
+  "author": "Seth Torrence",
   "license": "MIT",
   "type": "module",
   "main": "./out/main/index.js",
@@ -12,7 +13,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc -b",
     "package": "pnpm run build && electron-builder --dir",
-    "dist": "pnpm run build && electron-builder",
+    "dist": "pnpm run build && electron-builder --publish never",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },

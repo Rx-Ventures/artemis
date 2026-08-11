@@ -24,8 +24,6 @@ mac:
   target:
     - dmg
     - zip
-  hardenedRuntime: true
-  entitlementsInherit: build/entitlements.mac.plist
 
 win:
   target:
@@ -36,5 +34,14 @@ linux:
   target:
     - AppImage
     - deb
+
+# Declaring the provider makes electron-builder emit latest-mac.yml (the
+# update feed) beside the artifacts. Actual publishing is done by
+# scripts/release.ts via `gh` after every gate has passed — the dist build
+# always runs with `--publish never`.
+publish:
+  provider: github
+  owner: seth-torrence
+  repo: artemis
 
 npmRebuild: false

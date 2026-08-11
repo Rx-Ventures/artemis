@@ -17,6 +17,8 @@
     "typecheck": "tsc -b --pretty",
     "typecheck:clean": "tsc -b --clean && tsc -b --pretty",
     "smoke": "pnpm run build:libs && tsx scripts/smoke.ts",
+    "release": "tsx scripts/release.ts",
+    "verify:package": "tsx scripts/verify-package.ts",
     "test": "pnpm -r --if-present test",
     "test:watch": "pnpm -r --if-present --parallel test:watch",
     "clean": "tsc -b --clean && rimraf --glob \"**/dist\" \"**/out\" \"**/.tsbuild\" \"**/*.tsbuildinfo\""

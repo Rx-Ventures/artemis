@@ -3,6 +3,8 @@ dist/
 out/
 release/
 build/
+# …but electron-builder's buildResources (app icons) are source, not output.
+!apps/desktop/build/
 .tsbuild/
 *.tsbuildinfo
 
@@ -29,6 +31,7 @@ pnpm-debug.log*
 
 # Local test/profile scratch data
 .artemis-dev/
+test_workspace/
 coverage/
 
 # Worktrees created by other sessions
