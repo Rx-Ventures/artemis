@@ -119,13 +119,21 @@ describe('TranscriptModel', () => {
   });
 });
 
-describe('TranscriptModel tool groups', () => {
+describe('TranscriptModel activity groups', () => {
   /** `tool.start` + `tool.end` for one call, as a pair of event drafts. */
   function call(id: string, name: string, status: ToolEndStatus = 'ok') {
     return [
       { type: 'tool.start', toolCallId: id, name, input: {} },
       { type: 'tool.end', toolCallId: id, status },
     ] as Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>;
+  }
+
+  /** One whole thinking block, the way a provider that does not stream sends it. */
+  function thought(messageId: string, blockIndex: number, text: string) {
+    return { type: 'thinking.delta', messageId, blockIndex, text } as Omit<
+      AgentEvent,
+      'runId' | 'seq' | 'ts'
+    >;
   }
 
   it('folds a run of tool calls into one row and counts it by category', () => {
@@ -150,7 +158,7 @@ describe('TranscriptModel tool groups', () => {
     expect(group?.failed).toBe(0);
   });
 
-  it('breaks a group when something that is not a tool comes between', () => {
+  it('breaks a group only when the agent says something', () => {
     const model = build();
     for (const event of stream(
       ...call('c1', 'Bash'),
@@ -165,6 +173,76 @@ describe('TranscriptModel tool groups', () => {
     expect(rows[0]).toBe('g:t:c1');
     expect(isGroupId(rows[1] as string)).toBe(false);
     expect(rows[2]).toBe('g:t:c2');
+  });
+
+  it('keeps the thinking between two calls inside the same burst', () => {
+    const model = build();
+    for (const event of stream(
+      thought('m1', 0, 'where does this live'),
+      ...call('c1', 'Grep'),
+      thought('m1', 1, 'now the other file'),
+      ...call('c2', 'Read'),
+      thought('m1', 2, 'that explains it'),
+    )) {
+      model.apply(event);
+    }
+
+    // One row for the whole stretch, named for the thinking that opened it.
+    const rows = model.getRowsSnapshot();
+    expect(rows).toEqual(['g:k:m1:0']);
+
+    const group = model.getGroup('g:k:m1:0');
+    expect(group?.ids).toEqual(['k:m1:0', 't:c1', 'k:m1:1', 't:c2', 'k:m1:2']);
+    expect(group?.counts).toEqual({ search: 1, read: 1 });
+    expect(group?.thinking).toBe(3);
+    // The last block is still open — nothing has settled it — so the marker
+    // pulses without claiming either call is still running.
+    expect(group?.streaming).toBe(true);
+    expect(group?.running).toBe(0);
+  });
+
+  it('leaves thinking that did nothing as its own row', () => {
+    const model = build();
+    for (const event of stream(
+      thought('m1', 0, 'the user wants the short answer'),
+      { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'no' },
+    )) {
+      model.apply(event);
+    }
+
+    const rows = model.getRowsSnapshot();
+    expect(rows).toEqual(['k:m1:0', 'a:m1:0']);
+    expect(rows.some((id) => isGroupId(id))).toBe(false);
+  });
+
+  it('folds a lone thinking row into the marker once a call joins it', () => {
+    const model = build();
+    model.apply(stream(thought('m1', 0, 'let me look'))[0] as AgentEvent);
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
+
+    for (const event of stream(...call('c1', 'Read'))) model.apply(event);
+
+    expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
+    expect(model.getGroup('g:k:m1:0')?.ids).toEqual(['k:m1:0', 't:c1']);
+  });
+
+  it('stays silent while a thinking block inside it streams', () => {
+    const model = build();
+    for (const event of stream(...call('c1', 'Bash'), thought('m1', 0, 'so far so good'))) {
+      model.apply(event);
+    }
+
+    const groupId = model.getRowsSnapshot()[0] as string;
+    const before = model.getGroup(groupId);
+    const onGroup = vi.fn();
+    model.subscribeGroup(groupId, onGroup);
+
+    // The per-token path, now running through a member of the group. The
+    // summary holds counters and no text, so nothing about it moved.
+    model.apply(stream(thought('m1', 0, ' — keep going'))[0] as AgentEvent);
+
+    expect(model.getGroup(groupId)).toBe(before);
+    expect(onGroup).not.toHaveBeenCalled();
   });
 
   it('keeps a group id stable as the burst grows, so an open marker stays open', () => {
