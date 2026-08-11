@@ -25,7 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import { Transcript } from '@/components/Transcript';
-import { transcript, useApp } from '@/state/store';
+import { useApp } from '@/state/store';
+import { appTranscript, seedApp } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -60,8 +61,8 @@ function stream(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): Age
 
 /** Feed the singleton the way a run would, then settle it synchronously. */
 function play(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): void {
-  for (const event of stream(...drafts)) transcript.apply(event);
-  transcript.flush();
+  for (const event of stream(...drafts)) appTranscript().apply(event);
+  appTranscript().flush();
 }
 
 function call(id: string, name: string, status = 'ok'): Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>> {
@@ -72,9 +73,9 @@ function call(id: string, name: string, status = 'ok'): Array<Omit<AgentEvent, '
 }
 
 beforeEach(() => {
-  transcript.reset();
-  transcript.flush();
-  useApp.setState({
+  appTranscript().reset();
+  appTranscript().flush();
+  seedApp({
     providers: [
       {
         id: 'claude',
@@ -163,8 +164,8 @@ describe('the provider mark', () => {
   });
 
   it('does not appear on our own turns', () => {
-    transcript.pushUserMessage('fix the auth bug');
-    transcript.flush();
+    appTranscript().pushUserMessage('fix the auth bug');
+    appTranscript().flush();
     render(<Transcript />);
 
     expect(screen.getByText('fix the auth bug')).not.toBeNull();
@@ -173,7 +174,7 @@ describe('the provider mark', () => {
 
   it('keeps saying who actually answered after the account is switched', () => {
     play({ type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'done' });
-    useApp.setState({
+    seedApp({
       providers: [
         ...useApp.getState().providers,
         {

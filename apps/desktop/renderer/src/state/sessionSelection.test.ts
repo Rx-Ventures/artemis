@@ -46,7 +46,19 @@ import type {
   SessionSummary,
 } from '@rx-artemis/protocol';
 
-import { refreshSessions, setProfile, useApp } from './store';
+import { focusedPane, refreshSessions, setProfile, useApp } from './store';
+import { paneState, setPaneState } from './pane';
+
+/*
+ * One column, and it is the one the sidebar's listing answers for.
+ *
+ * `setProfile` and the rest write to a pane now — see `state/pane.ts`. The
+ * session list itself stays the window's: it spans every provider and both
+ * columns browse the same history.
+ */
+const pane = () => focusedPane();
+const session_ = () => paneState(pane());
+const setSession = (patch) => setPaneState(pane(), patch);
 
 const CAPABLE: Capabilities = {
   interactivePermissions: true,
@@ -150,13 +162,16 @@ beforeEach(() => {
   useApp.setState({
     providers: [CLAUDE, CODEX],
     profiles: [CLAUDE_WORK, CODEX_NEW],
+    sessions: [],
+    sessionsError: null,
+    sessionsLoading: false,
+  });
+  setSession({
     activeProviderId: 'claude',
     activeProfileId: CLAUDE_WORK.id,
     run: null,
     cwd: '/proj',
-    sessions: [],
-    sessionsError: null,
-    sessionsLoading: false,
+    models: [],
   });
 });
 
@@ -169,8 +184,8 @@ describe('setProfile', () => {
     // The whole reason the picker can span providers. Selecting a Codex account
     // while `activeProviderId` still said `claude` would point every catalogue
     // fetch, session list and run at the wrong binary.
-    expect(useApp.getState().activeProfileId).toBe(CODEX_NEW.id);
-    expect(useApp.getState().activeProviderId).toBe('codex');
+    expect(session_().activeProfileId).toBe(CODEX_NEW.id);
+    expect(session_().activeProviderId).toBe('codex');
   });
 
   it('gets back to a Claude account from a Codex one', () => {
@@ -180,26 +195,27 @@ describe('setProfile', () => {
     // The reported bug, read forwards: after initialising a Codex profile there
     // was no route back to the Claude accounts, because the only picker on
     // screen had filtered them out.
-    expect(useApp.getState().activeProfileId).toBe(CLAUDE_WORK.id);
-    expect(useApp.getState().activeProviderId).toBe('claude');
+    expect(session_().activeProfileId).toBe(CLAUDE_WORK.id);
+    expect(session_().activeProviderId).toBe('claude');
   });
 
   it('ignores an id no profile has', () => {
     setProfile('deleted-while-the-menu-was-open');
 
-    expect(useApp.getState().activeProfileId).toBe(CLAUDE_WORK.id);
-    expect(useApp.getState().activeProviderId).toBe('claude');
+    expect(session_().activeProfileId).toBe(CLAUDE_WORK.id);
+    expect(session_().activeProviderId).toBe('claude');
   });
 
   it('keeps the loaded catalogue when the provider does not change', () => {
     const models = [{ id: 'opus', label: 'Opus 5', resolvedModel: 'claude-opus-5', note: '' }];
-    useApp.setState({ models, profiles: [CLAUDE_WORK, profile('claude-personal', 'claude')] });
+    useApp.setState({ profiles: [CLAUDE_WORK, profile('claude-personal', 'claude')] });
+    setSession({ models });
 
     setProfile('claude-personal');
 
     // Same provider, so the list is still the right shape of answer. Clearing
     // would flash the picker back to the built-in list and forward again.
-    expect(useApp.getState().models).toEqual(models);
+    expect(session_().models).toEqual(models);
   });
 });
 

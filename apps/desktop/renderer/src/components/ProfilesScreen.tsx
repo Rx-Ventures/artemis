@@ -63,12 +63,15 @@ import { shortenPath } from '../lib/paths';
 import {
   createProfile,
   deleteProfile,
+  focusedPane,
   readAuthStatus,
   signOutProfile,
   suggestConfigDir,
   updateProfile,
   useApp,
 } from '../state/store';
+import { usePane } from '../state/paneContext';
+import { paneState } from '../state/pane';
 import { IconButton, ReasonButton } from './disabled-reason';
 import { ProfilePlanUsage } from './PlanUsageMeter';
 import { CodeBlock, ProfileSwatch, ToneBadge } from './primitives';
@@ -123,7 +126,7 @@ const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
 
 export function ProfilesSection(): ReactElement {
   const profiles = useApp((s) => s.profiles);
-  const activeId = useApp((s) => s.activeProfileId);
+  const activeId = usePane((s) => s.activeProfileId);
   const [editing, setEditing] = useState<string | null>(null);
   /**
    * Open the create form immediately when there are none.
@@ -500,9 +503,10 @@ function SignInStep({
   // follows. `command` already comes from the profile's own adapter, so reading
   // the prose off the active provider was a way to explain a `codex login` in
   // Claude's words.
+  const fallback = usePane((s) => s.activeProviderId);
   const provider = useApp((s) => {
     const owner = s.profiles.find((p) => p.id === profileId)?.providerId;
-    return s.providers.find((p) => p.id === (owner ?? s.activeProviderId));
+    return s.providers.find((p) => p.id === (owner ?? fallback));
   });
   const [copied, setCopied] = useState(false);
   const signedIn = status?.loggedIn === true;
@@ -713,7 +717,7 @@ interface FormProps {
 }
 
 function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
-  const fallbackProvider = useApp((s) => s.activeProviderId);
+  const fallbackProvider = usePane((s) => s.activeProviderId);
   const providers = useApp((s) => s.providers);
   const platform = useApp((s) => s.platform);
 
@@ -860,7 +864,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
     // `createProfile` makes the new profile active, which is how the sign-in
     // step below learns which id to poll.
     if (created) {
-      const id = useApp.getState().activeProfileId;
+      const id = paneState(focusedPane()).activeProfileId;
       if (id) onDone(id);
     }
   }

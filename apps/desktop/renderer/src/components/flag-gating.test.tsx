@@ -38,6 +38,7 @@ import {
   thinkingLevels,
   useApp,
 } from '@/state/store';
+import { appSession, seedApp } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -82,7 +83,7 @@ function useModels(models: readonly ProviderModelOption[], selected: string | nu
     effortLevels: EFFORTS,
     available: true,
   };
-  useApp.setState({
+  seedApp({
     providers: [provider],
     activeProviderId: 'claude',
     profiles: [{ id: 'p1', label: 'P', providerId: 'claude', configDir: '/Users/me/.claude' }],
@@ -111,28 +112,28 @@ describe('providerOffersFastMode / providerOffersUltracode', () => {
     // Not the *selected* model — `haiku` offers neither, and the provider still
     // has the concept because `opus` does.
     useModels(CLAUDE_MODELS, 'haiku');
-    expect(providerOffersFastMode(useApp.getState())).toBe(true);
-    expect(providerOffersUltracode(useApp.getState())).toBe(true);
+    expect(providerOffersFastMode(appSession())).toBe(true);
+    expect(providerOffersUltracode(appSession())).toBe(true);
   });
 
   it('is false when no model does', () => {
     useModels(CODEX_MODELS, 'gpt-5.5');
-    expect(providerOffersFastMode(useApp.getState())).toBe(false);
-    expect(providerOffersUltracode(useApp.getState())).toBe(false);
+    expect(providerOffersFastMode(appSession())).toBe(false);
+    expect(providerOffersUltracode(appSession())).toBe(false);
   });
 });
 
 describe('thinking ladder / ultracode rung', () => {
   it('carries the rung, disabled, on a model that cannot but a provider that can', () => {
     useModels(CLAUDE_MODELS, 'haiku');
-    const ultra = thinkingLevels(useApp.getState()).find((l) => l.id === 'ultracode');
+    const ultra = thinkingLevels(appSession()).find((l) => l.id === 'ultracode');
     expect(ultra).toBeDefined();
     expect(ultra?.available).toBe(false);
   });
 
   it('drops the rung entirely on a provider with no ultracode', () => {
     useModels(CODEX_MODELS, 'gpt-5.5');
-    const levels = thinkingLevels(useApp.getState());
+    const levels = thinkingLevels(appSession());
     // The ladder still exists — Codex has effort levels — it just ends at its
     // own top rung instead of carrying one that could never be reached.
     expect(levels.length).toBe(EFFORTS.length);
@@ -143,7 +144,7 @@ describe('thinking ladder / ultracode rung', () => {
 describe('command palette / fast mode', () => {
   it('lists the command disabled when the selected model cannot', () => {
     useModels(CLAUDE_MODELS, 'haiku');
-    useApp.setState({ paletteOpen: true });
+    seedApp({ paletteOpen: true });
     mount(<CommandPalette />);
 
     const item = screen.getByText('Turn fast mode on').closest('[role="option"]');
@@ -153,7 +154,7 @@ describe('command palette / fast mode', () => {
 
   it('does not list it at all when the provider has no fast mode', () => {
     useModels(CODEX_MODELS, 'gpt-5.5');
-    useApp.setState({ paletteOpen: true });
+    seedApp({ paletteOpen: true });
     mount(<CommandPalette />);
 
     expect(screen.queryByText('Turn fast mode on')).toBeNull();

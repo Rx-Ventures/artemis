@@ -62,6 +62,7 @@ import {
   toggleQuickModel,
   useApp,
 } from '../../state/store';
+import { usePane } from '../../state/paneContext';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import {
@@ -78,12 +79,12 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
 export function ModelsSection(): ReactElement {
-  const catalogue = useApp(activeModels);
-  const efforts = useApp(activeEffortLevels);
-  const providerLabel = useApp(activeProviderLabel);
-  const profileId = useApp((s) => s.activeProfileId);
-  const loading = useApp((s) => s.modelsLoading);
-  const error = useApp((s) => s.modelsError);
+  const catalogue = usePane(activeModels);
+  const efforts = usePane(activeEffortLevels);
+  const providerLabel = usePane(activeProviderLabel);
+  const profileId = usePane((s) => s.activeProfileId);
+  const loading = usePane((s) => s.modelsLoading);
+  const error = usePane((s) => s.modelsError);
   /**
    * Whether this list came off the installed CLI.
    *
@@ -93,7 +94,7 @@ export function ModelsSection(): ReactElement {
    * `live`. Deriving it here from the same fact keeps the badge from ever
    * disagreeing with the list it labels.
    */
-  const live = useApp((s) => s.models.length > 0);
+  const live = usePane((s) => s.models.length > 0);
 
   const refreshReason = profileId
     ? undefined
@@ -219,11 +220,11 @@ function flagReason(
  * over nothing.
  */
 function Defaults(): ReactElement | null {
-  const selected = useApp(selectedModelOption);
-  const offersFast = useApp(providerOffersFastMode);
-  const offersUltra = useApp(providerOffersUltracode);
-  const fastMode = useApp((s) => s.fastMode);
-  const ultracode = useApp((s) => s.ultracode);
+  const selected = usePane(selectedModelOption);
+  const offersFast = usePane(providerOffersFastMode);
+  const offersUltra = usePane(providerOffersUltracode);
+  const fastMode = usePane((s) => s.fastMode);
+  const ultracode = usePane((s) => s.ultracode);
 
   if (!offersFast && !offersUltra) return null;
 
@@ -314,7 +315,7 @@ function Catalogue({
   readonly efforts: ReturnType<typeof activeEffortLevels>;
 }): ReactElement {
   const quickIds = useApp((s) => s.quickModelIds);
-  const selectedId = useApp((s) => s.model);
+  const selectedId = usePane((s) => s.model);
   const curated = quickIds.length > 0;
 
   return (

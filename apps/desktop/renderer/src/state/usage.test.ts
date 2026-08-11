@@ -8,7 +8,20 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type { AgentEvent, RunId, UsageSnapshot } from '@rx-artemis/protocol';
 
-import { handleAgentEvent, useApp, type RunState } from './store';
+import { focusedPane, handleAgentEvent, useApp, type RunState } from './store';
+import { paneState, setPaneState } from './pane';
+
+/*
+ * The run belongs to a column; the learned window belongs to the window.
+ *
+ * That division is the thing worth asserting here, and it is not incidental: a
+ * context window is a fact about a *model*, so the right column benefits from
+ * what the left one learned, while the run that reported it is one column's
+ * alone. See the `usage` case in `handleAgentEvent`.
+ */
+const pane = () => focusedPane();
+const session = () => paneState(pane());
+const setSession = (patch) => setPaneState(pane(), patch);
 
 const RUN = 'run-1' as RunId;
 
@@ -31,7 +44,8 @@ const TOKENS = { inputTokens: 10, outputTokens: 5 };
 
 describe('usage / context readout', () => {
   beforeEach(() => {
-    useApp.setState({ run: { ...BASE }, contextWindows: {} });
+    useApp.setState({ contextWindows: {} });
+    setSession({ run: { ...BASE } });
   });
 
   it('keeps contextTokens when the final snapshot replaces the deltas', () => {
@@ -41,7 +55,7 @@ describe('usage / context readout', () => {
     handleAgentEvent(usageEvent({ scope: 'delta', tokens: TOKENS, contextTokens: 84_000 }, 0));
     handleAgentEvent(usageEvent({ scope: 'final', tokens: TOKENS, contextWindow: 200_000 }, 1));
 
-    const usage = useApp.getState().run?.usage;
+    const usage = session().run?.usage;
     expect(usage?.contextTokens).toBe(84_000);
     expect(usage?.contextWindow).toBe(200_000);
   });
@@ -58,7 +72,7 @@ describe('usage / context readout', () => {
     // The window belongs to the model, not the session: after a switch, showing
     // the previous model's window would be a confidently wrong number.
     handleAgentEvent(usageEvent({ scope: 'final', tokens: TOKENS, contextWindow: 200_000 }, 0));
-    useApp.setState({ run: { ...BASE, model: 'claude-sonnet-5' } });
+    setSession({ run: { ...BASE, model: 'claude-sonnet-5' } });
     handleAgentEvent(usageEvent({ scope: 'final', tokens: TOKENS, contextWindow: 1_000_000 }, 1));
 
     expect(useApp.getState().contextWindows).toEqual({

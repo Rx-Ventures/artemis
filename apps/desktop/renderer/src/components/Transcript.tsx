@@ -142,6 +142,7 @@ import { useToolGroup, useTranscriptItem, useTranscriptRows } from '../hooks/use
 import { formatBytes } from '../lib/attachments';
 import { detectFileEdit } from '../lib/diff';
 import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
+import { usePane } from '../state/paneContext';
 import {
   formatClock,
   formatDuration,
@@ -297,9 +298,9 @@ export function Transcript(): ReactElement {
  * costs nothing while text is arriving.
  */
 function Working(): ReactElement | null {
-  const live = useApp((s) => s.run !== null && s.run.status === 'running');
-  const streams = useApp((s) => activeCapabilities(s).partialMessages);
-  const waiting = useApp((s) => s.permissionQueue.length > 0);
+  const live = usePane((s) => s.run !== null && s.run.status === 'running');
+  const streams = usePane((s) => activeCapabilities(s).partialMessages);
+  const waiting = usePane((s) => s.permissionQueue.length > 0);
 
   if (!live || streams || waiting) return null;
   return (
@@ -426,13 +427,17 @@ function Line({
 /**
  * The mark of whoever is answering, for the gutter of an agent turn.
  *
- * Prefers the *run's* provider over the window's current one. They are usually
+ * Prefers the *run's* provider over the pane's current one. They are usually
  * the same, but a transcript that is still on screen after the user switches
  * profiles must keep saying who actually wrote it — relabelling finished turns
  * to match the account now selected would be a quiet lie about the record.
+ *
+ * Read from the pane rather than the window, which is the same rule one scope
+ * out: with several conversations open the window has no single answer, and the
+ * one that matters is the account *this* column is billing.
  */
 function AgentAvatar(): ReactElement {
-  const providerId = useApp((s) => s.run?.providerId ?? s.activeProviderId);
+  const providerId = usePane((s) => s.run?.providerId ?? s.activeProviderId);
   const label = useApp((s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId);
   return (
     <ProviderLogo

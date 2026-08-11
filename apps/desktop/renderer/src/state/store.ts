@@ -10,6 +10,26 @@
  * through `useApp.getState()` and write through `useApp.setState()`, which
  * keeps the store's type trivial and means a component can call an action
  * without subscribing to anything.
+ *
+ * ## This store is the *window*. The conversation lives in a pane.
+ *
+ * Split view is the reason there are two stores. Everything that answers "what
+ * will the next prompt in this column do" — the directory, the profile, the
+ * model, the live run, the parked permissions, the transcript — moved into
+ * `pane.ts`, one copy per open column. What is left here is genuinely about the
+ * application: the session list, the catalogues, the sidebar, the banners, the
+ * palette, the settings surface.
+ *
+ * Two consequences for anyone adding to this file:
+ *
+ *  - **A session-scoped action takes a `Pane`.** By convention it is the last
+ *    parameter and defaults to {@link focusedPane}, so window-level surfaces
+ *    (the palette, settings, a hotkey) can call it unchanged and a control
+ *    inside a column passes its own.
+ *  - **A selector over session state takes `SessionState`, not `AppState`.**
+ *    Five window values are mirrored into every pane so those selectors stay
+ *    single-argument; `pane.ts` explains why, and {@link mirrorToPanes} is the
+ *    only writer.
  */
 
 import { create } from 'zustand';
@@ -55,10 +75,22 @@ import {
 } from '../lib/extensions';
 import { isAbsolutePath } from '../lib/paths';
 import { newId } from '../lib/id';
-import { TranscriptModel } from './transcript';
+import type { TranscriptModel } from './transcript';
+import {
+  MIRRORED_KEYS,
+  createPane,
+  createRow,
+  paneState,
+  setPaneState,
+  type MirroredState,
+  type Pane,
+  type PaneId,
+  type PaneRow,
+  type RunState,
+  type SessionState,
+} from './pane';
 
-/** The one transcript instance. Components subscribe to it directly. */
-export const transcript = new TranscriptModel();
+export type { Pane, PaneId, PaneRow, RunState, SessionState };
 
 /* -------------------------------------------------------------------------- */
 /* Shapes                                                                     */
@@ -107,25 +139,6 @@ export type RunSummary = 'always' | 'failures' | 'never';
 
 export type { PlanMeterFocus };
 
-/** Renderer-side view of the live run. Mirrors `RunHandle` plus stream facts. */
-export interface RunState {
-  readonly runId: RunId;
-  readonly status: RunStatus;
-  readonly providerId: ProviderId;
-  readonly profileId: ProfileId;
-  readonly cwd: string;
-  readonly capabilities: Capabilities;
-  readonly startedAt: number;
-  readonly sessionId?: SessionId;
-  readonly model?: string;
-  readonly tools?: readonly string[];
-  readonly slashCommands?: readonly string[];
-  readonly permissionMode?: PermissionMode;
-  readonly usage?: UsageSnapshot;
-  readonly endReason?: RunEndReason;
-  readonly error?: AgentError;
-}
-
 /** A dismissible message on the error surface. */
 export interface Banner {
   readonly id: string;
@@ -141,10 +154,44 @@ export interface AppState {
   readonly platform: 'darwin' | 'win32' | 'linux';
   readonly booted: boolean;
 
+  /**
+   * The working grid: rows of columns, top to bottom and left to right.
+   *
+   * Arrays rather than a map because the order *is* the layout. Pane and row
+   * objects are stable identities for as long as they are open, so a component
+   * that captured one keeps reading the right store as the grid changes around
+   * it.
+   *
+   * Never empty, and no row is ever empty — {@link closePane} drops a row along
+   * with its last pane, and refuses to close the last pane in the window.
+   */
+  readonly grid: readonly PaneRow[];
+  /**
+   * Which pane the window-level surfaces act on.
+   *
+   * The palette, the run inspector, the settings dialog and every hotkey are
+   * singletons over a grid of conversations, so each needs an answer to "which
+   * one". Focus follows a click anywhere in a pane, and every pane is captioned
+   * with the focused one marked, so the answer is never a guess.
+   */
+  readonly focusedPaneId: PaneId;
+  /**
+   * Divider positions, as percentages, keyed by *position* rather than by id.
+   *
+   * `row:0`, `row:1`… are the row heights; `r0c1` is the second column of the
+   * first row. Positional keys are the point: pane and row ids are minted per
+   * session and mean nothing after a restart, whereas "the first divider in the
+   * top row" is the same place tomorrow. It is what lets a geometry the user
+   * dragged survive closing a pane and opening another one — and survive a
+   * relaunch, for whatever shape they rebuild.
+   *
+   * A shape with no stored entry simply splits evenly; see `WorkingArea`, which
+   * only hands the library a layout when it has one for every panel in a group.
+   */
+  readonly paneLayout: Readonly<Record<string, number>>;
+
   readonly providers: readonly ProviderDescriptor[];
   readonly profiles: readonly ProfileMetadata[];
-  readonly activeProviderId: ProviderId;
-  readonly activeProfileId: ProfileId | null;
 
   /**
    * Last-known login state per profile, keyed by id.
@@ -160,57 +207,6 @@ export interface AppState {
   readonly authByProfile: Readonly<Record<ProfileId, AuthStatusInfo>>;
 
   /**
-   * Where the agent works — a property of the session in the working column,
-   * not of the window around it.
-   *
-   * There is one of these rather than one per open session because the window
-   * shows one conversation at a time; "pinned to the session" is about *when it
-   * moves*, not about how many copies exist. It moves in exactly two places,
-   * and both keep it married to the transcript on screen: {@link resumeSession}
-   * adopts the selected session's directory, and {@link setCwd} ends the
-   * session rather than retargeting it. Nothing else may write this field.
-   */
-  readonly cwd: string;
-  readonly permissionMode: PermissionMode;
-  /**
-   * Model id for the next run, or `null` for the provider's default.
-   *
-   * Held as a plain id rather than a `ProviderModelOption` because it is
-   * persisted across restarts and across provider switches, where the option
-   * object may no longer exist. Every read resolves it against the live
-   * descriptor — see {@link activeModel}.
-   */
-  readonly model: string | null;
-  /** Reasoning-effort id for the next run, or `null` for the provider default. */
-  readonly effort: string | null;
-  readonly forkOnResume: boolean;
-  readonly resumeSessionId: SessionId | null;
-
-  /**
-   * The model catalogue the *account* actually offers, or `[]` before one has
-   * been fetched.
-   *
-   * Separate from the provider descriptor's static `models` because the two
-   * answer different questions: the descriptor says what this build of Artemis
-   * knows about, this says what the installed CLI, signed in as this profile,
-   * is willing to run. {@link activeModels} prefers this and falls back to the
-   * descriptor, so no caller has to know which one it got.
-   *
-   * Never persisted. A catalogue is a fact about a remote account at a moment
-   * in time; caching one across restarts would show models an expired
-   * subscription no longer has.
-   */
-  readonly models: readonly ProviderModelOption[];
-  readonly modelsLoading: boolean;
-  /**
-   * Why the last catalogue fetch failed, or `null`.
-   *
-   * Set *alongside* whatever catalogue is already loaded rather than instead of
-   * it — see {@link refreshModels}. The UI shows this as a note on a list that
-   * is still there, not as an empty state.
-   */
-  readonly modelsError: string | null;
-  /**
    * Model ids the user pinned to the status-line picker, in no particular
    * order — display order comes from the catalogue, not from this.
    *
@@ -218,12 +214,12 @@ export interface AppState {
    * catalogue. That is not the same as "pinned nothing": a user who has never
    * opened settings must still get a usable picker, so there is no way to
    * express an intentionally empty quick list and no need for one.
+   *
+   * A shortlist is a statement about which models the *user* likes, not about
+   * an account, so it stays here and is mirrored into every pane rather than
+   * kept per column.
    */
   readonly quickModelIds: readonly string[];
-  /** Ask the next run to trade reasoning depth for latency, where supported. */
-  readonly fastMode: boolean;
-  /** Ask the next run to spend materially more compute, where supported. */
-  readonly ultracode: boolean;
   /** How wide the transcript column may grow. */
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
@@ -244,26 +240,21 @@ export interface AppState {
   readonly sessionsLoading: boolean;
   readonly sessionsError: string | null;
 
-  readonly run: RunState | null;
   /**
    * Context window size per model, learned as runs finish.
    *
    * The provider only reveals a model's window in the `final` usage snapshot at
-   * run end, and `run` resets every turn — so without somewhere durable to keep
-   * it, the context readout can never render while a turn is streaming. Keyed
-   * by model because the number is a property of the model, not the session:
-   * switching models must not show the previous one's window.
+   * run end, and a pane's `run` resets every turn — so without somewhere
+   * durable to keep it, the context readout can never render while a turn is
+   * streaming. Keyed by model because the number is a property of the model,
+   * not the session: switching models must not show the previous one's window.
+   *
+   * Window-scoped, and mirrored into the panes, precisely because it is about
+   * the model. A window learned in the left column is just as true in the
+   * right, and making each column learn it separately would blank the readout
+   * in a freshly split pane for no reason.
    */
   readonly contextWindows: Readonly<Record<string, number>>;
-  /**
-   * Permission requests still awaiting an answer.
-   *
-   * Kept alongside the transcript's own permission items, which carry the
-   * *record* of a decision. This list is the live work queue: it drives the
-   * run's `awaiting_permission` status and the status line's counter, and it is
-   * what tells Escape which request to deny.
-   */
-  readonly permissionQueue: readonly PermissionRequest[];
   readonly banners: readonly Banner[];
 
   readonly screen: Screen;
@@ -304,25 +295,6 @@ export interface AppState {
    * gives nothing back at this size.
    */
   readonly collapsedProjects: readonly string[];
-  /**
-   * What the working directory is called — the repository's name when it is in
-   * one, and the directory's own either way.
-   *
-   * `null` until the answer arrives, and `null` forever in a build whose
-   * preload has no `workspace.describe`. Nothing waits on it: the sidebar falls
-   * back to the last segment of `cwd`, which is what it showed before this
-   * existed. See `lib/extensions.ts`.
-   */
-  readonly workspace: WorkspaceNames | null;
-  /**
-   * Prompts the user has sent this session, newest last.
-   *
-   * Kept so an empty composer can recall the previous prompt with Up, the way
-   * a shell does. Renderer-local and never persisted: a prompt history that
-   * survived a restart would be a second place a user's text lives, and this
-   * one has no business outliving the window.
-   */
-  readonly promptHistory: readonly string[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -340,6 +312,76 @@ export const SIDEBAR_DEFAULT_WIDTH = 272;
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Grid geometry                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many conversations a window may hold, whatever shape they are in.
+ *
+ * One number rather than a limit per axis, because the cost being bounded is
+ * *a pane* — a live provider subprocess, a transcript, a scroll position and an
+ * account being billed — and that cost is the same whether the pane sits in a
+ * row or a column. A per-axis cap would bound the wrong thing: four across and
+ * four down would permit sixteen agents running at once, which is a
+ * fundamentally different machine load from the four the ceiling is meant to
+ * describe.
+ *
+ * Four is also exactly enough for every arrangement worth having, so nothing is
+ * lost by stating it once: four across, four down, a two-by-two, and the ragged
+ * threes in between — a pair over a full-width third, or the reverse.
+ */
+export const MAX_PANES = 4;
+
+/**
+ * The narrowest a column may be dragged, and the shortest a row, **in pixels**.
+ *
+ * Sizes, not fractions, and the distinction is the whole point. A percentage
+ * floor is a different promise on every window: a quarter of a wide display is
+ * a perfectly usable column, and a quarter of a laptop window is 280px — narrow
+ * enough that the permission card's buttons stack, the status line drops
+ * segments and the composer shows four words at a time. The constraint being
+ * expressed is "enough room to read a tool call and type a reply", and that is
+ * measured in pixels.
+ *
+ * The height floor is the tighter of the two in practice: a row has to fit a
+ * caption, a composer and a status line before any transcript is visible at
+ * all, which is most of 220px before anything is readable.
+ *
+ * Closing a pane is the deliberate way to get rid of one, and it is one click
+ * away; a divider does not need to be able to do it by accident.
+ */
+export const SPLIT_MIN_WIDTH = 360;
+export const SPLIT_MIN_HEIGHT = 220;
+
+/**
+ * Sanity bounds for a *stored* divider position.
+ *
+ * Deliberately looser than the pixel floors above, and not a second copy of
+ * them. The real minimum is enforced by the panel group, which knows how large
+ * the window actually is; this only stops a hand-edited or corrupt preference
+ * from restoring a pane at 2%. Clamping here to match the pixel rule would be
+ * guessing at a window size this module cannot see.
+ */
+const LAYOUT_FLOOR = 5;
+
+/** Keep one stored divider position sane, and reject non-numbers. */
+function clampLayoutShare(percent: number): number | null {
+  if (!Number.isFinite(percent)) return null;
+  return Math.min(100 - LAYOUT_FLOOR, Math.max(LAYOUT_FLOOR, Math.round(percent * 100) / 100));
+}
+
+/** Keep only the entries that are usable percentages. */
+function cleanLayout(value: unknown): Record<string, number> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const share = typeof entry === 'number' ? clampLayoutShare(entry) : null;
+    if (share !== null) out[key] = share;
+  }
+  return out;
 }
 
 /** The default reading width, and the fallback for a value that fails validation. */
@@ -370,6 +412,18 @@ export const DEFAULT_PLAN_METER_FOCUS: PlanMeterFocus = 'five_hour';
 
 const PLAN_METER_FOCUSES: readonly PlanMeterFocus[] = ['five_hour', 'seven_day', 'model'];
 
+/**
+ * What is persisted, and whose it is.
+ *
+ * Everything above `sidebarCollapsed` describes a *session*, and with two
+ * columns open there are two of each. Only the focused column's is written —
+ * see {@link savePrefs} — because these are seeds for the next launch, which
+ * starts with one column. Persisting both would mean restoring both, and a
+ * split that reappeared on every start (with two sessions the user had since
+ * finished) is furniture nobody asked for; the split itself is deliberately
+ * not restored. The divider's position is, so re-splitting lands where it was
+ * left.
+ */
 interface Prefs {
   /**
    * The last directory worked in, restored as the starting point for the first
@@ -382,6 +436,7 @@ interface Prefs {
    * this" than remembering where the user was.
    */
   cwd?: string;
+  paneLayout?: Record<string, number>;
   activeProfileId?: string | null;
   activeProviderId?: ProviderId;
   permissionMode?: PermissionMode;
@@ -490,6 +545,10 @@ function loadPrefs(): Prefs {
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
     contextWindows: numberMap(raw['contextWindows']),
+    // Same treatment as `contextWindows`, and for the same reason: these reach
+    // a layout engine as percentages, so a string or a negative that survived
+    // out of the blob would silently produce a pane of no width.
+    paneLayout: cleanLayout(raw['paneLayout']),
     // Filtered rather than passed through: this is compared against directory
     // strings, so a non-string left here by a hand edit would simply never
     // match and fold nothing — a silent no-op is worse than dropping the entry.
@@ -497,22 +556,30 @@ function loadPrefs(): Prefs {
   };
 }
 
+/**
+ * Persist the window's preferences and the *focused* column's session seeds.
+ *
+ * Which column's is not arbitrary: the focused one is the conversation the user
+ * was last in, which is the one worth reopening into. See {@link Prefs}.
+ */
 function savePrefs(): void {
   const s = useApp.getState();
+  const pane = paneState(focusedPane(s));
   const prefs: Prefs = {
-    cwd: s.cwd,
-    activeProfileId: s.activeProfileId,
-    activeProviderId: s.activeProviderId,
-    permissionMode: s.permissionMode,
-    model: s.model,
-    effort: s.effort,
+    cwd: pane.cwd,
+    activeProfileId: pane.activeProfileId,
+    activeProviderId: pane.activeProviderId,
+    permissionMode: pane.permissionMode,
+    model: pane.model,
+    effort: pane.effort,
+    fastMode: pane.fastMode,
+    ultracode: pane.ultracode,
+    paneLayout: s.paneLayout,
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
     collapsedProjects: s.collapsedProjects,
     settingsSection: s.settingsSection,
     quickModelIds: s.quickModelIds,
-    fastMode: s.fastMode,
-    ultracode: s.ultracode,
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     planMeterFocus: s.planMeterFocus,
@@ -527,31 +594,60 @@ function savePrefs(): void {
 
 const prefs = loadPrefs();
 
+/**
+ * The state a brand-new column starts from.
+ *
+ * Takes the mirrored window values from whatever is current, so a pane opened
+ * an hour into a session does not begin with an empty profile list and a status
+ * line full of placeholders for the one frame before the first mirror lands.
+ */
+function seedSession(overrides: Partial<SessionState> = {}): SessionState {
+  return {
+    providers: [],
+    profiles: [],
+    sessions: [],
+    contextWindows: prefs.contextWindows ?? {},
+    quickModelIds: prefs.quickModelIds ?? [],
+
+    activeProviderId: prefs.activeProviderId ?? 'claude',
+    activeProfileId: (prefs.activeProfileId ?? null) as ProfileId | null,
+    cwd: prefs.cwd ?? '',
+    workspace: null,
+    permissionMode: prefs.permissionMode ?? 'default',
+    model: prefs.model ?? null,
+    effort: prefs.effort ?? null,
+    fastMode: prefs.fastMode ?? false,
+    ultracode: prefs.ultracode ?? false,
+    forkOnResume: false,
+    resumeSessionId: null,
+    models: [],
+    modelsLoading: false,
+    modelsError: null,
+    run: null,
+    permissionQueue: [],
+    promptHistory: [],
+    draft: '',
+    ...overrides,
+  };
+}
+
+const firstPane = createPane(seedSession());
+
 export const useApp = create<AppState>(() => ({
   bridgeMode: 'unavailable',
   version: '',
   platform: 'darwin',
   booted: false,
 
+  grid: [createRow([firstPane])],
+  focusedPaneId: firstPane.id,
+  paneLayout: prefs.paneLayout ?? {},
+
   providers: [],
   profiles: [],
-  activeProviderId: prefs.activeProviderId ?? 'claude',
-  activeProfileId: prefs.activeProfileId ?? null,
   authByProfile: {},
 
-  cwd: prefs.cwd ?? '',
-  permissionMode: prefs.permissionMode ?? 'default',
-  model: prefs.model ?? null,
-  effort: prefs.effort ?? null,
-  forkOnResume: false,
-  resumeSessionId: null,
-
-  models: [],
-  modelsLoading: false,
-  modelsError: null,
   quickModelIds: prefs.quickModelIds ?? [],
-  fastMode: prefs.fastMode ?? false,
-  ultracode: prefs.ultracode ?? false,
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
@@ -561,29 +657,298 @@ export const useApp = create<AppState>(() => ({
   sessionsLoading: false,
   sessionsError: null,
 
-  run: null,
   contextWindows: prefs.contextWindows ?? {},
-  permissionQueue: [],
   banners: [],
 
   screen: 'chat',
   settingsSection: prefs.settingsSection ?? 'profiles',
   paletteOpen: false,
   infoOpen: false,
-  promptHistory: [],
 
   sidebarCollapsed: prefs.sidebarCollapsed ?? false,
   sidebarWidth: clampSidebarWidth(prefs.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH),
   collapsedProjects: prefs.collapsedProjects ?? [],
-  workspace: null,
 }));
+
+/* -------------------------------------------------------------------------- */
+/* Panes                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every pane in the grid, in reading order.
+ *
+ * Memoised on the grid's identity, and that is not an optimisation. This is
+ * read through `useApp(allPanes)`, which decides whether to re-render by
+ * comparing the result by identity; a fresh `flatMap` on every store read would
+ * report a change every time and React would loop to its update-depth ceiling.
+ * Same hazard `NO_OPTIONS` and `quickModels` describe further down.
+ */
+let flatGrid: readonly PaneRow[] | null = null;
+let flatPanes: readonly Pane[] = [];
+
+export function allPanes(state: AppState = useApp.getState()): readonly Pane[] {
+  if (state.grid === flatGrid) return flatPanes;
+  flatGrid = state.grid;
+  flatPanes = state.grid.flatMap((row) => row.panes);
+  return flatPanes;
+}
+
+/** How many conversations are open. */
+export function paneCount(state: AppState = useApp.getState()): number {
+  return allPanes(state).length;
+}
+
+/**
+ * The pane the window-level surfaces act on.
+ *
+ * Total by construction: a pane is only ever removed by {@link closePane},
+ * which moves the focus first, and the grid can never be empty. The `?? [0]` is
+ * belt and braces against a focus id that outlived its pane, which would
+ * otherwise crash the palette rather than land somewhere sensible.
+ */
+export function focusedPane(state: AppState = useApp.getState()): Pane {
+  const panes = allPanes(state);
+  return panes.find((p) => p.id === state.focusedPaneId) ?? (panes[0] as Pane);
+}
+
+/** Where a pane sits, or `null` if it is not in the grid. */
+function locate(
+  grid: readonly PaneRow[],
+  paneId: PaneId,
+): { readonly row: number; readonly column: number } | null {
+  for (let row = 0; row < grid.length; row += 1) {
+    const column = (grid[row] as PaneRow).panes.findIndex((p) => p.id === paneId);
+    if (column >= 0) return { row, column };
+  }
+  return null;
+}
+
+/** Which way a split goes. Right adds a column to a row; down adds a row. */
+export type SplitDirection = 'right' | 'down';
+
+/**
+ * Is there room for one more pane?
+ *
+ * Asked by the controls so an impossible split is rendered disabled with a
+ * reason rather than silently doing nothing — the app-wide rule. It takes no
+ * direction because the limit does not have one: {@link MAX_PANES} bounds the
+ * window's conversations, not the length of a row.
+ */
+export function canSplit(state: AppState = useApp.getState()): boolean {
+  return paneCount(state) < MAX_PANES;
+}
+
+/** The sentence to show when {@link canSplit} says no. */
+export const SPLIT_LIMIT_REASON = `A window holds ${MAX_PANES} conversations at once. Close one to open another.`;
+
+/** The pane holding a given run, or `undefined` once it has been closed. */
+function paneForRun(runId: RunId): Pane | undefined {
+  return allPanes().find((p) => paneState(p).run?.runId === runId);
+}
+
+/** True while any pane has a live run. Drives the session feed's poll rate. */
+export function anyPaneLive(state: AppState = useApp.getState()): boolean {
+  return allPanes(state).some((pane) => isLive(paneState(pane)));
+}
+
+/**
+ * Copy the window's shared values into every pane.
+ *
+ * The single writer of the mirrored fields, subscribed to the app store rather
+ * than called by each action, so a new `setState` on `profiles` written a year
+ * from now cannot forget to propagate. The identity guard is what keeps this
+ * off the render path: the subscription fires on every window change (a banner,
+ * the palette opening), and without it each of those would push a fresh object
+ * into every pane and re-render every status line.
+ */
+function mirrorToPanes(state: AppState): void {
+  const next: MirroredState = {
+    providers: state.providers,
+    profiles: state.profiles,
+    sessions: state.sessions,
+    contextWindows: state.contextWindows,
+    quickModelIds: state.quickModelIds,
+  };
+  for (const pane of allPanes(state)) {
+    const current = paneState(pane);
+    if (MIRRORED_KEYS.every((key) => current[key] === next[key])) continue;
+    setPaneState(pane, next);
+  }
+}
+
+useApp.subscribe(mirrorToPanes);
+
+/** Point the window-level surfaces at a pane. */
+export function focusPane(paneId: PaneId): void {
+  if (useApp.getState().focusedPaneId === paneId) return;
+  useApp.setState({ focusedPaneId: paneId });
+  savePrefs();
+}
+
+/**
+ * Commit dragged dividers.
+ *
+ * Takes a whole group's worth at once — positional key to percentage — because
+ * that is what the panel library reports and because the shares in one group
+ * only mean anything together. Clamped here so no caller can persist a silly
+ * one, and a no-op write is dropped rather than churning `localStorage` on a
+ * layout that merely re-reported itself.
+ */
+export function setPaneLayout(shares: Readonly<Record<string, number>>): void {
+  const current = useApp.getState().paneLayout;
+  let changed = false;
+  const next: Record<string, number> = { ...current };
+  for (const [key, value] of Object.entries(shares)) {
+    const share = clampLayoutShare(value);
+    if (share === null || current[key] === share) continue;
+    next[key] = share;
+    changed = true;
+  }
+  if (!changed) return;
+  useApp.setState({ paneLayout: next });
+  savePrefs();
+}
+
+/**
+ * Add a pane beside or below an existing one.
+ *
+ * ## Right grows a row; down adds a full-width one
+ *
+ * That asymmetry is the layout model, not a shortcut — see `PaneRow`. Splitting
+ * a left/right pair downwards puts the third pane across the bottom rather than
+ * quartering the window, because the user asked for a third conversation, not
+ * for an empty fourth cell to keep the shape rectangular. Splitting *that* pane
+ * rightwards then gives the two-by-two.
+ *
+ * ## The seed matters
+ *
+ * A new pane starting from the persisted preferences would open in whatever
+ * directory the app launched in, which is almost never where the user is now —
+ * splitting is something you do *while working*, to put two views of one
+ * problem side by side. So it inherits the source pane's account, directory and
+ * model, and starts a blank session there.
+ *
+ * Returns `null` when the grid is already at its limit in that direction. The
+ * controls ask {@link canSplit} first and render the reason, so a `null` here is
+ * the backstop for a keyboard shortcut rather than a state the UI can reach.
+ */
+export function splitPane(
+  direction: SplitDirection,
+  from: Pane = focusedPane(),
+): Pane | null {
+  const state = useApp.getState();
+  const at = locate(state.grid, from.id);
+  if (!at || !canSplit(state)) return null;
+
+  const source = paneState(from);
+  const pane = createPane(
+    seedSession({
+      providers: state.providers,
+      profiles: state.profiles,
+      sessions: state.sessions,
+      contextWindows: state.contextWindows,
+      quickModelIds: state.quickModelIds,
+      activeProviderId: source.activeProviderId,
+      activeProfileId: source.activeProfileId,
+      cwd: source.cwd,
+      workspace: source.workspace,
+      permissionMode: source.permissionMode,
+      model: source.model,
+      effort: source.effort,
+      fastMode: source.fastMode,
+      ultracode: source.ultracode,
+      // The catalogue is a property of the account, and the account came across
+      // with it — so it comes too, rather than making the new pane flash the
+      // built-in list until its own fetch lands.
+      models: source.models,
+    }),
+  );
+
+  useApp.setState((s) => {
+    const grid = [...s.grid];
+    if (direction === 'down') {
+      grid.splice(at.row + 1, 0, createRow([pane]));
+    } else {
+      const row = grid[at.row] as PaneRow;
+      const panes = [...row.panes];
+      panes.splice(at.column + 1, 0, pane);
+      grid[at.row] = { ...row, panes };
+    }
+    return { grid, focusedPaneId: pane.id };
+  });
+
+  void refreshModels(pane);
+  return pane;
+}
+
+/**
+ * Close a pane, ending whatever it was running.
+ *
+ * Refuses to close the last one: a window with no conversation in it has no way
+ * back to having one, and "close" would read as "quit". With a single pane open
+ * the control is not rendered at all, so this is the guard for the palette and
+ * the hotkey rather than a state the UI can reach.
+ *
+ * A row that loses its last pane goes with it, which is what makes the grid
+ * collapse the way people expect: closing the lone pane on the bottom row gives
+ * the width back to the row above rather than leaving a band of nothing.
+ *
+ * Focus moves to the nearest surviving neighbour — the pane that took the
+ * closed one's place, or the one before it — rather than jumping to the top
+ * left. In a four-pane grid, having the focus leap across the window because
+ * you closed something in the corner is disorienting, and the focused pane is
+ * what every window-level surface is pointed at.
+ *
+ * The run is disposed rather than left in the main process. A closed pane is
+ * the user saying they are done with that conversation, and an orphaned
+ * provider subprocess with nowhere to render its events is a leak whose only
+ * symptom is a warm laptop.
+ */
+export function closePane(paneId: PaneId): void {
+  const state = useApp.getState();
+  if (paneCount(state) <= 1) return;
+  const at = locate(state.grid, paneId);
+  if (!at) return;
+  const pane = (state.grid[at.row] as PaneRow).panes[at.column] as Pane;
+
+  void disposeRun(pane);
+  pane.transcript.reset();
+  // The pane is gone, so any catalogue fetch still in flight for it has nowhere
+  // to land. Dropping the token both releases the entry and makes the reply's
+  // own staleness check fail, which is what stops it writing into a store
+  // nothing is subscribed to.
+  modelsRequestToken.delete(paneId);
+
+  const grid: PaneRow[] = [];
+  for (let i = 0; i < state.grid.length; i += 1) {
+    const row = state.grid[i] as PaneRow;
+    if (i !== at.row) {
+      grid.push(row);
+      continue;
+    }
+    const panes = row.panes.filter((p) => p.id !== paneId);
+    if (panes.length > 0) grid.push({ ...row, panes });
+  }
+
+  const survivors = grid.flatMap((row) => row.panes);
+  const neighbour =
+    (grid[at.row] as PaneRow | undefined)?.panes[at.column] ??
+    (grid[at.row] as PaneRow | undefined)?.panes[at.column - 1] ??
+    survivors[survivors.length - 1];
+
+  useApp.setState({
+    grid,
+    ...(state.focusedPaneId === paneId ? { focusedPaneId: (neighbour as Pane).id } : {}),
+  });
+  savePrefs();
+}
 
 /* -------------------------------------------------------------------------- */
 /* Selectors                                                                  */
 /* -------------------------------------------------------------------------- */
 
 /** The descriptor for the provider the UI is currently pointed at. */
-export function activeProvider(state: AppState): ProviderDescriptor | undefined {
+export function activeProvider(state: SessionState): ProviderDescriptor | undefined {
   return state.providers.find((p) => p.id === state.activeProviderId);
 }
 
@@ -593,22 +958,22 @@ export function activeProvider(state: AppState): ProviderDescriptor | undefined 
  * A live run keeps the capabilities it was started with, so switching the
  * provider selector mid-run cannot retroactively change what the run can do.
  */
-export function activeCapabilities(state: AppState): Capabilities {
+export function activeCapabilities(state: SessionState): Capabilities {
   if (state.run && state.run.status !== 'ended') return state.run.capabilities;
   return activeProvider(state)?.capabilities ?? NO_CAPABILITIES;
 }
 
 /** Human name for the provider being degraded against, for tooltips. */
-export function activeProviderLabel(state: AppState): string {
+export function activeProviderLabel(state: SessionState): string {
   return activeProvider(state)?.label ?? state.activeProviderId;
 }
 
 /** True when a run is accepting events. */
-export function isLive(state: AppState): boolean {
+export function isLive(state: SessionState): boolean {
   return state.run !== null && state.run.status !== 'ended';
 }
 
-export function activeProfile(state: AppState): ProfileMetadata | undefined {
+export function activeProfile(state: SessionState): ProfileMetadata | undefined {
   return state.profiles.find((p) => p.id === state.activeProfileId);
 }
 
@@ -641,7 +1006,7 @@ const NO_OPTIONS: readonly never[] = Object.freeze([]);
  * disabled segment with that as its reason rather than as an empty menu — the
  * same rule every other capability-driven control follows.
  */
-export function activeModels(state: AppState): readonly ProviderModelOption[] {
+export function activeModels(state: SessionState): readonly ProviderModelOption[] {
   if (state.models.length > 0) return state.models;
   return activeProvider(state)?.models ?? NO_OPTIONS;
 }
@@ -660,7 +1025,7 @@ let quickCatalogue: readonly ProviderModelOption[] | null = null;
 let quickIds: readonly string[] | null = null;
 let quickResult: readonly ProviderModelOption[] = NO_OPTIONS;
 
-export function quickModels(state: AppState): readonly ProviderModelOption[] {
+export function quickModels(state: SessionState): readonly ProviderModelOption[] {
   const catalogue = activeModels(state);
   const ids = state.quickModelIds;
   if (catalogue === quickCatalogue && ids === quickIds) return quickResult;
@@ -690,7 +1055,7 @@ export function quickModels(state: AppState): readonly ProviderModelOption[] {
  * expected to stay that way; the alias exists so a caller reading model
  * *properties* does not read as if it were about to start a run.
  */
-export function selectedModelOption(state: AppState): ProviderModelOption | undefined {
+export function selectedModelOption(state: SessionState): ProviderModelOption | undefined {
   return activeModel(state);
 }
 
@@ -703,12 +1068,12 @@ export function selectedModelOption(state: AppState): ProviderModelOption | unde
  * honoured. An enabled toggle that the run silently ignores is worse than a
  * disabled one with a reason attached — the user believes it took effect.
  */
-export function fastModeAvailable(state: AppState): boolean {
+export function fastModeAvailable(state: SessionState): boolean {
   return selectedModelOption(state)?.supportsFastMode === true;
 }
 
 /** The same question for ultracode. Separate flag, separate answer. */
-export function ultracodeAvailable(state: AppState): boolean {
+export function ultracodeAvailable(state: SessionState): boolean {
   return selectedModelOption(state)?.supportsUltracode === true;
 }
 
@@ -731,17 +1096,17 @@ export function ultracodeAvailable(state: AppState): boolean {
  * on purpose: hidden when the *provider* cannot, disabled-and-explained when the
  * *model* cannot.
  */
-export function providerOffersFastMode(state: AppState): boolean {
+export function providerOffersFastMode(state: SessionState): boolean {
   return activeModels(state).some((m) => m.supportsFastMode === true);
 }
 
 /** The same question for ultracode. See {@link providerOffersFastMode}. */
-export function providerOffersUltracode(state: AppState): boolean {
+export function providerOffersUltracode(state: SessionState): boolean {
   return activeModels(state).some((m) => m.supportsUltracode === true);
 }
 
 /** Reasoning-effort levels the active provider offers, least to most. */
-export function activeEffortLevels(state: AppState): readonly ProviderEffortOption[] {
+export function activeEffortLevels(state: SessionState): readonly ProviderEffortOption[] {
   return activeProvider(state)?.effortLevels ?? NO_OPTIONS;
 }
 
@@ -759,7 +1124,7 @@ export function activeEffortLevels(state: AppState): readonly ProviderEffortOpti
  * top of the list where it collected mis-clicks. Resolving to a concrete model
  * means every surface can name what the next run will use.
  */
-export function activeModel(state: AppState): ProviderModelOption | undefined {
+export function activeModel(state: SessionState): ProviderModelOption | undefined {
   const models = activeModels(state);
   return models.find((m) => m.id === state.model) ?? models[0];
 }
@@ -771,7 +1136,7 @@ export function activeModel(state: AppState): ProviderModelOption | undefined {
  * the same reason {@link activeModel} does — the thinking picker no longer
  * offers an "unset" rung to represent it.
  */
-export function activeEffort(state: AppState): ProviderEffortOption | undefined {
+export function activeEffort(state: SessionState): ProviderEffortOption | undefined {
   const levels = activeEffortLevels(state);
   return levels.find((e) => e.id === state.effort) ?? levels.find((e) => e.id === DEFAULT_EFFORT);
 }
@@ -836,7 +1201,7 @@ export interface ThinkingLevel {
  * the ladder simply ends at its top effort level instead of carrying a rung that
  * could never be reached.
  */
-export function thinkingLevels(state: AppState): readonly ThinkingLevel[] {
+export function thinkingLevels(state: SessionState): readonly ThinkingLevel[] {
   const provider = activeEffortLevels(state);
   if (provider.length === 0) return NO_THINKING;
 
@@ -912,7 +1277,7 @@ const NO_THINKING: readonly ThinkingLevel[] = [];
  * both `ultracode` and an effort is not ambiguous, the effort is the one
  * ultracode pinned.
  */
-export function activeThinkingLevel(state: AppState): string | undefined {
+export function activeThinkingLevel(state: SessionState): string | undefined {
   if (state.ultracode) return ULTRACODE_LEVEL;
   return activeEffort(state)?.id;
 }
@@ -925,11 +1290,11 @@ export function activeThinkingLevel(state: AppState): string | undefined {
  * ultracode does the reverse, so asking for both is a contradiction the
  * provider can only resolve silently.
  */
-export function setThinkingLevel(id: string): void {
+export function setThinkingLevel(id: string, pane: Pane = focusedPane()): void {
   if (id === ULTRACODE_LEVEL) {
-    useApp.setState({ effort: ULTRACODE_EFFORT, ultracode: true, fastMode: false });
+    setPaneState(pane, { effort: ULTRACODE_EFFORT, ultracode: true, fastMode: false });
   } else {
-    useApp.setState({ effort: id, ultracode: false });
+    setPaneState(pane, { effort: id, ultracode: false });
   }
   savePrefs();
 }
@@ -947,7 +1312,7 @@ export function setThinkingLevel(id: string): void {
  * that is what a run reports back. Falls back to the alias for a provider that
  * does not resolve.
  */
-export function learnedContextWindow(state: AppState): number | undefined {
+export function learnedContextWindow(state: SessionState): number | undefined {
   const model = selectedModelOption(state);
   if (!model) return undefined;
   return state.contextWindows[model.resolvedModel ?? model.id] ?? state.contextWindows[model.id];
@@ -966,7 +1331,7 @@ export function learnedContextWindow(state: AppState): number | undefined {
  * branch read off some *other* repository's history and shown next to this
  * directory would not be stale, it would be wrong.
  */
-export function lastKnownBranch(state: AppState): string | undefined {
+export function lastKnownBranch(state: SessionState): string | undefined {
   const cwd = state.cwd.trim();
   if (cwd.length === 0) return undefined;
   let best: SessionSummary | undefined;
@@ -978,7 +1343,7 @@ export function lastKnownBranch(state: AppState): string | undefined {
 }
 
 /** The oldest permission request still awaiting an answer. */
-export function pendingPermission(state: AppState): PermissionRequest | undefined {
+export function pendingPermission(state: SessionState): PermissionRequest | undefined {
   return state.permissionQueue[0];
 }
 
@@ -1044,7 +1409,7 @@ export async function bootstrap(): Promise<void> {
   }
 
   await Promise.all([refreshProviders(), refreshProfiles()]);
-  await adoptExistingRun();
+  await adoptExistingRun(focusedPane());
   await refreshSessions();
   useApp.setState({ booted: true });
 
@@ -1052,10 +1417,10 @@ export async function bootstrap(): Promise<void> {
   // catalogue spawns a provider subprocess; blocking the first paint on it
   // would trade a working window for a slightly better-labelled model picker,
   // and the picker has the descriptor's list to render in the meantime.
-  void refreshModels();
+  void refreshModels(focusedPane());
   // Same reasoning, cheaper call: the sidebar header renders the directory's
   // own name until this lands, which is a correct label either way.
-  void refreshWorkspace();
+  void refreshWorkspace(focusedPane());
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -1067,14 +1432,18 @@ export async function refreshProviders(refresh = false): Promise<void> {
     return;
   }
   const providers = result.value.providers;
-  useApp.setState((s) => {
-    const stillThere = providers.some((p) => p.id === s.activeProviderId);
-    const firstAvailable = providers.find((p) => p.available) ?? providers[0];
-    return {
-      providers,
-      activeProviderId: stillThere ? s.activeProviderId : (firstAvailable?.id ?? s.activeProviderId),
-    };
-  });
+  useApp.setState({ providers });
+  // Per column, because the selected provider is: a pane pointed at an adapter
+  // that no longer exists has to land somewhere real, and the other column's
+  // choice is none of its business.
+  const firstAvailable = providers.find((p) => p.available) ?? providers[0];
+  for (const pane of allPanes()) {
+    setPaneState(pane, (s) =>
+      providers.some((p) => p.id === s.activeProviderId)
+        ? {}
+        : { activeProviderId: firstAvailable?.id ?? s.activeProviderId },
+    );
+  }
 }
 
 export async function refreshProfiles(): Promise<void> {
@@ -1095,19 +1464,20 @@ export async function refreshProfiles(): Promise<void> {
    * heard of. Preferring the active provider's own profiles first means that
    * fallback is reached only when there is genuinely nothing else.
    */
-  useApp.setState((s) => {
-    const current = s.activeProfileId;
-    const kept = current !== null && profiles.some((p) => p.id === current);
-    if (kept) return { profiles, activeProfileId: current };
+  useApp.setState({ profiles });
+  for (const pane of allPanes()) {
+    setPaneState(pane, (s) => {
+      const current = s.activeProfileId;
+      if (current !== null && profiles.some((p) => p.id === current)) return {};
 
-    const adopted =
-      profiles.find((p) => p.providerId === s.activeProviderId) ?? profiles[0] ?? null;
-    return {
-      profiles,
-      activeProfileId: adopted?.id ?? null,
-      activeProviderId: adopted?.providerId ?? s.activeProviderId,
-    };
-  });
+      const adopted =
+        profiles.find((p) => p.providerId === s.activeProviderId) ?? profiles[0] ?? null;
+      return {
+        activeProfileId: adopted?.id ?? null,
+        activeProviderId: adopted?.providerId ?? s.activeProviderId,
+      };
+    });
+  }
   savePrefs();
   invalidateSessions();
   void refreshSessions();
@@ -1122,7 +1492,7 @@ export async function refreshProfiles(): Promise<void> {
  * the user is no longer signed in as — the same staleness `loadSessionHistory`
  * guards against, with a counter instead of an id because there is no id here.
  */
-let modelsRequestToken = 0;
+const modelsRequestToken = new Map<PaneId, number>();
 
 /**
  * Follow one persisted model id from the catalogue it was chosen in into the
@@ -1195,9 +1565,9 @@ function carryModelIds(
  * model picker away from under the user's cursor and replace it with a
  * "no models" state that is not true.
  */
-export async function refreshModels(): Promise<void> {
+export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
-  const state = useApp.getState();
+  const state = paneState(pane);
 
   // No profile means no credential, and the catalogue is a property of the
   // account rather than of the binary — there is nothing to authenticate as, so
@@ -1206,8 +1576,12 @@ export async function refreshModels(): Promise<void> {
   const profileId = state.activeProfileId;
   if (!bridge || !profileId) return;
 
-  const token = ++modelsRequestToken;
-  useApp.setState({ modelsLoading: true, modelsError: null });
+  // Per pane, not per window: two columns signed in as two accounts fetch two
+  // catalogues, and a shared counter would have whichever asked second silently
+  // discard the other's answer.
+  const token = (modelsRequestToken.get(pane.id) ?? 0) + 1;
+  modelsRequestToken.set(pane.id, token);
+  setPaneState(pane, { modelsLoading: true, modelsError: null });
 
   try {
     const result = await call(() =>
@@ -1218,13 +1592,13 @@ export async function refreshModels(): Promise<void> {
       }),
     );
 
-    if (token !== modelsRequestToken) return;
+    if (token !== modelsRequestToken.get(pane.id)) return;
 
     if (!result.ok) {
       // Not a banner. The picker still has a list to render — either a stale
       // live one or the descriptor's — so this is a footnote on a working
       // control, not an error the user has to dismiss.
-      useApp.setState({ modelsError: result.error.message });
+      setPaneState(pane, { modelsError: result.error.message });
       return;
     }
 
@@ -1236,39 +1610,51 @@ export async function refreshModels(): Promise<void> {
     if (result.value.live) {
       // Read once, before the swap: `carryModelId` needs the outgoing catalogue,
       // and after `setState` there is no way back to it.
-      const before = useApp.getState();
+      const before = paneState(pane);
       const outgoing = activeModels(before);
       const models = result.value.models;
-      const quickModelIds = carryModelIds(before.quickModelIds, outgoing, models);
+      // The shortlist is the window's, so its migration is written to the window
+      // store — from where the mirror puts the carried ids in front of *both*
+      // columns' pickers, which is right: the pins did not move, the catalogue
+      // renaming them did.
+      const quickModelIds = carryModelIds(useApp.getState().quickModelIds, outgoing, models);
       const model = before.model === null ? null : carryModelId(before.model, outgoing, models);
 
-      useApp.setState({ models, modelsError: null, quickModelIds, model });
+      setPaneState(pane, { models, modelsError: null, model });
+      if (quickModelIds !== useApp.getState().quickModelIds) useApp.setState({ quickModelIds });
       // Only when something actually moved. Persisting the carried ids is what
       // stops the migration from running again on every launch, and skipping the
       // write in the common case keeps a background refresh silent.
       if (quickModelIds !== before.quickModelIds || model !== before.model) savePrefs();
     } else {
-      useApp.setState({ modelsError: null });
+      setPaneState(pane, { modelsError: null });
     }
   } finally {
     // In a `finally` because an early `return` above still has to clear the
     // spinner; only the newest request owns it, or a superseded reply would
     // stop the indicator for a fetch that is still running.
-    if (token === modelsRequestToken) useApp.setState({ modelsLoading: false });
+    if (token === modelsRequestToken.get(pane.id)) setPaneState(pane, { modelsLoading: false });
   }
 }
 
-/** Re-attach to a run the main process still considers live after a reload. */
-async function adoptExistingRun(): Promise<void> {
+/**
+ * Re-attach to a run the main process still considers live after a reload.
+ *
+ * Only ever called for the first column, at boot, and only for a run in *its*
+ * directory. A reload is not a split — the window comes back with one
+ * conversation — so there is no question of deciding which of two columns
+ * inherits an orphaned run.
+ */
+async function adoptExistingRun(pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
-  const state = useApp.getState();
+  const state = paneState(pane);
   if (!bridge || !state.cwd) return;
   const result = await call(() => bridge.runs.list({ cwd: state.cwd }));
   if (!result.ok) return;
   const live = result.value.runs.find((r) => r.status !== 'ended');
   if (!live) return;
-  useApp.setState({ run: fromHandle(live) });
-  transcript.note(
+  setPaneState(pane, { run: fromHandle(live) });
+  pane.transcript.note(
     'info',
     `Re-attached to run ${live.runId.slice(0, 8)}… already in progress`,
     'Events emitted before this window loaded are not replayed.',
@@ -1292,14 +1678,13 @@ function fromHandle(handle: RunHandle): RunState {
 /* Selection                                                                  */
 /* -------------------------------------------------------------------------- */
 
-export function setProvider(providerId: ProviderId): void {
-  useApp.setState((s) => ({
+export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()): void {
+  setPaneState(pane, (s) => ({
     activeProviderId: providerId,
     activeProfileId:
       s.profiles.find((p) => p.id === s.activeProfileId)?.providerId === providerId
         ? s.activeProfileId
         : (s.profiles.find((p) => p.providerId === providerId)?.id ?? null),
-    sessions: [],
     // Cleared, unlike on a profile switch: a catalogue belongs to a provider,
     // and leaving the old one loaded would have `activeModels` hand the new
     // provider's picker a list of models it cannot run. The descriptor's own
@@ -1307,10 +1692,16 @@ export function setProvider(providerId: ProviderId): void {
     models: [],
     modelsError: null,
   }));
+  // The session list is the *window's*, and it is provider-scoped in the
+  // backend — so a provider switch in either column empties it and re-reads.
+  // That is not a column's business leaking into the window; it is the one
+  // list both columns browse, and it can only be pointed at one account at a
+  // time. See `refreshSessions`.
+  useApp.setState({ sessions: [] });
   savePrefs();
   invalidateSessions();
   void refreshSessions();
-  void refreshModels();
+  void refreshModels(pane);
 }
 
 /**
@@ -1335,13 +1726,13 @@ export function setProvider(providerId: ProviderId): void {
  * render of a profile that has since been deleted, and honouring it would point
  * the app at an account that is not there.
  */
-export function setProfile(profileId: ProfileId): void {
-  const state = useApp.getState();
+export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): void {
+  const state = paneState(pane);
   const profile = state.profiles.find((p) => p.id === profileId);
   if (!profile) return;
 
   const switched = state.activeProviderId !== profile.providerId;
-  useApp.setState({
+  setPaneState(pane, {
     activeProfileId: profileId,
     activeProviderId: profile.providerId,
     // Cleared only when the provider actually changes, for the reason
@@ -1350,12 +1741,13 @@ export function setProfile(profileId: ProfileId): void {
     // cleared: the loaded list is still the right shape of answer and is very
     // likely the same one, so showing it until the new account replies beats
     // flashing the picker back to the built-in list and forward again.
-    ...(switched ? { sessions: [], models: [], modelsError: null } : {}),
+    ...(switched ? { models: [], modelsError: null } : {}),
   });
+  if (switched) useApp.setState({ sessions: [] });
   savePrefs();
   invalidateSessions();
   void refreshSessions();
-  void refreshModels();
+  void refreshModels(pane);
 }
 
 /**
@@ -1385,9 +1777,9 @@ export function setProfile(profileId: ProfileId): void {
  * not plausibly what someone reaching for a folder picker meant to ask for, so
  * this says what is in the way and changes nothing.
  */
-export function setCwd(cwd: string): void {
+export function setCwd(cwd: string, pane: Pane = focusedPane()): void {
   const next = cwd.trim();
-  const state = useApp.getState();
+  const state = paneState(pane);
 
   // Re-picking the directory that is already selected is not a session change.
   // It is also not unusual: the native picker *opens at* the current directory,
@@ -1404,17 +1796,17 @@ export function setCwd(cwd: string): void {
   }
 
   const leaving = state.resumeSessionId !== null || state.run !== null;
-  if (leaving) newSession();
+  if (leaving) newSession(pane);
 
-  useApp.setState({ cwd: next });
+  setPaneState(pane, { cwd: next });
   savePrefs();
   invalidateSessions();
   void refreshSessions();
-  void refreshWorkspace();
+  void refreshWorkspace(pane);
 
   // After `newSession`, which resets the very transcript this is written into.
   if (leaving) {
-    transcript.note(
+    pane.transcript.note(
       'info',
       'Started a new session',
       `The working directory moved to ${next}, and a session only resumes in the directory it was created in.`,
@@ -1435,13 +1827,13 @@ export function setCwd(cwd: string): void {
  * project switcher is two `setCwd` calls apart from a click in the picker), and
  * without the check the slower of the two replies wins.
  */
-export async function refreshWorkspace(): Promise<void> {
-  const { cwd } = useApp.getState();
-  useApp.setState({ workspace: null });
+export async function refreshWorkspace(pane: Pane = focusedPane()): Promise<void> {
+  const { cwd } = paneState(pane);
+  setPaneState(pane, { workspace: null });
 
   const names = await describeWorkspace(cwd);
-  if (useApp.getState().cwd !== cwd) return;
-  useApp.setState({ workspace: names });
+  if (paneState(pane).cwd !== cwd) return;
+  setPaneState(pane, { workspace: names });
 }
 
 /**
@@ -1452,9 +1844,9 @@ export async function refreshWorkspace(): Promise<void> {
  * path is not a directory, the dialog could not open — has a specific reason,
  * and the caller shows that reason verbatim instead of "something went wrong".
  */
-export async function chooseWorkingDirectory(): Promise<DirectoryChoice> {
-  const choice = await pickDirectory(useApp.getState().cwd);
-  if (choice.status === 'chosen') setCwd(choice.path);
+export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promise<DirectoryChoice> {
+  const choice = await pickDirectory(paneState(pane).cwd);
+  if (choice.status === 'chosen') setCwd(choice.path, pane);
   return choice;
 }
 
@@ -1496,25 +1888,25 @@ export function toggleProjectCollapsed(cwd: string): void {
   savePrefs();
 }
 
-export function setPermissionMode(mode: PermissionMode): void {
-  useApp.setState({ permissionMode: mode });
+export function setPermissionMode(mode: PermissionMode, pane: Pane = focusedPane()): void {
+  setPaneState(pane, { permissionMode: mode });
   savePrefs();
 }
 
 /** Choose the model for the next run. `null` means the provider's default. */
-export function setModel(model: string | null): void {
-  useApp.setState({ model });
+export function setModel(model: string | null, pane: Pane = focusedPane()): void {
+  setPaneState(pane, { model });
   savePrefs();
 }
 
 /** Choose the reasoning effort for the next run. `null` means the default. */
-export function setEffort(effort: string | null): void {
-  useApp.setState({ effort });
+export function setEffort(effort: string | null, pane: Pane = focusedPane()): void {
+  setPaneState(pane, { effort });
   savePrefs();
 }
 
-export function setForkOnResume(fork: boolean): void {
-  useApp.setState({ forkOnResume: fork });
+export function setForkOnResume(fork: boolean, pane: Pane = focusedPane()): void {
+  setPaneState(pane, { forkOnResume: fork });
 }
 
 export function setScreen(screen: Screen): void {
@@ -1608,14 +2000,14 @@ export function setQuickModels(ids: readonly string[]): void {
  * flags on and the bar advertising both. An invariant that each new surface has
  * to remember to opt into is not an invariant.
  */
-export function setFastMode(on: boolean): void {
-  useApp.setState(on ? { fastMode: true, ultracode: false } : { fastMode: false });
+export function setFastMode(on: boolean, pane: Pane = focusedPane()): void {
+  setPaneState(pane, on ? { fastMode: true, ultracode: false } : { fastMode: false });
   savePrefs();
 }
 
 /** The same, for ultracode. @see setFastMode for why the two are exclusive. */
-export function setUltracode(on: boolean): void {
-  useApp.setState(on ? { ultracode: true, fastMode: false } : { ultracode: false });
+export function setUltracode(on: boolean, pane: Pane = focusedPane()): void {
+  setPaneState(pane, on ? { ultracode: true, fastMode: false } : { ultracode: false });
   savePrefs();
 }
 
@@ -1719,7 +2111,18 @@ function invalidateSessions(): void {
 
 export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
-  const state = useApp.getState();
+  const app = useApp.getState();
+  /*
+   * The focused column's selection, and only as a *fallback*.
+   *
+   * The modern listing channel enumerates every provider and every directory
+   * and ignores all three of these — see `listSessionsEverywhere`. They matter
+   * only on the old per-directory path, where something has to be asked about,
+   * and the focused column is the conversation the user is looking at. A split
+   * does not make the sidebar two lists; it is one history, and each row says
+   * which account and project it belongs to.
+   */
+  const state = paneState(focusedPane(app));
 
   /*
    * Deliberately not gated on the active provider's `listSessions`.
@@ -1758,7 +2161,7 @@ export async function refreshSessions(): Promise<void> {
    * does not need to know about. A background poll should be invisible until it
    * changes something.
    */
-  const first = state.sessions.length === 0;
+  const first = app.sessions.length === 0;
   if (first) useApp.setState({ sessionsLoading: true, sessionsError: null });
 
   try {
@@ -1894,8 +2297,9 @@ export function startSessionFeed(): () => void {
   const schedule = (): void => {
     if (stopped) return;
     if (timer !== undefined) clearTimeout(timer);
-    const live = isLive(useApp.getState());
-    timer = setTimeout(tick, live ? SESSION_POLL_LIVE_MS : SESSION_POLL_IDLE_MS);
+    // Either column running is enough to poll fast: both are writing session
+    // files, and the sidebar lists both.
+    timer = setTimeout(tick, anyPaneLive() ? SESSION_POLL_LIVE_MS : SESSION_POLL_IDLE_MS);
   };
 
   const tick = (): void => {
@@ -1927,11 +2331,12 @@ function refreshSessionsSoon(): void {
   setTimeout(() => void refreshSessions(), SESSION_SETTLE_MS);
 }
 
-/** Start a blank transcript. Disposes whatever run is live. */
-export function newSession(): void {
-  void disposeRun();
-  transcript.reset();
-  useApp.setState({ run: null, resumeSessionId: null, permissionQueue: [], paletteOpen: false });
+/** Start a blank transcript in one column. Disposes whatever run it had live. */
+export function newSession(pane: Pane = focusedPane()): void {
+  void disposeRun(pane);
+  pane.transcript.reset();
+  setPaneState(pane, { run: null, resumeSessionId: null, permissionQueue: [] });
+  useApp.setState({ paletteOpen: false });
 }
 
 /**
@@ -1956,8 +2361,8 @@ export function newSession(): void {
  * failure is reported. Resuming into a different profile's config directory
  * would not find the session anyway.
  */
-export function resumeSession(session: SessionSummary): void {
-  const state = useApp.getState();
+export function resumeSession(session: SessionSummary, pane: Pane = focusedPane()): void {
+  const state = paneState(pane);
 
   const profile = state.profiles.find((p) => p.id === session.profileId);
   if (!profile) {
@@ -1980,9 +2385,9 @@ export function resumeSession(session: SessionSummary): void {
   const switchedProfile = state.activeProfileId !== session.profileId;
   const switchedCwd = state.cwd !== session.cwd;
 
-  void disposeRun();
-  transcript.reset();
-  useApp.setState({
+  void disposeRun(pane);
+  pane.transcript.reset();
+  setPaneState(pane, {
     run: null,
     activeProviderId: session.providerId,
     activeProfileId: session.profileId,
@@ -1990,12 +2395,15 @@ export function resumeSession(session: SessionSummary): void {
     resumeSessionId: session.id,
     forkOnResume: false,
     permissionQueue: [],
-    paletteOpen: false,
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
     ...(state.activeProviderId === session.providerId ? {} : { models: [], modelsError: null }),
   });
+  // Opening a session is a deliberate act on one column, so that column takes
+  // the focus — which is what makes ⌘K, the run inspector and settings point
+  // at what the user just opened rather than at whatever they last clicked.
+  useApp.setState({ paletteOpen: false, focusedPaneId: pane.id });
   savePrefs();
 
   const moved = [
@@ -2004,17 +2412,17 @@ export function resumeSession(session: SessionSummary): void {
   ].filter(Boolean);
 
   if (moved.length > 0) {
-    transcript.note(
+    pane.transcript.note(
       'info',
       `Continuing "${session.title}"`,
       `Switched ${moved.join(' and ')}, because a session only resumes under the profile and directory it was created in.`,
     );
   }
 
-  void loadSessionHistory(session);
+  void loadSessionHistory(session, pane);
   invalidateSessions();
   void refreshSessions();
-  void refreshModels();
+  void refreshModels(pane);
   // This function writes `cwd` itself rather than going through `setCwd`, and
   // must keep doing so: `setCwd` clears `resumeSessionId` on the way past,
   // which is the one piece of state this function exists to set. Routing this
@@ -2024,7 +2432,42 @@ export function resumeSession(session: SessionSummary): void {
   // to `setCwd` does not happen either, so it is done here — otherwise resuming
   // a session from another project leaves the previous project's name sitting
   // over the new project's sessions.
-  if (switchedCwd) void refreshWorkspace();
+  if (switchedCwd) void refreshWorkspace(pane);
+}
+
+/**
+ * Open a session in a *new* pane beside or below an existing one.
+ *
+ * The action behind dropping a row from the sidebar onto a pane's edge, and
+ * behind "Open beside" in the palette. It is {@link splitPane} followed by
+ * {@link resumeSession} into what came back — written as one function because
+ * the two must not be separable: splitting and then failing to load leaves an
+ * empty pane the user did not ask for, and every caller wants exactly this
+ * pair.
+ *
+ * If the session is already open somewhere, this is a *reveal*, not a second
+ * copy. Two panes resumed at the same session id would be two provider
+ * processes appending to one transcript file, which is a data race with the
+ * user's own history on the losing side.
+ *
+ * `null` means the grid had no room in that direction; the caller has already
+ * been told by {@link canSplit} and should not reach this.
+ */
+export function openSessionBeside(
+  session: SessionSummary,
+  direction: SplitDirection = 'right',
+  from: Pane = focusedPane(),
+): Pane | null {
+  const existing = allPanes().find((p) => paneState(p).resumeSessionId === session.id);
+  if (existing) {
+    focusPane(existing.id);
+    return existing;
+  }
+
+  const pane = splitPane(direction, from);
+  if (!pane) return null;
+  resumeSession(session, pane);
+  return pane;
 }
 
 /**
@@ -2041,7 +2484,7 @@ export function resumeSession(session: SessionSummary): void {
  * make history indistinguishable from that run's own output. Deriving it from
  * the session id keeps the block stable across re-selection.
  */
-async function loadSessionHistory(session: SessionSummary): Promise<void> {
+async function loadSessionHistory(session: SessionSummary, pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
 
@@ -2058,13 +2501,14 @@ async function loadSessionHistory(session: SessionSummary): Promise<void> {
 
   // Selection can move while this is in flight — a fast second click, or a new
   // session. Applying a stale transcript over the current one would show the
-  // wrong conversation, so drop it.
-  if (useApp.getState().resumeSessionId !== session.id) return;
+  // wrong conversation, so drop it. Checked against *this column*: the other
+  // one moving on is not this transcript's business.
+  if (paneState(pane).resumeSessionId !== session.id) return;
 
   if (!res.ok) {
     // Non-fatal: the session still resumes, the user just cannot see what came
     // before. Say so rather than leaving an unexplained empty pane.
-    transcript.note(
+    pane.transcript.note(
       'warn',
       'Could not load earlier messages',
       `${res.error.message} The session will still continue from where it left off.`,
@@ -2072,10 +2516,10 @@ async function loadSessionHistory(session: SessionSummary): Promise<void> {
     return;
   }
 
-  for (const event of res.value.events) transcript.apply(event);
+  for (const event of res.value.events) pane.transcript.apply(event);
 
   if (res.value.hasMore) {
-    transcript.note('info', 'Showing the most recent part of this session', undefined);
+    pane.transcript.note('info', 'Showing the most recent part of this session', undefined);
   }
 }
 
@@ -2087,8 +2531,8 @@ async function loadSessionHistory(session: SessionSummary): Promise<void> {
 const MAX_PROMPT_HISTORY = 100;
 
 /** Append to the recall history, collapsing an immediate repeat. */
-function rememberPrompt(prompt: string): void {
-  useApp.setState((s) => {
+function rememberPrompt(prompt: string, pane: Pane): void {
+  setPaneState(pane, (s) => {
     if (s.promptHistory[s.promptHistory.length - 1] === prompt) return {};
     return { promptHistory: [...s.promptHistory, prompt].slice(-MAX_PROMPT_HISTORY) };
   });
@@ -2102,7 +2546,7 @@ const STATUS_RANK: Record<RunStatus, number> = {
 };
 
 /**
- * Send a prompt.
+ * Send a prompt, in one pane.
  *
  * Returns **false when the composer still owns the prompt** — when this refused
  * before anything was written to the transcript, so nothing anywhere is
@@ -2115,16 +2559,22 @@ const STATUS_RANK: Record<RunStatus, number> = {
  * fails: the prompt is on screen, the failure has a banner, and the record of
  * what was attached to it belongs with the message rather than back in an empty
  * composer.
+ *
+ * `pane` is last and defaults to the focused one, as every session-scoped
+ * action here does. A composer always passes its own: it must send into the
+ * conversation it is attached to, not into whichever one happens to have focus
+ * when the user hits Enter.
  */
 export async function submitPrompt(
   text: string,
   attachments?: readonly Attachment[],
+  pane: Pane = focusedPane(),
 ): Promise<boolean> {
   const prompt = text.trim();
   if (prompt.length === 0) return false;
 
   const { bridge } = resolveBridge();
-  const state = useApp.getState();
+  const state = paneState(pane);
   if (!bridge) {
     pushBanner('error', 'No bridge to the main process', 'The preload script did not load.');
     return false;
@@ -2142,7 +2592,7 @@ export async function submitPrompt(
   // Recorded before the send is attempted. Up-arrow recall is about getting a
   // prompt back, and the prompt you most want back is the one that just failed
   // to go anywhere.
-  rememberPrompt(prompt);
+  rememberPrompt(prompt, pane);
 
   const live = isLive(state) ? state.run : null;
 
@@ -2165,7 +2615,7 @@ export async function submitPrompt(
       pushBanner('warn', 'This provider cannot take input mid-run');
       return false;
     }
-    const steerId = transcript.pushUserMessage(prompt, sending);
+    const steerId = pane.transcript.pushUserMessage(prompt, sending);
     const result = await call(() =>
       bridge.runs.send({
         runId: live.runId,
@@ -2179,9 +2629,9 @@ export async function submitPrompt(
       // the note on this function for why that counts as sent from here.
       return true;
     }
-    transcript.confirmUserMessage(steerId);
+    pane.transcript.confirmUserMessage(steerId);
     if (!result.value.deliveredImmediately) {
-      transcript.note(
+      pane.transcript.note(
         'info',
         'Queued — the provider decides when this takes effect.',
         'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
@@ -2192,8 +2642,8 @@ export async function submitPrompt(
 
   const runId = newId('run');
   const capabilities = activeCapabilities(state);
-  const promptId = transcript.pushUserMessage(prompt, sending);
-  useApp.setState({
+  const promptId = pane.transcript.pushUserMessage(prompt, sending);
+  setPaneState(pane, {
     run: {
       runId,
       status: 'starting',
@@ -2252,18 +2702,18 @@ export async function submitPrompt(
   const result = await call(() => bridge.runs.start({ input }));
   if (!result.ok) {
     reportFailure('Could not start the run', result.error);
-    endRunLocally(runId, 'error', result.error);
+    endRunLocally(runId, 'error', pane, result.error);
     // As above: the prompt and its attachments are in the transcript, so the
     // composer is right to have let go of them.
     return true;
   }
-  transcript.confirmUserMessage(promptId);
-  mergeHandle(result.value.run);
+  pane.transcript.confirmUserMessage(promptId);
+  mergeHandle(result.value.run, pane);
   return true;
 }
 
-function mergeHandle(handle: RunHandle): void {
-  useApp.setState((s) => {
+function mergeHandle(handle: RunHandle, pane: Pane): void {
+  setPaneState(pane, (s) => {
     if (!s.run || s.run.runId !== handle.runId) return {};
     const status =
       STATUS_RANK[s.run.status] >= STATUS_RANK[handle.status] ? s.run.status : handle.status;
@@ -2287,18 +2737,23 @@ function mergeHandle(handle: RunHandle): void {
  * the UI would otherwise sit at `starting` forever, so the terminal card is
  * written locally instead of faking an event with an invented `seq`.
  */
-function endRunLocally(runId: RunId, reason: RunEndReason, error?: AgentError): void {
-  useApp.setState((s) =>
+function endRunLocally(
+  runId: RunId,
+  reason: RunEndReason,
+  pane: Pane,
+  error?: AgentError,
+): void {
+  setPaneState(pane, (s) =>
     s.run && s.run.runId === runId
       ? { run: { ...s.run, status: 'ended', endReason: reason, ...(error ? { error } : {}) } }
       : {},
   );
-  transcript.localRunEnd(reason, error);
+  pane.transcript.localRunEnd(reason, error);
 }
 
-export async function interruptRun(): Promise<void> {
+export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
-  const run = useApp.getState().run;
+  const run = paneState(pane).run;
   if (!bridge || !run || run.status === 'ended') return;
   const result = await call(() => bridge.runs.interrupt({ runId: run.runId }));
   if (!result.ok) {
@@ -2307,13 +2762,13 @@ export async function interruptRun(): Promise<void> {
   }
   const queued = result.value.stillQueued ?? [];
   if (queued.length > 0) {
-    transcript.note('warn', `${queued.length} queued message(s) will still run.`);
+    pane.transcript.note('warn', `${queued.length} queued message(s) will still run.`);
   }
 }
 
-export async function disposeRun(): Promise<void> {
+export async function disposeRun(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
-  const run = useApp.getState().run;
+  const run = paneState(pane).run;
   if (!bridge || !run) return;
   await call(() => bridge.runs.dispose({ runId: run.runId }));
 }
@@ -2323,8 +2778,8 @@ export async function disposeRun(): Promise<void> {
 /* -------------------------------------------------------------------------- */
 
 /** Take one request off the queue, clearing `awaiting_permission` when it empties. */
-function dropPermissionRequest(requestId: string): void {
-  useApp.setState((s) => {
+function dropPermissionRequest(requestId: string, pane: Pane): void {
+  setPaneState(pane, (s) => {
     const permissionQueue = s.permissionQueue.filter((r) => r.id !== requestId);
     const run =
       s.run && s.run.status === 'awaiting_permission' && permissionQueue.length === 0
@@ -2348,9 +2803,10 @@ function dropPermissionRequest(requestId: string): void {
 export async function respondToPermission(
   requestId: string,
   decision: PermissionDecision,
+  pane: Pane = focusedPane(),
 ): Promise<string | null> {
   const { bridge } = resolveBridge();
-  const run = useApp.getState().run;
+  const run = paneState(pane).run;
   if (!bridge || !run) return null;
 
   const result = await call(() =>
@@ -2364,19 +2820,19 @@ export async function respondToPermission(
     // composer and the Stop button — until the run happened to end on its own.
     // Drop it instead, and record on the card that the choice was taken away.
     if (result.error.code === 'invalid_request') {
-      transcript.resolvePermission(requestId, 'denied', result.error.message);
-      dropPermissionRequest(requestId);
+      pane.transcript.resolvePermission(requestId, 'denied', result.error.message);
+      dropPermissionRequest(requestId, pane);
     }
     return result.error.message;
   }
 
-  transcript.resolvePermission(
+  pane.transcript.resolvePermission(
     requestId,
     decision.behavior === 'allow' ? 'allowed' : 'denied',
     decision.behavior === 'deny' ? decision.message : describeScope(decision.scope),
   );
 
-  dropPermissionRequest(requestId);
+  dropPermissionRequest(requestId, pane);
   return null;
 }
 
@@ -2394,10 +2850,10 @@ export const DEFAULT_DENIAL = 'The user denied this tool call.';
  *
  * @returns true when there was something to deny.
  */
-export async function denyPendingPermission(): Promise<boolean> {
-  const request = pendingPermission(useApp.getState());
+export async function denyPendingPermission(pane: Pane = focusedPane()): Promise<boolean> {
+  const request = pendingPermission(paneState(pane));
   if (!request) return false;
-  await respondToPermission(request.id, { behavior: 'deny', message: DEFAULT_DENIAL });
+  await respondToPermission(request.id, { behavior: 'deny', message: DEFAULT_DENIAL }, pane);
   return true;
 }
 
@@ -2449,23 +2905,28 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
    * it can now that the form asks.
    */
   const created = result.value.profile;
-  const switched = useApp.getState().activeProviderId !== created.providerId;
-  useApp.setState({
+  // The focused column adopts it. Creating an account is something you do from
+  // one conversation, and quietly repointing the *other* column at a brand-new
+  // signed-out profile would change what its next prompt bills.
+  const pane = focusedPane();
+  const switched = paneState(pane).activeProviderId !== created.providerId;
+  setPaneState(pane, {
     activeProfileId: created.id,
     activeProviderId: created.providerId,
     // Cleared on a provider change for the reason `setProvider` gives: a
     // catalogue and a session list both belong to the provider they came from.
-    ...(switched ? { sessions: [], models: [], modelsError: null } : {}),
+    ...(switched ? { models: [], modelsError: null } : {}),
   });
   savePrefs();
   if (switched) {
+    useApp.setState({ sessions: [] });
     invalidateSessions();
     void refreshSessions();
   }
   // A new profile is a new account, and the catalogue is a property of the
   // account — the freshly created one may well be the first that can answer at
   // all, since `refreshModels` no-ops without a profile.
-  void refreshModels();
+  void refreshModels(pane);
   return true;
 }
 
@@ -2620,18 +3081,27 @@ function mergeUsage(previous: UsageSnapshot | undefined, next: UsageSnapshot): U
   };
 }
 
+/**
+ * Route one event to the column that owns its run.
+ *
+ * Events are multiplexed across every run the main process is driving — every
+ * window's, and both of this window's columns'. The `runId` is the whole
+ * routing key: a pane owns exactly the events for the run it started, and an
+ * event for a run nobody here owns (another window's, or one whose column has
+ * since been closed) is dropped rather than interleaved into whichever
+ * transcript happens to be on screen.
+ */
 export function handleAgentEvent(event: AgentEvent): void {
-  const state = useApp.getState();
-  const run = state.run;
-  // Events are multiplexed across every run the main process is driving; this
-  // window renders one at a time and ignores the rest rather than interleaving.
-  if (!run || run.runId !== event.runId) return;
+  const pane = paneForRun(event.runId);
+  if (!pane) return;
+  const run = paneState(pane).run;
+  if (!run) return;
 
-  transcript.apply(event);
+  pane.transcript.apply(event);
 
   switch (event.type) {
     case 'session.started':
-      useApp.setState({
+      setPaneState(pane, {
         run: {
           ...run,
           status: run.status === 'ended' ? 'ended' : 'running',
@@ -2650,25 +3120,31 @@ export function handleAgentEvent(event: AgentEvent): void {
       break;
 
     case 'permission.request':
-      useApp.setState((s) => ({
+      setPaneState(pane, (s) => ({
         permissionQueue: [...s.permissionQueue, event.request],
         run: s.run ? { ...s.run, status: 'awaiting_permission' } : s.run,
       }));
       break;
 
-    case 'usage':
-      useApp.setState((s) => {
-        if (!s.run) return { run: s.run };
-        const model = s.run.model;
-        const learned = event.usage.contextWindow;
-        return {
-          run: { ...s.run, usage: mergeUsage(s.run.usage, event.usage) },
-          ...(learned !== undefined && model !== undefined && s.contextWindows[model] !== learned
-            ? { contextWindows: { ...s.contextWindows, [model]: learned } }
-            : {}),
-        };
-      });
+    case 'usage': {
+      setPaneState(pane, (s) =>
+        s.run ? { run: { ...s.run, usage: mergeUsage(s.run.usage, event.usage) } } : {},
+      );
+      // The learned window is the *window's*, not this column's — it is a fact
+      // about a model, and the other column running the same one should not
+      // have to learn it again. Written to the app store, from where the mirror
+      // hands it to both panes.
+      const model = paneState(pane).run?.model;
+      const learned = event.usage.contextWindow;
+      if (learned !== undefined && model !== undefined) {
+        useApp.setState((s) =>
+          s.contextWindows[model] === learned
+            ? {}
+            : { contextWindows: { ...s.contextWindows, [model]: learned } },
+        );
+      }
       break;
+    }
 
     case 'run.end': {
       // A run is one turn cycle, so the next prompt starts a *new* run. Unless
@@ -2681,6 +3157,7 @@ export function handleAgentEvent(event: AgentEvent): void {
       // still pointed at the same directory and profile: a session id is scoped
       // to the config dir and cwd it was created under, so promoting one across
       // a switch would resume the wrong history.
+      const state = paneState(pane);
       const endedSessionId = event.sessionId ?? run.sessionId;
       const resumable =
         run.capabilities.resumeSession &&
@@ -2688,7 +3165,7 @@ export function handleAgentEvent(event: AgentEvent): void {
         state.cwd === run.cwd &&
         state.activeProfileId === run.profileId;
 
-      useApp.setState((s) => ({
+      setPaneState(pane, (s) => ({
         permissionQueue: [],
         // `forkOnResume` is a one-shot choice. The fork already happened and
         // `endedSessionId` is the fork's own id, so leaving the flag set would

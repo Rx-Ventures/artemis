@@ -126,7 +126,16 @@ import type { WorkspaceNames } from '../lib/extensions';
 import { condenseTitle, formatRelative } from '../lib/format';
 import { lastSegment } from '../lib/paths';
 import { flattenGroups, groupSessionsByProject, type ListRow } from '../lib/sessionGroups';
-import { refreshSessions, resumeSession, toggleProjectCollapsed, useApp } from '../state/store';
+import { writeSessionDrag } from '../lib/sessionDrag';
+import {
+  allPanes,
+  refreshSessions,
+  resumeSession,
+  toggleProjectCollapsed,
+  useApp,
+} from '../state/store';
+import { paneState } from '../state/pane';
+import { usePane } from '../state/paneContext';
 import { CapabilityButton } from './capability-button';
 import { ProfileSwatch } from './primitives';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
@@ -314,8 +323,11 @@ const GroupHeading = memo(function GroupHeading({
   readonly collapsed: boolean;
   readonly top: number;
 }): ReactElement {
-  const current = useApp((s) => s.cwd === cwd);
-  const workspace = useApp((s) => (s.cwd === cwd ? s.workspace : null));
+  // The focused column's directory. `usePane` outside a column resolves to it,
+  // so the heading marks the project the header is naming — the two agree by
+  // construction rather than by both reading the same field.
+  const current = usePane((s) => s.cwd === cwd);
+  const workspace = usePane((s) => (s.cwd === cwd ? s.workspace : null));
 
   // `workspace` only describes the *current* directory, so every other group
   // falls back to the folder name. A repository name for a project you are not
@@ -513,7 +525,16 @@ const Row = memo(function Row({
   readonly session: SessionSummary;
   readonly top: number;
 }): ReactElement {
-  const active = useApp((s) => s.resumeSessionId === session.id);
+  /*
+   * "Open in *a* column", not "open in the focused one".
+   *
+   * With the window split, the same session can be showing on either side, and
+   * a row that only lit up for the focused column would go dark the moment the
+   * user clicked into the other one — the row would stop marking a session that
+   * is plainly on screen. So this asks the question the user is actually
+   * asking: is this open anywhere?
+   */
+  const active = useApp((s) => allPanes(s).some((p) => paneState(p).resumeSessionId === session.id));
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
 
   // A session whose profile is gone cannot be resumed at all — its transcript
@@ -522,7 +543,34 @@ const Row = memo(function Row({
   const orphaned = profile === undefined;
 
   return (
-    <div style={{ top, height: ROW_HEIGHT }} className="absolute inset-x-0 px-2 py-0.5">
+    <div
+      style={{ top, height: ROW_HEIGHT }}
+      className="absolute inset-x-0 px-2 py-0.5"
+      /*
+       * The drag source for the split, and it is the wrapper rather than the
+       * button inside it.
+       *
+       * A `<button draggable>` is a fight: the element already owns pointer
+       * gestures for its own activation, and browsers differ on whether a drag
+       * that starts on one suppresses the click. Hanging the drag on the
+       * positioning wrapper the row already has costs nothing, drags the whole
+       * row, and leaves the button's click path exactly as it was.
+       *
+       * An orphaned session is not draggable, for the same reason its button is
+       * disabled: there is nowhere it could be opened.
+       */
+      draggable={!orphaned}
+      onDragStart={(event) => {
+        if (orphaned) {
+          event.preventDefault();
+          return;
+        }
+        writeSessionDrag(event.dataTransfer, session);
+      }}
+      title={
+        orphaned ? undefined : 'Click to open here, or drag onto a pane to choose where'
+      }
+    >
       <CapabilityButton
         capability="resumeSession"
         variant="ghost"

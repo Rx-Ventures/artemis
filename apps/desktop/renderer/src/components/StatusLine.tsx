@@ -132,6 +132,7 @@ import {
   thinkingLevels,
   useApp,
 } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton, WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
 import { ProfileSwatch, StatusDot, ToneBadge } from './primitives';
@@ -367,10 +368,11 @@ function profilesByProvider(
  * it, at the moment they do it.
  */
 function ProfileSegment(): ReactElement {
+  const pane = usePaneRef();
   const profiles = useApp((s) => s.profiles);
   const providers = useApp((s) => s.providers);
-  const activeId = useApp((s) => s.activeProfileId);
-  const profile = useApp(activeProfile);
+  const activeId = usePane((s) => s.activeProfileId);
+  const profile = usePane(activeProfile);
 
   const sections = useMemo(() => profilesByProvider(profiles, providers), [profiles, providers]);
   const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
@@ -416,7 +418,7 @@ function ProfileSegment(): ReactElement {
         ) : (
           <DropdownMenuRadioGroup
             value={activeId ?? ''}
-            onValueChange={(value) => setProfile(value as ProfileId)}
+            onValueChange={(value) => setProfile(value as ProfileId, pane)}
           >
             {sections.map((section, index) => (
               <Fragment key={section.id}>
@@ -505,14 +507,15 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
 /* -------------------------------------------------------------------------- */
 
 function ModelSegment(): ReactElement {
-  const catalogue = useApp(activeModels);
-  const quick = useApp(quickModels);
-  const selected = useApp(activeModel);
-  const stored = useApp((s) => s.model);
-  const providerLabel = useApp(activeProviderLabel);
+  const pane = usePaneRef();
+  const catalogue = usePane(activeModels);
+  const quick = usePane(quickModels);
+  const selected = usePane(activeModel);
+  const stored = usePane((s) => s.model);
+  const providerLabel = usePane(activeProviderLabel);
   // What the *run* reports it is actually using, which can differ from what was
   // asked for — the provider may substitute. Shown once it is known.
-  const running = useApp((s) => s.run?.model);
+  const running = usePane((s) => s.run?.model);
 
   /*
    * The pinned models, plus the selected one when it is not among them.
@@ -578,7 +581,7 @@ function ModelSegment(): ReactElement {
       >
         <DropdownMenuRadioGroup
           value={selected?.id ?? ''}
-          onValueChange={(value) => setModel(value)}
+          onValueChange={(value) => setModel(value, pane)}
         >
           {listed.map((model) => (
             <ModelRow key={model.id} model={model} />
@@ -680,8 +683,9 @@ function ShapeRow({
  * cannot do is rendered disabled and unexplained, the same as fast mode below.
  */
 function ThinkingRow(): ReactElement | null {
-  const levels = useApp(thinkingLevels);
-  const current = useApp(activeThinkingLevel);
+  const pane = usePaneRef();
+  const levels = usePane(thinkingLevels);
+  const current = usePane(activeThinkingLevel);
   if (levels.length === 0) return null;
 
   const label = levels.find((l) => l.id === current)?.label ?? '—';
@@ -700,7 +704,10 @@ function ThinkingRow(): ReactElement | null {
         <span className="ml-auto text-ink">{label}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="min-w-56">
-        <DropdownMenuRadioGroup value={current ?? ''} onValueChange={setThinkingLevel}>
+        <DropdownMenuRadioGroup
+          value={current ?? ''}
+          onValueChange={(value) => setThinkingLevel(value, pane)}
+        >
           {levels.map((level) => (
             <DropdownMenuRadioItem
               key={level.id}
@@ -736,16 +743,17 @@ function ThinkingRow(): ReactElement | null {
  * models and it lights up" is false, because there is no model to switch to.
  */
 function FastModeRow(): ReactElement | null {
-  const on = useApp((s) => s.fastMode);
-  const available = useApp(fastModeAvailable);
-  const offered = useApp(providerOffersFastMode);
+  const pane = usePaneRef();
+  const on = usePane((s) => s.fastMode);
+  const available = usePane(fastModeAvailable);
+  const offered = usePane(providerOffersFastMode);
   if (!offered) return null;
   return (
     <ShapeRow label="Fast mode">
       <Switch
         checked={on && available}
         disabled={!available}
-        onCheckedChange={setFastMode}
+        onCheckedChange={(next) => setFastMode(next, pane)}
         aria-label="Fast mode"
         className="scale-90"
       />
@@ -763,7 +771,7 @@ function FastModeRow(): ReactElement | null {
  * state; the alternative is a hard-coded spec table that goes stale silently.
  */
 function ContextRow(): ReactElement | null {
-  const window = useApp(learnedContextWindow);
+  const window = usePane(learnedContextWindow);
   if (window === undefined) return null;
   return (
     <ShapeRow label="Context">
@@ -778,8 +786,9 @@ function ContextRow(): ReactElement | null {
 
 function ModeSegment(): ReactElement {
   const modes = usePermissionModes();
-  const mode = useApp((s) => s.permissionMode);
-  const providerLabel = useApp(activeProviderLabel);
+  const pane = usePaneRef();
+  const mode = usePane((s) => s.permissionMode);
+  const providerLabel = usePane(activeProviderLabel);
 
   if (modes.length === 0) {
     return (
@@ -819,7 +828,7 @@ function ModeSegment(): ReactElement {
         </DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={mode}
-          onValueChange={(value) => setPermissionMode(value as PermissionMode)}
+          onValueChange={(value) => setPermissionMode(value as PermissionMode, pane)}
         >
           {modes.map((value) => (
             <DropdownMenuRadioItem key={value} value={value} className="items-start text-2xs">
@@ -849,9 +858,9 @@ function ModeSegment(): ReactElement {
 
 /** Live status and the count of prompts waiting on the user. Read-only. */
 function RunSegment(): ReactElement | null {
-  const live = useApp(isLive);
-  const status = useApp((s) => s.run?.status ?? null);
-  const pending = useApp((s) => s.permissionQueue.length);
+  const live = usePane(isLive);
+  const status = usePane((s) => s.run?.status ?? null);
+  const pending = usePane((s) => s.permissionQueue.length);
 
   if (pending > 0) {
     return (

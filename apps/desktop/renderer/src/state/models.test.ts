@@ -23,7 +23,21 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type { ProviderDescriptor, ProviderModelOption } from '@rx-artemis/protocol';
 
-import { activeModel, quickModels, refreshModels, useApp } from './store';
+import { activeModel, focusedPane, quickModels, refreshModels, useApp } from './store';
+import { paneState, setPaneState } from './pane';
+
+/*
+ * One column, and every assertion below is about it.
+ *
+ * Session state moved out of `useApp` into a pane when split view landed — see
+ * `state/pane.ts`. These helpers are the whole difference: `pane()` is the
+ * column the store's actions default to, and `session()` / `setSession()` read
+ * and write what `useApp.getState()` used to hold.
+ */
+const pane = () => focusedPane();
+const session = () => paneState(pane());
+const setSession = (patch) => setPaneState(pane(), patch);
+
 
 /** The Claude adapter's built-in list, trimmed to the ids that matter here. */
 const BUILT_IN: readonly ProviderModelOption[] = [
@@ -70,12 +84,14 @@ function bridgeReturning(models: readonly ProviderModelOption[], live = true): v
 
 /** The app as it boots: no live catalogue yet, so the built-in list is in force. */
 function booted(quickModelIds: readonly string[], model: string | null = null): void {
-  useApp.setState({
-    providers: [CLAUDE],
+  // Split across the two stores the way the app does: the catalogue of
+  // providers and the pinned shortlist are the window's, the selection is the
+  // column's. The mirror carries the first pair into the pane on its own.
+  useApp.setState({ providers: [CLAUDE], quickModelIds });
+  setSession({
     activeProviderId: 'claude',
     activeProfileId: 'p1',
     models: [],
-    quickModelIds,
     model,
     cwd: '',
   });
@@ -96,7 +112,7 @@ describe('refreshModels', () => {
     // the live one. Before this was fixed they both matched nothing, `fable`
     // included, and the picker fell back to a single row.
     expect(useApp.getState().quickModelIds).toEqual(['opus[1m]', 'claude-fable-5[1m]']);
-    expect(quickModels(useApp.getState()).map((m) => m.label)).toEqual(['Opus 5', 'Fable 5']);
+    expect(quickModels(session()).map((m) => m.label)).toEqual(['Opus 5', 'Fable 5']);
   });
 
   it('collapses two stale ids that land on one row', async () => {
@@ -116,10 +132,10 @@ describe('refreshModels', () => {
 
     await refreshModels();
 
-    expect(useApp.getState().model).toBe('claude-fable-5[1m]');
+    expect(session().model).toBe('claude-fable-5[1m]');
     // The run sends the resolved option's id, so this is what would actually be
     // asked for. Falling through to `models[0]` would silently start Opus.
-    expect(activeModel(useApp.getState())?.label).toBe('Fable 5');
+    expect(activeModel(session())?.label).toBe('Fable 5');
   });
 
   it('persists the carried ids, so the migration runs once', async () => {

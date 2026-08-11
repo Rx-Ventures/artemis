@@ -27,7 +27,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Composer } from '@/components/Composer';
-import { useApp } from '@/state/store';
+import { focusedPane, useApp } from '@/state/store';
+import { seedApp } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -75,7 +76,7 @@ const CAPABILITIES = {
 };
 
 function setProvider(supported: boolean): void {
-  useApp.setState({
+  seedApp({
     providers: [
       {
         id: 'claude',
@@ -168,7 +169,10 @@ describe('pasting an image', () => {
     fireEvent.change(field, { target: { value: 'what is wrong here?' } });
     fireEvent.click(screen.getByLabelText(/^Send the prompt/));
 
-    expect(submitPrompt).toHaveBeenCalledWith('what is wrong here?', [ATTACHMENT]);
+    // The pane is the third argument, and asserting it is the point rather than
+    // noise: a composer that let it default would send into whichever
+    // conversation happened to have focus instead of its own.
+    expect(submitPrompt).toHaveBeenCalledWith('what is wrong here?', [ATTACHMENT], focusedPane());
     // The attachment belonged to the prompt it went with; leaving it in the
     // field would silently put it on the next one too.
     await waitFor(() => {
@@ -226,7 +230,7 @@ describe('attaching a file', () => {
     fireEvent.change(field, { target: { value: 'what is the trend?' } });
     fireEvent.click(screen.getByLabelText(/^Send the prompt/));
 
-    expect(submitPrompt).toHaveBeenCalledWith('what is the trend?', [FILE]);
+    expect(submitPrompt).toHaveBeenCalledWith('what is the trend?', [FILE], focusedPane());
   });
 
   it('asks for slots of each kind separately', async () => {

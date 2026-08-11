@@ -36,6 +36,7 @@ import { CommandPalette } from '@/components/CommandPalette';
 import { Composer } from '@/components/Composer';
 import { StatusLine } from '@/components/StatusLine';
 import { useApp } from '@/state/store';
+import { appSession, seedApp } from '@/state/testkit';
 
 /* Radix's floating layer needs observers jsdom does not implement. */
 class NoopObserver {
@@ -123,7 +124,7 @@ const SESSION: SessionSummary = {
  * run, which it sets itself.
  */
 function useProvider(capabilities: Capabilities, extra?: Partial<ProviderDescriptor>): void {
-  useApp.setState({
+  seedApp({
     providers: [descriptor(capabilities, extra)],
     activeProviderId: 'claude',
     profiles: [{ id: 'p1', label: 'P', providerId: 'claude', configDir: '/Users/me/.claude' }],
@@ -159,7 +160,7 @@ afterEach(cleanup);
 describe('composer / midRunSteering', () => {
   it('leaves the prompt usable mid-run when the provider can be steered', () => {
     useProvider(ALL);
-    useApp.setState({
+    seedApp({
       run: {
         runId: 'r1',
         status: 'running',
@@ -177,7 +178,7 @@ describe('composer / midRunSteering', () => {
   it('disables the prompt mid-run when it cannot, and says why', () => {
     const noSteering: Capabilities = { ...ALL, midRunSteering: false };
     useProvider(noSteering);
-    useApp.setState({
+    seedApp({
       run: {
         runId: 'r1',
         status: 'running',
@@ -216,7 +217,7 @@ describe('status line / permission modes', () => {
 
   it('warns when the stored mode is one this provider will not accept', () => {
     useProvider({ ...ALL, permissionModes: ['plan'] });
-    useApp.setState({ permissionMode: 'bypassPermissions' });
+    seedApp({ permissionMode: 'bypassPermissions' });
     mount(<StatusLine />);
     expect(screen.getByLabelText('Permission mode').textContent).toContain('not accepted');
   });
@@ -236,14 +237,14 @@ describe('status line / permission modes', () => {
 describe('status line / model and effort', () => {
   it('builds the model segment from the descriptor rather than a literal', () => {
     useProvider(ALL);
-    useApp.setState({ model: 'opus' });
+    seedApp({ model: 'opus' });
     mount(<StatusLine />);
     expect(screen.getByLabelText('Model').textContent).toContain('Opus');
   });
 
   it('falls back to the provider default when the stored model is not offered', () => {
     useProvider(ALL, { models: [{ id: 'sonnet', label: 'Sonnet', note: 'Balanced.' }] });
-    useApp.setState({ model: 'gpt-9' });
+    seedApp({ model: 'gpt-9' });
     mount(<StatusLine />);
     // A stored preference survives a provider switch, so naming something this
     // catalogue does not have is routine. It resolves to the catalogue's first
@@ -335,7 +336,7 @@ describe('status line / usageReporting', () => {
 describe('command palette / listSessions', () => {
   it('offers the session list when the provider can enumerate history', () => {
     useProvider(ALL);
-    useApp.setState({ paletteOpen: true });
+    seedApp({ paletteOpen: true });
     mount(<CommandPalette />);
     const item = screen.getByText('Resume a past session…').closest('[role="option"]');
     expect(item?.getAttribute('aria-disabled')).not.toBe('true');
@@ -343,7 +344,7 @@ describe('command palette / listSessions', () => {
 
   it('keeps the entry and explains it when the provider cannot', () => {
     useProvider({ ...NO_CAPABILITIES, permissionModes: [] });
-    useApp.setState({ paletteOpen: true });
+    seedApp({ paletteOpen: true });
     mount(<CommandPalette />);
     const item = screen.getByText('Resume a past session…').closest('[role="option"]');
     // Present, disabled, and explained — never quietly absent.
@@ -356,7 +357,7 @@ describe('command palette / listSessions', () => {
 describe('command palette / forkSession', () => {
   it('explains that forking is unsupported rather than hiding the command', () => {
     useProvider({ ...ALL, forkSession: false });
-    useApp.setState({ paletteOpen: true, resumeSessionId: 'sess-1111-2222' });
+    seedApp({ paletteOpen: true, resumeSessionId: 'sess-1111-2222' });
     mount(<CommandPalette />);
     const item = screen
       .getByText('Fork the current session on the next prompt')
@@ -367,7 +368,7 @@ describe('command palette / forkSession', () => {
 
   it('distinguishes "cannot fork" from "nothing to fork yet"', () => {
     useProvider(ALL);
-    useApp.setState({ paletteOpen: true, resumeSessionId: null });
+    seedApp({ paletteOpen: true, resumeSessionId: null });
     mount(<CommandPalette />);
     expect(screen.getByText(/no session to fork yet/)).toBeTruthy();
   });
@@ -383,7 +384,7 @@ describe('command palette / resumeSession', () => {
    */
   it('marks the session list view-only when sessions cannot be resumed', () => {
     useProvider({ ...ALL, resumeSession: false });
-    useApp.setState({ paletteOpen: true });
+    seedApp({ paletteOpen: true });
     mount(<CommandPalette />);
     expect(screen.getByText('view only')).toBeTruthy();
   });

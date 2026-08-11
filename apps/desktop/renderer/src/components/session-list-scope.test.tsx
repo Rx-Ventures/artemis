@@ -29,6 +29,7 @@ import type { SessionSummary } from '@rx-artemis/protocol';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SessionList } from '@/components/SessionList';
 import { useApp } from '@/state/store';
+import { appSession, seedApp } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -68,7 +69,7 @@ const SESSIONS = [
 ];
 
 beforeEach(() => {
-  useApp.setState({
+  seedApp({
     providers: [
       {
         id: 'claude',
@@ -170,8 +171,8 @@ describe('the session list', () => {
     // clicking it moves you there. `resumeSession` already did the full switch —
     // it has to, since a session id only resolves against the directory it ran
     // in — so this asserts the sidebar hands it a cross-project session at all.
-    expect(useApp.getState().cwd).toBe('/code/web');
-    expect(useApp.getState().resumeSessionId).toBe('s2');
+    expect(appSession().cwd).toBe('/code/web');
+    expect(appSession().resumeSessionId).toBe('s2');
   });
 
   it('leaves the picked session marked as the current one', () => {
@@ -179,7 +180,7 @@ describe('the session list', () => {
 
     fireEvent.click(screen.getByText('Flag parsing'));
 
-    expect(useApp.getState().cwd).toBe('/code/cli');
-    expect(useApp.getState().resumeSessionId).toBe('s3');
+    expect(appSession().cwd).toBe('/code/cli');
+    expect(appSession().resumeSessionId).toBe('s3');
   });
 });

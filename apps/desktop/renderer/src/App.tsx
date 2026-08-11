@@ -2,19 +2,33 @@
  * The application shell.
  * ============================================================================
  *
- * A header over a floating sidebar and a working column, over one status line:
+ * A header over a floating sidebar and the working area:
  *
  *     +------------------------------------------------------------------+
- *     | [◧]  artemis › Wire the adapter seam              [+]  [⚙]  HEADER  |
+ *     | [◧]  artemis › Wire the adapter seam      [⊞][⊟] [+]  [⚙]  HEADER  |
  *     +------------------------------------------------------------------+
- *     |  ╭──────────────────╮ |                                          |
- *     |  │ [+ New session][◧]│ |  TRANSCRIPT   (scrolls, streams)         |
- *     |  │ ── artemis · 22 ─│ |                                          |
- *     |  │  this project    │ +------------------------------------------+
- *     |  │  only            │ |  COMPOSER                                |
- *     |  │ ⌂ All projects ▴ │ |------------------------------------------|
- *     |  ╰──────────────────╯ |  STATUS (profile·model·effort·directory)  |
+ *     |  ╭──────────────────╮ |  artemis › Wire…  ┊  api › Rate limiter  |
+ *     |  │ [+ New session][◧]│ |  TRANSCRIPT       ┊  TRANSCRIPT          |
+ *     |  │ ── artemis · 22 ─│ |  COMPOSER·STATUS  ┊  COMPOSER·STATUS     |
+ *     |  │  this project    │ |┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈|
+ *     |  │  only            │ |  cli › Flag parsing                      |
+ *     |  │ ⌂ All projects ▴ │ |  TRANSCRIPT                              |
+ *     |  ╰──────────────────╯ |  COMPOSER·STATUS                         |
  *     +------------------------------------------------------------------+
+ *
+ * ## The working area holds a grid of conversations
+ *
+ * A pane is a whole conversation — its own directory, account, model, run,
+ * permission queue and transcript — and the window can show up to four across
+ * and four down. The grid is *rows of columns* rather than a matrix, which is
+ * why a third conversation added under a left/right pair spans the full width
+ * instead of quartering the window. All of that lives in `WorkingArea`;
+ * everything about what a pane *owns* lives in `state/pane.ts`.
+ *
+ * What matters here is the division of responsibility this file used to blur:
+ * the header, the sidebar, the banners, the palette and the settings dialog are
+ * the *window's*, and there is one of each no matter how many panes are open.
+ * Each of those surfaces acts on the focused pane.
  *
  * ## The header exists so that hiding the sidebar is reversible
  *
@@ -73,18 +87,18 @@ import { useEffect, useRef, type ReactElement } from 'react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { AppHeader } from './components/AppHeader';
 import { CommandPalette } from './components/CommandPalette';
-import { Composer } from './components/Composer';
 import { ErrorSurface } from './components/ErrorSurface';
 import { RunInfoDialog } from './components/RunInfoDialog';
 import { SettingsDialog } from './components/settings';
 import { Sidebar } from './components/Sidebar';
-import { StatusLine } from './components/StatusLine';
-import { Transcript } from './components/Transcript';
+import { WorkingArea } from './components/WorkingArea';
 import { LogoMark } from './components/logo';
+import { paneState } from './state/pane';
 import {
   bootstrap,
   closeSettings,
   denyPendingPermission,
+  focusedPane,
   installEventBridge,
   startSessionFeed,
   interruptRun,
@@ -93,6 +107,7 @@ import {
   openSettings,
   setInfo,
   setPalette,
+  splitPane,
   toggleSidebar,
   togglePalette,
   useApp,
@@ -130,11 +145,18 @@ export function App(): ReactElement {
      * `!` — fires even from inside a text field. The palette has to be
      * reachable from the composer, which is where the caret spends its life.
      */
+    /*
+     * Every session-scoped shortcut below acts on the *focused* pane, and says
+     * so by resolving `focusedPane()` itself rather than leaning on the store's
+     * default argument. The difference is only legibility — the default is the
+     * same pane — but a reader of this file should not have to open the store to
+     * find out which of several conversations ⌘N clears.
+     */
     '!mod+k': () => {
       // Never over a permission prompt: the run is parked and the answer is
       // owed. Opening a palette on top of it would put a scrim over the one
       // thing that unblocks the agent.
-      if (useApp.getState().permissionQueue.length > 0) return;
+      if (paneState(focusedPane()).permissionQueue.length > 0) return;
       togglePalette();
     },
     escape: () => {
@@ -147,20 +169,53 @@ export function App(): ReactElement {
         setInfo(false);
         return;
       }
+      const pane = focusedPane(state);
+      const session = paneState(pane);
       // A parked prompt owns Escape. Denying is the safe answer and it unblocks
       // the provider; interrupting a run that owes a decision would strand it.
-      if (state.permissionQueue.length > 0) {
-        void denyPendingPermission();
+      //
+      // Only *this* pane's queue. A prompt parked in another pane is still
+      // answerable on its own card, and having Escape reach across a divider
+      // would deny a tool call the user is not looking at.
+      if (session.permissionQueue.length > 0) {
+        void denyPendingPermission(pane);
         return;
       }
       if (state.screen === 'profiles') {
         closeSettings();
         return;
       }
-      if (isLive(state)) void interruptRun();
+      if (isLive(session)) void interruptRun(pane);
     },
-    'mod+n': newSession,
+    'mod+n': () => newSession(focusedPane()),
     'mod+b': toggleSidebar,
+    /*
+     * `⌘\` splits to the right, `⌘⇧\` splits downwards.
+     *
+     * Two keys rather than one toggle, because the two produce different
+     * layouts and neither is undone by repeating it — a third press of a
+     * "toggle" would have to guess which of three panes to destroy. Closing has
+     * no shortcut on purpose: with up to sixteen panes open, a keystroke that
+     * ends a conversation should be aimed at a specific one, and the button on
+     * each pane's caption is that aim.
+     *
+     * Both act on the focused pane, whose brighter caption marks it. A split
+     * the grid has no room for is a no-op here; the header's buttons say why.
+     */
+    'mod+\\': () => splitPane('right'),
+    /*
+     * Two spellings for one chord, and the second is not a typo.
+     *
+     * `useHotkeys` builds its combo from `event.key`, which is the character
+     * the keyboard *produced* — and Shift turns `\` into `|`. So a binding
+     * written the way it is spoken (`mod+shift+\`) never matches anything, and
+     * does so silently: no error, no warning, a shortcut that simply does
+     * nothing. Registering both is the honest fix at this level; teaching
+     * `describe()` to reason about physical keys would change the meaning of
+     * every existing binding to solve one.
+     */
+    'mod+shift+\\': () => splitPane('down'),
+    'mod+shift+|': () => splitPane('down'),
     /*
      * `screen === 'profiles'` still means "the settings surface is open" — the
      * value kept its historical name so that every existing call site stayed
@@ -182,18 +237,20 @@ export function App(): ReactElement {
       <AppHeader />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
+        {/*
+          The banner surface spans the working area rather than sitting inside a
+          column, because a banner is the *window* reporting: "could not list
+          providers", "no bridge to the main process". The failures that belong
+          to one conversation are already reported inside it — a run that fails
+          writes its reason into that column's transcript, and a permission
+          decision that will not send says so on its own card.
+
+          The controls under each transcript belong to the input, not to the
+          window; see `WorkingArea`, which owns that arrangement now.
+        */}
         <main className="flex min-w-0 min-h-0 flex-1 flex-col">
           <ErrorSurface />
-          <Transcript />
-          {/*
-            The controls belong to the input, not to the window. Sitting them
-            directly under the composer — rather than in a bar spanning the
-            whole app, sidebar included — keeps "what will this prompt do"
-            (profile, model, thinking, directory) adjacent to the box you type
-            it into, instead of in furniture at the edge of the screen.
-          */}
-          <Composer />
-          <StatusLine />
+          <WorkingArea />
         </main>
       </div>
 

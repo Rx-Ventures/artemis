@@ -9,7 +9,8 @@
  */
 
 import type { Capabilities, PermissionMode } from '@rx-artemis/protocol';
-import { useApp, activeCapabilities, activeProviderLabel } from '../state/store';
+import { activeCapabilities, activeProviderLabel } from '../state/store';
+import { usePane } from '../state/paneContext';
 
 /** The boolean fields of {@link Capabilities}. */
 export type CapabilityKey = {
@@ -39,10 +40,17 @@ export interface CapabilityStatus {
   readonly label: string;
 }
 
+/**
+ * Answered for the column this component is in.
+ *
+ * Two panes can be pointed at two providers, so a capability is not a property
+ * of the window: the composer on the left may steer mid-run while the one on
+ * the right is disabled with Codex's reason attached, at the same moment.
+ */
 export function useCapability(key: CapabilityKey): CapabilityStatus {
-  const supported = useApp((s) => activeCapabilities(s)[key]);
-  const provider = useApp(activeProviderLabel);
-  const hasProvider = useApp((s) => s.providers.length > 0);
+  const supported = usePane((s) => activeCapabilities(s)[key]);
+  const provider = usePane(activeProviderLabel);
+  const hasProvider = usePane((s) => s.providers.length > 0);
   const label = CAPABILITY_LABELS[key];
 
   if (supported) return { supported: true, reason: '', label };
@@ -57,5 +65,5 @@ export function useCapability(key: CapabilityKey): CapabilityStatus {
 
 /** Permission modes the active provider accepts. Empty means "not applicable". */
 export function usePermissionModes(): readonly PermissionMode[] {
-  return useApp((s) => activeCapabilities(s).permissionModes);
+  return usePane((s) => activeCapabilities(s).permissionModes);
 }

@@ -39,6 +39,8 @@ import {
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
 import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
+import { paneState } from '../state/pane';
 import { WithReason } from './disabled-reason';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
@@ -208,16 +210,14 @@ function usePlanUsage(
 }
 
 export function PlanUsageMeter(): ReactElement | null {
-  const profileId = useApp((s) => s.activeProfileId);
-  const supported = useApp((s) => activeCapabilities(s).planUsageReporting);
-  const providerLabel = useApp(activeProviderLabel);
+  const pane = usePaneRef();
+  const profileId = usePane((s) => s.activeProfileId);
+  const supported = usePane((s) => activeCapabilities(s).planUsageReporting);
+  const providerLabel = usePane(activeProviderLabel);
   const focus = useApp((s) => s.planMeterFocus);
 
   const [open, setOpen] = useState(false);
-  const { usage, refreshing, load } = usePlanUsage(
-    profileId,
-    () => useApp.getState().activeProfileId,
-  );
+  const { usage, refreshing, load } = usePlanUsage(profileId, () => paneState(pane).activeProfileId);
 
   // Paint from cache as soon as the trigger exists, so the icon can already
   // carry a colour before it is ever clicked.
@@ -504,9 +504,9 @@ function PlanWindows({
  * new session, not on a clock.
  */
 function ContextWindowRow(): ReactElement {
-  const usage = useApp((s) => s.run?.usage);
-  const reporting = useApp((s) => activeCapabilities(s).usageReporting);
-  const providerLabel = useApp(activeProviderLabel);
+  const usage = usePane((s) => s.run?.usage);
+  const reporting = usePane((s) => activeCapabilities(s).usageReporting);
+  const providerLabel = usePane(activeProviderLabel);
 
   // The live run only learns its window at run end, so during a turn we fall
   // back to what this model reported last time. That memory is persisted, so
@@ -515,9 +515,9 @@ function ContextWindowRow(): ReactElement {
   // Deliberately no hardcoded default: a model's window is the provider's fact
   // to state, and a table of specs here would go stale silently and show a
   // confidently wrong denominator. Unknown stays blank until the model says.
-  const model = useApp((s) => s.run?.model);
-  const running = useApp((s) => s.run !== null);
-  const remembered = useApp((s) => (model === undefined ? undefined : s.contextWindows[model]));
+  const model = usePane((s) => s.run?.model);
+  const running = usePane((s) => s.run !== null);
+  const remembered = usePane((s) => (model === undefined ? undefined : s.contextWindows[model]));
   const window = usage?.contextWindow ?? remembered;
 
   // Before the first usage event a started session genuinely holds no context

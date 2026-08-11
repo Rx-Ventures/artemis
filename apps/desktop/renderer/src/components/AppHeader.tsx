@@ -3,12 +3,33 @@
  * ============================================================================
  *
  *     ┌──────────────────────────────────────────────────────────────────┐
- *     │ ●●●  [◧]  artemis › Wire the adapter seam            [+]  [⚙]      │
+ *     │ ●●●  [◧]  artemis › Wire the adapter seam   [⊞][⊟] [+]  [⚙]      │
  *     └──────────────────────────────────────────────────────────────────┘
- *       ↑     ↑    ↑                                        ↑    ↑
- *       │     │    └ what this window is pointed at         │    └ settings
- *       │     └ show/hide the sidebar — always present      └ new session
+ *       ↑     ↑    ↑                                 ↑  ↑   ↑    ↑
+ *       │     │    │                                 │  │   │    └ settings
+ *       │     │    │                                 │  │   └ new session
+ *       │     │    │                                 │  └ split downwards
+ *       │     │    │                                 └ split to the right
+ *       │     │    └ what the focused pane shows
+ *       │     └ show/hide the sidebar — always present
  *       └ macOS traffic lights, when the window is frameless
+ *
+ * ## With a grid open, this names the focused pane
+ *
+ * The header is the window's, and the window can be showing several
+ * conversations. Rather than trying to name them all in one line, it names
+ * whichever pane has focus, and each pane carries its own caption — see
+ * `WorkingArea`. That is why the title is read through `usePane` (which falls
+ * back to the focused pane outside a pane) rather than off the app store.
+ *
+ * ## Two split controls, not one toggle
+ *
+ * Splitting right and splitting down are different actions with different
+ * results — right grows a row, down adds a full-width one — so they are two
+ * buttons rather than one that guesses. Each is disabled *with its reason
+ * attached* when the grid has no room in that direction, per the app-wide rule
+ * that a gate is explained rather than hidden. Closing is on each pane's own
+ * caption, where the thing being closed is unambiguous.
  *
  * ## Why the app grew a header
  *
@@ -43,7 +64,9 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import {
   ChevronRightIcon,
+  Columns2Icon,
   PanelLeftCloseIcon,
+  Rows2Icon,
   PanelLeftIcon,
   PlusIcon,
   Settings2Icon,
@@ -51,7 +74,16 @@ import {
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { lastSegment } from '../lib/paths';
-import { newSession, openSettings, toggleSidebar, useApp } from '../state/store';
+import {
+  SPLIT_LIMIT_REASON,
+  canSplit,
+  newSession,
+  openSettings,
+  splitPane,
+  toggleSidebar,
+  useApp,
+} from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
 
 /**
@@ -108,8 +140,8 @@ function useTrafficLightGutter(): number {
  * cannot re-render the header.
  */
 function useSessionTitle(): string {
+  const id = usePane((s) => s.resumeSessionId);
   return useApp((s) => {
-    const id = s.resumeSessionId;
     if (id === null) return 'New session';
     return s.sessions.find((session) => session.id === id)?.title ?? 'Resumed session';
   });
@@ -117,9 +149,11 @@ function useSessionTitle(): string {
 
 export function AppHeader(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
-  const cwd = useApp((s) => s.cwd);
+  const cwd = usePane((s) => s.cwd);
   const title = useSessionTitle();
   const gutter = useTrafficLightGutter();
+  const pane = usePaneRef();
+  const room = useApp(canSplit);
 
   const project = cwd.trim().length > 0 ? lastSegment(cwd) : null;
 
@@ -157,9 +191,33 @@ export function AppHeader(): ReactElement {
         <h1 className="min-w-0 flex-1 truncate text-xs font-normal text-ink-muted">{title}</h1>
       </div>
 
+      {/*
+        The keyboard routes are `⌘\\` and `⌘⇧\\`; these are the discoverable
+        ones, and the only route for someone who never drags a session out of
+        the sidebar. Both act on the focused pane, which is what its brighter
+        caption marks.
+      */}
+      <IconButton
+        label={`Split to the right (${keyLabel('mod+\\')})`}
+        disabled={!room}
+        disabledReason={room ? undefined : SPLIT_LIMIT_REASON}
+        onClick={() => splitPane('right', pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <Columns2Icon />
+      </IconButton>
+      <IconButton
+        label={`Split downwards, full width (${keyLabel('mod+shift+\\')})`}
+        disabled={!room}
+        disabledReason={room ? undefined : SPLIT_LIMIT_REASON}
+        onClick={() => splitPane('down', pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <Rows2Icon />
+      </IconButton>
       <IconButton
         label={`New session (${keyLabel('mod+n')})`}
-        onClick={newSession}
+        onClick={() => newSession(pane)}
         className="no-drag shrink-0 text-ink-faint"
       >
         <PlusIcon />
