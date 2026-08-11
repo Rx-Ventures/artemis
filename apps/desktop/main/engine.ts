@@ -118,6 +118,16 @@ export interface EngineOptions {
   readonly userDataDir: string;
   /** Artemis's version, for any provider that wants a user-agent string. */
   readonly appVersion: string;
+  /**
+   * Real-filesystem path to the Claude Agent SDK's bundled CLI binary, when
+   * the host had to resolve it around a virtual filesystem.
+   *
+   * Packaged Electron is that host: the SDK's own sibling-package resolution
+   * yields an `app.asar/...` path, and spawning through the archive file
+   * fails with `ENOTDIR`. `index.ts` resolves the `app.asar.unpacked` twin
+   * and passes it here; in dev it stays unset and the SDK resolves itself.
+   */
+  readonly sdkExecutablePath?: string;
 }
 
 /**
@@ -297,7 +307,13 @@ function createEngine(options: EngineOptions): ArtemisEngine {
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
   // actually registers the Claude adapter. An empty registry typechecks
   // perfectly and then reports every provider as unavailable at runtime.
-  const providers: ProviderRegistry = createDefaultProviderRegistry();
+  const providers: ProviderRegistry = createDefaultProviderRegistry({
+    claude: {
+      ...(options.sdkExecutablePath === undefined
+        ? {}
+        : { sdkExecutablePath: options.sdkExecutablePath }),
+    },
+  });
 
   /**
    * Every variable any registered provider sets for itself.

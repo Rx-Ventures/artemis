@@ -405,6 +405,8 @@ export interface ClaudeModelQuery {
   readonly inheritHostEnv?: boolean;
   /** See {@link ClaudeAdapterOptions.hostEnv}. */
   readonly hostEnv?: EnvBundle;
+  /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
+  readonly sdkExecutablePath?: string;
   /** Override the default timeout. Mostly for tests. */
   readonly timeoutMs?: number;
 }
@@ -471,6 +473,9 @@ export async function fetchClaudeModels(
     sdkQuery = query({
       prompt: idlePrompt,
       options: {
+        ...(request.sdkExecutablePath === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: request.sdkExecutablePath }),
         cwd: request.cwd,
         env,
         abortController: abort,
@@ -672,6 +677,19 @@ export interface ClaudeAdapterOptions {
    * forwarded. Never called with a secret — everything is scrubbed first.
    */
   readonly onDiagnostic?: (message: string, detail?: unknown) => void;
+  /**
+   * Real-filesystem path to the SDK's bundled CLI binary, when the host knows
+   * the SDK's own resolution would be wrong.
+   *
+   * The one host that knows is Electron: modules packed into `app.asar` see
+   * virtual `__dirname`s, and `child_process.spawn` is deliberately not
+   * patched to translate them — so the SDK computing a sibling-package path
+   * for its binary produces `spawn ENOTDIR` against the archive file. The
+   * composition root that lives in Electron resolves the `app.asar.unpacked`
+   * path and injects it here; every other host leaves this unset and the SDK
+   * resolves itself.
+   */
+  readonly sdkExecutablePath?: string;
 }
 
 /**
@@ -684,6 +702,12 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
   const now = options?.now ?? Date.now;
   const hostEnv = options?.hostEnv;
   const diagnostic = options?.onDiagnostic;
+  // Spread at every `query()` call: absent entirely unless the host injected
+  // a path, so the SDK's own resolution stays untouched everywhere else.
+  const sdkExecutable =
+    options?.sdkExecutablePath === undefined
+      ? {}
+      : { pathToClaudeCodeExecutable: options.sdkExecutablePath };
 
   return {
     id: CLAUDE_PROVIDER_ID,
@@ -711,6 +735,9 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           cwd: query.cwd,
           inheritHostEnv: query.inheritHostEnv,
           hostEnv,
+          ...(options?.sdkExecutablePath === undefined
+            ? {}
+            : { sdkExecutablePath: options.sdkExecutablePath }),
         },
         diagnostic,
       );
@@ -746,7 +773,18 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           additionalDirectories: [...(input.additionalDirectories ?? []), directory],
         };
 
-        const run = new ClaudeRun(granted, { now, hostEnv, diagnostic }, { directory, staged });
+        const run = new ClaudeRun(
+          granted,
+          {
+            now,
+            hostEnv,
+            diagnostic,
+            ...(options?.sdkExecutablePath === undefined
+              ? {}
+              : { sdkExecutablePath: options.sdkExecutablePath }),
+          },
+          { directory, staged },
+        );
         run.start();
         return run;
       } catch (error) {
@@ -971,6 +1009,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         sdkQuery = query({
           prompt: buildTitlePrompt(request.prompt),
           options: {
+        ...sdkExecutable,
             cwd: request.cwd,
             env,
             model: request.model,
@@ -1103,6 +1142,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         sdkQuery = query({
           prompt: idlePrompt,
           options: {
+        ...sdkExecutable,
             cwd: input.cwd,
             /*
               The SAME composition a real run uses, and it has to be.
@@ -1203,6 +1243,8 @@ export interface BuildClaudeOptionsContext {
   readonly abortController: AbortController;
   readonly stderr: (data: string) => void;
   readonly hostEnv?: EnvBundle;
+  /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
+  readonly sdkExecutablePath?: string;
 }
 
 /**
@@ -1230,6 +1272,9 @@ export function buildClaudeOptions(
   const permissionMode = input.permissionMode;
 
   return {
+    ...(context.sdkExecutablePath === undefined
+      ? {}
+      : { pathToClaudeCodeExecutable: context.sdkExecutablePath }),
     cwd: input.cwd,
     env,
     abortController: context.abortController,
@@ -1364,6 +1409,8 @@ interface ClaudeRunDeps {
   readonly now: () => number;
   readonly hostEnv?: EnvBundle;
   readonly diagnostic?: (message: string, detail?: unknown) => void;
+  /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
+  readonly sdkExecutablePath?: string;
 }
 
 class ClaudeRun implements Run {
@@ -1463,6 +1510,9 @@ class ClaudeRun implements Run {
           abortController: this.#abort,
           stderr: (data) => this.#captureStderr(data),
           hostEnv: this.#deps.hostEnv,
+          ...(this.#deps.sdkExecutablePath === undefined
+            ? {}
+            : { sdkExecutablePath: this.#deps.sdkExecutablePath }),
         }),
       });
     } catch (error) {
