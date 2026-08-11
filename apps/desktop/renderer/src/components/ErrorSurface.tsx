@@ -33,9 +33,27 @@ export function ErrorSurface(): ReactElement | null {
   );
 }
 
+/**
+ * Error still carries its colour; warning no longer does.
+ *
+ * Not because amber is unusable — it is fine again under a cool accent — but
+ * because of what these rows *are*. They are full-bleed and they stack, so a
+ * tint here is not a badge, it is the top of the window changing colour. Half
+ * the things that raise a warning are ordinary and momentary (an unsupported
+ * setting, a directory that is not set yet), and none of them are worth
+ * repainting the chrome for.
+ *
+ * `--signal` keeps its fill because an error is not momentary: something
+ * already failed, the row is the only record of it, and rose is 45° from amber
+ * so the two never blur.
+ *
+ * Neutral surface, brighter ink than `info`, and the triangle in amber. Three
+ * distinguishable rows and one tinted one: rose fill for error, plain fill and
+ * full-strength ink for warning, plain fill and muted ink for information.
+ */
 const LEVEL_STYLES: Record<Banner['level'], string> = {
   error: 'bg-signal/10 text-signal',
-  warn: 'bg-amber/10 text-amber',
+  warn: 'bg-raised text-ink',
   info: 'bg-raised text-ink-muted',
 };
 
@@ -46,7 +64,14 @@ function BannerRow({ banner }: { readonly banner: Banner }): ReactElement {
       // top bar, and a rounded card per banner would read as a pile of toasts.
       className={cn('rounded-none border-0 px-3 py-1.5', LEVEL_STYLES[banner.level])}
     >
-      {banner.level === 'info' ? <InfoIcon /> : <TriangleAlertIcon />}
+      {banner.level === 'info' ? (
+        <InfoIcon />
+      ) : (
+        // The error row is already rose end to end, so its triangle inherits.
+        // The warning row is neutral now, which makes this the only thing
+        // carrying the level.
+        <TriangleAlertIcon className={banner.level === 'warn' ? 'text-amber' : undefined} />
+      )}
       <AlertTitle className="font-mono text-2xs leading-snug break-words whitespace-normal">
         {banner.message}
       </AlertTitle>

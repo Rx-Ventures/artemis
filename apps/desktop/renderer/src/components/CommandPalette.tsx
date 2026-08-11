@@ -503,7 +503,7 @@ function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactEleme
     <>
       <CommandEmpty>No session matches that.</CommandEmpty>
       {resuming.supported ? null : (
-        <p className="border-b border-line bg-amber/5 px-3 py-2 text-2xs leading-snug text-amber">
+        <p className="border-b border-line bg-raised px-3 py-2 text-2xs leading-snug text-ink-muted">
           {resuming.reason} These are listed for reference only — picking one would not carry the
           conversation forward, so they cannot be selected.
         </p>

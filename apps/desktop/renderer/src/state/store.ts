@@ -158,6 +158,17 @@ export interface AppState {
    */
   readonly authByProfile: Readonly<Record<ProfileId, AuthStatusInfo>>;
 
+  /**
+   * Where the agent works — a property of the session in the working column,
+   * not of the window around it.
+   *
+   * There is one of these rather than one per open session because the window
+   * shows one conversation at a time; "pinned to the session" is about *when it
+   * moves*, not about how many copies exist. It moves in exactly two places,
+   * and both keep it married to the transcript on screen: {@link resumeSession}
+   * adopts the selected session's directory, and {@link setCwd} ends the
+   * session rather than retargeting it. Nothing else may write this field.
+   */
   readonly cwd: string;
   readonly permissionMode: PermissionMode;
   /**
@@ -350,6 +361,16 @@ export const DEFAULT_PLAN_METER_FOCUS: PlanMeterFocus = 'five_hour';
 const PLAN_METER_FOCUSES: readonly PlanMeterFocus[] = ['five_hour', 'seven_day', 'model'];
 
 interface Prefs {
+  /**
+   * The last directory worked in, restored as the starting point for the first
+   * session of the next launch.
+   *
+   * Persisting it does not make it window state: it is a seed, and the moment a
+   * session is selected the directory follows that session instead. The
+   * alternative — launching with no directory — would block every run behind a
+   * folder picker on each start, which is a worse answer to "whose property is
+   * this" than remembering where the user was.
+   */
   cwd?: string;
   activeProfileId?: string | null;
   activeProviderId?: ProviderId;
@@ -1162,11 +1183,67 @@ export function setProfile(profileId: ProfileId): void {
   void refreshModels();
 }
 
+/**
+ * Point the working column at a directory.
+ *
+ * ## Moving the directory ends the session rather than dragging it along
+ *
+ * A session id is not portable — Claude files transcripts under the directory
+ * they ran in, so an id only resolves against that directory. (The long version
+ * of this is in {@link resumeSession}, which is the same fact read backwards:
+ * selecting a session moves the directory to match it.)
+ *
+ * Leaving `resumeSessionId` set across a change here would aim the next prompt
+ * at a session the new directory has never heard of, and that failure does not
+ * surface until several seconds after the user has typed a prompt, as a
+ * provider error about a session id they never saw. So the selection is cleared
+ * and the transcript starts blank.
+ *
+ * That is the pairing `ProjectSwitcher` used to write by hand — `newSession()`
+ * and then `setCwd()`, in that order, with a comment explaining why the order
+ * mattered. Doing it here instead makes every route to a directory correct by
+ * construction rather than by memory: the status line, the palette, the empty
+ * state and the switcher now all get the same behaviour, and a fifth one added
+ * later gets it without knowing this rule exists.
+ *
+ * A live run is the one case that refuses. Ending it is a real loss of work and
+ * not plausibly what someone reaching for a folder picker meant to ask for, so
+ * this says what is in the way and changes nothing.
+ */
 export function setCwd(cwd: string): void {
-  useApp.setState({ cwd: cwd.trim() });
+  const next = cwd.trim();
+  const state = useApp.getState();
+
+  // Re-picking the directory that is already selected is not a session change.
+  // It is also not unusual: the native picker *opens at* the current directory,
+  // so "Browse… → Choose" with no navigation lands here every time.
+  if (next === state.cwd) return;
+
+  if (isLive(state)) {
+    pushBanner(
+      'warn',
+      'A run is still going',
+      'Interrupt it first. A session belongs to the directory it started in, so moving the directory would have to end this one.',
+    );
+    return;
+  }
+
+  const leaving = state.resumeSessionId !== null || state.run !== null;
+  if (leaving) newSession();
+
+  useApp.setState({ cwd: next });
   savePrefs();
   void refreshSessions();
   void refreshWorkspace();
+
+  // After `newSession`, which resets the very transcript this is written into.
+  if (leaving) {
+    transcript.note(
+      'info',
+      'Started a new session',
+      `The working directory moved to ${next}, and a session only resumes in the directory it was created in.`,
+    );
+  }
 }
 
 /**
@@ -1673,10 +1750,15 @@ export function resumeSession(session: SessionSummary): void {
   void loadSessionHistory(session);
   void refreshSessions();
   void refreshModels();
-  // This function writes `cwd` itself rather than going through `setCwd` — it
-  // has a batch of state to move atomically — so the header's name has to be
-  // re-read here too, or resuming a session from another project would leave
-  // the previous project's name over the new project's sessions.
+  // This function writes `cwd` itself rather than going through `setCwd`, and
+  // must keep doing so: `setCwd` clears `resumeSessionId` on the way past,
+  // which is the one piece of state this function exists to set. Routing this
+  // through it would resume a session and immediately un-resume it.
+  //
+  // The cost of writing the field directly is that the workspace read attached
+  // to `setCwd` does not happen either, so it is done here — otherwise resuming
+  // a session from another project leaves the previous project's name sitting
+  // over the new project's sessions.
   if (switchedCwd) void refreshWorkspace();
 }
 

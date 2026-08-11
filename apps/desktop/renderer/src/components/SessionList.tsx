@@ -196,7 +196,7 @@ export function SessionList(): ReactElement {
            * be clicked. Neither ever silently disappears.
            */}
           {listing.supported && !resuming.supported ? (
-            <p className="border-y border-line bg-amber/5 px-2.5 py-1.5 text-2xs leading-snug text-amber">
+            <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
               {resuming.reason} These are listed for reference; picking one would not carry the
               conversation forward.
             </p>

@@ -8,13 +8,12 @@
  *     | [◧]  artemis › Wire the adapter seam              [+]  [⚙]  HEADER  |
  *     +------------------------------------------------------------------+
  *     |  ╭──────────────────╮ |                                          |
- *     |  │ ▣ artemis       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
- *     |  │ [ + New session ]│ |                                          |
- *     |  │ ~/code/artemis     │ |                                          |
- *     |  │ ── SESSIONS ──   │ +------------------------------------------+
- *     |  │  this project    │ |  COMPOSER                                |
+ *     |  │ [+ New session][◧]│ |  TRANSCRIPT   (scrolls, streams)         |
+ *     |  │ ── artemis · 22 ─│ |                                          |
+ *     |  │  this project    │ +------------------------------------------+
+ *     |  │  only            │ |  COMPOSER                                |
  *     |  │ ⌂ All projects ▴ │ |------------------------------------------|
- *     |  ╰──────────────────╯ |  STATUS  (profile · model · effort · ~)   |
+ *     |  ╰──────────────────╯ |  STATUS (profile·model·effort·directory)  |
  *     +------------------------------------------------------------------+
  *
  * ## The header exists so that hiding the sidebar is reversible
@@ -41,6 +40,13 @@
  * segment describes what the *next run* will do, so the bar lines up with the
  * input's edges inside the working column instead of spanning the app. See
  * `StatusLine`'s own header.
+ *
+ * The working directory is the strictest case of that rule and the reason it is
+ * worth stating twice. It is a property of the session in this column — it
+ * follows the session you select, and changing it ends the session rather than
+ * moving one somewhere its transcript was never written. The sidebar used to
+ * offer it too, one row under New session, which framed it as a standing window
+ * setting the next session would inherit. It does not live there any more.
  *
  * ## What stayed where it was
  *
