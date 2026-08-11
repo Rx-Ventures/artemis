@@ -86,20 +86,11 @@
  * now — it is always present, so this bar no longer needs a second copy.
  */
 
-import {
-  Fragment,
-  useMemo,
-  useState,
-  type ComponentProps,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
+import { Fragment, useMemo, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import {
   BrainIcon,
   ChevronsUpDownIcon,
   CpuIcon,
-  FolderIcon,
-  GitBranchIcon,
   KeyRoundIcon,
   ListTreeIcon,
   ShieldAlertIcon,
@@ -129,7 +120,6 @@ import {
   activeThinkingLevel,
   fastModeAvailable,
   isLive,
-  lastKnownBranch,
   learnedContextWindow,
   openSettings,
   providerOffersFastMode,
@@ -142,7 +132,6 @@ import {
   thinkingLevels,
   useApp,
 } from '../state/store';
-import { WorkingDirectoryDialog } from './WorkingDirectory';
 import { IconButton, WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
 import { ProfileSwatch, StatusDot, ToneBadge } from './primitives';
@@ -162,7 +151,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 const MODE_LABELS: Record<PermissionMode, string> = {
@@ -229,9 +217,13 @@ export function StatusLine(): ReactElement {
             "how much room is left", and splitting them across two controls
             meant checking two places.
           */}
+          {/*
+            The directory used to end this row. It reads as a heading for the
+            input rather than a setting on it, and at full-path width it was
+            squeezing the meter beside it, so it moved above the composer as
+            `WorkingDirectoryChip` — same dialog, same one-trigger rule.
+          */}
           <PlanUsageMeter />
-          <Divider />
-          <LocationSegment />
         </div>
       </div>
     </footer>
@@ -888,88 +880,20 @@ function RunSegment(): ReactElement | null {
 /* -------------------------------------------------------------------------- */
 /* Location                                                                   */
 /* -------------------------------------------------------------------------- */
+/* Location                                                                   */
+/* -------------------------------------------------------------------------- */
 
-/**
- * Working directory and branch.
+/*
+ * MOVED: `LocationSegment`, now `WorkingDirectoryChip` in `WorkingDirectory.tsx`.
  *
- * This is now the app's primary directory control, not one of two: the sidebar
- * used to carry a second one, which framed the directory as a property of the
- * window when it belongs to the session. This bar is where it belongs, because
- * this bar's whole subject is what the next prompt will do.
+ * It ended this row showing a shortened absolute path. Two things were wrong
+ * with that. The path made the control's width a function of how deeply nested
+ * the project was, so it pushed against the meter beside it; and a directory is
+ * not a setting on the next prompt the way the model and the permission mode
+ * are — it is where the whole session lives, which reads as a heading above the
+ * input rather than a chip below it.
  *
- * It is a control rather than a readout: it opens the same chooser the palette
- * and the empty state use, which offers the host's folder picker when the
- * bridge exposes one and a validated path field when it does not. It is still
- * not an *inline* editable field — a half-typed path committed by a stray blur
- * is exactly the failure a bar like this invites — so it opens a dialog and
- * commits deliberately. Committing may end the current session; `setCwd` in the
- * store explains why, and the dialog says so.
- *
- * The branch is a last-known value read off session history for this directory;
- * see `lastKnownBranch` for why it cannot be live.
+ * It lives beside the dialog it opens now. Still exactly one trigger for the
+ * value; it just moved.
  */
-function LocationSegment(): ReactElement {
-  const cwd = useApp((s) => s.cwd);
-  const platform = useApp((s) => s.platform);
-  const branch = useApp(lastKnownBranch);
-  const [open, setOpen] = useState(false);
-  const unset = cwd.trim().length === 0;
 
-  return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => setOpen(true)}
-            aria-label="Working directory — change it"
-            // Faint either way. "No directory" is the same absent-value
-            // placeholder the header and the sidebar show, and colouring one of
-            // the three left the bar disagreeing with them about how alarming
-            // an unconfigured app is.
-            className="h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal text-ink-faint"
-          >
-            <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className={cn('truncate', !unset && 'text-ink-muted')}>
-              {unset ? 'no directory' : shortenPath(cwd, { platform, max: 28 })}
-            </span>
-            {branch ? (
-              <span className="flex min-w-0 items-center gap-1">
-                <GitBranchIcon className="size-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{branch}</span>
-              </span>
-            ) : null}
-          </Button>
-        </TooltipTrigger>
-        {/*
-          `flex-col items-start`, because `TooltipContent` is a flex *row* with
-          centred items — it is built for one line of text next to a `Kbd`. Two
-          children in it become two columns, which is how this tooltip spent a
-          while rendering the path and the branch note side by side, each half
-          the width and neither reading as a sentence.
-
-          The note is one clause now rather than three. The reason a hover lands
-          here is the path, which the chip truncates; the branch caveat is a
-          footnote and was set at the size of the answer.
-        */}
-        <TooltipContent side="top" align="end" className="max-w-sm flex-col items-start gap-1">
-          {unset ? (
-            <span>
-              No working directory set — the agent needs an absolute path to work in. Click to
-              choose one.
-            </span>
-          ) : (
-            <span className="font-mono break-all">{cwd}</span>
-          )}
-          {branch ? (
-            <span className="text-ink-faint">
-              Branch “{branch}” is the last one recorded here, so it may be stale.
-            </span>
-          ) : null}
-        </TooltipContent>
-      </Tooltip>
-      <WorkingDirectoryDialog open={open} onOpenChange={setOpen} />
-    </>
-  );
-}
