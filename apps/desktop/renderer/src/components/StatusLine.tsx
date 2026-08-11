@@ -5,7 +5,7 @@
  * One always-visible row across the bottom of the window carrying everything
  * that decides what the *next* prompt will do, and nothing that does not:
  *
- *     [profile ▾] [model ▾] [fast|ultra] [thinking ▾] [mode ▾]   ◔ 61%  ~/proj
+ *     [profile ▾] [model ▾] [mode ▾]                    ◔ 61%  ~/proj  main
  *
  * Everything left of the gauge changes a setting in place; everything right of
  * it is read-only text. That split is the whole design: a setting you can
@@ -37,22 +37,18 @@
  * among the pinned ones — a picker that cannot show its own current value is
  * worse than a long one.
  *
- * ## Fast mode and ultracode are model properties, shown twice
+ * ## Everything about *how* the model runs is in the model popover
  *
- * They appear as toggles on the bar *and* inside the model menu. That is not
- * duplication for its own sake: on the bar they are one click away from any
- * prompt, and in the menu they sit under the model that determines whether
- * they exist at all, which is where a user works out why they are dimmed.
+ * Model, thinking and fast mode were four separate segments on this bar. They
+ * are all properties of one choice, so they now share one popover: the model
+ * list, then thinking, fast mode and context under it. Thinking is a single
+ * ladder from `low` up to ultracode — see `thinkingLevels` for why ultracode is
+ * a rung rather than a switch of its own.
  *
- * Both are gated on the selected model's `supportsFastMode` /
- * `supportsUltracode`, and — like everything else here — an unsupported one is
- * rendered dead with the reason rather than removed. They are styled as
- * run-shaping settings (cyan and ember, the same weight as thinking effort),
- * deliberately *not* as hazards: `bypassPermissions` is the only control on
- * this bar that gets the signal colour, and diluting it would cost the thing
- * that makes it work.
- *
- * The two are mutually exclusive; see {@link setFastMode}.
+ * Fast mode disables *without* a reason on a model that does not offer it,
+ * which is a deliberate exception to the rule below. That rule earns its keep
+ * when the user can act on the reason; here it is always "this model does not
+ * do that", which the disabled state already says.
  *
  * ## The profile segment is the reason this work exists
  *
@@ -81,10 +77,8 @@
  * width of a pane the input does not fill. The composer draws the border above
  * them; a second one here would box the input in.
  *
- * The sidebar toggle rides along at the far left despite acting on the window
- * rather than the prompt. It has to: `Sidebar` renders nothing when collapsed,
- * so its own close button cannot reopen it, and this is the only always-present
- * control that can.
+ * The sidebar toggle used to ride along at the far left. The header carries it
+ * now — it is always present, so this bar no longer needs a second copy.
  */
 
 import { useMemo, useState, type ComponentProps, type ReactElement, type ReactNode } from 'react';
@@ -96,7 +90,6 @@ import {
   GitBranchIcon,
   KeyRoundIcon,
   ListTreeIcon,
-  PanelLeftIcon,
   ShieldAlertIcon,
   ShieldIcon,
   SparklesIcon,
@@ -128,7 +121,6 @@ import {
   setProfile,
   setThinkingLevel,
   thinkingLevels,
-  toggleSidebar,
   useApp,
 } from '../state/store';
 import { WorkingDirectoryDialog } from './WorkingDirectory';
@@ -196,8 +188,6 @@ export function StatusLine(): ReactElement {
   return (
     <footer className="shrink-0 pb-1">
       <div className="mx-auto flex h-7 w-full max-w-4xl items-center gap-0.5 px-3 text-2xs">
-        <SidebarToggle />
-        <Divider />
         <ProfileSegment />
         <Divider />
         {/*
@@ -233,26 +223,12 @@ function Divider(): ReactElement {
   return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-line" />;
 }
 
-/**
- * Show/hide the session sidebar.
- *
- * Lives here rather than only inside the sidebar for the obvious reason: a
- * control that disappears along with the thing it controls leaves a collapsed
- * sidebar reachable only by remembering a shortcut.
+/*
+ * The sidebar toggle used to live here, because `Sidebar` renders nothing when
+ * collapsed and so could not reopen itself. The header owns that control now
+ * and is always present, so a second copy on this bar was simply the same
+ * button drawn twice.
  */
-function SidebarToggle(): ReactElement {
-  const collapsed = useApp((s) => s.sidebarCollapsed);
-  return (
-    <IconButton
-      size="icon-xs"
-      label={`${collapsed ? 'Show' : 'Hide'} the session sidebar (${keyLabel('mod+b')})`}
-      onClick={toggleSidebar}
-      className={cn('shrink-0', collapsed ? 'text-ink-muted' : 'text-ink-faint')}
-    >
-      <PanelLeftIcon />
-    </IconButton>
-  );
-}
 
 /**
  * Shared chrome for a picker's trigger.
@@ -507,7 +483,11 @@ function ModelSegment(): ReactElement {
         </SegmentTrigger>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" side="top" className="w-64 max-w-[min(18rem,90vw)]">
+      <DropdownMenuContent
+        align="start"
+        side="top"
+        className="w-52 max-w-[min(15rem,90vw)] p-1"
+      >
         <DropdownMenuRadioGroup
           value={selected?.id ?? ''}
           onValueChange={(value) => setModel(value)}
@@ -523,7 +503,7 @@ function ModelSegment(): ReactElement {
         <ContextRow />
 
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="gap-1.5 text-2xs" onSelect={() => openSettings('models')}>
+        <DropdownMenuItem className="h-6 gap-1.5 px-2 text-2xs" onSelect={() => openSettings('models')}>
           <ListTreeIcon className="size-3 shrink-0" aria-hidden="true" />
           Edit quick access…
           {hidden > 0 ? (
@@ -556,7 +536,7 @@ function ModelSegment(): ReactElement {
  */
 function ModelRow({ model }: { readonly model: ProviderModelOption }): ReactElement {
   return (
-    <DropdownMenuRadioItem value={model.id} className="text-2xs">
+    <DropdownMenuRadioItem value={model.id} className="py-1 pr-2 pl-7 text-xs">
       <span className="min-w-0 truncate text-ink">{model.label}</span>
     </DropdownMenuRadioItem>
   );
@@ -575,7 +555,7 @@ function ShapeRow({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <div className="flex h-7 items-center gap-2 px-2">
+    <div className="flex h-6 items-center gap-2 px-2">
       <span className="shrink-0 text-2xs text-ink-faint">{label}</span>
       <span className="ml-auto flex min-w-0 items-center">{children}</span>
     </div>
@@ -598,7 +578,7 @@ function ThinkingRow(): ReactElement | null {
 
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger className="h-7 gap-2 px-2 text-2xs">
+      <DropdownMenuSubTrigger className="h-6 gap-2 px-2 text-2xs">
         <span className="text-ink-faint">Thinking</span>
         <span className="ml-auto text-ink">{label}</span>
       </DropdownMenuSubTrigger>

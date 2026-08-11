@@ -393,7 +393,18 @@ export async function fetchClaudeModels(
       request.timeoutMs ?? MODEL_FETCH_TIMEOUT_MS,
     );
 
-    const mapped = infos.map(toModelOption).filter((m) => m.id.length > 0);
+    /*
+     * The CLI's own list includes a "Default (recommended)" row — an alias that
+     * points at whichever model it currently prefers rather than naming one.
+     * It is dropped here for the same reason Apollo's picker no longer offers a
+     * "provider default": a row that names no model cannot tell the user what
+     * the next run will cost or how capable it will be, and it sits at the top
+     * of the list collecting the clicks of people who have not decided yet.
+     * Every row Apollo shows is a real, named model.
+     */
+    const mapped = infos
+      .map(toModelOption)
+      .filter((m) => m.id.length > 0 && !isDefaultAlias(m));
     if (mapped.length === 0) {
       onDiagnostic?.('The Claude CLI reported an empty model list; using the built-in list.');
       return { models: CLAUDE_MODELS, live: false };
@@ -427,11 +438,54 @@ export async function fetchClaudeModels(
  *    provider's own stated precondition ("requires an xhigh-capable model")
  *    rather than a guess. There is no dedicated flag on `ModelInfo` to read.
  */
+/**
+ * A short, versioned name for the picker: "Opus 5", "Sonnet 5", "Haiku 4.5".
+ *
+ * Derived from the wire id rather than from `displayName`, because the CLI's
+ * display names are written for its own picker and are not what this one needs.
+ * In practice it reports "Opus (1M context)", "Sonnet", "Haiku" — a parenthetical
+ * about a context window that is now standard on every current model, and no
+ * version numbers at all, so two Sonnet generations would be indistinguishable.
+ * The wire id always carries the version: `claude-opus-5`, `claude-haiku-4-5`.
+ *
+ * Falls back to the display name when a provider publishes no resolution, since
+ * a name from the provider beats one this function invented.
+ */
+export function shortModelName(info: ModelInfo): string {
+  const wire = info.resolvedModel;
+  if (wire !== undefined) {
+    const parts = wire
+      .replace(/^claude-/i, '')
+      // Dated snapshot suffix — `claude-haiku-4-5-20251001`. It is not part of
+      // the version a human says out loud.
+      .replace(/-\d{8}$/, '')
+      .split('-');
+    const [family, ...version] = parts;
+    if (family !== undefined && family.length > 0) {
+      const named = family.charAt(0).toUpperCase() + family.slice(1);
+      return version.length > 0 ? `${named} ${version.join('.')}` : named;
+    }
+  }
+  return info.displayName.replace(/^Claude\s+/i, '').trim() || info.value;
+}
+
+/**
+ * Is this row a pointer at "whatever the CLI prefers" rather than a model?
+ *
+ * Matched on the alias rather than the display text, because the text is the
+ * CLI's to reword and `default` is the id it has to keep — anything sending
+ * `model: "default"` depends on it. The display check is a second net for a
+ * provider that names the concept differently without using that alias.
+ */
+export function isDefaultAlias(model: ProviderModelOption): boolean {
+  return model.id === 'default' || /^default\b/i.test(model.displayName ?? '');
+}
+
 function toModelOption(info: ModelInfo): ProviderModelOption {
   const levels = info.supportedEffortLevels;
   return {
     id: info.value,
-    label: info.displayName.replace(/^Claude\s+/i, '').trim() || info.value,
+    label: shortModelName(info),
     displayName: info.displayName,
     resolvedModel: info.resolvedModel,
     note: info.description,
