@@ -89,6 +89,19 @@ export function matchesQuery(
 export interface GroupOptions {
   readonly query?: string;
   readonly profileLabel?: ProfileLabelLookup;
+  /**
+   * A directory to sort to the front, ahead of the recency order.
+   *
+   * The sidebar passes the working directory. Listing every project means "what
+   * was I doing in *this* repo" is otherwise answered somewhere in the middle of
+   * the list — which is the specific complaint that once had this list scoped to
+   * one project and the rest behind a switcher. Pinning keeps the whole history
+   * reachable without giving up the answer to that question.
+   *
+   * Only ever moves a group that exists. A directory with no sessions yet does
+   * not get an empty heading — there would be nothing under it.
+   */
+  readonly pinned?: string;
 }
 
 /** Apply rules 1–4 above. */
@@ -113,7 +126,16 @@ export function groupSessionsByProject(
     groups.push({ cwd, sessions: bucket, updatedAt: bucket[0]?.updatedAt ?? 0 });
   }
 
-  groups.sort((a, b) => b.updatedAt - a.updatedAt || a.cwd.localeCompare(b.cwd));
+  const pinned = options.pinned;
+  groups.sort((a, b) => {
+    // Ahead of recency, not folded into it: the pinned project belongs at the
+    // top even when every other project has been touched since.
+    if (pinned !== undefined && a.cwd !== b.cwd) {
+      if (a.cwd === pinned) return -1;
+      if (b.cwd === pinned) return 1;
+    }
+    return b.updatedAt - a.updatedAt || a.cwd.localeCompare(b.cwd);
+  });
   return groups;
 }
 

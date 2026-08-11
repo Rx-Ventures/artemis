@@ -143,6 +143,57 @@ describe('sessionKey', () => {
   });
 });
 
+describe('pinning the working directory', () => {
+  it('puts the pinned project first, ahead of more recent ones', () => {
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'a', cwd: '/code/api', updatedAt: 1 }),
+        session({ id: 'b', cwd: '/code/web', updatedAt: 99 }),
+        session({ id: 'c', cwd: '/code/cli', updatedAt: 50 }),
+      ],
+      { pinned: '/code/api' },
+    );
+
+    // `/code/api` is the *stalest* project here and still leads. That is the
+    // point: the list holds every project now, and the one you are working in
+    // has to stay the first thing on screen rather than sinking into recency
+    // order — which is what had this list scoped to one project before.
+    expect(groups.map((g) => g.cwd)).toEqual(['/code/api', '/code/web', '/code/cli']);
+  });
+
+  it('leaves the others in recency order behind it', () => {
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'a', cwd: '/code/api', updatedAt: 1 }),
+        session({ id: 'b', cwd: '/code/web', updatedAt: 10 }),
+        session({ id: 'c', cwd: '/code/cli', updatedAt: 90 }),
+      ],
+      { pinned: '/code/api' },
+    );
+
+    expect(groups.map((g) => g.cwd)).toEqual(['/code/api', '/code/cli', '/code/web']);
+  });
+
+  it('does not invent a group for a directory with no sessions', () => {
+    const groups = groupSessionsByProject([session({ id: 'a', cwd: '/code/api', updatedAt: 1 })], {
+      pinned: '/somewhere/brand/new',
+    });
+
+    // A heading with nothing under it. The sidebar renders whatever comes back,
+    // so an empty pinned group would be a project label above no rows.
+    expect(groups.map((g) => g.cwd)).toEqual(['/code/api']);
+  });
+
+  it('is unchanged when nothing is pinned', () => {
+    const sessions = [
+      session({ id: 'a', cwd: '/code/api', updatedAt: 1 }),
+      session({ id: 'b', cwd: '/code/web', updatedAt: 99 }),
+    ];
+
+    expect(groupSessionsByProject(sessions).map((g) => g.cwd)).toEqual(['/code/web', '/code/api']);
+  });
+});
+
 describe('flattenGroups', () => {
   it('emits a header before each group and tags every row with its group index', () => {
     const rows = flattenGroups(

@@ -1,52 +1,68 @@
 /**
- * This project's session history.
+ * Every session, grouped by the project it ran in.
  * ============================================================================
  *
- *     ▾ artemis · 22            [ filter… ]
+ *     ▾ Sessions · 47           [ filter… ]
+ *       artemis ·22 ──────────────────────
  *         Wire the adapter seam
  *         ⌥ main · ▪ Work
+ *       api ·9 ───────────────────────────
  *         Profile store encryption
  *         ▪ Home
  *
- * One project, flat. The sidebar is scoped to the working directory now, and
- * other projects are reached through the switcher at the foot of the card
- * rather than by scrolling past them here. That is the change that matters:
- * this list used to interleave every repository under sticky per-project
- * headers, which meant the answer to "what was I doing in *this* repo" was
- * somewhere in the middle of a thousand rows.
+ * All projects, with the working directory pinned to the top.
  *
- * ## 0. The header names the project, and folds it away
+ * This has been both ways round. The list was once scoped to the working
+ * directory, with everything else behind an "All projects" switcher, because an
+ * undifferentiated stream of every repository buried the answer to "what was I
+ * doing in *this* repo". That fixed the wrong half: scoping made the other
+ * question — "where was that session I had open yesterday?" — unanswerable
+ * without first guessing the folder it was in and switching to it, which meant
+ * changing directory, which ends the current session. History you have to
+ * destroy your place to look at is not history you can browse.
  *
- * It used to read `SESSIONS`, which is a caption for a list whose contents are
- * already obviously sessions — it named the *shape* of what was below it and
- * not the *subject*. It now names the repository, which is the fact a person
- * actually wants confirmed before they click a row, and it is the card's only
- * title: the separate project-title row above it said the same word one line
- * higher and has gone.
+ * Pinning is what lets both hold at once. The current project sits at the top
+ * under its own heading, and every other project follows in recency order, so
+ * the scoped view is still the first thing on screen and the rest is a scroll
+ * rather than a mode change.
  *
- * Repository, not directory. Working in `~/code/artemis/apps/desktop` you are
- * working on *artemis*; a header reading "desktop" is technically true and
- * useless. The renderer cannot tell the difference on its own — it has no `fs`
- * — so the main process is asked once per directory change and the answer is
- * cached in the store. Until it lands, and in a build that cannot answer, the
- * directory's own name is shown, which is exactly what was there before.
+ * Clicking any row does the whole switch — provider, profile, directory and
+ * transcript — because `resumeSession` already had to: a session id only
+ * resolves against the directory it ran in. Crossing a project boundary from
+ * here was always going to work; it was only ever the list that hid the rows.
+ *
+ * ## 0. The card header names the list; the group headings name the projects
+ *
+ * It read `SESSIONS` once, which captions a list whose contents are obviously
+ * sessions — the *shape* of what is below, not the subject. It then named the
+ * current repository, which was right while the list held one project and
+ * became a lie the moment it held all of them. The projects are named inside
+ * the list now, each heading directly above its own rows.
+ *
+ * Repository name where it is known, directory name otherwise. Working in
+ * `~/code/artemis/apps/desktop` you are working on *artemis*; a heading reading
+ * "desktop" is technically true and useless. The renderer has no `fs`, so the
+ * main process is asked once per directory change — which means only the
+ * *current* project can be named that way, and the others fall back to their
+ * folder name rather than paying a round trip per heading.
  *
  * The fold is persisted. A section the user closed and found reopened on the
  * next launch is the same discourtesy as a sidebar width that resets.
  *
- * ## 1. It is still virtualised, and now trivially so
+ * ## 1. It is virtualised, over two row heights
  *
- * Even one project's history can run to hundreds of rows, and mounting all of
- * them costs a visible hitch every time the list refreshes — which happens at
- * the end of every run. So rows are absolutely positioned inside a spacer of
- * the full height and only the slice inside the viewport (plus overscan) is
- * mounted.
+ * History runs to hundreds of rows, and mounting all of them costs a visible
+ * hitch every time the list refreshes — which happens at the end of every run.
+ * So rows are absolutely positioned inside a spacer of the full height and only
+ * the slice inside the viewport (plus overscan) is mounted.
  *
- * With the group headers gone every row is the same height, so an offset is
- * `index * ROW_HEIGHT` and the visible window is two divisions. The previous
- * version needed prefix sums, a binary search, and a second copy of each header
- * pinned to the top of the viewport to fake `position: sticky` inside an
- * absolutely-positioned list. None of that has to exist any more.
+ * Headings are shorter than session rows, so an offset is no longer
+ * `index * ROW_HEIGHT`. Row starts are accumulated once per change of the row
+ * array and the visible window is a binary search over them — see `indexAt`.
+ * What is deliberately *not* back is the second copy of each heading pinned to
+ * the top of the viewport to fake `position: sticky` inside an absolutely
+ * positioned list. A heading you have scrolled past belongs to the rows you are
+ * already reading; it did not earn its bookkeeping.
  *
  * ## 2. `ROW_HEIGHT` is a constant, and it is not arbitrary
  *
@@ -94,6 +110,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   GitBranchIcon,
+  HistoryIcon,
   InboxIcon,
   SearchIcon,
 } from 'lucide-react';
@@ -103,7 +120,7 @@ import { useCapability } from '../hooks/useCapability';
 import type { WorkspaceNames } from '../lib/extensions';
 import { condenseTitle, formatRelative } from '../lib/format';
 import { lastSegment } from '../lib/paths';
-import { groupSessionsByProject, sessionKey } from '../lib/sessionGroups';
+import { flattenGroups, groupSessionsByProject, type ListRow } from '../lib/sessionGroups';
 import { refreshSessions, resumeSession, toggleSessionsCollapsed, useApp } from '../state/store';
 import { CapabilityButton } from './capability-button';
 import { ProfileSwatch } from './primitives';
@@ -114,6 +131,14 @@ import { cn } from '@/lib/utils';
 
 /** See note 2 in the file header before changing this. */
 const ROW_HEIGHT = 54;
+/**
+ * A group heading's row height.
+ *
+ * One 11px line on a 16px leading, with 4px of air above and below. Deliberately
+ * much shorter than a session row: a heading is a divider with a word on it, and
+ * at row height it would read as an unclickable entry in the list.
+ */
+const HEADER_HEIGHT = 24;
 /** Rows kept mounted beyond each edge, so a fast flick does not show gaps. */
 const OVERSCAN = 6;
 /**
@@ -145,26 +170,24 @@ export function SessionList(): ReactElement {
   );
 
   /*
-   * Grouping is reused rather than re-implemented, even though only one group
-   * is wanted. `groupSessionsByProject` owns the query matching, the recency
-   * order and the id tie-break, and it is the part of this feature that has
-   * tests. Filtering by `cwd` here instead would have quietly forked all three.
+   * Every project, grouped, with the working directory pinned to the top.
+   *
+   * `groupSessionsByProject` owns the query matching, the recency order, the
+   * pin and the id tie-break, and it is the part of this feature that has
+   * tests — filtering here instead would quietly fork all four.
    */
-  const rows = useMemo(() => {
-    const groups = groupSessionsByProject(sessions, { query, profileLabel });
-    return groups.find((group) => group.cwd === cwd)?.sessions ?? [];
-  }, [sessions, query, profileLabel, cwd]);
-
-  /** Unfiltered, so the section count does not jump around while typing. */
-  const total = useMemo(
-    () => sessions.reduce((count, session) => (session.cwd === cwd ? count + 1 : count), 0),
-    [sessions, cwd],
+  const rows = useMemo(
+    () => flattenGroups(groupSessionsByProject(sessions, { query, profileLabel, pinned: cwd })),
+    [sessions, query, profileLabel, cwd],
   );
+
+  /** Unfiltered, so the count does not jump around while typing. */
+  const total = sessions.length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-t border-line">
       <div className="flex items-center gap-1.5 px-1.5 pt-2 pb-1.5">
-        <ProjectHeader count={total} />
+        <SessionsHeader count={total} />
         {/*
          * The filter goes with the rows, so it goes away with them. Leaving a
          * field over a folded list would offer to search nothing.
@@ -179,7 +202,7 @@ export function SessionList(): ReactElement {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter…"
-              aria-label="Filter this project’s sessions"
+              aria-label="Filter sessions"
               spellCheck={false}
               className="h-6 rounded-md pl-6.5 text-2xs md:text-2xs"
             />
@@ -241,31 +264,27 @@ export function SessionList(): ReactElement {
  * thing people click three times before reading. The chevron stays as the
  * *affordance*; `aria-expanded` is what says the same thing to a screen reader.
  *
- * The count is unfiltered on purpose — it says how much history this project
- * has, which is a stable fact about the project, and a number that counted down
- * while someone typed in the filter would be answering a question nobody asked
- * of a header.
+ * ## It names the list, not a project
+ *
+ * It used to name the working directory's repository, which was right while the
+ * list held one project and became a lie the moment it held all of them — a
+ * heading reading `artemis` over rows from four other repositories. The projects
+ * are named by the group headings inside the list now, each directly above its
+ * own rows, which is where that fact belongs.
+ *
+ * The count is unfiltered on purpose: it says how much history exists, which is
+ * a stable fact, and a number that counted down while someone typed in the
+ * filter would be answering a question nobody asked of a header.
  */
-function ProjectHeader({ count }: { readonly count: number }): ReactElement {
-  const cwd = useApp((s) => s.cwd);
-  const workspace = useApp((s) => s.workspace);
+function SessionsHeader({ count }: { readonly count: number }): ReactElement {
   const collapsed = useApp((s) => s.sessionsCollapsed);
-
-  const { name, isRepo } = projectLabel(cwd, workspace);
-  const Icon = isRepo ? FolderGit2Icon : FolderIcon;
 
   return (
     <button
       type="button"
       onClick={toggleSessionsCollapsed}
       aria-expanded={!collapsed}
-      title={
-        cwd.trim().length === 0
-          ? 'No working directory set'
-          : isRepo && workspace?.repoRoot !== undefined && workspace.repoRoot !== cwd
-            ? `${workspace.repoRoot} — working in ${cwd}`
-            : cwd
-      }
+      title="Every session, newest project first"
       className="flex min-w-0 shrink items-center gap-1 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-raised/70"
     >
       <ChevronDownIcon
@@ -275,29 +294,70 @@ function ProjectHeader({ count }: { readonly count: number }): ReactElement {
           collapsed && '-rotate-90',
         )}
       />
-      {/*
-       * The unnamed case is faint, not amber — a placeholder for something
-       * unset, not a warning. It reads as absent next to a real project's
-       * lunar folder and full-strength ink, which is the actual distinction.
-       */}
-      <Icon
-        aria-hidden="true"
-        className={cn('size-3 shrink-0', name === null ? 'text-ink-faint' : 'text-lunar')}
-      />
-      <span
-        className={cn(
-          'min-w-0 truncate text-xs font-medium tracking-tight',
-          name === null ? 'text-ink-faint' : 'text-ink',
-        )}
-      >
-        {name ?? 'No project'}
-      </span>
+      <HistoryIcon aria-hidden="true" className="size-3 shrink-0 text-lunar" />
+      <span className="min-w-0 truncate text-xs font-medium tracking-tight text-ink">Sessions</span>
       {count > 0 ? (
         <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
       ) : null}
     </button>
   );
 }
+
+/**
+ * One project's heading, inside the list.
+ *
+ * Rendered as an ordinary row rather than a `position: sticky` element: the
+ * rows are absolutely positioned inside a spacer, where sticky does not apply,
+ * and faking it needs a second pinned copy of the heading plus the bookkeeping
+ * to know which one it is. That was in this file once and is not worth its
+ * weight — a heading you have scrolled past is a heading whose project you are
+ * already reading.
+ *
+ * The current project is marked rather than merely being first, because "first"
+ * stops being legible the moment the list is scrolled.
+ */
+const GroupHeading = memo(function GroupHeading({
+  cwd,
+  count,
+  top,
+}: {
+  readonly cwd: string;
+  readonly count: number;
+  readonly top: number;
+}): ReactElement {
+  const current = useApp((s) => s.cwd === cwd);
+  const workspace = useApp((s) => (s.cwd === cwd ? s.workspace : null));
+
+  // `workspace` only describes the *current* directory, so every other group
+  // falls back to the folder name. A repository name for a project you are not
+  // in would need a `describe` call per project, which is a round trip per row
+  // for a word.
+  const { name, isRepo } = projectLabel(cwd, workspace);
+  const Icon = isRepo ? FolderGit2Icon : FolderIcon;
+
+  return (
+    <div
+      style={{ top, height: HEADER_HEIGHT }}
+      className="absolute inset-x-0 flex items-center gap-1 px-3"
+      title={cwd}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn('size-2.5 shrink-0', current ? 'text-lunar' : 'text-ink-faint')}
+      />
+      <span
+        className={cn(
+          'min-w-0 truncate text-2xs font-medium tracking-tight',
+          current ? 'text-ink-muted' : 'text-ink-faint',
+        )}
+      >
+        {name ?? 'No project'}
+      </span>
+      <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
+      <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+    </div>
+  );
+});
 
 /**
  * What to call this project, and whether it is a repository.
@@ -322,7 +382,7 @@ function projectLabel(
 /* Virtualiser                                                                */
 /* -------------------------------------------------------------------------- */
 
-function VirtualRows({ rows }: { readonly rows: readonly SessionSummary[] }): ReactElement {
+function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElement {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
@@ -348,20 +408,45 @@ function VirtualRows({ rows }: { readonly rows: readonly SessionSummary[] }): Re
     }
   }, [rows]);
 
-  const height = viewport > 0 ? viewport : ASSUMED_VIEWPORT;
-  const total = rows.length * ROW_HEIGHT;
+  /*
+   * Where every row starts, and where the list ends.
+   *
+   * Two row heights means an offset is no longer `index * ROW_HEIGHT`, so the
+   * starts are accumulated once per change of `rows` and the window is found by
+   * binary search over them. `offsets` has one extra entry — the end of the last
+   * row — so `offsets[i + 1]` is always the bottom of row `i` and the total
+   * height is the final element, with no special case for an empty list.
+   */
+  const offsets = useMemo(() => {
+    const starts = new Array<number>(rows.length + 1);
+    let y = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+      starts[i] = y;
+      y += rows[i]?.kind === 'header' ? HEADER_HEIGHT : ROW_HEIGHT;
+    }
+    starts[rows.length] = y;
+    return starts;
+  }, [rows]);
 
-  const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  const last = Math.min(rows.length - 1, Math.floor((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
+  const height = viewport > 0 ? viewport : ASSUMED_VIEWPORT;
+  const total = offsets[rows.length] ?? 0;
+
+  const first = Math.max(0, indexAt(offsets, scrollTop) - OVERSCAN);
+  const last = Math.min(rows.length - 1, indexAt(offsets, scrollTop + height) + OVERSCAN);
 
   const visible: ReactElement[] = [];
   for (let i = first; i <= last; i += 1) {
-    const session = rows[i];
-    if (!session) continue;
-    // `sessionKey`, not `session.id`: an id is unique inside the profile that
-    // owns it, not globally, and two profiles surfacing the same id would
-    // collide into one React key and silently drop a row.
-    visible.push(<Row key={sessionKey(session)} top={i * ROW_HEIGHT} session={session} />);
+    const row = rows[i];
+    if (!row) continue;
+    const top = offsets[i] ?? 0;
+    if (row.kind === 'header') {
+      visible.push(<GroupHeading key={row.key} cwd={row.cwd} count={row.count} top={top} />);
+      continue;
+    }
+    // `row.key` is `sessionKey` — an id is unique inside the profile that owns
+    // it, not globally, and two profiles surfacing the same id would collide
+    // into one React key and silently drop a row.
+    visible.push(<Row key={row.key} top={top} session={row.session} />);
   }
 
   return (
@@ -375,6 +460,26 @@ function VirtualRows({ rows }: { readonly rows: readonly SessionSummary[] }): Re
       </div>
     </div>
   );
+}
+
+/**
+ * Index of the row containing `y`.
+ *
+ * Binary search for the last start at or before `y`. Clamped to a real index at
+ * both ends: `y` below the first row and `y` past the last are both routine —
+ * overscan asks for offsets outside the list on purpose — and the caller clamps
+ * again against `rows.length`.
+ */
+function indexAt(offsets: readonly number[], y: number): number {
+  let low = 0;
+  // `offsets` carries a trailing end-of-list entry, which is not a row.
+  let high = offsets.length - 2;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if ((offsets[mid] ?? 0) <= y) low = mid;
+    else high = mid - 1;
+  }
+  return Math.max(0, low);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -516,8 +621,8 @@ function NothingHere({
         </EmptyTitle>
         <EmptyDescription className="text-2xs leading-snug text-ink-faint">
           {filtered
-            ? `Nothing in this project matches “${query.trim()}”.`
-            : 'Anything you start in this project shows up here. Other projects are under “All projects” below.'}
+            ? `No session in any project matches “${query.trim()}”.`
+            : 'Every session you start shows up here, grouped by the project it ran in.'}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
