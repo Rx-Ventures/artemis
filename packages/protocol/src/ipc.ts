@@ -75,6 +75,8 @@ export const IPC = {
   runsDispose: 'artemis:runs:dispose',
   /** Re-sync live runs after a renderer reload. */
   runsList: 'artemis:runs:list',
+  /** Replay one run's retained events, for a window that was not there to hear them. */
+  runsEvents: 'artemis:runs:events',
 
   /** List historical sessions for a provider + profile + cwd. */
   sessionsList: 'artemis:sessions:list',
@@ -445,6 +447,41 @@ export interface RunsListRequest {
 export interface RunsListResponse {
   /** Runs the main process still considers live. */
   readonly runs: readonly RunHandle[];
+}
+
+/**
+ * Everything a run has emitted that the registry still holds.
+ *
+ * The counterpart to {@link RunsListRequest} for a window that reloaded: `list`
+ * says *which* runs are still going, this says *what they have said*. Without
+ * it a re-attached run streams its next token into an empty transcript, and the
+ * work the user was watching is only recoverable by waiting for it to finish
+ * and reopening it from history.
+ */
+export interface RunsEventsRequest {
+  readonly runId: RunId;
+  /**
+   * Only events numbered above this. Omit for everything still retained.
+   *
+   * A window that already saw the first half of a run passes the highest `seq`
+   * it applied, so re-attaching costs one page rather than the whole run.
+   */
+  readonly afterSeq?: number;
+}
+
+export interface RunsEventsResponse {
+  readonly runId: RunId;
+  /** In `seq` order, oldest first. Empty for a run the registry has forgotten. */
+  readonly events: readonly AgentEvent[];
+  /**
+   * True when the registry's buffer had already dropped events the caller asked
+   * for, so the replay starts mid-run.
+   *
+   * The caller is expected to say so rather than present a partial transcript as
+   * a whole one — a conversation that silently begins in the middle is worse
+   * than one that admits where it starts.
+   */
+  readonly truncated: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -983,6 +1020,7 @@ export type IpcRequestMap = {
   [IPC.runsRespondPermission]: RunsRespondPermissionRequest;
   [IPC.runsDispose]: RunsDisposeRequest;
   [IPC.runsList]: RunsListRequest;
+  [IPC.runsEvents]: RunsEventsRequest;
   [IPC.sessionsList]: SessionsListRequest;
   [IPC.sessionsListAll]: SessionsListAllRequest;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
@@ -1020,6 +1058,7 @@ export type IpcResponseMap = {
   [IPC.runsRespondPermission]: RunsRespondPermissionResponse;
   [IPC.runsDispose]: RunsDisposeResponse;
   [IPC.runsList]: RunsListResponse;
+  [IPC.runsEvents]: RunsEventsResponse;
   [IPC.sessionsList]: SessionsListResponse;
   [IPC.sessionsListAll]: SessionsListAllResponse;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
@@ -1148,6 +1187,15 @@ export interface ArtemisBridge {
     ): Promise<IpcResult<RunsRespondPermissionResponse>>;
     dispose(request: RunsDisposeRequest): Promise<IpcResult<RunsDisposeResponse>>;
     list(request: RunsListRequest): Promise<IpcResult<RunsListResponse>>;
+    /**
+     * What a run has already said, for a window that was not listening.
+     *
+     * Paired with {@link list} on the reload path: `list` finds the runs that
+     * outlived the page, this rebuilds their transcripts. Bounded by the
+     * registry's retention, so check `truncated` before presenting the result
+     * as the whole run.
+     */
+    events(request: RunsEventsRequest): Promise<IpcResult<RunsEventsResponse>>;
     /**
      * Subscribe to the live event feed for every run. Call this before
      * {@link start}; events can arrive before the start response resolves.

@@ -1,0 +1,394 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * Leaving a conversation does not stop it.
+ *
+ * Three actions used to end a live run outright — starting a new session,
+ * opening another one from the sidebar, and closing a column — because each
+ * called `runs.dispose` on the way past. From the user's side that read as "the
+ * agent dies whenever I look at something else", and the work it was halfway
+ * through (edits, a running command, a permission prompt waiting for an answer)
+ * went with it.
+ *
+ * The rule these assertions pin down is deliberately absolute: **nothing except
+ * an interrupt or quitting stops a run.** So the tests below check both halves
+ * of that — that the run survives the navigation, and that coming back to its
+ * session gets the *same* conversation rather than a re-read of the provider's
+ * file, which for a still-running session would be a partial copy of something
+ * already in memory.
+ *
+ * `runs.dispose` is asserted on directly rather than through a symptom. It is
+ * the one call that cannot be made here, and a future refactor that re-adds it
+ * somewhere sensible-looking should fail on this file rather than on a bug
+ * report three weeks later.
+ *
+ * Same caveat as `cwd.test.ts`: `renderer/tsconfig.json` excludes test files, so
+ * `pnpm typecheck` never sees this one and the assertions are behavioural.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Capabilities, SessionSummary } from '@rx-artemis/protocol';
+
+import {
+  bootstrap,
+  closePane,
+  focusedPane,
+  newSession,
+  resumeSession,
+  splitPane,
+  useApp,
+} from './store';
+import { paneState, setPaneState } from './pane';
+import { seedApp } from './testkit';
+
+/* -------------------------------------------------------------------------- */
+/* A bridge that records what was asked of it                                 */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * One mutable stub installed once, because `resolveBridge` memoises its binding
+ * on the first call — a second `window.artemis` would never be seen. Same
+ * pattern as `models.test.ts` and `sessionSelection.test.ts`.
+ */
+const disposed = vi.fn();
+const messagesFor = vi.fn();
+
+/** What the main process claims is still running, and what it has retained. */
+let mainProcessRuns: readonly unknown[] = [];
+let retainedEvents: Record<string, readonly unknown[]> = {};
+/** How many stored messages the fake session file holds. */
+let storedMessageCount = 0;
+
+/**
+ * A stored session, one assistant message per stored record.
+ *
+ * `limit` is honoured rather than ignored, because that is the whole point of
+ * the seam: a caller asking for the turns before a live run must not be handed
+ * the live run's own half-written turn back.
+ */
+function storedMessages(runId: string, limit?: number): readonly unknown[] {
+  const total = limit === undefined ? storedMessageCount : Math.min(limit, storedMessageCount);
+  return Array.from({ length: total }, (_, i) => ({
+    type: 'text.complete',
+    runId,
+    seq: i,
+    ts: 1,
+    messageId: `stored-${String(i)}`,
+    role: 'assistant',
+    text: `turn ${String(i + 1)}`,
+  }));
+}
+
+(globalThis.window as unknown as { artemis: unknown }).artemis = {
+  runs: {
+    dispose: async ({ runId }: { runId: string }) => {
+      disposed(runId);
+      return { ok: true, value: { runId } };
+    },
+    interrupt: async ({ runId }: { runId: string }) => ({ ok: true, value: { runId } }),
+    list: async () => ({ ok: true, value: { runs: mainProcessRuns } }),
+    events: async ({ runId }: { runId: string }) => ({
+      ok: true,
+      value: { runId, events: retainedEvents[runId] ?? [], truncated: false },
+    }),
+    onEvent: () => () => undefined,
+  },
+  sessions: {
+    listAll: async () => ({ ok: true, value: { sessions: [], hasMore: false } }),
+    messages: async (request: { sessionId: string; runId: string; limit?: number }) => {
+      messagesFor(request.sessionId, request.limit);
+      return {
+        ok: true,
+        value: { events: storedMessages(request.runId, request.limit), hasMore: false },
+      };
+    },
+  },
+  profiles: {
+    list: async () => ({
+      ok: true,
+      value: {
+        profiles: [{ id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.p1' }],
+      },
+    }),
+  },
+  providers: {
+    list: async () => ({ ok: true, value: { providers: [CLAUDE_DESCRIPTOR] } }),
+    models: async () => ({ ok: true, value: { models: [], live: false } }),
+  },
+  usagePlan: { cached: async () => ({ ok: true, value: { usage: null } }) },
+  workspace: { describe: async () => ({ ok: true, value: { workspace: null } }) },
+};
+
+/* -------------------------------------------------------------------------- */
+/* Fixtures                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const CAPS = {
+  interactivePermissions: true,
+  partialMessages: true,
+  midRunSteering: true,
+  forkSession: true,
+  listSessions: true,
+  subagents: true,
+  permissionModes: ['default'],
+  resumeSession: true,
+  usageReporting: true,
+  costReporting: true,
+  planUsageReporting: true,
+} as unknown as Capabilities;
+
+const CLAUDE_DESCRIPTOR = {
+  id: 'claude',
+  label: 'Claude',
+  capabilities: CAPS,
+  models: [],
+  effortLevels: [],
+  available: true,
+};
+
+/** A run that is still going, bound to `sessionId`. */
+function liveRun(runId: string, sessionId: string) {
+  return {
+    runId,
+    status: 'running',
+    providerId: 'claude',
+    profileId: 'p1',
+    cwd: '/a',
+    capabilities: CAPS,
+    startedAt: 1_000,
+    sessionId,
+  } as const;
+}
+
+function summary(id: string): SessionSummary {
+  return {
+    id,
+    title: id,
+    cwd: '/a',
+    profileId: 'p1',
+    updatedAt: 1_000,
+    providerId: 'claude',
+  } as SessionSummary;
+}
+
+const pane = () => focusedPane();
+const state = () => paneState(pane());
+const background = () => useApp.getState().background;
+
+/** Let the microtasks a navigation kicks off settle. */
+const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 8));
+
+/** True when the provider's session file was read for this session, at all. */
+const readHistoryFor = (sessionId: string): boolean =>
+  messagesFor.mock.calls.some(([id]) => id === sessionId);
+
+/**
+ * The transcript's row list, flushed first.
+ *
+ * The model coalesces one flush per animation frame — that is the whole reason
+ * streaming is cheap — so a snapshot read straight after a write is legitimately
+ * empty. Forcing the flush keeps the assertion about what the transcript *has*
+ * rather than about how long a frame took.
+ */
+function rows(of: ReturnType<typeof focusedPane>): readonly string[] {
+  of.transcript.flush();
+  return of.transcript.getRowsSnapshot();
+}
+
+beforeEach(() => {
+  globalThis.localStorage?.clear();
+  disposed.mockClear();
+  messagesFor.mockClear();
+  mainProcessRuns = [];
+  retainedEvents = {};
+  storedMessageCount = 0;
+
+  // Back to one column with nothing in flight, whatever the previous test left.
+  for (const extra of useApp.getState().grid.flatMap((row) => row.panes).slice(1)) {
+    setPaneState(extra, { run: null });
+    closePane(extra.id);
+  }
+  useApp.setState({ background: [], runningSessions: [], banners: [] });
+
+  seedApp({
+    profiles: [{ id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.p1' }],
+    providers: [CLAUDE_DESCRIPTOR],
+    sessions: [],
+    activeProviderId: 'claude',
+    activeProfileId: 'p1',
+    cwd: '/a',
+    run: null,
+    resumeSessionId: null,
+    permissionQueue: [],
+  });
+  pane().transcript.reset();
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('a live run when the user navigates away', () => {
+  it('survives ⌘N and keeps its transcript', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a') });
+    working.transcript.note('info', 'half a refactor');
+
+    const fresh = newSession();
+    await settled();
+
+    expect(disposed).not.toHaveBeenCalled();
+    // A different column now, holding nothing — and the old one is still alive.
+    expect(fresh.id).not.toBe(working.id);
+    expect(paneState(fresh).run).toBeNull();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+    expect(paneState(working).run?.runId).toBe('run-a');
+    expect(rows(working).length).toBeGreaterThan(0);
+  });
+
+  it('survives opening another session from the sidebar', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a') });
+
+    resumeSession(summary('sess-b'));
+    await settled();
+
+    expect(disposed).not.toHaveBeenCalled();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+    expect(state().resumeSessionId).toBe('sess-b');
+  });
+
+  it('survives closing its column', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a') });
+    splitPane('right', working);
+
+    closePane(working.id);
+    await settled();
+
+    expect(disposed).not.toHaveBeenCalled();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+  });
+
+  it('is reported as running so the sidebar can mark its row', () => {
+    setPaneState(pane(), { run: liveRun('run-a', 'sess-a') });
+
+    expect(useApp.getState().runningSessions).toEqual(['sess-a']);
+  });
+});
+
+describe('coming back to a session that never stopped', () => {
+  it('hands the same conversation back rather than re-reading it', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a') });
+    working.transcript.note('info', 'half a refactor');
+
+    newSession();
+    await settled();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+
+    resumeSession(summary('sess-a'));
+    await settled();
+
+    // The original pane is back in the grid with its run and its transcript.
+    expect(focusedPane().id).toBe(working.id);
+    expect(state().run?.runId).toBe('run-a');
+    expect(rows(working).length).toBeGreaterThan(0);
+    expect(background()).toHaveLength(0);
+    // And nothing was replayed from the provider's file: it is still being
+    // written, so a read would have produced a second, partial copy.
+    expect(readHistoryFor('sess-a')).toBe(false);
+  });
+
+  it('still reads history for a session that is not running', async () => {
+    resumeSession(summary('sess-old'));
+    await settled();
+
+    expect(readHistoryFor('sess-old')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('after ⌘R reloads the window', () => {
+  /*
+   * ⌘R reloads the renderer and leaves the main process — where runs actually
+   * live — untouched. The page used to come back with a blank grid and adopt at
+   * most one run, without replaying a word of it, so an agent that was still
+   * working was indistinguishable from one that had been killed. These are the
+   * two properties that make a reload survivable: every run is picked up, and
+   * each one's transcript is rebuilt from what the registry retained.
+   */
+  it('re-attaches every live run and replays what it has already said', async () => {
+    mainProcessRuns = [liveRun('run-a', 'sess-a'), liveRun('run-b', 'sess-b')];
+    retainedEvents = {
+      'run-a': [
+        { type: 'text.delta', runId: 'run-a', seq: 0, ts: 1, blockId: 'b1', text: 'still here' },
+        { type: 'text.complete', runId: 'run-a', seq: 1, ts: 2, blockId: 'b1', text: 'still here' },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    // The open column took the first run; the second is running in the
+    // background rather than being dropped on the floor.
+    expect(state().run?.runId).toBe('run-a');
+    expect(background().map((p) => paneState(p).run?.runId)).toEqual(['run-b']);
+    // Both are marked as working, which is what puts them back within reach.
+    expect([...useApp.getState().runningSessions].sort()).toEqual(['sess-a', 'sess-b']);
+    // And the conversation is on screen again, not an empty pane: the text the
+    // run had already produced is back in the transcript it belongs to.
+    const replayed = rows(pane())
+      .map((id) => pane().transcript.getItem(id))
+      .filter((item) => item?.kind === 'assistant');
+    expect(JSON.stringify(replayed)).toContain('still here');
+  });
+
+  it('draws the earlier turns from the session file and the live one from the buffer', async () => {
+    /*
+     * The session holds five stored messages; this run began after the third.
+     * So turns 1-3 are history and turns 4-5 are the provider's half-written
+     * copy of what the replay is about to render properly. Reading the file
+     * without the seam would show turns 4 and 5 twice.
+     */
+    storedMessageCount = 5;
+    mainProcessRuns = [{ ...liveRun('run-a', 'sess-a'), historyOffset: 3 }];
+    retainedEvents = {
+      'run-a': [
+        { type: 'text.delta', runId: 'run-a', seq: 0, ts: 1, blockId: 'b1', text: 'live output' },
+        { type: 'text.complete', runId: 'run-a', seq: 1, ts: 2, blockId: 'b1', text: 'live output' },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    expect(messagesFor).toHaveBeenCalledWith('sess-a', 3);
+    const shown = JSON.stringify(rows(pane()).map((id) => pane().transcript.getItem(id)));
+    expect(shown).toContain('turn 1');
+    expect(shown).toContain('turn 3');
+    expect(shown).toContain('live output');
+    // The seam held: nothing past the offset came out of the file.
+    expect(shown).not.toContain('turn 4');
+  });
+
+  it('shows the run alone when the provider could not measure the seam', async () => {
+    // No `historyOffset` on the handle — a provider that cannot count its own
+    // stored messages. Reading the file here would duplicate the live turn, so
+    // the run is shown on its own instead.
+    storedMessageCount = 5;
+    mainProcessRuns = [liveRun('run-a', 'sess-a')];
+
+    await bootstrap();
+    await settled();
+
+    expect(readHistoryFor('sess-a')).toBe(false);
+  });
+
+  it('leaves the column alone when nothing was running', async () => {
+    await bootstrap();
+    await settled();
+
+    expect(state().run).toBeNull();
+    expect(background()).toHaveLength(0);
+  });
+});

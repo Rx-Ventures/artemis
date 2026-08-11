@@ -474,6 +474,21 @@ export interface SessionDeleteQuery {
 }
 
 /**
+ * What counting one session's stored messages needs.
+ *
+ * The same locating fields a read takes, minus everything to do with
+ * presentation: no `runId`, because nothing is being replayed, and no paging,
+ * because the answer is the total. See {@link ProviderAdapter.countSessionMessages}.
+ */
+export interface SessionMessageCountQuery {
+  readonly sessionId: SessionId;
+  /** The directory the session ran in. Narrows the search; omit to search all. */
+  readonly cwd?: string;
+  /** The profile's resolved environment — this is what locates the store. */
+  readonly env: EnvBundle;
+}
+
+/**
  * A stored session, replayed as events.
  *
  * Deliberately `AgentEvent[]` rather than a separate "historical message"
@@ -904,6 +919,25 @@ export interface ProviderAdapter {
    * replayed history and anything sent next land in one continuous view.
    */
   getSessionMessages?(query: SessionMessagesQuery): Promise<SessionTranscript>;
+
+  /**
+   * How many messages a session holds right now.
+   *
+   * Called once, by {@link import('../sessions/registry.js').RunRegistry}, in
+   * the moment between resolving a run and spawning it — the only moment at
+   * which the answer is the boundary between the conversation so far and what
+   * this run is about to add. A count taken any later has the run's own output
+   * in it.
+   *
+   * Present alongside {@link getSessionMessages}, and for its benefit: the
+   * count is what lets a caller ask for "everything before this run" as
+   * `limit`. A provider that cannot count leaves it off, and callers fall back
+   * to showing the run alone rather than showing a conversation twice.
+   *
+   * @throws if the session cannot be read. Callers treat that as "no seam is
+   *         known" — it must not fail the run it was called for.
+   */
+  countSessionMessages?(query: SessionMessageCountQuery): Promise<number>;
 
   /**
    * Name a session from its opening message, using the model the caller names.

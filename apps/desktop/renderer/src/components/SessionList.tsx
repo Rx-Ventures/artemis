@@ -151,7 +151,7 @@ import {
 import { paneState } from '../state/pane';
 import { usePane } from '../state/paneContext';
 import { CapabilityButton } from './capability-button';
-import { ProfileSwatch } from './primitives';
+import { ProfileSwatch, StatusDot } from './primitives';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import {
   ContextMenu,
@@ -631,6 +631,20 @@ const Row = memo(function Row({
    * asking: is this open anywhere?
    */
   const active = useApp((s) => allPanes(s).some((p) => paneState(p).resumeSessionId === session.id));
+  /*
+   * Working, whether or not it is on screen.
+   *
+   * A conversation the user walked away from keeps running — see
+   * `AppState.background` — and this row is then the only place it exists in the
+   * UI. Without the marker, an agent halfway through a refactor looks exactly
+   * like a transcript that finished last Tuesday, and the user has no way to
+   * know there is anything to come back to.
+   *
+   * Read off `runningSessions` rather than computed from the panes, because run
+   * state lives in a store this component does not subscribe to. See
+   * `syncRunningSessions`.
+   */
+  const running = useApp((s) => s.runningSessions.includes(session.id));
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
   const renaming = useCapability('renameSession');
   const deleting = useCapability('deleteSession');
@@ -715,7 +729,7 @@ const Row = memo(function Row({
          * row's position — and evicting it is what gave the profile the room
          * it was being truncated for.
          */
-        tooltip={`Resume — ${session.cwd}${profile ? ` — ${profile.label}` : ''} — ${formatRelative(session.updatedAt)}`}
+        tooltip={`${running ? 'Running now' : 'Resume'} — ${session.cwd}${profile ? ` — ${profile.label}` : ''} — ${formatRelative(session.updatedAt)}`}
         tooltipSide="right"
         onClick={() => resumeSession(session)}
         className={cn(
@@ -732,11 +746,14 @@ const Row = memo(function Row({
         <span
           title={session.title}
           className={cn(
-            'w-full shrink-0 truncate text-xs',
+            'flex w-full shrink-0 items-center gap-1.5 truncate text-xs',
             active ? 'text-ink' : 'text-ink-muted',
           )}
         >
-          {condenseTitle(session.title)}
+          {/* Ahead of the title, not after it: the title is what truncates, and
+              a marker on the far side of a clip is a marker nobody sees. */}
+          {running ? <StatusDot tone="cyan" pulse /> : null}
+          <span className="truncate">{condenseTitle(session.title)}</span>
         </span>
         <span className="flex w-full shrink-0 items-center gap-1 font-mono text-2xs text-ink-faint">
           {/*

@@ -687,6 +687,17 @@ export function createMockBridge(): ArtemisBridge {
         return ok({ runId });
       },
       list: async () => ok({ runs: [...handles.values()] }),
+      /*
+        Always empty, and never `truncated`.
+
+        The mock keeps no event history — a run here is a script that emits and
+        forgets — so the honest answer is "nothing retained", which is exactly
+        what the reload path is contracted to cope with: it re-attaches, notes
+        that it cannot replay, and renders everything from the next event on.
+        Fabricating a replay would test the happy path only, and hide the branch
+        that a real run past its retention window actually takes.
+      */
+      events: async ({ runId }) => ok({ runId, events: [], truncated: false }),
       onEvent: (listener): Unsubscribe => {
         listeners.add(listener);
         return () => {
@@ -700,16 +711,27 @@ export function createMockBridge(): ArtemisBridge {
         A short replayed transcript, so selecting a session in dev shows
         history rather than an empty pane — the exact bug this feature fixes.
       */
-      messages: async ({ runId }) =>
-        ok({
-          events: [
-            { runId, seq: 0, ts: Date.now(), type: 'text.complete', messageId: 'h1', role: 'user', text: 'Where is auth handled?', replay: true },
-            { runId, seq: 1, ts: Date.now(), type: 'tool.start', toolCallId: 'h_t1', name: 'Grep', input: { pattern: 'authenticate' } },
-            { runId, seq: 2, ts: Date.now(), type: 'tool.end', toolCallId: 'h_t1', status: 'ok', result: 'src/auth/session.ts:42' },
-            { runId, seq: 3, ts: Date.now(), type: 'text.complete', messageId: 'h2', role: 'assistant', text: 'Auth lives in `src/auth/session.ts`.', replay: true },
-          ] as AgentEvent[],
-          hasMore: false,
-        }),
+      /*
+        `limit` is honoured, and that is not pedantry about the contract.
+
+        It is a *message* count, and the reload path asks for exactly the
+        messages that precede a live run so the run's own half-written turn is
+        not drawn twice. A mock that returned the whole fixture regardless would
+        make that path look correct in dev while the real one deduplicated
+        nothing — the one bug the parameter exists to prevent.
+      */
+      messages: async ({ runId, limit }) => {
+        const stored: AgentEvent[] = [
+          { runId, seq: 0, ts: Date.now(), type: 'text.complete', messageId: 'h1', role: 'user', text: 'Where is auth handled?', replay: true },
+          { runId, seq: 1, ts: Date.now(), type: 'tool.start', toolCallId: 'h_t1', name: 'Grep', input: { pattern: 'authenticate' } },
+          { runId, seq: 2, ts: Date.now(), type: 'tool.end', toolCallId: 'h_t1', status: 'ok', result: 'src/auth/session.ts:42' },
+          { runId, seq: 3, ts: Date.now(), type: 'text.complete', messageId: 'h2', role: 'assistant', text: 'Auth lives in `src/auth/session.ts`.', replay: true },
+        ] as AgentEvent[];
+        return ok({
+          events: limit === undefined ? stored : stored.slice(0, limit),
+          hasMore: limit !== undefined && limit < stored.length,
+        });
+      },
 
       /* One profile, one project — the narrow query the palette's fallback uses. */
       list: async ({ cwd, profileId }) =>

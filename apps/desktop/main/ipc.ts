@@ -79,6 +79,7 @@ import {
   validateProvidersModels,
   validateRunsDispose,
   validateRunsInterrupt,
+  validateRunsEvents,
   validateRunsList,
   validateRunsRespondPermission,
   validateRunsSend,
@@ -290,6 +291,17 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.runsList]: {
       validate: validateRunsList,
       handle: async (request) => ({ runs: await engine.require().listRuns({ cwd: request.cwd }) }),
+    },
+
+    [IPC.runsEvents]: {
+      validate: validateRunsEvents,
+      handle: (request) => {
+        const replay = engine.require().runEvents({
+          runId: request.runId,
+          ...(request.afterSeq === undefined ? {} : { afterSeq: request.afterSeq }),
+        });
+        return Promise.resolve({ runId: request.runId, ...replay });
+      },
     },
 
     /* ---------------------------------------------------------------- */
