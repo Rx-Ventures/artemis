@@ -62,6 +62,7 @@ import {
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
   type ProvidersModelsRequest,
+  type QuestionAnswer,
   type RunInput,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
@@ -118,6 +119,18 @@ const LIMITS = {
   envValue: 8_192,
   ruleUpdates: 64,
   rulesPerUpdate: 256,
+  /**
+   * Bounds on an answered question prompt.
+   *
+   * Sized to the provider's schema (1–4 questions, 2–4 options) with room to
+   * spare, not to what a person can be bothered to type. `answerNotes` is the
+   * one field a user actually fills in, so it gets a paragraph's worth; the
+   * adapter drops answers that name a question or an option the prompt never
+   * offered, so the counts here only have to stop a runaway array.
+   */
+  answers: 16,
+  answerOptions: 16,
+  answerNotes: 4_000,
   metadataNodes: 256,
   metadataDepth: 8,
   jsonObjectNodes: 4_096,
@@ -471,6 +484,40 @@ function optionalRuleUpdates(value: unknown, field: string): readonly Permission
   return value.map((entry, index) => validatePermissionRuleUpdate(entry, `${field}[${index}]`));
 }
 
+/**
+ * Answers to a question prompt.
+ *
+ * Shape only. Whether an answer names a question that was asked, or an option
+ * that was offered, is not checkable here — this layer does not hold the
+ * pending request. The adapter does, and it drops anything that does not match
+ * before the answers reach the provider.
+ */
+function optionalQuestionAnswers(
+  value: unknown,
+  field: string,
+): readonly QuestionAnswer[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ValidationError(field, 'must be an array');
+  if (value.length > LIMITS.answers) {
+    throw new ValidationError(field, `must have at most ${String(LIMITS.answers)} entries`);
+  }
+
+  return value.map((entry, index) => {
+    const answer = requireObject(entry, `${field}[${index}]`);
+    return compact<QuestionAnswer>({
+      question: requireString(answer['question'], `${field}[${index}].question`, LIMITS.text),
+      options:
+        optionalStringArray(
+          answer['options'],
+          `${field}[${index}].options`,
+          LIMITS.answerOptions,
+          LIMITS.text,
+        ) ?? [],
+      notes: optionalString(answer['notes'], `${field}[${index}].notes`, LIMITS.answerNotes),
+    });
+  });
+}
+
 function validatePermissionDecision(value: unknown, field: string): PermissionDecision {
   const decision = requireObject(value, field);
   const behavior = requireString(decision['behavior'], `${field}.behavior`, 16);
@@ -484,6 +531,7 @@ function validatePermissionDecision(value: unknown, field: string): PermissionDe
         LIMITS.jsonObjectNodes,
         LIMITS.jsonObjectDepth,
       ),
+      answers: optionalQuestionAnswers(decision['answers'], `${field}.answers`),
       updatedPermissions: optionalRuleUpdates(decision['updatedPermissions'], `${field}.updatedPermissions`),
       scope:
         decision['scope'] === undefined || decision['scope'] === null

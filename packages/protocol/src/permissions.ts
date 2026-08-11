@@ -124,6 +124,101 @@ export type PermissionRuleUpdate =
       readonly scope: PermissionScope;
     };
 
+/* -------------------------------------------------------------------------- */
+/* Questions                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Asking the user something is not asking the user for permission.
+ * ============================================================================
+ *
+ * Some provider tools exist only to put a question in front of a person —
+ * Claude's `AskUserQuestion` is the one implemented today. They park the run
+ * exactly the way a permission prompt does, over the same callback, because
+ * that callback is the only place a provider can hand control back mid-turn.
+ * So a question arrives on {@link PermissionRequest} and is answered with a
+ * {@link PermissionDecision}: same wire, same queue, same "the run is stopped
+ * until you deal with this" lifetime.
+ *
+ * What is *not* the same is what the user is being asked. Approving a tool call
+ * is a judgement about risk, and the honest rendering of it is the verbatim
+ * arguments plus Approve/Deny. A question is a choice between options the model
+ * wrote down, and rendering it as an approval asks the wrong thing twice over:
+ * it invites the user to "Approve" a JSON blob instead of picking an answer,
+ * and the model gets back a permission verdict where it expected a decision.
+ *
+ * So {@link PermissionRequest.question} carries the decoded question, and the
+ * UI branches on it. Adapters decode it; nothing downstream re-parses provider
+ * input.
+ */
+export interface QuestionOption {
+  /** The choice itself, a few words long. What the user picks. */
+  readonly label: string;
+  /** What choosing it means — trade-offs, consequences. */
+  readonly description: string;
+  /**
+   * Longer sample content for this option: a mock-up, a snippet, a diff.
+   *
+   * **Model-authored text with no trust attached.** Providers may describe it
+   * as markdown or as an HTML fragment; render it as neither. It is shown as
+   * plain text, because the alternative is letting a tool argument inject
+   * markup into the app's own chrome.
+   */
+  readonly preview?: string;
+}
+
+/** One question, with the choices the model is willing to accept. */
+export interface Question {
+  /**
+   * The question as asked. Also its identity: answers are keyed by this string,
+   * which is why providers require the texts in a prompt to be distinct.
+   */
+  readonly question: string;
+  /** Two or three words naming the topic, for a chip or a column header. */
+  readonly header: string;
+  /** The offered choices. At least two, or there is no decision to make. */
+  readonly options: readonly QuestionOption[];
+  /** Whether more than one option may be chosen. */
+  readonly multiSelect: boolean;
+}
+
+/**
+ * A decoded interview: everything the provider wants answered in one park.
+ *
+ * Answered as a unit. A prompt with three questions resolves once, with all
+ * three answers, because the provider is blocked on the single tool call that
+ * carried them.
+ */
+export interface QuestionPrompt {
+  readonly questions: readonly Question[];
+}
+
+/**
+ * What the user said about one question.
+ *
+ * Every field is optional-in-effect: an answer with no chosen options and no
+ * note means the user skipped this question, and the provider is told so rather
+ * than being left to infer it from a gap.
+ */
+export interface QuestionAnswer {
+  /** The {@link Question.question} being answered, verbatim. */
+  readonly question: string;
+  /**
+   * Chosen {@link QuestionOption.label}s. At most one unless the question is
+   * `multiSelect`; empty when the user answered only in prose.
+   */
+  readonly options: readonly string[];
+  /**
+   * Free text the user added — a caveat on the option they picked, or a whole
+   * answer the options did not offer.
+   */
+  readonly notes?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Requests                                                                   */
+/* -------------------------------------------------------------------------- */
+
 /**
  * An outstanding request for the user to approve a tool call.
  *
@@ -159,6 +254,18 @@ export interface PermissionRequest {
   readonly blockedPath?: string;
 
   /**
+   * Set when this park is an interview rather than an approval — see
+   * {@link QuestionOption} for why the two share a wire.
+   *
+   * Present only when the adapter could decode the tool's arguments into
+   * well-formed questions. A malformed `AskUserQuestion` leaves this undefined
+   * on purpose: the request degrades to an ordinary approval showing the raw
+   * arguments, which is ugly but answerable, rather than rendering a question
+   * card built from input that did not parse.
+   */
+  readonly question?: QuestionPrompt;
+
+  /**
    * Rule changes the provider suggests, for rendering an "always allow"
    * affordance. When the user picks that affordance, echo this whole array
    * back as {@link AllowPermissionDecision.updatedPermissions}.
@@ -177,6 +284,22 @@ export interface AllowPermissionDecision {
    * run the tool exactly as requested.
    */
   readonly updatedInput?: JsonObject;
+  /**
+   * The user's answers, when the request carried a {@link QuestionPrompt}.
+   *
+   * Answering *is* allowing: the tool's whole job is to carry the answers back,
+   * so there is no third verdict to invent. An allow with no answers is a skip
+   * — the provider is told the questions went unanswered and continues on its
+   * own judgement, which is the outcome a person who does not want to choose
+   * actually wants. A denial, by contrast, hands the model a refusal.
+   *
+   * Encoded into the provider's own argument shape by the adapter, never by the
+   * UI: the mapping (how multi-select is joined, where notes live, what an
+   * unanswered question looks like) is Claude's wire format, and a renderer
+   * that knew it would have to be edited for the next provider that asks
+   * questions. Adapters whose requests never carry a question ignore this.
+   */
+  readonly answers?: readonly QuestionAnswer[];
   /**
    * Rule changes to persist, so this prompt does not reappear. Usually the
    * verbatim {@link PermissionRequest.suggestions} array.

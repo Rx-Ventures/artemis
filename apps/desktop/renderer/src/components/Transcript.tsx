@@ -900,19 +900,22 @@ const MemberCard = memo(function MemberCard({ id }: { readonly id: string }): Re
 });
 
 /**
- * A permission prompt, answered where it happened.
+ * A parked request, answered where it happened.
  *
  * The card itself is `InlinePermission`; this only supplies the transcript's
- * row chrome. Pending prompts get an amber rail label so they are findable by
- * scrolling as well as by the status line's counter.
+ * row chrome. Pending requests get a coloured rail label so they are findable
+ * by scrolling as well as by the status line's counter — amber for an approval,
+ * because that is a risk decision, and cyan for a question, because it is not.
  */
 function PermissionRow({ item }: { readonly item: PermissionItem }): ReactElement {
+  const pending = item.state === 'pending';
+  const asking = item.request.question !== undefined;
   return (
     <Line
-      label={item.state === 'pending' ? 'approve?' : 'approval'}
-      tone={item.state === 'pending' ? 'amber' : 'neutral'}
+      label={asking ? (pending ? 'answer?' : 'question') : pending ? 'approve?' : 'approval'}
+      tone={pending ? (asking ? 'cyan' : 'amber') : 'neutral'}
       ts={item.ts}
-      className={item.state === 'pending' ? 'my-1' : undefined}
+      className={pending ? 'my-1' : undefined}
     >
       <InlinePermission item={item} />
     </Line>

@@ -52,6 +52,10 @@ import type {
   PermissionRuleUpdate,
   PermissionScope,
   ProfileId,
+  Question,
+  QuestionAnswer,
+  QuestionOption,
+  QuestionPrompt,
   RunEndReason,
   RunId,
   SessionId,
@@ -1253,6 +1257,191 @@ function mapTerminalReasonCode(reason: string | null | undefined): AgentErrorCod
   }
 }
 
+/* -------------------------------- questions ------------------------------- */
+
+/**
+ * The tool Claude uses to ask the user a question rather than to do something.
+ *
+ * Its `checkPermissions` returns `ask` unconditionally, so it always reaches
+ * `canUseTool` — the permission callback is not a gate on this tool, it *is*
+ * the tool's user interface. Answering means allowing the call with the answers
+ * written into its arguments; the tool body does nothing but hand them back to
+ * the model.
+ */
+export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
+
+/**
+ * The provider's spelling of "the user typed something but chose nothing".
+ *
+ * `AskUserQuestion` keys its answers by question text and treats a missing key
+ * as unanswered, so a note with no selection needs a value to hang off. This
+ * exact string is the one the tool recognises: it renders such an answer as
+ * "(no option selected)" followed by the note, instead of telling the model the
+ * user picked an option called "(notes only)".
+ */
+const NOTES_ONLY = '(notes only)';
+
+/**
+ * Bounds on what will be decoded into a {@link QuestionPrompt}.
+ *
+ * These mirror the provider's own schema rather than guessing: it accepts 1–4
+ * questions with 2–4 options each. Anything outside that did not come from the
+ * tool as documented, and the honest response is to stop decoding and let the
+ * request render as a plain approval showing the raw arguments — see
+ * {@link PermissionRequest.question}.
+ */
+const QUESTION_LIMITS = { questions: 4, options: 4, minOptions: 2 } as const;
+
+/**
+ * Decode `AskUserQuestion` arguments into questions, or `undefined`.
+ *
+ * Strict on purpose, and silent on purpose. This runs on model-authored input
+ * inside the adapter, where there is no user to show a parse error to, and the
+ * caller already has a safe fallback. So every check is a plain "does this
+ * match what the tool documents", and the first thing that does not gives up
+ * on the whole prompt — decoding two of three questions would show the user a
+ * partial interview whose answers could not be sent back coherently.
+ */
+export function readQuestionPrompt(
+  toolName: string,
+  input: Record<string, unknown>,
+): QuestionPrompt | undefined {
+  if (toolName !== ASK_USER_QUESTION_TOOL) return undefined;
+
+  const raw = input['questions'];
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > QUESTION_LIMITS.questions) {
+    return undefined;
+  }
+
+  const questions: Question[] = [];
+  for (const entry of raw) {
+    const question = readQuestion(entry);
+    if (question === undefined) return undefined;
+    questions.push(question);
+  }
+
+  // Answers are keyed by question text, so duplicates are not a cosmetic
+  // problem: two questions with the same text cannot be answered separately.
+  // The provider forbids them; a prompt that has them anyway is not decodable.
+  const texts = new Set(questions.map((q) => q.question));
+  if (texts.size !== questions.length) return undefined;
+
+  return { questions };
+}
+
+function readQuestion(value: unknown): Question | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entry = value as Record<string, unknown>;
+
+  const question = entry['question'];
+  const header = entry['header'];
+  const rawOptions = entry['options'];
+  if (typeof question !== 'string' || question.length === 0) return undefined;
+  if (typeof header !== 'string') return undefined;
+  if (
+    !Array.isArray(rawOptions) ||
+    rawOptions.length < QUESTION_LIMITS.minOptions ||
+    rawOptions.length > QUESTION_LIMITS.options
+  ) {
+    return undefined;
+  }
+
+  const options: QuestionOption[] = [];
+  for (const raw of rawOptions) {
+    const option = readOption(raw);
+    if (option === undefined) return undefined;
+    options.push(option);
+  }
+
+  // Labels are how an answer names the option it chose, so they have to be
+  // distinguishable for the same reason question texts do.
+  const labels = new Set(options.map((o) => o.label));
+  if (labels.size !== options.length) return undefined;
+
+  return {
+    question,
+    header,
+    options,
+    multiSelect: entry['multiSelect'] === true,
+  };
+}
+
+function readOption(value: unknown): QuestionOption | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entry = value as Record<string, unknown>;
+
+  const label = entry['label'];
+  if (typeof label !== 'string' || label.length === 0) return undefined;
+  const description = entry['description'];
+  const preview = entry['preview'];
+
+  const option: QuestionOption = {
+    label,
+    description: typeof description === 'string' ? description : '',
+    ...(typeof preview === 'string' && preview.length > 0 ? { preview } : {}),
+  };
+  return option;
+}
+
+/**
+ * Write the user's answers back into the tool's own arguments.
+ *
+ * The provider's shape, which is why this lives here and not in the renderer:
+ *
+ *  - `answers` is keyed by question text, one string per question, with
+ *    multi-select choices comma-joined.
+ *  - Prose lives in `annotations[question].notes`, *not* in the answer — an
+ *    answer that is not one of the offered labels reads to the model as a
+ *    garbled selection, whereas a note reads as the user talking.
+ *  - `annotations[question].preview` echoes back the sample the user was
+ *    looking at when they chose, so the model knows which one they saw.
+ *  - A question the user left alone appears in neither map. The tool
+ *    distinguishes that from a deliberate non-choice and tells the model which
+ *    happened.
+ *
+ * Everything else in `input` is preserved: `questions` is required by the tool's
+ * schema, and `metadata` is the provider's own tracking field.
+ */
+export function withQuestionAnswers(
+  input: JsonObject,
+  prompt: QuestionPrompt,
+  answers: readonly QuestionAnswer[],
+): JsonObject {
+  const byText = new Map(prompt.questions.map((q) => [q.question, q]));
+  const chosen: Record<string, string> = {};
+  const annotations: Record<string, JsonObject> = {};
+
+  for (const answer of answers) {
+    const question = byText.get(answer.question);
+    // An answer to a question that was not asked cannot be keyed to anything
+    // the tool will look up, so it is dropped rather than sent as a stray key.
+    if (question === undefined) continue;
+
+    const labels = question.options.map((o) => o.label);
+    const picked = answer.options.filter((label) => labels.includes(label));
+    const notes = answer.notes?.trim();
+    if (picked.length === 0 && (notes === undefined || notes.length === 0)) continue;
+
+    chosen[answer.question] = picked.length > 0 ? picked.join(', ') : NOTES_ONLY;
+
+    // Only for a single choice: with several selected there is no one sample
+    // the user was looking at, and the provider's own UI only previews
+    // single-select questions.
+    const preview = picked.length === 1 ? question.options.find((o) => o.label === picked[0])?.preview : undefined;
+    if (notes !== undefined && notes.length > 0) {
+      annotations[answer.question] = { notes, ...(preview === undefined ? {} : { preview }) };
+    } else if (preview !== undefined) {
+      annotations[answer.question] = { preview };
+    }
+  }
+
+  return {
+    ...input,
+    ...(Object.keys(chosen).length > 0 ? { answers: chosen } : {}),
+    ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
+  };
+}
+
 /* ------------------------------- permissions ------------------------------ */
 
 /**
@@ -1313,6 +1502,7 @@ export function buildPermissionRequest(params: BuildPermissionRequestParams): Pe
     description: info?.description,
     reason: info?.decisionReason,
     blockedPath: info?.blockedPath,
+    question: readQuestionPrompt(params.toolName, params.input),
     suggestions: suggestions.length > 0 ? suggestions : undefined,
     requestedAt: params.requestedAt,
   };
@@ -1451,6 +1641,18 @@ export interface ToPermissionResultOptions {
    * tool name would write a permission rule the user never agreed to.
    */
   readonly toolName?: string;
+  /**
+   * The questions this request asked, when it asked any, plus the arguments
+   * they arrived in.
+   *
+   * Both are needed to turn {@link AllowPermissionDecision.answers} into the
+   * tool's own input shape: the prompt to check the answers against the options
+   * actually offered, the input because the tool's schema still requires the
+   * `questions` array it came with. Absent for an ordinary approval, and then
+   * `answers` is ignored — there is nothing for it to key against.
+   */
+  readonly question?: QuestionPrompt;
+  readonly input?: JsonObject;
 }
 
 export function toPermissionResult(
@@ -1493,10 +1695,20 @@ export function toPermissionResult(
     .map(toSdkPermissionUpdate)
     .filter((update): update is PermissionUpdate => update !== null);
 
+  // A question's answers *are* its updated input, so they are folded in here
+  // rather than left for the UI to encode. `updatedInput` still wins if the
+  // caller set it explicitly — that is the escape hatch for editing arguments,
+  // and silently overwriting it would be worse than ignoring the answers.
+  const prompt = options?.question;
+  const answered =
+    prompt !== undefined && decision.answers !== undefined && decision.updatedInput === undefined
+      ? withQuestionAnswers(options?.input ?? {}, prompt, decision.answers)
+      : decision.updatedInput;
+
   return {
     result: {
       behavior: 'allow',
-      updatedInput: decision.updatedInput as Record<string, unknown> | undefined,
+      updatedInput: answered as Record<string, unknown> | undefined,
       updatedPermissions: mapped.length > 0 ? mapped : undefined,
       toolUseID: options?.toolUseID,
       decisionClassification:

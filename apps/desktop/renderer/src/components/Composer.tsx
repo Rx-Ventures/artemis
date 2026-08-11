@@ -143,6 +143,9 @@ export function Composer(): ReactElement {
   );
   const live = usePane(isLive);
   const pending = usePane((s) => s.permissionQueue.length);
+  // "Approve" is the wrong word for a question, and pointing at the wrong card
+  // is how a user ends up hunting for an Approve button that is not there.
+  const asking = usePane((s) => s.permissionQueue.every((r) => r.question !== undefined));
   const steering = useCapability('midRunSteering');
   const images = useCapability('imageInput');
   const files = useCapability('fileInput');
@@ -404,7 +407,9 @@ export function Composer(): ReactElement {
                 locked
                   ? `Waiting for the run to finish — ${steering.reason}`
                   : pending > 0
-                    ? 'A tool call is waiting for your approval above…'
+                    ? asking
+                      ? 'The agent is waiting on an answer above…'
+                      : 'A tool call is waiting for your approval above…'
                     : live
                       ? 'Steer the run…'
                       : resuming

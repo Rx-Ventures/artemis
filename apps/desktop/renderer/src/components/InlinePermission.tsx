@@ -44,6 +44,7 @@ import { formatJson } from '../lib/format';
 import { DEFAULT_DENIAL, respondToPermission } from '../state/store';
 import { usePaneRef } from '../state/paneContext';
 import type { PermissionItem } from '../state/transcript';
+import { InlineQuestion } from './InlineQuestion';
 import { CodeBlock, Fold, ToneBadge } from './primitives';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 export function InlinePermission({ item }: { readonly item: PermissionItem }): ReactElement {
+  /*
+   * Not every parked request is an approval. A provider can only hand control
+   * back mid-turn through the permission callback, so a tool whose entire
+   * purpose is to ask the user something arrives here too — and rendering it as
+   * an approval offers Approve and Deny to a question that wanted an answer.
+   * `InlineQuestion` is that branch; everything below is unchanged for the
+   * requests that really are about permission. A malformed question decodes to
+   * `undefined` and falls through to the verbatim-arguments card, which is
+   * still answerable.
+   */
+  const question = item.request.question;
+  if (question) return <InlineQuestion item={item} prompt={question} />;
+
   return item.state === 'pending' ? (
     <PendingPrompt item={item} />
   ) : (
