@@ -73,13 +73,16 @@ import {
   resolveEnv,
   resolveStoreEnv,
   RunRegistry,
+  SessionNamer,
   signInCommand,
   signOut as cliSignOut,
   type EnvBundle,
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
+  type SessionNamingPlan,
 } from '@rx-artemis/core';
+import { lowestTierModel } from '@rx-artemis/protocol';
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';
@@ -338,6 +341,78 @@ function createEngine(options: EngineOptions): ArtemisEngine {
   /** Last plan-usage reading per profile. In-memory by design — see below. */
   const planUsageCache = new Map<ProfileId, PlanUsage>();
 
+  /**
+   * The last *live* model catalogue read for a (provider, profile) pair.
+   *
+   * Written by `listProviderModels` when the account confirmed the list, and
+   * read by the session namer, which needs to know which model is the smallest
+   * one this account actually has. Only live answers are stored: a fallback
+   * list cached here would be indistinguishable from a confirmed one the next
+   * time it was read, which is the exact confusion `ModelCatalogue.live` exists
+   * to prevent.
+   *
+   * In-memory, and never fetched on demand. The renderer already reads this on
+   * boot and on every profile switch, so by the time anyone sends a first
+   * message the entry is almost always there — and when it is not, the namer
+   * falls back to the adapter's static list rather than spawning a subprocess
+   * on the path of a run that is starting.
+   */
+  const modelCatalogues = new Map<string, readonly ProviderModelOption[]>();
+  const catalogueKey = (providerId: ProviderId, profileId: ProfileId): string =>
+    `${providerId}:${profileId}`;
+
+  /**
+   * Names each new session from its opening message.
+   *
+   * Wired as a subscriber rather than folded into `startRun`, so that naming
+   * cannot delay, fail or otherwise touch the run it is named after. See
+   * `SessionNamer` for what it costs and when it declines.
+   */
+  const namer = new SessionNamer({
+    resolveAdapter: (id) => providers.get(id),
+
+    /**
+     * Which model names the session, and with which environments.
+     *
+     * The catalogue read is live-first, static-fallback, and it never fetches:
+     * the answer is "the smallest model this account has" where that is known,
+     * and "the smallest model this provider ships" where it is not. A provider
+     * whose models declare no tier yields `null` and nothing is named — see
+     * `lowestTierModel` for why that is better than guessing.
+     *
+     * Two environments, because the two halves of naming need different
+     * things. The completion is billed to the account, so it takes the
+     * credential-bearing bundle a run gets. The rename only locates a file, so
+     * it takes the store bundle a listing gets and decrypts nothing.
+     */
+    plan: async ({ profileId, providerId }): Promise<SessionNamingPlan | null> => {
+      const adapter = providers.get(providerId);
+      if (adapter === undefined) return null;
+
+      const model =
+        lowestTierModel(modelCatalogues.get(catalogueKey(providerId, profileId))) ??
+        lowestTierModel(adapter.models);
+      if (model === undefined) return null;
+
+      return {
+        model: model.id,
+        env: await envFor(profileId, providerId),
+        storeEnv: await storeEnvFor(profileId, providerId),
+      };
+    },
+
+    onError: (error, context) => {
+      // Deliberately a warning. Every failure here costs a nicer label and
+      // nothing else — the session still exists, still resumes, and still
+      // lists under the title it would have had before this feature.
+      log.warn(`Could not name the session for run ${context.runId}`, error);
+    },
+  });
+
+  runs.subscribe((event) => {
+    namer.handleEvent(event);
+  });
+
   return {
     listProviders: (query) => providers.describe({ refresh: query.refresh }),
 
@@ -371,12 +446,20 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         // indistinguishable from a real answer by inspection — the adapter is
         // the only party that knows which it returned, so it is the only party
         // that can say. See `ProviderAdapter.listModels`.
-        return await adapter.listModels({
+        const catalogue = await adapter.listModels({
           env: await envFor(query.profileId, query.providerId),
           // The query has to start somewhere that exists. userData always does;
           // the user's chosen workspace may not be set yet.
           cwd: query.cwd ?? userDataDir,
         });
+        // Only the confirmed list is worth remembering; see `modelCatalogues`.
+        if (catalogue.live) {
+          modelCatalogues.set(
+            catalogueKey(query.providerId, query.profileId),
+            catalogue.models,
+          );
+        }
+        return catalogue;
       } catch (error) {
         // The contract says it should not reject; if one does, that is a bug in
         // the adapter and not a reason to leave the picker empty.
@@ -400,7 +483,19 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
     deleteProfile: (id, query) => profiles.delete(id, { deleteConfigDir: query.deleteConfigDir }),
 
-    startRun: (input) => runs.start(input),
+    /**
+     * Start a run, and — if it opens a new session — have that session named.
+     *
+     * `noteRun` is told the registry's id rather than the input's, because
+     * `RunInput.runId` is optional and core mints one when it is absent. It
+     * returns immediately and starts nothing; the naming call is triggered by
+     * the `session.started` event, which the namer is subscribed to above.
+     */
+    startRun: async (input) => {
+      const handle = await runs.start(input);
+      namer.noteRun(input, handle.runId);
+      return handle;
+    },
     sendToRun: (runId, text) => runs.send(runId, text),
     interruptRun: (runId) => runs.interrupt(runId),
     respondToPermission: async (runId, requestId, decision) => {
@@ -623,7 +718,12 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
 
     subscribe: (listener) => runs.subscribe(listener),
-    dispose: () => runs.disposeAll(),
+
+    // Both, and in parallel: a half-written title is not worth delaying quit
+    // for, and `SessionNamer.dispose` aborts rather than waits.
+    dispose: async () => {
+      await Promise.all([runs.disposeAll(), namer.dispose()]);
+    },
   };
 }
 

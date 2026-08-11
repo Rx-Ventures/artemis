@@ -297,6 +297,7 @@ export const CODEX_MODELS: readonly ProviderModelOption[] = [
     displayName: 'GPT-5.5',
     note: 'Frontier model for complex coding, research, and real-world work.',
     effortLevels: ['low', 'medium', 'high', 'xhigh'],
+    tier: 1,
   },
   {
     id: 'gpt-5.4-mini',
@@ -304,6 +305,9 @@ export const CODEX_MODELS: readonly ProviderModelOption[] = [
     displayName: 'GPT-5.4 mini',
     note: 'Faster and cheaper, for routine edits and quick questions.',
     effortLevels: ['low', 'medium', 'high'],
+    // Ordinals within *this* catalogue and nothing more — see
+    // `ProviderModelOption.tier`. "mini" is Codex's own word for the small one.
+    tier: 0,
   },
 ];
 
@@ -586,6 +590,19 @@ export function createCodexAdapter(options?: CodexAdapterOptions): ProviderAdapt
       };
     },
 
+    /*
+     * No `suggestSessionTitle` / `setSessionTitle`, and the absence is the
+     * whole answer rather than a gap waiting to be filled.
+     *
+     * A thread already carries a `name` — `parseThreadList` reads it, and a
+     * named thread is reported with `titleIsCustom` — but the app server
+     * publishes no method that *writes* one: `thread/start`, `resume`, `fork`,
+     * `read` and `list` are the whole surface Artemis speaks, and none of them
+     * takes a title. Generating a name Artemis could not store would spend the
+     * user's account on a string with nowhere to go, so both halves are omitted
+     * together and `SessionNamer` skips this provider. Codex threads keep the
+     * label they have always had: the thread's own name, else its preview.
+     */
     async checkAvailability(): Promise<AdapterAvailability> {
       try {
         const version = await readCodexVersion(executable, hostEnv);

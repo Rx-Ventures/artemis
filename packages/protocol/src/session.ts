@@ -37,12 +37,26 @@ export interface SessionSummary {
   readonly cwd: string;
 
   /**
-   * Best available label. Adapters resolve this in order of preference: a
-   * user-assigned title, then the provider's generated summary, then the first
+   * Best available label. Adapters resolve this in order of preference: an
+   * assigned title, then the provider's generated summary, then the first
    * prompt, then a placeholder. The UI should render it verbatim.
    */
   readonly title: string;
-  /** True when {@link title} came from the user rather than being derived. */
+  /**
+   * True when {@link title} is a name this session was *given*, rather than one
+   * derived from its contents.
+   *
+   * Not the same as "the user typed it", though it used to be. Artemis names a
+   * new session from its opening message and stores the result in the
+   * provider's own title field — see `ProviderAdapter.setSessionTitle` for why
+   * that is the right place — so a generated name is indistinguishable from a
+   * typed one here, and deliberately so: both are names, as against the summary
+   * or the truncated first prompt that this flag exists to separate them from.
+   *
+   * Anything that needs "did a human choose this?" specifically cannot use this
+   * field and would need the provider to record the difference, which none of
+   * them do.
+   */
   readonly titleIsCustom?: boolean;
   /** Opening prompt, for a secondary line in the list. */
   readonly firstPrompt?: string;

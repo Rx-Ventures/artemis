@@ -15,7 +15,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelInfo } from '@anthropic-ai/claude-agent-sdk';
 
-import { isDefaultAlias, shortModelName } from '../claude.js';
+import { lowestTierModel } from '@rx-artemis/protocol';
+
+import { CLAUDE_MODELS, claudeModelTier, isDefaultAlias, shortModelName } from '../claude.js';
 
 const info = (partial: Partial<ModelInfo> & Pick<ModelInfo, 'value' | 'displayName'>): ModelInfo =>
   ({ description: '', ...partial }) as ModelInfo;
@@ -80,5 +82,60 @@ describe('isDefaultAlias', () => {
     expect(
       isDefaultAlias({ id: 'sonnet', label: 'Sonnet 5', note: '', displayName: 'Sonnet, the default choice' }),
     ).toBe(false);
+  });
+});
+
+/**
+ * Which model background work is billed to.
+ *
+ * This is the only place in Artemis allowed to know that Haiku is smaller than
+ * Opus, and it has to keep knowing it across a catalogue nobody controls: the
+ * live list arrives with snapshots, bracketed variants and generations that do
+ * not exist yet. Getting it wrong does not fail — it just quietly names every
+ * new session with the most expensive model on the account.
+ */
+describe('claudeModelTier', () => {
+  it('orders the families the account is billed by', () => {
+    expect(claudeModelTier('claude-haiku-4-5')).toBe(0);
+    expect(claudeModelTier('claude-sonnet-5')).toBe(1);
+    expect(claudeModelTier('claude-opus-5')).toBe(2);
+    expect(claudeModelTier('claude-fable-5')).toBe(3);
+  });
+
+  it('reads through the decoration a real catalogue carries', () => {
+    // The three shapes the CLI actually publishes.
+    expect(claudeModelTier('claude-haiku-4-5-20251001')).toBe(0);
+    expect(claudeModelTier('claude-opus-5[1m]')).toBe(2);
+    expect(claudeModelTier('haiku')).toBe(0);
+  });
+
+  it('places a generation that has not shipped yet', () => {
+    // The reason this keys on the family and not the model: a catalogue read
+    // next year must still find the cheap one.
+    expect(claudeModelTier('claude-haiku-9-2-20301001')).toBe(0);
+  });
+
+  it('refuses to place a family it does not know', () => {
+    // Unknown means "do not spend on this", not "cheapest" — see
+    // `lowestTierModel`, which skips these rows entirely.
+    expect(claudeModelTier('claude-something-new')).toBeUndefined();
+    expect(claudeModelTier('gpt-5.5')).toBeUndefined();
+    expect(claudeModelTier(undefined)).toBeUndefined();
+  });
+});
+
+describe('the built-in catalogue', () => {
+  it('offers Haiku as the model background work is billed to', () => {
+    // What the session namer picks when the account's live list is not cached.
+    expect(lowestTierModel(CLAUDE_MODELS)?.id).toBe('haiku');
+  });
+
+  it('agrees with the derivation applied to the live list', () => {
+    // Two lists, two authors, one ordering. If the static tiers and the derived
+    // ones ever disagreed, the model chosen would depend on whether the CLI
+    // happened to answer.
+    for (const model of CLAUDE_MODELS) {
+      expect(model.tier).toBe(claudeModelTier(model.resolvedModel ?? model.id));
+    }
   });
 });
