@@ -380,16 +380,28 @@ export function clampSidebarWidth(width: number): number {
  * One number rather than a limit per axis, because the cost being bounded is
  * *a pane* — a live provider subprocess, a transcript, a scroll position and an
  * account being billed — and that cost is the same whether the pane sits in a
- * row or a column. A per-axis cap would bound the wrong thing: four across and
- * four down would permit sixteen agents running at once, which is a
- * fundamentally different machine load from the four the ceiling is meant to
+ * row or a column. A per-axis cap would bound the wrong thing: eight across and
+ * eight down would permit sixty-four agents running at once, which is a
+ * fundamentally different machine load from the eight the ceiling is meant to
  * describe.
  *
- * Four is also exactly enough for every arrangement worth having, so nothing is
- * lost by stating it once: four across, four down, a two-by-two, and the ragged
- * threes in between — a pair over a full-width third, or the reverse.
+ * ## What the number is actually bounding
+ *
+ * Eight concurrent provider subprocesses, in the worst case where every pane is
+ * running. That is the real ceiling — not the layout, which stops being usable
+ * well before it: {@link SPLIT_MIN_WIDTH} is a pixel floor, so eight columns in
+ * one row want 2880px of working area and the panel library clamps rather than
+ * granting it. The shapes that fit are the stacked ones — four rows of two, two
+ * rows of four — and the limit does not try to know which, because "will this
+ * fit on this display" is a question about the window, not about the grid.
+ *
+ * Everything downstream derives from this constant rather than restating it:
+ * {@link canSplit}, {@link SPLIT_LIMIT_REASON} and the per-pane selector cache
+ * in {@link memoisePerPane} all read it, so moving it moves them together. That
+ * is deliberate — a hardcoded copy in the cache would silently reintroduce the
+ * eviction loop the moment this number went up.
  */
-export const MAX_PANES = 4;
+export const MAX_PANES = 8;
 
 /**
  * The narrowest a column may be dragged, and the shortest a row, **in pixels**.
@@ -963,7 +975,7 @@ export function splitPane(
  *
  * Focus moves to the nearest surviving neighbour — the pane that took the
  * closed one's place, or the one before it — rather than jumping to the top
- * left. In a four-pane grid, having the focus leap across the window because
+ * left. In a full grid, having the focus leap across the window because
  * you closed something in the corner is disorienting, and the focused pane is
  * what every window-level surface is pointed at.
  *
@@ -1142,7 +1154,7 @@ export function activeModels(state: SessionState): readonly ProviderModelOption[
  * accounts hold two distinct `models` arrays even when the accounts offer the
  * same models.
  *
- * With one slot and four panes, the columns evict each other. Pane A reads and
+ * With one slot and several panes, the columns evict each other. Pane A reads and
  * caches; pane B reads, misses, and takes the slot; pane A's next read misses
  * against B's entry and builds a fresh array — so A's value changes identity
  * without A's state changing at all. React re-renders A, which evicts B, which

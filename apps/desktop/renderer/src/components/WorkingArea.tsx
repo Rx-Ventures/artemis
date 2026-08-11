@@ -22,9 +22,15 @@
  * `state/pane.ts`. That is what puts a third conversation *across the bottom*
  * of a left/right pair instead of quartering the window: splitting downwards
  * adds a full-width row, and splitting that row's pane rightwards is what makes
- * the two-by-two. Within the four-pane ceiling (`MAX_PANES`) every arrangement
- * is reachable — four across, four down, a square, or a pair over a full-width
- * third — and none of them needs an empty cell to stay rectangular.
+ * the two-by-two. Within the ceiling (`MAX_PANES`) every arrangement is
+ * reachable — a row of them, a stack of them, a square, or a pair over a
+ * full-width third — and none needs an empty cell to stay rectangular.
+ *
+ * Reachable is not the same as usable: `SPLIT_MIN_WIDTH` is a pixel floor, so a
+ * window's worth of panes all in one row runs out of width long before it runs
+ * out of the pane budget, and the stacked shapes are what a full window
+ * actually looks like. The grid does not enforce that — "will this fit on this
+ * display" is a question about the window, not about the layout model.
  *
  * Structurally that is a vertical `ResizablePanelGroup` of rows, each row a
  * horizontal group of panes. A row holding one pane renders no inner group at

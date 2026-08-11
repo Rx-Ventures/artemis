@@ -218,9 +218,8 @@ export interface Pane {
  * rectangular. Splitting right adds a column *to a row*; splitting down adds a
  * *row*, always full width.
  *
- * The regular shapes fall out of that rather than being special-cased: four
- * across is one row of four, four down is four rows of one, and a square is two
- * rows of two.
+ * The regular shapes fall out of that rather than being special-cased: n across
+ * is one row of n, n down is n rows of one, and a square is two rows of two.
  *
  * The id is the row's own and is stable for as long as the row exists, because
  * the panel library keys its layout by it.
