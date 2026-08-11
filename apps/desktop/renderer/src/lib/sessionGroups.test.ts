@@ -13,6 +13,8 @@ import {
   flattenGroups,
   groupSessionsByProject,
   matchesQuery,
+  orderArchived,
+  partitionArchived,
   sessionKey,
 } from './sessionGroups';
 
@@ -211,5 +213,134 @@ describe('flattenGroups', () => {
 
     expect(flattenGroups(groups).map((r) => r.kind)).toEqual(['header', 'session']);
     expect(flattenGroups(groups)[0]).toMatchObject({ collapsed: false });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Archiving                                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('partitionArchived', () => {
+  it('lifts archived sessions out of the listing', () => {
+    const kept = session({ id: 'a', cwd: '/code/api', updatedAt: 2 });
+    const put = session({ id: 'b', cwd: '/code/api', updatedAt: 1 });
+
+    const split = partitionArchived([kept, put], new Set([sessionKey(put)]));
+
+    expect(split.active.map((s) => s.id)).toEqual(['a']);
+    expect(split.archived.map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('keys on profile+id, so archiving does not hide another profile’s session', () => {
+    // The same failure the row keys guard against: an id is unique inside its
+    // profile, not across them. Archiving by bare id would put both away.
+    const mine = session({
+      id: 'dup',
+      cwd: '/code/api',
+      updatedAt: 2,
+      profileId: 'prof_work' as ProfileId,
+    });
+    const theirs = session({
+      id: 'dup',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_personal' as ProfileId,
+    });
+
+    const split = partitionArchived([mine, theirs], new Set([sessionKey(mine)]));
+
+    expect(split.archived.map((s) => s.profileId)).toEqual(['prof_work']);
+    expect(split.active.map((s) => s.profileId)).toEqual(['prof_personal']);
+  });
+
+  it('returns the input untouched when nothing is archived', () => {
+    const sessions = [session({ id: 'a', cwd: '/code/api', updatedAt: 1 })];
+    const split = partitionArchived(sessions, new Set());
+
+    expect(split.active).toBe(sessions);
+    expect(split.archived).toEqual([]);
+  });
+
+  it('removes a project from the list entirely once its last session is archived', () => {
+    // The point of archiving: the row leaves its project rather than hiding
+    // inside it, so a project with nothing left does not linger as an empty
+    // header.
+    const only = session({ id: 'a', cwd: '/code/old', updatedAt: 1 });
+    const other = session({ id: 'b', cwd: '/code/api', updatedAt: 2 });
+
+    const split = partitionArchived([only, other], new Set([sessionKey(only)]));
+    const groups = groupSessionsByProject(split.active);
+
+    expect(groups.map((g) => g.cwd)).toEqual(['/code/api']);
+  });
+});
+
+describe('orderArchived', () => {
+  it('orders newest first, across projects', () => {
+    // Not regrouped by directory — the section is one flat list, because
+    // rebuilding the project structure inside it defeats putting things away.
+    const ordered = orderArchived([
+      session({ id: 'old', cwd: '/code/api', updatedAt: 1 }),
+      session({ id: 'new', cwd: '/code/web', updatedAt: 99 }),
+      session({ id: 'mid', cwd: '/code/api', updatedAt: 50 }),
+    ]);
+
+    expect(ordered.map((s) => s.id)).toEqual(['new', 'mid', 'old']);
+  });
+
+  it('applies the query, so searching still finds what you archived', () => {
+    const ordered = orderArchived(
+      [
+        session({ id: 'a', cwd: '/code/api', updatedAt: 2, title: 'fix auth' }),
+        session({ id: 'b', cwd: '/code/api', updatedAt: 1, title: 'restyle nav' }),
+      ],
+      { query: 'auth' },
+    );
+
+    expect(ordered.map((s) => s.id)).toEqual(['a']);
+  });
+});
+
+describe('flattenGroups with an archive', () => {
+  const groups = () =>
+    groupSessionsByProject([session({ id: 'live', cwd: '/code/api', updatedAt: 20 })]);
+  const archived = [session({ id: 'put', cwd: '/code/web', updatedAt: 10 })];
+
+  it('pins the archive last, after every project', () => {
+    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: false });
+
+    expect(rows.map((r) => r.kind)).toEqual([
+      'header',
+      'session',
+      'archive-header',
+      'session',
+    ]);
+  });
+
+  it('emits no archive header at all when nothing is archived', () => {
+    // A permanent "Archived · 0" is a control for a state the user is not in.
+    const rows = flattenGroups(groups(), new Set(), { sessions: [], collapsed: false });
+
+    expect(rows.some((r) => r.kind === 'archive-header')).toBe(false);
+  });
+
+  it('drops the archived rows when the section is shut but keeps the count', () => {
+    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: true });
+
+    expect(rows.map((r) => r.kind)).toEqual(['header', 'session', 'archive-header']);
+    expect(rows.at(-1)).toMatchObject({ kind: 'archive-header', count: 1, collapsed: true });
+  });
+
+  it('tags archived rows, so the menu can offer Unarchive rather than Archive', () => {
+    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: false });
+
+    const sessions = rows.filter((r) => r.kind === 'session');
+    expect(sessions.map((r) => r.archived ?? false)).toEqual([false, true]);
+  });
+
+  it('leaves the row list unchanged when no archive is passed at all', () => {
+    // The two-argument call is what every existing caller used; it must keep
+    // meaning "no archive section".
+    expect(flattenGroups(groups(), new Set())).toEqual(flattenGroups(groups()));
   });
 });

@@ -59,7 +59,9 @@ import {
   type SessionsListAllRequest,
   type SessionsListRequest,
   type Unsubscribe,
+  type SessionsDeleteRequest,
   type SessionsMessagesRequest,
+  type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
@@ -279,6 +281,8 @@ const bridge: ArtemisBridge = Object.freeze({
     list: (request: SessionsListRequest) => invoke(IPC.sessionsList, request),
     listAll: (request: SessionsListAllRequest) => invoke(IPC.sessionsListAll, request),
     messages: (request: SessionsMessagesRequest) => invoke(IPC.sessionsMessages, request),
+    rename: (request: SessionsRenameRequest) => invoke(IPC.sessionsRename, request),
+    delete: (request: SessionsDeleteRequest) => invoke(IPC.sessionsDelete, request),
   }),
 
   workspace: Object.freeze({

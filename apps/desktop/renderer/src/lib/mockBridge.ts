@@ -61,6 +61,8 @@ const CLAUDE_CAPS: Capabilities = {
   forkSession: true,
   listSessions: true,
   subagents: true,
+  renameSession: true,
+  deleteSession: true,
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true,
   usageReporting: true,
@@ -78,6 +80,8 @@ const CODEX_CAPS: Capabilities = {
   forkSession: false,
   listSessions: false,
   subagents: false,
+  renameSession: false,
+  deleteSession: false,
   permissionModes: ['default', 'bypassPermissions'],
   resumeSession: true,
   usageReporting: true,
@@ -438,7 +442,14 @@ export function createMockBridge(): ArtemisBridge {
     'Audit the IPC validators',
   ];
 
-  const seedSessions: readonly SessionSummary[] = PROJECTS.flatMap(([cwd, count], project) =>
+  /*
+   * Mutable, unlike the other seed data, because rename and delete are the
+   * first mock handlers that *write*. A frozen list would make both look like
+   * they worked and then restore the old row on the next refresh — which is
+   * precisely the bug an optimistic UI is prone to, so the mock must not be
+   * the thing that hides it.
+   */
+  let seedSessions: readonly SessionSummary[] = PROJECTS.flatMap(([cwd, count], project) =>
     Array.from({ length: count }, (_, index): SessionSummary => {
       const age = minutes(project * 90 + index * index * 37 + index * 11 + 4);
       return {
@@ -717,6 +728,35 @@ export function createMockBridge(): ArtemisBridge {
         const ordered = [...seedSessions].sort((a, b) => b.updatedAt - a.updatedAt);
         const page = limit === undefined ? ordered : ordered.slice(0, limit);
         return ok({ sessions: page, hasMore: page.length < ordered.length });
+      },
+
+      /*
+       * Trims and caps exactly as the engine does, and answers with what it
+       * stored. A mock that echoed the request would let a UI that renders its
+       * own optimistic string pass in dev and disagree with the transcript in
+       * the real app.
+       */
+      rename: async ({ profileId, sessionId, title }) => {
+        const stored = title.trim().slice(0, 200);
+        seedSessions = seedSessions.map((s) =>
+          s.id === sessionId && s.profileId === profileId
+            ? { ...s, title: stored, titleIsCustom: true }
+            : s,
+        );
+        return ok({ title: stored });
+      },
+
+      /*
+       * Reports `deleted: false` for a session that is already gone rather
+       * than failing, which is the contract the real handler keeps — and the
+       * case a double click reaches.
+       */
+      delete: async ({ profileId, sessionId }) => {
+        const before = seedSessions.length;
+        seedSessions = seedSessions.filter(
+          (s) => !(s.id === sessionId && s.profileId === profileId),
+        );
+        return ok({ deleted: seedSessions.length < before });
       },
     },
 

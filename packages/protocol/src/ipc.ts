@@ -87,6 +87,14 @@ export const IPC = {
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'artemis:sessions:messages',
 
+  /** Give a stored session a user-chosen title. */
+  sessionsRename: 'artemis:sessions:rename',
+  /**
+   * Destroy a stored session's transcript. Irreversible, and outside Artemis:
+   * see {@link SessionsDeleteRequest}.
+   */
+  sessionsDelete: 'artemis:sessions:delete',
+
   /** Last-known plan usage for a profile, served from cache without fetching. */
   usagePlanCached: 'artemis:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
@@ -434,6 +442,83 @@ export interface SessionsListAllResponse {
   readonly hasMore: boolean;
 }
 
+/**
+ * Retitle a stored session.
+ *
+ * The title is written into the transcript itself, not into bookkeeping of
+ * Artemis's own, which is what makes it survive: the same name shows up in the
+ * provider's own CLI, and a session renamed here is still renamed after Artemis
+ * is uninstalled. It is the write counterpart to
+ * {@link SessionSummary.titleIsCustom} — that flag is how a listing reports
+ * that this channel has been used on a session.
+ */
+export interface SessionsRenameRequest {
+  /**
+   * Whose history holds it. Session storage is per-profile.
+   *
+   * No `providerId` alongside it, matching {@link SessionsMessagesRequest}: the
+   * profile already names its provider, so a second field could only ever
+   * agree with it or be wrong. The main process reads the provider off the
+   * profile record.
+   */
+  readonly profileId: ProfileId;
+  readonly sessionId: SessionId;
+  /**
+   * The session's project directory. Optional, and purely a narrowing hint —
+   * omitting it makes the provider search every project it knows about, which
+   * is correct but slower.
+   */
+  readonly cwd?: string;
+  /** The new title. Trimmed and length-capped by the main process. */
+  readonly title: string;
+}
+
+export interface SessionsRenameResponse {
+  /**
+   * The title as actually stored, after trimming and capping.
+   *
+   * Echoed rather than assumed: the renderer shows this string, and showing
+   * the string it *sent* would leave the list disagreeing with the transcript
+   * whenever the two differ.
+   */
+  readonly title: string;
+}
+
+/**
+ * Destroy a stored session. There is no undo, and no tombstone.
+ *
+ * This deletes the transcript **on disk** — the provider's file, not a record
+ * Artemis keeps — so the session also stops existing for the provider's own
+ * CLI. That is the intended meaning of the menu item, and it is the reason the
+ * UI puts a confirmation in front of it rather than an undo behind it: there is
+ * nothing left to restore from.
+ *
+ * Hiding a session without destroying it is a separate, renderer-side concept
+ * (archiving), which deliberately does not come through this channel.
+ */
+export interface SessionsDeleteRequest {
+  /** Whose history holds it. See {@link SessionsRenameRequest.profileId}. */
+  readonly profileId: ProfileId;
+  readonly sessionId: SessionId;
+  /** Narrowing hint, exactly as in {@link SessionsRenameRequest}. */
+  readonly cwd?: string;
+}
+
+export interface SessionsDeleteResponse {
+  /**
+   * True when this call removed the transcript, false when there was nothing
+   * left to remove.
+   *
+   * A session that is already gone is a *success*, not an error: the caller
+   * asked for it to not exist and it does not exist. Two clicks on a delete
+   * button, or a transcript removed in a terminal since the sidebar last read
+   * it, both land here, and neither deserves an error dialog. The flag is kept
+   * so the UI can stay quiet in the second case instead of claiming a deletion
+   * it did not perform.
+   */
+  readonly deleted: boolean;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Workspace                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -621,6 +706,8 @@ export type IpcRequestMap = {
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
+  [IPC.sessionsRename]: SessionsRenameRequest;
+  [IPC.sessionsDelete]: SessionsDeleteRequest;
   [IPC.usagePlanCached]: UsagePlanRequest;
   [IPC.usagePlanRefresh]: UsagePlanRequest;
   [IPC.authStatus]: AuthStatusRequest;
@@ -647,6 +734,8 @@ export type IpcResponseMap = {
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
+  [IPC.sessionsRename]: SessionsRenameResponse;
+  [IPC.sessionsDelete]: SessionsDeleteResponse;
   [IPC.usagePlanCached]: UsagePlanResponse;
   [IPC.usagePlanRefresh]: UsagePlanResponse;
   [IPC.authStatus]: AuthStatusResponse;
@@ -779,6 +868,20 @@ export interface ArtemisBridge {
      * transcript: the agent holds the whole conversation, the user sees none.
      */
     messages(request: SessionsMessagesRequest): Promise<IpcResult<SessionsMessagesResponse>>;
+    /**
+     * Retitle a stored session, in the transcript itself.
+     *
+     * Gated on the `renameSession` capability — a provider that cannot write
+     * titles will reject this rather than silently doing nothing.
+     */
+    rename(request: SessionsRenameRequest): Promise<IpcResult<SessionsRenameResponse>>;
+    /**
+     * Destroy a stored session's transcript on disk. Irreversible.
+     *
+     * Gated on the `deleteSession` capability. See
+     * {@link SessionsDeleteRequest} for what this does and does not cover.
+     */
+    delete(request: SessionsDeleteRequest): Promise<IpcResult<SessionsDeleteResponse>>;
   };
 
   readonly workspace: {

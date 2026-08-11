@@ -457,6 +457,23 @@ export interface SessionMessagesQuery {
 }
 
 /**
+ * What destroying one stored session needs.
+ *
+ * The same locating fields a write already uses — see {@link SessionTitleUpdate},
+ * which a user-driven rename goes through too. The environment selects the
+ * store and the cwd narrows the search within it, because a destructive write
+ * has to find the transcript by exactly the route a read does; anything else
+ * and a delete could land in a different profile's copy of the same id.
+ */
+export interface SessionDeleteQuery {
+  readonly sessionId: SessionId;
+  /** The directory the session ran in. Narrows the search; omit to search all. */
+  readonly cwd?: string;
+  /** The profile's resolved environment — this is what locates the store. */
+  readonly env: EnvBundle;
+}
+
+/**
  * A stored session, replayed as events.
  *
  * Deliberately `AgentEvent[]` rather than a separate "historical message"
@@ -941,6 +958,20 @@ export interface ProviderAdapter {
    * log line rather than silence.
    */
   setSessionTitle?(update: SessionTitleUpdate): Promise<void>;
+
+  /**
+   * Destroy a stored session's transcript. Irreversible.
+   *
+   * Present **iff** {@link Capabilities.deleteSession} is true, and it must be
+   * a real deletion: the UI confirms this in front of the user on the promise
+   * that the data is gone afterwards, so an adapter that hides rather than
+   * removes must leave the capability off.
+   *
+   * Resolves `true` when this call removed something and `false` when there
+   * was nothing left to remove. "Already gone" is not an error — the caller
+   * asked for the session to not exist, and it does not.
+   */
+  deleteSession?(query: SessionDeleteQuery): Promise<boolean>;
 
   /**
    * Probe whether this provider is usable on this machine.
