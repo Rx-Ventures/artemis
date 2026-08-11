@@ -67,6 +67,7 @@ const CLAUDE_CAPS: Capabilities = {
   costReporting: true,
   planUsageReporting: true,
   imageInput: true,
+  fileInput: true,
 };
 
 /** A deliberately weaker provider, so capability gating is visible in dev. */
@@ -85,11 +86,12 @@ const CODEX_CAPS: Capabilities = {
   // like Claude answers its own. What differs is the *shape* of the answer —
   // see `mockCodexPlanUsage`.
   planUsageReporting: true,
-  // False *unlike* the real adapter, which does support images. This is the
-  // mock's job: the composer's attach button has a disabled state with a reason
+  // False *unlike* the real adapter, which supports both. This is the mock's
+  // job: the composer's attach button has a disabled state with a reason
   // attached, and with both mock providers advertising the capability there
   // would be no way to see it without editing this file.
   imageInput: false,
+  fileInput: false,
 };
 
 /**

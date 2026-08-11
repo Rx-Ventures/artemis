@@ -2146,33 +2146,36 @@ export async function submitPrompt(
 
   const live = isLive(state) ? state.run : null;
 
-  // Sent against the capabilities of the run that will actually carry them —
-  // the *live* run mid-steer, the active provider otherwise. Those differ after
-  // a provider switch mid-run, and the wrong one would either drop a supported
-  // image or send one into a run that will refuse it.
-  const images =
-    attachments !== undefined &&
-    attachments.length > 0 &&
-    (live ? live.capabilities.imageInput : activeCapabilities(state).imageInput)
-      ? attachments
-      : undefined;
+  // Filtered against the capabilities of the run that will actually carry them
+  // — the *live* run mid-steer, the active provider otherwise. Those differ
+  // after a provider switch mid-run, and the wrong one would either drop a
+  // supported attachment or send one into a run that will refuse it.
+  //
+  // Per kind, because a provider can plausibly take one and not the other, and
+  // dropping the whole set because half of it is unsupported would lose files
+  // the run could have carried.
+  const carrier = live ? live.capabilities : activeCapabilities(state);
+  const kept = (attachments ?? []).filter((attachment) =>
+    attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
+  );
+  const sending = kept.length > 0 ? kept : undefined;
 
   if (live) {
     if (!live.capabilities.midRunSteering) {
       pushBanner('warn', 'This provider cannot take input mid-run');
       return false;
     }
-    const steerId = transcript.pushUserMessage(prompt, images);
+    const steerId = transcript.pushUserMessage(prompt, sending);
     const result = await call(() =>
       bridge.runs.send({
         runId: live.runId,
         text: prompt,
-        ...(images === undefined ? {} : { attachments: images }),
+        ...(sending === undefined ? {} : { attachments: sending }),
       }),
     );
     if (!result.ok) {
       reportFailure('Could not deliver the message', result.error);
-      // True: the message is in the transcript, dimmed, with its images. See
+      // True: the message is in the transcript, dimmed, with its attachments. See
       // the note on this function for why that counts as sent from here.
       return true;
     }
@@ -2189,7 +2192,7 @@ export async function submitPrompt(
 
   const runId = newId('run');
   const capabilities = activeCapabilities(state);
-  const promptId = transcript.pushUserMessage(prompt, images);
+  const promptId = transcript.pushUserMessage(prompt, sending);
   useApp.setState({
     run: {
       runId,
@@ -2230,7 +2233,7 @@ export async function submitPrompt(
     prompt,
     runId,
     includePartialMessages: capabilities.partialMessages,
-    ...(images === undefined ? {} : { attachments: images }),
+    ...(sending === undefined ? {} : { attachments: sending }),
     ...(model ? { model: model.id } : {}),
     ...(effort ? { effort: effort.id } : {}),
     ...(supportsFast ? { fastMode: state.fastMode } : {}),
@@ -2250,7 +2253,7 @@ export async function submitPrompt(
   if (!result.ok) {
     reportFailure('Could not start the run', result.error);
     endRunLocally(runId, 'error', result.error);
-    // As above: the prompt and its images are in the transcript, so the
+    // As above: the prompt and its attachments are in the transcript, so the
     // composer is right to have let go of them.
     return true;
   }

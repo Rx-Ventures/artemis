@@ -430,6 +430,30 @@ describe('RunRegistry — starting', () => {
     expect(capable.runs[0]?.sentAttachments).toEqual([[image]]);
   });
 
+  it('refuses each kind against its own capability', async () => {
+    // Per kind, because the two travel by different mechanisms — an image needs
+    // a place on the wire, a file needs the adapter to stage it and say where —
+    // and an adapter can plausibly have one and not the other.
+    const image: Attachment = { kind: 'image', id: 'i1', mediaType: 'image/png', data: 'aGk=' };
+    const file: Attachment = { kind: 'file', id: 'f1', name: 'a.csv', data: 'aGk=' };
+
+    const imagesOnly = harness({
+      capabilities: { ...FULL_CAPABILITIES, imageInput: true, fileInput: false },
+    });
+    await expect(imagesOnly.registry.start(input({ attachments: [file] }))).rejects.toBeInstanceOf(
+      RunError,
+    );
+    await expect(imagesOnly.registry.start(input({ attachments: [image] }))).resolves.toBeDefined();
+
+    const filesOnly = harness({
+      capabilities: { ...FULL_CAPABILITIES, imageInput: false, fileInput: true },
+    });
+    await expect(filesOnly.registry.start(input({ attachments: [image] }))).rejects.toBeInstanceOf(
+      RunError,
+    );
+    await expect(filesOnly.registry.start(input({ attachments: [file] }))).resolves.toBeDefined();
+  });
+
   it('surfaces an adapter that fails to create a run, without registering it', async () => {
     const { registry } = harness({
       adapter: { createRun: () => Promise.reject(new Error('spawn failed')) },

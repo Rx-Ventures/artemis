@@ -90,6 +90,9 @@ describe('attachments', () => {
   const PNG =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
+  /** Well-formed base64 decoding to roughly `bytes`, for the size ceilings. */
+  const payload = (bytes: number): string => 'A'.repeat(Math.ceil(bytes / 3) * 4);
+
   const image = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     kind: 'image',
     id: 'img_1',
@@ -130,21 +133,33 @@ describe('attachments', () => {
   });
 
   it('rejects payloads that are not base64', () => {
-    // `Buffer.from(…, 'base64')` would accept both of these by discarding what
-    // it could not read, which is why the check is a regex.
+    // `Buffer.from(…, 'base64')` would accept all of these by discarding what
+    // it could not read, which is why the check is on the shape.
+    for (const data of ['not base64!!', 'iVBO=RwLA', 'abcde', 'ab==cd==', 'aGVs bG8=']) {
+      expect(() =>
+        validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data })] } }),
+      ).toThrow(ValidationError);
+    }
+  });
+
+  it('validates a large payload without blowing the stack', () => {
+    // The regression: the first version of this check used a `{4}`-group inside
+    // a `*`, which makes V8 push a backtracking frame per repetition. It threw
+    // `RangeError: Maximum call stack size exceeded` instead of validating —
+    // invisible while five megabytes of image was the largest payload, and
+    // immediately fatal once files could be 32MB.
     expect(() =>
-      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: 'not base64!!' })] } }),
-    ).toThrow(ValidationError);
-    expect(() =>
-      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: 'iVBO=RwLA' })] } }),
-    ).toThrow(ValidationError);
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [doc({ data: payload(8 * 1024 * 1024) })] },
+      }),
+    ).not.toThrow();
   });
 
   it('rejects an image over the per-image ceiling', () => {
-    // 8MB of valid base64, well past the 5MB limit.
-    const huge = 'A'.repeat(4 * 1024 * 1024 * 8 / 3);
     expect(() =>
-      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: huge })] } }),
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [image({ data: payload(8 * 1024 * 1024) })] },
+      }),
     ).toThrow(ValidationError);
   });
 
@@ -185,15 +200,137 @@ describe('attachments', () => {
     ).toThrow(ValidationError);
   });
 
-  it('rejects anything that is not an image', () => {
+  it('rejects a kind that is neither', () => {
     expect(() =>
-      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ kind: 'file' })] } }),
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ kind: 'audio' })] } }),
     ).toThrow(ValidationError);
     expect(() =>
       validateRunsStart({ input: { ...VALID_RUN, attachments: ['not an object'] } }),
     ).toThrow(ValidationError);
     expect(() =>
       validateRunsStart({ input: { ...VALID_RUN, attachments: { 0: image() } } }),
+    ).toThrow(ValidationError);
+  });
+
+  /**
+   * Files.
+   *
+   * The interesting difference from an image is `name`: an image's is a label
+   * nothing depends on, but a file's decides what the staged file is *called*,
+   * which makes it the one field here that can be shaped into a path. It is
+   * required, capped and NUL-checked here; `safeFileName` in core reduces it to
+   * a single path component before anything opens it. Two layers, because the
+   * consequence of getting it wrong is a write outside the staging directory.
+   */
+  const doc = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    kind: 'file',
+    id: 'file_1',
+    name: 'notes.md',
+    data: PNG,
+    ...over,
+  });
+
+  it('accepts a file of any format, with no allow-list', () => {
+    // The point of the feature: the agent has Read, Grep and a shell, so the
+    // formats it can use are wider than any list here would stay current with.
+    for (const name of ['a.csv', 'b.parquet', 'c.sqlite', 'd', 'e.tar.gz', 'f.xyz']) {
+      const result = validateRunsStart({
+        input: { ...VALID_RUN, attachments: [doc({ name })] },
+      });
+      expect(result.input.attachments?.[0]).toMatchObject({ kind: 'file', name });
+    }
+  });
+
+  it('requires a file to be named, because the staged file takes that name', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ name: undefined })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ name: '' })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ name: 'x'.repeat(500) })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a NUL in a filename, which truncates a path downstream', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ name: "a\u0000.png" })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('passes a traversing name through to the core sanitizer rather than guessing', () => {
+    // Deliberately *not* rejected here. `../../etc/passwd` is a legal filename
+    // string, and the layer that turns a name into a path is the layer that
+    // knows how to make it safe — see `safeFileName`. Rejecting here would also
+    // reject a file the user legitimately named `..config`.
+    const result = validateRunsStart({
+      input: { ...VALID_RUN, attachments: [doc({ name: '../../etc/passwd' })] },
+    });
+    expect(result.input.attachments?.[0]).toMatchObject({ name: '../../etc/passwd' });
+  });
+
+  it('gives files a larger ceiling than images, and enforces both', () => {
+    // An image's bytes become tokens; a file's become a file. 8MB is over the
+    // image limit and well under the file one.
+    const eightMb = payload(8 * 1024 * 1024);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: eightMb })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ data: eightMb })] } }),
+    ).not.toThrow();
+    // …and the file ceiling is real too.
+    expect(() =>
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [doc({ data: payload(40 * 1024 * 1024) })] },
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('counts the two kinds separately', () => {
+    // Four images and ten files is the maximum of each; a full image strip must
+    // not consume a file's slot.
+    const many = [
+      ...Array.from({ length: 4 }, (_, i) => image({ id: `img_${String(i)}` })),
+      ...Array.from({ length: 10 }, (_, i) => doc({ id: `file_${String(i)}` })),
+    ];
+    expect(validateRunsStart({ input: { ...VALID_RUN, attachments: many } }).input.attachments)
+      .toHaveLength(14);
+
+    expect(() =>
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [...many, image({ id: 'img_extra' })] },
+      }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [...many, doc({ id: 'file_extra' })] },
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('keeps a media type when given one and omits it when not', () => {
+    const withType = validateRunsStart({
+      input: { ...VALID_RUN, attachments: [doc({ mediaType: 'application/pdf' })] },
+    });
+    expect(withType.input.attachments?.[0]).toMatchObject({ mediaType: 'application/pdf' });
+
+    // Browsers hand over an empty string for anything they do not recognise.
+    const without = validateRunsStart({
+      input: { ...VALID_RUN, attachments: [doc({ mediaType: undefined })] },
+    });
+    expect(without.input.attachments?.[0]).not.toHaveProperty('mediaType');
+  });
+
+  it('applies the same base64 rules to a file as to an image', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [doc({ data: 'not base64!!' })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [doc({ data: `data:text/csv;base64,${PNG}` })] },
+      }),
     ).toThrow(ValidationError);
   });
 });

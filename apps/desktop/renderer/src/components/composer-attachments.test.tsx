@@ -16,7 +16,7 @@
  *    are separate code paths, and a thumbnail on screen is not evidence that
  *    anything was attached to the request.
  *
- * `readImageFiles` is stubbed. It decodes bitmaps and paints a canvas, neither
+ * `readAttachments` is stubbed. It decodes bitmaps and paints a canvas, neither
  * of which jsdom has; what is under test is the composer's wiring, and the
  * decoding has its own home.
  */
@@ -46,10 +46,10 @@ const ATTACHMENT = {
   name: 'screenshot.png',
 };
 
-const readImageFiles = vi.hoisted(() => vi.fn());
+const readAttachments = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/attachments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/attachments')>()),
-  readImageFiles,
+  readAttachments,
 }));
 
 const submitPrompt = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -71,15 +71,16 @@ const CAPABILITIES = {
   costReporting: true,
   planUsageReporting: true,
   imageInput: true,
+  fileInput: true,
 };
 
-function setProvider(imageInput: boolean): void {
+function setProvider(supported: boolean): void {
   useApp.setState({
     providers: [
       {
         id: 'claude',
         label: 'Test Provider',
-        capabilities: { ...CAPABILITIES, imageInput },
+        capabilities: { ...CAPABILITIES, imageInput: supported, fileInput: supported },
         models: [{ id: 'sonnet', label: 'Sonnet' }],
         effortLevels: [],
         available: true,
@@ -107,8 +108,8 @@ function setProvider(imageInput: boolean): void {
 }
 
 beforeEach(() => {
-  readImageFiles.mockReset();
-  readImageFiles.mockResolvedValue({ accepted: [ATTACHMENT], rejected: [] });
+  readAttachments.mockReset();
+  readAttachments.mockResolvedValue({ accepted: [ATTACHMENT], rejected: [] });
   submitPrompt.mockClear();
   setProvider(true);
 });
@@ -155,7 +156,7 @@ describe('pasting an image', () => {
     const proceeded = pasteInto(screen.getByLabelText('Prompt'), transferWith([]));
 
     expect(proceeded).toBe(true);
-    expect(readImageFiles).not.toHaveBeenCalled();
+    expect(readAttachments).not.toHaveBeenCalled();
   });
 
   it('sends the image with the prompt, then clears the strip', async () => {
@@ -188,14 +189,83 @@ describe('pasting an image', () => {
   });
 });
 
-describe('a provider that cannot take images', () => {
+describe('attaching a file', () => {
+  const FILE = {
+    kind: 'file' as const,
+    id: 'file_1',
+    name: 'quarterly-sales.csv',
+    mediaType: 'text/csv',
+    data: 'aGVsbG8=',
+  };
+
+  function csvFile(): File {
+    return new File(['a,b\n1,2\n'], 'quarterly-sales.csv', { type: 'text/csv' });
+  }
+
+  it('shows its name and size rather than a thumbnail', async () => {
+    // A file has no picture, so the chip has to say what it is. The size is
+    // there because it is the number that decides whether attaching it was a
+    // good idea — and it is the same number the agent gets told.
+    readAttachments.mockResolvedValue({ accepted: [FILE], rejected: [] });
+    mount(<Composer />);
+    pasteInto(screen.getByLabelText('Prompt'), transferWith([csvFile()]));
+
+    await screen.findByText('quarterly-sales.csv');
+    expect(screen.queryByAltText('quarterly-sales.csv')).toBeNull();
+    // 5 decoded bytes from "aGVsbG8=".
+    expect(screen.getByText(/CSV · 5 B/)).not.toBeNull();
+  });
+
+  it('sends it with the prompt', async () => {
+    readAttachments.mockResolvedValue({ accepted: [FILE], rejected: [] });
+    mount(<Composer />);
+    const field = screen.getByLabelText('Prompt');
+    pasteInto(field, transferWith([csvFile()]));
+    await screen.findByText('quarterly-sales.csv');
+
+    fireEvent.change(field, { target: { value: 'what is the trend?' } });
+    fireEvent.click(screen.getByLabelText(/^Send the prompt/));
+
+    expect(submitPrompt).toHaveBeenCalledWith('what is the trend?', [FILE]);
+  });
+
+  it('asks for slots of each kind separately', async () => {
+    // A full image strip must not block a CSV: the two have separate budgets,
+    // and collapsing them into one number is how a screenshot ends up
+    // preventing an attachment it has nothing to do with.
+    readAttachments.mockResolvedValue({ accepted: [ATTACHMENT], rejected: [] });
+    mount(<Composer />);
+    pasteInto(screen.getByLabelText('Prompt'), transferWith([pngFile()]));
+    await screen.findByAltText('screenshot.png');
+
+    readAttachments.mockClear();
+    pasteInto(screen.getByLabelText('Prompt'), transferWith([csvFile()]));
+    await waitFor(() => {
+      expect(readAttachments).toHaveBeenCalled();
+    });
+
+    // One image is attached, so three image slots remain and all ten file ones.
+    expect(readAttachments.mock.calls[0]?.[1]).toEqual({ images: 3, files: 10 });
+  });
+
+  it('takes any format, with no allow-list', () => {
+    // The file input carries no `accept`, so the OS picker greys nothing out.
+    // An `accept` that hides the user's own `.parquet` is a worse answer than
+    // attaching it and letting the agent try.
+    mount(<Composer />);
+    const input = document.querySelector('input[type="file"]');
+    expect(input?.getAttribute('accept')).toBeNull();
+  });
+});
+
+describe('a provider that cannot take attachments', () => {
   it('disables the attach button rather than hiding it', () => {
     // The house rule for capability gating: an unsupported control renders
     // disabled *with an explanation*, never silently missing.
     setProvider(false);
     mount(<Composer />);
 
-    const attach = screen.getByLabelText('Attach an image');
+    const attach = screen.getByLabelText('Attach a file');
     expect(attach.hasAttribute('disabled') || attach.getAttribute('aria-disabled') === 'true').toBe(
       true,
     );
@@ -209,7 +279,7 @@ describe('a provider that cannot take images', () => {
     await waitFor(() => {
       expect(useApp.getState().banners.length).toBeGreaterThan(0);
     });
-    expect(readImageFiles).not.toHaveBeenCalled();
+    expect(readAttachments).not.toHaveBeenCalled();
     expect(screen.queryByAltText('screenshot.png')).toBeNull();
   });
 });

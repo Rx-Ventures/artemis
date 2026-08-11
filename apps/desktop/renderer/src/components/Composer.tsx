@@ -32,12 +32,18 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactElement } from 'react';
 import {
   CircleStopIcon,
+  FileTextIcon,
   GitForkIcon,
-  ImageIcon,
+  PaperclipIcon,
   SendHorizontalIcon,
   XIcon,
 } from 'lucide-react';
-import { IMAGE_ATTACHMENT_LIMITS, type ImageAttachment } from '@rx-artemis/protocol';
+import {
+  ATTACHMENT_LIMITS,
+  attachmentBytes,
+  isImageAttachment,
+  type Attachment,
+} from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
@@ -52,8 +58,10 @@ import {
 } from '../state/store';
 import {
   attachmentSrc,
-  imageFilesFrom,
-  readImageFiles,
+  fileKindLabel,
+  filesFrom,
+  formatBytes,
+  readAttachments,
   type AttachmentRejection,
 } from '../lib/attachments';
 import { ReasonButton, WithReason } from './disabled-reason';
@@ -100,7 +108,7 @@ export function Composer(): ReactElement {
    * recalling" — the distinction matters, because index 0 is a real entry.
    */
   const [recall, setRecall] = useState<number | null>(null);
-  const [attachments, setAttachments] = useState<readonly ImageAttachment[]>([]);
+  const [attachments, setAttachments] = useState<readonly Attachment[]>([]);
   /**
    * Whether a drag is currently over the composer.
    *
@@ -118,42 +126,61 @@ export function Composer(): ReactElement {
   const pending = useApp((s) => s.permissionQueue.length);
   const steering = useCapability('midRunSteering');
   const images = useCapability('imageInput');
+  const files = useCapability('fileInput');
   const resuming = useApp((s) => s.resumeSessionId);
   const fork = useApp((s) => s.forkOnResume);
   const history = useApp((s) => s.promptHistory);
 
   const locked = live && !steering.supported;
-  const full = attachments.length >= IMAGE_ATTACHMENT_LIMITS.count;
+
+  /** Slots left, per kind — the two have separate budgets. */
+  const imageCount = attachments.filter(isImageAttachment).length;
+  const slots = {
+    images: ATTACHMENT_LIMITS.images - imageCount,
+    files: ATTACHMENT_LIMITS.files - (attachments.length - imageCount),
+  };
+  const full = slots.images <= 0 && slots.files <= 0;
+  /** Nothing at all can be attached — the provider takes neither kind. */
+  const attachable = images.supported || files.supported;
 
   /**
    * Take files from wherever they came from.
    *
-   * Every entry point funnels through here so that the count limit, the
+   * Every entry point funnels through here so that the count limits, the image
    * resizing and the rejection reporting cannot drift apart between paste, drop
    * and the picker.
    */
   const attach = useCallback(
-    async (files: readonly File[]): Promise<void> => {
-      if (files.length === 0) return;
-      if (!images.supported) {
-        pushBanner('warn', 'This provider cannot take images', images.reason);
+    async (dropped: readonly File[]): Promise<void> => {
+      if (dropped.length === 0) return;
+      if (!attachable) {
+        pushBanner('warn', 'This provider cannot take attachments', images.reason);
         return;
       }
 
       // Read against the slots free *now*; the state update below re-checks
       // against the slots free when it lands, because reading is async and the
-      // user can paste twice in the time it takes.
-      const { accepted, rejected } = await readImageFiles(
-        files,
-        IMAGE_ATTACHMENT_LIMITS.count - attachments.length,
-      );
+      // user can paste twice in the time it takes. A kind the provider cannot
+      // carry gets zero slots, so it is rejected with a reason rather than
+      // attached and silently dropped at send time.
+      const { accepted, rejected } = await readAttachments(dropped, {
+        images: images.supported ? slots.images : 0,
+        files: files.supported ? slots.files : 0,
+      });
       reportRejections(rejected);
       if (accepted.length === 0) return;
-      setAttachments((current) =>
-        [...current, ...accepted].slice(0, IMAGE_ATTACHMENT_LIMITS.count),
-      );
+      setAttachments((current) => {
+        const merged = [...current, ...accepted];
+        const keptImages = merged.filter(isImageAttachment).slice(0, ATTACHMENT_LIMITS.images);
+        const keptFiles = merged
+          .filter((attachment) => !isImageAttachment(attachment))
+          .slice(0, ATTACHMENT_LIMITS.files);
+        // Re-ordered so images lead, which is the order they are sent in and
+        // the order the strip reads best in — thumbnails, then filenames.
+        return [...keptImages, ...keptFiles];
+      });
     },
-    [attachments.length, images.reason, images.supported],
+    [attachable, files.supported, images.reason, images.supported, slots.files, slots.images],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -326,7 +353,7 @@ export function Composer(): ReactElement {
           onDrop={(event: DragEvent<HTMLDivElement>) => {
             event.preventDefault();
             setDragging(false);
-            const files = imageFilesFrom(event.dataTransfer);
+            const files = filesFrom(event.dataTransfer);
             if (files.length === 0) {
               // Dropped something, but nothing we can use. Silence here reads
               // as a broken drop target.
@@ -379,7 +406,7 @@ export function Composer(): ReactElement {
                 keeps its default behaviour and the image is taken alongside it.
               */
               onPaste={(event) => {
-                const files = imageFilesFrom(event.clipboardData);
+                const files = filesFrom(event.clipboardData);
                 if (files.length === 0) return;
                 event.preventDefault();
                 void attach(files);
@@ -460,11 +487,16 @@ export function Composer(): ReactElement {
               would then have to be read on the renderer's say-so; the input
               element hands over the bytes the user themselves selected and
               needs no new IPC channel to do it.
+
+              No `accept` filter, deliberately. The agent has `Read`, `Grep` and
+              a shell, so the set of files it can do something with is wider
+              than any list here would stay current with — and an `accept` that
+              greys out the user's own `.parquet` in the OS picker is a worse
+              answer than attaching it and letting the agent try.
             */}
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
               multiple
               className="hidden"
               onChange={(event) => {
@@ -478,21 +510,21 @@ export function Composer(): ReactElement {
             <ReasonButton
               variant="ghost"
               onClick={() => fileInputRef.current?.click()}
-              disabled={locked || !images.supported || full}
+              disabled={locked || !attachable || full}
               disabledReason={
-                !images.supported
+                !attachable
                   ? images.reason
                   : full
-                    ? `A prompt can carry ${String(IMAGE_ATTACHMENT_LIMITS.count)} images.`
+                    ? `A prompt can carry ${String(ATTACHMENT_LIMITS.images)} images and ${String(ATTACHMENT_LIMITS.files)} files.`
                     : locked
                       ? steering.reason
                       : undefined
               }
-              aria-label="Attach an image"
-              title="Attach an image — or paste or drop one"
+              aria-label="Attach a file"
+              title="Attach a file — or paste or drop one"
               className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
             >
-              <ImageIcon />
+              <PaperclipIcon />
             </ReasonButton>
 
             <ReasonButton
@@ -526,12 +558,18 @@ export function Composer(): ReactElement {
 }
 
 /**
- * The attached images, above the field they will be sent from.
+ * What is attached, above the field it will be sent from.
  *
- * Thumbnails rather than filenames. Half of what lands here is a pasted
+ * Two shapes, because the two kinds answer "which one is this?" differently.
+ *
+ * An **image** shows its picture. Half of what lands here is a pasted
  * screenshot with no filename at all, and of the half that has one, "Screenshot
  * 2026-08-11 at 14.03.22.png" tells the user nothing about which screenshot it
  * is. The picture is the label.
+ *
+ * A **file** has nothing to show, so it shows what it is: name, kind and size.
+ * The size is there because it is the number that decides whether attaching it
+ * was a good idea, and because it is the same number the agent will be told.
  *
  * Nothing renders when there is nothing attached — not an empty row, not a
  * dashed drop zone. The composer is a place to type, and a permanent box
@@ -542,30 +580,56 @@ function AttachmentStrip({
   attachments,
   onRemove,
 }: {
-  readonly attachments: readonly ImageAttachment[];
+  readonly attachments: readonly Attachment[];
   readonly onRemove: (id: string) => void;
 }): ReactElement | null {
   if (attachments.length === 0) return null;
 
   return (
-    <ul className="mb-1.5 flex flex-wrap gap-1.5" aria-label="Attached images">
+    <ul className="mb-1.5 flex flex-wrap items-start gap-1.5" aria-label="Attachments">
       {attachments.map((attachment) => (
-        <li key={attachment.id} className="group/thumb relative">
-          <img
-            src={attachmentSrc(attachment)}
-            // The filename when there is one, so a screen reader and a hover
-            // both name the thing. `alt` is not decorative here: this is
-            // content the user added and can remove.
-            alt={attachment.name ?? 'Attached image'}
-            title={attachment.name ?? 'Attached image'}
-            className="size-14 rounded-md border border-line object-cover"
-          />
+        <li key={attachment.id} className="relative">
+          {isImageAttachment(attachment) ? (
+            <img
+              src={attachmentSrc(attachment)}
+              // The filename when there is one, so a screen reader and a hover
+              // both name the thing. `alt` is not decorative here: this is
+              // content the user added and can remove.
+              alt={attachment.name ?? 'Attached image'}
+              title={attachment.name ?? 'Attached image'}
+              className="size-14 rounded-md border border-line object-cover"
+            />
+          ) : (
+            /*
+              Sized to the thumbnails' height so the strip keeps one baseline,
+              but free to be as wide as the name needs up to a cap — a filename
+              squeezed into a square would defeat the point of showing it.
+            */
+            <div
+              title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
+              className="flex h-14 max-w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5"
+            >
+              <FileTextIcon className="size-4 shrink-0 text-ink-muted" />
+              <span className="min-w-0">
+                {/* `break-all` over `truncate`: the informative half of a
+                    filename is often its end (`…-final-v3.csv`), and a middle
+                    ellipsis is not something CSS can do. Two lines of a long
+                    name beats one line of its prefix. */}
+                <span className="line-clamp-2 font-mono text-2xs leading-tight break-all text-ink">
+                  {attachment.name}
+                </span>
+                <span className="block text-2xs text-ink-muted">
+                  {fileKindLabel(attachment)} · {formatBytes(attachmentBytes(attachment))}
+                </span>
+              </span>
+            </div>
+          )}
           {/*
             Remove is always visible, not hover-only.
 
             A control that appears on hover is a control that does not exist for
             anyone navigating by keyboard, and the whole point of this strip is
-            that an image attached by accident — the wrong screenshot, a paste
+            that something attached by accident — the wrong screenshot, a paste
             into the wrong window — can be taken back before it is sent and
             billed for.
           */}
@@ -585,3 +649,4 @@ function AttachmentStrip({
     </ul>
   );
 }
+

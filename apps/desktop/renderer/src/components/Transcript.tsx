@@ -130,14 +130,16 @@ import {
   SearchIcon,
   SparklesIcon,
   TerminalIcon,
+  PaperclipIcon,
   TriangleAlertIcon,
   WrenchIcon,
   type LucideIcon,
 } from 'lucide-react';
 
-import { isImageAttachment } from '@rx-artemis/protocol';
+import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
 import { useToolGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
+import { formatBytes } from '../lib/attachments';
 import { detectFileEdit } from '../lib/diff';
 import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
 import {
@@ -462,23 +464,44 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             square corner points back at the author, which is what makes an
             aligned bubble read as *from* someone rather than merely offset. */}
         <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
-          {/* Images above the text, in the order the model receives them. A
-              transcript that showed them the other way round would be a record
-              of a prompt nobody sent. */}
+          {/* Attachments above the text, in the order the model receives them.
+              A transcript that showed them the other way round would be a
+              record of a prompt nobody sent.
+
+              `items-start` because the row mixes a tall thumbnail with short
+              chips, and flexbox's default `stretch` would blow each chip up to
+              the image's height. */}
           {item.attachments && item.attachments.length > 0 ? (
-            <div className="mb-2 flex flex-wrap justify-end gap-1.5">
-              {item.attachments.filter(isImageAttachment).map((attachment) => (
-                <img
-                  key={attachment.id}
-                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
-                  alt={attachment.name ?? 'Attached image'}
-                  title={attachment.name ?? 'Attached image'}
-                  // Capped rather than full-bleed: a tall screenshot at full
-                  // width would push the prompt it belongs to off the screen,
-                  // and this is a record of what was sent, not a viewer.
-                  className="max-h-48 max-w-full rounded-md border border-lunar/25 object-contain"
-                />
-              ))}
+            <div className="mb-2 flex flex-wrap items-start justify-end gap-1.5">
+              {item.attachments.map((attachment) =>
+                isImageAttachment(attachment) ? (
+                  <img
+                    key={attachment.id}
+                    src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                    alt={attachment.name ?? 'Attached image'}
+                    title={attachment.name ?? 'Attached image'}
+                    // Capped rather than full-bleed: a tall screenshot at full
+                    // width would push the prompt it belongs to off the screen,
+                    // and this is a record of what was sent, not a viewer.
+                    className="max-h-48 max-w-full rounded-md border border-lunar/25 object-contain"
+                  />
+                ) : (
+                  /* A file has no picture, so the record of it is its name and
+                     size — the same two facts the agent was given. Deliberately
+                     not a link: the staged copy is deleted when the run ends,
+                     and a control that stops working after a minute is worse
+                     than no control. */
+                  <span
+                    key={attachment.id}
+                    title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-lunar/25 px-2 py-1 font-mono text-2xs text-ink-muted"
+                  >
+                    <PaperclipIcon className="size-3 shrink-0" />
+                    <span className="truncate text-ink">{attachment.name}</span>
+                    <span className="shrink-0">{formatBytes(attachmentBytes(attachment))}</span>
+                  </span>
+                ),
+              )}
             </div>
           ) : null}
           {item.text}

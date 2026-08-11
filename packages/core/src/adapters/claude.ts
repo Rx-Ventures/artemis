@@ -67,7 +67,12 @@ import type {
  * here survives compilation, and the package is already in the tree as the
  * Agent SDK's own dependency.
  */
-import type { ImageBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+import type {
+  ContentBlockParam,
+  DocumentBlockParam,
+  ImageBlockParam,
+  MessageParam,
+} from '@anthropic-ai/sdk/resources';
 
 import type {
   AgentError,
@@ -86,7 +91,22 @@ import type {
   SessionSummary,
   SystemPromptSpec,
 } from '@rx-artemis/protocol';
-import { isImageAttachment, NO_CAPABILITIES } from '@rx-artemis/protocol';
+import {
+  isFileAttachment,
+  isImageAttachment,
+  isPdf,
+  NO_CAPABILITIES,
+  PDF_MEDIA_TYPE,
+} from '@rx-artemis/protocol';
+
+import {
+  createStagingDirectory,
+  describeStagedAttachments,
+  removeStagingDirectory,
+  stageAttachments,
+  withAttachmentNote,
+} from './attachments.js';
+import type { StagedAttachment } from './attachments.js';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
@@ -167,6 +187,7 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
   costReporting: true, // `total_cost_usd` / `ModelUsage.costUSD`
   planUsageReporting: true, // the SDK's structured `/usage` control request
   imageInput: true, // base64 `image` blocks in the user message's content
+  fileInput: true, // staged to a granted temp directory and named in the prompt
 };
 
 /** Env var selecting an isolated Claude config — and therefore session — directory. */
@@ -692,9 +713,43 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
 
     async createRun(input: ResolvedRunInput): Promise<Run> {
       validateRunInput(input);
-      const run = new ClaudeRun(input, { now, hostEnv, diagnostic });
-      run.start();
-      return run;
+
+      /*
+       * The staging directory is created for *every* run, attachments or not.
+       *
+       * It has to exist before `start()`, because the only way to tell the SDK
+       * a directory is readable is `Options.additionalDirectories`, and options
+       * are built once when the query opens. A directory created later — when
+       * the user attaches a file to a mid-run steer — would be one the agent is
+       * not allowed to open, and the failure would be the agent reporting that
+       * a file the user can see in the transcript does not exist.
+       *
+       * So it is created up front and granted up front. An empty temp directory
+       * that Artemis owns widens nothing, and one `mkdtemp` is not a cost worth
+       * making a mid-run attachment fail over.
+       */
+      const directory = await createStagingDirectory();
+
+      try {
+        const staged = await stageAttachments(
+          directory,
+          (input.attachments ?? []).filter(isFileAttachment),
+        );
+
+        const granted: ResolvedRunInput = {
+          ...input,
+          additionalDirectories: [...(input.additionalDirectories ?? []), directory],
+        };
+
+        const run = new ClaudeRun(granted, { now, hostEnv, diagnostic }, { directory, staged });
+        run.start();
+        return run;
+      } catch (error) {
+        // Nothing owns the directory yet — the run that would have removed it
+        // was never constructed.
+        await removeStagingDirectory(directory);
+        throw error;
+      }
     },
 
     async listSessions(request: SessionListQuery): Promise<SessionListPage> {
@@ -1292,10 +1347,23 @@ class ClaudeRun implements Run {
   #permissionCounter = 0;
   #detachAbortSignal: (() => void) | undefined;
 
-  constructor(input: ResolvedRunInput, deps: ClaudeRunDeps) {
+  /** Where this run's files live, and how many it has written. */
+  readonly #stagingDir: string;
+  #stagedCount: number;
+  /** The opening prompt's files, held until `start()` builds its message. */
+  #openingStaged: readonly StagedAttachment[];
+
+  constructor(
+    input: ResolvedRunInput,
+    deps: ClaudeRunDeps,
+    staging: { readonly directory: string; readonly staged: readonly StagedAttachment[] },
+  ) {
     this.#input = input;
     this.#deps = deps;
     this.runId = input.runId;
+    this.#stagingDir = staging.directory;
+    this.#openingStaged = staging.staged;
+    this.#stagedCount = staging.staged.length;
 
     this.#state = createClaudeMapperState(input.runId, {
       now: deps.now,
@@ -1325,7 +1393,12 @@ class ClaudeRun implements Run {
   start(): void {
     // Seed the input pump before the SDK starts pulling, so the first turn has
     // its prompt waiting rather than racing for it.
-    this.#promptQueue.push(this.#userMessage(this.#input.prompt, this.#input.attachments));
+    this.#promptQueue.push(
+      this.#userMessage(this.#input.prompt, this.#input.attachments, this.#openingStaged),
+    );
+    // Released once consumed: the payloads are large, and the run has no reason
+    // to keep the opening turn's attachments alive for its whole lifetime.
+    this.#openingStaged = [];
 
     const external = this.#input.abortSignal;
     if (external !== undefined) {
@@ -1431,7 +1504,11 @@ class ClaudeRun implements Run {
       );
     }
 
-    this.#promptQueue.push(this.#userMessage(text, attachments));
+    // Staged before the push and outside any queue guard, so a staging failure
+    // surfaces as itself rather than as a message that silently lost its files.
+    const staged = await this.#stage(attachments);
+
+    this.#promptQueue.push(this.#userMessage(text, attachments, staged));
     return { deliveredImmediately: false };
   }
 
@@ -1534,7 +1611,21 @@ class ClaudeRun implements Run {
       await settleWithin(this.#pumpDone, DISPOSE_GRACE_MS);
     }
 
-    // 6. Guarantee the contract even if the SDK never came back at all: exactly
+    // 6. Drop the staged attachments, now that the process that could read them
+    //    is gone. After the process, so a turn still winding down cannot lose a
+    //    file out from under itself.
+    //
+    //    Safe to delete: the model has already been sent whatever it was going
+    //    to be sent, and a resumed session replays the provider's own stored
+    //    transcript — which holds the text of the turn, including the paths. A
+    //    resumed run that tries to re-open one gets a plain "no such file",
+    //    which is the honest answer: the file was the user's, and it was
+    //    attached to a conversation that has since ended.
+    await removeStagingDirectory(this.#stagingDir, (message) => {
+      this.#deps.diagnostic?.(`Run ${this.runId}: ${message}`);
+    });
+
+    // 7. Guarantee the contract even if the SDK never came back at all: exactly
     //    one `run.end`, and a stream that terminates.
     this.#finalize('disposed');
     this.#eventQueue.close();
@@ -1671,35 +1762,72 @@ class ClaudeRun implements Run {
   /**
    * One user turn, as the SDK's streaming input wants it.
    *
-   * With no images this stays a plain string rather than a one-element block
-   * array. The two are equivalent to the API, but the string is what the SDK's
-   * own examples send and what every transcript reader in the ecosystem expects
-   * to find in the `.jsonl` — including Artemis's own history reader, which
-   * would otherwise need to learn a second shape to display prompts it wrote
-   * itself.
+   * Three things can end up in it, and they arrive by three different routes:
    *
-   * With images, blocks — and the images come *first*. Anthropic's guidance is
-   * explicit that a question placed before its image is answered worse, and the
-   * ordering is free to get right here.
+   *  - **Images** become `image` blocks. There is no other way for the model to
+   *    see a picture — no tool it has can look at one.
+   *  - **PDFs** become `document` blocks *as well as* staged files. The block is
+   *    what gives the model vision over the rendered pages — layout, tables,
+   *    charts, scanned text that is not text at all — which reading the file
+   *    with a tool does not recover. The staged copy is still worth having, so
+   *    the agent can run something over it.
+   *  - **Every other file** appears only as a path in the text, because the
+   *    agent reading it beats inlining it. See `describeStagedAttachments`.
+   *
+   * With none of them the content stays a plain string rather than a
+   * one-element block array. The two are equivalent to the API, but the string
+   * is what the SDK's own examples send and what every transcript reader in the
+   * ecosystem expects to find in the `.jsonl` — including Artemis's own history
+   * reader, which would otherwise need a second shape for prompts it wrote.
+   *
+   * Blocks come *before* the text. Anthropic's guidance is explicit that a
+   * question placed before its image is answered worse, and the ordering is
+   * free to get right here.
    */
-  #userMessage(text: string, attachments?: readonly Attachment[]): SDKUserMessage {
-    const images = (attachments ?? []).filter(isImageAttachment);
+  #userMessage(
+    text: string,
+    attachments?: readonly Attachment[],
+    staged: readonly StagedAttachment[] = [],
+  ): SDKUserMessage {
+    const all = attachments ?? [];
+    const images = all.filter(isImageAttachment);
+    const pdfs = all.filter(isPdf);
+
+    // Only the files that are *not* already in the message get named. A PDF
+    // rides in as a document block, so pointing the agent at a staged copy
+    // would invite a tool call to re-read something it can already see.
+    const note = describeStagedAttachments(staged.filter(({ attachment }) => !isPdf(attachment)));
+    const body = withAttachmentNote(text, note);
+
+    const blocks: ContentBlockParam[] = [
+      ...images.map(
+        (image): ImageBlockParam => ({
+          type: 'image',
+          source: { type: 'base64', media_type: image.mediaType, data: image.data },
+        }),
+      ),
+      ...pdfs.map(
+        (pdf): DocumentBlockParam => ({
+          type: 'document',
+          source: { type: 'base64', media_type: PDF_MEDIA_TYPE, data: pdf.data },
+          // The filename, so the model can refer to it the way the user does
+          // and so several attached PDFs are tellable apart.
+          title: pdf.name,
+        }),
+      ),
+    ];
+
     const content: MessageParam['content'] =
-      images.length === 0
-        ? text
+      blocks.length === 0
+        ? body
         : [
-            ...images.map(
-              (image): ImageBlockParam => ({
-                type: 'image',
-                source: { type: 'base64', media_type: image.mediaType, data: image.data },
-              }),
-            ),
+            ...blocks,
             // An empty text block is a 400 from the Messages API, so a prompt
-            // that is *only* images sends its blocks alone. The composer does
-            // not allow that today — Send needs text — but this is a wire
+            // that is *only* attachments sends its blocks alone. The composer
+            // does not allow that today — Send needs text — but this is a wire
             // format, and "the UI prevents it" is not a reason for the wire to
             // be malformed if it ever stops preventing it.
-            ...(text.length === 0 ? [] : [{ type: 'text' as const, text }]),
+            ...(body.length === 0 ? [] : [{ type: 'text' as const, text: body }]),
           ];
 
     return {
@@ -1707,6 +1835,15 @@ class ClaudeRun implements Run {
       message: { role: 'user', content },
       parent_tool_use_id: null,
     };
+  }
+
+  /** Write a turn's files to this run's directory, continuing its numbering. */
+  async #stage(attachments?: readonly Attachment[]): Promise<readonly StagedAttachment[]> {
+    const files = (attachments ?? []).filter(isFileAttachment);
+    if (files.length === 0) return [];
+    const staged = await stageAttachments(this.#stagingDir, files, this.#stagedCount);
+    this.#stagedCount += files.length;
+    return staged;
   }
 
   /**

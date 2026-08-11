@@ -29,10 +29,6 @@
  * back.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import type {
   AgentError,
   AgentEvent,
@@ -54,7 +50,15 @@ import type {
   SessionId,
   SessionSummary,
 } from '@rx-artemis/protocol';
-import { isImageAttachment, NO_CAPABILITIES } from '@rx-artemis/protocol';
+import { isFileAttachment, isImageAttachment, NO_CAPABILITIES } from '@rx-artemis/protocol';
+
+import {
+  createStagingDirectory,
+  describeStagedAttachments,
+  removeStagingDirectory,
+  stageAttachments,
+  withAttachmentNote,
+} from './attachments.js';
 
 import { composeProviderEnv, readEnv } from './env.js';
 import {
@@ -156,6 +160,7 @@ export const CODEX_CAPABILITIES: Capabilities = {
   subagents: false,
   costReporting: false,
   imageInput: true, // `localImage` input items, staged to temp files
+  fileInput: true, // staged to a granted temp directory and named in the prompt
   permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],
 };
 
@@ -484,9 +489,30 @@ export function createCodexAdapter(options?: CodexAdapterOptions): ProviderAdapt
 
     async createRun(input: ResolvedRunInput): Promise<Run> {
       validateCodexRunInput(input);
-      const run = new CodexRun(input, deps);
-      run.start();
-      return run;
+
+      // Created for every run, attachments or not, and granted before the first
+      // turn: the sandbox policy is built once from `additionalDirectories`, so
+      // a directory created later — when the user attaches to a mid-run steer —
+      // would be outside the roots the turn was started with.
+      const directory = await createStagingDirectory();
+
+      try {
+        const run = new CodexRun(
+          {
+            ...input,
+            additionalDirectories: [...(input.additionalDirectories ?? []), directory],
+          },
+          deps,
+          directory,
+        );
+        run.start();
+        return run;
+      } catch (error) {
+        // Nothing owns the directory yet — the run that would have removed it
+        // was never constructed.
+        await removeStagingDirectory(directory);
+        throw error;
+      }
     },
 
     async listSessions(request: SessionListQuery): Promise<SessionListPage> {
@@ -912,17 +938,18 @@ class CodexRun implements Run {
   #session: AppServerSession | undefined;
   #bootstrap: Promise<void> = Promise.resolve();
   #disposing: Promise<void> | undefined;
-  /** Where this run's staged images live, once it has any. @see #imageInputs */
-  #imageDir: string | undefined;
-  #imageCounter = 0;
+  /** Where this run's attachments live, and how many it has written. */
+  readonly #stagingDir: string;
+  #stagedCount = 0;
   #approvalCounter = 0;
   #detachAbortSignal: (() => void) | undefined;
   #startedAt = 0;
 
-  constructor(input: ResolvedRunInput, deps: CodexRunDeps) {
+  constructor(input: ResolvedRunInput, deps: CodexRunDeps, stagingDir: string) {
     this.#input = input;
     this.#deps = deps;
     this.runId = input.runId;
+    this.#stagingDir = stagingDir;
 
     this.#state = createCodexMapperState(input.runId, {
       now: deps.now,
@@ -1023,7 +1050,7 @@ class CodexRun implements Run {
 
     // Staged before the request and outside its `try`, so a staging failure
     // surfaces as itself rather than as "could not steer the Codex turn".
-    const images = await this.#imageInputs(attachments);
+    const { items, note } = await this.#turnInputs(attachments);
 
     try {
       await session.request(
@@ -1031,7 +1058,7 @@ class CodexRun implements Run {
         wireParams({
           threadId,
           expectedTurnId: turnId,
-          input: [...images, textInput(text)],
+          input: [...items, textInput(withAttachmentNote(text, note))],
         }),
       );
       return { deliveredImmediately: true };
@@ -1110,58 +1137,58 @@ class CodexRun implements Run {
   /* -------------------------------- internals ------------------------------ */
 
   /**
-   * Turn attachments into the input items a turn can carry.
+   * Write a turn's attachments to disk and say what the turn should carry.
    *
-   * ## Why this writes files
+   * ## Everything is staged, images included
    *
-   * Codex takes an image as a **path** (`localImage`) or a **url** (`image`).
-   * It has no variant that carries bytes, and Artemis holds bytes: a pasted
-   * screenshot never had a path, and see the note in `protocol/attachment.ts`
-   * for why a renderer-supplied path is not something the main process should
-   * be reading on request. So the bytes are written where the CLI can read
-   * them, and the path is what goes on the wire.
+   * Codex has no content-block equivalent for either kind. An image goes on the
+   * wire as `localImage` — a **path** — and there is no document variant at all,
+   * so a PDF or a CSV can only reach the agent as a file it opens itself. Both
+   * therefore get written; what differs is what comes back:
+   *
+   *  - images become `localImage` input items, so the model sees them;
+   *  - files become a line in the prompt naming their path, so the agent can
+   *    read them. See `describeStagedAttachments`.
+   *
+   * Artemis holds bytes rather than paths for both — a pasted screenshot never
+   * had a path, and see the note atop `protocol/attachment.ts` for why a
+   * renderer-supplied path is not something to read on request.
    *
    * ## Why deleting them at dispose is safe
    *
-   * The file is read once, at submission: Codex encodes it into a
-   * `data:image/…;base64,…` URL and it is *that* — not the path — which lands
-   * in the rollout as the turn's `input_image` content. A resumed thread
-   * replays the rollout, so it still has the image after the file is gone.
+   * An image is read once, at submission: Codex encodes it into a
+   * `data:image/…;base64,…` URL, and it is *that* — not the path — which lands
+   * in the rollout as the turn's `input_image` content, so a resumed thread
+   * still has the picture after the file is gone. (Confirmed against the app
+   * server's generated bindings rather than inferred from the docs.)
    *
-   * What does not survive is the app server's own thread-item view, which
-   * echoes back the `localImage` path the client sent. Nothing in Artemis reads
-   * it — the transcript renders from Artemis's own record of the prompt — so
-   * the cost of being wrong about this is a dangling path in a structure we do
-   * not display, against a temp directory per run that would otherwise never be
-   * reclaimed.
-   *
-   * ## Why a failure here fails the turn
-   *
-   * A prompt that says "why is this button misaligned?" is not a prompt without
-   * its screenshot; it is a question about nothing, and the answer will be
-   * confident and useless. Staging failures are rare and loud (no writable
-   * temp directory, a full disk) and every one of them is worth interrupting
-   * for, so this throws rather than dropping the image and sending the text.
+   * A staged **file** is different and worth being straight about: it is read
+   * only if the agent chooses to, and a resumed thread that reaches for one
+   * after dispose gets "no such file". That is the honest outcome — the file
+   * belonged to a conversation that has ended — and it beats leaving a
+   * directory per run on disk forever.
    */
-  async #imageInputs(attachments: readonly Attachment[] | undefined): Promise<readonly CodexUserInput[]> {
-    const images = (attachments ?? []).filter(isImageAttachment);
-    if (images.length === 0) return [];
+  async #turnInputs(
+    attachments: readonly Attachment[] | undefined,
+  ): Promise<{ readonly items: readonly CodexUserInput[]; readonly note: string }> {
+    const all = attachments ?? [];
+    if (all.length === 0) return { items: [], note: '' };
 
-    try {
-      // `mkdtemp` rather than a fixed name: two runs staging at once must not
-      // share a directory, or disposing the first deletes the second's images.
-      this.#imageDir ??= await mkdtemp(join(tmpdir(), 'artemis-codex-'));
-    } catch (error) {
-      throw adapterError(
-        'transport',
-        `Could not create a temporary directory to stage ${String(images.length)} image(s) for Codex: ${describe(error)}`,
-        { cause: error },
-      );
-    }
+    const staged = await stageAttachments(this.#stagingDir, all, this.#stagedCount);
+    this.#stagedCount += all.length;
 
-    const items = await stageCodexImages(this.#imageDir, images, this.#imageCounter);
-    this.#imageCounter += images.length;
-    return items;
+    const items = staged
+      .filter(({ attachment }) => isImageAttachment(attachment))
+      .map(({ path }): CodexUserInput => ({ type: 'localImage', path }));
+
+    // Only the files get named. An image is already an input item; pointing the
+    // agent at a staged copy would invite a tool call to open a picture the
+    // model can already see.
+    const note = describeStagedAttachments(
+      staged.filter(({ attachment }) => isFileAttachment(attachment)),
+    );
+
+    return { items, note };
   }
 
   async #connect(): Promise<void> {
@@ -1240,13 +1267,13 @@ class CodexRun implements Run {
 
     // Images before the text, matching the Claude adapter and Codex's own
     // client: a question asked before its screenshot is answered worse.
-    const images = await this.#imageInputs(this.#input.attachments);
+    const { items, note } = await this.#turnInputs(this.#input.attachments);
 
     const response = await session.request(
       CODEX_METHOD.turnStart,
       wireParams({
         threadId,
-        input: [...images, textInput(this.#input.prompt)],
+        input: [...items, textInput(withAttachmentNote(this.#input.prompt, note))],
         cwd: this.#input.cwd,
         approvalPolicy: permissions.approvalPolicy,
         sandboxPolicy: permissions.sandboxPolicy,
@@ -1380,22 +1407,13 @@ class CodexRun implements Run {
     // 4. Take the process down.
     if (session !== undefined) await session.process.dispose(DISPOSE_GRACE_MS);
 
-    // 5. Drop the staged images, now that the process that read them is gone.
-    //    After the process, so a turn still winding down cannot lose an image
-    //    out from under itself; best-effort, because a temp directory that
+    // 5. Drop the staged attachments, now that the process that read them is
+    //    gone. After the process, so a turn still winding down cannot lose a
+    //    file out from under itself; best-effort, because a temp directory that
     //    outlives its run is a smaller problem than a dispose that throws.
-    const imageDir = this.#imageDir;
-    if (imageDir !== undefined) {
-      this.#imageDir = undefined;
-      try {
-        await rm(imageDir, { recursive: true, force: true });
-      } catch (error) {
-        this.#deps.diagnostic?.(
-          `Run ${this.runId}: could not remove the staged image directory ${imageDir}.`,
-          describe(error),
-        );
-      }
-    }
+    await removeStagingDirectory(this.#stagingDir, (message) => {
+      this.#deps.diagnostic?.(`Run ${this.runId}: ${message}`);
+    });
 
     // 6. Guarantee the contract even if the server never came back at all:
     //    every open tool call closed, exactly one `run.end`, stream terminated.
@@ -1736,59 +1754,6 @@ function textInput(text: string): CodexTextInput {
   // `text_elements` is required and snake_case; omitting it fails the request
   // with an error naming `type`. See the note on `CodexTextInput`.
   return { type: 'text', text, text_elements: [] };
-}
-
-/**
- * File extension for an image, so the staged file's name matches its bytes.
- *
- * Codex re-encodes a `localImage` into a `data:<media-type>;base64,…` URL for
- * the model, and derives that media type from the path. A `.png` holding JPEG
- * bytes is therefore not a cosmetic mismatch — it is a mislabelled image sent
- * to the API.
- */
-const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-};
-
-/**
- * Write images into `directory` and name them on the wire.
- *
- * Exported for its tests, and because it is the whole of what "staging" means —
- * the caller's remaining job is owning the directory's lifetime. `startIndex`
- * continues the caller's numbering, so a mid-run steer does not overwrite the
- * images the opening prompt staged.
- *
- * @see CodexRun.#imageInputs for why this writes files at all.
- */
-export async function stageCodexImages(
-  directory: string,
-  images: readonly ImageAttachment[],
-  startIndex = 0,
-): Promise<readonly CodexLocalImageInput[]> {
-  return Promise.all(
-    images.map(async (image, offset): Promise<CodexLocalImageInput> => {
-      // Named by a counter, never by `image.name`: that string came from a
-      // filename the user did not necessarily choose, and it is the one field
-      // here that something upstream could shape. A counter cannot traverse.
-      const path = join(
-        directory,
-        `image-${String(startIndex + offset + 1)}.${IMAGE_EXTENSIONS[image.mediaType]}`,
-      );
-      try {
-        await writeFile(path, Buffer.from(image.data, 'base64'));
-      } catch (error) {
-        throw adapterError(
-          'transport',
-          `Could not stage an image for Codex at ${path}: ${describe(error)}`,
-          { cause: error },
-        );
-      }
-      return { type: 'localImage', path };
-    }),
-  );
 }
 
 /**

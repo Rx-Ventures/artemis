@@ -144,6 +144,19 @@ export interface Capabilities {
    * says so in its reply.
    */
   readonly imageInput: boolean;
+
+  /**
+   * A prompt can carry arbitrary files — the adapter stages them somewhere the
+   * agent can reach and tells it they are there.
+   *
+   * Separate from {@link imageInput} because they are not the same mechanism.
+   * `imageInput` is about a *wire format*: somewhere on the request to put
+   * pixels. This is about an adapter doing work — writing files, granting the
+   * agent access to where it wrote them, and naming them in the prompt — and an
+   * adapter that has not done that work drops files silently, which is exactly
+   * what the flag exists to prevent.
+   */
+  readonly fileInput: boolean;
 }
 
 /**
@@ -166,6 +179,7 @@ export const NO_CAPABILITIES: Capabilities = {
   costReporting: false,
   planUsageReporting: false,
   imageInput: false,
+  fileInput: false,
 };
 
 /**

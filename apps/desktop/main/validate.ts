@@ -28,11 +28,13 @@
 import { isAbsolute } from 'node:path';
 
 import {
+  ATTACHMENT_LIMITS,
+  attachmentBytes,
   base64Bytes,
   configDirProblem,
-  IMAGE_ATTACHMENT_LIMITS,
   IMAGE_MEDIA_TYPES,
   isCredentialRoutingEnvKey,
+  isImageAttachment,
   isImageMediaType,
   isPermissionMode,
   isProviderEffort,
@@ -41,6 +43,7 @@ import {
   normalizeProfileColor,
   profileColorProblem,
   type Attachment,
+  type FileAttachment,
   type ImageAttachment,
   type JsonObject,
   type JsonValue,
@@ -582,17 +585,51 @@ function optionalSystemPrompt(value: unknown, field: string): SystemPromptSpec |
  * Base64 as the Messages API wants it: standard alphabet, correct padding, no
  * whitespace and no `data:` prefix.
  *
- * Checked with a regex rather than by round-tripping through `Buffer`, because
+ * Checked by shape rather than by round-tripping through `Buffer`, because
  * `Buffer.from(x, 'base64')` does not validate — it discards anything outside
  * the alphabet and returns whatever it managed to decode. A payload that is
  * half base64 and half something else would sail through a decode check and
- * reach the provider as a corrupt image, or reach `writeFile` in the Codex
- * adapter as a file whose contents nobody predicted.
+ * reach the provider as a corrupt image, or reach `writeFile` in an adapter as
+ * a file whose contents nobody predicted.
  *
- * The `(?:[A-Za-z0-9+/]{4})*` grouping is what makes the length a multiple of
- * four, which is also what stops a payload from being padded in the middle.
+ * ## Why this is not one regex
+ *
+ * The obvious pattern is
+ * `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`, where the
+ * `{4}` group inside a `*` is what enforces the multiple-of-four length. That
+ * is a **nested quantifier**, and V8 pushes a backtracking frame per repetition
+ * — so on a payload of any real size it does not reject the input, it throws
+ * `RangeError: Maximum call stack size exceeded`. That version shipped in the
+ * image-only revision of this file and never fired, because five megabytes of
+ * image was under the threshold; the first 8MB file attachment found it.
+ *
+ * So the length rule is arithmetic and the charset rule is a flat character
+ * class, which is linear and allocates no frames. `=` appears only in the
+ * trailing `={0,2}`, so padding still cannot appear in the middle.
  */
-const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function isBase64(value: string): boolean {
+  return value.length % 4 === 0 && BASE64_PATTERN.test(value);
+}
+
+/**
+ * The base64 payload both attachment kinds carry.
+ *
+ * Size before shape: the regex is linear, but scanning a 40MB string before
+ * refusing it is work done for a payload that was never going to be accepted.
+ */
+function requirePayload(value: unknown, field: string, maxBytes: number): string {
+  if (typeof value !== 'string') throw new ValidationError(field, 'must be a string');
+  if (value.length === 0) throw new ValidationError(field, 'must not be empty');
+  if (base64Bytes(value) > maxBytes) {
+    throw new ValidationError(field, `must decode to at most ${String(maxBytes)} bytes`);
+  }
+  if (!isBase64(value)) {
+    throw new ValidationError(field, 'must be base64 with no data: prefix');
+  }
+  return value;
+}
 
 /**
  * One image crossing IPC.
@@ -601,14 +638,10 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
  * while the image is still in the composer. That is a courtesy, not the
  * boundary: a renderer is not a trusted enforcer of its own limits, and this
  * is the last place the payload can be refused before it is written to a file
- * (Codex) or billed to the user's account (both).
+ * or billed to the user's account.
  */
 function validateImageAttachment(value: unknown, field: string): ImageAttachment {
   const attachment = requireObject(value, field);
-
-  if (attachment['kind'] !== 'image') {
-    throw new ValidationError(`${field}.kind`, 'must be "image"');
-  }
 
   const mediaType = attachment['mediaType'];
   if (!isImageMediaType(mediaType)) {
@@ -618,34 +651,43 @@ function validateImageAttachment(value: unknown, field: string): ImageAttachment
     );
   }
 
-  const data = attachment['data'];
-  if (typeof data !== 'string') throw new ValidationError(`${field}.data`, 'must be a string');
-  if (data.length === 0) throw new ValidationError(`${field}.data`, 'must not be empty');
-  // Length before shape: the regex is linear, but refusing a 40MB string after
-  // scanning all of it is work done for a payload that was never going to be
-  // accepted.
-  const bytes = base64Bytes(data);
-  if (bytes > IMAGE_ATTACHMENT_LIMITS.bytesPerImage) {
-    throw new ValidationError(
-      `${field}.data`,
-      `must decode to at most ${String(IMAGE_ATTACHMENT_LIMITS.bytesPerImage)} bytes`,
-    );
-  }
-  if (!BASE64_PATTERN.test(data)) {
-    throw new ValidationError(`${field}.data`, 'must be base64 with no data: prefix');
-  }
-
   return compact<ImageAttachment>({
     kind: 'image',
     id: requireId(attachment['id'], `${field}.id`),
     mediaType,
-    data,
+    data: requirePayload(attachment['data'], `${field}.data`, ATTACHMENT_LIMITS.bytesPerImage),
     // A filename, so it is untrusted display text: length-capped like every
-    // other label, and never used to build a path — see `#imageInputs` in the
-    // Codex adapter, which names its files after a counter for this reason.
-    name: optionalString(attachment['name'], `${field}.name`, IMAGE_ATTACHMENT_LIMITS.nameLength),
+    // other label, and never used to build a path — staged images are named
+    // after a counter for exactly this reason.
+    name: optionalString(attachment['name'], `${field}.name`, ATTACHMENT_LIMITS.nameLength),
     width: optionalInteger(attachment['width'], `${field}.width`, 1, 1_000_000),
     height: optionalInteger(attachment['height'], `${field}.height`, 1, 1_000_000),
+  });
+}
+
+/**
+ * One file crossing IPC.
+ *
+ * No format check, deliberately — see {@link FileAttachment}. What is checked
+ * is the one field that is *not* inert: `name` is required here (an image's is
+ * optional) because the staged file is named after it, so a missing one is a
+ * bug rather than a shrug. It is length-capped and NUL-checked by
+ * `requireString`, and `safeFileName` in the core adapters reduces it to a
+ * single safe path component before anything opens it. Two layers, because the
+ * consequence of getting it wrong is a write outside the staging directory.
+ */
+function validateFileAttachment(value: unknown, field: string): FileAttachment {
+  const attachment = requireObject(value, field);
+
+  return compact<FileAttachment>({
+    kind: 'file',
+    id: requireId(attachment['id'], `${field}.id`),
+    name: requireString(attachment['name'], `${field}.name`, ATTACHMENT_LIMITS.nameLength),
+    // Free-form: browsers hand over whatever they like, including nothing, and
+    // only `application/pdf` changes any behaviour downstream. Bounded so it
+    // cannot be used as a smuggling channel, and otherwise passed through.
+    mediaType: optionalString(attachment['mediaType'], `${field}.mediaType`, 200),
+    data: requirePayload(attachment['data'], `${field}.data`, ATTACHMENT_LIMITS.bytesPerFile),
   });
 }
 
@@ -653,30 +695,47 @@ function optionalAttachments(value: unknown, field: string): readonly Attachment
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) throw new ValidationError(field, 'must be an array');
   if (value.length === 0) return undefined;
-  if (value.length > IMAGE_ATTACHMENT_LIMITS.count) {
+  // A cheap bound before anything is decoded, so a renderer sending ten
+  // thousand entries is refused by a length check rather than by a loop.
+  if (value.length > ATTACHMENT_LIMITS.images + ATTACHMENT_LIMITS.files) {
     throw new ValidationError(
       field,
-      `must have at most ${String(IMAGE_ATTACHMENT_LIMITS.count)} entries`,
+      `must have at most ${String(ATTACHMENT_LIMITS.images + ATTACHMENT_LIMITS.files)} entries`,
     );
   }
 
-  const attachments = value.map((entry, index) =>
-    validateImageAttachment(entry, `${field}[${index}]`),
-  );
+  const attachments = value.map((entry, index): Attachment => {
+    const at = `${field}[${index}]`;
+    const kind = requireObject(entry, at)['kind'];
+    if (kind === 'image') return validateImageAttachment(entry, at);
+    if (kind === 'file') return validateFileAttachment(entry, at);
+    throw new ValidationError(`${at}.kind`, 'must be "image" or "file"');
+  });
 
-  // The per-image ceiling bounds one payload; this bounds the request. Four
-  // images each just under the limit is four times the memory of one, in the
-  // main process, held while they are copied to a subprocess.
-  const total = attachments.reduce((sum, attachment) => sum + base64Bytes(attachment.data), 0);
-  if (total > IMAGE_ATTACHMENT_LIMITS.bytesTotal) {
+  // Per kind, because the two have different ceilings for different reasons —
+  // an image's bytes become tokens, a file's become a file.
+  const images = attachments.filter(isImageAttachment).length;
+  if (images > ATTACHMENT_LIMITS.images) {
+    throw new ValidationError(field, `must have at most ${String(ATTACHMENT_LIMITS.images)} images`);
+  }
+  const files = attachments.length - images;
+  if (files > ATTACHMENT_LIMITS.files) {
+    throw new ValidationError(field, `must have at most ${String(ATTACHMENT_LIMITS.files)} files`);
+  }
+
+  // The per-attachment ceilings bound one payload; this bounds the request.
+  // Ten files each just under the limit is ten times the memory of one, in the
+  // main process, held while they are written to disk.
+  const total = attachments.reduce((sum, attachment) => sum + attachmentBytes(attachment), 0);
+  if (total > ATTACHMENT_LIMITS.bytesTotal) {
     throw new ValidationError(
       field,
-      `must decode to at most ${String(IMAGE_ATTACHMENT_LIMITS.bytesTotal)} bytes in total`,
+      `must decode to at most ${String(ATTACHMENT_LIMITS.bytesTotal)} bytes in total`,
     );
   }
 
-  // Duplicate ids would make the transcript's thumbnails ambiguous and are
-  // never something the composer produces.
+  // Duplicate ids would make the transcript's chips ambiguous and are never
+  // something the composer produces.
   const ids = new Set(attachments.map((attachment) => attachment.id));
   if (ids.size !== attachments.length) {
     throw new ValidationError(field, 'must not contain two attachments with the same id');
