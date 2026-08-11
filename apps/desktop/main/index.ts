@@ -36,6 +36,7 @@ import { EngineHost } from './engine.js';
 import { broadcast, forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
+import { registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
 import { createUpdater } from './updater.js';
 import {
@@ -114,6 +115,13 @@ adoptPreviousUserData();
  * that forgets to ask for it. Must run before `app.whenReady()`.
  */
 app.enableSandbox();
+
+/**
+ * Declare the preview scheme. Also before ready, and for the same kind of
+ * reason: after `whenReady` this call does nothing and says nothing, and the
+ * only evidence is a preview frame that never loads. See `preview.ts`.
+ */
+registerPreviewScheme();
 
 /** Directory containing the built main bundle (`out/main`). */
 const distributionDir = fileURLToPath(new URL('.', import.meta.url));
@@ -261,6 +269,10 @@ async function bootstrap(): Promise<void> {
   applySessionPolicy(session.defaultSession, policy);
   installNetworkAuthGuard(app);
   app.on('web-contents-created', (_event, contents) => hardenWebContents(contents, policy));
+
+  // After the session policy, so the handler this installs is already covered by
+  // the request lockdown's preview exemption rather than racing it.
+  servePreviews();
 
   const userDataDir = app.getPath('userData');
   // Where Artemis's *suggested* config directories live. A profile may point

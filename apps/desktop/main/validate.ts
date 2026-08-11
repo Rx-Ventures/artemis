@@ -83,6 +83,7 @@ import {
   type UpdatesInstallRequest,
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
+  type PreviewOpenRequest,
   type WindowRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
@@ -1074,6 +1075,24 @@ export function validateWorkspacePickDirectory(raw: unknown): WorkspacePickDirec
 
 /** Naming a directory. Absolute, because there is nothing to resolve against. */
 export function validateWorkspaceDescribe(raw: unknown): WorkspaceDescribeRequest {
+  const request = requireRequest(raw);
+  return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
+/**
+ * Opening a preview.
+ *
+ * Absolute for the same reason every other path here is: a relative one would
+ * resolve against the main process's `process.cwd()`, which is an artefact of
+ * how Artemis was launched rather than anywhere the user has been.
+ *
+ * What is *not* checked here is which extensions may be previewed. That belongs
+ * to `preview.ts`, which is the layer that knows what it can serve, and keeping
+ * the list in one place means a validator and a handler can never disagree about
+ * it — the failure mode being a file that passes validation and is then refused
+ * with a different error.
+ */
+export function validatePreviewOpen(raw: unknown): PreviewOpenRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };
 }

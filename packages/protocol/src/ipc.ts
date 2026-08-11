@@ -88,6 +88,15 @@ export const IPC = {
   /** Name a directory: its own name, and its repository's when it has one. */
   workspaceDescribe: 'artemis:workspace:describe',
 
+  /**
+   * Make a file the agent wrote renderable, and say where to render it from.
+   *
+   * One channel, and no `close` counterpart: closing a preview is the renderer
+   * dropping a frame, which needs main's permission for nothing. What main
+   * retains it retires on its own — see `preview.ts`.
+   */
+  previewOpen: 'artemis:preview:open',
+
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'artemis:sessions:messages',
 
@@ -695,6 +704,73 @@ export interface WorkspaceDescribeResponse {
   readonly repoName?: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Preview                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Show me the page at this path.
+ *
+ * The renderer cannot read a file and would not be allowed to frame one if it
+ * could: a `file:` URL in an iframe is refused by the renderer's own policy, and
+ * loosening that policy to permit it would hand every path on the machine to a
+ * page rendering model output. So it asks, and gets back a URL that serves
+ * exactly one file and nothing else.
+ */
+export interface PreviewOpenRequest {
+  /** Absolute path to an `.html`, `.htm`, `.svg`, `.md` or `.markdown` file. */
+  readonly path: string;
+}
+
+/** What every preview carries, however it is shown. */
+export interface PreviewBase {
+  /** The file's own name, for the pane's caption. */
+  readonly title: string;
+  /** The path as asked about, echoed so the caption can say where it came from. */
+  readonly path: string;
+  /** Size of the snapshot, for the caption's detail line. */
+  readonly bytes: number;
+}
+
+/**
+ * A page to be framed: HTML or SVG, served from the preview scheme.
+ *
+ * The renderer never receives the markup. It gets a URL and hands it to a
+ * sandboxed frame, which is what keeps a document that executes script out of
+ * the renderer's own.
+ */
+export interface PreviewFrame extends PreviewBase {
+  readonly kind: 'frame';
+  /**
+   * What to put in the frame's `src`. Single-use in spirit — it names a
+   * snapshot main is holding, not the path — and stops resolving once enough
+   * later previews have pushed it out.
+   */
+  readonly url: string;
+}
+
+/**
+ * Markdown, as source, for the renderer's own pipeline.
+ *
+ * The opposite transport from {@link PreviewFrame}, and deliberately so.
+ * Markdown is not a program: there is nothing in it to execute, so there is
+ * nothing to sandbox, and sending the text is *stricter* than serving generated
+ * HTML into a frame that permits inline script. It also means one markdown
+ * renderer in the app rather than two. See `PreviewPane`.
+ */
+export interface PreviewMarkdown extends PreviewBase {
+  readonly kind: 'markdown';
+  /** The file's text, verbatim. */
+  readonly text: string;
+}
+
+/**
+ * How a preview arrives. Discriminated on `kind`, because the two are genuinely
+ * different deliveries — a URL for a frame, or text to render in place — rather
+ * than one shape with an unused field.
+ */
+export type PreviewOpenResponse = PreviewFrame | PreviewMarkdown;
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -949,6 +1025,7 @@ export type IpcRequestMap = {
   [IPC.sessionsListAll]: SessionsListAllRequest;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
+  [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
   [IPC.sessionsRename]: SessionsRenameRequest;
   [IPC.sessionsDelete]: SessionsDeleteRequest;
@@ -986,6 +1063,7 @@ export type IpcResponseMap = {
   [IPC.sessionsListAll]: SessionsListAllResponse;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
+  [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
   [IPC.sessionsRename]: SessionsRenameResponse;
   [IPC.sessionsDelete]: SessionsDeleteResponse;
@@ -1175,6 +1253,18 @@ export interface ArtemisBridge {
      * it whenever the working directory changes.
      */
     describe(request: WorkspaceDescribeRequest): Promise<IpcResult<WorkspaceDescribeResponse>>;
+  };
+
+  /**
+   * Rendering a page the agent wrote.
+   *
+   * One method, because the renderer's half of a preview is a frame and a URL:
+   * ask for the URL, put it in the frame, drop the frame when done. Nothing has
+   * to be closed, and nothing here can name a file main did not agree to serve.
+   */
+  readonly preview: {
+    /** Snapshot the file at `path` and return the URL that serves it. */
+    open(request: PreviewOpenRequest): Promise<IpcResult<PreviewOpenResponse>>;
   };
 
   /**

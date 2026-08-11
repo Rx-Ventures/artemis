@@ -138,6 +138,7 @@ import {
   PlugIcon,
   SearchIcon,
   SparklesIcon,
+  SquareArrowOutUpRightIcon,
   TerminalIcon,
   PaperclipIcon,
   TriangleAlertIcon,
@@ -150,8 +151,9 @@ import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { formatBytes } from '../lib/attachments';
 import { detectFileEdit } from '../lib/diff';
-import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
-import { usePane } from '../state/paneContext';
+import { previewablePath } from '../lib/preview';
+import { activeCapabilities, openPreview, useApp, type ConversationWidth } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import {
   formatClock,
   formatDuration,
@@ -687,6 +689,18 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
   // free, and this row can be re-rendered by its own status transition.
   const edit = useMemo(() => detectFileEdit(item.name, item.input), [item.name, item.input]);
 
+  // The pane this card is in, so a preview opens against *this* column's
+  // working directory and reports a failure into *this* column's transcript.
+  // One subscription that fires on a focus change and never on a token — the
+  // same cost `AgentAvatar` two rows up already pays.
+  const pane = usePaneRef();
+  const cwd = usePane((s) => s.cwd);
+  const platform = useApp((s) => s.platform);
+  const previewable = useMemo(
+    () => previewablePath(edit, cwd, platform),
+    [edit, cwd, platform],
+  );
+
   return (
     <div
       className={cn(
@@ -695,42 +709,68 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
         open && 'border-line-strong',
       )}
     >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <Icon
-          className={cn(
-            'size-3 shrink-0',
-            item.status === 'running' ? 'text-cyan' : 'text-ink-faint',
+      {/*
+        A row rather than a single button, because the preview action cannot
+        live inside the disclosure control: a button nested in a button is
+        invalid markup, and the browsers that tolerate it fire both handlers, so
+        opening a preview would also toggle the card underneath it.
+      */}
+      <div className="flex w-full min-w-0 items-center">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <Icon
+            className={cn(
+              'size-3 shrink-0',
+              item.status === 'running' ? 'text-cyan' : 'text-ink-faint',
+            )}
+            aria-hidden="true"
+          />
+          <span className="shrink-0 font-mono text-xs font-semibold text-ink">{item.name}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
+            {summary}
+          </span>
+          {/* A file edit advertises its size in the collapsed row. Whether an
+              edit touched three lines or three hundred is the single most
+              useful thing to know before deciding to open it. */}
+          {edit && !edit.whole ? (
+            <span className="shrink-0 font-mono text-2xs">
+              <span className="text-mint">+{edit.added}</span>{' '}
+              <span className="text-signal">−{edit.removed}</span>
+            </span>
+          ) : null}
+          {item.durationMs === undefined ? null : (
+            <span className="shrink-0 font-mono text-2xs text-ink-faint">
+              {formatDuration(item.durationMs)}
+            </span>
           )}
-          aria-hidden="true"
-        />
-        <span className="shrink-0 font-mono text-xs font-semibold text-ink">{item.name}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
-          {summary}
-        </span>
-        {/* A file edit advertises its size in the collapsed row. Whether an
-            edit touched three lines or three hundred is the single most
-            useful thing to know before deciding to open it. */}
-        {edit && !edit.whole ? (
-          <span className="shrink-0 font-mono text-2xs">
-            <span className="text-mint">+{edit.added}</span>{' '}
-            <span className="text-signal">−{edit.removed}</span>
-          </span>
+          <ToneBadge tone={tone}>
+            {item.status === 'running' ? <StatusDot tone="cyan" pulse /> : null}
+            {item.status}
+          </ToneBadge>
+        </button>
+
+        {/*
+          Only for a call that *succeeded*. A write that errored, was denied or
+          was cancelled left no file — or left half of one — and a Preview button
+          beside a red badge would be an invitation to open something that is not
+          there, answered by a failure a moment later.
+        */}
+        {previewable !== null && item.status === 'ok' ? (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void openPreview(previewable, pane)}
+            className="mr-2 shrink-0"
+          >
+            <SquareArrowOutUpRightIcon />
+            Preview
+          </Button>
         ) : null}
-        {item.durationMs === undefined ? null : (
-          <span className="shrink-0 font-mono text-2xs text-ink-faint">
-            {formatDuration(item.durationMs)}
-          </span>
-        )}
-        <ToneBadge tone={tone}>
-          {item.status === 'running' ? <StatusDot tone="cyan" pulse /> : null}
-          {item.status}
-        </ToneBadge>
-      </button>
+      </div>
 
       {open ? (
         <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">

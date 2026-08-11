@@ -73,6 +73,7 @@ import {
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
   type UsagePlanRequest,
+  type PreviewOpenRequest,
   type WindowRequest,
   type WindowState,
   type WorkspaceDescribeRequest,
@@ -414,6 +415,10 @@ const bridge: ArtemisBridge = Object.freeze({
     pickDirectory: (request: WorkspacePickDirectoryRequest) =>
       invoke(IPC.workspacePickDirectory, request),
     describe: (request: WorkspaceDescribeRequest) => invoke(IPC.workspaceDescribe, request),
+  }),
+
+  preview: Object.freeze({
+    open: (request: PreviewOpenRequest) => invoke(IPC.previewOpen, request),
   }),
 
   /**

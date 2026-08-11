@@ -66,6 +66,7 @@ import {
   WorkspaceError,
 } from './errors.js';
 import { createLogger } from './log.js';
+import { grantPreview } from './preview.js';
 import { assertNoSecrets, EVENT_SCAN_POLICY, RESPONSE_SCAN_POLICY } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
 import type { Updater } from './updater.js';
@@ -89,6 +90,7 @@ import {
   validateSessionsMessages,
   validateSessionsRename,
   validateProfilesSuggestDir,
+  validatePreviewOpen,
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
@@ -349,6 +351,25 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.workspaceDescribe]: {
       validate: validateWorkspaceDescribe,
       handle: async (request) => describeWorkspace(request.path),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Preview                                                          */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Make one file renderable.
+     *
+     * The path arriving here came from a tool call in a transcript, which is to
+     * say from model output — so this is the one handler whose whole job is to
+     * take an untrusted path and hand back something safe to frame. Everything
+     * that makes it safe is in `preview.ts`; what matters at this layer is that
+     * the renderer receives a `artemis-preview://` URL and never a `file:` one,
+     * and so is never in a position to frame a path of its own choosing.
+     */
+    [IPC.previewOpen]: {
+      validate: validatePreviewOpen,
+      handle: async (request) => grantPreview(request.path),
     },
 
     [IPC.sessionsMessages]: {
