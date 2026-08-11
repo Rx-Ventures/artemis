@@ -42,6 +42,70 @@ export interface SessionGroup {
   readonly updatedAt: number;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Archiving                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Split a listing into the sessions that belong in their projects and the ones
+ * the user has put away.
+ *
+ * A separate step *before* grouping rather than a flag inside it, because an
+ * archived session leaves its project entirely — it is not a hidden row in
+ * `/code/api`, it is a row in Archived. Filtering inside `groupSessionsByProject`
+ * would have to special-case the group whose every member was archived, and
+ * would leave the caller no way to render the archived ones at all.
+ *
+ * Keys are `sessionKey` values, not ids: see the note at the top of this file.
+ */
+export function partitionArchived(
+  sessions: readonly SessionSummary[],
+  archived: ReadonlySet<string>,
+): {
+  readonly active: readonly SessionSummary[];
+  readonly archived: readonly SessionSummary[];
+} {
+  // The overwhelmingly common case is an empty archive, and walking the list
+  // twice to discover that is waste on the sidebar's hot path.
+  if (archived.size === 0) return { active: sessions, archived: [] };
+
+  const active: SessionSummary[] = [];
+  const put: SessionSummary[] = [];
+  for (const session of sessions) {
+    if (archived.has(sessionKey(session))) put.push(session);
+    else active.push(session);
+  }
+  return { active, archived: put };
+}
+
+/**
+ * The archived sessions, ready to render as one section.
+ *
+ * Ordered newest-first by the same comparator projects use, and *not* grouped
+ * by directory: the point of the section is that these are out of the way, and
+ * re-imposing the project structure inside it would rebuild the thing the user
+ * archived them to escape.
+ */
+export interface ArchiveSection {
+  /** Newest first, spanning every project. */
+  readonly sessions: readonly SessionSummary[];
+  /** Whether the section is folded shut. Defaults to shut — see `flattenGroups`. */
+  readonly collapsed: boolean;
+}
+
+/** Sort archived sessions for display. Same rule as inside a project group. */
+export function orderArchived(
+  sessions: readonly SessionSummary[],
+  options: GroupOptions = {},
+): readonly SessionSummary[] {
+  const query = options.query ?? '';
+  const lookup = options.profileLabel;
+  const kept = query
+    ? sessions.filter((s) => matchesQuery(s, query, lookup?.(s.profileId)))
+    : [...sessions];
+  return kept.sort(byRecency);
+}
+
 /** Resolves a profile id to its display label, for search and for the row badge. */
 export type ProfileLabelLookup = (id: ProfileId) => string | undefined;
 
@@ -148,14 +212,39 @@ export interface HeaderRow {
   readonly collapsed: boolean;
 }
 
+/**
+ * The Archived section's heading.
+ *
+ * Its own row kind rather than a {@link HeaderRow} with a flag, because almost
+ * nothing a project heading renders applies to it: there is no directory to
+ * name, no repository to look up, and no "you are here" marker — it spans every
+ * project by construction. Giving it a distinct kind means the renderer cannot
+ * accidentally ask it for a `cwd` it does not have.
+ */
+export interface ArchiveHeaderRow {
+  readonly kind: 'archive-header';
+  readonly key: string;
+  /** Sessions in the archive — the full count, even when it is folded shut. */
+  readonly count: number;
+  readonly collapsed: boolean;
+}
+
 export interface SessionRow {
   readonly kind: 'session';
   readonly key: string;
   readonly session: SessionSummary;
   readonly group: number;
+  /**
+   * True for rows inside the Archived section.
+   *
+   * Carried on the row so the renderer does not have to consult the archive set
+   * again to know which menu item to offer — and so an archived row can be
+   * styled as put-away without a second lookup per frame.
+   */
+  readonly archived?: boolean;
 }
 
-export type ListRow = HeaderRow | SessionRow;
+export type ListRow = HeaderRow | ArchiveHeaderRow | SessionRow;
 
 /**
  * Groups → one flat array of rows.
@@ -175,6 +264,7 @@ export type ListRow = HeaderRow | SessionRow;
 export function flattenGroups(
   groups: readonly SessionGroup[],
   collapsed: ReadonlySet<string> = new Set(),
+  archive?: ArchiveSection,
 ): readonly ListRow[] {
   const rows: ListRow[] = [];
   groups.forEach((group, index) => {
@@ -196,5 +286,40 @@ export function flattenGroups(
       rows.push({ kind: 'session', key: sessionKey(session), session, group: index });
     }
   });
+
+  /*
+   * Archived last, always, and absent when empty.
+   *
+   * Pinned to the bottom rather than sorted in by recency because it is not a
+   * project competing for position — it is the drawer everything else can be
+   * put into, and a drawer that wandered up the list as its newest member aged
+   * would be furniture that moves. An empty archive contributes no header at
+   * all: a permanently visible "Archived · 0" is a control for a state the user
+   * is not in.
+   *
+   * The group index continues past the projects so the sticky-header lookup
+   * still resolves every row to something, and archived rows are tagged so the
+   * renderer can offer "Unarchive" rather than "Archive".
+   */
+  if (archive !== undefined && archive.sessions.length > 0) {
+    rows.push({
+      kind: 'archive-header',
+      key: 'h:archive',
+      count: archive.sessions.length,
+      collapsed: archive.collapsed,
+    });
+    if (!archive.collapsed) {
+      for (const session of archive.sessions) {
+        rows.push({
+          kind: 'session',
+          key: sessionKey(session),
+          session,
+          group: groups.length,
+          archived: true,
+        });
+      }
+    }
+  }
+
   return rows;
 }

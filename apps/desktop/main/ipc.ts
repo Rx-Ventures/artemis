@@ -81,8 +81,10 @@ import {
   validateRunsSend,
   validateRunsStart,
   validateSessionsList,
+  validateSessionsDelete,
   validateSessionsListAll,
   validateSessionsMessages,
+  validateSessionsRename,
   validateProfilesSuggestDir,
   validateAuthSignOut,
   validateAuthStatus,
@@ -331,6 +333,33 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.sessionsMessages]: {
       validate: validateSessionsMessages,
       handle: async (request) => engine.require().getSessionMessages(request),
+    },
+
+    [IPC.sessionsRename]: {
+      validate: validateSessionsRename,
+      handle: async (request) =>
+        engine.require().renameSession({
+          profileId: request.profileId,
+          sessionId: request.sessionId,
+          title: request.title,
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        }),
+    },
+
+    /**
+     * Destroys a transcript on disk. The confirmation that guards it lives in
+     * the renderer, which is the only layer that can ask a person anything —
+     * so by the time a request reaches here the decision has been made and
+     * this does not second-guess it.
+     */
+    [IPC.sessionsDelete]: {
+      validate: validateSessionsDelete,
+      handle: async (request) =>
+        engine.require().deleteSession({
+          profileId: request.profileId,
+          sessionId: request.sessionId,
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        }),
     },
 
     /* ---------------------------------------------------------------- */

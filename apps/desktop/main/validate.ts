@@ -69,7 +69,9 @@ import {
   type SessionsListAllRequest,
   type SessionsListRequest,
   type SystemPromptSpec,
+  type SessionsDeleteRequest,
   type SessionsMessagesRequest,
+  type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
@@ -116,6 +118,17 @@ const LIMITS = {
   maxBudgetUsd: 100_000,
   pageSize: 1_000,
   offset: 1_000_000,
+  /**
+   * Transport bound for a session title, deliberately far above the length the
+   * engine actually stores (`MAX_SESSION_TITLE`).
+   *
+   * The two limits do different jobs. This one rejects payloads no user
+   * produced; the engine's truncates what a user *did* produce — someone
+   * pasting a paragraph into the rename field wants a name out of it, not an
+   * error about a character count no part of the UI shows them. Setting this
+   * to the storage cap would turn that paste into a failure.
+   */
+  sessionTitle: 4_000,
 } as const;
 
 /**
@@ -1001,6 +1014,42 @@ export function validateSessionsMessages(raw: unknown): SessionsMessagesRequest 
     cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
     limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.pageSize),
     offset: optionalInteger(request['offset'], 'offset', 0, LIMITS.offset),
+  });
+}
+
+/**
+ * Retitle one session.
+ *
+ * `title` is bounded but not otherwise policed: it is a display string that is
+ * appended to a JSONL record and rendered as text, never interpolated into a
+ * path or a command, so the only hostile input worth refusing here is one big
+ * enough to be an attack on the store itself. `requireString` already rejects
+ * NUL bytes, which is the character that would corrupt the record.
+ */
+export function validateSessionsRename(raw: unknown): SessionsRenameRequest {
+  const request = requireRequest(raw);
+  return compact<SessionsRenameRequest>({
+    profileId: requireId(request['profileId'], 'profileId'),
+    sessionId: requireId(request['sessionId'], 'sessionId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+    title: requireString(request['title'], 'title', LIMITS.sessionTitle),
+  });
+}
+
+/**
+ * Destroy one session.
+ *
+ * Nothing here is a policy check. The decision to delete is the user's and was
+ * taken in front of a confirmation dialog in the renderer; this only makes sure
+ * the three fields naming *which* transcript are well-formed, so that a
+ * malformed id cannot become a path.
+ */
+export function validateSessionsDelete(raw: unknown): SessionsDeleteRequest {
+  const request = requireRequest(raw);
+  return compact<SessionsDeleteRequest>({
+    profileId: requireId(request['profileId'], 'profileId'),
+    sessionId: requireId(request['sessionId'], 'sessionId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
   });
 }
 

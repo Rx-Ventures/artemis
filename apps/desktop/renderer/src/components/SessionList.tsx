@@ -113,11 +113,15 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
   ChevronDownIcon,
   FolderIcon,
   GitBranchIcon,
   InboxIcon,
+  PencilIcon,
   SearchIcon,
+  Trash2Icon,
 } from 'lucide-react';
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
@@ -125,19 +129,37 @@ import { useCapability } from '../hooks/useCapability';
 import type { WorkspaceNames } from '../lib/extensions';
 import { condenseTitle, formatRelative } from '../lib/format';
 import { lastSegment } from '../lib/paths';
-import { flattenGroups, groupSessionsByProject, type ListRow } from '../lib/sessionGroups';
+import {
+  flattenGroups,
+  groupSessionsByProject,
+  orderArchived,
+  partitionArchived,
+  sessionKey,
+  type ListRow,
+} from '../lib/sessionGroups';
 import { writeSessionDrag } from '../lib/sessionDrag';
 import {
   allPanes,
   refreshSessions,
+  renameSession,
   resumeSession,
+  toggleArchivedExpanded,
   toggleProjectCollapsed,
+  toggleSessionArchived,
   useApp,
 } from '../state/store';
 import { paneState } from '../state/pane';
 import { usePane } from '../state/paneContext';
 import { CapabilityButton } from './capability-button';
 import { ProfileSwatch } from './primitives';
+import { DeleteSessionDialog } from './DeleteSessionDialog';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -172,6 +194,8 @@ export function SessionList(): ReactElement {
   const error = useApp((s) => s.sessionsError);
   const profiles = useApp((s) => s.profiles);
   const collapsedProjects = useApp((s) => s.collapsedProjects);
+  const archivedSessions = useApp((s) => s.archivedSessions);
+  const archivedExpanded = useApp((s) => s.archivedExpanded);
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
 
@@ -190,10 +214,26 @@ export function SessionList(): ReactElement {
    * here instead would quietly fork all three.
    */
   const collapsed = useMemo(() => new Set(collapsedProjects), [collapsedProjects]);
-  const rows = useMemo(
-    () => flattenGroups(groupSessionsByProject(sessions, { query, profileLabel }), collapsed),
-    [sessions, query, profileLabel, collapsed],
-  );
+  const archivedKeys = useMemo(() => new Set(archivedSessions), [archivedSessions]);
+
+  /*
+   * Archived sessions are lifted out *before* grouping, so they leave their
+   * project rather than hiding inside it — a project whose every session is
+   * archived disappears from the list entirely, which is the point of putting
+   * them away. The archive is then filtered by the same query, so searching
+   * still finds what you put in it.
+   */
+  const rows = useMemo(() => {
+    const split = partitionArchived(sessions, archivedKeys);
+    return flattenGroups(
+      groupSessionsByProject(split.active, { query, profileLabel }),
+      collapsed,
+      {
+        sessions: orderArchived(split.archived, { query, profileLabel }),
+        collapsed: !archivedExpanded,
+      },
+    );
+  }, [sessions, query, profileLabel, collapsed, archivedKeys, archivedExpanded]);
 
   /** Unfiltered, so the count does not jump around while typing. */
   const total = sessions.length;
@@ -383,6 +423,51 @@ const GroupHeading = memo(function GroupHeading({
 });
 
 /**
+ * The Archived section's heading.
+ *
+ * Built to the same shape as {@link GroupHeading} so the two read as one list
+ * rather than as a list plus an appendix, but deliberately not the same
+ * component: it names no directory, marks no current project, and folds on its
+ * own preference rather than on `collapsedProjects` — see `archivedExpanded`
+ * for why the polarity differs.
+ */
+const ArchiveHeading = memo(function ArchiveHeading({
+  count,
+  collapsed,
+  top,
+}: {
+  readonly count: number;
+  readonly collapsed: boolean;
+  readonly top: number;
+}): ReactElement {
+  return (
+    <div style={{ top, height: HEADER_HEIGHT }} className="absolute inset-x-0 px-1.5">
+      <button
+        type="button"
+        onClick={() => toggleArchivedExpanded()}
+        aria-expanded={!collapsed}
+        title="Sessions you have put away. Still on disk, still resumable."
+        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+      >
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn(
+            'size-2.5 shrink-0 text-ink-faint transition-transform',
+            collapsed && '-rotate-90',
+          )}
+        />
+        <ArchiveIcon aria-hidden="true" className="size-2.5 shrink-0 text-ink-faint" />
+        <span className="min-w-0 truncate text-2xs font-medium tracking-tight text-ink-faint">
+          Archived
+        </span>
+        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
+        <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+      </button>
+    </div>
+  );
+});
+
+/**
  * What to call this project.
  *
  * Repository name first, then the directory's, then the last segment of `cwd`
@@ -446,7 +531,8 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
     let y = 0;
     for (let i = 0; i < rows.length; i += 1) {
       starts[i] = y;
-      y += rows[i]?.kind === 'header' ? HEADER_HEIGHT : ROW_HEIGHT;
+      const kind = rows[i]?.kind;
+      y += kind === 'header' || kind === 'archive-header' ? HEADER_HEIGHT : ROW_HEIGHT;
     }
     starts[rows.length] = y;
     return starts;
@@ -475,10 +561,18 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
       );
       continue;
     }
+    if (row.kind === 'archive-header') {
+      visible.push(
+        <ArchiveHeading key={row.key} count={row.count} collapsed={row.collapsed} top={top} />,
+      );
+      continue;
+    }
     // `row.key` is `sessionKey` — an id is unique inside the profile that owns
     // it, not globally, and two profiles surfacing the same id would collide
     // into one React key and silently drop a row.
-    visible.push(<Row key={row.key} top={top} session={row.session} />);
+    visible.push(
+      <Row key={row.key} top={top} session={row.session} archived={row.archived ?? false} />,
+    );
   }
 
   return (
@@ -521,9 +615,11 @@ function indexAt(offsets: readonly number[], y: number): number {
 const Row = memo(function Row({
   session,
   top,
+  archived,
 }: {
   readonly session: SessionSummary;
   readonly top: number;
+  readonly archived: boolean;
 }): ReactElement {
   /*
    * "Open in *a* column", not "open in the focused one".
@@ -536,28 +632,60 @@ const Row = memo(function Row({
    */
   const active = useApp((s) => allPanes(s).some((p) => paneState(p).resumeSessionId === session.id));
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
+  const renaming = useCapability('renameSession');
+  const deleting = useCapability('deleteSession');
 
   // A session whose profile is gone cannot be resumed at all — its transcript
   // lives in that profile's config directory. Say so on the row rather than
   // letting the click fail somewhere the user is not looking.
   const orphaned = profile === undefined;
 
+  /*
+   * Two pieces of row-local UI state, and both are deliberately here rather
+   * than in the store.
+   *
+   * `editing` is a text field that exists for a few seconds; `confirming` is a
+   * dialog answering one question about one row. Neither is a fact about the
+   * application — putting either in the store would make every row re-render
+   * when any row started an edit, on a list that is virtualised precisely to
+   * avoid that.
+   */
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  /*
+   * The rename field replaces the whole row, not just its first line.
+   *
+   * Overlaying an input on top of the button would leave a resume click live
+   * underneath it — the row's own click handler is what the user is trying to
+   * type inside. Swapping the row out means there is nothing behind the field
+   * to hit by accident, and the row comes back the moment the edit ends.
+   */
+  if (editing) {
+    return (
+      <div style={{ top, height: ROW_HEIGHT }} className="absolute inset-x-0 px-2 py-0.5">
+        <RenameField session={session} onDone={() => setEditing(false)} />
+      </div>
+    );
+  }
+
   return (
     <div
       style={{ top, height: ROW_HEIGHT }}
       className="absolute inset-x-0 px-2 py-0.5"
       /*
-       * The drag source for the split, and it is the wrapper rather than the
-       * button inside it.
+       * The drag source for the split, and it is the outermost wrapper rather
+       * than the button or the context-menu trigger inside it.
        *
        * A `<button draggable>` is a fight: the element already owns pointer
        * gestures for its own activation, and browsers differ on whether a drag
-       * that starts on one suppresses the click. Hanging the drag on the
-       * positioning wrapper the row already has costs nothing, drags the whole
-       * row, and leaves the button's click path exactly as it was.
+       * that starts on one suppresses the click. The trigger is no better — it
+       * owns the right-button gesture. Hanging the drag on the positioning
+       * wrapper the row already has costs nothing, drags the whole row, and
+       * leaves both the click and the context menu exactly as they were.
        *
        * An orphaned session is not draggable, for the same reason its button is
-       * disabled: there is nowhere it could be opened.
+       * disabled and its menu items are: there is nowhere it could be opened.
        */
       draggable={!orphaned}
       onDragStart={(event) => {
@@ -567,10 +695,10 @@ const Row = memo(function Row({
         }
         writeSessionDrag(event.dataTransfer, session);
       }}
-      title={
-        orphaned ? undefined : 'Click to open here, or drag onto a pane to choose where'
-      }
     >
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="h-full w-full">
       <CapabilityButton
         capability="resumeSession"
         variant="ghost"
@@ -593,6 +721,9 @@ const Row = memo(function Row({
         className={cn(
           'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
           active && 'border-lunar/70 bg-raised/60',
+          // Put away, and it should look it — but still legible, because these
+          // rows are only on screen when the user went looking for them.
+          archived && 'opacity-60',
         )}
       >
         {/* `shrink-0` on both lines: see note 2 in the file header. Without it
@@ -656,9 +787,136 @@ const Row = memo(function Row({
           </span>
         </span>
       </CapabilityButton>
+          </div>
+        </ContextMenuTrigger>
+
+        <ContextMenuContent className="w-44">
+          {/*
+           * Rename and Delete are capability-gated; Archive is not, and that
+           * asymmetry is the design. The first two write to the provider's own
+           * store, so a provider that cannot do them must not offer them.
+           * Archiving is Artemis's own bookkeeping and works against every
+           * provider, including one whose CLI cannot even list its history.
+           */}
+          <ContextMenuItem
+            disabled={!renaming.supported}
+            title={renaming.supported ? undefined : renaming.reason}
+            onSelect={() => setEditing(true)}
+          >
+            <PencilIcon aria-hidden="true" />
+            Rename
+          </ContextMenuItem>
+
+          <ContextMenuItem onSelect={() => toggleSessionArchived(session)}>
+            {archived ? (
+              <>
+                <ArchiveRestoreIcon aria-hidden="true" />
+                Unarchive
+              </>
+            ) : (
+              <>
+                <ArchiveIcon aria-hidden="true" />
+                Archive
+              </>
+            )}
+          </ContextMenuItem>
+
+          <ContextMenuSeparator />
+
+          <ContextMenuItem
+            variant="destructive"
+            disabled={!deleting.supported}
+            title={deleting.supported ? undefined : deleting.reason}
+            /*
+             * Opening the dialog is deferred out of the `onSelect` tick.
+             *
+             * Radix restores focus to the trigger as the menu unmounts, and a
+             * dialog mounted synchronously inside that same tick fights it for
+             * focus — the dialog opens without it, so Escape and the default
+             * button do nothing until the user clicks. Letting the menu finish
+             * closing first is the documented way out.
+             */
+            onSelect={() => setTimeout(() => setConfirming(true), 0)}
+          >
+            <Trash2Icon aria-hidden="true" />
+            Delete…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
+      {/*
+       * Mounted only while it is open, so a virtualised list is not carrying a
+       * dialog per row. `DeleteSessionDialog` asks the main process whether the
+       * session is still running as it opens, which is a question worth asking
+       * once per confirmation rather than once per render.
+       */}
+      {confirming ? (
+        <DeleteSessionDialog session={session} onClose={() => setConfirming(false)} />
+      ) : null}
     </div>
   );
 });
+
+/**
+ * The rename field, in place of the row.
+ *
+ * Commits on Enter and on blur; abandons on Escape. Blur-commits rather than
+ * blur-cancels because the field is opened from a menu and dismissed by
+ * clicking away, and the reading of "click away" that loses typing is the one
+ * people complain about — every other list in this app that renames in place
+ * behaves the same way.
+ */
+function RenameField({
+  session,
+  onDone,
+}: {
+  readonly session: SessionSummary;
+  readonly onDone: () => void;
+}): ReactElement {
+  const [value, setValue] = useState(session.title);
+  /*
+   * Guards the double-commit. Enter commits and then blurs, and the blur
+   * handler would commit the same edit a second time — harmless for the store,
+   * but it is a second IPC write and a second chance to fail.
+   */
+  const done = useRef(false);
+
+  const finish = useCallback(
+    (commit: boolean): void => {
+      if (done.current) return;
+      done.current = true;
+      if (commit) void renameSession(session, value);
+      onDone();
+    },
+    [session, value, onDone],
+  );
+
+  return (
+    <Input
+      autoFocus
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => finish(true)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finish(true);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(false);
+        }
+        // Arrow keys and Home/End belong to the field while it is open. Without
+        // this the sidebar's own key handling would move the selection out from
+        // under a cursor the user is using to edit.
+        event.stopPropagation();
+      }}
+      onFocus={(event) => event.target.select()}
+      aria-label={`Rename session: ${session.title}`}
+      spellCheck={false}
+      className="h-full w-full rounded-lg px-2 text-xs md:text-xs"
+    />
+  );
+}
 
 /* -------------------------------------------------------------------------- */
 /* States                                                                     */

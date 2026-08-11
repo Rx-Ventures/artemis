@@ -45,6 +45,7 @@
 import { isAbsolute } from 'node:path';
 
 import {
+  deleteSession as sdkDeleteSession,
   getSessionMessages as sdkGetSessionMessages,
   listSessions as sdkListSessions,
   query,
@@ -153,6 +154,7 @@ import type {
   ResolvedRunInput,
   Run,
   SendResult,
+  SessionDeleteQuery,
   SessionListPage,
   SessionListQuery,
   SessionMessagesQuery,
@@ -181,6 +183,9 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
   forkSession: true, // `Options.forkSession`
   listSessions: true, // the SDK's `listSessions({ dir })`
   subagents: true, // `parent_tool_use_id` / `agentID`
+  renameSession: true, // the SDK's `renameSession(id, title)`
+  deleteSession: true, // the SDK's `deleteSession(id)` — unlinks the transcript
+
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true, // `Options.resume`
   usageReporting: true, // `result.usage` / `result.modelUsage`
@@ -1036,6 +1041,40 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         );
       } catch (error) {
         throw adapterError('unknown', `Could not rename the Claude session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
+    },
+
+    /**
+     * Delete a session's transcript from disk, along with its subagent
+     * transcripts. There is no undo.
+     *
+     * The counterpart to {@link setSessionTitle} rather than a sibling of it:
+     * both are writes to the same store, reached by the same config-directory
+     * swap and narrowed by the same `dir`.
+     *
+     * Returns false rather than throwing when the transcript is already gone.
+     * The SDK throws for a missing session, and that case is routine here in a
+     * way it is not for a read: a second click, or a transcript removed in a
+     * terminal since the sidebar last listed it, both arrive as "not found",
+     * and the user's intent — that this session stop existing — is already
+     * satisfied. Every other failure still throws; only absence is forgiven,
+     * which is why this inspects the error rather than swallowing all of them.
+     */
+    async deleteSession(input: SessionDeleteQuery): Promise<boolean> {
+      const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
+
+      try {
+        await withClaudeConfigDir(configDir, () =>
+          sdkDeleteSession(input.sessionId, {
+            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+          }),
+        );
+        return true;
+      } catch (error) {
+        if (isMissingSession(error)) return false;
+        throw adapterError('unknown', `Could not delete that session: ${describe(error)}`, {
           cause: error,
         });
       }
@@ -2078,6 +2117,28 @@ async function settleWithin(promise: Promise<unknown>, ms: number): Promise<void
 /** A short, scrubbed description of anything thrown. For diagnostics only. */
 function describe(error: unknown): string {
   return toAgentError(error).message;
+}
+
+/**
+ * Does this failure mean "there is no such session" rather than "the delete
+ * went wrong"?
+ *
+ * Only `deleteSession` asks, and only so that deleting something already gone
+ * can succeed quietly — see the note there. The test is deliberately narrow in
+ * the opposite direction from {@link looksLikeLaunchFailure}: a false positive
+ * here reports a *successful* deletion for a transcript that is in fact still
+ * on disk, which is the one outcome this feature must never produce. So a
+ * permission error, a locked file or a malformed store all fall through to the
+ * caller and surface as failures.
+ *
+ * `ENOENT` is the honest signal and is matched first; the SDK's own wording is
+ * matched alongside it because the SDK raises a plain `Error` for a session it
+ * cannot locate, with no errno to key on.
+ */
+function isMissingSession(error: unknown): boolean {
+  const code: unknown = (error as { readonly code?: unknown } | null)?.code;
+  if (code === 'ENOENT') return true;
+  return /\bENOENT\b|session not found|no such session|not found/i.test(describe(error));
 }
 
 /**

@@ -75,6 +75,7 @@ import {
 } from '../lib/extensions';
 import { isAbsolutePath } from '../lib/paths';
 import { newId } from '../lib/id';
+import { sessionKey } from '../lib/sessionGroups';
 import type { TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
@@ -295,6 +296,37 @@ export interface AppState {
    * gives nothing back at this size.
    */
   readonly collapsedProjects: readonly string[];
+  /**
+   * Sessions the user has put away — hidden from their project, gathered into
+   * the sidebar's Archived section instead.
+   *
+   * Entries are `sessionKey` values (`profileId:id`), not bare session ids. An
+   * id is only unique inside the profile that owns it, so archiving by id would
+   * let one profile's session hide another profile's — rare, but silent and
+   * untraceable when it happened.
+   *
+   * **This is Artemis's own bookkeeping, and deliberately so.** Archiving is
+   * the one operation in this menu that does not touch the provider's store:
+   * the transcript is untouched, still resumable, and still listed by the
+   * provider's own CLI. That is the whole distinction from delete — one hides a
+   * row, the other destroys a file — and keeping the two in different places
+   * is what makes it impossible to implement one as the other by accident.
+   *
+   * A key here for a session that no longer exists is harmless and is swept on
+   * delete; nothing resolves these keys back into sessions except by filtering
+   * a list that only contains real ones.
+   */
+  readonly archivedSessions: readonly string[];
+  /**
+   * Whether the sidebar's Archived section is open.
+   *
+   * Stored with the opposite polarity to {@link collapsedProjects}, and
+   * deliberately: a project nobody has touched should be open, whereas the
+   * archive should be shut until asked for. Both defaults fall out of "absent
+   * from the preferences file", so neither needs seeding — and expressing this
+   * as another entry in `collapsedProjects` would have given it the wrong one.
+   */
+  readonly archivedExpanded: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -445,6 +477,8 @@ interface Prefs {
   sidebarCollapsed?: boolean;
   sidebarWidth?: number;
   collapsedProjects?: readonly string[];
+  archivedSessions?: readonly string[];
+  archivedExpanded?: boolean;
   settingsSection?: SettingsSection;
   quickModelIds?: readonly string[];
   fastMode?: boolean;
@@ -553,6 +587,11 @@ function loadPrefs(): Prefs {
     // strings, so a non-string left here by a hand edit would simply never
     // match and fold nothing — a silent no-op is worse than dropping the entry.
     collapsedProjects: stringList(raw['collapsedProjects']),
+    // Same treatment, same reason: these are compared against session keys, so
+    // a non-string surviving out of the blob would never match and would
+    // quietly archive nothing.
+    archivedSessions: stringList(raw['archivedSessions']),
+    archivedExpanded: boolOrUndefined(raw['archivedExpanded']),
   };
 }
 
@@ -578,6 +617,8 @@ function savePrefs(): void {
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
     collapsedProjects: s.collapsedProjects,
+    archivedSessions: s.archivedSessions,
+    archivedExpanded: s.archivedExpanded,
     settingsSection: s.settingsSection,
     quickModelIds: s.quickModelIds,
     conversationWidth: s.conversationWidth,
@@ -668,6 +709,8 @@ export const useApp = create<AppState>(() => ({
   sidebarCollapsed: prefs.sidebarCollapsed ?? false,
   sidebarWidth: clampSidebarWidth(prefs.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH),
   collapsedProjects: prefs.collapsedProjects ?? [],
+  archivedSessions: prefs.archivedSessions ?? [],
+  archivedExpanded: prefs.archivedExpanded ?? false,
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -1888,6 +1931,12 @@ export function toggleProjectCollapsed(cwd: string): void {
   savePrefs();
 }
 
+/** Open or shut the sidebar's Archived section. */
+export function toggleArchivedExpanded(): void {
+  useApp.setState((s) => ({ archivedExpanded: !s.archivedExpanded }));
+  savePrefs();
+}
+
 export function setPermissionMode(mode: PermissionMode, pane: Pane = focusedPane()): void {
   setPaneState(pane, { permissionMode: mode });
   savePrefs();
@@ -2203,6 +2252,163 @@ export async function refreshSessions(): Promise<void> {
       void refreshSessions();
     }
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Session mutations                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Retitle a session, optimistically.
+ *
+ * The row is rewritten before the call goes out, because a rename is the one
+ * edit here whose result the user is staring at: waiting a round trip to
+ * redraw the label they just typed reads as the app not having heard them. The
+ * write is small and the failure path restores exactly what was there, so the
+ * cost of being wrong is one flicker and a banner that says why.
+ *
+ * The *stored* title is what lands in the end, not the typed one — the main
+ * process trims and caps, and it answers with what it wrote. Rendering the
+ * request instead would leave the sidebar disagreeing with the transcript over
+ * trailing whitespace nobody can see.
+ */
+export async function renameSession(session: SessionSummary, title: string): Promise<boolean> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return false;
+
+  const next = title.trim();
+  // Nothing to do, and nothing to report: the field was closed unchanged, which
+  // is how most rename dialogs end.
+  if (next.length === 0 || next === session.title) return false;
+
+  const key = sessionKey(session);
+  const previous = session.title;
+  const apply = (value: string, custom: boolean): void => {
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((entry) =>
+        sessionKey(entry) === key ? { ...entry, title: value, titleIsCustom: custom } : entry,
+      ),
+    }));
+  };
+
+  apply(next, true);
+
+  const result = await call(() =>
+    bridge.sessions.rename({
+      profileId: session.profileId,
+      sessionId: session.id,
+      title: next,
+      ...(session.cwd.length > 0 ? { cwd: session.cwd } : {}),
+    }),
+  );
+
+  if (!result.ok) {
+    apply(previous, session.titleIsCustom ?? false);
+    reportFailure('Could not rename that session', result.error);
+    return false;
+  }
+
+  // The stored title, which may differ from what was sent.
+  apply(result.value.title, true);
+  return true;
+}
+
+/**
+ * Put a session away, or take it back out.
+ *
+ * Purely local — see {@link AppState.archivedSessions}. No IPC, nothing on
+ * disk changes, and the session stays resumable the whole time; the row simply
+ * moves from its project into the Archived section.
+ */
+export function toggleSessionArchived(session: SessionSummary): void {
+  const key = sessionKey(session);
+  useApp.setState((s) => ({
+    archivedSessions: s.archivedSessions.includes(key)
+      ? s.archivedSessions.filter((entry) => entry !== key)
+      : [...s.archivedSessions, key],
+  }));
+  savePrefs();
+}
+
+/**
+ * Destroy a session's transcript. There is no undo.
+ *
+ * Not optimistic, unlike {@link renameSession}, and the asymmetry is the point:
+ * a rename that fails costs a flicker, whereas a delete that fails after the
+ * row has already gone tells the user their data is destroyed when it is still
+ * there. So the row survives until the main process confirms the file did not.
+ *
+ * Callers are responsible for having asked the user first — see
+ * `DeleteSessionDialog`. This does not confirm anything.
+ */
+export async function deleteSession(session: SessionSummary): Promise<boolean> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return false;
+
+  const result = await call(() =>
+    bridge.sessions.delete({
+      profileId: session.profileId,
+      sessionId: session.id,
+      ...(session.cwd.length > 0 ? { cwd: session.cwd } : {}),
+    }),
+  );
+
+  if (!result.ok) {
+    reportFailure('Could not delete that session', result.error);
+    return false;
+  }
+
+  const key = sessionKey(session);
+  useApp.setState((s) => ({
+    sessions: s.sessions.filter((entry) => sessionKey(entry) !== key),
+    // Swept together with the row. An archive key for a session that no longer
+    // exists is inert, but it would accumulate in the persisted preferences
+    // forever, and a session id that came round again would arrive pre-hidden.
+    archivedSessions: s.archivedSessions.filter((entry) => entry !== key),
+  }));
+  // A deleted session cannot be resumed, and leaving it selected would aim the
+  // next prompt at a transcript that is gone.
+  //
+  // Every pane, not just the focused one: the same session can be open in more
+  // than one column — the sidebar row marks it active while it is showing
+  // anywhere — and clearing only the pane the user happened to right-click from
+  // would leave the others pointed at a file that no longer exists.
+  for (const pane of allPanes()) {
+    setPaneState(pane, (p) =>
+      p.resumeSessionId === session.id ? { resumeSessionId: null } : {},
+    );
+  }
+  savePrefs();
+
+  // `deleted: false` means it was already gone — the user's intent either way,
+  // so it is not reported. See the protocol's `SessionsDeleteResponse`.
+  return true;
+}
+
+/**
+ * Is this session attached to a run that is still going — in any window?
+ *
+ * Asks the main process rather than reading local state, and that is the whole
+ * reason this is async. The store's own `run` is only *this* window's; the run
+ * registry holds every live run in the app, which is what "still running
+ * somewhere" has to mean if the warning is to be trusted. A second window
+ * working in the same session is exactly the case where deleting it silently
+ * would be worst.
+ *
+ * Answers `false` when the question cannot be asked — no bridge, or a failed
+ * call. A failure here must not block a delete the user asked for: the
+ * confirmation they get is then the ordinary one, which is the same dialog
+ * they would have seen if nothing were running.
+ */
+export async function isSessionRunning(sessionId: SessionId): Promise<boolean> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return false;
+
+  // No `cwd` filter: a run in another project can still hold this session.
+  const result = await call(() => bridge.runs.list({}));
+  if (!result.ok) return false;
+
+  return result.value.runs.some((run) => run.sessionId === sessionId && run.status !== 'ended');
 }
 
 /**

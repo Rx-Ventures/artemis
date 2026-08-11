@@ -75,6 +75,8 @@ const ALL: Capabilities = {
   forkSession: true,
   listSessions: true,
   subagents: true,
+  renameSession: true,
+  deleteSession: true,
   permissionModes: ['default', 'plan'],
   resumeSession: true,
   usageReporting: true,

@@ -91,6 +91,32 @@ export interface Capabilities {
   readonly subagents: boolean;
 
   /**
+   * A stored session can be given a user-chosen title, which the provider
+   * persists alongside the transcript — the adapter's `setSessionTitle`.
+   *
+   * Separate from {@link listSessions} because reading history and writing to
+   * it are different powers: an adapter that can enumerate transcripts it did
+   * not write has no obligation to be able to edit them.
+   *
+   * Note that `setSessionTitle` is *also* reached without consulting this flag,
+   * by the automatic naming of a session from its first message. That is not an
+   * inconsistency: a flag exists so the UI can degrade before calling, and
+   * automatic naming has nothing to degrade — it renders no control and simply
+   * does not happen. This flag is for the rename *menu item*, which does.
+   */
+  readonly renameSession: boolean;
+
+  /**
+   * A stored session can be destroyed — the transcript removed from disk, not
+   * hidden.
+   *
+   * The UI treats this as irreversible and confirms before calling it, so an
+   * adapter must not turn this on for a soft delete: something that claims to
+   * delete and does not is worse than an absent menu item.
+   */
+  readonly deleteSession: boolean;
+
+  /**
    * Permission modes this provider accepts in {@link RunInput.permissionMode}
    * and (if `midRunSteering`) mid-run. Empty means the concept does not apply.
    *
@@ -173,6 +199,8 @@ export const NO_CAPABILITIES: Capabilities = {
   forkSession: false,
   listSessions: false,
   subagents: false,
+  renameSession: false,
+  deleteSession: false,
   permissionModes: [],
   resumeSession: false,
   usageReporting: false,

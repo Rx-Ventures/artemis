@@ -90,6 +90,17 @@ import { createLogger } from './log.js';
 
 const log = createLogger('engine');
 
+/**
+ * Longest session title Artemis will store.
+ *
+ * A cap rather than a rejection: someone pasting a paragraph into the rename
+ * field wants a name, and truncating gives them one, whereas an error over a
+ * character count they cannot see is a puzzle. Generous enough that no title a
+ * person would type reaches it, small enough that the value stays a *label* —
+ * it is appended to the transcript and read back into a one-line row.
+ */
+const MAX_SESSION_TITLE = 200;
+
 /* -------------------------------------------------------------------------- */
 /* The interface the IPC layer calls                                          */
 /* -------------------------------------------------------------------------- */
@@ -230,6 +241,31 @@ export interface ArtemisEngine {
     readonly limit?: number;
     readonly offset?: number;
   }): Promise<{ readonly sessions: readonly SessionSummary[]; readonly hasMore: boolean }>;
+
+  /**
+   * Give a stored session a user-chosen title, in the provider's own store.
+   *
+   * Resolves to the title as written, so the caller renders what was stored
+   * rather than what it hoped would be.
+   */
+  renameSession(options: {
+    readonly profileId: ProfileId;
+    readonly sessionId: SessionId;
+    readonly cwd?: string;
+    readonly title: string;
+  }): Promise<{ readonly title: string }>;
+
+  /**
+   * Destroy a stored session's transcript. Irreversible.
+   *
+   * Resolves `false` when there was nothing left to delete, which is a success
+   * — see the protocol's `SessionsDeleteResponse`.
+   */
+  deleteSession(options: {
+    readonly profileId: ProfileId;
+    readonly sessionId: SessionId;
+    readonly cwd?: string;
+  }): Promise<{ readonly deleted: boolean }>;
 
   /**
    * Subscribe to every run's events.
@@ -612,6 +648,68 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         ...(query.limit === undefined ? {} : { limit: query.limit }),
         ...(query.offset === undefined ? {} : { offset: query.offset }),
       });
+    },
+
+    renameSession: async (query) => {
+      const profile = await profiles.require(query.profileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter === undefined) {
+        throw new EngineUnavailableError(
+          `No adapter is registered for provider "${profile.providerId}".`,
+        );
+      }
+      /*
+       * The same adapter method `SessionNamer` uses to store a generated name.
+       *
+       * Deliberately not a second one. A user-typed title and a model-written
+       * one are the same fact about a session — its own name, as opposed to a
+       * summary the provider derived — and they belong in the same field. Two
+       * write paths into one store would eventually disagree about which of
+       * them `titleIsCustom` describes.
+       */
+      if (adapter.setSessionTitle === undefined) {
+        throw new EngineUnavailableError(`${adapter.label} cannot rename a stored session.`);
+      }
+
+      /*
+       * Normalised here rather than at the edge, because the caller is told
+       * what was *stored* and that answer has to be produced by whoever does
+       * the storing. Trimming at the IPC boundary and returning the untrimmed
+       * string would leave the sidebar showing a title with whitespace the
+       * transcript does not have.
+       */
+      const title = query.title.trim().slice(0, MAX_SESSION_TITLE);
+      if (title.length === 0) {
+        throw new EngineUnavailableError('A session title cannot be empty.');
+      }
+
+      await adapter.setSessionTitle({
+        sessionId: query.sessionId,
+        title,
+        env: await storeEnvFor(query.profileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+      return { title };
+    },
+
+    deleteSession: async (query) => {
+      const profile = await profiles.require(query.profileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter === undefined) {
+        throw new EngineUnavailableError(
+          `No adapter is registered for provider "${profile.providerId}".`,
+        );
+      }
+      if (adapter.deleteSession === undefined) {
+        throw new EngineUnavailableError(`${adapter.label} cannot delete a stored session.`);
+      }
+
+      const deleted = await adapter.deleteSession({
+        sessionId: query.sessionId,
+        env: await storeEnvFor(query.profileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+      return { deleted };
     },
 
     listSessions: async (query) => {
