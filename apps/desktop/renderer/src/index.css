@@ -135,20 +135,24 @@
   --cyan: oklch(76% 0.1 245); /* tools / machine activity         */
   --sage: oklch(75% 0.05 195); /* thinking                         */
   --mint: oklch(80% 0.12 155); /* success                          */
-  /* A muted gold, and deliberately quieter than the accent.
+  /* Warning is the accent, deepened — not a second warm hue.
 
-     This started as a true yellow at hue 100, chosen purely for hue separation
-     from the accent. That was the wrong thing to optimise: warning is used more
-     often in this app than the accent is — missing credential, no working
-     directory, unsupported setting, parked permission — so a warning brighter
-     and more saturated than `--ember` (it was +6 lightness and +0.03 chroma)
-     made a half-configured app read as yellow rather than orange.
+     This went through two wrong answers before this one. First a true yellow at
+     hue 100, chosen purely for hue separation from the accent; that made a
+     half-configured app read as yellow, because warning is used more often here
+     than the accent is (missing credential, no working directory, unsupported
+     setting, parked permission). Then a muted gold at hue 90, quieter but still
+     visibly a *different* warm colour — so the app had two of them, which is one
+     more than a palette with a single accent is allowed.
 
-     So it is now dimmer and less saturated than the accent, which is what makes
-     it recede behind it, and only then as far from it in hue as that allows:
-     40° to `--ember`, 80° to `--signal`. Warning must be *noticeable*, not
-     loud; the accent is the colour this app is supposed to look like. */
-  --amber: oklch(78% 0.085 90); /* warning                          */
+     So warning now sits in the accent's own hue family and is separated by
+     depth instead: darker and more saturated than `--ember`, which reads as
+     "careful" against the accent's "act" without introducing a colour. The
+     trade is real and deliberate — warning and the primary action are no longer
+     distinguishable by hue alone, so anywhere the two could be confused should
+     lean on the icon and the wording, which is where that distinction belongs
+     anyway. `--signal` stays a clearly separate rose for anything that failed. */
+  --amber: oklch(70% 0.135 55); /* warning                          */
   /* Rose-red rather than the orange-red an error usually gets. An orange-red
      would sit ~25° from the accent and blur against it exactly where the two
      appear together; this keeps 45° and still reads unmistakably as "stop". */

@@ -124,14 +124,38 @@ function ageHint(fetchedAt: number, now: number): string {
   return `${Math.round(minutes / 60)}h ago`;
 }
 
-export function PlanUsageMeter(): ReactElement | null {
-  const profileId = useApp((s) => s.activeProfileId);
-  const supported = useApp((s) => activeCapabilities(s).planUsageReporting);
-  const providerLabel = useApp(activeProviderLabel);
-
-  const [open, setOpen] = useState(false);
-  const [usage, setUsage] = useState<PlanUsage | null>(null);
+/**
+ * One profile's plan usage, cached-then-fresh.
+ *
+ * A hook rather than a prop drilled down from one owner, because two unrelated
+ * places ask this question about two different profiles: the status bar asks
+ * about the *active* one, and each card on the profiles screen asks about its
+ * own. Keeping the read here means both get the same staleness rules and the
+ * same guard against a late response landing on the wrong account.
+ *
+ * `follow` is the "did the question change under us" test. The status bar's
+ * profile can change while a read is in flight — the user switches accounts —
+ * and attributing one account's limits to another is a worse answer than none.
+ * A card's profile cannot change, so it passes nothing.
+ */
+function usePlanUsage(
+  profileId: string | null,
+  follow?: () => string | null,
+): {
+  readonly usage: PlanUsage | null;
+  readonly refreshing: boolean;
+  readonly load: (mode: 'cached' | 'refresh') => Promise<void>;
+} {
+  /*
+    The reading is stored *with* the profile it describes, and read back only
+    on a match, rather than being cleared by an effect when `profileId`
+    changes. An effect clears one render too late, and that render is the one
+    that paints the previous account's percentage under the new account's
+    name — the exact mislabelling the in-flight guard below exists to prevent.
+  */
+  const [held, setHeld] = useState<{ readonly of: string; readonly usage: PlanUsage } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const usage = held !== null && held.of === profileId ? held.usage : null;
 
   const load = useCallback(
     async (mode: 'cached' | 'refresh') => {
@@ -143,18 +167,33 @@ export function PlanUsageMeter(): ReactElement | null {
       const res = await call(() => bridge.usagePlan[mode]({ profileId }));
       if (mode === 'refresh') setRefreshing(false);
 
-      // The active profile can change while a read is in flight; showing one
-      // account's limits under another's label would be worse than showing none.
-      if (useApp.getState().activeProfileId !== profileId) return;
-      if (res.ok && res.value.usage !== null) setUsage(res.value.usage);
+      if (follow && follow() !== profileId) return;
+      if (res.ok && res.value.usage !== null) setHeld({ of: profileId, usage: res.value.usage });
     },
+    // `follow` is read at call time, not closed over as a dependency: the
+    // status bar passes an inline arrow, so depending on it would rebuild
+    // `load` every render and re-fire the effect below in a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [profileId],
+  );
+
+  return { usage, refreshing, load };
+}
+
+export function PlanUsageMeter(): ReactElement | null {
+  const profileId = useApp((s) => s.activeProfileId);
+  const supported = useApp((s) => activeCapabilities(s).planUsageReporting);
+  const providerLabel = useApp(activeProviderLabel);
+
+  const [open, setOpen] = useState(false);
+  const { usage, refreshing, load } = usePlanUsage(
+    profileId,
+    () => useApp.getState().activeProfileId,
   );
 
   // Paint from cache as soon as the trigger exists, so the icon can already
   // carry a colour before it is ever clicked.
   useEffect(() => {
-    setUsage(null);
     void load('cached');
   }, [load]);
 
@@ -197,6 +236,58 @@ export function PlanUsageMeter(): ReactElement | null {
         <PlanUsageBody usage={usage} refreshing={refreshing} now={now} onRefresh={() => void load('refresh')} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The same limits, on a profile card.
+ *
+ * No context-window row here, unlike the popover: a context window belongs to
+ * the live run, and the profiles screen is about accounts — three cards each
+ * claiming the same window would be three copies of one number that describes
+ * none of them.
+ *
+ * Reads cache only. The popover refreshes because opening it is a deliberate
+ * "tell me now"; this screen renders every profile at once, and refreshing all
+ * of them on mount would spawn a provider subprocess per account for a screen
+ * the user may have opened to rename something. The refresh control on each
+ * card is how a fresh reading is asked for.
+ */
+export function ProfilePlanUsage({
+  profileId,
+  supported,
+  providerLabel,
+}: {
+  readonly profileId: string;
+  readonly supported: boolean;
+  readonly providerLabel: string;
+}): ReactElement | null {
+  const { usage, refreshing, load } = usePlanUsage(profileId);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    void load('cached');
+  }, [load]);
+
+  if (!supported) {
+    return (
+      <p className="text-2xs text-ink-faint">{providerLabel} does not report plan usage.</p>
+    );
+  }
+
+  return (
+    <PlanWindows
+      usage={usage}
+      refreshing={refreshing}
+      now={now}
+      onRefresh={() => {
+        // Stamp the clock at the moment of the request, so "just now" is
+        // measured against a fresh read rather than against whenever this card
+        // first mounted.
+        setNow(Date.now());
+        void load('refresh');
+      }}
+    />
   );
 }
 

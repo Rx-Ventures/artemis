@@ -459,6 +459,10 @@ export function shortModelName(info: ModelInfo): string {
       // Dated snapshot suffix — `claude-haiku-4-5-20251001`. It is not part of
       // the version a human says out loud.
       .replace(/-\d{8}$/, '')
+      // Variant suffix — `claude-opus-5[1m]`. It marks the 1M-context variant,
+      // which is the only context every current model has, so it distinguishes
+      // nothing and reads as noise on a row this narrow.
+      .replace(/\[[^\]]*\]$/, '')
       .split('-');
     const [family, ...version] = parts;
     if (family !== undefined && family.length > 0) {

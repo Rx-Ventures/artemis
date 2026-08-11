@@ -549,7 +549,19 @@ function ModelSegment(): ReactElement {
  */
 function ModelRow({ model }: { readonly model: ProviderModelOption }): ReactElement {
   return (
-    <DropdownMenuRadioItem value={model.id} className="py-1 pr-2 pl-7 text-xs">
+    /*
+     * Name flush left, tick on the right.
+     *
+     * shadcn's radio item reserves the left gutter for its indicator, which
+     * indented every model name past the labels of the rows beneath it — the
+     * list read as if it belonged to a different menu. The indicator is moved
+     * to the trailing edge instead, so the names start on the same left margin
+     * as "Thinking" and "Fast mode" and the whole popover has one text column.
+     */
+    <DropdownMenuRadioItem
+      value={model.id}
+      className="py-1 pr-7 pl-2 text-xs [&>span:first-child]:right-2 [&>span:first-child]:left-auto"
+    >
       <span className="min-w-0 truncate text-ink">{model.label}</span>
     </DropdownMenuRadioItem>
   );
@@ -568,7 +580,7 @@ function ShapeRow({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <div className="flex h-6 items-center gap-2 px-2">
+    <div className="flex h-6 items-center gap-2 pr-7 pl-2">
       <span className="shrink-0 text-2xs text-ink-faint">{label}</span>
       <span className="ml-auto flex min-w-0 items-center">{children}</span>
     </div>
@@ -591,7 +603,9 @@ function ThinkingRow(): ReactElement | null {
 
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger className="h-6 gap-2 px-2 text-2xs">
+      {/* `pr-7` matches the gutter the model rows reserve for their tick, so
+          the values in this column right-align with it rather than floating. */}
+      <DropdownMenuSubTrigger className="h-6 gap-2 py-0 pr-7 pl-2 text-2xs">
         <span className="text-ink-faint">Thinking</span>
         <span className="ml-auto text-ink">{label}</span>
       </DropdownMenuSubTrigger>
@@ -817,19 +831,29 @@ function LocationSegment(): ReactElement {
             ) : null}
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top" align="end" className="max-w-md">
+        {/*
+          `flex-col items-start`, because `TooltipContent` is a flex *row* with
+          centred items — it is built for one line of text next to a `Kbd`. Two
+          children in it become two columns, which is how this tooltip spent a
+          while rendering the path and the branch note side by side, each half
+          the width and neither reading as a sentence.
+
+          The note is one clause now rather than three. The reason a hover lands
+          here is the path, which the chip truncates; the branch caveat is a
+          footnote and was set at the size of the answer.
+        */}
+        <TooltipContent side="top" align="end" className="max-w-sm flex-col items-start gap-1">
           {unset ? (
             <span>
               No working directory set — the agent needs an absolute path to work in. Click to
               choose one.
             </span>
           ) : (
-            <span className="font-mono">{cwd}</span>
+            <span className="font-mono break-all">{cwd}</span>
           )}
           {branch ? (
-            <span className="mt-1 block text-ink-faint">
-              Branch “{branch}” is the last one recorded in this directory’s session history — Apollo
-              cannot read the working tree, so it may be out of date.
+            <span className="text-ink-faint">
+              Branch “{branch}” is the last one recorded here, so it may be stale.
             </span>
           ) : null}
         </TooltipContent>
