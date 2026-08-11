@@ -31,6 +31,7 @@ import type {
   SessionSummary,
   Unsubscribe,
 } from '@rx-apollo/protocol';
+import { normalizeProfileColor } from '@rx-apollo/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -203,6 +204,10 @@ export function createMockBridge(): ApolloBridge {
       // An existing directory the user pointed at, which is the case that
       // motivated letting `configDir` be a full path at all.
       configDir: '/Users/demo/.claude',
+      // One profile with a colour and one without, because "no colour" is the
+      // default state and the layout has to survive a swatch appearing on some
+      // rows and not others.
+      color: '#7c8cff',
     },
     {
       id: 'demo-work',
@@ -495,6 +500,11 @@ export function createMockBridge(): ApolloBridge {
           label: draft.label,
           providerId: draft.providerId,
           configDir: draft.configDir,
+          // Normalised here as the real store does, so `#ABC` typed into the
+          // form comes back as `#aabbcc` in dev too — the colour input only
+          // accepts the long lowercase form, and a mock that skipped this
+          // would show a black swatch the real app does not.
+          color: normalizeProfileColor(draft.color) ?? undefined,
         };
         profiles = [...profiles, profile];
         // A newly created profile is signed out, and the mock has to say so or
@@ -513,6 +523,11 @@ export function createMockBridge(): ApolloBridge {
           ...existing,
           ...(patch.label === undefined ? {} : { label: patch.label }),
           ...(patch.configDir === undefined ? {} : { configDir: patch.configDir }),
+          // An empty string clears the colour — see `ProfilePatch.color`. That
+          // is the one patch value here that must not be treated as "unset".
+          ...(patch.color === undefined
+            ? {}
+            : { color: normalizeProfileColor(patch.color) ?? undefined }),
         };
         profiles = profiles.map((p) => (p.id === id ? updated : p));
         return ok({ profile: updated });
@@ -663,6 +678,27 @@ export function createMockBridge(): ApolloBridge {
        * would make the dev bridge unpredictable.
        */
       pickDirectory: async () => ok({ path: '/Users/dev/code/api-gateway' }),
+
+      /*
+       * No filesystem to walk either, so the repository is faked from the path
+       * — but all three shapes the header has to render are reachable in dev,
+       * which a mock that always answered "this directory is the repo" would
+       * not give you:
+       *
+       *  - `~/scratch/…`  no repository at all, so the folder name is the label.
+       *  - `…/monorepo/…` a repository several levels *above* the cwd, which is
+       *                   the case the whole channel exists for.
+       *  - everything else — the ordinary clone, cwd at the root.
+       */
+      describe: async ({ path }) => {
+        const segments = path.split('/').filter(Boolean);
+        const name = segments.at(-1) ?? path;
+        if (path.includes('/scratch/')) return ok({ path, name });
+
+        const depth = segments.indexOf('monorepo');
+        const repoRoot = depth < 0 ? path : `/${segments.slice(0, depth + 1).join('/')}`;
+        return ok({ path, name, repoRoot, repoName: repoRoot.split('/').at(-1) ?? name });
+      },
     },
 
     /*

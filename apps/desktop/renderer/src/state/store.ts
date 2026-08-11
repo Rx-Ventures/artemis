@@ -44,10 +44,12 @@ import type {
 } from '@rx-apollo/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
+  describeWorkspace,
   listSessionsEverywhere,
   pickDirectory,
   type DirectoryChoice,
   type SessionScope,
+  type WorkspaceNames,
 } from '../lib/extensions';
 import { isAbsolutePath } from '../lib/paths';
 import { newId } from '../lib/id';
@@ -269,6 +271,24 @@ export interface AppState {
   readonly sidebarCollapsed: boolean;
   readonly sidebarWidth: number;
   /**
+   * Whether the sidebar's project section is folded shut.
+   *
+   * Persisted alongside the geometry and for the same reason: it is a piece of
+   * furniture the user arranged, and re-opening a section they closed on every
+   * launch is the same discourtesy as resetting a width they dragged.
+   */
+  readonly sessionsCollapsed: boolean;
+  /**
+   * What the working directory is called — the repository's name when it is in
+   * one, and the directory's own either way.
+   *
+   * `null` until the answer arrives, and `null` forever in a build whose
+   * preload has no `workspace.describe`. Nothing waits on it: the sidebar falls
+   * back to the last segment of `cwd`, which is what it showed before this
+   * existed. See `lib/extensions.ts`.
+   */
+  readonly workspace: WorkspaceNames | null;
+  /**
    * Prompts the user has sent this session, newest last.
    *
    * Kept so an empty composer can recall the previous prompt with Up, the way
@@ -322,6 +342,7 @@ interface Prefs {
   effort?: string | null;
   sidebarCollapsed?: boolean;
   sidebarWidth?: number;
+  sessionsCollapsed?: boolean;
   settingsSection?: SettingsSection;
   quickModelIds?: readonly string[];
   fastMode?: boolean;
@@ -420,6 +441,11 @@ function loadPrefs(): Prefs {
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     contextWindows: numberMap(raw['contextWindows']),
+    // Coerced rather than passed through: it is read straight into state with
+    // `?? false`, so a non-boolean left here by a hand edit would reach a
+    // conditional as a truthy string and fold the session list shut with no
+    // way to tell why.
+    sessionsCollapsed: boolOrUndefined(raw['sessionsCollapsed']),
   };
 }
 
@@ -434,6 +460,7 @@ function savePrefs(): void {
     effort: s.effort,
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
+    sessionsCollapsed: s.sessionsCollapsed,
     settingsSection: s.settingsSection,
     quickModelIds: s.quickModelIds,
     fastMode: s.fastMode,
@@ -497,6 +524,8 @@ export const useApp = create<AppState>(() => ({
 
   sidebarCollapsed: prefs.sidebarCollapsed ?? false,
   sidebarWidth: clampSidebarWidth(prefs.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH),
+  sessionsCollapsed: prefs.sessionsCollapsed ?? false,
+  workspace: null,
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -934,6 +963,9 @@ export async function bootstrap(): Promise<void> {
   // would trade a working window for a slightly better-labelled model picker,
   // and the picker has the descriptor's list to render in the meantime.
   void refreshModels();
+  // Same reasoning, cheaper call: the sidebar header renders the directory's
+  // own name until this lands, which is a correct label either way.
+  void refreshWorkspace();
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -1114,6 +1146,29 @@ export function setCwd(cwd: string): void {
   useApp.setState({ cwd: cwd.trim() });
   savePrefs();
   void refreshSessions();
+  void refreshWorkspace();
+}
+
+/**
+ * Re-read what the working directory is called.
+ *
+ * Cleared to `null` first, so the header falls back to the directory's own name
+ * for the moment the read is in flight rather than keeping the *previous*
+ * directory's repository name on screen — a stale answer here is worse than no
+ * answer, because both look equally authoritative.
+ *
+ * The reply is dropped when the directory has moved on again underneath it.
+ * Two directory changes in quick succession are ordinary (a click in the
+ * project switcher is two `setCwd` calls apart from a click in the picker), and
+ * without the check the slower of the two replies wins.
+ */
+export async function refreshWorkspace(): Promise<void> {
+  const { cwd } = useApp.getState();
+  useApp.setState({ workspace: null });
+
+  const names = await describeWorkspace(cwd);
+  if (useApp.getState().cwd !== cwd) return;
+  useApp.setState({ workspace: names });
 }
 
 /**
@@ -1147,6 +1202,17 @@ export function toggleSidebar(): void {
 /** Commit a dragged width. Clamped here so no caller can persist a silly one. */
 export function setSidebarWidth(width: number): void {
   useApp.setState({ sidebarWidth: clampSidebarWidth(width) });
+  savePrefs();
+}
+
+/** Fold the project's session list shut, or open it. */
+export function setSessionsCollapsed(collapsed: boolean): void {
+  useApp.setState({ sessionsCollapsed: collapsed });
+  savePrefs();
+}
+
+export function toggleSessionsCollapsed(): void {
+  useApp.setState((s) => ({ sessionsCollapsed: !s.sessionsCollapsed }));
   savePrefs();
 }
 
@@ -1582,6 +1648,11 @@ export function resumeSession(session: SessionSummary): void {
   void loadSessionHistory(session);
   void refreshSessions();
   void refreshModels();
+  // This function writes `cwd` itself rather than going through `setCwd` — it
+  // has a batch of state to move atomically — so the header's name has to be
+  // re-read here too, or resuming a session from another project would leave
+  // the previous project's name over the new project's sessions.
+  if (switchedCwd) void refreshWorkspace();
 }
 
 /**

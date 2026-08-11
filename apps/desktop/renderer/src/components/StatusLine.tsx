@@ -126,7 +126,7 @@ import {
 import { WorkingDirectoryDialog } from './WorkingDirectory';
 import { IconButton, WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
-import { StatusDot, ToneBadge } from './primitives';
+import { ProfileSwatch, StatusDot, ToneBadge } from './primitives';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import {
@@ -329,9 +329,21 @@ function ProfileSegment(): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
+        {/*
+          The swatch stands in for the key icon when the profile has one. Two
+          marks for one thing would be noise, and of the two the colour is the
+          one carrying information — the key says "profile", which the label
+          beside it already says.
+        */}
         <SegmentTrigger
           label="Profile"
-          icon={<KeyRoundIcon className="size-3 shrink-0" aria-hidden="true" />}
+          icon={
+            profile?.color ? (
+              <ProfileSwatch color={profile.color} />
+            ) : (
+              <KeyRoundIcon className="size-3 shrink-0" aria-hidden="true" />
+            )
+          }
           className={cn(signedOut && 'text-amber', profile && 'text-ink')}
         >
           {profile?.label ?? 'no profile'}
@@ -392,6 +404,7 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
          * the two the user needs more is not a close call.
          */}
         <span className="flex min-w-0 items-center gap-1.5">
+          <ProfileSwatch color={profile.color} />
           <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
           {status ? (
             <ToneBadge tone={status.loggedIn ? 'sage' : 'amber'} className="shrink-0">

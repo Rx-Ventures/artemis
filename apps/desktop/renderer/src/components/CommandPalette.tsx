@@ -104,6 +104,7 @@ import {
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
+import { ProfileSwatch } from './primitives';
 import { DirectoryChooser } from './WorkingDirectory';
 import {
   Command,
@@ -568,7 +569,10 @@ function SessionRow({
           rather than a surprise after the fact. */}
       <span className="flex w-full items-center gap-2 pl-5 font-mono text-2xs text-ink-faint">
         <span title={session.cwd}>{shortenPath(session.cwd, { platform, max: 28 })}</span>
-        <span>·{profile?.label ?? 'profile missing'}</span>
+        <span className="flex items-center gap-1">
+          <ProfileSwatch color={profile?.color} />
+          {profile?.label ?? 'profile missing'}
+        </span>
         {session.gitBranch ? <span>{session.gitBranch}</span> : null}
       </span>
     </CommandItem>

@@ -60,6 +60,55 @@ export function oneLine(text: string, max = 120): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/** Words a condensed title keeps, and the length past which it stops early. */
+const TITLE_WORDS = 8;
+const TITLE_CHARS = 56;
+
+/**
+ * A session title short enough to be a title.
+ *
+ * Adapters resolve a title in order of preference — the user's own, then the
+ * provider's generated summary, then **the first prompt** — and that last one
+ * is not a title at all. It is however far and away the most common, because a
+ * summary only exists once the provider has bothered to write one, so most
+ * rows in a real sidebar are headed by the opening paragraph of a conversation.
+ *
+ * `truncate` alone does not fix that. CSS clips at whatever pixel the column
+ * ends on, which lands mid-word and, worse, lands in a *different* place per
+ * row — so a list of prompts that all open "Can you take a look at…" renders as
+ * a column of near-identical text ending in ragged fragments. Clipping to whole
+ * words at a fixed count gives every row the same budget and ends it somewhere
+ * a person would have ended it.
+ *
+ * Applied to every title, not only the derived ones. A user who typed a
+ * sentence as a custom title gets the same treatment, which is the right call
+ * for a 200px column — and the full string is on the row's `title` attribute
+ * either way, so nothing is lost, only folded.
+ *
+ * The ellipsis is the character, not three dots: it is one glyph of column
+ * width instead of three.
+ */
+export function condenseTitle(title: string): string {
+  const flat = title.replace(/\s+/g, ' ').trim();
+  if (flat.length === 0) return flat;
+
+  const words = flat.split(' ');
+  const kept: string[] = [];
+  let length = 0;
+
+  for (const word of words) {
+    // Stop *before* exceeding the budget rather than after, so a title that
+    // opens with one very long word is still clipped rather than passed
+    // through whole — but never to nothing: the first word always goes in.
+    if (kept.length > 0 && (kept.length >= TITLE_WORDS || length + word.length > TITLE_CHARS)) {
+      return `${kept.join(' ')}…`;
+    }
+    kept.push(word);
+    length += word.length + 1;
+  }
+  return kept.join(' ');
+}
+
 const MAX_JSON_CHARS = 20_000;
 
 /**

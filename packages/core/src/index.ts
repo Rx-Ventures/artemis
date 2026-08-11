@@ -18,6 +18,7 @@
  * │ RunRegistry     live runs by id, event fan-out, guaranteed teardown  │
  * ├── workspace ─────────────────────────────────────────────────────────┤
  * │ checkWorkingDirectory  is this cwd real, a directory, and readable?  │
+ * │ describeWorkspace      what is it called — repository, or folder?    │
  * └──────────────────────────────────────────────────────────────────────┘
  * ```
  *
