@@ -20,7 +20,7 @@
  * | `errors`        | `AgentError`, `AgentErrorCode`                             |
  * | `run`           | `RunInput`, `RunHandle`, `RunStatus`                       |
  * | `session`       | `SessionSummary`                                           |
- * | `profile`       | `Profile`, `ProfileMetadata`, `ProviderBackend`            |
+ * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
  * | `ipc`           | channel constants, request/response maps, `ApolloBridge`    |
  *
  * What does *not* live here: the `ProviderAdapter` / `Run` interfaces. Those

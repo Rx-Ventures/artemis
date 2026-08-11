@@ -49,8 +49,6 @@ import type {
   PermissionRequestId,
   PlanUsage,
   ProfileId,
-  ProviderAuthModeOption,
-  ProviderBackendOption,
   ProviderDescriptor,
   ProviderEffortOption,
   ProviderId,
@@ -507,183 +505,106 @@ export interface AdapterAvailability {
 /* -------------------------------------------------------------------------- */
 
 /**
- * One hosting backend, plus the environment flag that selects it.
+ * How the user signs a profile in, in the provider's own vocabulary.
  *
- * Extends the renderer-facing {@link ProviderBackendOption} with the part the
- * renderer must never see: which variable to set. `envFlag` is `null` for the
- * backend that is selected by the *absence* of the others — Claude's
- * first-party API works that way — and otherwise names a flag set to `"1"`
- * when the backend is active and omitted (never `"0"`) when it is not.
+ * Apollo does not perform the login. It composes a command, shows it to the
+ * user, and polls the status probe until the answer changes — so every string
+ * here ends up either in a terminal the user pastes into or in a subprocess
+ * Apollo spawns to read a boolean back.
+ *
+ * Naming the argv here rather than in the sign-in module is the same seam
+ * {@link Capabilities} draws: `['auth', 'login']` is Claude's spelling, and a
+ * second provider will spell it differently or not have one at all.
  */
-export interface ProviderBackendSpec extends ProviderBackendOption {
-  readonly envFlag: string | null;
-}
-
-/**
- * One authentication mode, plus the variable its secret is emitted as.
- *
- * Extends the renderer-facing {@link ProviderAuthModeOption} with the part the
- * renderer must never see: which variable carries the credential.
- *
- * The mode axis is separate from the backend axis because for Claude the two
- * are genuinely independent questions — *where the models are hosted* versus
- * *what the credential is and what it bills*. It also has a sharp edge the
- * backend axis does not: `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are
- * both credentials the CLI accepts, and when both are present the API key wins
- * and the user is billed for metered usage they did not ask for. Naming the
- * variable here is what lets `resolveEnv` emit exactly one of them and remove
- * every other mode's variable from the environment.
- */
-export interface ProviderAuthModeSpec extends ProviderAuthModeOption {
+export interface ProviderSignInSpec {
   /**
-   * Variable the profile's stored secret is written into when this mode is
-   * selected. Every mode's variable is managed by Apollo, so a mode that is
-   * *not* selected has its variable stripped rather than merely left unset.
-   *
-   * **Omitted for a mode that stores no secret.** Some credentials are not
-   * Apollo's to hold: a provider CLI can own its own login, scoped to the
-   * profile's config directory, in which case there is no value to emit and no
-   * variable to emit it as. Emitting one anyway would be worse than useless —
-   * an explicitly-set credential variable *overrides* whatever the config
-   * directory holds, so a stale value would silently beat a good login.
+   * The executable, resolved on `PATH`. Also what the generated command names,
+   * so it has to be the thing a user can actually type.
    */
-  readonly secretEnvVar?: string;
+  readonly executable: string;
+  /** Arguments for the interactive login **the user runs themselves**. */
+  readonly loginArgs: readonly string[];
+  /**
+   * Arguments for a machine-readable status probe. Must be cheap and free of
+   * side effects: this is polled while the user is signing in, and called again
+   * whenever the UI needs to know.
+   */
+  readonly statusArgs: readonly string[];
+  /** Arguments that clear the credential from a config directory. */
+  readonly logoutArgs: readonly string[];
+  /**
+   * One or two sentences telling the user what the command will do. Published
+   * to the renderer as `ProviderDescriptor.signInHowTo` and shown next to it.
+   */
+  readonly howTo: string;
 }
 
 /**
- * How a provider's credential becomes an environment.
+ * How a provider's environment is scoped to a profile.
  *
- * This is the piece of the seam that used to be missing, and its absence was
- * not cosmetic: `resolveEnv` dispatched on the profile's backend and wrote
- * `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_*` and `CLAUDE_CONFIG_DIR` for *every*
- * provider, never once reading `providerId`. A Codex adapter would have been
- * handed an OpenAI key in a variable called `ANTHROPIC_API_KEY` and no
- * `OPENAI_API_KEY` at all, so "adding a provider is one line" was false for the
- * single most security-sensitive step in the system.
+ * Once, this described how a *credential* became an environment: which variable
+ * to write an API key into, which flag selected a hosting backend, which of
+ * several modes was being billed. Apollo held the credential, and the spec
+ * existed to get it into the right variable for the right provider.
  *
- * Declaring it here puts the mapping next to the adapter that owns it, the way
- * `CLAUDE_ENV_SCRUB_KEYS` already lives next to the Claude adapter.
+ * Apollo holds no credential now, so what is left is the one variable that
+ * matters and the list of variables that must not be allowed to interfere. The
+ * seam is unchanged and still load-bearing: nothing outside an adapter names
+ * `CLAUDE_CONFIG_DIR`, so a second provider is still a one-line registration
+ * rather than an edit to the environment resolver.
  */
 export interface ProviderCredentialSpec {
   /**
-   * Variable carrying the plaintext API key, set only for backends whose
-   * {@link ProviderBackendSpec.requiresApiKey} is true.
-   *
-   * This is the *default* credential variable: it is what a provider that
-   * declares no {@link authModes} writes its secret into. A provider with an
-   * auth-mode axis names the variable on each mode instead, and its `api-key`
-   * mode will normally repeat this value.
-   */
-  readonly apiKeyVar: string;
-
-  /**
-   * Variable pointing the provider at this profile's isolated config/state
-   * directory. For Claude that is `CLAUDE_CONFIG_DIR`, which buys isolated
-   * credentials *and* isolated session history in one move.
+   * Variable pointing the provider at this profile's config/state directory.
+   * For Claude that is `CLAUDE_CONFIG_DIR`, which buys an isolated credential
+   * *and* isolated session history in one move.
    */
   readonly configDirVar: string;
 
-  /** Backends this provider offers, in display order. The first is the default. */
-  readonly backends: readonly ProviderBackendSpec[];
-
   /**
-   * Auth modes this provider offers, in display order. The first is the
-   * default.
+   * Credential variables Apollo strips from the inherited environment and
+   * refuses in `publicEnv` — **and never sets**.
    *
-   * Empty is legitimate and means "this provider has one implicit way of
-   * authenticating": the secret goes into {@link apiKeyVar} and a profile that
-   * names an auth mode is rejected. Required rather than optional so that
-   * adding a provider is a decision about this axis rather than a silent
-   * inheritance of Claude's.
+   * Every one of these is a way to authenticate the provider without going
+   * through the profile's config directory, and each of them *outranks* that
+   * directory when present. An `ANTHROPIC_API_KEY` exported in the user's shell
+   * beats the subscription the user just signed this profile into, and bills
+   * metered usage instead. Since Apollo emits none of them, the entire list is
+   * strip-only: there is no "selected" variable to spare.
+   *
+   * This is what makes "Apollo cannot be authenticated by accident" structural
+   * rather than merely unimplemented.
    */
-  readonly authModes: readonly ProviderAuthModeSpec[];
+  readonly credentialEnvKeys: readonly string[];
 
-  /**
-   * Extra variables Apollo owns outright for this provider, beyond
-   * {@link apiKeyVar}, {@link configDirVar}, the backend flags and every auth
-   * mode's {@link ProviderAuthModeSpec.secretEnvVar}.
-   *
-   * These are stripped from the inherited environment and rejected in
-   * `publicEnv`, so a profile's credentials are decided by the profile and by
-   * nothing else. Claude lists the credential variables Apollo does *not*
-   * support here, which is what makes "Apollo cannot be authenticated by
-   * accident" structural rather than merely unimplemented.
-   */
-  readonly extraManagedEnvKeys: readonly string[];
+  /** How the user authenticates a profile against {@link configDirVar}. */
+  readonly signIn: ProviderSignInSpec;
 }
 
 /**
  * Every variable a provider's credential spec owns.
  *
- * The union of the key variable, the config-directory variable, each backend
- * flag, **each auth mode's secret variable**, and anything the adapter named
- * explicitly. Callers use it both to scrub the inherited environment and to
- * reject `publicEnv` entries that would override Apollo's own choices.
+ * The config-directory variable plus every credential variable. Callers use it
+ * both to scrub the inherited environment and to reject `publicEnv` entries
+ * that would override Apollo's own choices.
  *
- * Every mode's variable is in the union, not just the selected one, and that is
- * the point: a profile in subscription mode must have `ANTHROPIC_API_KEY`
- * removed from its environment, because an inherited API key would otherwise
- * take precedence over the subscription token and bill metered usage instead.
- * The selected mode then writes exactly one of these back in — see
- * `resolveEnv`.
+ * Note that Apollo writes exactly one of these — the config directory — and
+ * strips the rest unconditionally. There is no case in which a credential
+ * variable is stripped and then written back.
  */
 export function managedEnvKeys(spec: ProviderCredentialSpec): readonly string[] {
-  return [
-    spec.apiKeyVar,
-    spec.configDirVar,
-    ...spec.extraManagedEnvKeys,
-    // A mode that stores no secret contributes no variable — but every *other*
-    // mode's variable still has to be stripped, which is what stops a stale
-    // `CLAUDE_CODE_OAUTH_TOKEN` in the shell from overriding a CLI login.
-    ...spec.authModes.flatMap((mode) => (mode.secretEnvVar === undefined ? [] : [mode.secretEnvVar])),
-    ...spec.backends.flatMap((backend) => (backend.envFlag === null ? [] : [backend.envFlag])),
-  ];
-}
-
-/** Project a credential spec down to the renderer-safe backend list. */
-export function backendOptions(spec: ProviderCredentialSpec): readonly ProviderBackendOption[] {
-  return spec.backends.map(({ id, label, note, requiresApiKey }) => ({
-    id,
-    label,
-    note,
-    requiresApiKey,
-  }));
+  return [spec.configDirVar, ...spec.credentialEnvKeys];
 }
 
 /**
- * Project a credential spec down to the renderer-safe auth-mode list.
+ * The command a user runs to sign a profile in, as argv.
  *
- * Drops {@link ProviderAuthModeSpec.secretEnvVar}. Not because the name of an
- * environment variable is itself sensitive, but because the renderer has no use
- * for it and every field it does not receive is one it cannot leak back.
+ * Returned as an array rather than a string so the caller decides how to render
+ * it — a shell needs quoting the user's clipboard should carry, a subprocess
+ * needs none and must never be handed a quoted path.
  */
-export function authModeOptions(spec: ProviderCredentialSpec): readonly ProviderAuthModeOption[] {
-  return spec.authModes.map(({ id, label, note, requiresSecret, backends, secretHowTo }) => ({
-    id,
-    label,
-    note,
-    requiresSecret,
-    ...(backends === undefined ? {} : { backends }),
-    ...(secretHowTo === undefined ? {} : { secretHowTo }),
-  }));
-}
-
-/**
- * The implicit mode used by a provider that declares no {@link
- * ProviderCredentialSpec.authModes}: one credential, in {@link
- * ProviderCredentialSpec.apiKeyVar}, valid on every backend.
- *
- * Exists so credential resolution has exactly one code path rather than a
- * "modes or no modes" branch.
- */
-export function defaultAuthMode(spec: ProviderCredentialSpec): ProviderAuthModeSpec {
-  return {
-    id: 'api-key',
-    label: 'API key',
-    note: `Uses ${spec.apiKeyVar}.`,
-    requiresSecret: true,
-    secretEnvVar: spec.apiKeyVar,
-  };
+export function signInArgv(spec: ProviderCredentialSpec): readonly string[] {
+  return [spec.signIn.executable, ...spec.signIn.loginArgs];
 }
 
 /**

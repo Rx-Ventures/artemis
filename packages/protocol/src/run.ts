@@ -29,10 +29,10 @@ export type SystemPromptSpec =
 /**
  * How much reasoning effort a run should ask the model for.
  *
- * **Deliberately opaque**, exactly like `ProviderBackend` and
- * `ProviderAuthMode`. The levels Apollo ships today are Claude's
- * (`low`…`max`), and naming them here would make one provider's scale a
- * universal fact. Each adapter declares its own and publishes them as
+ * **Deliberately opaque**, exactly like `ProviderPermissionMode`. The levels
+ * Apollo ships today are Claude's (`low`…`max`), and naming them here would
+ * make one provider's scale a universal fact. Each adapter declares its own
+ * and publishes them as
  * {@link import('./provider.js').ProviderDescriptor.effortLevels}; the UI
  * builds its picker from that.
  *

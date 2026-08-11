@@ -28,10 +28,9 @@
 import { isAbsolute } from 'node:path';
 
 import {
+  configDirProblem,
   isCredentialRoutingEnvKey,
   isPermissionMode,
-  isProviderAuthMode,
-  isProviderBackend,
   isProviderEffort,
   isProviderId,
   isSecretEnvKey,
@@ -45,6 +44,7 @@ import {
   type ProfilesCreateRequest,
   type ProfilesDeleteRequest,
   type ProfilesListRequest,
+  type ProfilesSuggestDirRequest,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
   type ProvidersModelsRequest,
@@ -59,7 +59,6 @@ import {
   type SessionsListRequest,
   type SystemPromptSpec,
   type SessionsMessagesRequest,
-  type AuthSignInRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
@@ -89,7 +88,6 @@ const LIMITS = {
   path: 4_096,
   model: 200,
   toolName: 200,
-  apiKey: 8_192,
   denyMessage: 4_000,
   toolListItems: 512,
   directoryItems: 64,
@@ -116,9 +114,6 @@ const LIMITS = {
  * id can never be a path, a shell fragment or a JSON injection.
  */
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-
-/** Bare directory name — no separators, no traversal, no hidden dotfiles. */
-const CONFIG_DIR_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** POSIX-ish environment variable name. */
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -481,105 +476,56 @@ function validatePermissionDecision(value: unknown, field: string): PermissionDe
 /* -------------------------------------------------------------------------- */
 
 /**
- * A profile draft — the one request that legitimately carries a plaintext
- * credential, and only in the renderer → main direction.
+ * A profile draft.
  *
- * The key is validated for shape but never logged, never echoed and never
- * returned; the handler hands it straight to the encrypted store.
+ * Note what it no longer carries: a credential. There is no plaintext secret
+ * anywhere in this IPC surface, in either direction, because Apollo stores
+ * none — the provider's own login writes one into the config directory named
+ * below and Apollo never sees it.
  */
 function validateProfileDraft(value: unknown, field: string): ProfileDraft {
   const draft = requireObject(value, field);
   const providerId = draft['providerId'];
   if (!isProviderId(providerId)) throw new ValidationError(`${field}.providerId`, 'is not a known provider');
 
-  const backend = draft['backend'];
-  // Shape only. Backends are provider-scoped, so "does this provider offer a
-  // backend by that name?" is answered where an adapter is reachable — in
-  // `resolveEnv`, against the adapter's declared list. Rejecting an unknown
-  // name here would mean this file holding a copy of every provider's backend
-  // list, which is what made a Codex profile impossible to express at all.
-  if (backend !== undefined && backend !== null && !isProviderBackend(backend)) {
-    throw new ValidationError(`${field}.backend`, 'is not a valid backend id');
-  }
-
-  // Shape only, for the same reason as `backend`. Whether the provider offers
-  // this mode — and whether it offers it on the chosen backend, which is what
-  // stops a subscription profile pointing at Bedrock — is decided in
-  // `resolveEnv` against the adapter's declared list.
-  const authMode = draft['authMode'];
-  if (authMode !== undefined && authMode !== null && !isProviderAuthMode(authMode)) {
-    throw new ValidationError(`${field}.authMode`, 'is not a valid authentication mode id');
-  }
-
-  const configDirName = optionalString(draft['configDirName'], `${field}.configDirName`, 64);
-  if (configDirName !== undefined && !CONFIG_DIR_NAME_PATTERN.test(configDirName)) {
-    throw new ValidationError(
-      `${field}.configDirName`,
-      'must be a bare directory name with no separators or traversal segments',
-    );
-  }
-
   return compact<ProfileDraft>({
     label: requireString(draft['label'], `${field}.label`, LIMITS.label),
     providerId,
-    backend: backend === null ? undefined : (backend as ProfileDraft['backend']),
-    authMode: authMode === null ? undefined : (authMode as ProfileDraft['authMode']),
-    apiKey: validateApiKey(draft['apiKey'], `${field}.apiKey`) ?? undefined,
+    configDir: requireConfigDir(draft['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(draft['publicEnv'], `${field}.publicEnv`),
-    configDirName,
   });
 }
 
 /**
- * Validate a credential's *shape* without inspecting its contents.
+ * Validate a config-directory path.
  *
- * Returns `null` for an explicit null (which means "delete the stored key" on a
- * patch) and `undefined` when absent (which means "leave it alone").
+ * The rules live in protocol's {@link configDirProblem}, and are applied from
+ * that single definition in three places — here, in the profile store, and in
+ * the editor while the user is still typing. So the boundary cannot drift from
+ * what the form accepted, nor from what the store will agree to keep.
  */
-function validateApiKey(value: unknown, field: string): string | null | undefined {
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  if (typeof value !== 'string') throw new ValidationError(field, 'must be a string or null');
-  const trimmed = value.trim();
-  if (trimmed.length === 0) throw new ValidationError(field, 'must not be blank');
-  if (trimmed.length > LIMITS.apiKey) throw new ValidationError(field, 'is implausibly long for an API key');
-  // Control characters in a credential mean a paste went wrong; catching it
-  // here beats a confusing 401 later.
-  if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
-    throw new ValidationError(field, 'contains control characters — check for a stray newline in the pasted key');
+function requireConfigDir(value: unknown, field: string): string {
+  const problem = configDirProblem(value);
+  if (problem !== null) throw new ValidationError(field, problem);
+  const trimmed = (value as string).trim();
+  if (trimmed.length > LIMITS.path) {
+    throw new ValidationError(field, 'is implausibly long for a path');
   }
   return trimmed;
 }
 
+function optionalConfigDir(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requireConfigDir(value, field);
+}
+
 function validateProfilePatch(value: unknown, field: string): ProfilePatch {
   const patch = requireObject(value, field);
-  const backend = patch['backend'];
-  // Shape only. Backends are provider-scoped, so "does this provider offer a
-  // backend by that name?" is answered where an adapter is reachable — in
-  // `resolveEnv`, against the adapter's declared list. Rejecting an unknown
-  // name here would mean this file holding a copy of every provider's backend
-  // list, which is what made a Codex profile impossible to express at all.
-  if (backend !== undefined && backend !== null && !isProviderBackend(backend)) {
-    throw new ValidationError(`${field}.backend`, 'is not a valid backend id');
-  }
-
-  // Shape only — see `validateProfileDraft`.
-  const authMode = patch['authMode'];
-  if (authMode !== undefined && authMode !== null && !isProviderAuthMode(authMode)) {
-    throw new ValidationError(`${field}.authMode`, 'is not a valid authentication mode id');
-  }
-
-  const apiKey = validateApiKey(patch['apiKey'], `${field}.apiKey`);
-  const built: ProfilePatch = compact<ProfilePatch>({
+  return compact<ProfilePatch>({
     label: optionalString(patch['label'], `${field}.label`, LIMITS.label),
-    backend: backend === null ? undefined : (backend as ProfilePatch['backend']),
-    authMode: authMode === null ? undefined : (authMode as ProfilePatch['authMode']),
+    configDir: optionalConfigDir(patch['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(patch['publicEnv'], `${field}.publicEnv`),
   });
-
-  // `apiKey: null` is meaningful ("delete the credential"), so it survives
-  // `compact` by being reattached afterwards.
-  return apiKey === undefined ? built : { ...built, apiKey };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -698,6 +644,22 @@ export function validateProfilesDelete(raw: unknown): ProfilesDeleteRequest {
     id: requireId(request['id'], 'id'),
     deleteConfigDir: optionalBoolean(request['deleteConfigDir'], 'deleteConfigDir'),
   });
+}
+
+/**
+ * A label to name a suggested directory after.
+ *
+ * Accepts an empty label — the create form calls this while the user is still
+ * typing, and refusing the first keystroke would leave the field blank at the
+ * exact moment it is most useful. The suggestion falls back to a generic name.
+ */
+export function validateProfilesSuggestDir(raw: unknown): ProfilesSuggestDirRequest {
+  const request = requireRequest(raw);
+  const label = request['label'];
+  if (label !== undefined && typeof label !== 'string') {
+    throw new ValidationError('label', 'must be a string');
+  }
+  return { label: (label ?? '').slice(0, LIMITS.label) };
 }
 
 export function validateProvidersList(raw: unknown): ProvidersListRequest {
@@ -838,20 +800,6 @@ export function validateSessionsMessages(raw: unknown): SessionsMessagesRequest 
 export function validateAuthStatus(raw: unknown): AuthStatusRequest {
   const request = requireRequest(raw);
   return { profileId: requireId(request['profileId'], 'profileId') };
-}
-
-export function validateAuthSignIn(raw: unknown): AuthSignInRequest {
-  const request = requireRequest(raw);
-  const mode = request['mode'];
-  // Only the two the provider actually offers. An unrecognised mode would be
-  // passed to the CLI as a flag and fail there, far from the cause.
-  if (mode !== undefined && mode !== 'subscription' && mode !== 'console') {
-    throw new ValidationError('mode', 'must be "subscription" or "console"');
-  }
-  return {
-    profileId: requireId(request['profileId'], 'profileId'),
-    ...(mode === undefined ? {} : { mode }),
-  };
 }
 
 export function validateAuthSignOut(raw: unknown): AuthSignOutRequest {

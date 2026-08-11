@@ -1,14 +1,22 @@
 /**
- * Parsing the CLI's authentication status.
+ * Reading the CLI's authentication status, and writing the command that changes
+ * it.
  *
- * The parser is the part worth pinning: everything else in `signIn.ts` is
- * subprocess plumbing, but this decides whether a profile is shown as ready to
- * run. Reading "signed in" from a malformed answer would let a run start
- * against a directory that has no credential.
+ * Two things in `signIn.ts` are worth pinning; the rest is subprocess plumbing.
+ *
+ *  - **The parser** decides whether a profile is shown as ready to run. Reading
+ *    "signed in" from a malformed answer would let a run start against a
+ *    directory that has no credential.
+ *  - **The command** is pasted into a terminal by a human. It is the only
+ *    instruction they get, so a quoting mistake is not a cosmetic defect — it
+ *    is a command that silently signs in the wrong directory, or fails with a
+ *    shell error the user has no way to connect back to Apollo.
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseAuthStatus } from '../signIn.js';
+
+import { CLAUDE_CREDENTIALS } from '../claude.js';
+import { parseAuthStatus, signInCommand } from '../signIn.js';
 
 /** The real shape, captured from `claude auth status --json` on a signed-in dir. */
 const SIGNED_IN = JSON.stringify({
@@ -90,5 +98,63 @@ describe('parseAuthStatus', () => {
     expect(() => parseAuthStatus('')).not.toThrow();
     expect(() => parseAuthStatus('{')).not.toThrow();
     expect(() => parseAuthStatus('{"loggedIn":true')).not.toThrow();
+  });
+});
+
+describe('signInCommand', () => {
+  const command = (configDir: string): string =>
+    signInCommand({ credentials: CLAUDE_CREDENTIALS, configDir });
+
+  it('sets the config directory inline rather than exporting it', () => {
+    // Inline, so it scopes to this one command. An `export` would silently
+    // re-point every later `claude` invocation in that shell — a user signing a
+    // second profile in would end up looking at the first one's account.
+    expect(command('/Users/me/.claude')).toBe(
+      "CLAUDE_CONFIG_DIR=/Users/me/.claude claude auth login",
+    );
+  });
+
+  it('quotes a path containing spaces, which macOS produces by default', () => {
+    // `~/Library/Application Support/…` is where Apollo's own suggestions live,
+    // so this is the common case rather than an edge one. Unquoted, the shell
+    // splits it and `claude` is run with a truncated directory.
+    expect(command('/Users/me/Library/Application Support/Apollo/profiles/work')).toBe(
+      "CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Apollo/profiles/work' claude auth login",
+    );
+  });
+
+  it('quotes characters a shell would otherwise interpret', () => {
+    for (const dir of ['/tmp/a$b', '/tmp/a`b', '/tmp/a"b', '/tmp/a\\b', '/tmp/a;rm -rf b']) {
+      const line = command(dir);
+      // Single quotes: nothing inside them is expanded or executed.
+      expect(line).toContain(`'${dir}'`);
+    }
+  });
+
+  it('escapes an embedded single quote rather than ending the quoting early', () => {
+    // The one character single-quoting cannot contain. Getting this wrong
+    // terminates the string mid-path and hands the rest to the shell as code.
+    expect(command("/Users/me/o'brien/.claude")).toBe(
+      String.raw`CLAUDE_CONFIG_DIR='/Users/me/o'\''brien/.claude' claude auth login`,
+    );
+  });
+
+  it('names the executable and argv the adapter declared, not a hard-coded string', () => {
+    const line = signInCommand({
+      credentials: {
+        configDirVar: 'OTHER_CONFIG_DIR',
+        credentialEnvKeys: [],
+        signIn: {
+          executable: 'other',
+          loginArgs: ['login', '--browser'],
+          statusArgs: [],
+          logoutArgs: [],
+          howTo: '',
+        },
+      },
+      configDir: '/tmp/other',
+    });
+
+    expect(line).toBe('OTHER_CONFIG_DIR=/tmp/other other login --browser');
   });
 });

@@ -41,18 +41,6 @@ export class EngineUnavailableError extends Error {
   }
 }
 
-/** Encrypted credential storage is not usable on this machine. */
-export class SecretStoreUnavailableError extends Error {
-  /** Machine-readable cause, for the UI and for tests. */
-  readonly reason: 'encryption_unavailable' | 'plaintext_backend' | 'io_error' | 'corrupt_store';
-
-  constructor(reason: SecretStoreUnavailableError['reason'], detail: string) {
-    super(detail);
-    this.name = 'SecretStoreUnavailableError';
-    this.reason = reason;
-  }
-}
-
 /**
  * A directory cannot be used as a workspace.
  *
@@ -128,15 +116,6 @@ function classify(error: unknown): IpcError {
       message: scrubSecrets(error.message),
       retryable: false,
       details: { field: error.field },
-    };
-  }
-
-  if (error instanceof SecretStoreUnavailableError) {
-    return {
-      code: 'auth',
-      message: scrubSecrets(error.message),
-      retryable: false,
-      details: { reason: error.reason },
     };
   }
 

@@ -56,12 +56,15 @@
  *
  * ## The profile segment is the reason this work exists
  *
- * It names the profile, its billing arrangement (API key or subscription) and
- * its masked key hint, because "which account is about to be charged" must be
- * answerable by looking rather than by opening an editor. The masked hint is
- * the only thing the renderer ever sees of a credential — `ProfileMetadata`
- * carries no secret ref, no config directory and no env bundle — so there is
- * nothing on this bar that could be turned back into a key.
+ * It names the profile, whether that profile is signed in, and the account it
+ * is signed in as — because "which account is about to be charged" must be
+ * answerable by looking rather than by opening an editor.
+ *
+ * There is no credential here to reveal or mask. A profile is a config
+ * directory, the provider's own login put a credential inside it, and this bar
+ * shows only what a status read reported. The amber state means *checked and
+ * signed out*, never merely unchecked: a warning on a state nobody has looked
+ * at is a warning the user learns to ignore.
  *
  * ## Why permission mode is here
  *
@@ -103,7 +106,6 @@ import type { PermissionMode, ProfileId, ProviderModelOption } from '@rx-apollo/
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';
-import { describeCredential, resolveAuthMode, resolveBackend } from '../lib/authModes';
 import { shortenPath } from '../lib/paths';
 import { formatTokens } from '../lib/format';
 import {
@@ -341,13 +343,12 @@ function ProfileSegment(): ReactElement {
   const provider = useApp(activeProvider);
 
   const forProvider = profiles.filter((p) => p.providerId === providerId);
-  const backend = resolveBackend(provider, profile?.backend);
-  const authMode = resolveAuthMode(provider, profile?.backend, profile?.authMode);
-  const credential = profile ? describeCredential(backend, authMode) : undefined;
+  const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
 
-  // A credential that is missing *and needed* is the only thing worth an amber
-  // segment. A profile on an ambient-chain backend legitimately stores none.
-  const needsKey = credential?.usesStoredSecret === true && !profile?.keyHint;
+  // Amber only for a profile that has been *checked* and is signed out. An
+  // unchecked profile is not evidence of anything, and colouring it would put a
+  // permanent warning on a status bar for a state nobody has looked at.
+  const signedOut = status !== undefined && !status.loggedIn;
 
   return (
     <DropdownMenu>
@@ -355,7 +356,7 @@ function ProfileSegment(): ReactElement {
         <SegmentTrigger
           label="Profile"
           icon={<KeyRoundIcon className="size-3 shrink-0" aria-hidden="true" />}
-          className={cn(needsKey && 'text-amber', profile && 'text-ink')}
+          className={cn(signedOut && 'text-amber', profile && 'text-ink')}
         >
           {profile?.label ?? 'no profile'}
         </SegmentTrigger>
@@ -363,12 +364,12 @@ function ProfileSegment(): ReactElement {
 
       <DropdownMenuContent align="start" side="top" className="w-96 max-w-[min(24rem,90vw)]">
         <DropdownMenuLabel className="text-2xs text-ink-faint">
-          Profile — credentials and billing
+          Profile — which account runs
         </DropdownMenuLabel>
 
         {forProvider.length === 0 ? (
           <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
-            No profile exists for this provider yet. A run needs credentials, which come from a
+            No profile exists for this provider yet. A run needs an account, which comes from a
             profile.
           </p>
         ) : (
@@ -387,52 +388,48 @@ function ProfileSegment(): ReactElement {
           Manage profiles…
         </DropdownMenuItem>
         <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-ink-faint">
-          Credentials live in the OS keychain. This window only ever receives a masked hint.
+          Each profile’s account lives in its own config directory, signed in with Claude’s own CLI.
+          Apollo stores no credential.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/** One profile row: label, billing arrangement, masked hint. */
+/** One profile row: label, sign-in state, config directory. */
 function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
-  const provider = useApp((s) => s.providers.find((p) => p.id === profile?.providerId));
+  const status = useApp((s) => s.authByProfile[id]);
+  const platform = useApp((s) => s.platform);
   if (!profile) return null;
 
-  const backend = resolveBackend(provider, profile.backend);
-  const mode = resolveAuthMode(provider, profile.backend, profile.authMode);
-  const credential = describeCredential(backend, mode);
-  const missing = credential?.usesStoredSecret === true && !profile.keyHint;
+  const signedOut = status !== undefined && !status.loggedIn;
 
   return (
     <DropdownMenuRadioItem value={profile.id} className="items-start gap-2 text-2xs">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {/*
-         * `min-w-0 flex-1` on the label and `shrink-0` on the badges, in that
-         * combination. Without it the badges — which have their own intrinsic
-         * width and no reason to yield — squeeze the label to nothing, and a
-         * profile row ends up showing its billing arrangement and no name at
-         * all. Which of the two the user needs more is not a close call.
+         * `min-w-0 flex-1` on the label and `shrink-0` on the badge, in that
+         * combination. Without it the badge — which has its own intrinsic width
+         * and no reason to yield — squeezes the label to nothing, and a profile
+         * row ends up showing its sign-in state and no name at all. Which of
+         * the two the user needs more is not a close call.
          */}
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
-          {credential ? (
-            <ToneBadge
-              tone={credential.usesStoredSecret ? 'ember' : 'neutral'}
-              className="shrink-0"
-            >
-              {credential.label}
-            </ToneBadge>
-          ) : null}
-          {backend && backend.id !== provider?.backends[0]?.id ? (
-            <ToneBadge tone="cyan" className="shrink-0">
-              {backend.label}
+          {status ? (
+            <ToneBadge tone={status.loggedIn ? 'sage' : 'amber'} className="shrink-0">
+              {status.loggedIn ? (status.subscriptionType ?? 'signed in') : 'signed out'}
             </ToneBadge>
           ) : null}
         </span>
-        <span className={cn('font-mono text-2xs', missing ? 'text-amber' : 'text-ink-faint')}>
-          {profile.keyHint ?? (missing ? 'no credential stored — this backend needs one' : 'no credential needed')}
+        <span
+          className={cn('truncate font-mono text-2xs', signedOut ? 'text-amber' : 'text-ink-faint')}
+          title={profile.configDir}
+        >
+          {signedOut
+            ? 'not signed in — open Manage profiles'
+            : (status?.email ?? shortenPath(profile.configDir, { platform, max: 40 }))}
         </span>
       </span>
     </DropdownMenuRadioItem>

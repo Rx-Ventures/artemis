@@ -46,12 +46,14 @@ import type { PlanUsage } from './usage.js';
 export const IPC = {
   /** List profiles as renderer-safe metadata. */
   profilesList: 'apollo:profiles:list',
-  /** Create a profile; the only call that accepts a plaintext credential. */
+  /** Create a profile. */
   profilesCreate: 'apollo:profiles:create',
-  /** Update a profile's label, backend, env or credential. */
+  /** Update a profile's label, config directory or env. */
   profilesUpdate: 'apollo:profiles:update',
-  /** Delete a profile, its stored credential and (optionally) its config dir. */
+  /** Delete a profile and (where Apollo owns it) its config dir. */
   profilesDelete: 'apollo:profiles:delete',
+  /** Propose an unused config-directory path for a profile about to be created. */
+  profilesSuggestDir: 'apollo:profiles:suggest-dir',
 
   /** Enumerate providers and their capability descriptors. */
   providersList: 'apollo:providers:list',
@@ -87,10 +89,17 @@ export const IPC = {
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
   usagePlanRefresh: 'apollo:usage:plan-refresh',
 
-  /** Read a profile's login state from its own config directory. */
+  /**
+   * Read a profile's login state from its own config directory.
+   *
+   * The only auth channel. There is no `sign-in` counterpart: the user runs the
+   * provider's login themselves, in their own terminal, and this is polled
+   * until it reports success. Apollo used to spawn that login itself and had to
+   * hold a five-minute subprocess open around a browser flow it could not see —
+   * a command the user can read, run and re-run beats a spinner that can only
+   * time out.
+   */
   authStatus: 'apollo:auth:status',
-  /** Run the provider's interactive login against a profile's config directory. */
-  authSignIn: 'apollo:auth:sign-in',
   /** Sign a profile out, clearing the credentials in its config directory. */
   authSignOut: 'apollo:auth:sign-out',
 } as const;
@@ -157,7 +166,7 @@ export interface ProfilesListRequest {
 }
 
 export interface ProfilesListResponse {
-  /** Renderer-safe metadata only — masked hints, no secrets, no paths. */
+  /** Renderer-safe metadata only. */
   readonly profiles: readonly ProfileMetadata[];
 }
 
@@ -181,17 +190,44 @@ export interface ProfilesUpdateResponse {
 export interface ProfilesDeleteRequest {
   readonly id: ProfileId;
   /**
-   * Also delete the profile's isolated `CLAUDE_CONFIG_DIR`, discarding its
-   * session history. Defaults to false: deleting an account should not
-   * silently destroy transcripts.
+   * Also delete the profile's config directory, discarding its session history.
+   * Defaults to false: deleting an account should not silently destroy
+   * transcripts.
+   *
+   * **Honoured only for a directory Apollo created**, i.e. one inside its own
+   * user-data directory. The config directory is a path the user picked and may
+   * well be their own `~/.claude`, or another profile's; asking Apollo to
+   * recursively delete one of those is a request it declines rather than
+   * performs. See {@link ProfilesDeleteResponse.configDirDeleted}.
    */
   readonly deleteConfigDir?: boolean;
 }
 
 export interface ProfilesDeleteResponse {
   readonly id: ProfileId;
-  /** True when the config directory was removed as well. */
+  /**
+   * True when the config directory was removed as well.
+   *
+   * False whenever it was not — because it was not asked for, because it did
+   * not exist, or because it sits outside Apollo's own directory and is
+   * therefore not Apollo's to delete. The caller is told which happened rather
+   * than left to assume the deletion took.
+   */
   readonly configDirDeleted: boolean;
+}
+
+export interface ProfilesSuggestDirRequest {
+  /** The label the user has typed so far. Used to make the path recognisable. */
+  readonly label: string;
+}
+
+export interface ProfilesSuggestDirResponse {
+  /**
+   * An absolute path inside Apollo's user-data directory that no existing
+   * profile uses. A suggestion, not a reservation: nothing is created, and the
+   * user is free to replace it with a directory of their own.
+   */
+  readonly configDir: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -468,17 +504,8 @@ export interface AuthStatusInfo {
   readonly error?: string;
 }
 
-/** How a profile should authenticate. */
-export type AuthMode = 'subscription' | 'console';
-
 export interface AuthStatusRequest {
   readonly profileId: ProfileId;
-}
-
-export interface AuthSignInRequest {
-  readonly profileId: ProfileId;
-  /** Defaults to `subscription` — the plan-billed login. */
-  readonly mode?: AuthMode;
 }
 
 export interface AuthSignOutRequest {
@@ -488,6 +515,18 @@ export interface AuthSignOutRequest {
 /** Every auth channel answers with the resulting state, so the UI never guesses. */
 export interface AuthStatusResponse {
   readonly status: AuthStatusInfo;
+  /**
+   * The shell command that signs this profile in, ready to copy.
+   *
+   * Carried on the *status* response rather than fetched separately because the
+   * screen needs both answers at once — "are you signed in, and if not, what do
+   * I run?" — and because composing it requires the provider's argv and its
+   * config-directory variable, neither of which the renderer can see.
+   *
+   * Present even when signed in: it is what a user re-runs to switch the
+   * account behind an existing profile.
+   */
+  readonly signInCommand: string;
 }
 
 export interface UsagePlanRequest {
@@ -516,6 +555,7 @@ export type IpcRequestMap = {
   [IPC.profilesCreate]: ProfilesCreateRequest;
   [IPC.profilesUpdate]: ProfilesUpdateRequest;
   [IPC.profilesDelete]: ProfilesDeleteRequest;
+  [IPC.profilesSuggestDir]: ProfilesSuggestDirRequest;
   [IPC.providersList]: ProvidersListRequest;
   [IPC.providersModels]: ProvidersModelsRequest;
   [IPC.runsStart]: RunsStartRequest;
@@ -531,7 +571,6 @@ export type IpcRequestMap = {
   [IPC.usagePlanCached]: UsagePlanRequest;
   [IPC.usagePlanRefresh]: UsagePlanRequest;
   [IPC.authStatus]: AuthStatusRequest;
-  [IPC.authSignIn]: AuthSignInRequest;
   [IPC.authSignOut]: AuthSignOutRequest;
 };
 
@@ -541,6 +580,7 @@ export type IpcResponseMap = {
   [IPC.profilesCreate]: ProfilesCreateResponse;
   [IPC.profilesUpdate]: ProfilesUpdateResponse;
   [IPC.profilesDelete]: ProfilesDeleteResponse;
+  [IPC.profilesSuggestDir]: ProfilesSuggestDirResponse;
   [IPC.providersList]: ProvidersListResponse;
   [IPC.providersModels]: ProvidersModelsResponse;
   [IPC.runsStart]: RunsStartResponse;
@@ -556,7 +596,6 @@ export type IpcResponseMap = {
   [IPC.usagePlanCached]: UsagePlanResponse;
   [IPC.usagePlanRefresh]: UsagePlanResponse;
   [IPC.authStatus]: AuthStatusResponse;
-  [IPC.authSignIn]: AuthStatusResponse;
   [IPC.authSignOut]: AuthStatusResponse;
 };
 
@@ -628,6 +667,15 @@ export interface ApolloBridge {
     create(request: ProfilesCreateRequest): Promise<IpcResult<ProfilesCreateResponse>>;
     update(request: ProfilesUpdateRequest): Promise<IpcResult<ProfilesUpdateResponse>>;
     remove(request: ProfilesDeleteRequest): Promise<IpcResult<ProfilesDeleteResponse>>;
+    /**
+     * A config-directory path to prefill the create form with.
+     *
+     * Exists so the renderer never has to know how Apollo lays out its own
+     * user-data directory — a layout it cannot see and should not encode.
+     */
+    suggestDir(
+      request: ProfilesSuggestDirRequest,
+    ): Promise<IpcResult<ProfilesSuggestDirResponse>>;
   };
 
   readonly providers: {
@@ -707,23 +755,17 @@ export interface ApolloBridge {
   };
 
   /**
-   * Per-profile authentication.
+   * Per-profile authentication — two reads and no write.
    *
-   * The whole surface, because this is the *only* way a profile is
-   * authenticated: the provider's own CLI login runs against the profile's
-   * isolated config directory, and no credential ever passes through Apollo —
-   * there is nothing here that takes a key or a token.
+   * There is no `signIn` here, and its absence is the design. The user runs the
+   * provider's own login in their own terminal, against the config directory
+   * this profile names; Apollo's entire part is to hand them the command and
+   * poll {@link status} until it changes. Nothing on this surface accepts a key
+   * or a token, because nothing in Apollo has anywhere to put one.
    */
   readonly auth: {
     /** Read the profile's current login state. Cheap; safe to poll on mount. */
     status(request: AuthStatusRequest): Promise<IpcResult<AuthStatusResponse>>;
-    /**
-     * Run the provider's interactive login for this profile.
-     *
-     * Long-running: the user completes it in a browser, so callers must expect
-     * to wait minutes and should keep the UI cancellable rather than blocked.
-     */
-    signIn(request: AuthSignInRequest): Promise<IpcResult<AuthStatusResponse>>;
     /** Clear the credentials in this profile's config directory. */
     signOut(request: AuthSignOutRequest): Promise<IpcResult<AuthStatusResponse>>;
   };
