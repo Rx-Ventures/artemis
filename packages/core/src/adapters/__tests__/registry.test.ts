@@ -20,17 +20,19 @@ import { AdapterError, adapterError, isAdapterError, scrubSecrets, toAgentError 
 import type { ProviderAdapter, ProviderCredentialSpec } from '../types.js';
 
 /**
- * A credential spec with no backend and no auth-mode choice — the shape a
- * provider that authenticates one way and one way only would declare.
- * Deliberately nothing like Claude's, so these tests cannot accidentally depend
- * on Anthropic's vocabulary leaking back into the registry.
+ * A credential spec deliberately nothing like Claude's, so these tests cannot
+ * accidentally depend on Anthropic's vocabulary leaking back into the registry.
  */
 const FAKE_CREDENTIALS: ProviderCredentialSpec = {
-  apiKeyVar: 'FAKE_API_KEY',
   configDirVar: 'FAKE_CONFIG_DIR',
-  extraManagedEnvKeys: [],
-  authModes: [],
-  backends: [],
+  credentialEnvKeys: ['FAKE_API_KEY'],
+  signIn: {
+    executable: 'fake-cli',
+    loginArgs: ['login'],
+    statusArgs: ['whoami', '--json'],
+    logoutArgs: ['logout'],
+    howTo: 'Run the fake CLI’s login.',
+  },
 };
 
 function fakeAdapter(overrides: Partial<ProviderAdapter> & Pick<ProviderAdapter, 'id'>): ProviderAdapter {
@@ -188,49 +190,35 @@ describe('createDefaultProviderRegistry', () => {
     expect(typeof claude.listSessions).toBe('function');
   });
 
-  it('publishes Claude’s auth modes so the profile editor can build a picker', async () => {
+  it('publishes sign-in instructions so the profile screen can explain the command', async () => {
     const [claude] = await createDefaultProviderRegistry().describe();
 
-    expect(claude?.authModes?.map((mode) => mode.id)).toEqual(['console', 'cloud', 'subscription']);
-    // The first entry is the default, and it must be the metered one: a user
-    // who never opens the picker should not land on subscription billing.
-    //
-    // Every mode is `requiresSecret: false` now — Apollo stores no credential at
-    // all. Console and subscription are the same `claude auth login` with a
-    // different flag, and cloud defers to the cloud provider's own chain.
-    expect(claude?.authModes?.[0]).toMatchObject({ id: 'console', requiresSecret: false });
-    expect(claude?.authModes?.every((mode) => mode.requiresSecret !== true)).toBe(true);
-    expect(claude?.authModes?.[2]).toMatchObject({
-      id: 'subscription',
-      // No stored secret: the credential is created by `claude auth login`
-      // against this profile's own config directory and stays with the CLI.
-      requiresSecret: false,
-      // The constraint the editor needs in order to grey the option out.
-      backends: ['anthropic'],
-    });
-    // The editor still needs to tell the user how to authenticate — it just
-    // points at the in-app sign-in now rather than at a token to paste.
-    // Both Anthropic-billed modes point at the in-app sign-in rather than at a
-    // token to paste. Cloud is exempt: it has nothing to sign in to.
-    expect(claude?.authModes?.[0]?.secretHowTo).toContain('claude auth login');
-    expect(claude?.authModes?.[2]?.secretHowTo).toContain('claude auth login');
+    // The screen generates the command but does not know what it does. The
+    // adapter that owns the argv owns the explanation too.
+    expect(claude?.signInHowTo).toBeTruthy();
+    expect(claude?.signInHowTo).toContain('config directory');
   });
 
-  it('does not publish which variable a mode’s secret is written into', async () => {
+  it('publishes no credential vocabulary at all', async () => {
     const [claude] = await createDefaultProviderRegistry().describe();
-    const serialized = JSON.stringify(claude?.authModes);
+    const serialized = JSON.stringify(claude);
 
-    expect(serialized).not.toContain('secretEnvVar');
+    // A descriptor crosses IPC to the renderer. It carries which command to
+    // run, never which variable a credential would travel in — the renderer has
+    // no use for the latter, and every field it does not receive is one it
+    // cannot leak back.
     expect(serialized).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(serialized).not.toContain('ANTHROPIC_API_KEY');
+    expect(serialized).not.toContain('configDirVar');
   });
 
-  it('offers no auth modes for a provider that is not registered', async () => {
+  it('offers no sign-in instructions for a provider that is not registered', async () => {
     const descriptors = await createDefaultProviderRegistry().describe();
     const codex = descriptors.find((d) => d.id === 'codex');
 
-    // An empty picker rather than Claude's list rendered under Codex's name.
-    expect(codex?.authModes).toEqual([]);
-    expect(codex?.backends).toEqual([]);
+    // Silence rather than Claude's command rendered under Codex's name.
+    expect(codex?.signInHowTo).toBeUndefined();
+    expect(codex?.available).toBe(false);
   });
 });
 

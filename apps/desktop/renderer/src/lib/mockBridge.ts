@@ -8,13 +8,11 @@
  * active the status bar says so in as many words. It never masquerades as a
  * real bridge and it is dead code in a packaged build.
  *
- * It also honours the secret boundary: an API key handed to `profiles.create`
- * is turned into a masked hint and dropped on the floor. Nothing here can hand
- * a key back, so the UI cannot accidentally be written against a bridge that
- * would.
+ * It also honours the secret boundary, which is now trivial to honour: there is
+ * no credential anywhere in the bridge contract, so there is nothing here that
+ * could hand one back.
  */
 
-import { maskApiKey } from '@rx-apollo/protocol';
 import type {
   AgentEvent,
   AuthStatusInfo,
@@ -36,6 +34,17 @@ import type {
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
+
+/** The command the real bridge composes in the main process. */
+const mockSignInCommand = (profileId: string): string => {
+  const dir = MOCK_CONFIG_DIRS[profileId] ?? '/Users/demo/.claude';
+  return `CLAUDE_CONFIG_DIR='${dir}' claude auth login`;
+};
+
+const MOCK_CONFIG_DIRS: Record<string, string> = {
+  'demo-personal': '/Users/demo/.claude',
+  'demo-work': '/Users/demo/Library/Application Support/Apollo/profiles/demo-work',
+};
 
 /** An event minus the envelope fields the transport stamps on. */
 type EventDraft = AgentEvent extends infer E
@@ -153,7 +162,33 @@ const FINAL_USAGE = {
   contextWindow: 200_000,
 } as const;
 
-let mockAuth: AuthStatusInfo = { loggedIn: false, authMethod: 'none' };
+const SIGNED_OUT: AuthStatusInfo = { loggedIn: false, authMethod: 'none' };
+const SIGNED_IN: AuthStatusInfo = {
+  loggedIn: true,
+  authMethod: 'claude.ai',
+  email: 'demo@example.com',
+  orgName: 'Demo Org',
+  subscriptionType: 'max',
+};
+
+/**
+ * How many polls of *one profile* the mock stays signed out for.
+ *
+ * The real flow has the user leave the app, complete a browser login, and come
+ * back; the screen learns about it only by polling. Flipping on a count rather
+ * than on a method call is what reproduces that — a mock that signed in the
+ * instant it was asked would make the waiting state, which is the part most
+ * worth being able to look at, unreachable in dev.
+ *
+ * Counted per profile, because a shared counter is not merely imprecise: the
+ * card list polls every profile it renders, so three cards would exhaust a
+ * global budget between one render and the next and the waiting state would
+ * never be visible at all. Login state belongs to a config directory, and the
+ * mock has to model that or it stops standing in for anything.
+ */
+const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
+const mockAuthPolls = new Map<string, number>();
+const mockSignedOut = new Set<string>(['demo-personal']);
 
 export function createMockBridge(): ApolloBridge {
   const listeners = new Set<(event: AgentEvent) => void>();
@@ -162,29 +197,20 @@ export function createMockBridge(): ApolloBridge {
 
   let profiles: ProfileMetadata[] = [
     {
-      id: 'demo-anthropic',
-      label: 'Demo — Anthropic',
+      id: 'demo-personal',
+      label: 'Demo — personal',
       providerId: 'claude',
-      authMode: 'api-key',
-      keyHint: maskApiKey('sk-ant-api03-demo-key-000000000000000000004f2a'),
+      // An existing directory the user pointed at, which is the case that
+      // motivated letting `configDir` be a full path at all.
+      configDir: '/Users/demo/.claude',
     },
     {
-      id: 'demo-subscription',
-      label: 'Demo — subscription',
+      id: 'demo-work',
+      label: 'Demo — work',
       providerId: 'claude',
-      backend: 'anthropic',
-      // The second billing arrangement, seeded so the badge, the picker and
-      // the "switching modes changes what is billed" warning are all reachable
-      // in dev without a real credential.
-      authMode: 'subscription',
-      keyHint: maskApiKey('sk-ant-oat01-demo-token-00000000000000009c71'),
-    },
-    {
-      id: 'demo-bedrock',
-      label: 'Demo — Bedrock',
-      providerId: 'claude',
-      backend: 'bedrock',
-      keyHint: null,
+      // And one Apollo suggested, so both shapes are visible in dev — only the
+      // second is one Apollo will offer to delete.
+      configDir: '/Users/demo/Library/Application Support/Apollo/profiles/demo-work',
     },
   ];
 
@@ -402,7 +428,7 @@ export function createMockBridge(): ApolloBridge {
         providerId: 'claude',
         // Alternate profiles inside a project, which is the case the row-level
         // marker exists for.
-        profileId: index % 3 === 0 ? 'demo-subscription' : 'demo-anthropic',
+        profileId: index % 3 === 0 ? 'demo-work' : 'demo-personal',
         cwd,
         title: `${TITLES[index % TITLES.length] ?? 'Session'}${index > TITLES.length ? ` (${index})` : ''}`,
         ...(index % 2 === 0
@@ -420,41 +446,8 @@ export function createMockBridge(): ApolloBridge {
       id: 'claude',
       label: 'Claude',
       capabilities: CLAUDE_CAPS,
-      backends: [
-        {
-          id: 'anthropic',
-          label: 'Anthropic API',
-          note: 'Anthropic’s first-party API. A credential is required.',
-          requiresApiKey: true,
-        },
-        {
-          id: 'bedrock',
-          label: 'AWS Bedrock',
-          note: 'Uses the ambient AWS credential chain.',
-          requiresApiKey: false,
-        },
-      ],
-      // Mirrors the shape the real adapter publishes, including the constraint
-      // that makes the picker interesting: subscription billing exists only on
-      // the first-party API, so selecting Bedrock must disable it.
-      authModes: [
-        {
-          id: 'api-key',
-          label: 'API key',
-          note: 'Metered API usage, billed to the key’s account.',
-          requiresSecret: true,
-          secretHowTo: 'Create a key in the provider’s console. It starts with sk-ant-.',
-        },
-        {
-          id: 'subscription',
-          label: 'Claude subscription',
-          note: 'Billed against a Claude Pro, Max, Team or Enterprise plan instead of API credit.',
-          requiresSecret: true,
-          backends: ['anthropic'],
-          secretHowTo:
-            'Run `claude setup-token` in Anthropic’s own CLI. It opens a browser, then prints a token — paste that here. Apollo never performs the login itself.',
-        },
-      ],
+      signInHowTo:
+        'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Apollo. Apollo watches that directory and continues on its own once you are done.',
       // Same pattern again for the status line's model and thinking pickers:
       // both lists come off the descriptor, so a provider that offers neither
       // renders them disabled-with-a-reason rather than showing this one's.
@@ -480,11 +473,9 @@ export function createMockBridge(): ApolloBridge {
       id: 'codex',
       label: 'Codex',
       capabilities: CODEX_CAPS,
-      // Unregistered, so no backends, auth modes, models or effort levels —
+      // Unregistered, so no sign-in instructions, models or effort levels —
       // every picker in the app renders its own "this provider offers none"
       // state, which is the case worth being able to see in dev.
-      backends: [],
-      authModes: [],
       models: [],
       effortLevels: [],
       available: false,
@@ -503,11 +494,14 @@ export function createMockBridge(): ApolloBridge {
           id: newId('prof'),
           label: draft.label,
           providerId: draft.providerId,
-          ...(draft.backend ? { backend: draft.backend } : {}),
-          ...(draft.authMode ? { authMode: draft.authMode } : {}),
-          keyHint: maskApiKey(draft.apiKey ?? null),
+          configDir: draft.configDir,
         };
         profiles = [...profiles, profile];
+        // A newly created profile is signed out, and the mock has to say so or
+        // the sign-in step it leads into would be skipped in dev.
+        mockSignedOut.add(profile.id);
+        mockAuthPolls.set(profile.id, 0);
+        MOCK_CONFIG_DIRS[profile.id] = draft.configDir;
         return ok({ profile });
       },
       update: async ({ id, patch }) => {
@@ -518,12 +512,16 @@ export function createMockBridge(): ApolloBridge {
         const updated: ProfileMetadata = {
           ...existing,
           ...(patch.label === undefined ? {} : { label: patch.label }),
-          ...(patch.backend === undefined ? {} : { backend: patch.backend }),
-          ...(patch.authMode === undefined ? {} : { authMode: patch.authMode }),
-          ...(patch.apiKey === undefined ? {} : { keyHint: maskApiKey(patch.apiKey) }),
+          ...(patch.configDir === undefined ? {} : { configDir: patch.configDir }),
         };
         profiles = profiles.map((p) => (p.id === id ? updated : p));
         return ok({ profile: updated });
+      },
+      suggestDir: async ({ label }) => {
+        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return ok({
+          configDir: `/Users/demo/Library/Application Support/Apollo/profiles/${slug || 'profile'}`,
+        });
       },
       remove: async ({ id }) => {
         profiles = profiles.filter((p) => p.id !== id);
@@ -676,25 +674,26 @@ export function createMockBridge(): ApolloBridge {
      */
     /**
      * Auth starts *signed out*, because that is the state the profile screen
-     * has to handle well and the one a mock that always returns "signed in"
-     * would hide. `signIn` flips it after a beat, standing in for the browser
-     * round trip.
+     * has to handle well and the one a mock that always returned "signed in"
+     * would hide. It flips after a few polls, standing in for a user finishing
+     * the login in their own terminal.
      */
     auth: {
-      status: async () => ok({ status: mockAuth }),
-      signIn: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 900));
-        mockAuth = {
-          loggedIn: true,
-          authMethod: 'claude.ai',
-          email: 'demo@example.com',
-          subscriptionType: 'max',
-        };
-        return ok({ status: mockAuth });
+      status: async ({ profileId }) => {
+        if (mockSignedOut.has(profileId)) {
+          const polls = (mockAuthPolls.get(profileId) ?? 0) + 1;
+          mockAuthPolls.set(profileId, polls);
+          if (polls > MOCK_POLLS_BEFORE_SIGNED_IN) mockSignedOut.delete(profileId);
+        }
+        return ok({
+          status: mockSignedOut.has(profileId) ? SIGNED_OUT : SIGNED_IN,
+          signInCommand: mockSignInCommand(profileId),
+        });
       },
-      signOut: async () => {
-        mockAuth = { loggedIn: false, authMethod: 'none' };
-        return ok({ status: mockAuth });
+      signOut: async ({ profileId }) => {
+        mockSignedOut.add(profileId);
+        mockAuthPolls.set(profileId, 0);
+        return ok({ status: SIGNED_OUT, signInCommand: mockSignInCommand(profileId) });
       },
     },
 

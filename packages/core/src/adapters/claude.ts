@@ -153,160 +153,82 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
 /** Env var selecting an isolated Claude config — and therefore session — directory. */
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
-/** Env var carrying a metered API key. Billed per token to the key's account. */
-export const CLAUDE_API_KEY_ENV = 'ANTHROPIC_API_KEY';
-
 /**
- * Env var carrying a Claude subscription token.
+ * Env vars that authenticate the Claude CLI *without* going through the config
+ * directory — and therefore the exact set Apollo has to keep unset.
  *
- * Minted by the user running `claude setup-token` in Anthropic's own CLI, which
- * opens a browser and prints a long-lived token. **Apollo never does this**: it
- * implements no OAuth flow, opens no browser for login, and never refreshes the
- * token. The user pastes in what their own CLI printed.
+ * Each of these outranks the credential the config directory holds. An
+ * `ANTHROPIC_API_KEY` exported in the user's shell beats the subscription their
+ * profile is signed into and bills metered API usage instead; that failure is
+ * silent, arrives on the bill rather than on screen, and is indistinguishable
+ * from "account switching does not work".
+ *
+ * Apollo sets none of them, in any circumstance, and strips all of them from
+ * every run's inherited environment.
  */
-export const CLAUDE_OAUTH_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
+export const CLAUDE_CREDENTIAL_ENVS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const;
 
 /**
- * How a Claude credential becomes an environment.
+ * How a Claude profile's environment is scoped, and how it gets signed in.
  *
- * This is Claude's vocabulary and it lives with Claude's adapter. The backend
- * list in particular is not universal: `bedrock`, `vertex` and `foundry` are
- * places *Anthropic's* models are hosted, and the flags that select them are
- * read by the Claude CLI and nothing else.
+ * This is Claude's vocabulary and it lives with Claude's adapter. Everything
+ * here is read by the Claude CLI and nothing else — `CLAUDE_CONFIG_DIR`, the
+ * credential variables that would override it, and the `claude auth …` argv.
  *
- * `anthropic` is first, which makes it the default, and it is the only backend
- * that needs a stored credential — the cloud backends authenticate from the
- * ambient AWS, GCP or Azure credential chain, so nothing is read for them even
- * if a secret happens to be stored. It has no flag of its own: it is selected
- * by the *absence* of the other three.
+ * ## One directory, one account
  *
- * ## The two auth modes, and the trap between them
+ * `CLAUDE_CONFIG_DIR` scopes the *credential*, not merely settings. Verified on
+ * macOS, same machine, same moment:
  *
- * `api-key` writes the secret to `ANTHROPIC_API_KEY` and bills metered API
- * usage. `subscription` writes it to `CLAUDE_CODE_OAUTH_TOKEN` and bills a
- * Claude Pro/Max/Team/Enterprise plan.
+ *     CLAUDE_CONFIG_DIR=<temp>  →  { loggedIn: false, authMethod: 'none' }
+ *     (ambient)                 →  { loggedIn: true,  subscriptionType: 'max' }
  *
- * They are not symmetric. **`ANTHROPIC_API_KEY`, when set, overrides the
- * subscription token**: with both present the run is billed as metered API
- * usage even though the user chose the subscription. So it is not enough for
- * subscription mode to set its own variable — the API key variable has to be
- * *absent*, including when it was merely inherited from the user's shell.
- * `managedEnvKeys` covers both variables for exactly that reason, and
- * `resolveEnv` writes back only the selected mode's.
+ * So a login performed with it set belongs to that directory alone, which is
+ * the entire isolation mechanism: one profile, one directory, one account, one
+ * history. (The official docs describe macOS credentials as living in the
+ * Keychain, which reads as though a config directory could not isolate them.
+ * The observed behaviour above says otherwise, and it is what this is built on.)
  *
- * `ANTHROPIC_AUTH_TOKEN` stays managed-and-always-stripped: it is a third
- * credential path Apollo does not expose, and leaving it inheritable would let
- * ambient state pick an account no profile named.
+ * ## Why Apollo emits no credential
+ *
+ * It used to. A profile held a pasted API key or subscription token and this
+ * spec named the variable to write it into. Two things were wrong with that,
+ * and neither was fixable while Apollo held the credential: the secret sat in
+ * Apollo's own store, and `ANTHROPIC_API_KEY` *overrides* a subscription login,
+ * so a profile meant to bill a plan could silently bill API credit instead.
+ *
+ * Now the CLI's own per-profile login supplies the credential and Apollo emits
+ * none of the three variables that could compete with it — it only strips them.
+ * A stale value in the user's shell cannot beat a good login, because there is
+ * no case in which one of these variables survives into a run.
  */
 export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
-  apiKeyVar: CLAUDE_API_KEY_ENV,
   configDirVar: CLAUDE_CONFIG_DIR_ENV,
-  /*
-    Always stripped, never set.
+  credentialEnvKeys: [...CLAUDE_CREDENTIAL_ENVS],
+  signIn: {
+    executable: 'claude',
+    /*
+      No `--claudeai` flag, though it exists and would be equivalent.
 
-    `CLAUDE_CODE_OAUTH_TOKEN` moved here when subscription mode stopped
-    emitting it. Apollo no longer produces this variable in any mode — the CLI's
-    own per-profile login supplies the credential — but it must still be
-    removed from the inherited environment, because an explicitly-set token
-    outranks the config directory's login. Left alone, a token sitting in the
-    user's shell would silently decide which account a profile uses.
+      Subscription is the CLI's own default, and this argv is rendered into a
+      command the *user* reads and runs. A flag that only restates the default
+      is one more thing to explain in a line that has to survive being pasted
+      into a terminal.
 
-    `ANTHROPIC_AUTH_TOKEN` is here for the same reason: a third credential path
-    Apollo does not expose, which ambient state must not be able to select.
-  */
-  extraManagedEnvKeys: ['ANTHROPIC_AUTH_TOKEN', CLAUDE_OAUTH_TOKEN_ENV],
-  authModes: [
-    {
-      id: 'console',
-      label: 'Console account',
-      note: 'Metered API usage, billed to the signed-in Console account.',
-      /*
-        Also no stored secret — the same CLI login, with `--console` instead of
-        `--claudeai`.
-
-        This replaced a pasted-API-key mode. Two things were wrong with that:
-        the key sat in Apollo's own store, and `ANTHROPIC_API_KEY` *overrides* a
-        subscription login, so a profile meant to bill a plan would silently
-        bill API credit instead. Neither is fixable while Apollo holds the
-        credential, so it no longer does.
-      */
-      requiresSecret: false,
-      backends: ['anthropic'],
-      secretHowTo:
-        'Sign in with the button above. Apollo runs `claude auth login --console` against this profile’s own config directory; the browser flow happens in Anthropic’s CLI and no credential passes through Apollo.',
-    },
-    {
-      id: 'cloud',
-      label: 'Cloud credentials',
-      note: 'Billed by the cloud account. Uses that provider’s own credential chain.',
-      /*
-        The cloud backends do not authenticate through Anthropic at all: Bedrock
-        reads the AWS chain, Vertex the Google one, Foundry the Azure one, each
-        from ambient configuration Apollo does not manage. So there is nothing to
-        sign in to here and nothing to store — the mode exists to say that
-        plainly, rather than leaving these backends with no selectable mode.
-      */
-      requiresSecret: false,
-      backends: ['bedrock', 'vertex', 'foundry'],
-      secretHowTo:
-        'Nothing to enter. Configure the cloud provider’s own credentials as you normally would — AWS for Bedrock, gcloud for Vertex, Azure for Foundry — and Apollo’s run inherits them.',
-    },
-    {
-      id: 'subscription',
-      label: 'Claude subscription',
-      note: 'Billed against a Claude Pro, Max, Team or Enterprise plan instead of API credit.',
-      /*
-        No stored secret, by design.
-
-        The credential is created by `claude auth login` run with this
-        profile's `CLAUDE_CONFIG_DIR`, and it lives with the CLI — Apollo never
-        sees, stores or emits it. Verified on macOS: three config directories
-        report three independent answers, so the login genuinely scopes to the
-        profile and multiple accounts still work.
-
-        Emitting `CLAUDE_CODE_OAUTH_TOKEN` here would actively break that,
-        because an explicitly-set token overrides whatever the config directory
-        holds — a stale pasted value would silently beat a good login.
-      */
-      requiresSecret: false,
-      // Subscription billing exists only on Anthropic's first-party API. A
-      // Bedrock or Vertex run is billed by that cloud, so the combination is a
-      // contradiction rather than an unsupported feature.
-      backends: ['anthropic'],
-      secretHowTo:
-        'Sign in with the button above. Apollo runs `claude auth login` against this profile’s own config directory, so the browser flow happens in Anthropic’s CLI and the credential never passes through Apollo.',
-    },
-  ],
-  backends: [
-    {
-      id: 'anthropic',
-      label: 'Anthropic API',
-      note: 'Anthropic’s first-party API. A credential is required.',
-      requiresApiKey: true,
-      envFlag: null,
-    },
-    {
-      id: 'bedrock',
-      label: 'AWS Bedrock',
-      note: 'Uses the ambient AWS credential chain.',
-      requiresApiKey: false,
-      envFlag: 'CLAUDE_CODE_USE_BEDROCK',
-    },
-    {
-      id: 'vertex',
-      label: 'Google Vertex AI',
-      note: 'Uses ambient Google Cloud credentials.',
-      requiresApiKey: false,
-      envFlag: 'CLAUDE_CODE_USE_VERTEX',
-    },
-    {
-      id: 'foundry',
-      label: 'Microsoft Foundry',
-      note: 'Uses ambient Foundry credentials.',
-      requiresApiKey: false,
-      envFlag: 'CLAUDE_CODE_USE_FOUNDRY',
-    },
-  ],
+      `--console` is deliberately not offered. Apollo supports plan-billed
+      accounts, so a mode picker with one entry is a picker that only teaches
+      the user there was a decision to get wrong.
+    */
+    loginArgs: ['auth', 'login'],
+    statusArgs: ['auth', 'status', '--json'],
+    logoutArgs: ['auth', 'logout'],
+    howTo:
+      'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Apollo. Apollo watches that directory and continues on its own once you are done.',
+  },
 };
 
 /**

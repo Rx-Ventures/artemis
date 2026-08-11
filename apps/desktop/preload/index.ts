@@ -45,6 +45,7 @@ import {
   type ApolloBridge,
   type ProfilesCreateRequest,
   type ProfilesDeleteRequest,
+  type ProfilesSuggestDirRequest,
   type ProfilesListRequest,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
@@ -59,7 +60,6 @@ import {
   type SessionsListRequest,
   type Unsubscribe,
   type SessionsMessagesRequest,
-  type AuthSignInRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
@@ -250,6 +250,7 @@ const bridge: ApolloBridge = Object.freeze({
     create: (request: ProfilesCreateRequest) => invoke(IPC.profilesCreate, request),
     update: (request: ProfilesUpdateRequest) => invoke(IPC.profilesUpdate, request),
     remove: (request: ProfilesDeleteRequest) => invoke(IPC.profilesDelete, request),
+    suggestDir: (request: ProfilesSuggestDirRequest) => invoke(IPC.profilesSuggestDir, request),
   }),
 
   /**
@@ -285,13 +286,12 @@ const bridge: ApolloBridge = Object.freeze({
   }),
 
   /**
-   * Two channels rather than one, so the renderer can paint before the
-   * provider answers: `cached` returns immediately from memory, `refresh`
-   * spawns a subprocess.
+   * Two reads and no write: nothing here accepts a credential, and nothing here
+   * performs a login. The user runs the provider's own command; `status` is
+   * what Apollo polls to find out whether they finished.
    */
   auth: Object.freeze({
     status: (request: AuthStatusRequest) => invoke(IPC.authStatus, request),
-    signIn: (request: AuthSignInRequest) => invoke(IPC.authSignIn, request),
     signOut: (request: AuthSignOutRequest) => invoke(IPC.authSignOut, request),
   }),
 

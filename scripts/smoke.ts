@@ -42,12 +42,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { homedir } from 'node:os';
+
 import {
+  checkAuthStatus,
   createDefaultProviderRegistry,
-  InMemorySecretStore,
   ProfileStore,
   resolveEnv,
   RunRegistry,
+  signInCommand,
 } from '@rx-apollo/core';
 import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@rx-apollo/protocol';
 
@@ -114,21 +117,27 @@ function printEvent(event: AgentEvent): void {
 /* -------------------------------------------------------------------------- */
 
 async function main(): Promise<number> {
-  // Either credential works, and which one is set decides the profile's auth
-  // mode — the same choice the profile editor offers. The API key is checked
-  // first because it is the default in the app too.
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  const oauthToken = process.env['CLAUDE_CODE_OAUTH_TOKEN'];
-  const credential = apiKey ?? oauthToken;
-  const authMode = apiKey ? 'api-key' : 'subscription';
+  /*
+    A profile is a config directory, so this script needs one that is already
+    signed in — the same thing the app needs, obtained the same way.
 
-  if (!credential) {
+    It deliberately does *not* read `ANTHROPIC_API_KEY` or
+    `CLAUDE_CODE_OAUTH_TOKEN` any more. Apollo strips both from every run, so a
+    smoke test that authenticated with one would be exercising a path the
+    product does not have.
+  */
+  const configDir = process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude');
+
+  const credentials = createDefaultProviderRegistry().require('claude').credentials;
+  const status = await checkAuthStatus({ credentials, configDir, hostEnv: process.env });
+  if (!status.loggedIn) {
     console.error(
-      'No credential in the environment.\n' +
-        'Apollo never performs a login of its own, so this script needs one of:\n\n' +
-        '  export ANTHROPIC_API_KEY=sk-ant-…          metered API usage\n' +
-        '  export CLAUDE_CODE_OAUTH_TOKEN=…           billed to a Claude subscription\n\n' +
-        'A subscription token is printed by `claude setup-token` in Anthropic’s CLI.\n',
+      `Not signed in at ${configDir}.\n` +
+        `${status.error ?? ''}\n` +
+        'Apollo performs no login of its own — run the CLI’s, the way the app tells you to:\n\n' +
+        `  ${signInCommand({ credentials, configDir })}\n\n` +
+        'Or point this script at a directory that is already signed in:\n\n' +
+        '  export CLAUDE_CONFIG_DIR=/path/to/config/dir\n',
     );
     return 2;
   }
@@ -147,33 +156,28 @@ async function main(): Promise<number> {
   console.log(`Apollo smoke test`);
   console.log(`  scratch : ${root}`);
   console.log(`  workdir : ${workdir}`);
-  console.log(`  auth    : ${authMode}`);
+  console.log(`  config  : ${configDir}`);
   console.log(`  prompt  : ${prompt}\n`);
 
-  // In the desktop app this is a `safeStorage`-backed store. Here it is memory
-  // only, which is the whole reason the scratch directory is disposable.
-  const secrets = new InMemorySecretStore();
-  const profiles = new ProfileStore({ userDataDir, secrets });
+  const profiles = new ProfileStore({ userDataDir });
   const providers = createDefaultProviderRegistry();
 
+  // The profile record is disposable; the directory it points at is the user's
+  // real one and is never written to by the store.
   const profile = await profiles.create({
     label: 'Smoke test',
     providerId: 'claude',
-    backend: 'anthropic',
-    authMode,
-    apiKey: credential,
+    configDir,
   });
 
-  // Prove the metadata projection really is credential-free before going any
-  // further — this is the shape the renderer would receive.
   const metadata = await profiles.describe(profile.id);
-  console.log(`profile ${metadata.id} — ${metadata.label} [${metadata.keyHint ?? 'no key'}]\n`);
+  console.log(`profile ${metadata.id} — ${metadata.label}`);
+  console.log(`  signed in as ${status.email ?? 'unknown'} (${status.subscriptionType ?? status.authMethod ?? '?'})\n`);
 
   const registry = new RunRegistry({
     resolveAdapter: (id) => providers.get(id),
-    // The only path a credential takes into a run. `baseEnv` is left at its
-    // default: the adapter merges the host environment itself, scrubbing
-    // inherited credential variables as it goes.
+    // `baseEnv` is left at its default: the adapter merges the host environment
+    // itself, scrubbing inherited credential variables as it goes.
     resolveRun: async ({
       profileId,
       providerId,
@@ -181,9 +185,8 @@ async function main(): Promise<number> {
       readonly profileId: ProfileId;
       readonly providerId: ProviderId;
     }) => ({
-      env: await resolveEnv(await profiles.require(profileId), secrets, {
-        userDataDir,
-        // The provider decides which variable names its credential lands in.
+      env: await resolveEnv(await profiles.require(profileId), {
+        // The provider decides which variable points at the config directory.
         credentials: providers.require(providerId).credentials,
       }),
     }),

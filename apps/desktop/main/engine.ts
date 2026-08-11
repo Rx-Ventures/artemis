@@ -61,8 +61,7 @@ import type {
   SessionSummary,
   Unsubscribe,
   PlanUsage,
-  AuthMode,
-  AuthStatusInfo,
+  AuthStatusResponse,
 } from '@rx-apollo/protocol';
 
 import {
@@ -74,7 +73,7 @@ import {
   resolveEnv,
   resolveStoreEnv,
   RunRegistry,
-  signIn as cliSignIn,
+  signInCommand,
   signOut as cliSignOut,
   type EnvBundle,
   type ProviderCredentialSpec,
@@ -84,7 +83,6 @@ import {
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';
-import type { SecretStore } from './secrets.js';
 
 const log = createLogger('engine');
 
@@ -95,18 +93,12 @@ const log = createLogger('engine');
 /** What Electron injects into core. */
 export interface EngineOptions {
   /**
-   * Encrypted credential storage, owned by the main process.
-   *
-   * Satisfies core's own `SecretStore` seam (`get` / `set` / `delete`). Core
-   * never sees the ciphertext, the file, or the OS keychain.
-   */
-  readonly secrets: SecretStore;
-  /**
    * Electron's per-app user data directory.
    *
-   * Profile records live here, and so do the per-profile `CLAUDE_CONFIG_DIR`s
-   * that core derives from it (`<userData>/profiles/<configDirName>`) — which
-   * is why a profile record stores a bare directory name rather than a path.
+   * Profile records live here, and so do the config directories Apollo
+   * *suggests* (`<userData>/profiles/<name>`). A profile's actual `configDir`
+   * is an absolute path the user chose and need not be under this one at all —
+   * pointing a profile at `~/.claude` is a supported and common thing to do.
    */
   readonly userDataDir: string;
   /** Apollo's version, for any provider that wants a user-agent string. */
@@ -149,6 +141,8 @@ export interface ApolloEngine {
     id: ProfileId,
     options: { readonly deleteConfigDir?: boolean },
   ): Promise<{ readonly id: ProfileId; readonly configDirDeleted: boolean }>;
+  /** A config-directory path to prefill the create form with. Creates nothing. */
+  suggestConfigDir(label: string): Promise<string>;
 
   startRun(input: RunInput): Promise<RunHandle>;
   sendToRun(runId: RunId, text: string): Promise<{ readonly deliveredImmediately: boolean }>;
@@ -181,17 +175,16 @@ export interface ApolloEngine {
   /**
    * Per-profile authentication, delegated entirely to the provider's own CLI.
    *
-   * This is the only way a profile is authenticated. There is deliberately no
-   * method here that accepts a key or a token: the provider's login writes
-   * credentials into the profile's isolated config directory, so no credential
-   * is ever handled by, stored by, or reachable from Apollo. That is also what
-   * makes multiple accounts work — the config directory *is* the account
-   * boundary.
+   * This is the only way a profile is authenticated, and there is deliberately
+   * no method here that accepts a key or a token — nor one that *performs* a
+   * login. The user runs the provider's command themselves against the
+   * profile's config directory; Apollo reads the result back. No credential is
+   * ever handled by, stored by, or reachable from Apollo, and the config
+   * directory *is* the account boundary, which is what makes multiple accounts
+   * work.
    */
-  authStatus(profileId: ProfileId): Promise<AuthStatusInfo>;
-  /** Long-running: the user completes this in a browser. */
-  signIn(options: { readonly profileId: ProfileId; readonly mode?: AuthMode }): Promise<AuthStatusInfo>;
-  signOut(profileId: ProfileId): Promise<AuthStatusInfo>;
+  authStatus(profileId: ProfileId): Promise<AuthStatusResponse>;
+  signOut(profileId: ProfileId): Promise<AuthStatusResponse>;
 
   listSessions(options: {
     readonly providerId: ProviderId;
@@ -255,7 +248,7 @@ export interface ApolloEngine {
  *         which is the sole caller and catches everything.
  */
 function createEngine(options: EngineOptions): ApolloEngine {
-  const { secrets, userDataDir } = options;
+  const { userDataDir } = options;
 
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
   // actually registers the Claude adapter. An empty registry typechecks
@@ -275,7 +268,7 @@ function createEngine(options: EngineOptions): ApolloEngine {
     ...new Set(providers.list().flatMap((adapter) => managedEnvKeys(adapter.credentials))),
   ];
 
-  const profiles = new ProfileStore({ userDataDir, secrets, managedEnvKeys: managed });
+  const profiles = new ProfileStore({ userDataDir, managedEnvKeys: managed });
 
   /** The credential vocabulary of the provider a request names. */
   const credentialsFor = (providerId: ProviderId): ProviderCredentialSpec =>
@@ -285,34 +278,48 @@ function createEngine(options: EngineOptions): ApolloEngine {
    * Profile → the environment a provider executes with.
    *
    * `baseEnv` is deliberately left at its default (`{}`): this bundle carries
-   * only profile-owned variables — the credential, the backend flag and
-   * `CLAUDE_CONFIG_DIR`. The adapter is what merges the host environment in,
-   * and it scrubs inherited credential variables while doing so, so a key in
-   * the launching shell can never contaminate a profile. Pre-spreading
+   * only profile-owned variables — `CLAUDE_CONFIG_DIR` and the profile's
+   * `publicEnv`. The adapter is what merges the host environment in, and it
+   * scrubs inherited credential variables while doing so, so a key in the
+   * launching shell can never contaminate a profile. Pre-spreading
    * `process.env` here would duplicate that work against a second, separately
    * maintained list of managed keys.
    */
   const envFor = async (profileId: ProfileId, providerId: ProviderId): Promise<EnvBundle> =>
-    resolveEnv(await profiles.require(profileId), secrets, {
-      userDataDir,
+    resolveEnv(await profiles.require(profileId), {
       credentials: credentialsFor(providerId),
     });
 
   /**
    * Profile → just enough environment to *find* its history.
    *
-   * Listing is a read. It needs the isolated config directory and no
-   * credential, so it must not go through `envFor`: that one refuses to resolve
-   * an `anthropic` profile with no key stored, which would make the history
-   * pane show an auth error for a profile the protocol explicitly models as
-   * valid-but-needing-setup. It also would not create a directory on a path
-   * that only reads.
+   * Listing is a read. It needs the config directory and nothing else, and it
+   * must not create that directory on a path that only reads — which is the
+   * one behaviour that separates it from `envFor`.
    */
   const storeEnvFor = async (profileId: ProfileId, providerId: ProviderId): Promise<EnvBundle> =>
     resolveStoreEnv(await profiles.require(profileId), {
-      userDataDir,
       credentials: credentialsFor(providerId),
     });
+
+  /**
+   * Everything the sign-in helpers need about one profile.
+   *
+   * Both the status probe and the generated command are built from the same
+   * pair — the provider's vocabulary and the profile's directory — so they are
+   * resolved once. Reading the status against one directory while telling the
+   * user to sign a different one in is the failure this shape rules out.
+   */
+  const authOptionsFor = async (
+    profileId: ProfileId,
+  ): Promise<{ readonly credentials: ProviderCredentialSpec; readonly configDir: string; readonly hostEnv: NodeJS.ProcessEnv }> => {
+    const profile = await profiles.require(profileId);
+    return {
+      credentials: credentialsFor(profile.providerId),
+      configDir: profileConfigDir(profile),
+      hostEnv: process.env,
+    };
+  };
 
   const runs = new RunRegistry({
     resolveAdapter: (id) => providers.get(id),
@@ -462,29 +469,25 @@ function createEngine(options: EngineOptions): ApolloEngine {
       return usage;
     },
 
-    authStatus: async (profileId) => {
-      const profile = await profiles.require(profileId);
-      return checkAuthStatus({ configDir: profileConfigDir(userDataDir, profile), hostEnv: process.env });
-    },
+    suggestConfigDir: (label) => profiles.suggestConfigDir(label),
 
-    signIn: async (options) => {
-      const profile = await profiles.require(options.profileId);
-      return cliSignIn({
-        configDir: profileConfigDir(userDataDir, profile),
-        hostEnv: process.env,
-        ...(options.mode === undefined ? {} : { mode: options.mode }),
-      });
+    authStatus: async (profileId) => {
+      const options = await authOptionsFor(profileId);
+      return {
+        status: await checkAuthStatus(options),
+        signInCommand: signInCommand(options),
+      };
     },
 
     signOut: async (profileId) => {
-      const profile = await profiles.require(profileId);
-      const configDir = profileConfigDir(userDataDir, profile);
-      await cliSignOut({ configDir, hostEnv: process.env });
-      // Report what the directory *actually* says afterwards rather than
-      // assuming the logout took: a failed sign-out that renders as signed-out
-      // would leave the user's real credential in place while the UI claims
-      // otherwise.
-      return checkAuthStatus({ configDir, hostEnv: process.env });
+      const options = await authOptionsFor(profileId);
+      // `signOut` re-reads the directory afterwards rather than assuming the
+      // logout took: a failed sign-out rendered as signed-out would leave the
+      // real credential in place while the UI claimed otherwise.
+      return {
+        status: await cliSignOut(options),
+        signInCommand: signInCommand(options),
+      };
     },
 
     getSessionMessages: async (query) => {
@@ -577,10 +580,7 @@ function createEngine(options: EngineOptions): ApolloEngine {
           try {
             scopes.push({
               profileId: profile.id,
-              env: await resolveStoreEnv(profile, {
-                userDataDir,
-                credentials: adapter.credentials,
-              }),
+              env: await resolveStoreEnv(profile, { credentials: adapter.credentials }),
             });
           } catch (error) {
             log.warn(`Skipping profile ${profile.id} while listing all sessions`, error);

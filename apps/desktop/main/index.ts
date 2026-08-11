@@ -32,7 +32,6 @@ import { profilesRoot } from '@rx-apollo/core';
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
-import { createSecretStore, probeEncryption, type EncryptionProbe, type SecretStore } from './secrets.js';
 import {
   applySessionPolicy,
   hardenWebContents,
@@ -73,20 +72,14 @@ app.setName('Apollo');
  * directory and lost every profile and every session history the user had.
  * This moves the old directory across, once, on the first launch that finds one.
  *
- * ## The credentials cannot come with it, and that is not a bug to fix here
+ * ## `secrets.v1.json` is deleted rather than carried
  *
- * `safeStorage` encrypts against a keychain item named after the app, so an
- * Apollo build cannot decrypt ciphertext a Libra build wrote — the file would
- * arrive intact and undecryptable. Carrying it over would turn a clean "this
- * profile needs a credential" into a decrypt error on every read, so
- * `secrets.v1.json` is deliberately left behind. Profiles arrive with their
- * names, backends, auth modes and config directories — the parts worth
- * keeping — and each asks for its key again.
- *
- * A two-phase decrypt-under-the-old-identity-then-re-encrypt migration was
- * considered and rejected: it is boot-order code that runs exactly once, is
- * near-impossible to test, and corrupts the secret store if it half-fails.
- * Re-pasting a key is a smaller cost than that risk.
+ * Apollo no longer has a secret store — the provider's own CLI holds the
+ * credential, inside the profile's config directory, which *does* come across
+ * with the rename. So the old encrypted file has nothing to be read by. It is
+ * removed rather than left in place, because a file of undecryptable
+ * ciphertext sitting in the user-data directory invites exactly one question
+ * later ("what is this, and does it still matter?") whose answer is "no".
  *
  * Runs before `app.whenReady()` and synchronously, because everything that
  * follows reads `userData`. A failure is logged and swallowed — a migration
@@ -101,11 +94,9 @@ function adoptPreviousUserData(): void {
   try {
     if (existsSync(current) || !existsSync(previous)) return;
     renameSync(previous, current);
-    // Leaving this behind would be worse than deleting it: it decrypts to
-    // nothing under this app's keychain identity. See above.
+    // Nothing reads this any more, and nothing can. See above.
     rmSync(join(current, 'secrets.v1.json'), { force: true });
     log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
-    log.info('Stored credentials were not carried over; each profile will ask for its key again.');
   } catch (error) {
     log.error('Could not adopt user data from the previous app name', error);
   }
@@ -201,25 +192,6 @@ function focusExistingWindow(): void {
 /* Startup diagnostics                                                        */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Tell the user, in a dialog, when credentials cannot be stored.
- *
- * This is the surfaced half of the "never silently fall back to plaintext"
- * rule. Apollo could make key storage *appear* to work by calling
- * `safeStorage.setUsePlainTextEncryption(true)`; it does not, so the user has to
- * be told why the profile editor is going to refuse their key.
- */
-function reportEncryptionProblem(probe: EncryptionProbe): void {
-  if (probe.available) return;
-  log.error(`Encrypted credential storage is unavailable: ${probe.detail ?? 'unknown reason'}`);
-  dialog.showErrorBox(
-    'Apollo cannot store API keys securely',
-    `${probe.detail ?? 'This machine has no usable credential store.'}\n\n` +
-      'Apollo will not save an API key in plaintext, so profiles cannot be created until this is fixed. ' +
-      'Everything else in the app will continue to work.',
-  );
-}
-
 function reportEngineProblem(): void {
   if (engineHost.ready) return;
   const detail = engineHost.failureMessage ?? 'The engine did not start.';
@@ -269,26 +241,22 @@ async function bootstrap(): Promise<void> {
   installNetworkAuthGuard(app);
   app.on('web-contents-created', (_event, contents) => hardenWebContents(contents, policy));
 
-  const probe = probeEncryption();
-  const secrets: SecretStore = createSecretStore({ probe });
-  if (probe.backend) log.info(`Credential storage backend: ${probe.backend}`);
-
   const userDataDir = app.getPath('userData');
-  // Per-profile `CLAUDE_CONFIG_DIR`s live under `<userData>/profiles/<name>` and
-  // hold session transcripts. Core creates each one on demand; the root is
-  // created here so it is owner-only rather than inheriting the process umask.
+  // Where Apollo's *suggested* config directories live. A profile may point
+  // anywhere, but the suggestions land here and hold real logins and
+  // transcripts, so the root is created owner-only rather than inheriting the
+  // process umask. Core creates each directory inside it on demand.
   await mkdir(profilesRoot(userDataDir), { recursive: true, mode: 0o700 }).catch((error: unknown) => {
     log.error('Could not create the profiles directory', error);
   });
 
-  await engineHost.start({ secrets, userDataDir, appVersion: app.getVersion() });
+  await engineHost.start({ userDataDir, appVersion: app.getVersion() });
 
-  ipcLayer = registerIpcHandlers({ engine: engineHost, secrets, policy });
+  ipcLayer = registerIpcHandlers({ engine: engineHost, policy });
   stopEventForwarding = forwardAgentEvents(engineHost);
 
   createWindow(policy);
 
-  reportEncryptionProblem(probe);
   reportEngineProblem();
 
   app.on('activate', () => {

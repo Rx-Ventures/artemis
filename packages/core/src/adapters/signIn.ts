@@ -1,35 +1,39 @@
 /**
- * Signing a profile in, by driving Anthropic's own CLI.
+ * Signing a profile in, by handing the user their provider's own command.
  *
- * ## Why Apollo performs no login of its own
+ * ## Apollo performs no login
  *
  * Apollo never sees a credential under this design. `claude auth login` opens
  * the browser, completes the OAuth exchange, and writes the token into the
  * profile's own config directory. Apollo supplies one environment variable —
  * `CLAUDE_CONFIG_DIR` — and reads a boolean back. There is no token to paste,
  * store, encrypt, mask or leak, and no `ANTHROPIC_API_KEY` /
- * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Apollo stops
- * setting either.
+ * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Apollo sets
+ * neither and strips both.
  *
- * ## Why this preserves multiple accounts
+ * ## Why the user runs it, rather than Apollo spawning it
  *
- * Verified on macOS, same machine, same moment:
+ * Apollo used to spawn the login itself. It worked, and it was worse:
  *
- *     CLAUDE_CONFIG_DIR=<temp>  →  { loggedIn: false, authMethod: 'none' }
- *     (ambient)                 →  { loggedIn: true,  subscriptionType: 'max' }
+ *  - The subprocess had to be held open for up to five minutes around a browser
+ *    flow Apollo could not observe, so the only failure it could report was a
+ *    timeout — for a login that had actually succeeded, or one where the CLI
+ *    had asked a question nobody could see, alike.
+ *  - `claude auth login` is interactive. Spawned with `stdio: 'ignore'` on
+ *    stdin, any prompt it raises is unanswerable and the process simply hangs.
+ *  - A user who hit trouble had nothing to retry, nothing to read, and nothing
+ *    to paste into a search or a bug report.
  *
- * `CLAUDE_CONFIG_DIR` isolates the *credential*, not merely settings — so a
- * login performed with it set belongs to that directory alone. Apollo already
- * gives every profile its own directory, which is the whole mechanism: one
- * profile, one folder, one account.
- *
- * (The official docs describe macOS credentials as living in the Keychain,
- * which reads as though the config directory could not isolate them. The
- * observed behaviour above says otherwise, and it is what this file is built
- * on.)
+ * {@link signInCommand} produces a line the user can read, run, re-run and
+ * quote. {@link checkAuthStatus} is then polled until the directory answers
+ * differently, which is the same question the old code asked *after* its
+ * subprocess exited — it was always the directory that decided, never the exit
+ * code.
  */
 
 import { spawn } from 'node:child_process';
+
+import type { ProviderCredentialSpec } from './types.js';
 
 /** What the CLI reports about a config directory's authentication. */
 export interface AuthStatus {
@@ -45,35 +49,71 @@ export interface AuthStatus {
   readonly error?: string;
 }
 
-/** How a profile should authenticate. */
-export type SignInMode = 'subscription' | 'console';
-
 export interface SignInOptions {
-  /** The profile's isolated config directory. This is what scopes the login. */
+  /** The provider's vocabulary — argv and variable names. */
+  readonly credentials: ProviderCredentialSpec;
+  /** The profile's config directory. This is what scopes the login. */
   readonly configDir: string;
   /** Inherited environment. `PATH` and `HOME` must survive or the CLI cannot run. */
   readonly hostEnv?: NodeJS.ProcessEnv;
-  /** Path to the `claude` executable. Defaults to resolving it on `PATH`. */
+  /** Override the executable. Defaults to the spec's, resolved on `PATH`. */
   readonly executable?: string;
-  /** Abandon a login the user never completed in the browser. */
+  /** Abandon a probe that is not answering. */
   readonly timeoutMs?: number;
 }
 
 /**
- * The environment the CLI runs under.
+ * Quote one argument for a POSIX shell, if it needs it.
  *
- * `CLAUDE_CONFIG_DIR` is forced to the profile's directory, and the two
- * credential variables are stripped: an inherited `ANTHROPIC_API_KEY` outranks
- * a subscription login (documented precedence), so leaving one in place would
- * let ambient shell state silently decide which account — and which bill — a
- * profile uses. That is the exact failure this design exists to remove.
+ * The config directory is the reason this exists: it is a path the *user*
+ * chose, so it can contain spaces, and a command that breaks when pasted is
+ * worse than no command at all. Single quotes are used because nothing inside
+ * them is interpreted — a path containing `$`, backticks or a backslash is safe
+ * — with the standard `'\''` dance for an embedded single quote.
+ */
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/.:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+}
+
+/**
+ * The command a user runs to sign this profile in.
+ *
+ * A single line, safe to paste into a POSIX shell, that sets the config
+ * directory inline rather than exporting it — so it scopes to this one command
+ * and cannot leak into the rest of the user's session and quietly re-point
+ * their next `claude` invocation.
+ *
+ * ```
+ * CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Apollo/profiles/work' claude auth login
+ * ```
+ *
+ * Windows shells need a different spelling (`$env:` in PowerShell, `set` in
+ * cmd). That is a rendering concern for whoever displays this, not a reason to
+ * emit something no shell accepts.
+ */
+export function signInCommand(options: {
+  readonly credentials: ProviderCredentialSpec;
+  readonly configDir: string;
+}): string {
+  const { credentials, configDir } = options;
+  const assignment = `${credentials.configDirVar}=${shellQuote(configDir)}`;
+  const argv = [credentials.signIn.executable, ...credentials.signIn.loginArgs].map(shellQuote);
+  return `${assignment} ${argv.join(' ')}`;
+}
+
+/**
+ * The environment a status probe runs under.
+ *
+ * `CLAUDE_CONFIG_DIR` is forced to the profile's directory, and every
+ * credential variable is stripped: an inherited `ANTHROPIC_API_KEY` outranks a
+ * subscription login, so leaving one in place would make a signed-out directory
+ * report itself signed in — as the wrong account.
  */
 function childEnv(options: SignInOptions): NodeJS.ProcessEnv {
   const env = { ...(options.hostEnv ?? process.env) };
-  delete env['ANTHROPIC_API_KEY'];
-  delete env['ANTHROPIC_AUTH_TOKEN'];
-  delete env['CLAUDE_CODE_OAUTH_TOKEN'];
-  env['CLAUDE_CONFIG_DIR'] = options.configDir;
+  for (const key of options.credentials.credentialEnvKeys) delete env[key];
+  env[options.credentials.configDirVar] = options.configDir;
   return env;
 }
 
@@ -83,12 +123,17 @@ interface RunResult {
   readonly stderr: string;
 }
 
-function run(args: readonly string[], options: SignInOptions, timeoutMs: number): Promise<RunResult> {
+function run(
+  args: readonly string[],
+  options: SignInOptions,
+  timeoutMs: number,
+): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(options.executable ?? 'claude', [...args], {
+    const child = spawn(options.executable ?? options.credentials.signIn.executable, [...args], {
       env: childEnv(options),
-      // The login flow prints a URL and waits; it must not inherit a TTY it
-      // does not have, and its output is what we report back.
+      // Nothing here is interactive — the interactive command is the one the
+      // *user* runs. Stdin is closed so a probe that unexpectedly prompts fails
+      // fast instead of hanging until the timeout.
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -157,12 +202,17 @@ export function parseAuthStatus(stdout: string): AuthStatus {
 /**
  * Is this profile's directory signed in?
  *
- * Cheap and side-effect free — safe to call whenever the UI needs to know.
- * Never throws: a missing CLI is reported as signed-out-with-a-reason, because
- * every caller is UI that has to render something either way.
+ * Cheap and side-effect free — safe to poll while the user completes a login in
+ * their own terminal, which is exactly what the profile screen does. Never
+ * throws: a missing CLI is reported as signed-out-with-a-reason, because every
+ * caller is UI that has to render something either way.
  */
 export async function checkAuthStatus(options: SignInOptions): Promise<AuthStatus> {
-  const result = await run(['auth', 'status', '--json'], options, options.timeoutMs ?? 15_000);
+  const result = await run(
+    options.credentials.signIn.statusArgs,
+    options,
+    options.timeoutMs ?? 15_000,
+  );
 
   // A signed-out directory legitimately exits non-zero on some versions, and
   // still prints usable JSON. Prefer the JSON, fall back to the exit code.
@@ -174,43 +224,16 @@ export async function checkAuthStatus(options: SignInOptions): Promise<AuthStatu
     error:
       result.stderr.trim() ||
       (result.code === null
-        ? 'Could not run the Claude CLI. Check that `claude` is installed and on your PATH.'
-        : `The Claude CLI exited with code ${result.code}.`),
-  };
-}
-
-/**
- * Sign this profile in.
- *
- * Opens the browser via the CLI and resolves once the flow completes. The
- * default timeout is generous because a human is signing in on the other side.
- *
- * Resolves with the resulting status rather than rejecting: "the user closed
- * the browser" is an ordinary outcome, not an exception.
- */
-export async function signIn(
-  options: SignInOptions & { readonly mode?: SignInMode },
-): Promise<AuthStatus> {
-  const mode = options.mode ?? 'subscription';
-  const result = await run(
-    ['auth', 'login', mode === 'console' ? '--console' : '--claudeai'],
-    options,
-    options.timeoutMs ?? 5 * 60_000,
-  );
-
-  // Trust the directory over the exit code: what matters is whether a
-  // credential now exists, not how the process reported its own exit.
-  const status = await checkAuthStatus(options);
-  if (status.loggedIn) return status;
-
-  return {
-    loggedIn: false,
-    error:
-      result.stderr.trim() || 'Sign-in did not complete. The browser window may have been closed.',
+        ? `Could not run the ${options.credentials.signIn.executable} CLI. Check that it is installed and on your PATH.`
+        : `The CLI exited with code ${result.code}.`),
   };
 }
 
 /** Sign this profile out, clearing the credential from its directory. */
-export async function signOut(options: SignInOptions): Promise<void> {
-  await run(['auth', 'logout'], options, options.timeoutMs ?? 30_000);
+export async function signOut(options: SignInOptions): Promise<AuthStatus> {
+  await run(options.credentials.signIn.logoutArgs, options, options.timeoutMs ?? 30_000);
+  // Report what the directory *actually* says afterwards rather than assuming
+  // the logout took: a failed sign-out rendered as signed-out would leave the
+  // real credential in place while the UI claimed otherwise.
+  return checkAuthStatus(options);
 }

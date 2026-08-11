@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from './errors.js';
 import {
   validateProfilesCreate,
+  validateProfilesSuggestDir,
   validateProfilesUpdate,
   validateRunsRespondPermission,
   validateRunsStart,
@@ -78,11 +79,50 @@ describe('validateRunsStart', () => {
 describe('validateProfilesCreate', () => {
   it('accepts a first-party draft', () => {
     const result = validateProfilesCreate({
-      draft: { label: 'Work', providerId: 'claude', apiKey: '  sk-ant-example-key-value  ' },
+      draft: { label: 'Work', providerId: 'claude', configDir: '  /Users/me/.claude  ' },
     });
     expect(result.draft.label).toBe('Work');
-    // Trimmed, because a pasted key routinely arrives with whitespace.
-    expect(result.draft.apiKey).toBe('sk-ant-example-key-value');
+    // Trimmed, because a pasted path routinely arrives with whitespace.
+    expect(result.draft.configDir).toBe('/Users/me/.claude');
+  });
+
+  it('requires a config directory', () => {
+    // No default. A profile with no directory has no account and no history,
+    // and guessing one on the user's behalf is what the old scheme did.
+    expect(() => validateProfilesCreate({ draft: { label: 'Work', providerId: 'claude' } })).toThrow(
+      ValidationError,
+    );
+  });
+
+  it('rejects a relative config directory', () => {
+    // The path is resolved by a child process whose working directory is not
+    // the user's, so a relative one means somewhere nobody intended.
+    expect(() =>
+      validateProfilesCreate({ draft: { label: 'W', providerId: 'claude', configDir: '.claude' } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a config directory that traverses upward', () => {
+    expect(() =>
+      validateProfilesCreate({
+        draft: { label: 'W', providerId: 'claude', configDir: '/Users/me/../../etc' },
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects the filesystem root', () => {
+    expect(() =>
+      validateProfilesCreate({ draft: { label: 'W', providerId: 'claude', configDir: '/' } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a tilde rather than creating a directory literally named "~"', () => {
+    // Nothing in Apollo expands `~`; a child process would receive it verbatim.
+    expect(() =>
+      validateProfilesCreate({
+        draft: { label: 'W', providerId: 'claude', configDir: '~/.claude' },
+      }),
+    ).toThrow(ValidationError);
   });
 
   it('rejects a credential hiding in publicEnv', () => {
@@ -90,17 +130,21 @@ describe('validateProfilesCreate', () => {
     // written anywhere.
     expect(() =>
       validateProfilesCreate({
-        draft: { label: 'Work', providerId: 'claude', publicEnv: { ANTHROPIC_AUTH_TOKEN: 'nope' } },
+        draft: {
+          label: 'Work',
+          providerId: 'claude',
+          configDir: '/Users/me/.claude',
+          publicEnv: { ANTHROPIC_AUTH_TOKEN: 'nope' },
+        },
       }),
     ).toThrow(ValidationError);
   });
 
   it('rejects publicEnv that would point the credential elsewhere', () => {
     // The renderer is untrusted by construction. `ANTHROPIC_BASE_URL` carries
-    // no secret and passes the credential-name check, but the main process
-    // writes the decrypted key into the same bundle before handing it to the
-    // provider subprocess — so a renderer that could set it would read the key
-    // back off its own server, with nothing sensitive ever crossing IPC.
+    // no secret and passes the credential-name check, but the provider CLI will
+    // send the credential from its config directory to whatever endpoint it is
+    // aimed at — so a renderer that could set it would redirect a real token.
     for (const key of [
       'ANTHROPIC_BASE_URL',
       'ANTHROPIC_CUSTOM_HEADERS',
@@ -114,6 +158,7 @@ describe('validateProfilesCreate', () => {
           draft: {
             label: 'Work',
             providerId: 'claude',
+            configDir: '/Users/me/.claude',
             publicEnv: { [key]: 'https://attacker.example' },
           },
         }),
@@ -132,80 +177,60 @@ describe('validateProfilesCreate', () => {
 
   it('allows genuinely non-sensitive env vars', () => {
     const result = validateProfilesCreate({
-      draft: { label: 'Work', providerId: 'claude', publicEnv: { AWS_REGION: 'us-east-1' } },
+      draft: {
+        label: 'Work',
+        providerId: 'claude',
+        configDir: '/Users/me/.claude',
+        publicEnv: { AWS_REGION: 'us-east-1' },
+      },
     });
     expect(result.draft.publicEnv).toEqual({ AWS_REGION: 'us-east-1' });
   });
 
-  it('rejects a configDirName that escapes its root', () => {
-    expect(() =>
-      validateProfilesCreate({ draft: { label: 'W', providerId: 'claude', configDirName: '../../..' } }),
-    ).toThrow(ValidationError);
-  });
-
-  it('rejects a key with an embedded newline', () => {
-    expect(() =>
-      validateProfilesCreate({ draft: { label: 'W', providerId: 'claude', apiKey: 'sk-ant\nrest' } }),
-    ).toThrow(ValidationError);
-  });
-
-  it('carries the auth mode through', () => {
+  it('drops a field the renderer did not send', () => {
+    // Payloads are rebuilt rather than passed through, so an extra property
+    // cannot ride along into the engine.
     const result = validateProfilesCreate({
       draft: {
-        label: 'Plan',
+        label: 'W',
         providerId: 'claude',
-        authMode: 'subscription',
-        apiKey: 'sk-ant-oat01-0123456789abcdef',
+        configDir: '/Users/me/.claude',
+        apiKey: 'sk-ant-nope',
       },
     });
-    expect(result.draft.authMode).toBe('subscription');
-  });
-
-  it('drops an auth mode the renderer did not send', () => {
-    // Payloads are rebuilt rather than passed through, so an absent field must
-    // stay absent — that is what makes "the provider's default mode" reachable.
-    const result = validateProfilesCreate({ draft: { label: 'W', providerId: 'claude' } });
-    expect('authMode' in result.draft).toBe(false);
-  });
-
-  it('rejects a malformed auth mode id', () => {
-    // Shape only. Whether Claude offers a mode by this name, and whether it
-    // offers it on the chosen backend, is decided in `resolveEnv` where the
-    // adapter's declared list is reachable.
-    for (const authMode of ['Subscription', 'sub scription', '../../etc', 1]) {
-      expect(() =>
-        validateProfilesCreate({ draft: { label: 'W', providerId: 'claude', authMode } }),
-      ).toThrow(ValidationError);
-    }
+    expect('apiKey' in result.draft).toBe(false);
   });
 });
 
 describe('validateProfilesUpdate', () => {
-  it('preserves a null apiKey, which means "delete the credential"', () => {
-    const result = validateProfilesUpdate({ id: 'p1', patch: { apiKey: null } });
-    expect(result.patch.apiKey).toBeNull();
+  it('carries a config-directory change through', () => {
+    const result = validateProfilesUpdate({ id: 'p1', patch: { configDir: '/Users/me/other' } });
+    expect(result.patch.configDir).toBe('/Users/me/other');
   });
 
-  it('omits apiKey entirely when absent, which means "leave it alone"', () => {
+  it('omits configDir entirely when absent, which means "leave it alone"', () => {
     const result = validateProfilesUpdate({ id: 'p1', patch: { label: 'Renamed' } });
-    expect('apiKey' in result.patch).toBe(false);
+    expect('configDir' in result.patch).toBe(false);
   });
 
-  it('carries an auth-mode switch through, and omits it when absent', () => {
-    const switched = validateProfilesUpdate({
-      id: 'p1',
-      patch: { authMode: 'subscription', apiKey: 'sk-ant-oat01-0123456789abcdef' },
-    });
-    expect(switched.patch.authMode).toBe('subscription');
-
-    const renamed = validateProfilesUpdate({ id: 'p1', patch: { label: 'Renamed' } });
-    expect('authMode' in renamed.patch).toBe(false);
-  });
-
-  it('rejects a malformed auth mode on update', () => {
-    expect(() => validateProfilesUpdate({ id: 'p1', patch: { authMode: 'NOT A MODE' } })).toThrow(
+  it('rejects a malformed config directory on update', () => {
+    expect(() => validateProfilesUpdate({ id: 'p1', patch: { configDir: 'relative' } })).toThrow(
       ValidationError,
     );
+  });
+});
+
+describe('validateProfilesSuggestDir', () => {
+  it('accepts a partial label, because the form asks while the user is typing', () => {
+    expect(validateProfilesSuggestDir({ label: 'Wo' })).toEqual({ label: 'Wo' });
+  });
+
+  it('accepts an empty request rather than refusing the first keystroke', () => {
+    expect(validateProfilesSuggestDir({})).toEqual({ label: '' });
+  });
+
+  it('rejects a non-string label', () => {
+    expect(() => validateProfilesSuggestDir({ label: 42 })).toThrow(ValidationError);
   });
 });
 

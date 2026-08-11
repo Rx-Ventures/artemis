@@ -83,7 +83,7 @@ const SECTIONS: readonly SectionEntry[] = [
   {
     id: 'profiles',
     label: 'Profiles',
-    hint: 'Credentials and accounts',
+    hint: 'Accounts and sign-in',
     icon: <KeyRoundIcon aria-hidden="true" />,
   },
   {

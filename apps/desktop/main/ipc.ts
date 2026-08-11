@@ -60,14 +60,12 @@ import { checkWorkingDirectory } from '@rx-apollo/core';
 
 import type { EngineHost } from './engine.js';
 import {
-  SecretStoreUnavailableError,
   toIpcError,
   UntrustedSenderError,
   WorkspaceError,
 } from './errors.js';
 import { createLogger } from './log.js';
 import { assertNoSecrets, EVENT_SCAN_POLICY, RESPONSE_SCAN_POLICY } from './redact.js';
-import type { SecretStore } from './secrets.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
 import {
   validateProfilesCreate,
@@ -85,7 +83,7 @@ import {
   validateSessionsList,
   validateSessionsListAll,
   validateSessionsMessages,
-  validateAuthSignIn,
+  validateProfilesSuggestDir,
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
@@ -131,7 +129,6 @@ export interface HandlerContext {
 
 export interface IpcLayerOptions {
   readonly engine: EngineHost;
-  readonly secrets: SecretStore;
   readonly policy: SecurityPolicy;
 }
 
@@ -147,24 +144,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, secrets, policy } = options;
-
-  /**
-   * Refuse a credential write when there is nowhere safe to put it.
-   *
-   * The engine would fail on this too, but failing here means the error names
-   * the real problem ("no keyring") rather than surfacing as a storage error
-   * three layers down, and it means the plaintext key is discarded immediately.
-   */
-  const assertCanStoreSecrets = (apiKey: string | null | undefined): void => {
-    if (apiKey === undefined || apiKey === null) return;
-    if (secrets.isAvailable()) return;
-    throw new SecretStoreUnavailableError(
-      'encryption_unavailable',
-      secrets.unavailableReason() ??
-        'Apollo cannot encrypt API keys on this machine, so it will not store one. No key was saved.',
-    );
-  };
+  const { engine, policy } = options;
 
   const handlers: ChannelHandlers = {
     /* ---------------------------------------------------------------- */
@@ -180,27 +160,29 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
 
     [IPC.profilesCreate]: {
       validate: validateProfilesCreate,
-      handle: async (request) => {
-        assertCanStoreSecrets(request.draft.apiKey);
-        // `draft.apiKey` is the one plaintext credential in the whole IPC
-        // surface, and it only ever travels this way: renderer → main → the
-        // encrypted store. What comes back is metadata with a masked hint.
-        return { profile: await engine.require().createProfile(request.draft) };
-      },
+      handle: async (request) => ({
+        profile: await engine.require().createProfile(request.draft),
+      }),
     },
 
     [IPC.profilesUpdate]: {
       validate: validateProfilesUpdate,
-      handle: async (request) => {
-        assertCanStoreSecrets(request.patch.apiKey);
-        return { profile: await engine.require().updateProfile(request.id, request.patch) };
-      },
+      handle: async (request) => ({
+        profile: await engine.require().updateProfile(request.id, request.patch),
+      }),
     },
 
     [IPC.profilesDelete]: {
       validate: validateProfilesDelete,
       handle: async (request) =>
         engine.require().deleteProfile(request.id, { deleteConfigDir: request.deleteConfigDir }),
+    },
+
+    [IPC.profilesSuggestDir]: {
+      validate: validateProfilesSuggestDir,
+      handle: async (request) => ({
+        configDir: await engine.require().suggestConfigDir(request.label),
+      }),
     },
 
     /* ---------------------------------------------------------------- */
@@ -364,33 +346,22 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     /* ---------------------------------------------------------------- */
 
     /**
-     * Auth. Note what is *absent*: no channel accepts a key, token or password.
-     * The provider's own CLI performs the login against the profile's isolated
-     * config directory, so a credential never crosses this boundary — which is
-     * also why none of these responses need scrubbing beyond the usual scan.
+     * Auth. Note what is *absent*: no channel accepts a key, token or password,
+     * and none performs a login. The user runs the provider's own command
+     * against the profile's config directory; these two report what landed
+     * there. A credential never crosses this boundary in either direction.
+     *
+     * `authStatus` is polled while the user signs in, so it has to stay cheap —
+     * it spawns one short-lived status probe and nothing else.
      */
     [IPC.authStatus]: {
       validate: validateAuthStatus,
-      handle: async (request) => ({ status: await engine.require().authStatus(request.profileId) }),
-    },
-
-    /**
-     * Long-running by nature: the user finishes this in a browser, and the CLI
-     * waits for them. The renderer must stay responsive rather than modal.
-     */
-    [IPC.authSignIn]: {
-      validate: validateAuthSignIn,
-      handle: async (request) => ({
-        status: await engine.require().signIn({
-          profileId: request.profileId,
-          ...(request.mode === undefined ? {} : { mode: request.mode }),
-        }),
-      }),
+      handle: async (request) => engine.require().authStatus(request.profileId),
     },
 
     [IPC.authSignOut]: {
       validate: validateAuthSignOut,
-      handle: async (request) => ({ status: await engine.require().signOut(request.profileId) }),
+      handle: async (request) => engine.require().signOut(request.profileId),
     },
   };
 
