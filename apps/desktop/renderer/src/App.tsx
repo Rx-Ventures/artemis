@@ -80,6 +80,7 @@ import {
   closeSettings,
   denyPendingPermission,
   installEventBridge,
+  startSessionFeed,
   interruptRun,
   isLive,
   newSession,
@@ -103,11 +104,19 @@ export function App(): ReactElement {
    */
   useEffect(() => {
     const unsubscribe = installEventBridge();
+    // The sidebar's history is not only written by this window — another Apollo
+    // window, or the user's own CLI in a terminal, writes into the same store.
+    // The feed is what keeps the list current without a reload; see
+    // `startSessionFeed`.
+    const stopFeed = startSessionFeed();
     if (!started.current) {
       started.current = true;
       void bootstrap();
     }
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      stopFeed();
+    };
   }, []);
 
   useHotkeys({

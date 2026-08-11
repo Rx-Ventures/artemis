@@ -105,28 +105,28 @@ import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';
 import { describeCredential, resolveAuthMode, resolveBackend } from '../lib/authModes';
 import { shortenPath } from '../lib/paths';
+import { formatTokens } from '../lib/format';
 import {
-  activeEffort,
-  activeEffortLevels,
+  ULTRACODE_LEVEL,
   activeModel,
   activeModels,
   activeProfile,
   activeProvider,
   activeProviderLabel,
+  activeThinkingLevel,
   fastModeAvailable,
   isLive,
   lastKnownBranch,
+  learnedContextWindow,
   openSettings,
   quickModels,
-  selectedModelOption,
-  setEffort,
   setFastMode,
   setModel,
   setPermissionMode,
   setProfile,
-  setUltracode,
+  setThinkingLevel,
+  thinkingLevels,
   toggleSidebar,
-  ultracodeAvailable,
   useApp,
 } from '../state/store';
 import { WorkingDirectoryDialog } from './WorkingDirectory';
@@ -137,16 +137,18 @@ import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Toggle } from '@/components/ui/toggle';
+import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
@@ -186,23 +188,25 @@ const MODE_NOTES: Record<PermissionMode, string> = {
  * sidebar a one-way door for anyone who does not know `mod+b`.
  */
 export function StatusLine(): ReactElement {
+  // No fill. These controls belong to the input directly above them, and the
+  // composer no longer sits in a bar of its own — filling this strip would
+  // re-draw the same bottom panel one row lower.
   return (
-    <footer className="shrink-0 bg-panel">
+    <footer className="shrink-0 pb-1">
       <div className="mx-auto flex h-7 w-full max-w-4xl items-center gap-0.5 px-3 text-2xs">
         <SidebarToggle />
         <Divider />
         <ProfileSegment />
         <Divider />
-        <ModelSegment />
         {/*
-          No divider between the model picker and these two. The dividers on
-          this bar separate independent settings, and fast mode and ultracode
-          are not independent of the model — they are properties of whichever
-          one is selected, and sitting flush against it is what says so.
+          One control, not four. Model, thinking and fast mode used to be a
+          picker plus a picker plus two chips strung along this bar — four
+          segments for settings that are all properties of the *same* choice.
+          They now share a single popover: pick a model, then shape how it runs.
+          Everything that was on the bar is one click away instead of zero, and
+          the bar is short enough to read.
         */}
-        <RunShapeToggles />
-        <Divider />
-        <EffortSegment />
+        <ModelSegment />
         <Divider />
         <ModeSegment />
 
@@ -506,40 +510,31 @@ function ModelSegment(): ReactElement {
         </SegmentTrigger>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" side="top" className="min-w-80 max-w-[min(26rem,90vw)]">
-        <DropdownMenuLabel className="text-2xs text-ink-faint">
-          {hidden > 0 ? 'Quick access' : 'Model'} — {providerLabel}
-        </DropdownMenuLabel>
+      <DropdownMenuContent align="start" side="top" className="w-64 max-w-[min(18rem,90vw)]">
         <DropdownMenuRadioGroup
           value={selected?.id ?? ''}
-          onValueChange={(value) => setModel(value === '' ? null : value)}
+          onValueChange={(value) => setModel(value)}
         >
-          <DropdownMenuRadioItem value="" className="items-start text-2xs">
-            <span className="flex min-w-0 flex-col">
-              <span className="text-ink">Provider default</span>
-              <span className="text-2xs text-ink-faint">
-                Send no model and let {providerLabel} choose.
-              </span>
-            </span>
-          </DropdownMenuRadioItem>
           {listed.map((model) => (
             <ModelRow key={model.id} model={model} />
           ))}
         </DropdownMenuRadioGroup>
 
         <DropdownMenuSeparator />
-        <ModelOptionItems />
+        <ThinkingRow />
+        <FastModeRow />
+        <ContextRow />
 
         <DropdownMenuSeparator />
         <DropdownMenuItem className="gap-1.5 text-2xs" onSelect={() => openSettings('models')}>
           <ListTreeIcon className="size-3 shrink-0" aria-hidden="true" />
-          All models and defaults…
+          Edit quick access…
           {hidden > 0 ? (
             <span className="ml-auto font-mono text-2xs text-ink-faint">{hidden} more</span>
           ) : null}
         </DropdownMenuItem>
 
-        {running ? (
+        {running && running !== selected?.resolvedModel && running !== selected?.id ? (
           <p className="px-2 pt-0.5 pb-1.5 font-mono text-2xs text-ink-faint">
             this run reports: {running}
           </p>
@@ -564,404 +559,116 @@ function ModelSegment(): ReactElement {
  */
 function ModelRow({ model }: { readonly model: ProviderModelOption }): ReactElement {
   return (
-    <DropdownMenuRadioItem value={model.id} className="items-start text-2xs">
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-ink">{model.displayName ?? model.label}</span>
-          {model.supportsFastMode === true ? (
-            <>
-              <ZapIcon className="size-2.5 shrink-0 text-cyan" aria-hidden="true" />
-              <span className="sr-only">offers fast mode</span>
-            </>
-          ) : null}
-          {model.supportsUltracode === true ? (
-            <>
-              <SparklesIcon className="size-2.5 shrink-0 text-ember" aria-hidden="true" />
-              <span className="sr-only">offers ultracode</span>
-            </>
-          ) : null}
-          {model.adaptiveThinking === true ? (
-            <ToneBadge tone="sage" className="shrink-0">
-              adaptive
-            </ToneBadge>
-          ) : null}
-        </span>
-        <span className="text-2xs leading-snug text-ink-faint">{model.note}</span>
-        {model.resolvedModel ? (
-          <span className="truncate font-mono text-2xs text-ink-faint/75">
-            {model.resolvedModel}
-          </span>
-        ) : null}
-      </span>
+    <DropdownMenuRadioItem value={model.id} className="text-2xs">
+      <span className="min-w-0 truncate text-ink">{model.label}</span>
     </DropdownMenuRadioItem>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fast mode and ultracode                                                    */
+/* How the selected model runs                                                */
 /* -------------------------------------------------------------------------- */
 
-/**
-/*
- * The mutual exclusion between fast mode and ultracode used to live here, as a
- * pair of `*Exclusive` wrappers this file exported for itself and the command
- * palette to share. It has moved into `setFastMode` / `setUltracode` in the
- * store, because a settings pane calling the plain setters could reach a state
- * with both flags on — see the note on `setFastMode`. Call the store actions
- * directly; there is nothing to wrap.
- */
-
-function modelName(model: ProviderModelOption): string {
-  return model.displayName ?? model.label;
-}
-
-/**
- * Why fast mode cannot be used, or `undefined` when it can.
- *
- * One function rather than three copies, because the toggle on the bar, the row
- * inside the menu and the command in the palette must give the same answer —
- * and this is the answer, not a tooltip string: `fastModeAvailable` decides
- * *whether*, this says *why*.
- *
- * The trailing sentence about the stored preference matters more than it looks.
- * The store keeps the flag on across a model switch on purpose, but the control
- * shows off, because showing it on next to a model that ignores it would be a
- * lie about what the next run does. Saying so is what stops that reading as a
- * setting Apollo quietly threw away.
- */
-export function fastModeReason(
-  model: ProviderModelOption | undefined,
-  on: boolean,
-): string | undefined {
-  const kept = on ? ' It stays on and applies again on a model that offers it.' : '';
-  if (model === undefined) {
-    return `Fast mode belongs to a specific model, and “provider default” means Apollo does not know which one will run — so it will not offer a switch whose effect it cannot promise. Choose a model.${kept}`;
-  }
-  if (model.supportsFastMode !== true) {
-    return `${modelName(model)} does not offer fast mode.${kept}`;
-  }
-  return undefined;
-}
-
-/** The same question for ultracode. Separate flag, separate answer. */
-export function ultracodeReason(
-  model: ProviderModelOption | undefined,
-  on: boolean,
-): string | undefined {
-  const kept = on ? ' It stays on and applies again on a model that offers it.' : '';
-  if (model === undefined) {
-    return `Ultracode belongs to a specific model, and “provider default” means Apollo does not know which one will run. Choose a model.${kept}`;
-  }
-  if (model.supportsUltracode !== true) {
-    return `${modelName(model)} does not offer ultracode — it needs a model that can think at xhigh effort.${kept}`;
-  }
-  return undefined;
-}
-
-/** The pair of toggles that ride next to the model picker. */
-function RunShapeToggles(): ReactElement {
-  const model = useApp(selectedModelOption);
-  const fastOk = useApp(fastModeAvailable);
-  const ultraOk = useApp(ultracodeAvailable);
-  const fast = useApp((s) => s.fastMode);
-  const ultra = useApp((s) => s.ultracode);
-
-  return (
-    <ButtonGroup className="shrink-0" aria-label="Run shaping">
-      <ShapeToggle
-        name="Fast mode"
-        short="fast"
-        icon={<ZapIcon className="size-2.5 shrink-0" aria-hidden="true" />}
-        hint="Answer sooner, thinking less. Best on edits you can check at a glance."
-        activeClass="border-cyan/40 text-cyan aria-pressed:bg-cyan/10 data-[state=on]:bg-cyan/10 hover:bg-cyan/15 hover:text-cyan"
-        // `fastOk && fast`, never `fast` alone: the toggle reports what the next
-        // run will do, and on a model without fast mode the answer is "nothing".
-        pressed={fastOk && fast}
-        reason={fastOk ? undefined : fastModeReason(model, fast)}
-        onPressedChange={setFastMode}
-      />
-      <ShapeToggle
-        name="Ultracode"
-        short="ultra"
-        icon={<SparklesIcon className="size-2.5 shrink-0" aria-hidden="true" />}
-        hint="Think as hard as the model can before writing. Slower, and worth it on a design you cannot easily undo."
-        activeClass="border-ember/40 text-ember aria-pressed:bg-ember/10 data-[state=on]:bg-ember/10 hover:bg-ember/15 hover:text-ember"
-        pressed={ultraOk && ultra}
-        reason={ultraOk ? undefined : ultracodeReason(model, ultra)}
-        onPressedChange={setUltracode}
-      />
-    </ButtonGroup>
-  );
-}
-
-/**
- * One run-shaping toggle, always tooltipped: the hint when it works, the reason
- * when it does not.
- *
- * Unavailable does **not** mean `disabled`. A natively disabled control takes
- * no pointer events and no focus, so the tooltip carrying the explanation could
- * never open for a mouse or a keyboard — the argument set out at length in
- * `disabled-reason.tsx`, applied here to a Radix toggle. Instead it keeps
- * `aria-disabled`, and the change handler is swapped for a no-op: `pressed` is
- * controlled, so a click that reaches the primitive still cannot move it.
- */
-function ShapeToggle({
-  name,
-  short,
-  icon,
-  hint,
-  activeClass,
-  pressed,
-  reason,
-  onPressedChange,
+/** Shared chrome for the three rows under the model list: label, then control. */
+function ShapeRow({
+  label,
+  children,
 }: {
-  readonly name: string;
-  readonly short: string;
-  readonly icon: ReactNode;
-  readonly hint: string;
-  readonly activeClass: string;
-  readonly pressed: boolean;
-  readonly reason: string | undefined;
-  readonly onPressedChange: (on: boolean) => void;
+  readonly label: string;
+  readonly children: ReactNode;
 }): ReactElement {
-  const dead = reason !== undefined;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Toggle
-          size="sm"
-          aria-label={name}
-          aria-disabled={dead ? true : undefined}
-          pressed={pressed}
-          onPressedChange={dead ? noop : onPressedChange}
-          className={cn(
-            'h-5 min-w-0 shrink-0 gap-1 border border-transparent px-1.5 font-mono text-2xs font-normal text-ink-faint',
-            /*
-             * `activeClass` states its background under the *same* variants the
-             * toggle's own styles use — `aria-pressed:` and `data-[state=on]:`
-             * — rather than as a plain `bg-*`. It has to: the base variant sets
-             * `aria-pressed:bg-muted`, an attribute selector, which outranks an
-             * unmodified class no matter what order they appear in. Matching
-             * the modifier is what lets tailwind-merge drop the grey instead of
-             * layering a losing rule underneath it.
-             */
-            pressed && activeClass,
-            dead && 'cursor-not-allowed opacity-50',
-          )}
-        >
-          {icon}
-          {short}
-        </Toggle>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="start" className="max-w-xs">
-        {reason ?? hint}
-      </TooltipContent>
-    </Tooltip>
+    <div className="flex h-7 items-center gap-2 px-2">
+      <span className="shrink-0 text-2xs text-ink-faint">{label}</span>
+      <span className="ml-auto flex min-w-0 items-center">{children}</span>
+    </div>
   );
 }
-
-function noop(): void {}
 
 /**
- * The same two flags, inside the model menu, where they read as properties of
- * the model above them.
+ * The thinking ladder, as a submenu.
  *
- * Menu items rather than the bar's toggles: this is a menu, so the things in it
- * should be reachable with the arrow keys and announced as
- * `menuitemcheckbox`es. A pair of buttons dropped into `DropdownMenuContent`
- * would look identical and be unreachable without a mouse.
+ * One list from `low` up to ultracode — see `thinkingLevels` for why ultracode
+ * is a rung here rather than a switch of its own. A rung the selected model
+ * cannot do is rendered disabled and unexplained, the same as fast mode below.
  */
-function ModelOptionItems(): ReactElement {
-  const model = useApp(selectedModelOption);
-  const fastOk = useApp(fastModeAvailable);
-  const ultraOk = useApp(ultracodeAvailable);
-  const fast = useApp((s) => s.fastMode);
-  const ultra = useApp((s) => s.ultracode);
+function ThinkingRow(): ReactElement | null {
+  const levels = useApp(thinkingLevels);
+  const current = useApp(activeThinkingLevel);
+  if (levels.length === 0) return null;
+
+  const label = levels.find((l) => l.id === current)?.label ?? '—';
 
   return (
-    <>
-      <DropdownMenuLabel className="text-2xs text-ink-faint">
-        {model ? `${modelName(model)} — options` : 'Model options'}
-      </DropdownMenuLabel>
-      <OptionItem
-        name="Fast mode"
-        note="Answer sooner, thinking less."
-        icon={<ZapIcon className="size-3 shrink-0 text-cyan" aria-hidden="true" />}
-        checked={fastOk && fast}
-        reason={fastOk ? undefined : fastModeReason(model, fast)}
-        onCheckedChange={setFastMode}
-      />
-      <OptionItem
-        name="Ultracode"
-        note="Think as hard as the model can before writing."
-        icon={<SparklesIcon className="size-3 shrink-0 text-ember" aria-hidden="true" />}
-        checked={ultraOk && ultra}
-        reason={ultraOk ? undefined : ultracodeReason(model, ultra)}
-        onCheckedChange={setUltracode}
-      />
-    </>
-  );
-}
-
-function OptionItem({
-  name,
-  note,
-  icon,
-  checked,
-  reason,
-  onCheckedChange,
-}: {
-  readonly name: string;
-  readonly note: string;
-  readonly icon: ReactNode;
-  readonly checked: boolean;
-  readonly reason: string | undefined;
-  readonly onCheckedChange: (on: boolean) => void;
-}): ReactElement {
-  const dead = reason !== undefined;
-  return (
-    <DropdownMenuCheckboxItem
-      checked={checked}
-      disabled={dead}
-      /*
-       * Selecting a checkbox item closes the menu. Here it must not: these are
-       * properties of the model listed directly above, and closing the menu to
-       * report a one-bit change would take away the rows that give it meaning —
-       * including the *other* flag, which this one may have just turned off.
-       */
-      onSelect={(event) => event.preventDefault()}
-      onCheckedChange={dead ? noop : onCheckedChange}
-      // The reason is rendered as part of the row, so the row must stay legible
-      // even though it is disabled; the palette's `GatedItem` does the same.
-      className={cn('items-start text-2xs', dead && 'opacity-100')}
-    >
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className={cn('flex items-center gap-1.5', dead ? 'text-ink-faint' : 'text-ink')}>
-          {icon}
-          {name}
-        </span>
-        <span className="text-2xs leading-snug text-ink-faint">{reason ?? note}</span>
-      </span>
-    </DropdownMenuCheckboxItem>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Effort                                                                     */
-/* -------------------------------------------------------------------------- */
-
-/**
- * How hard the model should think, narrowed to what the selected model accepts.
- *
- * The provider declares a scale; a model declares which rungs of it are real.
- * `ProviderModelOption.effortLevels` is `undefined` for "all of them", a list
- * for "these", and `[]` for "this model takes no effort setting at all" — and
- * the three cases are genuinely different, not a tri-state for its own sake:
- * offering `xhigh` on a model that ignores it sends a parameter the run drops
- * on the floor while the bar goes on claiming it is set.
- *
- * (An earlier version of this comment said no provider declared per-model
- * levels, so the narrowing was not worth building. That stopped being true when
- * the live catalogue landed — the models now arrive carrying their own lists.)
- */
-function EffortSegment(): ReactElement {
-  const providerLevels = useApp(activeEffortLevels);
-  const model = useApp(selectedModelOption);
-  const selected = useApp(activeEffort);
-  const stored = useApp((s) => s.effort);
-  const providerLabel = useApp(activeProviderLabel);
-
-  const allowed = model?.effortLevels;
-  const levels = useMemo(
-    () =>
-      allowed === undefined ? providerLevels : providerLevels.filter((l) => allowed.includes(l.id)),
-    [providerLevels, allowed],
-  );
-
-  if (providerLevels.length === 0) {
-    return (
-      <DeadSegment
-        label="Thinking"
-        icon={<BrainIcon className="size-3 shrink-0" aria-hidden="true" />}
-        text="thinking"
-        reason={`${providerLabel} does not expose a reasoning-effort setting, so there is nothing to choose.`}
-      />
-    );
-  }
-
-  // The provider has a scale and this model sits outside all of it. Dead for a
-  // different reason than the case above, and the reason names the model rather
-  // than the provider, because switching model is what fixes it.
-  if (levels.length === 0) {
-    return (
-      <DeadSegment
-        label="Thinking"
-        icon={<BrainIcon className="size-3 shrink-0" aria-hidden="true" />}
-        text="thinking"
-        reason={`${model ? modelName(model) : 'This model'} takes no reasoning-effort setting. Another model on ${providerLabel} will.`}
-      />
-    );
-  }
-
-  const orphaned = stored !== null && selected === undefined;
-  // Chosen under a different model, and not on this one's scale. The run will
-  // fall back to the model's own default, so the bar says so rather than
-  // showing a level that is not going to be sent.
-  const offModel = selected !== undefined && !levels.some((l) => l.id === selected.id);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <SegmentTrigger
-          label="Thinking"
-          icon={<BrainIcon className="size-3 shrink-0" aria-hidden="true" />}
-          className={cn(selected && 'text-sage', (orphaned || offModel) && 'text-amber')}
-        >
-          {offModel
-            ? `${selected.label.toLowerCase()} (not on this model)`
-            : (selected?.label.toLowerCase() ?? (orphaned ? `${stored} (unavailable)` : 'default'))}
-        </SegmentTrigger>
-      </DropdownMenuTrigger>
-
-      <DropdownMenuContent align="start" side="top" className="min-w-72">
-        <DropdownMenuLabel className="text-2xs text-ink-faint">
-          Thinking effort — least to most
-          {allowed === undefined || model === undefined ? null : ` · ${modelName(model)}`}
-        </DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={offModel ? '' : (selected?.id ?? '')}
-          onValueChange={(value) => setEffort(value === '' ? null : value)}
-        >
-          <DropdownMenuRadioItem value="" className="items-start text-2xs">
-            <span className="flex min-w-0 flex-col">
-              <span className="text-ink">Provider default</span>
-              <span className="text-2xs text-ink-faint">Send no effort setting at all.</span>
-            </span>
-          </DropdownMenuRadioItem>
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger className="h-7 gap-2 px-2 text-2xs">
+        <span className="text-ink-faint">Thinking</span>
+        <span className="ml-auto text-ink">{label}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="min-w-56">
+        <DropdownMenuRadioGroup value={current ?? ''} onValueChange={setThinkingLevel}>
           {levels.map((level) => (
-            <DropdownMenuRadioItem key={level.id} value={level.id} className="items-start text-2xs">
+            <DropdownMenuRadioItem
+              key={level.id}
+              value={level.id}
+              disabled={!level.available}
+              className="items-start text-2xs"
+            >
               <span className="flex min-w-0 flex-col">
-                <span className="text-ink">{level.label}</span>
+                <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-ember' : 'text-ink')}>
+                  {level.label}
+                </span>
                 <span className="text-2xs leading-snug text-ink-faint">{level.note}</span>
               </span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {offModel ? (
-          <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-amber">
-            “{selected.label}” was chosen under a different model.{' '}
-            {model ? modelName(model) : 'This model'} does not accept it, so the next run will use
-            the model’s own default.
-          </p>
-        ) : null}
-        {model?.adaptiveThinking === true ? (
-          <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-ink-faint">
-            {modelName(model)} decides its own thinking depth, so this is a hint rather than an
-            instruction and may not visibly change anything.
-          </p>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+/**
+ * Fast mode.
+ *
+ * Disabled without explanation on a model that does not offer it — deliberately.
+ * Every other degraded control in this app attaches a reason, and that rule is
+ * right when the user could *act* on it. Here they cannot: the answer is always
+ * "this model does not do that", which the disabled state already says, and
+ * spelling it out on a row this small is noise. Switch models and it lights up.
+ */
+function FastModeRow(): ReactElement {
+  const on = useApp((s) => s.fastMode);
+  const available = useApp(fastModeAvailable);
+  return (
+    <ShapeRow label="Fast mode">
+      <Switch
+        checked={on && available}
+        disabled={!available}
+        onCheckedChange={setFastMode}
+        aria-label="Fast mode"
+        className="scale-90"
+      />
+    </ShapeRow>
+  );
+}
+
+/**
+ * The selected model's context window — a fact, not a control.
+ *
+ * There is nothing to choose: the current lineup ships 1M as both the default
+ * and the maximum, so a picker here would offer exactly one option. And the
+ * number is *learned* from a completed run rather than declared by the
+ * catalogue, so it is blank until this model has run once. Blank is the honest
+ * state; the alternative is a hard-coded spec table that goes stale silently.
+ */
+function ContextRow(): ReactElement | null {
+  const window = useApp(learnedContextWindow);
+  if (window === undefined) return null;
+  return (
+    <ShapeRow label="Context">
+      <span className="font-mono text-2xs text-ink-muted">{formatTokens(window)}</span>
+    </ShapeRow>
   );
 }
 

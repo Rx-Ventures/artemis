@@ -338,11 +338,6 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
  */
 export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
   {
-    id: 'default',
-    label: 'Default',
-    note: 'Whatever the installed Claude CLI selects.',
-  },
-  {
     id: 'fable',
     label: 'Fable 5',
     displayName: 'Claude Fable 5',

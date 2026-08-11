@@ -600,19 +600,197 @@ export function activeEffortLevels(state: AppState): readonly ProviderEffortOpti
 /**
  * The model the next run will actually use.
  *
- * `null` when the stored preference names something this provider does not
- * offer — which happens routinely, because the preference survives a provider
- * switch. Callers render that as "provider default" rather than echoing a model
- * id the run will not use.
+ * **Always a real model when the provider offers any.** A stored preference the
+ * current catalogue does not contain — routine, since the preference survives a
+ * provider switch — falls through to the catalogue's first entry, which the
+ * adapter contract defines as the provider's own default.
+ *
+ * There used to be a "Provider default" row in the picker representing the
+ * absent case, and this returned `undefined` for it. It is gone: it named no
+ * model, so it told the user nothing about what would run, and it sat at the
+ * top of the list where it collected mis-clicks. Resolving to a concrete model
+ * means every surface can name what the next run will use.
  */
 export function activeModel(state: AppState): ProviderModelOption | undefined {
   const models = activeModels(state);
-  return models.find((m) => m.id === state.model) ?? undefined;
+  return models.find((m) => m.id === state.model) ?? models[0];
 }
 
-/** The effort level the next run will actually use, resolved the same way. */
+/**
+ * The effort level the next run will actually use, resolved the same way.
+ *
+ * Falls back to the provider's documented default rather than to nothing, for
+ * the same reason {@link activeModel} does — the thinking picker no longer
+ * offers an "unset" rung to represent it.
+ */
 export function activeEffort(state: AppState): ProviderEffortOption | undefined {
-  return activeEffortLevels(state).find((e) => e.id === state.effort) ?? undefined;
+  const levels = activeEffortLevels(state);
+  return levels.find((e) => e.id === state.effort) ?? levels.find((e) => e.id === DEFAULT_EFFORT);
+}
+
+/**
+ * The provider's own default effort, mirrored here so the picker can preselect
+ * it. `high` is what the SDK documents as the default when `effort` is omitted.
+ */
+const DEFAULT_EFFORT = 'high';
+
+/* -------------------------------------------------------------------------- */
+/* Thinking: one scale, from `low` up to ultracode                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The id of the synthetic top rung.
+ *
+ * Ultracode is not an effort level the provider accepts — it is a *setting*
+ * that rides `Options.settings` alongside a real effort. But to a user it is
+ * plainly "more than max", and presenting it as a separate switch next to an
+ * effort picker asks them to reason about a combination that has no meaning
+ * (ultracode at `low` is a contradiction the provider resolves silently). So
+ * the UI offers one ladder and this file does the translating: picking this
+ * rung sets a real effort *and* the flag; picking any other clears the flag.
+ */
+export const ULTRACODE_LEVEL = 'ultracode';
+
+/**
+ * The effort ultracode implies.
+ *
+ * The provider states its own precondition — ultracode "requires an
+ * xhigh-capable model" — so selecting the top rung pins effort there rather
+ * than leaving whatever was set before, which could be `low`.
+ */
+const ULTRACODE_EFFORT = 'xhigh';
+
+/** One rung of the thinking ladder, as the picker renders it. */
+export interface ThinkingLevel {
+  readonly id: string;
+  readonly label: string;
+  readonly note: string;
+  /**
+   * False when the selected model does not offer this rung. The control renders
+   * it disabled and *says nothing about why* — see the note on fast mode in
+   * `StatusLine`. An unavailable rung is not an error to explain, it is simply
+   * not on this model's ladder.
+   */
+  readonly available: boolean;
+}
+
+/**
+ * The thinking ladder for the selected model, least to most.
+ *
+ * Built from the provider's own effort list, narrowed to what the selected
+ * model accepts (`ProviderModelOption.effortLevels`), with ultracode appended
+ * when the model supports it. A model that takes no effort setting at all
+ * (`effortLevels: []`) yields an empty ladder and the control renders dead.
+ */
+export function thinkingLevels(state: AppState): readonly ThinkingLevel[] {
+  const provider = activeEffortLevels(state);
+  if (provider.length === 0) return NO_THINKING;
+
+  const model = selectedModelOption(state);
+
+  /*
+   * Memoised on input identity, and not for speed.
+   *
+   * This builds a fresh array, and it is read through `useApp(thinkingLevels)`
+   * — a zustand selector. A new array on every store read fails zustand's
+   * identity check every time, which re-renders, which reads again: React bails
+   * out with "Maximum update depth exceeded" and the menu never opens. That is
+   * not hypothetical; it is what happened, and `quickModels` above carries the
+   * same guard for the same reason. Any selector in this file that constructs a
+   * value must cache it on its inputs.
+   */
+  if (
+    thinkingCache !== null &&
+    thinkingCache.provider === provider &&
+    thinkingCache.model === model &&
+    thinkingCache.ultra === (model?.supportsUltracode === true)
+  ) {
+    return thinkingCache.out;
+  }
+
+  // `undefined` means "every level the provider offers"; `[]` means none.
+  const allowed = model?.effortLevels;
+  const rungs: ThinkingLevel[] = provider
+    .filter((level) => allowed === undefined || allowed.includes(level.id))
+    .map((level) => ({ id: level.id, label: level.label, note: level.note, available: true }));
+
+  const out: readonly ThinkingLevel[] =
+    rungs.length === 0
+      ? NO_THINKING
+      : [
+          ...rungs,
+          {
+            id: ULTRACODE_LEVEL,
+            label: 'Ultracode',
+            note: 'Maximum effort plus standing multi-agent orchestration. The most compute this model will spend on one turn.',
+            available: model?.supportsUltracode === true,
+          },
+        ];
+
+  thinkingCache = {
+    provider,
+    model,
+    ultra: model?.supportsUltracode === true,
+    out,
+  };
+  return out;
+}
+
+let thinkingCache: {
+  readonly provider: readonly ProviderEffortOption[];
+  readonly model: ProviderModelOption | undefined;
+  readonly ultra: boolean;
+  readonly out: readonly ThinkingLevel[];
+} | null = null;
+
+const NO_THINKING: readonly ThinkingLevel[] = [];
+
+/**
+ * Which rung is selected — an effort id, or {@link ULTRACODE_LEVEL}.
+ *
+ * Ultracode wins when set, because it is the strictly higher rung: a state with
+ * both `ultracode` and an effort is not ambiguous, the effort is the one
+ * ultracode pinned.
+ */
+export function activeThinkingLevel(state: AppState): string | undefined {
+  if (state.ultracode) return ULTRACODE_LEVEL;
+  return activeEffort(state)?.id;
+}
+
+/**
+ * Move to a rung. Handles the effort/ultracode translation in one place.
+ *
+ * Fast mode is cleared on the way up for the same reason the two were made
+ * mutually exclusive in the first place: it buys latency by spending depth and
+ * ultracode does the reverse, so asking for both is a contradiction the
+ * provider can only resolve silently.
+ */
+export function setThinkingLevel(id: string): void {
+  if (id === ULTRACODE_LEVEL) {
+    useApp.setState({ effort: ULTRACODE_EFFORT, ultracode: true, fastMode: false });
+  } else {
+    useApp.setState({ effort: id, ultracode: false });
+  }
+  savePrefs();
+}
+
+/**
+ * The context window observed for the selected model, or `undefined`.
+ *
+ * Learned rather than declared: the provider reports a window only at run end
+ * (`usage.contextWindow`), and nothing in the model catalogue carries one. So
+ * this is blank until the model has completed a run, and that is the honest
+ * state — the alternative is a hard-coded table of model specs, which goes
+ * stale silently and shows a confidently wrong number.
+ *
+ * Keyed by the *resolved* wire id where the catalogue publishes one, because
+ * that is what a run reports back. Falls back to the alias for a provider that
+ * does not resolve.
+ */
+export function learnedContextWindow(state: AppState): number | undefined {
+  const model = selectedModelOption(state);
+  if (!model) return undefined;
+  return state.contextWindows[model.resolvedModel ?? model.id] ?? state.contextWindows[model.id];
 }
 
 /**
@@ -1088,6 +1266,17 @@ export function setInfo(open: boolean): void {
  */
 const SESSION_PAGE_SIZE = 500;
 
+/**
+ * Whether a listing is already in flight.
+ *
+ * Guards re-entrancy rather than queueing: the feed below fires from several
+ * independent triggers (a poll, a lifecycle event, the window regaining focus)
+ * which routinely coincide, and every listing reads the same directories off
+ * disk. A second concurrent read cannot see anything the first will not, so it
+ * is dropped rather than stacked.
+ */
+let sessionsInFlight = false;
+
 export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
   const state = useApp.getState();
@@ -1100,20 +1289,164 @@ export async function refreshSessions(): Promise<void> {
     return;
   }
 
-  useApp.setState({ sessionsLoading: true, sessionsError: null });
-  const listing = await listSessionsEverywhere({
-    providerId: state.activeProviderId,
-    profileId: state.activeProfileId,
-    cwd: state.cwd,
-    limit: SESSION_PAGE_SIZE,
-  });
+  if (sessionsInFlight) return;
+  sessionsInFlight = true;
 
-  useApp.setState({
-    sessionsLoading: false,
-    sessions: listing.sessions,
-    sessionsScope: listing.scope,
-    sessionsError: listing.error ?? null,
-  });
+  /*
+   * The spinner is only raised on the *first* listing. Afterwards this runs on
+   * a timer, and flipping a loading flag every few seconds would put a
+   * permanent flicker in the sidebar for a refresh the user did not ask for and
+   * does not need to know about. A background poll should be invisible until it
+   * changes something.
+   */
+  const first = state.sessions.length === 0;
+  if (first) useApp.setState({ sessionsLoading: true, sessionsError: null });
+
+  try {
+    const listing = await listSessionsEverywhere({
+      providerId: state.activeProviderId,
+      profileId: state.activeProfileId,
+      cwd: state.cwd,
+      limit: SESSION_PAGE_SIZE,
+    });
+
+    useApp.setState((s) => ({
+      sessionsLoading: false,
+      // Reference-stable when nothing changed. `sessions` is the sidebar's
+      // subscription, so handing back a fresh array every poll would re-render
+      // the whole list several times a minute for no reason.
+      sessions: sameSessions(s.sessions, listing.sessions) ? s.sessions : listing.sessions,
+      sessionsScope: listing.scope,
+      sessionsError: listing.error ?? null,
+    }));
+  } finally {
+    sessionsInFlight = false;
+  }
+}
+
+/**
+ * Are these two listings the same, as far as the sidebar is concerned?
+ *
+ * Compares the fields the list actually renders. A deep equality check would be
+ * both slower and wrong — a session carries timestamps and counters that tick
+ * without changing anything on screen.
+ */
+function sameSessions(a: readonly SessionSummary[], b: readonly SessionSummary[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x === undefined || y === undefined) return false;
+    if (
+      x.id !== y.id ||
+      x.title !== y.title ||
+      x.updatedAt !== y.updatedAt ||
+      x.cwd !== y.cwd ||
+      x.profileId !== y.profileId
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The live session feed                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How often the sidebar re-reads session history while a run is live.
+ *
+ * A run rewrites its session file as it goes — the title is generated partway
+ * through, and the timestamp moves on every turn — so this is the window in
+ * which the list is actually changing.
+ */
+const SESSION_POLL_LIVE_MS = 4_000;
+
+/**
+ * And while nothing is running.
+ *
+ * Not zero, because this window is not the only writer: a second Apollo window,
+ * or the user's own `claude` in a terminal, writes into the same history that
+ * this sidebar lists. Polling is what makes those appear without a reload.
+ */
+const SESSION_POLL_IDLE_MS = 20_000;
+
+/**
+ * How long after `run.end` to re-read.
+ *
+ * The provider writes its session file asynchronously, so a listing taken the
+ * instant a run ends frequently reads the state from *before* the last turn —
+ * the row appears with a stale title, or the brand-new session is missing
+ * altogether. That was the bug this feed was built to fix: the list did update
+ * on `run.end`, it just read too early, and nothing read again until the window
+ * was reloaded. Waiting a beat and letting the poll cover the rest is more
+ * robust than trying to guess when the file has landed.
+ */
+const SESSION_SETTLE_MS = 600;
+
+/**
+ * Start the sidebar's live feed. Returns an unsubscribe.
+ *
+ * Three triggers, deliberately overlapping — each covers a case the others
+ * miss, and `refreshSessions` drops the duplicates:
+ *
+ *  - **A timer**, faster while a run is live. Catches this window's own
+ *    in-progress writes and every other writer's.
+ *  - **Window focus and tab visibility**, so returning to a window that has sat
+ *    in the background never shows a stale list for as long as a poll interval.
+ *  - **Lifecycle events**, from `handleAgentEvent`: a session starting, and a
+ *    run ending.
+ *
+ * ## The poll deliberately does not check `document.visibilityState`
+ *
+ * Standing the timer down while the window is hidden is the obvious saving, and
+ * it was written that way first. It is wrong here. The saving is one directory
+ * listing every twenty seconds; the cost of a false "hidden" is that the feed
+ * silently stops and the sidebar goes stale — which is the exact bug this
+ * exists to fix. Electron reports occluded and minimised windows as hidden, and
+ * a plain browser reports a background tab the same way, so the failure mode is
+ * routine rather than exotic. Poll regardless and treat focus as an *extra*
+ * trigger, not a gate.
+ */
+export function startSessionFeed(): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  const schedule = (): void => {
+    if (stopped) return;
+    if (timer !== undefined) clearTimeout(timer);
+    const live = isLive(useApp.getState());
+    timer = setTimeout(tick, live ? SESSION_POLL_LIVE_MS : SESSION_POLL_IDLE_MS);
+  };
+
+  const tick = (): void => {
+    if (stopped) return;
+    void refreshSessions();
+    schedule();
+  };
+
+  const onWake = (): void => {
+    if (stopped) return;
+    void refreshSessions();
+    schedule();
+  };
+
+  schedule();
+  window.addEventListener('focus', onWake);
+  document.addEventListener('visibilitychange', onWake);
+
+  return () => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+    window.removeEventListener('focus', onWake);
+    document.removeEventListener('visibilitychange', onWake);
+  };
+}
+
+/** Re-read history once the provider has had a moment to flush its own writes. */
+function refreshSessionsSoon(): void {
+  setTimeout(() => void refreshSessions(), SESSION_SETTLE_MS);
 }
 
 /** Start a blank transcript. Disposes whatever run is live. */
@@ -1691,6 +2024,11 @@ export function handleAgentEvent(event: AgentEvent): void {
           ...(event.permissionMode === undefined ? {} : { permissionMode: event.permissionMode }),
         },
       });
+      // A session that has only just been created is not in the list the
+      // sidebar is currently showing. Waiting for `run.end` to reveal it means
+      // the thing the user is watching happen is the one thing missing from
+      // their history.
+      refreshSessionsSoon();
       break;
 
     case 'permission.request':
@@ -1752,7 +2090,10 @@ export function handleAgentEvent(event: AgentEvent): void {
       if (event.error) {
         pushBanner('error', `Run failed: ${event.error.message}`, describeError(event.error));
       }
-      void refreshSessions();
+      // Deliberately *not* immediate — see `SESSION_SETTLE_MS`. The provider is
+      // still writing this session's file as the event arrives, so reading now
+      // reliably returns the previous turn's title.
+      refreshSessionsSoon();
       break;
     }
 

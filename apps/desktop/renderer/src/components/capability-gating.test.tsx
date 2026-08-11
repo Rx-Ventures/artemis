@@ -243,13 +243,16 @@ describe('status line / model and effort', () => {
     expect(screen.getByLabelText('Model').textContent).toContain('Opus');
   });
 
-  it('flags a stored model the current provider does not offer', () => {
+  it('falls back to the provider default when the stored model is not offered', () => {
     useProvider(ALL, { models: [{ id: 'sonnet', label: 'Sonnet', note: 'Balanced.' }] });
     useApp.setState({ model: 'gpt-9' });
     mount(<StatusLine />);
-    // Not silently ignored: the run would use the provider default, so the bar
-    // has to stop claiming a model that is not going to be used.
-    expect(screen.getByLabelText('Model').textContent).toContain('unavailable');
+    // A stored preference survives a provider switch, so naming something this
+    // catalogue does not have is routine. It resolves to the catalogue's first
+    // entry — the adapter contract's own default — rather than to an
+    // "(unavailable)" placeholder naming a model that will not run. There is no
+    // "provider default" row any more for the absent case to point at.
+    expect(screen.getByLabelText('Model').textContent).toContain('Sonnet');
   });
 
   it('disables the model segment with a reason when the provider offers none', async () => {
@@ -258,10 +261,26 @@ describe('status line / model and effort', () => {
     expect(await explanationOf('Model')).toMatch(/does not offer a model choice/);
   });
 
-  it('disables the thinking segment with a reason when the provider offers no levels', async () => {
+  it('offers no thinking control at all when the provider exposes no levels', async () => {
+    // Thinking is a row inside the model popover now, not a segment on the bar.
+    // A provider with no effort scale has no ladder to show, so the row is
+    // absent rather than present-and-dead — there is nothing on this surface
+    // for a reason to attach to.
     useProvider(ALL, { effortLevels: [] });
     mount(<StatusLine />);
-    expect(await explanationOf('Thinking')).toMatch(/does not expose a reasoning-effort setting/);
+    const trigger = screen.getByLabelText('Model');
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    await screen.findByRole('menu');
+    expect(screen.queryByText('Thinking')).toBeNull();
+  });
+
+  it('puts thinking inside the model popover when the provider does offer levels', async () => {
+    useProvider(ALL);
+    mount(<StatusLine />);
+    const trigger = screen.getByLabelText('Model');
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    await screen.findByRole('menu');
+    expect(screen.getByText('Thinking')).toBeTruthy();
   });
 });
 
@@ -277,7 +296,9 @@ describe('status line / model and effort', () => {
  * trigger). Only opening one catches it, so each picker gets opened here.
  */
 describe('status line / the pickers actually open', () => {
-  const PICKERS = ['Profile', 'Model', 'Thinking', 'Permission mode'] as const;
+  // Thinking is no longer a trigger on this bar — it is a submenu inside the
+  // model popover, covered by the two tests above.
+  const PICKERS = ['Profile', 'Model', 'Permission mode'] as const;
 
   it.each(PICKERS)('%s opens its menu on click', async (label) => {
     useProvider(ALL);
