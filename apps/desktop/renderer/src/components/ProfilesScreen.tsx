@@ -98,12 +98,27 @@ import { cn } from '@/lib/utils';
 /**
  * How often the sign-in step re-reads the config directory.
  *
- * Each poll spawns a short-lived `claude auth status` subprocess, so this is a
- * trade between "the screen feels dead" and "the machine is busy". Two seconds
- * is comfortably under the time it takes to complete a browser login, and the
- * poll only runs while the sign-in step is actually on screen.
+ * Each poll spawns a short-lived status subprocess (`claude auth status`,
+ * `codex login status`), so this is a trade between "the screen feels dead" and
+ * "the machine is busy". Two seconds is comfortably under the time it takes to
+ * complete a browser login, and the poll only runs while the sign-in step is
+ * actually on screen.
  */
 const POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Where each provider's CLI keeps its config by default.
+ *
+ * Used for the directory placeholder and the "point it at your existing one"
+ * hint, so a Codex profile is not offered `~/.claude` as an example. Presentation
+ * only — the authoritative variable name lives on the adapter's
+ * `ProviderCredentialSpec`, which the renderer never sees.
+ */
+const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
+  claude: '.claude',
+  codex: '.codex',
+  opencode: '.config/opencode',
+};
 
 export function ProfilesSection(): ReactElement {
   const profiles = useApp((s) => s.profiles);
@@ -121,7 +136,7 @@ export function ProfilesSection(): ReactElement {
   return (
     <SettingsPane
       title="Profiles"
-      description="Each profile is a Claude account and its own history, kept in its own config directory. Switching is manual — Apollo never pools accounts or rotates them for you."
+      description="Each profile is one provider account and its own history, kept in its own config directory. Switching is manual — Apollo never pools accounts or rotates them for you."
       actions={
         creating ? null : (
           <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
@@ -157,8 +172,8 @@ export function ProfilesSection(): ReactElement {
         {creating ? <CreateProfileFlow onDone={() => setCreating(false)} /> : null}
 
         <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
-          Apollo stores no credential of any kind. Signing in runs Claude’s own CLI against the
-          profile’s config directory, and the credential it writes stays there — Apollo sets one
+          Apollo stores no credential of any kind. Signing in runs the provider’s own CLI against
+          the profile’s config directory, and the credential it writes stays there — Apollo sets one
           environment variable and reads back whether it worked.
         </p>
       </div>
@@ -408,7 +423,8 @@ function ProfileCard({
               >
                 Also delete the config directory and its session history. Apollo only does this for
                 directories it created itself — one you chose, such as your own{' '}
-                <code className="font-mono">~/.claude</code>, is never deleted.
+                <code className="font-mono">~/.claude</code> or{' '}
+                <code className="font-mono">~/.codex</code>, is never deleted.
               </Label>
             </div>
 
@@ -702,6 +718,10 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const editing = profile !== undefined;
   const providerId: ProviderId = profile?.providerId ?? fallbackProvider;
   const native = hasNativeDirectoryPicker();
+  const providerLabel = useApp(
+    (s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId,
+  );
+  const homeDirName = CONVENTIONAL_CONFIG_DIR[providerId];
 
   /**
    * Whether the user has taken ownership of the path.
@@ -864,7 +884,11 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                   spellCheck={false}
                   autoComplete="off"
                   aria-invalid={pathProblem !== null}
-                  placeholder={platform === 'win32' ? 'C:\\Users\\you\\.claude' : '/Users/you/.claude'}
+                  placeholder={
+                    platform === 'win32'
+                      ? `C:\\Users\\you\\${homeDirName}`
+                      : `/Users/you/${homeDirName}`
+                  }
                   onChange={(event) => {
                     touched.current = true;
                     setConfigDir(event.target.value);
@@ -886,10 +910,10 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                 </ReasonButton>
               </div>
               <FieldDescription className="text-2xs">
-                Claude keeps this profile’s login and its session history here. Apollo suggests a
-                fresh directory; point it at an existing one — your own{' '}
-                <code className="font-mono">~/.claude</code>, say — to reuse an account you are
-                already signed in to.
+                {providerLabel} keeps this profile’s login and its session history here. Apollo
+                suggests a fresh directory; point it at an existing one — your own{' '}
+                <code className="font-mono">~/{homeDirName}</code>, say — to reuse an account you
+                are already signed in to.
               </FieldDescription>
               {pathProblem ? (
                 <FieldDescription className="text-2xs text-amber">{pathProblem}</FieldDescription>

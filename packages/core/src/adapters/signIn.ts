@@ -33,21 +33,9 @@
 
 import { spawn } from 'node:child_process';
 
-import type { ProviderCredentialSpec } from './types.js';
+import type { AuthStatus, ProviderCredentialSpec } from './types.js';
 
-/** What the CLI reports about a config directory's authentication. */
-export interface AuthStatus {
-  readonly loggedIn: boolean;
-  /** `claude.ai` for a subscription, `console` for API billing, `none` when signed out. */
-  readonly authMethod?: string;
-  /** Present when signed in. Shown so a user can tell two accounts apart. */
-  readonly email?: string;
-  readonly orgName?: string;
-  /** `pro`, `max`, `team`, `enterprise` — absent on Console/API logins. */
-  readonly subscriptionType?: string;
-  /** Set when the status could not be read at all, rather than read as "signed out". */
-  readonly error?: string;
-}
+export type { AuthStatus } from './types.js';
 
 export interface SignInOptions {
   /** The provider's vocabulary — argv and variable names. */
@@ -208,25 +196,57 @@ export function parseAuthStatus(stdout: string): AuthStatus {
  * caller is UI that has to render something either way.
  */
 export async function checkAuthStatus(options: SignInOptions): Promise<AuthStatus> {
-  const result = await run(
-    options.credentials.signIn.statusArgs,
-    options,
-    options.timeoutMs ?? 15_000,
-  );
+  const spec = options.credentials.signIn;
+  const result = await run(spec.statusArgs, options, options.timeoutMs ?? 15_000);
 
-  // A signed-out directory legitimately exits non-zero on some versions, and
-  // still prints usable JSON. Prefer the JSON, fall back to the exit code.
-  const parsed = parseAuthStatus(result.stdout);
+  // An adapter whose CLI does not print JSON supplies its own reader. Claude's
+  // convention is the default, not the rule — see `ProviderSignInSpec.parseStatus`.
+  const hooked = spec.parseStatus !== undefined;
+  const parsed = hooked
+    ? readWithHook(spec.parseStatus as NonNullable<typeof spec.parseStatus>, result)
+    : parseAuthStatus(result.stdout);
+
   if (parsed.error === undefined) return parsed;
+
+  // Whose explanation wins depends on who produced it. `parseAuthStatus` can
+  // only say generic things ("did not return a readable status"), so raw stderr
+  // is usually more informative and is preferred — the long-standing behaviour,
+  // preserved exactly for Claude. An adapter-supplied parser has already read
+  // *both* streams and knows what it was looking at, so its diagnosis outranks
+  // the raw text it was reading.
+  const fallback =
+    result.code === null
+      ? `Could not run the ${spec.executable} CLI. Check that it is installed and on your PATH.`
+      : `The CLI exited with code ${result.code}.`;
 
   return {
     loggedIn: false,
-    error:
-      result.stderr.trim() ||
-      (result.code === null
-        ? `Could not run the ${options.credentials.signIn.executable} CLI. Check that it is installed and on your PATH.`
-        : `The CLI exited with code ${result.code}.`),
+    error: hooked
+      ? parsed.error || result.stderr.trim() || fallback
+      : result.stderr.trim() || parsed.error || fallback,
   };
+}
+
+/**
+ * Run an adapter's parser without letting it break the poll.
+ *
+ * The hook is documented as "must not throw", but it is third-party-ish code on
+ * a path the profile screen calls every second while a user signs in. A throw
+ * here would surface as an unhandled rejection rather than as a status, so it
+ * is contained and reported as one.
+ */
+function readWithHook(
+  parse: NonNullable<ProviderCredentialSpec['signIn']['parseStatus']>,
+  result: RunResult,
+): AuthStatus {
+  try {
+    return parse({ stdout: result.stdout, stderr: result.stderr, exitCode: result.code });
+  } catch (error) {
+    return {
+      loggedIn: false,
+      error: `Could not read the sign-in status: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 /** Sign this profile out, clearing the credential from its directory. */
