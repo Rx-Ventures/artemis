@@ -148,6 +148,18 @@ export const IPC_PUSH = {
    * correct, and still lags behind the window.
    */
   windowState: 'artemis:push:window-state',
+  /**
+   * Carries one profile's {@link PlanUsage} each time the poller re-reads it.
+   *
+   * Pushed rather than polled from the renderer, and that is the whole reason
+   * the channel exists. Every reading spawns the provider's CLI, so a renderer
+   * that polled would spawn one subprocess per profile per window — the second
+   * Artemis window would double the machine's load to show the same numbers.
+   * One poller in main, fanned out to whoever is open.
+   *
+   * @see PlanUsagePush
+   */
+  planUsage: 'artemis:push:plan-usage',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -696,6 +708,24 @@ export interface UsagePlanRequest {
   readonly profileId: ProfileId;
 }
 
+/**
+ * One profile's freshly-read plan usage, pushed as the poller collects it.
+ *
+ * Per profile rather than a whole map, because the poller reads accounts one at
+ * a time — batching them into a single message would hold the first result
+ * until the last CLI answered, which on a machine with several accounts is the
+ * difference between the menu being right now and being right in ten seconds.
+ *
+ * `usage` is never null here, unlike {@link UsagePlanResponse}: a push happens
+ * *because* a reading landed. An account that has no plan limits pushes an
+ * `available: false` snapshot, which is a fact worth having — it is what stops
+ * the recommendation from ever naming it.
+ */
+export interface PlanUsagePush {
+  readonly profileId: ProfileId;
+  readonly usage: PlanUsage;
+}
+
 export interface UsagePlanResponse {
   /**
    * The snapshot, or `null` when nothing has been fetched for this profile yet.
@@ -859,6 +889,7 @@ export type IpcHandlerMap = { [C in IpcChannel]: IpcHandler<C> };
 export type IpcPushMap = {
   [IPC_PUSH.agentEvent]: AgentEvent;
   [IPC_PUSH.windowState]: WindowState;
+  [IPC_PUSH.planUsage]: PlanUsagePush;
 };
 
 /** Payload type for a push channel. */
@@ -1008,6 +1039,15 @@ export interface ArtemisBridge {
     cached(request: UsagePlanRequest): Promise<IpcResult<UsagePlanResponse>>;
     /** Fetch from the provider and store the result. Costs no tokens. */
     refresh(request: UsagePlanRequest): Promise<IpcResult<UsagePlanResponse>>;
+    /**
+     * Readings as the main process's poller collects them, for every profile.
+     *
+     * Subscribe rather than poll: the readings arrive whether or not anything
+     * asked, which is what lets a menu opened at any moment already know which
+     * account has room. See {@link IPC_PUSH.planUsage} for why the poll lives
+     * in main and not here.
+     */
+    onChange(listener: (push: PlanUsagePush) => void): Unsubscribe;
   };
 
   /**

@@ -65,6 +65,7 @@ import {
   type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
+  type PlanUsagePush,
   type UsagePlanRequest,
   type WindowRequest,
   type WindowState,
@@ -153,6 +154,28 @@ function isWindowState(value: unknown): value is WindowState {
     typeof candidate.maximized === 'boolean' &&
     typeof candidate.fullScreen === 'boolean' &&
     typeof candidate.focused === 'boolean'
+  );
+}
+
+/**
+ * Minimal shape check on a pushed plan-usage reading. Same standard as
+ * {@link isAgentEvent}.
+ *
+ * `windows` is checked for being an array but not walked: a malformed *window*
+ * renders as a row of dashes, which the meter already handles, whereas a
+ * missing `available` reaches a branch that decides whether the account is
+ * recommendable at all.
+ */
+function isPlanUsagePush(value: unknown): value is PlanUsagePush {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { profileId?: unknown; usage?: unknown };
+  if (typeof candidate.profileId !== 'string' || candidate.profileId === '') return false;
+  if (typeof candidate.usage !== 'object' || candidate.usage === null) return false;
+  const usage = candidate.usage as { available?: unknown; windows?: unknown; fetchedAt?: unknown };
+  return (
+    typeof usage.available === 'boolean' &&
+    Array.isArray(usage.windows) &&
+    typeof usage.fetchedAt === 'number'
   );
 }
 
@@ -253,12 +276,19 @@ const windowStates = createPushChannel<WindowState>({
   isValid: isWindowState,
 });
 
+const planUsages = createPushChannel<PlanUsagePush>({
+  channel: IPC_PUSH.planUsage,
+  label: 'artemis.usagePlan.onChange',
+  isValid: isPlanUsagePush,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
 window.addEventListener('beforeunload', () => {
   agentEvents.reset();
   windowStates.reset();
+  planUsages.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -361,6 +391,7 @@ const bridge: ArtemisBridge = Object.freeze({
   usagePlan: Object.freeze({
     cached: (request: UsagePlanRequest) => invoke(IPC.usagePlanCached, request),
     refresh: (request: UsagePlanRequest) => invoke(IPC.usagePlanRefresh, request),
+    onChange: planUsages.subscribe,
   }),
 
   /**

@@ -167,6 +167,7 @@ export function toMetadata(profile: Profile): ProfileMetadata {
     providerId: profile.providerId,
     configDir: profile.configDir,
     color: profile.color,
+    planId: profile.planId,
   };
 }
 

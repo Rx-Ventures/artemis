@@ -55,6 +55,13 @@
  * because there is no model to switch to and so nothing the user could do about
  * it. See `providerOffersFastMode`.
  *
+ * The closed trigger echoes the whole choice, not just the model: the thinking
+ * level rides beside the name and the cyan zap appears when fast mode is in
+ * force. Folding four segments into one popover shortened the bar; it must not
+ * also hide what the next prompt will do, because "Sonnet 5" with ultracode
+ * armed and "Sonnet 5" on low are different promises about time and money and
+ * the bar exists precisely to make that readable without opening anything.
+ *
  * ## The profile segment is the reason this work exists
  *
  * It names the profile, whether that profile is signed in, and the account it
@@ -88,18 +95,17 @@
 
 import { Fragment, useMemo, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import {
-  BrainIcon,
   ChevronsUpDownIcon,
   CpuIcon,
   KeyRoundIcon,
   ListTreeIcon,
   ShieldAlertIcon,
   ShieldIcon,
-  SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
 import type {
   PermissionMode,
+  PlanRecommendation,
   ProfileId,
   ProfileMetadata,
   ProviderDescriptor,
@@ -122,6 +128,7 @@ import {
   isLive,
   learnedContextWindow,
   openSettings,
+  planRecommendation,
   providerOffersFastMode,
   quickModels,
   setFastMode,
@@ -135,7 +142,7 @@ import {
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton, WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
-import { ProfileSwatch, StatusDot, ToneBadge } from './primitives';
+import { ProfileSwatch, StatusDot } from './primitives';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import {
@@ -262,18 +269,27 @@ function Divider(): ReactElement {
  * rest. It looked completely fine — the button rendered, styled correctly, took
  * focus — and not one of the four pickers opened, because the click handler had
  * been quietly thrown away. Keep the spread.
+ *
+ * `trailing` sits between the label and the chevron, *outside* the truncating
+ * span. That placement is the reason the prop exists: `text-overflow` elides
+ * text and nothing else, so an icon inside the span would be clipped mid-glyph
+ * at the exact widths where truncation kicks in — the mark would break rather
+ * than yield. Out here it is `shrink-0` by convention and the text gives way
+ * instead.
  */
 function SegmentTrigger({
   icon,
   children,
   className,
   label,
+  trailing,
   ...rest
 }: {
   readonly icon: ReactNode;
   readonly children: ReactNode;
   readonly className?: string;
   readonly label: string;
+  readonly trailing?: ReactNode;
 } & ComponentProps<typeof Button>): ReactElement {
   return (
     <Button
@@ -288,6 +304,7 @@ function SegmentTrigger({
     >
       {icon}
       <span className="min-w-0 truncate">{children}</span>
+      {trailing}
       <ChevronsUpDownIcon className="size-2.5 shrink-0 opacity-50" aria-hidden="true" />
     </Button>
   );
@@ -407,6 +424,8 @@ function ProfileSegment(): ReactElement {
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" side="top" className="w-56 max-w-[min(14rem,90vw)]">
+        <RecommendedProfile />
+
         {sections.length === 0 ? (
           <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
             No profile exists yet. A run needs an account, which comes from a profile.
@@ -450,21 +469,156 @@ function ProfileSegment(): ReactElement {
 }
 
 /**
- * One profile row: swatch, label, sign-in state.
+ * Which account has room right now, at the top of the menu.
+ *
+ * ## Why this is worth a section of its own
+ *
+ * The rest of this menu answers "which accounts do I have"; the meter beside it
+ * answers "how full is the one I am in". Neither answers the question that
+ * actually comes up mid-session — *my 5-hour window is nearly gone, where
+ * should I go?* — because answering it means comparing accounts, and nothing in
+ * the app had ever read an account other than the active one. A poll in the
+ * main process now reads them all every few minutes; this is what that is for.
+ *
+ * ## It is a shortcut, not a fourth copy of the list
+ *
+ * A `DropdownMenuItem` outside the radio group rather than a duplicate radio
+ * row inside it. Two radio items with one value both paint their check when
+ * selected, which reads as two accounts being active at once — and the
+ * recommendation is an action ("take me there"), not a fifth state of the
+ * choice below.
+ *
+ * ## The row is a profile, not a report
+ *
+ * One line — swatch and name under a "Recommended" heading — the same anatomy
+ * as every row in the list below it. A first cut carried a headroom badge, the
+ * plan tier and a sentence of justification, and earned the obvious review:
+ * the extra markup buried the answer. The heading is the claim; the row is the
+ * answer; the numbers that argued for it (how free, which window binds, how
+ * many accounts ranked) live in the tooltip, one hover away instead of being
+ * asserted at a glance.
+ *
+ * It renders nothing at all when there is no comparison to make — one account,
+ * stale readings, or accounts that bill per token rather than by plan.
+ * `recommendProfile` holds those rules and explains each; the important one is
+ * that a metered profile is never recommended, because "your plan is full, use
+ * the one that charges per token" is not advice anyone asked for.
+ */
+/**
+ * The sentence behind the row, which is where the whole argument lives.
+ *
+ * The row is a name. This is the case for it, and it has to be *self-correcting*
+ * — a reader who disagrees should be able to see which step they disagree with,
+ * because every basis below is a different quality of evidence.
+ *
+ * ## Why the percentage alone will not do
+ *
+ * Once plan sizes are weighed, the winner can show the **smaller** share free:
+ * 30% of a Max 20x window is six Pro windows against a Pro account's nine
+ * tenths of one. "30% free — picked across 2 accounts" reads as a bug in that
+ * situation, and a tooltip that makes a correct recommendation look broken is
+ * worse than no tooltip. So the weighted case names the plan and says the
+ * comparison was by size.
+ *
+ * ## The assumption is disclosed where it changed something
+ *
+ * A provider reports `max`, never `Max 5x` or `Max 20x`, so an unpinned account
+ * is ranked as the family's floor. That understates it, which is the safe
+ * direction, but it is still a reason the answer might be wrong — and the fix
+ * takes ten seconds in the profile editor. Someone can only take it if they
+ * know it is theirs to take.
+ *
+ * Only under `weighted`, though. That is the one basis where a plan's size
+ * enters the arithmetic; under the other two the tier was never consulted, and
+ * warning about an assumption that changed no outcome trains people to skip the
+ * sentence in the case where it matters.
+ */
+function explainRecommendation(recommendation: PlanRecommendation): string {
+  const share = `${String(Math.round(recommendation.headroom))}% free on its ${recommendation.binding.label} limit`;
+  const across = `across ${String(recommendation.candidates)} accounts`;
+
+  const basis =
+    recommendation.basis === 'same-plan'
+      ? `${share} — the most room ${across} on this plan.`
+      : recommendation.basis === 'weighted'
+        ? // The plan is named because the number on its own now understates the
+          // pick. See the header.
+          `${share}, and ${recommendation.plan?.label ?? 'its plan'} is the largest plan in play — the most actual capacity ${across}, not the largest percentage.`
+        : `${share} — the largest share of its own plan ${across}. They are on different plans, and providers report only percentages, never how much a plan holds, so this is not a comparison of capacity.`;
+
+  if (!recommendation.assumedPlan || recommendation.basis !== 'weighted') return basis;
+  return `${basis} That tier is an assumption — the provider reports a plan family, never which tier of it — so set the exact plan on the profile if it is wrong.`;
+}
+
+function RecommendedProfile(): ReactElement | null {
+  const pane = usePaneRef();
+  const profiles = useApp((s) => s.profiles);
+  const usageByProfile = useApp((s) => s.planUsageByProfile);
+
+  /*
+   * `Date.now()` is captured at mount, not on every render, and that is exactly
+   * right here: Radix mounts this content when the menu opens, so the staleness
+   * rule is re-judged at the moment the user is about to act on the answer.
+   * A `useApp` selector could not return this — see `planRecommendation`.
+   */
+  const recommendation = useMemo(
+    () => planRecommendation(profiles, usageByProfile, Date.now()),
+    [profiles, usageByProfile],
+  );
+  if (recommendation === null) return null;
+
+  const profile = profiles.find((p) => p.id === recommendation.profileId);
+  if (!profile) return null;
+
+  const why = explainRecommendation(recommendation);
+
+  return (
+    <>
+      <DropdownMenuLabel className="text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
+      <DropdownMenuItem
+        className="gap-1.5 text-2xs"
+        onSelect={() => setProfile(profile.id, pane)}
+        title={why}
+      >
+        <ProfileSwatch color={profile.color} />
+        <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
+/**
+ * One profile row: swatch, name, and the plan in muted text beside it.
  *
  * One line, not two. The account and its config directory used to sit stacked,
  * which doubled the height of every row to show a path nobody picks a profile
  * by — the swatch and the name are what identify it. Both the directory and
  * the signed-in email survive as the row's tooltip, which is where a detail
  * belongs when it is wanted rarely and never at a glance.
+ *
+ * The plan used to be a filled badge pushed to the row's far edge. A badge is a
+ * status light, and a plan tier is not a status — it is a fact about the
+ * account — so it now reads as quiet text directly after the name. The one
+ * state that *is* a status, checked-and-signed-out, keeps its amber; and a
+ * signed-in account whose tier is simply unknown shows nothing rather than a
+ * "signed in" filler that answers a question nobody asked.
+ *
+ * The tier falls back to the polled plan reading when the sign-in probe does
+ * not name one. The two probes know different things — Codex's auth check
+ * answers "signed in" with no plan attached, while its rate-limit read reports
+ * `team` — and which plan an account is on should not depend on which probe
+ * happened to carry the answer.
  */
 function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
   const status = useApp((s) => s.authByProfile[id]);
+  const polledTier = useApp((s) => s.planUsageByProfile[id]?.subscriptionType);
   const platform = useApp((s) => s.platform);
   if (!profile) return null;
 
   const path = shortenPath(profile.configDir, { platform, max: 60 });
+  const tier = status?.loggedIn === true ? (status.subscriptionType ?? polledTier) : undefined;
 
   return (
     <DropdownMenuRadioItem
@@ -473,19 +627,18 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
       title={status?.email ? `${status.email} — ${path}` : path}
     >
       {/*
-       * `min-w-0 flex-1` on the label and `shrink-0` on the badge, in that
-       * combination. Without it the badge — which has its own intrinsic width
-       * and no reason to yield — squeezes the label to nothing, and a profile
-       * row ends up showing its sign-in state and no name at all. Which of
-       * the two the user needs more is not a close call.
+       * The name is the only flexible thing on the row: `min-w-0`+`truncate` on
+       * it, `shrink-0` on the texts after it, so under pressure the name elides
+       * and the tier survives. No `flex-1` on the name, deliberately — that is
+       * what pushed the old badge to the far edge, and the tier belongs beside
+       * the name it describes, not across the row from it.
        */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <ProfileSwatch color={profile.color} />
-        <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
-        {status ? (
-          <ToneBadge tone={status.loggedIn ? 'sage' : 'amber'} className="shrink-0">
-            {status.loggedIn ? (status.subscriptionType ?? 'signed in') : 'signed out'}
-          </ToneBadge>
+        <span className="min-w-0 truncate text-ink">{profile.label}</span>
+        {tier !== undefined ? <span className="shrink-0 text-ink-faint">{tier}</span> : null}
+        {status !== undefined && !status.loggedIn ? (
+          <span className="shrink-0 text-amber">signed out</span>
         ) : null}
       </span>
     </DropdownMenuRadioItem>
@@ -506,6 +659,16 @@ function ModelSegment(): ReactElement {
   // What the *run* reports it is actually using, which can differ from what was
   // asked for — the provider may substitute. Shown once it is known.
   const running = usePane((s) => s.run?.model);
+  // The rest of the choice, for the closed trigger. Same selectors the rows
+  // inside the popover read, so the two can never disagree.
+  const levels = usePane(thinkingLevels);
+  const thinking = usePane(activeThinkingLevel);
+  const fastOn = usePane((s) => s.fastMode);
+  const fastAvailable = usePane(fastModeAvailable);
+
+  // Undefined on a provider with no effort scale, where there is no ladder and
+  // so no rung to name — the suffix vanishes with the ThinkingRow it mirrors.
+  const thinkingLabel = levels.find((l) => l.id === thinking)?.label;
 
   /*
    * The pinned models, plus the selected one when it is not among them.
@@ -553,14 +716,37 @@ function ModelSegment(): ReactElement {
           label="Model"
           icon={<CpuIcon className="size-3 shrink-0" aria-hidden="true" />}
           className={cn(selected && 'text-ink', orphaned && 'text-amber')}
+          trailing={
+            /*
+             * Gated on `on && available`, the same expression as the switch
+             * inside — a zap for a flag the run will ignore would be the
+             * enabled-toggle-that-does-nothing failure `fastModeAvailable`
+             * exists to prevent, shrunk to icon size.
+             */
+            fastOn && fastAvailable ? (
+              <ZapIcon className="size-3 shrink-0 text-cyan" aria-label="fast mode on" />
+            ) : undefined
+          }
         >
           {/*
             The *short* label here and the full `displayName` on the rows below.
             This trigger is one segment of five on a 20px bar and "Claude Sonnet
             5 (latest)" would push the rest of the bar off the end of it; the
             menu is where there is room to be unambiguous.
+
+            The thinking level rides after it, lowercased to match the bar's
+            register (the mode segment says "ask", not "Ask"). It lives inside
+            the truncating span *behind* the name deliberately: when the two
+            cannot both fit, the model keeps its start and the refinement is
+            what the ellipsis eats.
           */}
           {selected?.label ?? (orphaned ? `${stored} (unavailable)` : 'default')}
+          {thinkingLabel !== undefined ? (
+            <span className={cn(thinking === ULTRACODE_LEVEL ? 'text-lunar' : 'text-ink-muted')}>
+              {' · '}
+              {thinkingLabel.toLowerCase()}
+            </span>
+          ) : null}
         </SegmentTrigger>
       </DropdownMenuTrigger>
 

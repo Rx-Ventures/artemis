@@ -106,8 +106,17 @@ function resetLabel(resetsAt: number | null, now: number): string {
  *
  * Claude's payload carries these alongside the limits that actually stop you,
  * and showing seven bars would bury the two that matter.
+ *
+ * `nimbus_quill` is an internal experiment flag riding the rate-limits payload
+ * — utilization 0, no reset time, named after nothing a user could act on. Its
+ * codename siblings (`tangelo`, `cinder_cove`, …) arrive as `null` and never
+ * render; this one arrives as an object and drew a permanent 0% bar.
  */
-const NOT_WORTH_A_BAR: ReadonlySet<string> = new Set(['seven_day_oauth_apps', 'extra_usage']);
+const NOT_WORTH_A_BAR: ReadonlySet<string> = new Set([
+  'seven_day_oauth_apps',
+  'extra_usage',
+  'nimbus_quill',
+]);
 
 /**
  * Is this window worth a bar?
@@ -124,9 +133,18 @@ const NOT_WORTH_A_BAR: ReadonlySet<string> = new Set(['seven_day_oauth_apps', 'e
  * heard of is far more likely to be a new limit worth seeing than a new kind of
  * clutter, and the failure modes are not symmetric — one extra bar is a
  * cosmetic problem, a missing bar is a plan that runs out without warning.
+ *
+ * Usage credits are the one *conditional* entry. They are overflow billing
+ * rather than a limit: nothing about the plan runs out when they sit at zero,
+ * and zero is the state most accounts are permanently in — so an always-on row
+ * would be permanent noise, while a row that appears is the news itself
+ * ("you are now spending past your plan"). Hidden until there is a number
+ * greater than nothing to report.
  */
-function isShown(id: string): boolean {
-  return !NOT_WORTH_A_BAR.has(id);
+function isShown(window: PlanUsageWindow): boolean {
+  if (NOT_WORTH_A_BAR.has(window.id)) return false;
+  if (window.id === 'spend') return window.utilization !== null && window.utilization > 0;
+  return true;
 }
 
 /** Order: overall limits first, then per-model, then a provider's own names. */
@@ -462,7 +480,7 @@ function PlanWindows({
   }
 
   const shown = usage.windows
-    .filter((w) => isShown(w.id))
+    .filter((w) => isShown(w))
     .slice()
     .sort((a, b) => displayRank(a.id) - displayRank(b.id) || a.label.localeCompare(b.label));
 

@@ -289,8 +289,8 @@ export class SessionNamer {
   async #name(runId: RunId, sessionId: SessionId, record: PendingRun): Promise<void> {
     const adapter = await this.#resolveAdapter(record.providerId);
     // Both halves or neither: a title with nowhere to store it is a call that
-    // spends the user's account for nothing. See the Codex adapter, which has
-    // one half and therefore ships neither.
+    // spends the user's account for nothing, and a store with no generator
+    // simply keeps the names it has.
     if (adapter?.suggestSessionTitle === undefined || adapter.setSessionTitle === undefined) return;
 
     const plan = await this.#plan({

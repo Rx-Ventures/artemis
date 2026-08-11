@@ -55,7 +55,13 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react';
-import { configDirProblem, normalizeProfileColor, profileColorProblem } from '@rx-artemis/protocol';
+import {
+  configDirProblem,
+  normalizeProfileColor,
+  normalizeProfilePlanId,
+  plansForProvider,
+  profileColorProblem,
+} from '@rx-artemis/protocol';
 import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-artemis/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
@@ -94,6 +100,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
@@ -585,6 +598,89 @@ function SignInStep({
 }
 
 /* -------------------------------------------------------------------------- */
+/* Plan                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** The value the "let the provider say" option carries. See {@link PlanField}. */
+const PLAN_UNPINNED = 'auto';
+
+/**
+ * Which plan this account is on.
+ *
+ * ## Why the user is asked at all
+ *
+ * Everything else on this form is something only the user knows. This is the
+ * one field that exists because the *provider* will not say: the usage payload
+ * reports a plan family, so Claude answers `max` for both Max 5x and Max 20x
+ * and Codex answers `pro` for both of its Pro tiers. The members of a family
+ * differ by four times, which is more than enough to invert "which of my
+ * accounts has the most room left" — the question the profile menu's
+ * Recommended section answers.
+ *
+ * ## Why it defaults to unpinned rather than to a guess
+ *
+ * Left alone, Artemis assumes the smallest tier in the reported family. That
+ * assumption can only ever *understate* an account, so the cost of never
+ * touching this field is a recommendation not made, never a user sent to a
+ * smaller account believing it is bigger. Pre-selecting a tier would be a
+ * different kind of default: one that looks like an answer the app knows.
+ *
+ * ## Why it changes no behaviour beyond ranking
+ *
+ * A plan is not a setting — it is a fact about a subscription, and this field
+ * cannot alter it. Pinning Max 20x on a Pro account buys nothing and breaks
+ * nothing; it makes one menu sort wrongly until it is corrected. Worth saying
+ * plainly in the description, because a field that names a paid tier invites
+ * the reading that choosing it *selects* one.
+ */
+function PlanField({
+  providerId,
+  value,
+  onChange,
+}: {
+  readonly providerId: ProviderId;
+  readonly value: string;
+  readonly onChange: (next: string) => void;
+}): ReactElement | null {
+  const plans = plansForProvider(providerId);
+  // A provider Artemis has no plan table for. The whole field would be an empty
+  // list, which asks a question it cannot take an answer to.
+  if (plans.length === 0) return null;
+
+  return (
+    <Field>
+      <FieldLabel htmlFor="profile-plan" className="text-2xs text-ink-faint uppercase">
+        Plan
+      </FieldLabel>
+      <Select
+        value={value === '' ? PLAN_UNPINNED : value}
+        onValueChange={(next) => onChange(next === PLAN_UNPINNED ? '' : next)}
+      >
+        <SelectTrigger id="profile-plan" size="sm" className="w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={PLAN_UNPINNED} className="text-xs">
+            Let the provider say
+          </SelectItem>
+          {plans.map((plan) => (
+            <SelectItem key={plan.id} value={plan.id} className="text-xs">
+              {plan.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FieldDescription className="text-2xs">
+        Optional, and it changes nothing about what a run does. The provider reports which family a
+        plan is in but not which tier — “max” covers both Max 5x and Max 20x — so naming the exact
+        one is what lets the profile picker compare this account’s remaining capacity against your
+        others. Left alone, Artemis assumes the smallest tier, which can only undersell it.
+      </FieldDescription>
+    </Field>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Colour                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -742,6 +838,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const [label, setLabel] = useState(profile?.label ?? '');
   const [configDir, setConfigDir] = useState(profile?.configDir ?? '');
   const [color, setColor] = useState(profile?.color ?? '');
+  const [planId, setPlanId] = useState(profile?.planId ?? '');
   const [envText, setEnvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -846,6 +943,9 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
         // the colour", and omitting it when the user cleared the swatch would
         // silently keep the old one. See `ProfilePatch.color`.
         color: normalizeProfileColor(color) ?? '',
+        // Always sent, empty string included, for the same reason as the
+        // colour: that is how a patch says "stop pinning a plan".
+        planId: normalizeProfilePlanId(planId, providerId) ?? '',
         ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
       });
       setBusy(false);
@@ -858,6 +958,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       providerId,
       configDir: configDir.trim(),
       ...(normalizeProfileColor(color) === null ? {} : { color }),
+      ...(normalizeProfilePlanId(planId, providerId) === null ? {} : { planId }),
       ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
     });
     setBusy(false);
@@ -935,6 +1036,8 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                 glance which account the next prompt will bill.
               </FieldDescription>
             </Field>
+
+            <PlanField providerId={providerId} value={planId} onChange={setPlanId} />
 
             <Field>
               <FieldLabel htmlFor="profile-config-dir" className="text-2xs text-ink-faint uppercase">

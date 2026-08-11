@@ -55,6 +55,8 @@ export const CODEX_METHOD = {
   threadFork: 'thread/fork',
   threadRead: 'thread/read',
   threadList: 'thread/list',
+  threadDelete: 'thread/delete',
+  threadNameSet: 'thread/name/set',
   turnStart: 'turn/start',
   turnSteer: 'turn/steer',
   turnInterrupt: 'turn/interrupt',

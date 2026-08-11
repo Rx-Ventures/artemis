@@ -45,6 +45,7 @@
  */
 
 import type { ProfileId } from './ids.js';
+import { PLAN_CAPACITIES } from './planCapacity.js';
 import type { ProviderId } from './provider.js';
 
 /**
@@ -113,6 +114,27 @@ export interface Profile {
    */
   readonly color?: string;
 
+  /**
+   * Which plan this account is on, as a {@link PlanCapacity} id, or absent.
+   *
+   * The one fact about an account that Artemis has to be *told*. Providers
+   * report a plan family rather than a tier — Claude answers `max` for both Max
+   * 5x and Max 20x, Codex answers `pro` for both of its Pro tiers — and the
+   * members of a family differ by four times, which is more than enough to
+   * invert "which account has the most room left". Nothing else in the payload
+   * separates them, so without this the comparison has to fall back to
+   * percentages and say so.
+   *
+   * Absent is the ordinary state, not a gap to be filled in by guessing: the
+   * family's smallest tier is assumed, which can only understate an account.
+   * See {@link resolvePlanWeight}.
+   *
+   * A display-and-ranking hint only. Like {@link color} it changes nothing
+   * about what a run does — it cannot grant capacity the account does not have,
+   * and getting it wrong misranks a menu rather than misbilling anyone.
+   */
+  readonly planId?: string;
+
   /** Creation time, ms since epoch. */
   readonly createdAt?: number;
   /** Last modification time, ms since epoch. */
@@ -138,6 +160,8 @@ export interface ProfileMetadata {
   readonly configDir: string;
   /** `#rrggbb`, or absent. See {@link Profile.color}. */
   readonly color?: string;
+  /** Pinned plan id, or absent. See {@link Profile.planId}. */
+  readonly planId?: string;
 }
 
 /** Fields the renderer supplies when creating a profile. */
@@ -159,6 +183,8 @@ export interface ProfileDraft {
    */
   readonly configDir: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
+  /** Pinned plan id. Omit to let the provider's reported family stand. */
+  readonly planId?: string;
 }
 
 /** Fields the renderer may change on an existing profile. */
@@ -183,6 +209,11 @@ export interface ProfilePatch {
    * end up disagreeing.
    */
   readonly color?: string;
+  /**
+   * Pin, change, or unpin the plan. The empty string unpins, exactly as it
+   * clears {@link color} and for the same reason.
+   */
+  readonly planId?: string;
 }
 
 /**
@@ -296,6 +327,59 @@ export function profileColorProblem(value: unknown): string | null {
   if (value.trim().length === 0) return null;
   return normalizeProfileColor(value) === null
     ? 'That is not a hex colour. Use #rgb or #rrggbb — for example #7c8cff.'
+    : null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plan                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Canonicalise a pinned plan id, or `null` if it does not name a known plan.
+ *
+ * The same shape as {@link normalizeProfileColor}, and for the same reasons: a
+ * profiles file is hand-editable, the value arrives over IPC, and every layer
+ * needs the identical rule rather than its own approximation.
+ *
+ * Validated against {@link PLAN_CAPACITIES} rather than accepted as free text,
+ * because an id that matches nothing is not a harmless label — it is a pin that
+ * silently never applies, leaving a user who has told Artemis their plan
+ * looking at a ranking that ignored them.
+ *
+ * A blank value is not an error: it is how "no pin" is spelled, so callers
+ * check for `null` and store nothing.
+ */
+export function normalizeProfilePlanId(value: unknown, providerId?: ProviderId): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  const plan = PLAN_CAPACITIES.find((candidate) => candidate.id === trimmed);
+  if (!plan) return null;
+  /*
+    A pin belonging to a different provider is dropped rather than kept. It can
+    only arrive by repointing a profile at another provider's config directory,
+    and a Codex plan weighed on Claude's ladder is worse than no pin at all —
+    `resolvePlanWeight` would refuse it anyway, so storing it would leave a
+    field in the editor that reads as set and behaves as unset.
+  */
+  if (providerId !== undefined && plan.providerId !== providerId) return null;
+  return plan.id;
+}
+
+/**
+ * Why this string is unusable as a plan pin, or `null` if it is fine.
+ *
+ * The companion to {@link normalizeProfilePlanId} for the profile form, in the
+ * shape {@link profileColorProblem} established. An empty value is accepted:
+ * unpinned is the default state.
+ */
+export function profilePlanIdProblem(value: unknown, providerId?: ProviderId): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return 'A plan must be one of the listed options.';
+  if (value.trim().length === 0) return null;
+  return normalizeProfilePlanId(value, providerId) === null
+    ? 'That is not a plan Artemis knows about for this provider.'
     : null;
 }
 

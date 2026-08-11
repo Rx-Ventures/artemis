@@ -33,7 +33,12 @@
  */
 
 import { create } from 'zustand';
-import { isSameModel, NO_CAPABILITIES } from '@rx-artemis/protocol';
+import {
+  isSameModel,
+  NO_CAPABILITIES,
+  recommendProfile,
+  resolvePlanWeight,
+} from '@rx-artemis/protocol';
 import type {
   AuthStatusInfo,
   AgentError,
@@ -46,6 +51,8 @@ import type {
   PermissionRequest,
   PermissionScope,
   PlanMeterFocus,
+  PlanRecommendation,
+  PlanUsage,
   ProfileDraft,
   ProfileId,
   ProfileMetadata,
@@ -206,6 +213,23 @@ export interface AppState {
    * -up `{ loggedIn: false }` and must not be rendered as signed out.
    */
   readonly authByProfile: Readonly<Record<ProfileId, AuthStatusInfo>>;
+
+  /**
+   * Last-known plan usage per profile, keyed by id.
+   *
+   * Filled by the main process's poller — see `installPlanUsageFeed` — rather
+   * than by anything in this window asking. That is what makes the comparison
+   * in {@link planRecommendation} possible at all: a per-component fetch can
+   * only ever know about the profile that component is looking at, and "which
+   * account has the most room" is a question about the ones you are *not*
+   * looking at.
+   *
+   * Not persisted, for the reason the main process does not persist its own
+   * cache: a utilization figure restored from disk describes a plan as it was
+   * whenever the app was last quit, and it would look exactly as authoritative
+   * as a fresh one.
+   */
+  readonly planUsageByProfile: Readonly<Record<ProfileId, PlanUsage>>;
 
   /**
    * Model ids the user pinned to the status-line picker, in no particular
@@ -687,6 +711,7 @@ export const useApp = create<AppState>(() => ({
   providers: [],
   profiles: [],
   authByProfile: {},
+  planUsageByProfile: {},
 
   quickModelIds: prefs.quickModelIds ?? [],
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
@@ -1018,6 +1043,52 @@ export function isLive(state: SessionState): boolean {
 
 export function activeProfile(state: SessionState): ProfileMetadata | undefined {
   return state.profiles.find((p) => p.id === state.activeProfileId);
+}
+
+/**
+ * Which account has the most plan capacity left, from the polled readings.
+ *
+ * **Not a `useApp` selector**, deliberately — `recommendProfile` returns a
+ * fresh object every call, and a selector whose result is never identical to
+ * its predecessor re-renders on every store read until React gives up (see
+ * `NO_OPTIONS` above for the same trap). Components subscribe to the two
+ * *stable* inputs and call this inside a `useMemo`.
+ *
+ * `now` is a parameter rather than read here so the caller decides when
+ * staleness is re-judged — the profile menu computes it as the menu opens,
+ * which is exactly when the answer is about to be acted on.
+ *
+ * Profiles are passed in list order, which is what breaks ties: see
+ * `recommendProfile`.
+ */
+export function planRecommendation(
+  profiles: readonly ProfileMetadata[],
+  usageByProfile: Readonly<Record<ProfileId, PlanUsage>>,
+  now: number,
+): PlanRecommendation | null {
+  return recommendProfile(
+    profiles.map((profile) => {
+      const usage = usageByProfile[profile.id];
+      /*
+        Two sources for the plan, and the order matters. The profile's pin wins
+        because it is the only one that can tell Max 5x from Max 20x — the
+        provider reports the family, not the tier. Without a pin this resolves
+        to the family's floor and is marked assumed; see `resolvePlanWeight`.
+      */
+      const capacity = resolvePlanWeight({
+        providerId: profile.providerId,
+        subscriptionType: usage?.subscriptionType,
+        pinned: profile.planId,
+      });
+      return {
+        profileId: profile.id,
+        usage,
+        providerId: profile.providerId,
+        capacity,
+      };
+    }),
+    { now },
+  );
 }
 
 /**
@@ -1438,6 +1509,51 @@ export function installEventBridge(): () => void {
   return bridge.runs.onEvent(handleAgentEvent);
 }
 
+/**
+ * Subscribe to the main process's plan-usage poll. Returns an unsubscribe.
+ *
+ * There is no timer here, and that is the point: the poll runs once in main
+ * for the whole app, so a second window costs nothing and both windows see the
+ * same numbers at the same moment. See `IPC_PUSH.planUsage`.
+ *
+ * The first push is up to a poll cycle away, so {@link seedPlanUsage} fills the
+ * gap from main's cache — a window opened into a long-running app should not
+ * have to wait five minutes to know which account has room.
+ */
+export function installPlanUsageFeed(): () => void {
+  const { bridge } = resolveBridge();
+  if (!bridge) return () => undefined;
+  return bridge.usagePlan.onChange(({ profileId, usage }) => {
+    useApp.setState((s) => ({
+      planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
+    }));
+  });
+}
+
+/**
+ * Prime the map from main's cache, one profile at a time.
+ *
+ * Cache reads only — `cached` never contacts a provider, so this is a handful
+ * of cheap IPC round-trips rather than a subprocess per account. A profile
+ * nobody has read yet answers `null` and is simply left out, which is the
+ * honest state: not "no plan", but "not yet known".
+ */
+async function seedPlanUsage(profiles: readonly ProfileMetadata[]): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const seeded: Record<ProfileId, PlanUsage> = {};
+  for (const profile of profiles) {
+    const result = await call(() => bridge.usagePlan.cached({ profileId: profile.id }));
+    if (result.ok && result.value.usage !== null) seeded[profile.id] = result.value.usage;
+  }
+  if (Object.keys(seeded).length === 0) return;
+
+  // Merged *under* what is already there: a push that landed while these reads
+  // were in flight is newer than the cache they came from.
+  useApp.setState((s) => ({ planUsageByProfile: { ...seeded, ...s.planUsageByProfile } }));
+}
+
 export async function bootstrap(): Promise<void> {
   const { mode, bridge } = resolveBridge();
   useApp.setState({
@@ -1464,6 +1580,10 @@ export async function bootstrap(): Promise<void> {
   // Same reasoning, cheaper call: the sidebar header renders the directory's
   // own name until this lands, which is a correct label either way.
   void refreshWorkspace(focusedPane());
+  // Cache reads, so this contacts no provider — see `seedPlanUsage`. It is what
+  // makes the profile menu's recommendation available immediately in a window
+  // opened into an app that has been running for hours.
+  void seedPlanUsage(useApp.getState().profiles);
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -1839,7 +1959,9 @@ export function setCwd(cwd: string, pane: Pane = focusedPane()): void {
   }
 
   const leaving = state.resumeSessionId !== null || state.run !== null;
-  if (leaving) newSession(pane);
+  // The reset without the profile hop — see `newSession` on why a directory
+  // change must not move which account pays.
+  if (leaving) newSession(pane, { adoptRecommendedProfile: false });
 
   setPaneState(pane, { cwd: next });
   savePrefs();
@@ -2537,11 +2659,47 @@ function refreshSessionsSoon(): void {
   setTimeout(() => void refreshSessions(), SESSION_SETTLE_MS);
 }
 
-/** Start a blank transcript in one column. Disposes whatever run it had live. */
-export function newSession(pane: Pane = focusedPane()): void {
+/**
+ * Start a blank transcript in one column. Disposes whatever run it had live.
+ *
+ * ## A new session starts on the account with the most room
+ *
+ * When the polled readings can name a recommended profile (see
+ * `planRecommendation`), the fresh session adopts it. This is the one moment
+ * switching accounts is free: nothing has run, so no history is bound to the
+ * profile yet, and the whole point of knowing which account has headroom is to
+ * start the next piece of work there rather than discovering mid-session that
+ * this one is nearly out. The profile chip on the status line updates in the
+ * same frame, so which account the next prompt bills stays answerable at a
+ * glance — the bar's standing rule.
+ *
+ * No recommendation — one account, stale readings, metered billing — changes
+ * nothing: the session stays on the profile already selected.
+ *
+ * `adoptRecommendedProfile: false` is for callers where a new session is a
+ * *side effect* rather than the request. `setCwd` resets the session because a
+ * directory moved; hopping the billing account off the back of a workspace
+ * action would move *who pays* when the user only asked to move *where* —
+ * exactly the silent account change `resumeSession` refuses to make.
+ */
+export function newSession(
+  pane: Pane = focusedPane(),
+  { adoptRecommendedProfile = true }: { readonly adoptRecommendedProfile?: boolean } = {},
+): void {
   void disposeRun(pane);
   pane.transcript.reset();
   setPaneState(pane, { run: null, resumeSessionId: null, permissionQueue: [] });
+
+  if (adoptRecommendedProfile) {
+    // Read off the app store, where the poll writes: the readings are
+    // window-wide facts about accounts, not column state.
+    const { profiles, planUsageByProfile } = useApp.getState();
+    const recommended = planRecommendation(profiles, planUsageByProfile, Date.now());
+    if (recommended !== null && recommended.profileId !== paneState(pane).activeProfileId) {
+      setProfile(recommended.profileId, pane);
+    }
+  }
+
   useApp.setState({ paletteOpen: false });
 }
 

@@ -390,6 +390,37 @@ describe('ProfileStore — update', () => {
     // Empty string: removed. A patch has no other way to say "back to absent".
     expect((await store.update(created.id, { color: '' })).color).toBeUndefined();
   });
+
+  it('sets, keeps and clears the pinned plan', async () => {
+    const created = await store.create(draft({ planId: 'claude:max-20x' }));
+    expect(created.planId).toBe('claude:max-20x');
+
+    expect((await store.update(created.id, { label: 'Renamed' })).planId).toBe('claude:max-20x');
+    expect((await store.update(created.id, { planId: 'claude:pro' })).planId).toBe('claude:pro');
+    expect((await store.update(created.id, { planId: '' })).planId).toBeUndefined();
+  });
+
+  it('drops a pin belonging to another provider', async () => {
+    /*
+      Reachable by repointing a profile at a different provider's directory, and
+      silent if it were kept: `resolvePlanWeight` refuses a cross-provider pin,
+      so the editor would show a plan that ranks nothing. Both scales have a
+      plan called "Pro", which is exactly why this cannot be lenient.
+    */
+    const created = await store.create(draft({ planId: 'codex:pro-20x' }));
+    expect(created.planId).toBeUndefined();
+
+    const pinned = await store.create(draft({ label: 'Other', planId: 'claude:max-5x' }));
+    expect((await store.update(pinned.id, { planId: 'codex:plus' })).planId).toBeUndefined();
+  });
+
+  it('drops a pin naming a plan this build has never heard of', async () => {
+    // A record written by a later build, or hand-edited. An unknown pin becomes
+    // no pin, which falls back to the family the provider reports.
+    const created = await store.create(draft({ planId: 'claude:max-100x' }));
+    expect(created.planId).toBeUndefined();
+    expect(created.label).toBe('Work');
+  });
 });
 
 /* -------------------------------------------------------------------------- */

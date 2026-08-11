@@ -63,6 +63,7 @@ import {
 import { composeProviderEnv, readEnv } from './env.js';
 import {
   CODEX_METHOD,
+  CODEX_NOTIFICATION,
   CODEX_SERVER_REQUEST,
   asRecord,
   readNumber,
@@ -90,6 +91,12 @@ import { JsonRpcError, spawnJsonRpcSubprocess } from './jsonrpc.js';
 import type { IncomingRequest, JsonRpcSubprocess } from './jsonrpc.js';
 import { AsyncQueue, createDeferred } from './stream.js';
 import type { Deferred } from './stream.js';
+import {
+  SESSION_TITLE_INSTRUCTIONS,
+  buildTitlePrompt,
+  cleanSessionTitle,
+  isDeclinedTitle,
+} from './titles.js';
 import { adapterError, toAgentError } from './types.js';
 import type {
   AdapterAvailability,
@@ -107,9 +114,12 @@ import type {
   ResolvedRunInput,
   Run,
   SendResult,
+  SessionDeleteQuery,
   SessionListPage,
   SessionListQuery,
   SessionMessagesQuery,
+  SessionTitleQuery,
+  SessionTitleUpdate,
   SessionTranscript,
 } from './types.js';
 
@@ -131,6 +141,13 @@ const HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /** How long a metadata probe (`model/list`, rate limits) may take. */
 const PROBE_TIMEOUT_MS = 20_000;
+
+/**
+ * How long a naming turn may run once started, matching the Claude adapter's
+ * budget for the same call. Bounded because the seam demands it: this is
+ * chrome, and a naming call that hangs holds a subprocess nobody can see.
+ */
+const TITLE_TIMEOUT_MS = 30_000;
 
 /** How long to wait for a turn to interrupt before forcing teardown. */
 const INTERRUPT_TIMEOUT_MS = 10_000;
@@ -154,6 +171,8 @@ export const CODEX_CAPABILITIES: Capabilities = {
   midRunSteering: true,
   forkSession: true,
   listSessions: true,
+  renameSession: true, // `thread/name/set` — the field Codex's own UI renames
+  deleteSession: true, // `thread/delete` — removes the rollout file, not a soft archive
   resumeSession: true,
   usageReporting: true,
   planUsageReporting: true,
@@ -626,19 +645,210 @@ export function createCodexAdapter(options?: CodexAdapterOptions): ProviderAdapt
       };
     },
 
-    /*
-     * No `suggestSessionTitle` / `setSessionTitle`, and the absence is the
-     * whole answer rather than a gap waiting to be filled.
+    /**
+     * Name a session by running one bounded turn in an **ephemeral** thread.
      *
-     * A thread already carries a `name` — `parseThreadList` reads it, and a
-     * named thread is reported with `titleIsCustom` — but the app server
-     * publishes no method that *writes* one: `thread/start`, `resume`, `fork`,
-     * `read` and `list` are the whole surface Artemis speaks, and none of them
-     * takes a title. Generating a name Artemis could not store would spend the
-     * user's account on a string with nowhere to go, so both halves are omitted
-     * together and `SessionNamer` skips this provider. Codex threads keep the
-     * label they have always had: the thread's own name, else its preview.
+     * The seam's first obligation is "it is not a run", and `ephemeral: true`
+     * is how Codex expresses it: an ephemeral thread writes no rollout file
+     * and never appears in `thread/list` — verified against 0.147, because a
+     * naming call that left a phantom row in the very list it labels would be
+     * worse than no name at all.
+     *
+     * The other obligations map onto the turn itself:
+     *
+     *  - **Replacing `baseInstructions`** displaces the coding-agent preset,
+     *    for the same reason the Claude adapter sends a bare `systemPrompt` —
+     *    the preset spends more tokens describing tools than the title costs.
+     *  - **Plan-mode permissions** (`never` + `readOnly`) are the closest
+     *    Codex gets to "no tools": nothing can prompt, nothing can write. A
+     *    server-initiated approval should therefore be unreachable, and the
+     *    `onRequest` fallback declines rather than parks — a naming call must
+     *    never sit waiting on a question nobody is being shown.
+     *  - **`low` effort**, because this is chrome and is billed like chrome.
+     *
+     * Resolves `null` on every failure, per the seam's contract: no CLI, no
+     * credential, a model the account cannot use — the session just keeps the
+     * name it would have had.
      */
+    async suggestSessionTitle(request: SessionTitleQuery): Promise<string | null> {
+      if (request.abortSignal?.aborted === true) return null;
+
+      let answerText: string | undefined;
+      let session: AppServerSession | undefined;
+      const outcome = createDeferred<{ ok: boolean; reason?: string }>();
+      // Killing the subprocess is what actually reclaims an aborted call —
+      // resolving the outcome alone would leave a request in flight until the
+      // server got around to answering it. `dispose` is memoised, so the
+      // `finally` below disposing again is a no-op rather than a race.
+      const onAbort = (): void => {
+        outcome.resolve({ ok: false, reason: 'aborted' });
+        void session?.process.dispose();
+      };
+      request.abortSignal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        session = await openAppServer({
+          deps,
+          env: request.env,
+          cwd: request.cwd,
+          ...(request.inheritHostEnv === undefined
+            ? {}
+            : { inheritHostEnv: request.inheritHostEnv }),
+          onNotification: (method, params) => {
+            const payload = asRecord(params);
+            if (method === CODEX_NOTIFICATION.itemCompleted) {
+              const item = asRecord(payload['item']);
+              // Last one wins, deliberately: reasoning items are not
+              // `agentMessage`s, and a model that answers twice has said the
+              // title it means second.
+              if (readString(item, 'type') === 'agentMessage') {
+                answerText = readString(item, 'text');
+              }
+            } else if (method === CODEX_NOTIFICATION.turnCompleted) {
+              outcome.resolve({ ok: true });
+            } else if (method === CODEX_NOTIFICATION.error) {
+              outcome.resolve({
+                ok: false,
+                reason: readString(payload, 'message') ?? 'the app server reported an error',
+              });
+            }
+          },
+          onRequest: async (incoming: IncomingRequest) =>
+            toApprovalResponse(incoming.method, { behavior: 'deny' }),
+          onExit: (reason) => {
+            outcome.resolve({ ok: false, reason });
+          },
+        });
+
+        if (outcome.settled) return null;
+
+        const permissions = toCodexPermissions('plan', { cwd: request.cwd });
+        const started = await session.request(
+          CODEX_METHOD.threadStart,
+          wireParams({
+            cwd: request.cwd,
+            ephemeral: true,
+            baseInstructions: SESSION_TITLE_INSTRUCTIONS,
+            model: request.model,
+          }),
+        );
+
+        await session.request(
+          CODEX_METHOD.turnStart,
+          wireParams({
+            threadId: requireThreadId(started),
+            input: [textInput(buildTitlePrompt(request.prompt))],
+            cwd: request.cwd,
+            approvalPolicy: permissions.approvalPolicy,
+            sandboxPolicy: permissions.sandboxPolicy,
+            model: request.model,
+            effort: 'low' satisfies CodexReasoningEffort,
+          }),
+        );
+
+        const ended = await withTimeout(
+          outcome.promise,
+          TITLE_TIMEOUT_MS,
+          'The naming turn did not finish in time.',
+        );
+        if (!ended.ok) {
+          diagnostic?.(`Could not name the session: ${ended.reason ?? 'unknown'}`);
+          return null;
+        }
+
+        const title = cleanSessionTitle(answerText);
+        if (title === null && answerText !== undefined && !isDeclinedTitle(answerText)) {
+          // Worth a line — a model that keeps answering with prose is a prompt
+          // problem, and this is the only place that would show it. A declined
+          // answer is excluded: that is the prompt working. See the Claude
+          // adapter, which draws the same distinction.
+          diagnostic?.(
+            `Discarded an unusable session title: ${JSON.stringify(answerText.slice(0, 120))}`,
+          );
+        }
+        return title;
+      } catch (error) {
+        diagnostic?.(`Could not name the session: ${describe(error)}`, error);
+        return null;
+      } finally {
+        request.abortSignal?.removeEventListener('abort', onAbort);
+        // Disposing the subprocess is what discards the ephemeral thread —
+        // there is nothing to clean up server-side, which is the point.
+        await session?.process.dispose();
+      }
+    },
+
+    /**
+     * `thread/name/set` — the same field Codex's own UI renames, so a title
+     * written here survives in the provider's tooling and is read straight
+     * back by `parseThreadList` as `titleIsCustom`.
+     *
+     * Started in the profile's config directory for the reason `deleteSession`
+     * documents: the thread id alone locates the rollout, and the session's
+     * own cwd may no longer exist.
+     *
+     * Unlike the delete, a missing rollout **rejects** rather than resolving —
+     * the contract says a failed write is worth a log line, and `SessionNamer`
+     * depends on the rejection: its one retry exists for the race where a
+     * brand-new session's file has not been written yet, and a swallowed
+     * "not found" would turn that race into a title that silently never lands.
+     */
+    async setSessionTitle(update: SessionTitleUpdate): Promise<void> {
+      const configDir = readEnv(update.env, CODEX_HOME_ENV);
+
+      try {
+        await withAppServer(
+          { deps, env: update.env, cwd: configDir ?? process.cwd() },
+          async (session) =>
+            session.request(CODEX_METHOD.threadNameSet, {
+              threadId: update.sessionId,
+              name: update.title,
+            }),
+        );
+      } catch (error) {
+        throw adapterError('unknown', `Could not rename the Codex session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
+    },
+
+    /**
+     * `thread/delete`, which removes the rollout file itself — verified, not
+     * assumed: the capability's contract is a real deletion, and Codex also
+     * offers `thread/archive`, which merely relocates the file and would break
+     * the promise the confirm dialog makes. Archive is deliberately not what
+     * this calls.
+     *
+     * The app server needs *a* directory to start in, and the profile's config
+     * directory is the one guaranteed to exist — the session's own cwd is not,
+     * and a workspace deleted since the run is exactly when a user reaches for
+     * delete. The thread id alone locates the rollout within `CODEX_HOME`, so
+     * the cwd narrows nothing here.
+     *
+     * "Already gone" resolves `false`, not an error: whether the file was
+     * removed out from under Artemis or the id was stale, the user's intent —
+     * that this session stop existing — is already satisfied. Only the one
+     * wording Codex uses for that case is forgiven; anything else still
+     * throws, because a delete that quietly failed is the worst outcome this
+     * method can have.
+     */
+    async deleteSession(query: SessionDeleteQuery): Promise<boolean> {
+      const configDir = readEnv(query.env, CODEX_HOME_ENV);
+
+      try {
+        await withAppServer(
+          { deps, env: query.env, cwd: configDir ?? process.cwd() },
+          async (session) =>
+            session.request(CODEX_METHOD.threadDelete, { threadId: query.sessionId }),
+        );
+        return true;
+      } catch (error) {
+        if (isMissingRollout(error)) return false;
+        throw adapterError('unknown', `Could not delete that session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
+    },
+
     async checkAvailability(): Promise<AdapterAvailability> {
       try {
         const version = await readCodexVersion(executable, hostEnv);
@@ -1810,6 +2020,22 @@ async function readCodexVersion(
 function byNewestThenId(a: SessionSummary, b: SessionSummary): number {
   if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
   return a.id.localeCompare(b.id);
+}
+
+/**
+ * Does this failure mean "that session does not exist"?
+ *
+ * Codex answers `thread/delete` for an unknown id with a generic
+ * `-32600 Invalid Request` — an error code shared with genuinely malformed
+ * requests, so the code alone cannot distinguish "already gone" from "broken".
+ * The message can: `no rollout found for thread id …` is the server's one
+ * wording for absence (verified against 0.147). Deliberately narrow — a match
+ * broad enough to catch a future rephrasing would also be broad enough to
+ * mislabel a real failure as a success, and of the two mistakes, a spurious
+ * error message is the recoverable one.
+ */
+export function isMissingRollout(error: unknown): boolean {
+  return /no rollout found/i.test(describe(error));
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

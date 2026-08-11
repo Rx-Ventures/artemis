@@ -151,6 +151,50 @@ describe('mapPlanUsage', () => {
     expect(usage.windows.map((w) => w.id)).toEqual(['model_scoped:Fable']);
   });
 
+  /*
+   * `spend` — usage credits — is the other sibling with a shape of its own:
+   * the fraction arrives as `percent` rather than `utilization`, so the
+   * generic passthrough rendered it as a row named "spend" reporting `null`.
+   */
+  it('maps spend into a Usage Credits window instead of passing it through raw', () => {
+    const usage = mapPlanUsage(
+      {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 10, resets_at: RESET_ISO },
+          spend: {
+            used: { amount_minor: 340, currency: 'USD', exponent: 2 },
+            percent: 12,
+            severity: 'normal',
+            enabled: true,
+          },
+        },
+      },
+      NOW,
+    );
+
+    const spend = usage.windows.filter((w) => w.id === 'spend');
+    expect(spend).toEqual([
+      { id: 'spend', label: 'Usage Credits', utilization: 12, resetsAt: null },
+    ]);
+  });
+
+  it('keeps a spend entry with no percent, as null rather than a guess', () => {
+    // `percent` is null until credits are enabled. The adapter still reports
+    // the window — whether a null reading is worth a bar is the UI's call.
+    const usage = mapPlanUsage(
+      {
+        rate_limits_available: true,
+        rate_limits: { spend: { enabled: false, percent: null } },
+      },
+      NOW,
+    );
+
+    expect(usage.windows).toEqual([
+      { id: 'spend', label: 'Usage Credits', utilization: null, resetsAt: null },
+    ]);
+  });
+
   it('does not render an unfamiliar array window as a row of nulls', () => {
     const usage = mapPlanUsage(
       {

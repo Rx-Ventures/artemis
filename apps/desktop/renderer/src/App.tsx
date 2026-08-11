@@ -100,6 +100,7 @@ import {
   denyPendingPermission,
   focusedPane,
   installEventBridge,
+  installPlanUsageFeed,
   startSessionFeed,
   interruptRun,
   isLive,
@@ -130,6 +131,9 @@ export function App(): ReactElement {
     // The feed is what keeps the list current without a reload; see
     // `startSessionFeed`.
     const stopFeed = startSessionFeed();
+    // Plan usage arrives unasked, from main's poller, for every account rather
+    // than the active one — which is what lets the profile menu recommend.
+    const stopUsageFeed = installPlanUsageFeed();
     if (!started.current) {
       started.current = true;
       void bootstrap();
@@ -137,6 +141,7 @@ export function App(): ReactElement {
     return () => {
       unsubscribe();
       stopFeed();
+      stopUsageFeed();
     };
   }, []);
 

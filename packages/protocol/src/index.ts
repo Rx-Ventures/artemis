@@ -35,6 +35,7 @@ export * from './ids.js';
 export * from './provider.js';
 export * from './permissions.js';
 export * from './usage.js';
+export * from './planCapacity.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './attachment.js';
