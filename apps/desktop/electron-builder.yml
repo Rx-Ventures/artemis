@@ -21,6 +21,10 @@ asarUnpack:
 
 mac:
   category: public.app-category.developer-tools
+  # The arch is part of every name, x64 included — electron-builder's default
+  # omits it for x64, which makes "which file is this?" a trick question the
+  # moment two architectures share a release page.
+  artifactName: ${productName}-${version}-${arch}-mac.${ext}
   target:
     - dmg
     - zip
@@ -28,6 +32,9 @@ mac:
 win:
   target:
     - nsis
+
+nsis:
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
 linux:
   category: Development

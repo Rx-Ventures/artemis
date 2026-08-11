@@ -1,0 +1,105 @@
+# Cut a release: push a v* tag (scripts/release.ts does the gating and the
+# push) and this builds every platform natively, boot-verifies each build, and
+# publishes one GitHub release with all artifacts and the per-arch update
+# feeds the in-app updater reads.
+#
+# Each target builds on its own architecture's runner on purpose: the Claude
+# Agent SDK ships per-platform binaries as optional dependencies and pnpm only
+# installs the host's, so a native runner per target is what guarantees every
+# artifact contains the binary it needs. (macos-15-intel is GitHub's Intel
+# image, available through August 2027.)
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  build:
+    needs: gates
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runs-on: macos-latest
+            build-args: --mac --arm64
+            feed-rename: latest-mac-arm64.yml
+            app-binary: apps/desktop/release/mac-arm64/Artemis.app/Contents/MacOS/Artemis
+          - name: macos-x64
+            runs-on: macos-15-intel
+            build-args: --mac --x64
+            feed-rename: latest-mac-x64.yml
+            app-binary: apps/desktop/release/mac/Artemis.app/Contents/MacOS/Artemis
+          - name: windows-x64
+            runs-on: windows-latest
+            build-args: --win --x64
+            feed-rename: ''
+            app-binary: apps/desktop/release/win-unpacked/Artemis.exe
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm --filter @rx-artemis/desktop exec electron-builder ${{ matrix.build-args }} --publish never
+      # One feed per mac architecture. electron-builder always writes
+      # `latest-mac.yml`; the updater asks for `latest-mac-<arch>.yml`, so a
+      # machine can only ever be offered its own architecture's artifact.
+      - if: matrix.feed-rename != ''
+        shell: bash
+        run: mv apps/desktop/release/latest-mac.yml apps/desktop/release/${{ matrix.feed-rename }}
+      # The packaged app must actually boot before anything is published.
+      - shell: bash
+        run: pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/*.yml
+            !apps/desktop/release/builder-debug.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Artemis $version" \
+            --notes-file .github/RELEASE_NOTES.md
