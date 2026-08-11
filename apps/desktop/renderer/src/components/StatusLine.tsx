@@ -818,19 +818,29 @@ function LocationSegment(): ReactElement {
             ) : null}
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top" align="end" className="max-w-md">
+        {/*
+          `flex-col items-start`, because `TooltipContent` is a flex *row* with
+          centred items — it is built for one line of text next to a `Kbd`. Two
+          children in it become two columns, which is how this tooltip spent a
+          while rendering the path and the branch note side by side, each half
+          the width and neither reading as a sentence.
+
+          The note is one clause now rather than three. The reason a hover lands
+          here is the path, which the chip truncates; the branch caveat is a
+          footnote and was set at the size of the answer.
+        */}
+        <TooltipContent side="top" align="end" className="max-w-sm flex-col items-start gap-1">
           {unset ? (
             <span>
               No working directory set — the agent needs an absolute path to work in. Click to
               choose one.
             </span>
           ) : (
-            <span className="font-mono">{cwd}</span>
+            <span className="font-mono break-all">{cwd}</span>
           )}
           {branch ? (
-            <span className="mt-1 block text-ink-faint">
-              Branch “{branch}” is the last one recorded in this directory’s session history — Apollo
-              cannot read the working tree, so it may be out of date.
+            <span className="text-ink-faint">
+              Branch “{branch}” is the last one recorded here, so it may be stale.
             </span>
           ) : null}
         </TooltipContent>
