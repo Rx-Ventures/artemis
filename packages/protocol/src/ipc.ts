@@ -7,9 +7,11 @@
  *
  * Two structural decisions worth understanding before you extend this:
  *
- *  1. **Everything is request/response over `invoke`, except agent events.**
- *     Agent events are high-frequency and one-directional, so they get a single
- *     push channel ({@link IPC_PUSH.agentEvent}) instead of a round-trip.
+ *  1. **Everything is request/response over `invoke`, except what only main can
+ *     observe.** Two things qualify, and both are one-directional: agent
+ *     events, which are high-frequency, and the window's own chrome state,
+ *     which the renderer cannot see at all. Each gets a push channel
+ *     ({@link IPC_PUSH}) instead of a round-trip.
  *
  *  2. **Handlers never reject.** Every handler resolves an {@link IpcResult}.
  *     An `ipcRenderer.invoke` rejection loses the error's type and stringifies
@@ -113,6 +115,21 @@ export const IPC = {
   authStatus: 'artemis:auth:status',
   /** Sign a profile out, clearing the credentials in its config directory. */
   authSignOut: 'artemis:auth:sign-out',
+
+  /**
+   * Window chrome.
+   *
+   * Artemis draws its own title bar, so the four things a native one would have
+   * done have to be reachable from the renderer. Each acts on the window the
+   * message came from — see {@link WindowRequest} for why none of them names a
+   * window.
+   */
+  windowMinimize: 'artemis:window:minimize',
+  /** Maximize, or restore a maximized window. One channel, because it is one button. */
+  windowToggleMaximize: 'artemis:window:toggle-maximize',
+  windowClose: 'artemis:window:close',
+  /** Read the window's chrome state, for the first paint. */
+  windowState: 'artemis:window:state',
 } as const;
 
 /**
@@ -122,6 +139,15 @@ export const IPC = {
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
   agentEvent: 'artemis:push:agent-event',
+  /**
+   * Carries a {@link WindowState} whenever the window's chrome state changes.
+   *
+   * Pushed rather than polled because the renderer has no way to observe any of
+   * it. The alternative — re-reading {@link IPC.windowState} on every `resize`
+   * — puts an IPC round-trip on each frame of a drag-resize to keep one icon
+   * correct, and still lags behind the window.
+   */
+  windowState: 'artemis:push:window-state',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -683,6 +709,62 @@ export interface UsagePlanResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Window chrome                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every window channel's request, and deliberately empty.
+ *
+ * A window is not addressable from the renderer and must not become so. The
+ * target is always the window the message arrived from, which the main process
+ * reads off the sender — so there is no `windowId` for a compromised renderer to
+ * iterate, and a second Artemis window cannot be closed by the first.
+ *
+ * Typed as `Record<string, never>` rather than an empty interface so that
+ * passing a field is a compile error instead of a silently ignored one.
+ */
+export type WindowRequest = Record<string, never>;
+
+/**
+ * What the window's own chrome is doing.
+ *
+ * Three booleans because three booleans are what the header draws with, not
+ * because that is all a window has. `minimized` is absent on purpose: a
+ * minimized window is not rendering, so nothing could read it.
+ */
+export interface WindowState {
+  /** True while the window fills its display's work area. Drives the restore icon. */
+  readonly maximized: boolean;
+  /**
+   * True in native full screen.
+   *
+   * The header cares because macOS takes its traffic lights away in full
+   * screen — they move to an overlay that slides down with the menu bar — so
+   * the gutter reserved for them has to close, or the bar keeps a 76px hole
+   * where three buttons used to be.
+   */
+  readonly fullScreen: boolean;
+  /**
+   * True while this is the active window. Chrome in a background window is
+   * dimmed, the same way the platform dims its own.
+   */
+  readonly focused: boolean;
+}
+
+/**
+ * The answer to every window channel: the state the window is in *now*.
+ *
+ * Commands reply with the resulting state rather than an acknowledgement, for
+ * the reason the auth channels do — the UI is never left to assume its command
+ * took. {@link IPC.windowClose} is the exception that proves it: its reply
+ * races the window's destruction and will usually never arrive, so nothing
+ * should be sequenced behind it.
+ */
+export interface WindowStateResponse {
+  readonly state: WindowState;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -712,6 +794,10 @@ export type IpcRequestMap = {
   [IPC.usagePlanRefresh]: UsagePlanRequest;
   [IPC.authStatus]: AuthStatusRequest;
   [IPC.authSignOut]: AuthSignOutRequest;
+  [IPC.windowMinimize]: WindowRequest;
+  [IPC.windowToggleMaximize]: WindowRequest;
+  [IPC.windowClose]: WindowRequest;
+  [IPC.windowState]: WindowRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -740,6 +826,10 @@ export type IpcResponseMap = {
   [IPC.usagePlanRefresh]: UsagePlanResponse;
   [IPC.authStatus]: AuthStatusResponse;
   [IPC.authSignOut]: AuthStatusResponse;
+  [IPC.windowMinimize]: WindowStateResponse;
+  [IPC.windowToggleMaximize]: WindowStateResponse;
+  [IPC.windowClose]: WindowStateResponse;
+  [IPC.windowState]: WindowStateResponse;
 };
 
 /** Request type for a channel. */
@@ -768,6 +858,7 @@ export type IpcHandlerMap = { [C in IpcChannel]: IpcHandler<C> };
 /** Payload carried by each push channel. */
 export type IpcPushMap = {
   [IPC_PUSH.agentEvent]: AgentEvent;
+  [IPC_PUSH.windowState]: WindowState;
 };
 
 /** Payload type for a push channel. */
@@ -933,6 +1024,40 @@ export interface ArtemisBridge {
     status(request: AuthStatusRequest): Promise<IpcResult<AuthStatusResponse>>;
     /** Clear the credentials in this profile's config directory. */
     signOut(request: AuthSignOutRequest): Promise<IpcResult<AuthStatusResponse>>;
+  };
+
+  /**
+   * The window's own chrome, because Artemis draws it.
+   *
+   * The title bar is hidden and the app's header stands in for it, which buys a
+   * bar that can carry real controls — and costs the three actions the native
+   * one came with. They live here. On macOS the traffic lights are still the
+   * system's own, drawn over the page and handled by AppKit, so
+   * {@link minimize}, {@link toggleMaximize} and {@link close} exist for
+   * Windows and Linux, where the buttons are Artemis's to draw. {@link state}
+   * and {@link onStateChange} are read by every platform: macOS needs
+   * `fullScreen` to know whether to leave room for the traffic lights it does
+   * not own.
+   *
+   * None of these takes a window id. See {@link WindowRequest}.
+   */
+  readonly window: {
+    minimize(request: WindowRequest): Promise<IpcResult<WindowStateResponse>>;
+    /** Maximize, or restore. One call, because the button is one button. */
+    toggleMaximize(request: WindowRequest): Promise<IpcResult<WindowStateResponse>>;
+    /**
+     * Close this window. The reply races the window's own destruction — treat
+     * it as fire-and-forget rather than sequencing anything behind it.
+     */
+    close(request: WindowRequest): Promise<IpcResult<WindowStateResponse>>;
+    /** The state right now, for the first paint before any change has been pushed. */
+    state(request: WindowRequest): Promise<IpcResult<WindowStateResponse>>;
+    /**
+     * Subscribe to chrome-state changes. Call this before {@link state}, for
+     * the reason {@link runs.onEvent} says: a change can land while the read is
+     * still in flight.
+     */
+    onStateChange(listener: (state: WindowState) => void): Unsubscribe;
   };
 }
 

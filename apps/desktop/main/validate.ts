@@ -75,6 +75,7 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type WindowRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
 } from '@rx-artemis/protocol';
@@ -1069,4 +1070,22 @@ export function validateUsagePlan(raw: unknown): UsagePlanRequest {
   return {
     profileId: requireId(request['profileId'], 'profileId'),
   };
+}
+
+/**
+ * Every window channel's request: nothing at all.
+ *
+ * Shared by all four rather than written out four times, because there is
+ * genuinely one shape and a copy per channel would only invite them to drift.
+ *
+ * `requireRequest` still runs, so a non-object payload is rejected rather than
+ * ignored, and rule (2) at the top of this file still holds in the strongest
+ * possible form — the returned object is a fresh empty one, so a renderer that
+ * attaches a `windowId` finds it dropped before any handler could read it. That
+ * is the point: the window a command acts on is the one it arrived from, and
+ * nothing in the payload can change that.
+ */
+export function validateWindowRequest(raw: unknown): WindowRequest {
+  requireRequest(raw);
+  return {};
 }

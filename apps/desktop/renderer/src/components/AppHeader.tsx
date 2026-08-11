@@ -1,18 +1,37 @@
 /**
- * The window header.
+ * The window header — which *is* the title bar.
  * ============================================================================
  *
  *     ┌──────────────────────────────────────────────────────────────────┐
- *     │ ●●●  [◧]  artemis › Wire the adapter seam   [⊞][⊟] [+]  [⚙]      │
+ *     │ ●●● [◧] artemis › Wire the seam  [⊞][⊟] [+] [⚙]   [–][□][✕] │
  *     └──────────────────────────────────────────────────────────────────┘
- *       ↑     ↑    ↑                                 ↑  ↑   ↑    ↑
- *       │     │    │                                 │  │   │    └ settings
- *       │     │    │                                 │  │   └ new session
- *       │     │    │                                 │  └ split downwards
- *       │     │    │                                 └ split to the right
- *       │     │    └ what the focused pane shows
- *       │     └ show/hide the sidebar — always present
- *       └ macOS traffic lights, when the window is frameless
+ *       ↑    ↑   ↑                        ↑  ↑   ↑   ↑        ↑
+ *       │    │   │                        │  │   │   │        └ Windows and
+ *       │    │   │                        │  │   │   │          Linux only
+ *       │    │   │                        │  │   │   └ settings
+ *       │    │   │                        │  │   └ new session
+ *       │    │   │                        │  └ split downwards
+ *       │    │   │                        └ split to the right
+ *       │    │   └ what the focused pane shows
+ *       │    └ show/hide the sidebar — always present
+ *       └ macOS traffic lights: the system's own, drawn over this bar
+ *
+ * ## This bar replaced the title bar rather than sitting under it
+ *
+ * `main/window.ts` hides the platform's title bar, so what is drawn here is the
+ * only chrome the window has. That file explains why; the consequence for this
+ * one is that the header now owes the user everything the native bar used to
+ * provide, and the two ends of that debt are handled differently:
+ *
+ *  - **macOS** keeps its traffic lights. They are still AppKit's — the system
+ *    draws them, handles the clicks, and does full screen — so there is nothing
+ *    to implement, only room to leave. See {@link useTrafficLightGutter}.
+ *  - **Windows and Linux** get nothing back from the system, so
+ *    {@link WindowControls} draws minimize, maximize and close and routes them
+ *    through `artemis.window.*`.
+ *
+ * Dragging and double-click-to-zoom come free with the drag region below; they
+ * are Chromium's, not ours.
  *
  * ## With a grid open, this names the focused pane
  *
@@ -61,19 +80,26 @@
  * firing its handler. If a button in here ever stops responding, this is why.
  */
 
-import { useEffect, useState, type ReactElement } from 'react';
+import { type ReactElement } from 'react';
 import {
   ChevronRightIcon,
   Columns2Icon,
+  CopyIcon,
+  MinusIcon,
   PanelLeftCloseIcon,
   Rows2Icon,
   PanelLeftIcon,
   PlusIcon,
   Settings2Icon,
+  SquareIcon,
+  XIcon,
 } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
+import { useWindowState } from '../hooks/useWindowState';
+import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
+import { cn } from '../lib/utils';
 import {
   SPLIT_LIMIT_REASON,
   canSplit,
@@ -89,46 +115,103 @@ import { IconButton } from './disabled-reason';
 /**
  * Room reserved for the macOS traffic lights, in pixels.
  *
- * The buttons themselves end around 78px from the left edge on a standard
- * `hiddenInset` title bar. Rounded down slightly because the first control
- * after them is an icon button with its own optical padding.
+ * The group is 52px wide and `main/window.ts` puts its left edge at 16, so the
+ * buttons end at 68. The remainder is the gap before the sidebar toggle, whose
+ * own optical padding does the rest.
+ *
+ * The 16 is that file's to choose and this is the only number here that depends
+ * on it: if the traffic lights move, this moves with them.
  */
 const TRAFFIC_LIGHT_GUTTER = 76;
 
 /**
- * How much space to leave at the leading edge for the window's own buttons.
+ * How much space to leave at the leading edge for buttons Artemis does not draw.
  *
- * Zero unless three things are true at once: macOS, a real Electron window
- * (a browser tab has no traffic lights to dodge), and a window whose frame has
- * been hidden so the buttons are drawn *over* the page.
+ * Three conditions, and full screen is the one worth explaining. macOS takes
+ * its traffic lights away when a window goes full screen — they move into the
+ * overlay that slides down with the menu bar — so a gutter that stayed put
+ * would leave a 76px hole at the start of the bar for as long as the user was
+ * in full screen. It closes, and reopens on the way out.
  *
- * That last condition is measured rather than assumed, because the main
- * process does not set `titleBarStyle: 'hiddenInset'` today — it ships a native
- * title bar, and reserving 76px for buttons that are not there would leave a
- * permanent hole in the header. A framed window's chrome shows up as the
- * difference between `outerHeight` and `innerHeight`; a frameless one has
- * none. So this reads correctly now *and* the moment the window goes
- * frameless, with no coordination between the two files.
+ * The other two are static: no other platform has traffic lights, and a browser
+ * tab in dev (`bridgeMode !== 'preload'`) has no window chrome at all.
  */
-function useTrafficLightGutter(): number {
+function useTrafficLightGutter(fullScreen: boolean): number {
   const platform = useApp((s) => s.platform);
   const bridgeMode = useApp((s) => s.bridgeMode);
-  const [frameless, setFrameless] = useState(false);
 
-  useEffect(() => {
-    const measure = (): void => {
-      // A couple of pixels of slack: fractional device-pixel ratios can leave
-      // a sub-pixel difference on a window that has no chrome at all.
-      setFrameless(window.outerHeight - window.innerHeight <= 2);
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+  if (platform !== 'darwin' || bridgeMode !== 'preload' || fullScreen) return 0;
+  return TRAFFIC_LIGHT_GUTTER;
+}
 
-  return platform === 'darwin' && bridgeMode === 'preload' && frameless
-    ? TRAFFIC_LIGHT_GUTTER
-    : 0;
+/* -------------------------------------------------------------------------- */
+/* Window controls                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Minimize, maximize and close, for the platforms that hand back nothing.
+ *
+ * Renders `null` on macOS, where the traffic lights are the system's own and a
+ * second set of buttons doing the same three jobs would be a bug rather than a
+ * feature — and in dev's browser tab, where there is no window to act on.
+ *
+ * Drawn in Artemis's own idiom rather than to Windows' 46×32px metrics. Those
+ * metrics only read as native inside a native title bar, and this bar is
+ * plainly the app's — so matching the icon buttons two positions to the left is
+ * the more coherent choice. Close keeps a red hover, because that convention is
+ * about consequence rather than about geometry.
+ *
+ * Every button is `.no-drag`, or it would drag the window instead of firing.
+ */
+function WindowControls({ maximized, focused }: {
+  readonly maximized: boolean;
+  readonly focused: boolean;
+}): ReactElement | null {
+  const platform = useApp((s) => s.platform);
+  const bridgeMode = useApp((s) => s.bridgeMode);
+
+  if (platform === 'darwin' || bridgeMode !== 'preload') return null;
+
+  // Fire and forget. Each channel does answer with the resulting state, but the
+  // state this renders from is already on its way over the push channel — and
+  // `close` in particular resolves about a window that no longer exists.
+  const send = (action: 'minimize' | 'toggleMaximize' | 'close') => () => {
+    void resolveBridge().bridge?.window[action]({});
+  };
+
+  return (
+    <div
+      // Dimmed while the window is in the background, which is what every
+      // platform does to its own controls. The header's *content* is left
+      // alone: a title that faded whenever the user clicked another app would
+      // be movement without meaning.
+      className={cn('ml-1 flex shrink-0 items-center gap-0.5', !focused && 'opacity-60')}
+    >
+      <IconButton
+        label="Minimize"
+        onClick={send('minimize')}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <MinusIcon />
+      </IconButton>
+      <IconButton
+        label={maximized ? 'Restore' : 'Maximize'}
+        onClick={send('toggleMaximize')}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        {/* Two overlapping squares for restore, one for maximize — the glyphs
+            Windows itself uses, so the button says which way it will go. */}
+        {maximized ? <CopyIcon /> : <SquareIcon />}
+      </IconButton>
+      <IconButton
+        label="Close"
+        onClick={send('close')}
+        className="no-drag shrink-0 text-ink-faint hover:bg-destructive/20 hover:text-destructive"
+      >
+        <XIcon />
+      </IconButton>
+    </div>
+  );
 }
 
 /**
@@ -151,7 +234,10 @@ export function AppHeader(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const cwd = usePane((s) => s.cwd);
   const title = useSessionTitle();
-  const gutter = useTrafficLightGutter();
+  // Subscribed once, here, and passed down. Two components calling the hook
+  // would open two IPC subscriptions to describe one window.
+  const windowState = useWindowState();
+  const gutter = useTrafficLightGutter(windowState.fullScreen);
   const pane = usePaneRef();
   const room = useApp(canSplit);
 
@@ -229,6 +315,8 @@ export function AppHeader(): ReactElement {
       >
         <Settings2Icon />
       </IconButton>
+
+      <WindowControls maximized={windowState.maximized} focused={windowState.focused} />
     </header>
   );
 }

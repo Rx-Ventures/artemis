@@ -40,6 +40,7 @@ import {
   windowSecurityPreferences,
   type SecurityPolicy,
 } from './security.js';
+import { forwardWindowState, windowChromeOptions } from './window.js';
 
 const log = createLogger('main');
 
@@ -156,6 +157,9 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     // wrong dark.
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0a09' : '#ffffff',
     autoHideMenuBar: process.platform !== 'darwin',
+    // No native title bar: the app's own header is the title bar. What that
+    // costs, and what has to be drawn in its place, is in `window.ts`.
+    ...windowChromeOptions(),
     webPreferences: windowSecurityPreferences(preloadPath, [
       `--artemis-version=${app.getVersion()}`,
       `--artemis-platform=${process.platform}`,
@@ -163,6 +167,11 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
   });
 
   window.once('ready-to-show', () => window.show());
+
+  // Maximized, full screen and focused are invisible from inside the page, and
+  // the header draws with all three. The listeners die with the window, so the
+  // disposer is deliberately dropped rather than tracked.
+  forwardWindowState(window);
 
   if (devServerUrl) {
     void window.loadURL(devServerUrl);

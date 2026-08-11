@@ -89,9 +89,11 @@ import {
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
+  validateWindowRequest,
   validateWorkspaceDescribe,
   validateWorkspacePickDirectory,
 } from './validate.js';
+import { readWindowState } from './window.js';
 import { DIRECTORY_PICKER_PROPERTIES, readPickedDirectory } from './workspace.js';
 
 const log = createLogger('ipc');
@@ -406,6 +408,75 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.authSignOut]: {
       validate: validateAuthSignOut,
       handle: async (request) => engine.require().signOut(request.profileId),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Window chrome                                                    */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * The four channels that exist because Artemis hides the native title bar.
+     *
+     * The only handlers in this file that touch neither the engine nor the
+     * filesystem — they act on `context.window`, and on nothing else. That is
+     * the whole security story here: the request carries no window id (see
+     * `WindowRequest`), so a renderer can only ever minimize, zoom or close
+     * *itself*, and a second Artemis window is unreachable from the first.
+     *
+     * Each answers with the resulting state so the header never has to assume
+     * its command landed. A window that died mid-call answers with the
+     * all-false state rather than failing; see `readWindowState`.
+     */
+    [IPC.windowMinimize]: {
+      validate: validateWindowRequest,
+      handle: async (_request, context) => {
+        // `minimize()` on a full-screen window is ignored by macOS and leaves
+        // the user in full screen with a button that did nothing. Leave first.
+        if (context.window?.isFullScreen() === true) context.window.setFullScreen(false);
+        context.window?.minimize();
+        return { state: readWindowState(context.window) };
+      },
+    },
+
+    /**
+     * One button, so one channel.
+     *
+     * On macOS the *native* green button toggles full screen rather than
+     * maximizing, and this deliberately does not: it is the Windows and Linux
+     * maximize control, and macOS reaches full screen through its own traffic
+     * lights, which are still AppKit's.
+     */
+    [IPC.windowToggleMaximize]: {
+      validate: validateWindowRequest,
+      handle: async (_request, context) => {
+        const window = context.window;
+        if (window !== null && !window.isDestroyed()) {
+          if (window.isMaximized()) window.unmaximize();
+          else window.maximize();
+        }
+        return { state: readWindowState(window) };
+      },
+    },
+
+    /**
+     * The reply is read off the window *before* it is asked to close, because
+     * a moment later there may be no window to read. Nothing consumes it — see
+     * `ArtemisBridge.window.close` — but returning the state of a destroyed
+     * window as though it were the outcome would be a small lie in a response
+     * whose whole contract is "here is what actually happened".
+     */
+    [IPC.windowClose]: {
+      validate: validateWindowRequest,
+      handle: async (_request, context) => {
+        const state = readWindowState(context.window);
+        context.window?.close();
+        return { state };
+      },
+    },
+
+    [IPC.windowState]: {
+      validate: validateWindowRequest,
+      handle: async (_request, context) => ({ state: readWindowState(context.window) }),
     },
   };
 
