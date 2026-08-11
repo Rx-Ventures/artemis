@@ -1,32 +1,28 @@
 /**
- * Cut a release: gate, build, verify, tag, publish to GitHub.
+ * Cut a release: gate locally, then hand the build to GitHub Actions.
  *
- * One command — `pnpm release` — takes the working tree to a downloadable
- * GitHub release, and refuses to start from anything less than a clean,
- * fully-gated state:
+ * One command — `pnpm release` — checks that this machine's tree deserves a
+ * release and pushes the tag that makes `.github/workflows/release.yml` build
+ * it: every platform on its own native runner, boot-verified, published as one
+ * GitHub release with the per-arch update feeds.
  *
- *   1. clean tree, on main, tag for this version not yet taken
- *   2. typecheck + full test suite
- *   3. production build, then electron-builder (dmg + zip, no publish)
- *   4. verify-package: the packaged app must actually boot
- *   5. git tag vX.Y.Z, push main + tag
- *   6. `gh release create` with the artifacts and the update feed
+ *   1. clean tree, on main, up to date gates
+ *   2. typecheck + full test suite (CI runs them again; failing here is
+ *      simply faster than failing there)
+ *   3. git tag vX.Y.Z, push main + tag → Actions takes it from here
  *
  * The version is read from apps/desktop/package.json — bump it there first.
- * Release notes come from RELEASE_NOTES.md at the repo root when present,
- * otherwise a default alpha template is used.
+ * Release notes are `.github/RELEASE_NOTES.md`, versioned with the code.
  *
- * Publishing goes through `gh` rather than electron-builder's publisher so the
- * release only exists after every gate has passed, and so a stray GH_TOKEN in
- * the environment can never publish a half-built artifact.
+ * This script used to build and publish from the local machine. It stopped
+ * because a laptop can only build its own platform: the Agent SDK ships one
+ * native binary per platform and pnpm installs only the host's, so the
+ * Windows and Intel artifacts have to come from runners that *are* those
+ * platforms.
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-const RELEASE_DIR = 'apps/desktop/release';
+import { readFileSync } from 'node:fs';
 
 function run(command: string, args: readonly string[]): void {
   console.log(`\n$ ${command} ${args.join(' ')}`);
@@ -61,84 +57,22 @@ try {
 } catch {
   // tag absent: exactly what we want
 }
-capture('gh', ['auth', 'status']); // throws if gh is not signed in
 
 // ---- 2. Quality gates -----------------------------------------------------
 
 run('pnpm', ['typecheck']);
 run('pnpm', ['test']);
 
-// ---- 3. Build + package ---------------------------------------------------
-
-run('pnpm', ['run', 'build']);
-run('pnpm', [
-  '--filter',
-  '@rx-artemis/desktop',
-  'exec',
-  'electron-builder',
-  '--publish',
-  'never',
-]);
-
-// ---- 4. The packaged app must boot ----------------------------------------
-
-run('tsx', ['scripts/verify-package.ts']);
-
-// ---- 5. Tag ---------------------------------------------------------------
+// ---- 3. Tag; Actions builds and publishes ---------------------------------
 
 run('git', ['tag', tag]);
 run('git', ['push', 'origin', 'main']);
 run('git', ['push', 'origin', tag]);
 
-// ---- 6. GitHub release ----------------------------------------------------
+console.log(`
+release: ${tag} is tagged. GitHub Actions is building macOS (arm64 + x64) and
+Windows natively, boot-verifying each, and publishing the release:
 
-const assets = readdirSync(RELEASE_DIR)
-  .filter((name) => /\.(dmg|zip|blockmap|yml)$/.test(name) && !name.startsWith('builder-'))
-  .map((name) => join(RELEASE_DIR, name));
-if (assets.length === 0) fail(`no artifacts found in ${RELEASE_DIR}.`);
-
-const notes = existsSync('RELEASE_NOTES.md')
-  ? readFileSync('RELEASE_NOTES.md', 'utf8')
-  : `## Artemis ${version} — internal alpha
-
-macOS, Apple Silicon. Unsigned internal build: if macOS blocks the first
-launch, allow it under System Settings → Privacy & Security → "Open Anyway",
-or clear the quarantine flag:
-
-\`\`\`
-xattr -dr com.apple.quarantine /Applications/Artemis.app
-\`\`\`
-
-### Install
-
-Download the \`.dmg\`, drag Artemis into Applications.
-
-### First run
-
-1. You need Anthropic's \`claude\` CLI installed, and a Claude subscription.
-2. In Artemis, open **Profiles** (⌘,) and create a profile.
-3. Run the sign-in command Artemis shows you in your own terminal and finish
-   in the browser — Artemis watches the profile directory and continues on
-   its own. No credential ever passes through Artemis.
-4. Set a working directory, send a prompt.
-
-Runs are billed to the Claude account each profile is signed into.
-
-Feedback: open an issue in this repo.
-`;
-
-const notesFile = join(tmpdir(), `artemis-release-notes-${version}.md`);
-writeFileSync(notesFile, notes);
-
-run('gh', [
-  'release',
-  'create',
-  tag,
-  ...assets,
-  '--title',
-  `Artemis ${version}`,
-  '--notes-file',
-  notesFile,
-]);
-
-console.log(`\nrelease: done — ${capture('gh', ['release', 'view', tag, '--json', 'url', '--jq', '.url'])}`);
+  watch:   gh run watch
+  result:  gh release view ${tag}
+`);

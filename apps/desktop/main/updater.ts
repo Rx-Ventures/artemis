@@ -64,7 +64,14 @@ const log = createLogger('updater');
  */
 const REPO = 'seth-torrence/artemis';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
-const FEED_NAME = 'latest-mac.yml';
+
+/**
+ * The feed for *this* machine. Releases carry one feed per mac architecture
+ * (CI renames electron-builder's `latest-mac.yml` per build — see
+ * `.github/workflows/release.yml`), because a feed's top-level `path` is the
+ * artifact to install and an Intel Mac must never be handed the arm64 zip.
+ */
+const FEED_NAME = `latest-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.yml`;
 
 /** First check shortly after launch; then steadily. Both deliberately lazy —
  * an update is never urgent enough to compete with startup. */
@@ -378,6 +385,14 @@ export function createUpdater(options: UpdaterOptions): Updater {
 
     start(): void {
       if (timer !== null) return;
+      if (process.platform !== 'darwin') {
+        // Windows builds exist, but the swap below is written in macOS terms —
+        // an .app bundle, two renames, `ditto`. A Windows updater is a
+        // different mechanism (a running .exe cannot be renamed over), so for
+        // now Windows updates are manual and the banner simply never appears.
+        log.debug('Updater disabled: macOS only for now.');
+        return;
+      }
       if (!app.isPackaged) {
         // In dev the "installed app" is the repo checkout; there is nothing to
         // update and a check would only ever offer a downgrade to a release.
