@@ -6,7 +6,7 @@
  * not stylistic — breaking any one of them turns a fast provider's output into
  * O(items) work per token:
  *
- *  1. **The list renders ids, not items.** `useTranscriptIds` fires only when
+ *  1. **The list renders ids, not items.** `useTranscriptRows` fires only when
  *     the transcript's *shape* changes — a block appears, or it is reset. A
  *     token never touches it, so `Transcript` itself does not re-render while
  *     text streams.
@@ -43,20 +43,26 @@
  * ============================================================================
  * THE LAYOUT: A SPINE, AND TWO SIDES OF A CONVERSATION
  *
- * Every row is a `Message` from `components/ui/message`, so the whole pane is
- * one grid: a fixed label gutter (the *spine*) and a content column. The spine
- * carries the tone system — `tool` in cyan, `thinking` in sage, `end` in mint
- * or amber or signal — which is how the pane stays scannable at a glance now
- * that the content column is much wider than it used to be.
+ * Every row is a fixed label gutter (the *spine*) beside a content column. The
+ * spine carries the tone system — `tool` in cyan, `thinking` in sage, `end` in
+ * mint or amber or signal — which is how the pane stays scannable at a glance
+ * now that the content column is much wider than it used to be.
  *
- * `Message`'s `align` flips the whole row, gutter included, so a user turn puts
- * its label on the right where the bubble is. That is the back-and-forth: the
- * user speaks from the right in a filled lunar bubble, everything the agent
- * does answers from the left.
+ * `align` flips the whole row, gutter included, so a user turn puts its label
+ * on the right where the bubble is. That is the back-and-forth: the user speaks
+ * from the right in a filled lunar bubble, everything the agent does answers
+ * from the left.
  *
- * Three choices inside that worth stating, because each had an obvious
+ * Four choices inside that worth stating, because each had an obvious
  * alternative:
  *
+ *  - **`Bubble` only — `components/ui/message` is not used.** `Message` is the
+ *    registry's full chat row: avatar slot, header, footer, group. This pane
+ *    needs one of those four, and a row that is three flex utilities long is
+ *    not worth a second component system layered over the first. The row div
+ *    below still declares `group/message` and `data-align`, because those are
+ *    the hooks `bubble.tsx` itself selects on — renaming the group would
+ *    quietly break a vendored file's own styling.
  *  - **The user bubble is `tinted`, not `default`.** `default` fills with
  *    `--primary`, which here is lunar at 73% lightness. A one-line prompt would
  *    survive that; a pasted twenty-line spec is a floodlight in a dark room
@@ -67,17 +73,36 @@
  *    80%-wide blob would both squeeze the code and fight `.md`, which already
  *    draws its own wells and rules. Ghost strips the chrome and lets the answer
  *    read as full-width prose, which is what it is.
- *  - **No `MessageGroup` / `BubbleGroup`, and no avatars.** Grouping
- *    consecutive turns would require a row to know about its neighbours, and
- *    rule 1 says the list only ever hands down an id — a row cannot see the row
- *    before it without the list reading items, which is the exact thing that
- *    makes streaming O(items). Avatars were dropped separately: a repeated
- *    glyph on every turn costs horizontal room in a pane whose whole point is
- *    now to be wide, and the spine already says who is talking.
+ *  - **One avatar, on the agent's side only.** The gutter of an agent turn
+ *    carries the mark of the provider that answered — Anthropic's or OpenAI's
+ *    — because with two accounts signed in at once, *which model wrote this* is
+ *    a fact about the transcript rather than a setting to go and look up. The
+ *    user's own turns get no avatar: alignment and the tinted fill already say
+ *    whose they are, so a second constant glyph down the thread would spend
+ *    horizontal room to repeat something the layout has already said.
  *
  * Thinking, tool calls, permissions, notices and run-ends are NOT conversation
  * turns and are not bubbles. They stay the compact rows that expand in place,
  * aligned onto the same spine so the column reads as one thread.
+ *
+ * ============================================================================
+ * TOOL CALLS ARRIVE AS ONE MARKER, NOT FORTY ROWS
+ *
+ * A turn that touches forty files used to be forty rows of machinery between
+ * two sentences of answer. Consecutive tool calls are now folded into a single
+ * activity marker — "Ran 36 commands, read 6 files, used a tool" — that expands
+ * in place to the individual calls, each still the card it always was.
+ *
+ * The folding happens in the transcript model, not here, and that is forced by
+ * rule 1 rather than chosen: grouping is a question about neighbours, and a row
+ * that looked at its neighbours would have to read items during render. See
+ * `ToolGroup` in `state/transcript.ts` for how it stays off the per-token path.
+ *
+ * What this file owns is the phrasing and the icons, and one rule about both: a
+ * failure is never summarised away. A group holding an error or a denial says
+ * so on the collapsed line and opens itself, because "Ran 36 commands" reading
+ * identically whether or not one of them failed is the single worst thing this
+ * marker could do.
  */
 
 import {
@@ -94,14 +119,23 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowDownIcon,
+  BotIcon,
   BrainIcon,
+  FilePenLineIcon,
+  FileTextIcon,
+  GlobeIcon,
   InfoIcon,
+  ListChecksIcon,
+  PlugIcon,
+  SearchIcon,
   SparklesIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  WrenchIcon,
+  type LucideIcon,
 } from 'lucide-react';
 
-import { useTranscriptIds, useTranscriptItem } from '../hooks/useTranscript';
+import { useToolGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { detectFileEdit } from '../lib/diff';
 import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
 import {
@@ -113,22 +147,30 @@ import {
   oneLine,
   summarizeToolInput,
 } from '../lib/format';
-import type {
-  AssistantItem,
-  NoticeItem,
-  PermissionItem,
-  RunEndItem,
-  ThinkingItem,
-  ToolItem,
-  UserItem,
+import {
+  TOOL_CATEGORY_ORDER,
+  classifyTool,
+  describeActivity,
+  type ToolCategory,
+} from '../lib/tools';
+import {
+  isGroupId,
+  type AssistantItem,
+  type NoticeItem,
+  type PermissionItem,
+  type RunEndItem,
+  type ThinkingItem,
+  type ToolGroup,
+  type ToolItem,
+  type UserItem,
 } from '../state/transcript';
 import { DiffView } from './DiffView';
 import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
+import { ProviderLogo } from './provider-mark';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
-import { Message, MessageContent } from '@/components/ui/message';
 import { cn } from '@/lib/utils';
 
 /** Markdown parsing is skipped above this size; the cost is not worth it. */
@@ -156,7 +198,7 @@ const COLUMN_MAX: Record<ConversationWidth, string> = {
 };
 
 export function Transcript(): ReactElement {
-  const ids = useTranscriptIds();
+  const rows = useTranscriptRows();
   // A scalar the user changes from Appearance, not transcript state — reading
   // it here costs one subscription that fires roughly never, and does not go
   // near rule 4 (which is about streaming text, not preferences).
@@ -218,7 +260,7 @@ export function Transcript(): ReactElement {
           ref={contentRef}
           className={cn('mx-auto flex w-full flex-col gap-1.5 px-4 py-4', COLUMN_MAX[width])}
         >
-          {ids.length === 0 ? <EmptyState /> : ids.map((id) => <Row key={id} id={id} />)}
+          {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
           <Working />
         </div>
       </div>
@@ -257,7 +299,7 @@ function Working(): ReactElement | null {
 
   if (!live || streams || waiting) return null;
   return (
-    <Line label="agent" tone="cyan">
+    <Line label="agent" tone="cyan" avatar={<AgentAvatar />}>
       <span className="flex items-center gap-2 py-1 font-mono text-2xs text-ink-faint">
         <StatusDot tone="cyan" pulse />
         Working — this provider sends whole messages, so nothing appears until the block is done.
@@ -271,6 +313,14 @@ function Working(): ReactElement | null {
 /* -------------------------------------------------------------------------- */
 
 const Row = memo(function Row({ id }: { readonly id: string }): ReactElement | null {
+  // A group id names a fold of several tool calls rather than one item, and
+  // subscribes to a different slice of the model. Splitting before the item
+  // lookup keeps `ItemRow` on the single-id subscription that rule 2 requires.
+  if (isGroupId(id)) return <ActivityRow id={id} />;
+  return <ItemRow id={id} />;
+});
+
+const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactElement | null {
   const item = useTranscriptItem(id);
   if (!item) return null;
 
@@ -282,7 +332,13 @@ const Row = memo(function Row({ id }: { readonly id: string }): ReactElement | n
     case 'thinking':
       return <ThinkingRow item={item} />;
     case 'tool':
-      return <ToolRow item={item} />;
+      // Reached only if a tool ever escapes grouping; the model folds every
+      // one it knows about. Rendering the bare card is the honest fallback.
+      return (
+        <Line label="tool" tone="cyan" ts={item.ts}>
+          <ToolCard item={item} />
+        </Line>
+      );
     case 'permission':
       return <PermissionRow item={item} />;
     case 'notice':
@@ -302,17 +358,27 @@ const Row = memo(function Row({ id }: { readonly id: string }): ReactElement | n
  * the label or the gutter reflows on hover and shoves every row down by a line.
  * 3.5rem is the first Tailwind step that clears it.
  *
- * The gutter follows `align`: `Message` reverses the row for `end`, so a user
- * turn's label lands on the right next to its bubble. The text alignment has to
- * flip with it, hence the `group-data-[align=end]/message` override — without
- * it the label would be right-aligned against the window edge, hanging off the
- * bubble it names.
+ * The gutter follows `align`: the row reverses for `end`, so a user turn's
+ * label lands on the right next to its bubble. The text alignment has to flip
+ * with it, hence the `group-data-[align=end]/message` override — without it the
+ * label would be right-aligned against the window edge, hanging off the bubble
+ * it names.
+ *
+ * The two group names are load-bearing and do different jobs. `group/message`
+ * is what `bubble.tsx` selects on to self-align a bubble inside a reversed row,
+ * so it has to keep that name even though `components/ui/message` is not used;
+ * plain `group` is what the clock's hover reveal uses.
+ *
+ * `avatar` renders above the label rather than beside it — a 14px mark and a
+ * word do not both fit across 3.5rem, and the alternative (widening the spine)
+ * would spend the content column's width on every row to decorate two.
  */
 function Line({
   label,
   tone = 'neutral',
   ts,
   align = 'start',
+  avatar,
   children,
   className,
 }: {
@@ -320,12 +386,20 @@ function Line({
   readonly tone?: Tone;
   readonly ts?: number;
   readonly align?: 'start' | 'end';
+  readonly avatar?: ReactNode;
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement {
   return (
-    <Message align={align} className={cn('group', className)}>
-      <div className="w-14 shrink-0 pt-px text-right group-data-[align=end]/message:text-left">
+    <div
+      data-align={align}
+      className={cn(
+        'group group/message relative flex w-full min-w-0 gap-2 text-sm data-[align=end]:flex-row-reverse',
+        className,
+      )}
+    >
+      <div className="flex w-14 shrink-0 flex-col items-end pt-px group-data-[align=end]/message:items-start">
+        {avatar}
         <div className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}>
           {label}
         </div>
@@ -335,11 +409,34 @@ function Line({
           </div>
         )}
       </div>
-      {/* `gap-2.5` is `MessageContent`'s default and is tuned for a chat app
+      {/* The registry's `MessageContent` uses `gap-2.5`, tuned for a chat app
           with one bubble per turn; the transcript stacks a bubble against a
           badge, so it wants a tighter rhythm. */}
-      <MessageContent className="gap-1">{children}</MessageContent>
-    </Message>
+      <div className="flex w-full min-w-0 flex-col gap-1 wrap-break-word group-data-[align=end]/message:*:data-slot:self-end">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The mark of whoever is answering, for the gutter of an agent turn.
+ *
+ * Prefers the *run's* provider over the window's current one. They are usually
+ * the same, but a transcript that is still on screen after the user switches
+ * profiles must keep saying who actually wrote it — relabelling finished turns
+ * to match the account now selected would be a quiet lie about the record.
+ */
+function AgentAvatar(): ReactElement {
+  const providerId = useApp((s) => s.run?.providerId ?? s.activeProviderId);
+  const label = useApp((s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId);
+  return (
+    <ProviderLogo
+      providerId={providerId}
+      title={label}
+      size={13}
+      className="mb-0.5 text-ink-muted"
+    />
   );
 }
 
@@ -376,6 +473,7 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
       label={item.agentId ? 'subagent' : 'agent'}
       tone="neutral"
       ts={item.ts}
+      avatar={<AgentAvatar />}
       className="turn-in"
     >
       {/* `ghost` zeroes the padding and the fill, so `.md` renders against the
@@ -445,7 +543,7 @@ const TOOL_TONE: Record<ToolItem['status'], Tone> = {
 };
 
 /**
- * A tool call: one compact line that expands in place.
+ * A tool call: one compact card that expands in place.
  *
  * Collapsed it is icon + name + primary argument, which is all a reader needs
  * to follow what the agent is doing. Expanded it reveals the full input and
@@ -453,19 +551,22 @@ const TOOL_TONE: Record<ToolItem['status'], Tone> = {
  * quoted string.
  *
  * Not a bubble, and that is the point: a tool call is not something anyone
- * said. It sits on the same spine as the agent's turns so the thread reads
- * continuously, but it keeps card chrome so the eye can tell work from speech
- * without reading a word.
+ * said. It keeps card chrome so the eye can tell work from speech without
+ * reading a word.
+ *
+ * No `Line` of its own: these are rendered inside an expanded {@link
+ * ActivityRow}, which owns the gutter for the whole burst. A card that drew its
+ * own spine would put a second `tool` label under the marker's.
  *
  * Open state is local, which is what lets it survive the re-renders driven by
- * the external transcript store: this row is memoised on its own id, so a
- * `text.delta` on a sibling never reaches it and cannot fold it shut.
+ * the external transcript store.
  */
-function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
+function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
   const [open, setOpen] = useState(false);
   const tone = TOOL_TONE[item.status];
   const summary = item.title ?? summarizeToolInput(item.input);
   const failed = item.status === 'error' || item.status === 'denied';
+  const Icon = CATEGORY_ICON[classifyTool(item.name)];
 
   // Recomputed only when the arguments change, which for a tool call is once:
   // `tool.end` carries the result, not a new input. A diff is cheap but not
@@ -473,97 +574,201 @@ function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
   const edit = useMemo(() => detectFileEdit(item.name, item.input), [item.name, item.input]);
 
   return (
-    <Line label="tool" tone="cyan" ts={item.ts}>
-      <div
-        className={cn(
-          'rounded-lg border bg-panel/60',
-          failed ? 'border-signal/35' : 'border-line',
-          open && 'border-line-strong',
-        )}
+    <div
+      className={cn(
+        'rounded-lg border bg-panel/60',
+        failed ? 'border-signal/35' : 'border-line',
+        open && 'border-line-strong',
+      )}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <TerminalIcon
-            className={cn(
-              'size-3 shrink-0',
-              item.status === 'running' ? 'text-cyan' : 'text-ink-faint',
-            )}
-            aria-hidden="true"
-          />
-          <span className="shrink-0 font-mono text-xs font-semibold text-ink">{item.name}</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
-            {summary}
-          </span>
-          {/* A file edit advertises its size in the collapsed row. Whether an
-              edit touched three lines or three hundred is the single most
-              useful thing to know before deciding to open it. */}
-          {edit && !edit.whole ? (
-            <span className="shrink-0 font-mono text-2xs">
-              <span className="text-mint">+{edit.added}</span>{' '}
-              <span className="text-signal">−{edit.removed}</span>
-            </span>
-          ) : null}
-          {item.durationMs === undefined ? null : (
-            <span className="shrink-0 font-mono text-2xs text-ink-faint">
-              {formatDuration(item.durationMs)}
-            </span>
+        <Icon
+          className={cn(
+            'size-3 shrink-0',
+            item.status === 'running' ? 'text-cyan' : 'text-ink-faint',
           )}
-          <ToneBadge tone={tone}>
-            {item.status === 'running' ? <StatusDot tone="cyan" pulse /> : null}
-            {item.status}
-          </ToneBadge>
-        </button>
+          aria-hidden="true"
+        />
+        <span className="shrink-0 font-mono text-xs font-semibold text-ink">{item.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
+          {summary}
+        </span>
+        {/* A file edit advertises its size in the collapsed row. Whether an
+            edit touched three lines or three hundred is the single most
+            useful thing to know before deciding to open it. */}
+        {edit && !edit.whole ? (
+          <span className="shrink-0 font-mono text-2xs">
+            <span className="text-mint">+{edit.added}</span>{' '}
+            <span className="text-signal">−{edit.removed}</span>
+          </span>
+        ) : null}
+        {item.durationMs === undefined ? null : (
+          <span className="shrink-0 font-mono text-2xs text-ink-faint">
+            {formatDuration(item.durationMs)}
+          </span>
+        )}
+        <ToneBadge tone={tone}>
+          {item.status === 'running' ? <StatusDot tone="cyan" pulse /> : null}
+          {item.status}
+        </ToneBadge>
+      </button>
 
-        {open ? (
-          <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">
-            {edit ? <DiffView edit={edit} /> : null}
+      {open ? (
+        <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">
+          {edit ? <DiffView edit={edit} /> : null}
 
+          <Fold
+            // The raw arguments stay available even when a diff was rendered:
+            // the diff is a reading of the input, and the input is the record.
+            defaultOpen={edit === null}
+            triggerClassName="text-2xs"
+            summary={
+              <span className="font-mono text-2xs">{edit ? 'raw arguments' : 'input'}</span>
+            }
+          >
+            <CodeBlock text={formatJson(item.input)} />
+          </Fold>
+
+          {item.status === 'running' ? (
+            <p className="font-mono text-2xs text-cyan">still running…</p>
+          ) : (
             <Fold
-              // The raw arguments stay available even when a diff was rendered:
-              // the diff is a reading of the input, and the input is the record.
-              defaultOpen={edit === null}
+              // A failure opens itself. Everything else stays folded: a
+              // successful `Read` of a 4,000-line file is noise.
+              defaultOpen={failed}
               triggerClassName="text-2xs"
               summary={
-                <span className="font-mono text-2xs">{edit ? 'raw arguments' : 'input'}</span>
+                <span className={cn('font-mono text-2xs', failed && 'text-signal')}>
+                  {failed ? 'error' : 'result'}
+                </span>
               }
             >
-              <CodeBlock text={formatJson(item.input)} />
-            </Fold>
-
-            {item.status === 'running' ? (
-              <p className="font-mono text-2xs text-cyan">still running…</p>
-            ) : (
-              <Fold
-                // A failure opens itself. Everything else stays folded: a
-                // successful `Read` of a 4,000-line file is noise.
-                defaultOpen={failed}
-                triggerClassName="text-2xs"
-                summary={
-                  <span className={cn('font-mono text-2xs', failed && 'text-signal')}>
-                    {failed ? 'error' : 'result'}
-                  </span>
+              <CodeBlock
+                tone={failed ? 'error' : 'neutral'}
+                text={
+                  item.error
+                    ? `${item.error.code}: ${item.error.message}\n\n${item.resultText ?? formatJson(item.result)}`
+                    : (item.resultText ?? formatJson(item.result))
                 }
-              >
-                <CodeBlock
-                  tone={failed ? 'error' : 'neutral'}
-                  text={
-                    item.error
-                      ? `${item.error.code}: ${item.error.message}\n\n${item.resultText ?? formatJson(item.result)}`
-                      : (item.resultText ?? formatJson(item.result))
-                  }
-                />
-              </Fold>
-            )}
-          </div>
-        ) : null}
-      </div>
+              />
+            </Fold>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The activity marker                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** One glyph per category, for the marker's icon cluster and each tool card. */
+const CATEGORY_ICON: Record<ToolCategory, LucideIcon> = {
+  command: TerminalIcon,
+  edit: FilePenLineIcon,
+  read: FileTextIcon,
+  search: SearchIcon,
+  web: GlobeIcon,
+  agent: BotIcon,
+  plan: ListChecksIcon,
+  mcp: PlugIcon,
+  other: WrenchIcon,
+};
+
+/** At most this many icons lead the marker; past three it is a smudge. */
+const MAX_MARKER_ICONS = 3;
+
+/**
+ * A burst of tool calls, as one line.
+ *
+ * The collapsed line is the whole point — "Ran 36 commands, read 6 files, used
+ * a tool" is what someone scrolling back wants, and forty individual cards is
+ * what they were getting. Expanding restores the cards exactly as they were.
+ *
+ * Two things are deliberately *not* summarised away:
+ *
+ *  - **Failures.** A group holding an error or a denial says so on the
+ *    collapsed line, in signal, and opens itself. A marker that read the same
+ *    whether or not something broke would be worse than no marker.
+ *  - **Work in flight.** While anything is still running the line reads in
+ *    present tense with a pulsing dot, so a long `Bash` looks like progress
+ *    rather than a thread that stopped.
+ */
+const ActivityRow = memo(function ActivityRow({ id }: { readonly id: string }): ReactElement | null {
+  const group = useToolGroup(id);
+  if (!group) return null;
+  return <ActivityMarker group={group} />;
+});
+
+function ActivityMarker({ group }: { readonly group: ToolGroup }): ReactElement {
+  const live = group.running > 0;
+  const summary = describeActivity(group.counts, live);
+  const icons = TOOL_CATEGORY_ORDER.filter((c) => (group.counts[c] ?? 0) > 0).slice(
+    0,
+    MAX_MARKER_ICONS,
+  );
+
+  return (
+    <Line label="tool" tone={group.failed > 0 ? 'signal' : 'cyan'} ts={group.ts}>
+      <Fold
+        // A failure opens itself, matching what a single tool card already does
+        // with its own error output. `defaultOpen` is read once, so a group that
+        // fails *after* being drawn does not spring open under the reader — the
+        // signal-toned count on the line is what catches that case.
+        defaultOpen={group.failed > 0}
+        triggerClassName="text-2xs"
+        summary={
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="flex shrink-0 items-center gap-1">
+              {icons.map((category) => {
+                const Icon = CATEGORY_ICON[category];
+                return (
+                  <Icon
+                    key={category}
+                    className={cn('size-3', live ? 'text-cyan' : 'text-ink-faint')}
+                    aria-hidden="true"
+                  />
+                );
+              })}
+            </span>
+            <span className="truncate font-mono text-2xs">{summary}</span>
+            {live ? <StatusDot tone="cyan" pulse /> : null}
+            {group.failed > 0 ? (
+              <span className="shrink-0 font-mono text-2xs text-signal">
+                · {group.failed} failed
+              </span>
+            ) : null}
+          </span>
+        }
+      >
+        <div className="flex flex-col gap-1">
+          {group.ids.map((memberId) => (
+            <ToolCardById key={memberId} id={memberId} />
+          ))}
+        </div>
+      </Fold>
     </Line>
   );
 }
+
+/**
+ * One member of an expanded group.
+ *
+ * Subscribed by its own id and memoised, which is rule 2 applied one level
+ * down: a `tool.end` inside an open marker re-renders that one card, not the
+ * other thirty-nine beside it.
+ */
+const ToolCardById = memo(function ToolCardById({ id }: { readonly id: string }): ReactElement | null {
+  const item = useTranscriptItem(id);
+  if (item?.kind !== 'tool') return null;
+  return <ToolCard item={item} />;
+});
 
 /**
  * A permission prompt, answered where it happened.
