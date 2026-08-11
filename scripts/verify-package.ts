@@ -42,7 +42,14 @@ function finish(code: number, message: string): void {
   console.log(message);
   if (code !== 0 && output) console.error(output.slice(-2_000));
   child.kill();
-  rmSync(userDataDir, { recursive: true, force: true });
+  try {
+    // Windows: the just-killed process can hold locks in its own profile dir
+    // for a beat, so retry — and a leftover temp dir on an ephemeral runner
+    // must never fail a verification that passed.
+    rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // best-effort
+  }
   process.exit(code);
 }
 
