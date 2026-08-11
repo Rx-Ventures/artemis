@@ -125,8 +125,14 @@ export type WorkingDirectoryChecker = (
 /** Receives every event of the runs it is subscribed to. */
 export type RunEventListener = (event: AgentEvent) => void;
 
-/** Where a swallowed error came from. */
-export type RunErrorPhase = 'events' | 'listener' | 'dispose';
+/**
+ * Where a swallowed error came from.
+ *
+ * `start` is for the work around starting a run that the run does not depend
+ * on — measuring the session's history, so far. A failure there is reported and
+ * dropped; anything the run *does* depend on throws instead.
+ */
+export type RunErrorPhase = 'start' | 'events' | 'listener' | 'dispose';
 
 /** Reports failures the registry handled rather than propagated. */
 export type RunErrorReporter = (
@@ -388,11 +394,46 @@ export class RunRegistry {
     // caller-supplied id cannot both get through.
     this.#starting.add(runId);
     let run: Run;
+    // See `RunHandle.historyOffset`. A new session has nothing before it, so
+    // the seam is 0 and no read is needed.
+    let historyOffset: number | undefined = input.resumeSessionId === undefined ? 0 : undefined;
     try {
       // Credentials are resolved here and handed straight to the adapter. The
       // registry does not keep the bundle: after this line the only thing that
       // holds it is the provider transport.
       const resolution = await this.#resolveRun({ ...input, runId });
+
+      /*
+       * The seam, taken before the provider is spawned.
+       *
+       * Placement is the whole point and is not free to move: one line later
+       * the CLI has written the user's message into the session file, and the
+       * count is a message too large. There is no way to correct it afterwards,
+       * because nothing distinguishes the run's own first message from the last
+       * of the previous turn.
+       *
+       * It reuses the run's own environment rather than resolving a read-only
+       * one. That looks like a credential on a read, and is not: the bundle was
+       * decrypted on the line above for the run itself, and only its config
+       * directory is used here — asking for a second bundle would mean a second
+       * decryption for the same run.
+       *
+       * A failure is swallowed. The count buys a nicer transcript after a
+       * reload; a run must never fail to start because history could not be
+       * measured.
+       */
+      if (input.resumeSessionId !== undefined && adapter.countSessionMessages !== undefined) {
+        try {
+          historyOffset = await adapter.countSessionMessages({
+            sessionId: input.resumeSessionId,
+            cwd: input.cwd,
+            env: resolution.env,
+          });
+        } catch (error) {
+          this.#report(error, runId, 'start');
+        }
+      }
+
       const resolved: ResolvedRunInput = { ...input, ...resolution, runId };
       run = await adapter.createRun(resolved);
     } catch (error) {
@@ -410,6 +451,7 @@ export class RunRegistry {
       capabilities: adapter.capabilities,
       startedAt: this.#now(),
       metadata: input.metadata,
+      ...(historyOffset === undefined ? {} : { historyOffset }),
     };
 
     const entry: RunEntry = {

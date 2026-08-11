@@ -237,6 +237,25 @@ export interface RunHandle {
   readonly capabilities: Capabilities;
   /** Assigned once `session.started` arrives. */
   readonly sessionId?: SessionId;
+  /**
+   * How many stored messages the session already held when this run started.
+   *
+   * The seam between "what came before" and "what this run is doing", and the
+   * one number that cannot be recovered later: the provider appends to the
+   * session file as the run goes, so by the time anyone asks, the boundary has
+   * moved. It is recorded once, before the provider is even spawned.
+   *
+   * What it is for: a window that reloads mid-run re-attaches to the run and
+   * replays it from the registry's buffer, which covers this turn and no more.
+   * Reading the session file for the earlier turns would also re-read the
+   * half-written current one, and the turn would appear twice. Reading it with
+   * `limit: historyOffset` stops exactly where the replay begins.
+   *
+   * `0` for a run that opened a new session — the whole file is this run's.
+   * Absent when the provider cannot count its own stored messages, which a
+   * caller should read as "no seam is known", not as zero.
+   */
+  readonly historyOffset?: number;
   /** Start time, ms since epoch. */
   readonly startedAt: number;
   /** Echoed from {@link RunInput.metadata}. */

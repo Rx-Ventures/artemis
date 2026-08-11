@@ -135,6 +135,8 @@ interface Harness {
   readonly errors: Array<{ error: unknown; phase: string }>;
   /** Every ResolvedRunInput the adapter was handed. */
   readonly resolved: ResolvedRunInput[];
+  /** Adapter methods in the order they were called. The history seam depends on it. */
+  readonly calls: string[];
 }
 
 /**
@@ -159,6 +161,8 @@ function harness(
     disposeTimeoutMs?: number;
     historyLimit?: number;
     adapter?: Partial<{ createRun: () => Promise<FakeRun> }>;
+    /** Present only when a test is about the history seam; absent models a provider that cannot count. */
+    countSessionMessages?: (query: { sessionId: string }) => Promise<number>;
     resolveRun?: RunRegistryOptions['resolveRun'];
     checkWorkingDirectory?: RunRegistryOptions['checkWorkingDirectory'];
   } = {},
@@ -166,17 +170,27 @@ function harness(
   const runs: FakeRun[] = [];
   const errors: Array<{ error: unknown; phase: string }> = [];
   const resolved: ResolvedRunInput[] = [];
+  const calls: string[] = [];
 
   const adapter = {
     id: 'claude',
     capabilities: options.capabilities ?? FULL_CAPABILITIES,
     createRun: (runInput: ResolvedRunInput) => {
+      calls.push('createRun');
       resolved.push(runInput);
       if (options.adapter?.createRun) return options.adapter.createRun();
       const run = new FakeRun();
       runs.push(run);
       return Promise.resolve(run);
     },
+    ...(options.countSessionMessages === undefined
+      ? {}
+      : {
+          countSessionMessages: (query: { sessionId: string }) => {
+            calls.push('countSessionMessages');
+            return options.countSessionMessages!(query);
+          },
+        }),
   };
 
   const registry = new RunRegistry({
@@ -193,7 +207,7 @@ function harness(
     onError: (error, context) => errors.push({ error, phase: context.phase }),
   });
 
-  return { registry, runs, errors, resolved };
+  return { registry, runs, errors, resolved, calls };
 }
 
 const input = (overrides: Partial<RunInput> = {}): RunInput => ({
@@ -893,5 +907,98 @@ describe('RunRegistry — termination', () => {
     await expect(registry.dispose(handle.runId)).resolves.toBeDefined();
     expect(errors.some((e) => e.phase === 'dispose')).toBe(true);
     expect(registry.activeCount).toBe(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The history seam                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `RunHandle.historyOffset` — how much of the session predates this run.
+ *
+ * It exists for one caller: a window that reloads mid-run re-attaches to the
+ * run and has to draw the conversation from two places at once — the session
+ * file for the earlier turns, the registry's buffer for the turn in flight.
+ * The file is being appended to while that happens, so without a recorded
+ * boundary the current turn appears in both and is rendered twice.
+ *
+ * The boundary is only true for an instant, which is what these assertions are
+ * really about: it has to be taken before the provider is spawned, because one
+ * line later the user's message is in the file and the count is wrong by a
+ * message that nothing downstream can identify or subtract.
+ */
+describe('history offset', () => {
+  it('is zero for a run that opens its own session, and costs no read', async () => {
+    const count = vi.fn(() => Promise.resolve(9));
+    const h = harness({ countSessionMessages: count });
+
+    const handle = await h.registry.start(input());
+
+    expect(handle.historyOffset).toBe(0);
+    expect(count).not.toHaveBeenCalled();
+  });
+
+  it('counts the resumed session before the provider is started', async () => {
+    const h = harness({ countSessionMessages: () => Promise.resolve(12) });
+
+    const handle = await h.registry.start(input({ resumeSessionId: 'session-abc' }));
+
+    expect(handle.historyOffset).toBe(12);
+    // Order, not just occurrence: after `createRun` the provider has written
+    // the new prompt into the session and the count is a message too high.
+    expect(h.calls).toEqual(['countSessionMessages', 'createRun']);
+  });
+
+  it('counts the session being forked, which is the file the fork starts from', async () => {
+    const seen: string[] = [];
+    const h = harness({
+      countSessionMessages: ({ sessionId }) => {
+        seen.push(sessionId);
+        return Promise.resolve(4);
+      },
+    });
+
+    const handle = await h.registry.start(
+      input({ resumeSessionId: 'session-abc', forkSession: true }),
+    );
+
+    expect(seen).toEqual(['session-abc']);
+    expect(handle.historyOffset).toBe(4);
+  });
+
+  it('leaves the offset unknown when the provider cannot count, rather than guessing zero', async () => {
+    // No `countSessionMessages` on the adapter at all.
+    const h = harness();
+
+    const handle = await h.registry.start(input({ resumeSessionId: 'session-abc' }));
+
+    // Undefined, not 0: a zero would tell a reloading window that the whole
+    // file belongs to this run, and it would replay the conversation twice.
+    expect(handle.historyOffset).toBeUndefined();
+  });
+
+  it('starts the run anyway when the count fails, and reports it', async () => {
+    const h = harness({
+      countSessionMessages: () => Promise.reject(new Error('transcript unreadable')),
+    });
+
+    const handle = await h.registry.start(input({ resumeSessionId: 'session-abc' }));
+
+    expect(handle.runId).toBe('run-1');
+    expect(handle.historyOffset).toBeUndefined();
+    expect(h.errors.map((e) => e.phase)).toEqual(['start']);
+  });
+
+  it('survives the handle being rebuilt as the run progresses', async () => {
+    const h = harness({ countSessionMessages: () => Promise.resolve(7) });
+
+    const handle = await h.registry.start(input({ resumeSessionId: 'session-abc' }));
+    h.runs[0]?.emit(sessionStarted(handle.runId));
+    await flush();
+
+    // `session.started` replaces the handle. The offset is a fact about how the
+    // run began and must not be dropped on the way through.
+    expect(h.registry.get(handle.runId)?.historyOffset).toBe(7);
   });
 });

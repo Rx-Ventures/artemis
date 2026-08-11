@@ -175,6 +175,39 @@ export interface AppState {
    */
   readonly grid: readonly PaneRow[];
   /**
+   * Conversations that are still running with no column showing them.
+   *
+   * A run belongs to the main process, not to the column that happened to start
+   * it, and the agent does not stop working because the user looked at
+   * something else. So leaving a live conversation — ⌘N, opening another
+   * session, reloading the window — hands its pane to this list instead of
+   * disposing the run, and coming back to that session hands the same pane back
+   * to the grid. The pane *is* the conversation: its store holds the run and
+   * the parked permission prompts, its transcript holds what has been said. Move
+   * the pane and everything arrives intact, with no replay and nothing to
+   * reconcile.
+   *
+   * Panes here are otherwise ordinary. They receive the mirrored window values
+   * ({@link mirrorToPanes}), they own their runs' events ({@link paneForRun}),
+   * and they count towards the live-poll rate — the only thing they lack is a
+   * cell in the grid.
+   *
+   * Bounded by the runs themselves: an entry is dropped when its run ends, at
+   * which point the provider has written the session to disk and reopening it
+   * from the sidebar is a full-fidelity read. Nothing accumulates here across a
+   * working day.
+   */
+  readonly background: readonly Pane[];
+  /**
+   * Sessions with work in flight, whether or not a column is showing them.
+   *
+   * A projection of the panes, maintained by {@link syncRunningSessions},
+   * because the sidebar lives in the window store and the truth lives in each
+   * pane's. An array rather than a `Set` so the change check is a cheap
+   * element-wise compare and the value is stable between real changes.
+   */
+  readonly runningSessions: readonly SessionId[];
+  /**
    * Which pane the window-level surfaces act on.
    *
    * The palette, the run inspector, the settings dialog and every hotkey are
@@ -708,7 +741,30 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
   };
 }
 
-const firstPane = createPane(seedSession());
+/**
+ * Watch a pane's run state, once.
+ *
+ * Every pane goes through {@link openPane} — the first at module scope, the rest
+ * as they are minted — so a new conversation cannot be forgotten here. The
+ * disposer is kept so {@link closePane} can drop it: a live subscription to a
+ * closed pane's store would hold the pane, its transcript and every message in
+ * it for the life of the window.
+ */
+const paneWatchers = new Map<PaneId, () => void>();
+
+function unwatchPane(paneId: PaneId): void {
+  paneWatchers.get(paneId)?.();
+  paneWatchers.delete(paneId);
+}
+
+/** Mint a conversation the window is already watching. The only way panes are made. */
+function openPane(initial: SessionState): Pane {
+  const pane = createPane(initial);
+  paneWatchers.set(pane.id, pane.store.subscribe(syncRunningSessions));
+  return pane;
+}
+
+const firstPane = openPane(seedSession());
 
 export const useApp = create<AppState>(() => ({
   bridgeMode: 'unavailable',
@@ -717,6 +773,8 @@ export const useApp = create<AppState>(() => ({
   booted: false,
 
   grid: [createRow([firstPane])],
+  background: [],
+  runningSessions: [],
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
 
@@ -773,6 +831,33 @@ export function allPanes(state: AppState = useApp.getState()): readonly Pane[] {
   return flatPanes;
 }
 
+/**
+ * Every conversation this window is responsible for — on screen or not.
+ *
+ * The distinction from {@link allPanes} is exactly "does it have a column".
+ * Anything that is about *layout* wants `allPanes`; anything that is about a
+ * *conversation* — routing its events, mirroring the window's values into it,
+ * deciding whether the app has work in flight — wants this. Getting that wrong
+ * is silent: a backgrounded run whose events find no owner simply stops
+ * appearing, and the transcript is only missing the part the user was away for.
+ *
+ * Memoised on both halves for the reason `allPanes` gives: it is read through
+ * `useApp`, so a fresh array per read would report a change on every store
+ * write.
+ */
+let livePanesFrom: readonly Pane[] | null = null;
+let livePanesBackground: readonly Pane[] | null = null;
+let livePanes: readonly Pane[] = [];
+
+export function allLivePanes(state: AppState = useApp.getState()): readonly Pane[] {
+  const visible = allPanes(state);
+  if (visible === livePanesFrom && state.background === livePanesBackground) return livePanes;
+  livePanesFrom = visible;
+  livePanesBackground = state.background;
+  livePanes = state.background.length === 0 ? visible : [...visible, ...state.background];
+  return livePanes;
+}
+
 /** How many conversations are open. */
 export function paneCount(state: AppState = useApp.getState()): number {
   return allPanes(state).length;
@@ -821,14 +906,83 @@ export function canSplit(state: AppState = useApp.getState()): boolean {
 /** The sentence to show when {@link canSplit} says no. */
 export const SPLIT_LIMIT_REASON = `A window holds ${MAX_PANES} conversations at once. Close one to open another.`;
 
-/** The pane holding a given run, or `undefined` once it has been closed. */
+/**
+ * The pane holding a given run, or `undefined` once it has been closed.
+ *
+ * Searches backgrounded conversations too, which is what keeps a run the user
+ * navigated away from streaming into its own transcript rather than into
+ * nothing.
+ */
 function paneForRun(runId: RunId): Pane | undefined {
-  return allPanes().find((p) => paneState(p).run?.runId === runId);
+  return allLivePanes().find((p) => paneState(p).run?.runId === runId);
 }
 
-/** True while any pane has a live run. Drives the session feed's poll rate. */
+/** True while any conversation has a live run. Drives the session feed's poll rate. */
 export function anyPaneLive(state: AppState = useApp.getState()): boolean {
-  return allPanes(state).some((pane) => isLive(paneState(pane)));
+  return allLivePanes(state).some((pane) => isLive(paneState(pane)));
+}
+
+/**
+ * The backgrounded conversation for a session, if one is still running.
+ *
+ * How {@link resumeSession} tells "open this from history" from "go back to the
+ * thing that is still working". Matched on the run's own `sessionId` rather than
+ * the pane's `resumeSessionId`: the latter is the session the *next* prompt will
+ * continue, and for a brand-new conversation it is null until the run ends —
+ * precisely the window in which a user is most likely to switch away.
+ */
+function backgroundPaneForSession(
+  sessionId: SessionId,
+  state: AppState = useApp.getState(),
+): Pane | undefined {
+  return state.background.find((pane) => {
+    const s = paneState(pane);
+    return s.run?.sessionId === sessionId || s.resumeSessionId === sessionId;
+  });
+}
+
+/**
+ * Recompute {@link AppState.runningSessions} from the conversations themselves.
+ *
+ * The sidebar needs to know which sessions are working, and "working" is a fact
+ * about a *pane's* store — a different store from the window's, which is the one
+ * the sidebar subscribes to. A selector that reached across the two would only
+ * be re-evaluated when the *window* changed, so a run starting or ending would
+ * not repaint the list until something unrelated did. So the fact is copied to
+ * the window instead, by a subscription on every pane, and the sidebar reads an
+ * ordinary window value.
+ *
+ * Writes only on a real change: this runs on every keystroke in a composer (the
+ * same store holds `draft`), and an unconditional `setState` would re-render the
+ * whole session list per character.
+ */
+function syncRunningSessions(): void {
+  const ids: SessionId[] = [];
+  for (const pane of allLivePanes()) {
+    const state = paneState(pane);
+    if (!isLive(state)) continue;
+    /*
+     * Both ids, not the better of the two.
+     *
+     * They are usually the same — resuming a Claude session continues under its
+     * own id — but they diverge in two ordinary cases: before `session.started`
+     * arrives, when the run has no id of its own yet, and after a fork, where
+     * the run's id is new and the row the user clicked still carries the old
+     * one. Marking only one of them leaves the conversation running behind a row
+     * that looks idle, which is the whole failure this marker exists to prevent.
+     * `backgroundPaneForSession` matches on either for the same reason, and the
+     * two must agree: a row that cannot be marked but can be opened, or the
+     * reverse, is worse than neither.
+     */
+    if (state.run?.sessionId !== undefined) ids.push(state.run.sessionId);
+    if (state.resumeSessionId !== null && state.resumeSessionId !== state.run?.sessionId) {
+      ids.push(state.resumeSessionId);
+    }
+  }
+
+  const current = useApp.getState().runningSessions;
+  if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
+  useApp.setState({ runningSessions: ids });
 }
 
 /**
@@ -849,7 +1003,10 @@ function mirrorToPanes(state: AppState): void {
     contextWindows: state.contextWindows,
     quickModelIds: state.quickModelIds,
   };
-  for (const pane of allPanes(state)) {
+  // Backgrounded conversations included: one comes home the moment the user
+  // clicks its row, and a pane that had been out of the mirror would arrive
+  // showing an empty profile list under a status line full of placeholders.
+  for (const pane of allLivePanes(state)) {
     const current = paneState(pane);
     if (MIRRORED_KEYS.every((key) => current[key] === next[key])) continue;
     setPaneState(pane, next);
@@ -857,6 +1014,20 @@ function mirrorToPanes(state: AppState): void {
 }
 
 useApp.subscribe(mirrorToPanes);
+
+/*
+ * The other half of `syncRunningSessions`'s trigger.
+ *
+ * The per-pane subscription catches a run *changing*; this catches the set of
+ * panes changing — a conversation moving to the background, coming home, or
+ * being adopted from the main process after a reload. Neither alone is enough:
+ * backgrounding a pane writes only the window store, and a run ending writes
+ * only a pane's.
+ *
+ * Safe to re-enter. The write inside notifies this subscriber again, and the
+ * second pass finds nothing changed and returns.
+ */
+useApp.subscribe(syncRunningSessions);
 
 /** Point the window-level surfaces at a pane. */
 export function focusPane(paneId: PaneId): void {
@@ -912,6 +1083,39 @@ export function setPaneLayout(shares: Readonly<Record<string, number>>): void {
  * controls ask {@link canSplit} first and render the reason, so a `null` here is
  * the backstop for a keyboard shortcut rather than a state the UI can reach.
  */
+/**
+ * A blank conversation carrying over everything but the conversation.
+ *
+ * Shared by {@link splitPane} and {@link newSession}, which want the same thing
+ * for the same reason: the account, directory, model and mode are the user's
+ * current *setup*, and a fresh session is a change of subject, not a change of
+ * desk. Only what a transcript is about — the run, the session id, the prompt
+ * history — is left behind.
+ */
+function seedBeside(source: Pane, state: AppState = useApp.getState()): SessionState {
+  const from = paneState(source);
+  return seedSession({
+    providers: state.providers,
+    profiles: state.profiles,
+    sessions: state.sessions,
+    contextWindows: state.contextWindows,
+    quickModelIds: state.quickModelIds,
+    activeProviderId: from.activeProviderId,
+    activeProfileId: from.activeProfileId,
+    cwd: from.cwd,
+    workspace: from.workspace,
+    permissionMode: from.permissionMode,
+    model: from.model,
+    effort: from.effort,
+    fastMode: from.fastMode,
+    ultracode: from.ultracode,
+    // The catalogue is a property of the account, and the account came across
+    // with it — so it comes too, rather than making the new pane flash the
+    // built-in list until its own fetch lands.
+    models: from.models,
+  });
+}
+
 export function splitPane(
   direction: SplitDirection,
   from: Pane = focusedPane(),
@@ -920,29 +1124,7 @@ export function splitPane(
   const at = locate(state.grid, from.id);
   if (!at || !canSplit(state)) return null;
 
-  const source = paneState(from);
-  const pane = createPane(
-    seedSession({
-      providers: state.providers,
-      profiles: state.profiles,
-      sessions: state.sessions,
-      contextWindows: state.contextWindows,
-      quickModelIds: state.quickModelIds,
-      activeProviderId: source.activeProviderId,
-      activeProfileId: source.activeProfileId,
-      cwd: source.cwd,
-      workspace: source.workspace,
-      permissionMode: source.permissionMode,
-      model: source.model,
-      effort: source.effort,
-      fastMode: source.fastMode,
-      ultracode: source.ultracode,
-      // The catalogue is a property of the account, and the account came across
-      // with it — so it comes too, rather than making the new pane flash the
-      // built-in list until its own fetch lands.
-      models: source.models,
-    }),
-  );
+  const pane = openPane(seedBeside(from, state));
 
   useApp.setState((s) => {
     const grid = [...s.grid];
@@ -961,8 +1143,108 @@ export function splitPane(
   return pane;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Handing a column between conversations                                     */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Close a pane, ending whatever it was running.
+ * How many finished conversations stay in memory after the user leaves them.
+ *
+ * A conversation is backgrounded because it is *working*; once it ends, the
+ * provider has written it to disk and reopening it from the sidebar is a
+ * full-fidelity read. The only thing the in-memory copy still has that the file
+ * does not is Artemis's own end-of-run card — the accounting, and, when a run
+ * failed, the reason. That is worth keeping for the handful of conversations a
+ * user might come back to, and not worth keeping for a day's worth.
+ */
+const MAX_BACKGROUND_ENDED = 8;
+
+/**
+ * Release a conversation nothing will look at again.
+ *
+ * Unsubscribing matters more than the transcript reset: the watcher installed by
+ * {@link openPane} is a reference from a module-level map into the pane, so a
+ * pane that is dropped without this is never collected — along with every
+ * message in its transcript.
+ */
+function retirePane(pane: Pane): void {
+  unwatchPane(pane.id);
+  pane.transcript.reset();
+  // Any catalogue fetch still in flight for it has nowhere to land. Dropping the
+  // token both releases the entry and makes the reply's own staleness check
+  // fail, which is what stops it writing into a store nothing is subscribed to.
+  modelsRequestToken.delete(pane.id);
+}
+
+/** Evict finished conversations past {@link MAX_BACKGROUND_ENDED}, oldest first. */
+function pruneBackground(): void {
+  const { background } = useApp.getState();
+  const ended = background.filter((pane) => !isLive(paneState(pane)));
+  if (ended.length <= MAX_BACKGROUND_ENDED) return;
+
+  const evicted = new Set(ended.slice(0, ended.length - MAX_BACKGROUND_ENDED).map((p) => p.id));
+  for (const pane of background) if (evicted.has(pane.id)) retirePane(pane);
+  useApp.setState({ background: background.filter((pane) => !evicted.has(pane.id)) });
+}
+
+/**
+ * Give one conversation's column to another. The outgoing one keeps running.
+ *
+ * This is the single move behind every "leave this session" action — ⌘N,
+ * opening something from the sidebar, closing a column. Its whole point is what
+ * it does *not* do: it never disposes the run. A run belongs to the main
+ * process and the agent carries on working whether or not anyone is watching, so
+ * the pane is moved to {@link AppState.background} and handed back intact if the
+ * user returns to it. Only {@link interruptRun} and quitting stop an agent.
+ *
+ * `incoming` may itself be a backgrounded conversation coming home, which is why
+ * the grid write and the background write happen in one `setState`: for a frame
+ * in between, a pane would otherwise be in both places or in neither, and the
+ * event router would deliver its stream twice or not at all.
+ *
+ * A conversation with nothing in flight is retired instead of backgrounded —
+ * there is nothing to come back to, and its transcript is on disk.
+ */
+function handOver(outgoing: Pane, incoming: Pane): void {
+  const state = useApp.getState();
+  const at = locate(state.grid, outgoing.id);
+  if (!at) return;
+
+  const keep = isLive(paneState(outgoing));
+  const grid = state.grid.map((row, index) =>
+    index === at.row
+      ? { ...row, panes: row.panes.map((p) => (p.id === outgoing.id ? incoming : p)) }
+      : row,
+  );
+  const background = state.background.filter((p) => p.id !== incoming.id);
+  if (keep) background.push(outgoing);
+
+  useApp.setState({
+    grid,
+    background,
+    ...(state.focusedPaneId === outgoing.id ? { focusedPaneId: incoming.id } : {}),
+  });
+
+  if (!keep) retirePane(outgoing);
+  pruneBackground();
+  savePrefs();
+}
+
+/**
+ * Move a working conversation out of its column and put a blank one there.
+ *
+ * Returns the pane now holding the column, which every caller must use from that
+ * point on: the pane they were handed is still alive, but it is no longer the
+ * one on screen.
+ */
+function handOffToBlank(pane: Pane): Pane {
+  const fresh = openPane(seedBeside(pane));
+  handOver(pane, fresh);
+  return fresh;
+}
+
+/**
+ * Close a pane. Whatever it was running carries on without it.
  *
  * Refuses to close the last one: a window with no conversation in it has no way
  * back to having one, and "close" would read as "quit". With a single pane open
@@ -979,10 +1261,11 @@ export function splitPane(
  * you closed something in the corner is disorienting, and the focused pane is
  * what every window-level surface is pointed at.
  *
- * The run is disposed rather than left in the main process. A closed pane is
- * the user saying they are done with that conversation, and an orphaned
- * provider subprocess with nowhere to render its events is a leak whose only
- * symptom is a warm laptop.
+ * A live run is backgrounded rather than disposed. Closing a column is a
+ * statement about the layout, not about the work: the agent is mid-edit, the
+ * sidebar goes on marking its session as running, and clicking that row brings
+ * the conversation back with its transcript. Stopping an agent is what
+ * {@link interruptRun} is for, and it is the only thing that does it.
  */
 export function closePane(paneId: PaneId): void {
   const state = useApp.getState();
@@ -991,13 +1274,8 @@ export function closePane(paneId: PaneId): void {
   if (!at) return;
   const pane = (state.grid[at.row] as PaneRow).panes[at.column] as Pane;
 
-  void disposeRun(pane);
-  pane.transcript.reset();
-  // The pane is gone, so any catalogue fetch still in flight for it has nowhere
-  // to land. Dropping the token both releases the entry and makes the reply's
-  // own staleness check fail, which is what stops it writing into a store
-  // nothing is subscribed to.
-  modelsRequestToken.delete(paneId);
+  const keep = isLive(paneState(pane));
+  if (!keep) retirePane(pane);
 
   const grid: PaneRow[] = [];
   for (let i = 0; i < state.grid.length; i += 1) {
@@ -1018,8 +1296,10 @@ export function closePane(paneId: PaneId): void {
 
   useApp.setState({
     grid,
+    ...(keep ? { background: [...state.background, pane] } : {}),
     ...(state.focusedPaneId === paneId ? { focusedPaneId: (neighbour as Pane).id } : {}),
   });
+  pruneBackground();
   savePrefs();
 }
 
@@ -1615,7 +1895,7 @@ export async function bootstrap(): Promise<void> {
   }
 
   await Promise.all([refreshProviders(), refreshProfiles()]);
-  await adoptExistingRun(focusedPane());
+  await adoptLiveRuns(focusedPane());
   await refreshSessions();
   useApp.setState({ booted: true });
 
@@ -1848,27 +2128,167 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
 }
 
 /**
- * Re-attach to a run the main process still considers live after a reload.
+ * Re-attach to every run that outlived the page.
  *
- * Only ever called for the first column, at boot, and only for a run in *its*
- * directory. A reload is not a split — the window comes back with one
- * conversation — so there is no question of deciding which of two columns
- * inherits an orphaned run.
+ * ⌘R reloads the renderer; it does not touch the main process, where the runs
+ * actually live. So a reload used to be indistinguishable from a crash from the
+ * user's side — the agents carried on working, invisibly, into transcripts that
+ * no longer existed. This is the other half of that: `runs.list` says which
+ * conversations are still going, `runs.events` says what they have said, and
+ * both are replayed through the ordinary event path so a re-attached run renders
+ * exactly like one that was never interrupted.
+ *
+ * The first run takes the open column and the rest go to the background, which
+ * is a reasonable guess rather than a restoration — pane geometry is not
+ * persisted, so there is nothing that says which column a given run was in.
+ * What matters is that none of them is lost: every one is reachable from its row
+ * in the sidebar.
  */
-async function adoptExistingRun(pane: Pane): Promise<void> {
+async function adoptLiveRuns(pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
-  const state = paneState(pane);
-  if (!bridge || !state.cwd) return;
-  const result = await call(() => bridge.runs.list({ cwd: state.cwd }));
+  if (!bridge) return;
+
+  // No `cwd` filter: a conversation the user backgrounded may well have been
+  // working in another project, and dropping it because this column happens to
+  // point somewhere else is the bug this function exists to fix.
+  const result = await call(() => bridge.runs.list({}));
   if (!result.ok) return;
-  const live = result.value.runs.find((r) => r.status !== 'ended');
-  if (!live) return;
-  setPaneState(pane, { run: fromHandle(live) });
-  pane.transcript.note(
-    'info',
-    `Re-attached to run ${live.runId.slice(0, 8)}… already in progress`,
-    'Events emitted before this window loaded are not replayed.',
+
+  const live = result.value.runs.filter((handle) => handle.status !== 'ended');
+  const [first, ...rest] = live;
+  if (first === undefined) return;
+
+  await attachRun(pane, first);
+
+  const adopted: Pane[] = [];
+  for (const handle of rest) {
+    const extra = openPane(seedSession());
+    adopted.push(extra);
+    await attachRun(extra, handle);
+  }
+  if (adopted.length > 0) {
+    useApp.setState((s) => ({ background: [...s.background, ...adopted] }));
+  }
+}
+
+/**
+ * Point a pane at a run already in progress, and rebuild its whole conversation.
+ *
+ * Two sources, joined at a seam neither of them could work out on its own:
+ *
+ *  - **Before the run** comes from the provider's session file, read with
+ *    `limit: handle.historyOffset` — the count of stored messages taken the
+ *    instant this run started. Every earlier turn, and not one line of this one.
+ *  - **The run itself** comes from the registry's retained events, which is the
+ *    only place a turn still being written exists in full.
+ *
+ * Reading the file without that limit is the obvious version and it is wrong:
+ * the provider appends as the run goes, so the file already holds a partial
+ * copy of the turn the replay is about to render, and the turn appears twice.
+ * `historyOffset` exists to make that seam knowable — see `RunHandle`.
+ *
+ * The pane is bound *before* anything is fetched, and live events are held back
+ * while both reads are in flight (see {@link handleAgentEvent}). Without that
+ * hold, a token arriving during the round-trip would be applied ahead of the
+ * history it belongs after, and the transcript would read out of order — a race
+ * that only shows up on a reload during a fast turn, which is exactly when it
+ * is least welcome.
+ */
+async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  replayBuffers.set(handle.runId, []);
+  pane.transcript.reset();
+  setPaneState(pane, {
+    run: fromHandle(handle),
+    activeProviderId: handle.providerId,
+    activeProfileId: handle.profileId,
+    cwd: handle.cwd,
+    permissionQueue: [],
+    // The session the next prompt continues is this run's own. Set now rather
+    // than waiting for `run.end`, because until it is set the sidebar cannot
+    // mark the row the user needs in order to find this conversation again.
+    ...(handle.sessionId === undefined ? {} : { resumeSessionId: handle.sessionId }),
+  });
+
+  let lastSeq = -1;
+  try {
+    await replayEarlierTurns(pane, handle);
+    const replay = await call(() => bridge.runs.events({ runId: handle.runId }));
+    if (!replay.ok) {
+      pane.transcript.note(
+        'warn',
+        'Could not replay what this run has already done',
+        `${replay.error.message} It is still running, and everything from here on will appear normally.`,
+      );
+      return;
+    }
+
+    if (replay.value.truncated) {
+      pane.transcript.note(
+        'info',
+        'Showing the most recent part of this run',
+        'The window was reloaded and the earliest events had already been dropped.',
+      );
+    }
+    for (const event of replay.value.events) {
+      applyAgentEvent(event);
+      lastSeq = event.seq;
+    }
+  } finally {
+    // Whatever arrived while the replay was in flight, minus anything the replay
+    // already covered. In a `finally` because a failed fetch still has to
+    // release the hold — otherwise the run streams into a buffer forever.
+    const pending = replayBuffers.get(handle.runId) ?? [];
+    replayBuffers.delete(handle.runId);
+    for (const event of pending) if (event.seq > lastSeq) applyAgentEvent(event);
+  }
+}
+
+/**
+ * Put the turns that came before a re-attached run back above it.
+ *
+ * Silent in three cases, and each is a correct "there is nothing to show":
+ * a run that opened its own session (`historyOffset` 0), one whose provider
+ * cannot count its stored messages (absent — see `RunHandle.historyOffset`),
+ * and one whose session id has not arrived yet, which has no file to read.
+ *
+ * A failed read is a note rather than a banner, exactly as in
+ * {@link loadSessionHistory}: the run is live and continuing, and the cost of
+ * the failure is scrollback, not work.
+ *
+ * The synthetic run id is the same one `loadSessionHistory` uses, and for the
+ * same reason — this is history, and stamping it with the live run's id would
+ * make the two indistinguishable inside the transcript.
+ */
+async function replayEarlierTurns(pane: Pane, handle: RunHandle): Promise<void> {
+  const { bridge } = resolveBridge();
+  const { sessionId, historyOffset } = handle;
+  if (!bridge || sessionId === undefined || historyOffset === undefined || historyOffset <= 0) {
+    return;
+  }
+
+  const result = await call(() =>
+    bridge.sessions.messages({
+      profileId: handle.profileId,
+      sessionId,
+      runId: `history:${sessionId}` as RunId,
+      cwd: handle.cwd,
+      limit: historyOffset,
+    }),
   );
+
+  if (!result.ok) {
+    pane.transcript.note(
+      'warn',
+      'Could not load the earlier part of this conversation',
+      `${result.error.message} The run below is still going, and is shown in full.`,
+    );
+    return;
+  }
+
+  for (const event of result.value.events) pane.transcript.apply(event);
 }
 
 function fromHandle(handle: RunHandle): RunState {
@@ -2707,7 +3127,20 @@ function refreshSessionsSoon(): void {
 }
 
 /**
- * Start a blank transcript in one column. Disposes whatever run it had live.
+ * Start a blank transcript in one column.
+ *
+ * ## Whatever was running keeps running
+ *
+ * A column that is working is not cleared — it is handed to
+ * {@link AppState.background} and a blank one takes its place. Asking for a new
+ * conversation says nothing about the old one, and an agent that is halfway
+ * through editing files has no business being killed because the user wanted to
+ * start something else while it finished. The sidebar goes on marking that
+ * session as running and clicking it brings the column back.
+ *
+ * The caller gets the pane that now holds the column, which is a *different*
+ * pane whenever a hand-off happened. Anything the caller does afterwards has to
+ * be done to that one.
  *
  * ## A new session starts on the account with the most room
  *
@@ -2732,22 +3165,30 @@ function refreshSessionsSoon(): void {
 export function newSession(
   pane: Pane = focusedPane(),
   { adoptRecommendedProfile = true }: { readonly adoptRecommendedProfile?: boolean } = {},
-): void {
-  void disposeRun(pane);
-  pane.transcript.reset();
-  setPaneState(pane, { run: null, resumeSessionId: null, permissionQueue: [] });
+): Pane {
+  // A working conversation moves aside intact; an idle one is simply cleared,
+  // which avoids remounting the column — and the composer the user is typing in
+  // — for what is, in that case, nothing more than an erase.
+  let target = pane;
+  if (isLive(paneState(pane))) {
+    target = handOffToBlank(pane);
+  } else {
+    pane.transcript.reset();
+    setPaneState(pane, { run: null, resumeSessionId: null, permissionQueue: [] });
+  }
 
   if (adoptRecommendedProfile) {
     // Read off the app store, where the poll writes: the readings are
     // window-wide facts about accounts, not column state.
     const { profiles, planUsageByProfile } = useApp.getState();
     const recommended = planRecommendation(profiles, planUsageByProfile, Date.now());
-    if (recommended !== null && recommended.profileId !== paneState(pane).activeProfileId) {
-      setProfile(recommended.profileId, pane);
+    if (recommended !== null && recommended.profileId !== paneState(target).activeProfileId) {
+      setProfile(recommended.profileId, target);
     }
   }
 
   useApp.setState({ paletteOpen: false });
+  return target;
 }
 
 /**
@@ -2771,6 +3212,16 @@ export function newSession(
  * When the session's profile no longer exists, nothing is switched and the
  * failure is reported. Resuming into a different profile's config directory
  * would not find the session anyway.
+ *
+ * ## Returning to something that never stopped
+ *
+ * A session the user walked away from mid-run is still running — see
+ * {@link AppState.background} — and for that one there is nothing to resume.
+ * The conversation is handed back to the column exactly as it was: same run,
+ * same transcript, same parked permission prompt. No history is read, because
+ * reading it would replay from the provider's file a conversation that is
+ * already in memory *and still being appended to*, and the two copies would
+ * interleave.
  */
 export function resumeSession(session: SessionSummary, pane: Pane = focusedPane()): void {
   const state = paneState(pane);
@@ -2785,6 +3236,15 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     return;
   }
 
+  // Still working in the background? Then this is a return, not a resume.
+  const running = backgroundPaneForSession(session.id);
+  if (running !== undefined && running.id !== pane.id) {
+    handOver(pane, running);
+    useApp.setState({ paletteOpen: false, focusedPaneId: running.id });
+    savePrefs();
+    return;
+  }
+
   if (!activeCapabilities(state).resumeSession) {
     pushBanner(
       'warn',
@@ -2796,9 +3256,12 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   const switchedProfile = state.activeProfileId !== session.profileId;
   const switchedCwd = state.cwd !== session.cwd;
 
-  void disposeRun(pane);
-  pane.transcript.reset();
-  setPaneState(pane, {
+  // Whatever this column was working on moves aside rather than being killed —
+  // the same rule as `newSession`, for the same reason. `target` is the pane
+  // that now holds the column and everything below is done to it.
+  const target = isLive(state) ? handOffToBlank(pane) : pane;
+  target.transcript.reset();
+  setPaneState(target, {
     run: null,
     activeProviderId: session.providerId,
     activeProfileId: session.profileId,
@@ -2814,7 +3277,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // Opening a session is a deliberate act on one column, so that column takes
   // the focus — which is what makes ⌘K, the run inspector and settings point
   // at what the user just opened rather than at whatever they last clicked.
-  useApp.setState({ paletteOpen: false, focusedPaneId: pane.id });
+  useApp.setState({ paletteOpen: false, focusedPaneId: target.id });
   savePrefs();
 
   const moved = [
@@ -2823,17 +3286,17 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   ].filter(Boolean);
 
   if (moved.length > 0) {
-    pane.transcript.note(
+    target.transcript.note(
       'info',
       `Continuing "${session.title}"`,
       `Switched ${moved.join(' and ')}, because a session only resumes under the profile and directory it was created in.`,
     );
   }
 
-  void loadSessionHistory(session, pane);
+  void loadSessionHistory(session, target);
   invalidateSessions();
   void refreshSessions();
-  void refreshModels(pane);
+  void refreshModels(target);
   // This function writes `cwd` itself rather than going through `setCwd`, and
   // must keep doing so: `setCwd` clears `resumeSessionId` on the way past,
   // which is the one piece of state this function exists to set. Routing this
@@ -2843,7 +3306,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // to `setCwd` does not happen either, so it is done here — otherwise resuming
   // a session from another project leaves the previous project's name sitting
   // over the new project's sessions.
-  if (switchedCwd) void refreshWorkspace(pane);
+  if (switchedCwd) void refreshWorkspace(target);
 }
 
 /**
@@ -3177,12 +3640,20 @@ export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   }
 }
 
-export async function disposeRun(pane: Pane = focusedPane()): Promise<void> {
-  const { bridge } = resolveBridge();
-  const run = paneState(pane).run;
-  if (!bridge || !run) return;
-  await call(() => bridge.runs.dispose({ runId: run.runId }));
-}
+/*
+ * REMOVED: `disposeRun`.
+ *
+ * It had three callers — `newSession`, `resumeSession` and `closePane` — and in
+ * every one of them it was the bug: leaving a conversation is a statement about
+ * what the user wants to look at, and it was killing the agent's subprocess
+ * mid-edit. Those three now hand the pane to `AppState.background` instead.
+ *
+ * Nothing replaced it, deliberately. A run ends when it finishes, when
+ * {@link interruptRun} stops it, or when the app quits (`engine.dispose`), and
+ * the registry retires each one on `run.end` — so there is no resource here
+ * that needed a fourth way to be released, and re-adding one would re-open the
+ * question of which navigation is allowed to kill work.
+ */
 
 /* -------------------------------------------------------------------------- */
 /* Permissions                                                                */
@@ -3502,7 +3973,28 @@ function mergeUsage(previous: UsageSnapshot | undefined, next: UsageSnapshot): U
  * since been closed) is dropped rather than interleaved into whichever
  * transcript happens to be on screen.
  */
+/**
+ * Runs whose retained history is still being fetched.
+ *
+ * A run being re-attached after a reload has two sources of truth for a moment
+ * — the buffer the main process kept, and the live feed — and they must be
+ * applied in `seq` order or the transcript reads backwards. Events land here
+ * while the fetch is in flight and {@link attachRun} drains them behind the
+ * replay. Empty in every other circumstance, which is why the lookup is the
+ * first thing on the streaming path and nothing else is.
+ */
+const replayBuffers = new Map<RunId, AgentEvent[]>();
+
 export function handleAgentEvent(event: AgentEvent): void {
+  const held = replayBuffers.get(event.runId);
+  if (held !== undefined) {
+    held.push(event);
+    return;
+  }
+  applyAgentEvent(event);
+}
+
+function applyAgentEvent(event: AgentEvent): void {
   const pane = paneForRun(event.runId);
   if (!pane) return;
   const run = paneState(pane).run;
@@ -3596,6 +4088,11 @@ export function handleAgentEvent(event: AgentEvent): void {
       if (event.error) {
         pushBanner('error', `Run failed: ${event.error.message}`, describeError(event.error));
       }
+      // A backgrounded conversation that has finished is no longer holding
+      // anything the provider's own file does not — except this end card. A few
+      // are kept for the user who comes back to ask what happened; see
+      // `MAX_BACKGROUND_ENDED`.
+      pruneBackground();
       // Deliberately *not* immediate — see `SESSION_SETTLE_MS`. The provider is
       // still writing this session's file as the event arrives, so reading now
       // reliably returns the previous turn's title.

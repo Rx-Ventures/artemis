@@ -65,6 +65,7 @@ import {
   type RunInput,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
+  type RunsEventsRequest,
   type RunsListRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
@@ -125,7 +126,26 @@ const LIMITS = {
   maxTurns: 10_000,
   maxBudgetUsd: 100_000,
   pageSize: 1_000,
+  /**
+   * Bound for a page of *messages*, as against a page of session summaries.
+   *
+   * Deliberately far above {@link LIMITS.pageSize}: the caller that asks for a
+   * bounded page of messages is a reloading window replaying everything before
+   * a live run, and that number is however long the conversation is. A cap of a
+   * thousand would refuse the request outright on a long session — worse than
+   * the unbounded read the same channel already accepts when `limit` is
+   * omitted, which is what opening any session from the sidebar does.
+   */
+  messagePage: 100_000,
   offset: 1_000_000,
+  /**
+   * Upper bound for a replay cursor.
+   *
+   * A run's `seq` counts events, not bytes, and the registry retains a
+   * four-figure window of them — so anything near this is already a caller that
+   * has lost track of what it is asking for rather than a long conversation.
+   */
+  seq: 1_000_000_000,
   /**
    * Transport bound for a session title, deliberately far above the length the
    * engine actually stores (`MAX_SESSION_TITLE`).
@@ -985,6 +1005,19 @@ export function validateRunsList(raw: unknown): RunsListRequest {
   return compact<RunsListRequest>({ cwd: optionalAbsolutePath(request['cwd'], 'cwd') });
 }
 
+/**
+ * `-1` is the floor rather than `0` because it is the natural spelling of
+ * "everything you still have": `seq` starts at 0, and a caller that has applied
+ * nothing has no event to name. Omitting the field means the same thing.
+ */
+export function validateRunsEvents(raw: unknown): RunsEventsRequest {
+  const request = requireRequest(raw);
+  return compact<RunsEventsRequest>({
+    runId: requireId(request['runId'], 'runId'),
+    afterSeq: optionalInteger(request['afterSeq'], 'afterSeq', -1, LIMITS.seq),
+  });
+}
+
 export function validateSessionsList(raw: unknown): SessionsListRequest {
   const request = requireRequest(raw);
   const providerId = request['providerId'];
@@ -1053,7 +1086,7 @@ export function validateSessionsMessages(raw: unknown): SessionsMessagesRequest 
     sessionId: requireId(request['sessionId'], 'sessionId'),
     runId: requireId(request['runId'], 'runId'),
     cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
-    limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.pageSize),
+    limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.messagePage),
     offset: optionalInteger(request['offset'], 'offset', 0, LIMITS.offset),
   });
 }
