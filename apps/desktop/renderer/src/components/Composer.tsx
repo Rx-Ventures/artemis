@@ -21,9 +21,11 @@
  *    be interrupted into a clean state while a decision is owed.
  *  - **It stays usable mid-run** when the provider advertises `midRunSteering`.
  *    When it does not, the field is disabled *with the reason attached* rather
- *    than quietly swallowing keystrokes, and Send says the same thing.
- *  - **Stop is always available while a run is live**, and is not
- *    capability-gated. A run that cannot be stopped is a wedged app.
+ *    than quietly swallowing keystrokes.
+ *  - **One button at the end of the field, offering whichever action would
+ *    work.** Stop while a run is live and there is nothing to send; Send the
+ *    moment there is. See {@link Composer} for why it is one button and not
+ *    two, and why "nothing to send" is not the same as "empty".
  *  - **Images attach by paste, by drop, or from a picker**, and all three land
  *    in the same place. Paste is the one that matters: a screenshot goes to the
  *    clipboard, and the gesture after taking one is Cmd+V.
@@ -151,6 +153,37 @@ export function Composer(): ReactElement {
   const history = usePane((s) => s.promptHistory);
 
   const locked = live && !steering.supported;
+
+  /**
+   * Whether the field is holding a prompt that pressing the button would send.
+   *
+   * Not `text.length > 0`: a field of whitespace sends nothing, and a locked
+   * composer sends nothing whatever is in it.
+   */
+  const sendable = !locked && text.trim().length > 0;
+
+  /**
+   * Which action the button at the end of the field is offering.
+   *
+   * One button, not two. Stop used to sit outside the field as a red pill that
+   * appeared for the length of a run and pushed the composer sideways, next to
+   * a Send that was disabled for most of that time — two controls where one is
+   * ever usable, and the usable one was the one that moved.
+   *
+   * So the button offers whichever action would actually do something. While a
+   * run is live with nothing to send it is Stop; type a prompt to steer with
+   * and it becomes Send again, because at that point the user is aiming at
+   * their own sentence and a Stop under the cursor is a trap.
+   *
+   * "Nothing to send" is deliberately {@link sendable} rather than "the field
+   * is empty", and the difference is what keeps a live run stoppable: a
+   * composer that cannot steer holds text it can do nothing with, and a Send
+   * disabled with an explanation would leave the run with no stop at all. The
+   * rule that has to survive any edit here is that a live run is always
+   * stoppable — from this button, or from Escape, which does it either way and
+   * is what the title promises.
+   */
+  const stops = live && !sendable;
 
   /** Slots left, per kind — the two have separate budgets. */
   const imageCount = attachments.filter(isImageAttachment).length;
@@ -334,7 +367,9 @@ export function Composer(): ReactElement {
         <WorkingDirectoryChip />
       </div>
 
-      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 px-3 pt-1 pb-1">
+      {/* One child now that Stop has moved inside the field; the row is what
+          centres the composer and gives it its margins. */}
+      <div className="mx-auto flex w-full max-w-4xl items-end px-3 pt-1 pb-1">
         {/*
           The positioning context for Send is this element, not `WithReason`.
           `WithReason` renders its children bare — no wrapper, no `className` —
@@ -548,30 +583,45 @@ export function Composer(): ReactElement {
               <PaperclipIcon />
             </ReasonButton>
 
-            <ReasonButton
-              variant="ghost"
-              onClick={send}
-              disabled={locked || text.trim().length === 0}
-              disabledReason={locked ? steering.reason : undefined}
-              aria-label={`Send the prompt (${keyLabel('enter')})`}
-              title={`Send the prompt (${keyLabel('enter')})`}
-              className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
-            >
-              <SendHorizontalIcon />
-            </ReasonButton>
+            {/*
+              Send and Stop share this slot; see `stops` above for which is on
+              screen when. Both are the same 28px ghost square in the same
+              place, so the swap is a change of glyph rather than of layout —
+              nothing moves under the pointer as a run starts or ends.
+
+              Signal-toned rather than the `destructive` fill it used to wear
+              outside the field. In here a filled red square would be the
+              brightest thing in the composer, which is a strange thing for the
+              window to shout while it is working; the colour is enough to say
+              this is not the arrow that was there a moment ago.
+            */}
+            {stops ? (
+              <Button
+                variant="ghost"
+                onClick={() => void interruptRun(pane)}
+                aria-label={`Stop the run (${keyLabel('escape')})`}
+                title={`Stop the run (${keyLabel('escape')})`}
+                className="size-7 shrink-0 p-0 text-signal hover:bg-signal/10 hover:text-signal"
+              >
+                <CircleStopIcon />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                onClick={send}
+                // No `ReasonButton` and no reason to attach: the one state that
+                // had one — locked mid-run — is now Stop, and the disabled
+                // field above still explains itself.
+                disabled={!sendable}
+                aria-label={`Send the prompt (${keyLabel('enter')})`}
+                title={`Send the prompt (${keyLabel('enter')})`}
+                className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+              >
+                <SendHorizontalIcon />
+              </Button>
+            )}
           </div>
         </div>
-
-        {live ? (
-          <Button
-            variant="destructive"
-            onClick={() => void interruptRun(pane)}
-            title={`Stop the run (${keyLabel('escape')})`}
-          >
-            <CircleStopIcon />
-            Stop
-          </Button>
-        ) : null}
       </div>
 
     </div>
