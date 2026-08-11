@@ -13,11 +13,11 @@
  *    added or removed. Adding a token does not touch it.
  *  - **one item** — each rendered item subscribes to *its own id*, so a delta
  *    notifies exactly one leaf component.
- *  - **one tool group** — runs of consecutive tool calls are folded into a
- *    single summarised row, because grouping is about neighbours and a
- *    component here is never allowed to see its neighbours. See
- *    {@link ToolGroup}, which explains why that constraint forces the work
- *    down here and how it stays off the per-token path.
+ *  - **one activity group** — runs of consecutive machinery (thinking blocks
+ *    and tool calls) are folded into a single summarised row, because grouping
+ *    is about neighbours and a component here is never allowed to see its
+ *    neighbours. See {@link ActivityGroup}, which explains why that constraint
+ *    forces the work down here and how it stays off the per-token path.
  *
  * Deltas are appended to a mutable string buffer and coalesced: a burst of
  * fifty tokens produces one snapshot and one notification on the next frame,
@@ -148,15 +148,32 @@ export type TranscriptItem =
   | RunEndItem;
 
 /* -------------------------------------------------------------------------- */
-/* Tool groups                                                                */
+/* Activity groups                                                            */
 /* -------------------------------------------------------------------------- */
 
 /**
- * A run of consecutive tool calls, summarised.
+ * A run of consecutive machinery — thinking blocks and tool calls — summarised.
  *
  * The transcript draws one marker per group — "Ran 36 commands, read 6 files"
  * — instead of one row per call, because a turn that touches forty files is
  * forty rows of machinery between two sentences of actual answer.
+ *
+ * ## Why thinking is in here too
+ *
+ * Grouping tool calls alone fixed half the problem and made the other half
+ * obvious. A working turn does not emit a clean burst of calls: it thinks,
+ * calls a tool, thinks about the result, calls the next one. Folding only the
+ * calls leaves that as `thinking / tool / thinking / tool / thinking …` — the
+ * marker collapses each run of one, and the reader is back to a screen of rows
+ * for what is a single line of reasoning with some work hanging off it.
+ *
+ * So a run is *machinery*, not tools, and the whole stretch between two things
+ * someone actually said folds into one row.
+ *
+ * A run with no tool call in it is left alone: a thinking block on its own is
+ * the model's reasoning before it answers, it already renders as one compact
+ * sage row, and burying it behind a marker would cost a click to reach the only
+ * thing in there.
  *
  * ## Why this is computed here and not in the component
  *
@@ -170,29 +187,43 @@ export type TranscriptItem =
  *
  *  - **membership** is rebuilt only on a structural change, alongside the
  *    `ids` snapshot that is already O(items). A token never triggers it.
- *  - **the summary** is recomputed only for groups whose members changed, and
- *    only ever from `tool.start` / `tool.end` — one per call, not per token.
+ *  - **the summary** is O(members) and holds no text, so a thinking delta
+ *    inside a group rebuilds a handful of counters that compare equal and
+ *    notifies nobody. What the reader sees of that delta is the member card,
+ *    which subscribes to its own id like every other row.
  *
  * Snapshots are reference-stable: an unchanged group keeps its object identity
  * across flushes, which is what `useSyncExternalStore` requires and what stops
  * a marker re-rendering every time a sibling streams.
  */
-export interface ToolGroup {
+export interface ActivityGroup {
   /** `g:` + the first member's id. Distinct from every item id by prefix. */
   readonly id: string;
-  /** Member item ids, in transcript order. Never empty. */
+  /** Member item ids, in transcript order. Holds at least one tool call. */
   readonly ids: readonly string[];
   /** When the burst started — the first member's timestamp. */
   readonly ts: number;
   /** How many calls of each kind, for the summary line. */
   readonly counts: ActivityCounts;
+  /** Thinking blocks folded in. The marker says *that* they are here, not how many. */
+  readonly thinking: number;
   /** Calls still running. Non-zero means the marker reads in present tense. */
   readonly running: number;
   /** Calls that errored or were denied. Never hidden behind a collapsed row. */
   readonly failed: number;
+  /**
+   * A thinking block is still arriving.
+   *
+   * Kept apart from {@link running} rather than folded into it because the two
+   * drive different things: the marker pulses for either, but only a running
+   * *call* may put the summary in the present tense. A group whose commands
+   * have all finished while the model thinks about them did run them, and
+   * "Running 2 commands" would be a lie about work that is over.
+   */
+  readonly streaming: boolean;
 }
 
-/** True for a row id that names a {@link ToolGroup} rather than an item. */
+/** True for a row id that names an {@link ActivityGroup} rather than an item. */
 export function isGroupId(id: string): boolean {
   return id.startsWith('g:');
 }
@@ -229,16 +260,16 @@ export class TranscriptModel {
   private items = new Map<string, TranscriptItem>();
 
   /**
-   * The renderable sequence: `ids` with runs of tool calls folded into groups.
+   * The renderable sequence: `ids` with runs of machinery folded into groups.
    *
-   * Rebuilt only on a structural change — see {@link ToolGroup}. `groupOf` is
-   * the reverse index, so a changed tool can find its group in O(1) instead of
-   * a scan.
+   * Rebuilt only on a structural change — see {@link ActivityGroup}. `groupOf`
+   * is the reverse index, so a changed member can find its group in O(1)
+   * instead of a scan.
    */
   private rowsSnapshot: readonly string[] = EMPTY_IDS;
   private groupMembers = new Map<string, readonly string[]>();
   private groupOf = new Map<string, string>();
-  private groupSnapshots = new Map<string, ToolGroup>();
+  private groupSnapshots = new Map<string, ActivityGroup>();
   private groupListeners = new Map<string, Set<Listener>>();
 
   /** Authoritative text for streaming blocks; folded into snapshots on flush. */
@@ -279,9 +310,10 @@ export class TranscriptModel {
   /**
    * Stable array of *row* ids — the list the transcript actually renders.
    *
-   * Same as {@link getListSnapshot} except that runs of consecutive tool calls
-   * appear as one `g:` group id. Changes identity on exactly the same beat, so
-   * it costs a subscription and no extra render.
+   * Same as {@link getListSnapshot} except that a run of consecutive machinery
+   * — thinking blocks and tool calls — appears as one `g:` group id. Changes
+   * identity on exactly the same beat, so it costs a subscription and no extra
+   * render.
    */
   getRowsSnapshot = (): readonly string[] => this.rowsSnapshot;
 
@@ -289,13 +321,13 @@ export class TranscriptModel {
   getItem = (id: string): TranscriptItem | undefined => this.items.get(id);
 
   /**
-   * Stable snapshot of one tool group.
+   * Stable snapshot of one activity group.
    *
    * Built on first read and cached; the cache entry survives until the group's
    * membership or one of its members changes, which is what makes the identity
    * safe to hand `useSyncExternalStore`.
    */
-  getGroup = (id: string): ToolGroup | undefined => {
+  getGroup = (id: string): ActivityGroup | undefined => {
     const cached = this.groupSnapshots.get(id);
     if (cached) return cached;
     const built = this.buildGroup(id);
@@ -707,17 +739,23 @@ export class TranscriptModel {
   }
 
   /**
-   * Recompute the row sequence, folding runs of tool calls into groups.
+   * Recompute the row sequence, folding runs of machinery into groups.
    *
    * O(items), and called only where the `ids` snapshot is already being copied
    * — so this rides along with work the model was doing anyway rather than
-   * adding a pass of its own. See {@link ToolGroup} for why it cannot live in
-   * the component.
+   * adding a pass of its own. See {@link ActivityGroup} for why it cannot live
+   * in the component, and why a run is thinking-and-tools rather than tools.
    *
    * A group is named for its first member, which makes the id stable as the
-   * run grows: appending a tool call to an open burst extends the group rather
-   * than renaming it, so an expanded marker does not collapse itself every
-   * time the agent runs one more command.
+   * run grows: appending to an open burst extends the group rather than
+   * renaming it, so an expanded marker does not collapse itself every time the
+   * agent runs one more command.
+   *
+   * The one place a row id does change under the reader is the moment a run of
+   * pure thinking gains its first tool call — a thinking row becomes a marker.
+   * That is the fold arriving, not a glitch: the alternative is holding the
+   * burst back until it is over, which would mean the transcript showed nothing
+   * at all while the work was happening.
    */
   private rebuildRows(): void {
     const rows: string[] = [];
@@ -730,17 +768,25 @@ export class TranscriptModel {
         i += 1;
         continue;
       }
-      if (this.items.get(id)?.kind !== 'tool') {
+      if (!this.isMachinery(id)) {
         rows.push(id);
         i += 1;
         continue;
       }
       const run: string[] = [];
+      let tools = 0;
       while (i < this.ids.length) {
         const next = this.ids[i];
-        if (next === undefined || this.items.get(next)?.kind !== 'tool') break;
+        if (next === undefined || !this.isMachinery(next)) break;
+        if (this.items.get(next)?.kind === 'tool') tools += 1;
         run.push(next);
         i += 1;
+      }
+      // Nothing was *done* here, so there is nothing to summarise: a stretch of
+      // thinking on its own stays the rows it already was.
+      if (tools === 0) {
+        for (const memberId of run) rows.push(memberId);
+        continue;
       }
       const groupId = `g:${id}`;
       for (const memberId of run) groupOf.set(memberId, groupId);
@@ -763,10 +809,13 @@ export class TranscriptModel {
   /**
    * Rebuild the summaries that could have changed, and notify only those.
    *
-   * The comparison matters more than it looks: a `tool.end` marks one item
-   * dirty, and without the equality check every marker on screen would be
-   * notified on every flush that touched any tool. Groups whose numbers did
-   * not actually move keep their snapshot and stay silent.
+   * The comparison matters more than it looks, and more than it used to. A
+   * `tool.end` marks one item dirty, and without the equality check every
+   * marker on screen would be notified on every flush that touched any tool —
+   * but a *thinking* member is dirty on every frame it streams, so this is now
+   * what keeps a group silent while one of its blocks is being written. It can
+   * be: the summary holds counters, never text, so the rebuilt snapshot
+   * compares equal until something actually happens.
    */
   private refreshGroups(changed: ReadonlySet<string>, restructured: boolean): void {
     const touched = new Set<string>();
@@ -792,17 +841,25 @@ export class TranscriptModel {
   }
 
   /** Count one group's members by category. O(members), not O(items). */
-  private buildGroup(id: string): ToolGroup | undefined {
+  private buildGroup(id: string): ActivityGroup | undefined {
     const ids = this.groupMembers.get(id);
     if (ids === undefined || ids.length === 0) return undefined;
 
     const counts: Partial<Record<ToolCategory, number>> = {};
+    let thinking = 0;
     let running = 0;
     let failed = 0;
+    let streaming = false;
     let ts: number | undefined;
 
     for (const memberId of ids) {
       const item = this.items.get(memberId);
+      if (item?.kind === 'thinking') {
+        ts ??= item.ts;
+        thinking += 1;
+        if (item.streaming) streaming = true;
+        continue;
+      }
       if (item?.kind !== 'tool') continue;
       ts ??= item.ts;
       const category = classifyTool(item.name);
@@ -811,7 +868,13 @@ export class TranscriptModel {
       else if (item.status === 'error' || item.status === 'denied') failed += 1;
     }
 
-    return { id, ids, ts: ts ?? 0, counts, running, failed };
+    return { id, ids, ts: ts ?? 0, counts, thinking, running, failed, streaming };
+  }
+
+  /** Whether a row is machinery — the thing runs are made of. */
+  private isMachinery(id: string): boolean {
+    const kind = this.items.get(id)?.kind;
+    return kind === 'tool' || kind === 'thinking';
   }
 
   /** Keep the open-work indexes in step with an item's current state. */
@@ -942,8 +1005,9 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * flush that touches a tool, and serialising both sides to decide "nothing
  * changed" would allocate two strings per group per tool call.
  */
-function sameGroup(a: ToolGroup, b: ToolGroup): boolean {
+function sameGroup(a: ActivityGroup, b: ActivityGroup): boolean {
   if (a.ts !== b.ts || a.running !== b.running || a.failed !== b.failed) return false;
+  if (a.thinking !== b.thinking || a.streaming !== b.streaming) return false;
   if (!sameIds(a.ids, b.ids)) return false;
   const keys = Object.keys(a.counts) as ToolCategory[];
   if (keys.length !== Object.keys(b.counts).length) return false;

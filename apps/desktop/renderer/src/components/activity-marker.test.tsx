@@ -1,14 +1,18 @@
 /**
  * @vitest-environment jsdom
  *
- * What the transcript says about a burst of tool calls, and who it says spoke.
+ * What the transcript says about a burst of work, and who it says spoke.
  *
- * Three things here are easy to break silently, which is why they are asserted
+ * Four things here are easy to break silently, which is why they are asserted
  * rather than eyeballed:
  *
  *  - **The roll-up.** A turn that ran forty tools must render as one line, not
  *    forty rows. The failure mode is not a crash — it is a pane that quietly
  *    goes back to being unreadable, which no other test would notice.
+ *  - **What counts as one burst.** Thinking between two calls belongs to the
+ *    same stretch of work. If it starts breaking the run again, the roll-up
+ *    still passes its own test and the pane is unreadable anyway — a marker
+ *    around every single call, with a thinking row between each pair.
  *  - **The failure that must not be summarised away.** "Ran 36 commands" has to
  *    read differently when one of them failed. A regression here hides errors
  *    behind a cheerful summary, which is the worst thing this marker could do.
@@ -139,6 +143,51 @@ describe('the activity marker', () => {
     expect(screen.getByText('· 2 failed')).not.toBeNull();
     // And it opens itself, so the error output is on screen without a click.
     expect(screen.getAllByText('Bash').length).toBe(3);
+  });
+
+  it('folds the thinking between two calls into the same marker', () => {
+    play(
+      { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'where does this live' },
+      ...call('c1', 'Grep'),
+      { type: 'thinking.delta', messageId: 'm1', blockIndex: 1, text: 'now the other file' },
+      ...call('c2', 'Read'),
+    );
+    render(<Transcript />);
+
+    expect(screen.getByText('Read a file, searched the code')).not.toBeNull();
+    // Both blocks are inside the fold. Either one on screen means the burst
+    // was cut in two and the marker is back to wrapping one call at a time.
+    expect(screen.queryByText('where does this live')).toBeNull();
+    expect(screen.queryByText('now the other file')).toBeNull();
+  });
+
+  it('gives the thinking back too when the marker is opened', () => {
+    play(
+      { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'where does this live' },
+      ...call('c1', 'Grep'),
+      { type: 'thinking.delta', messageId: 'm1', blockIndex: 1, text: 'now the other file' },
+      ...call('c2', 'Read'),
+    );
+    render(<Transcript />);
+
+    fireEvent.click(screen.getByText('Read a file, searched the code'));
+
+    expect(screen.getAllByText('thinking').length).toBe(2);
+    expect(screen.getByText('where does this live')).not.toBeNull();
+    expect(screen.getByText('Grep')).not.toBeNull();
+    expect(screen.getByText('Read')).not.toBeNull();
+  });
+
+  it('leaves thinking that did no work as its own row', () => {
+    play(
+      { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'the short answer will do' },
+      { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'no' },
+    );
+    render(<Transcript />);
+
+    // Nothing to summarise, so nothing is hidden: the preview is on screen
+    // without a click, which a marker would have cost.
+    expect(screen.getByText('the short answer will do')).not.toBeNull();
   });
 
   it('starts a new marker when the agent says something mid-burst', () => {

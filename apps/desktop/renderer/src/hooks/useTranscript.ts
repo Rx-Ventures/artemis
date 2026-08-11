@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { usePaneRef } from '../state/paneContext';
-import type { ToolGroup, TranscriptItem } from '../state/transcript';
+import type { ActivityGroup, TranscriptItem } from '../state/transcript';
 
 /*
  * REMOVED: `useTranscriptIds`.
@@ -37,8 +37,9 @@ import type { ToolGroup, TranscriptItem } from '../state/transcript';
  * whole reason streaming stays cheap: the list component re-renders once per
  * new block, never once per token.
  *
- * A run of consecutive tool calls arrives as one `g:` group id rather than one
- * id per call; pass it to {@link useToolGroup} to read the summary.
+ * A run of consecutive machinery — thinking blocks and tool calls — arrives as
+ * one `g:` group id rather than one id per member; pass it to
+ * {@link useActivityGroup} to read the summary.
  */
 export function useTranscriptRows(): readonly string[] {
   const { transcript } = usePaneRef();
@@ -51,12 +52,13 @@ export function useTranscriptRows(): readonly string[] {
 }
 
 /**
- * One tool group, subscribed by id.
+ * One activity group, subscribed by id.
  *
- * Fires when the group's membership or its members' statuses change — that is,
- * on `tool.start` and `tool.end` — and never on a text delta.
+ * Fires when the group's membership or its members' statuses change — a call
+ * starting or ending, a thinking block opening or settling — and never on a
+ * delta arriving inside one. The cards do that part, each on its own id.
  */
-export function useToolGroup(id: string): ToolGroup | undefined {
+export function useActivityGroup(id: string): ActivityGroup | undefined {
   const { transcript } = usePaneRef();
   const subscribe = useCallback(
     (onChange: () => void) => transcript.subscribeGroup(id, onChange),
