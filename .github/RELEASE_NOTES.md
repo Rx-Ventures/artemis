@@ -1,25 +1,15 @@
-Internal build — unsigned on every platform, on purpose.
-
-## Which file
-
-| Your machine | Download |
-| --- | --- |
-| Mac, Apple Silicon | `Artemis-<version>-arm64-mac.dmg` |
-| Mac, Intel | `Artemis-<version>-x64-mac.dmg` |
-| Windows | `Artemis-<version>-x64-setup.exe` |
+Internal build — unsigned, on purpose. macOS on Apple Silicon only for now;
+Intel and Windows builds return when there is someone to run them.
 
 ## Install
 
-**macOS** — open the dmg, drag Artemis into Applications. If macOS blocks the
-first launch, allow it under System Settings → Privacy & Security → "Open
-Anyway", or clear the quarantine flag:
+Download `Artemis-<version>-arm64-mac.dmg`, open it, drag Artemis into
+Applications. If macOS blocks the first launch, allow it under System
+Settings → Privacy & Security → "Open Anyway", or clear the quarantine flag:
 
 ```
 xattr -dr com.apple.quarantine /Applications/Artemis.app
 ```
-
-**Windows** — run the installer. SmartScreen will warn about an unrecognised
-app: More info → Run anyway.
 
 ## First run
 
@@ -34,9 +24,8 @@ Runs are billed to the Claude account each profile is signed into.
 
 ## Updates
 
-On macOS, Artemis checks this repository for newer releases (using your own
-`gh` CLI login) and shows a banner when one exists. Installing parks at
-"restart when you're ready" — nothing restarts on its own. On Windows,
-updates are manual for now: download the new installer from this page.
+Artemis checks this repository for newer releases (using your own `gh` CLI
+login) and shows a banner when one exists. Installing parks at "restart when
+you're ready" — nothing restarts on its own.
 
 Feedback: open an issue in this repo.
