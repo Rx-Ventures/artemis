@@ -68,6 +68,7 @@ import {
   useApp,
 } from '../state/store';
 import { IconButton, ReasonButton } from './disabled-reason';
+import { ProfilePlanUsage } from './PlanUsageMeter';
 import { CodeBlock, ToneBadge } from './primitives';
 import { SettingsPane } from './settings/pane';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -237,6 +238,14 @@ function ProfileCard({
   const platform = useApp((s) => s.platform);
   const { status } = useAuthStatus(profile.id, signingIn);
 
+  // This profile's provider, not the active one. A card on this screen can
+  // belong to a provider the app is not currently pointed at, and degrading it
+  // against whatever happens to be selected would say "does not report plan
+  // usage" about a provider that does.
+  const provider = useApp((s) => s.providers.find((p) => p.id === profile.providerId));
+  const usageSupported = provider?.capabilities.planUsageReporting ?? false;
+  const providerLabel = provider?.label ?? profile.providerId;
+
   // Undefined means "not read yet", which must not render as signed out — the
   // difference between "we do not know" and "you are not signed in" is the
   // difference between a quiet dash and an amber warning.
@@ -251,15 +260,36 @@ function ProfileCard({
   return (
     <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
+        {/*
+          Only problems get a badge.
+          ------------------------------------------------------------------
+          `active` and `signed in` were both badges that said the expected
+          thing. A row of them trains the eye to skip the badge slot, which is
+          the one place a real problem has to be noticed — and `signed out`,
+          the only badge that needs acting on, was sitting in a line of green
+          and orange reassurance.
+
+          Neither fact is lost. Active is the card's ember ring, which reads
+          faster than a word and does not compete for the same slot; signed-in
+          is the account line below, which names the account rather than
+          asserting that one exists.
+        */}
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-ink">{profile.label}</span>
-          {active ? <ToneBadge tone="ember">active</ToneBadge> : null}
-          {known ? (
-            <ToneBadge tone={signedIn ? 'sage' : 'amber'}>
-              {signedIn ? 'signed in' : 'signed out'}
-            </ToneBadge>
-          ) : null}
-          <span className="ml-auto flex items-center gap-1">
+          <span className="shrink-0 text-sm font-medium text-ink">{profile.label}</span>
+          {/*
+            The config directory, promoted to the title row. It is what makes
+            two profiles different — the label is a nickname, the directory is
+            the account — so it belongs beside the name rather than below the
+            account line where it read as a footnote.
+          */}
+          <span
+            className="min-w-0 truncate font-mono text-2xs text-ink-faint"
+            title={profile.configDir}
+          >
+            {shortenPath(profile.configDir, { platform, max: 40 })}
+          </span>
+          {known && !signedIn ? <ToneBadge tone="amber">signed out</ToneBadge> : null}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
             <Button size="xs" variant="ghost" onClick={onEdit}>
               Edit
             </Button>
@@ -288,12 +318,27 @@ function ProfileCard({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 font-mono text-2xs">
-          <span className="text-ink-faint">config</span>
-          <span className="min-w-0 truncate text-ink-muted" title={profile.configDir}>
-            {shortenPath(profile.configDir, { platform, max: 48 })}
-          </span>
-        </div>
+        {/*
+          What is left of this account, on the screen where accounts are
+          managed. Deciding which profile to switch to is a question about
+          headroom — "the one that is not out of weekly" — and answering it
+          used to mean switching to each account in turn and opening the status
+          bar gauge, which is the switch the user was trying to make an
+          informed choice about.
+
+          Only for a signed-in profile: a signed-out one has no limits to
+          report, and an empty meter under a sign-in button reads as a limit of
+          zero rather than as an unanswered question.
+        */}
+        {signedIn ? (
+          <div className="mt-1 border-t border-line pt-2">
+            <ProfilePlanUsage
+              profileId={profile.id}
+              supported={usageSupported}
+              providerLabel={providerLabel}
+            />
+          </div>
+        ) : null}
 
         {/*
           The sign-in affordance lives on the card, not only in the create

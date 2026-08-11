@@ -8,9 +8,9 @@
  * does not support.
  *
  * What is left is genuinely a matter of taste and genuinely wired: how wide the
- * transcript column may grow, and whether the sidebar is showing. Both are
- * persisted, both take effect the moment they are set, and there is nothing
- * else here.
+ * transcript column may grow, how much of the block at the end of a run it
+ * keeps, and whether the sidebar is showing. All are persisted and all take
+ * effect the moment they are set.
  *
  * That last part is the rule this file is written to. Every control below
  * writes to a store action that something actually reads. A "reduced motion" or
@@ -28,10 +28,12 @@ import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
 import {
   SIDEBAR_DEFAULT_WIDTH,
   setConversationWidth,
+  setRunSummary,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
   type ConversationWidth,
+  type RunSummary,
 } from '../../state/store';
 import {
   Item,
@@ -69,15 +71,41 @@ const WIDTHS: readonly Choice<ConversationWidth>[] = [
   },
 ];
 
+/**
+ * What each setting keeps of the block a run ends with.
+ *
+ * Every note says what still appears, not what disappears — the question a
+ * user has here is "will I lose the error", and the answer is no in all three
+ * cases. Trimming is described as trimming; nothing here is described as off.
+ */
+const RUN_SUMMARIES: readonly Choice<RunSummary>[] = [
+  {
+    id: 'always',
+    label: 'After every run',
+    note: 'Duration, turns, tokens and cost. Worth keeping while you are watching spend or comparing models.',
+  },
+  {
+    id: 'failures',
+    label: 'Only when a run is cut short',
+    note: 'A clean run ends quietly. Errors, interruptions and hitting a turn or budget limit still report — each means the answer above is unfinished.',
+  },
+  {
+    id: 'never',
+    label: 'Never',
+    note: 'No accounting at all. A failed run still shows its message and code, because this is the only place either appears.',
+  },
+];
+
 export function AppearanceSection(): ReactElement {
   const width = useApp((s) => s.conversationWidth);
+  const runSummary = useApp((s) => s.runSummary);
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How much room the conversation gets, and whether the sidebar is in the way."
+      description="How much room the conversation gets, how much it reports when a run ends, and whether the sidebar is in the way."
     >
       <SettingsGroup label="Conversation width">
         <ChoiceList
@@ -85,6 +113,15 @@ export function AppearanceSection(): ReactElement {
           value={width}
           choices={WIDTHS}
           onChange={setConversationWidth}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup label="Run summary">
+        <ChoiceList
+          label="Run summary"
+          value={runSummary}
+          choices={RUN_SUMMARIES}
+          onChange={setRunSummary}
         />
       </SettingsGroup>
 

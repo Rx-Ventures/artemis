@@ -230,13 +230,21 @@ export function Composer(): ReactElement {
           </Button>
         ) : null}
 
+        {/*
+          Icon only. The word was carrying nothing the icon and the Enter hint
+          in the empty state do not already carry, and it made the widest
+          control on this row the one that says the least. `aria-label` and the
+          title keep it named for anyone not reading the glyph.
+        */}
         <ReasonButton
+          size="icon"
           onClick={send}
           disabled={locked || text.trim().length === 0}
           disabledReason={locked ? steering.reason : undefined}
+          aria-label={`Send the prompt (${keyLabel('enter')})`}
+          title={`Send the prompt (${keyLabel('enter')})`}
         >
           <SendHorizontalIcon />
-          Send
         </ReasonButton>
       </div>
 

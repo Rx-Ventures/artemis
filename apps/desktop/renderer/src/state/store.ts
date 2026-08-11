@@ -86,6 +86,21 @@ export type SettingsSection = 'profiles' | 'models' | 'appearance' | 'permission
  */
 export type ConversationWidth = 'comfortable' | 'wide' | 'full';
 
+/**
+ * How much of the run-end summary the transcript keeps.
+ *
+ * The block reports two unrelated things that happen to arrive together: the
+ * accounting for a run (duration, turns, tokens, cost) and, when a run does not
+ * finish cleanly, *why*. The accounting is noise to someone who is not watching
+ * spend; the reason is the only place a failure is ever explained.
+ *
+ * So the three values are not "on, less, off" — they are how far down the
+ * accounting is trimmed, and none of them can hide an error. `'never'` still
+ * renders a failed run's message and code, because a run that vanishes without
+ * saying it failed is a bug report we would never receive.
+ */
+export type RunSummary = 'always' | 'failures' | 'never';
+
 /** Renderer-side view of the live run. Mirrors `RunHandle` plus stream facts. */
 export interface RunState {
   readonly runId: RunId;
@@ -194,6 +209,8 @@ export interface AppState {
   readonly ultracode: boolean;
   /** How wide the transcript column may grow. */
   readonly conversationWidth: ConversationWidth;
+  /** How much of the run-end accounting the transcript keeps. */
+  readonly runSummary: RunSummary;
 
   /**
    * Every session the listing returned, ungrouped and unsorted.
@@ -291,6 +308,11 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 
 const CONVERSATION_WIDTHS: readonly ConversationWidth[] = ['comfortable', 'wide', 'full'];
 
+/** Show the whole block. What the app did before this was settable. */
+export const DEFAULT_RUN_SUMMARY: RunSummary = 'always';
+
+const RUN_SUMMARIES: readonly RunSummary[] = ['always', 'failures', 'never'];
+
 interface Prefs {
   cwd?: string;
   activeProfileId?: string | null;
@@ -305,6 +327,7 @@ interface Prefs {
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
+  runSummary?: RunSummary;
   /**
    * Context windows learned from completed runs, keyed by model.
    *
@@ -395,6 +418,7 @@ function loadPrefs(): Prefs {
     fastMode: fastMode === true && ultracode === true ? false : fastMode,
     ultracode,
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
+    runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     contextWindows: numberMap(raw['contextWindows']),
   };
 }
@@ -415,6 +439,7 @@ function savePrefs(): void {
     fastMode: s.fastMode,
     ultracode: s.ultracode,
     conversationWidth: s.conversationWidth,
+    runSummary: s.runSummary,
     contextWindows: s.contextWindows,
   };
   try {
@@ -452,6 +477,7 @@ export const useApp = create<AppState>(() => ({
   fastMode: prefs.fastMode ?? false,
   ultracode: prefs.ultracode ?? false,
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
+  runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
 
   sessions: [],
   sessionsScope: 'all',
@@ -1253,6 +1279,11 @@ export function setUltracode(on: boolean): void {
 
 export function setConversationWidth(width: ConversationWidth): void {
   useApp.setState({ conversationWidth: width });
+  savePrefs();
+}
+
+export function setRunSummary(summary: RunSummary): void {
+  useApp.setState({ runSummary: summary });
   savePrefs();
 }
 
