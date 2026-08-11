@@ -38,7 +38,7 @@ export type AgentErrorCode =
   | 'permission_denied'
   /** The provider process/transport died unexpectedly. */
   | 'transport'
-  /** Apollo could not find or launch the provider at all. */
+  /** Artemis could not find or launch the provider at all. */
   | 'provider_not_found'
   /** Anything unclassified. */
   | 'unknown';

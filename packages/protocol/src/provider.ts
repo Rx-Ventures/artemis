@@ -1,7 +1,7 @@
 /**
  * Providers and their capability descriptors.
  *
- * The whole point of this file is that Apollo's UI must never assume every
+ * The whole point of this file is that Artemis's UI must never assume every
  * provider can do everything. Three planned providers have three completely
  * different transports:
  *
@@ -18,7 +18,7 @@
 import type { PermissionMode } from './permissions.js';
 
 /**
- * The set of agent backends Apollo can drive.
+ * The set of agent backends Artemis can drive.
  *
  * Only `claude` is implemented today; the other two are declared here so the
  * seam is designed against three transports rather than retrofitted to them.
@@ -189,7 +189,7 @@ export interface ProviderModelOption {
    * The canonical wire id this option resolves to, e.g. `sonnet` →
    * `claude-sonnet-5`.
    *
-   * Apollo offers *aliases* rather than dated snapshots on purpose (see the
+   * Artemis offers *aliases* rather than dated snapshots on purpose (see the
    * Claude adapter's model list), which means the id it sends does not identify
    * the model that actually ran. This carries the resolution so the UI can
    * match a persisted explicit id back to the alias row that covers it, and so
@@ -264,7 +264,7 @@ export interface ProviderDescriptor {
   /**
    * How the user signs a profile in, in one or two sentences.
    *
-   * The provider's login is the user's to run — Apollo sets the config
+   * The provider's login is the user's to run — Artemis sets the config
    * directory and reads the result back — so this is the only instruction they
    * get, and it is the adapter's to write because the command is its own. Shown
    * beside the generated command on the profile screen.

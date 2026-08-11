@@ -1,5 +1,5 @@
 /**
- * The composition root: where Electron's resources meet `@rx-apollo/core`.
+ * The composition root: where Electron's resources meet `@rx-artemis/core`.
  *
  * Core is deliberately incapable of doing this itself. It must never import
  * `electron` — it has to run in a plain Node process and under vitest — so
@@ -20,7 +20,7 @@
  * did not match its signature. The seam between main and core is exactly where
  * type checking earns its keep, so it is checked.
  *
- * The "a failed engine must not stop Apollo from launching" property is
+ * The "a failed engine must not stop Artemis from launching" property is
  * preserved where it actually belongs — in {@link EngineHost.start}, which
  * catches construction failures and reports them through
  * {@link EngineHost.failureMessage}.
@@ -62,7 +62,7 @@ import type {
   Unsubscribe,
   PlanUsage,
   AuthStatusResponse,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 import {
   checkAuthStatus,
@@ -79,7 +79,7 @@ import {
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
-} from '@rx-apollo/core';
+} from '@rx-artemis/core';
 
 import { EngineUnavailableError } from './errors.js';
 import { createLogger } from './log.js';
@@ -95,13 +95,13 @@ export interface EngineOptions {
   /**
    * Electron's per-app user data directory.
    *
-   * Profile records live here, and so do the config directories Apollo
+   * Profile records live here, and so do the config directories Artemis
    * *suggests* (`<userData>/profiles/<name>`). A profile's actual `configDir`
    * is an absolute path the user chose and need not be under this one at all —
    * pointing a profile at `~/.claude` is a supported and common thing to do.
    */
   readonly userDataDir: string;
-  /** Apollo's version, for any provider that wants a user-agent string. */
+  /** Artemis's version, for any provider that wants a user-agent string. */
   readonly appVersion: string;
 }
 
@@ -111,7 +111,7 @@ export interface EngineOptions {
  * Every method takes and returns renderer-safe protocol types, because each one
  * is a single step from an IPC response. Nothing here returns a `Profile`.
  */
-export interface ApolloEngine {
+export interface ArtemisEngine {
   listProviders(options: { readonly refresh?: boolean }): Promise<readonly ProviderDescriptor[]>;
 
   /**
@@ -178,8 +178,8 @@ export interface ApolloEngine {
    * This is the only way a profile is authenticated, and there is deliberately
    * no method here that accepts a key or a token — nor one that *performs* a
    * login. The user runs the provider's command themselves against the
-   * profile's config directory; Apollo reads the result back. No credential is
-   * ever handled by, stored by, or reachable from Apollo, and the config
+   * profile's config directory; Artemis reads the result back. No credential is
+   * ever handled by, stored by, or reachable from Artemis, and the config
    * directory *is* the account boundary, which is what makes multiple accounts
    * work.
    */
@@ -247,7 +247,7 @@ export interface ApolloEngine {
  * @throws {EngineUnavailableError} — but only through {@link EngineHost.start},
  *         which is the sole caller and catches everything.
  */
-function createEngine(options: EngineOptions): ApolloEngine {
+function createEngine(options: EngineOptions): ArtemisEngine {
   const { userDataDir } = options;
 
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
@@ -351,7 +351,7 @@ function createEngine(options: EngineOptions): ApolloEngine {
      * which is precisely the cross-profile leak the isolated config directory
      * exists to prevent.
      *
-     * Every branch resolves. A provider Apollo cannot drive, an adapter that
+     * Every branch resolves. A provider Artemis cannot drive, an adapter that
      * cannot enumerate, or a fetch that failed are all "here is the built-in
      * list, and no, the account did not confirm it" — the caller renders a
      * picker either way and labels it from `live`.
@@ -636,15 +636,15 @@ function createEngine(options: EngineOptions): ApolloEngine {
  *
  * IPC handlers call {@link require}, which either returns a live engine or
  * throws {@link EngineUnavailableError}. That is normalized into a
- * `provider_not_found` result, so the UI can say "Apollo's engine failed to
+ * `provider_not_found` result, so the UI can say "Artemis's engine failed to
  * start" instead of waiting on a promise that never settles.
  */
 export class EngineHost {
-  #engine: ApolloEngine | null = null;
+  #engine: ArtemisEngine | null = null;
   #failure: EngineUnavailableError | null = null;
 
   /** The live engine, or a descriptive throw. */
-  require(): ApolloEngine {
+  require(): ArtemisEngine {
     if (this.#engine) return this.#engine;
     throw this.#failure ?? new EngineUnavailableError('the engine has not been started yet.');
   }

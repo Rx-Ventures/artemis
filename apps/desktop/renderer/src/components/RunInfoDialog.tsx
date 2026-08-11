@@ -21,7 +21,7 @@
 
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { CheckIcon, XIcon } from 'lucide-react';
-import type { Capabilities } from '@rx-apollo/protocol';
+import type { Capabilities } from '@rx-artemis/protocol';
 
 import { CAPABILITY_LABELS, type CapabilityKey } from '../hooks/useCapability';
 import { contextRatio, formatDuration, formatTokens, formatUsd } from '../lib/format';
@@ -269,7 +269,7 @@ function UsageBlock(): ReactElement {
       )}
       <Row label="cost">
         {costing ? (
-          <span className="text-ember">{formatUsd(usage.costUsd)}</span>
+          <span className="text-lunar">{formatUsd(usage.costUsd)}</span>
         ) : (
           <span className="text-ink-faint">not reported</span>
         )}

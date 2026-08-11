@@ -113,16 +113,16 @@ export function DirectoryChooser({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="apollo-cwd" className="text-2xs tracking-wider text-ink-faint uppercase">
+        <Label htmlFor="artemis-cwd" className="text-2xs tracking-wider text-ink-faint uppercase">
           Working directory
         </Label>
         <Input
-          id="apollo-cwd"
+          id="artemis-cwd"
           autoFocus={autoFocus}
           value={draft}
           spellCheck={false}
           aria-invalid={typed.length > 0 && !valid}
-          aria-describedby="apollo-cwd-hint"
+          aria-describedby="artemis-cwd-hint"
           placeholder={platform === 'win32' ? 'C:\\Users\\you\\project' : '/absolute/path/to/project'}
           onChange={(event) => {
             setDraft(event.target.value);
@@ -136,7 +136,7 @@ export function DirectoryChooser({
           }}
           className="font-mono text-xs md:text-xs"
         />
-        <p id="apollo-cwd-hint" className="text-2xs leading-snug text-ink-faint">
+        <p id="artemis-cwd-hint" className="text-2xs leading-snug text-ink-faint">
           {absolutePathHint(platform)} Changing it re-lists this project’s sessions.
         </p>
       </div>

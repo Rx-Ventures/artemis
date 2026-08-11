@@ -7,7 +7,7 @@
  */
 
 /**
- * Identifies one Apollo run: a single `createRun()` call and the event stream
+ * Identifies one Artemis run: a single `createRun()` call and the event stream
  * that comes out of it. Minted by core, never by a provider. A run may span
  * several provider "turns" and may outlive several provider session ids.
  */

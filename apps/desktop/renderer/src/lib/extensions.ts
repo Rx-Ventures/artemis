@@ -3,7 +3,7 @@
  * ============================================================================
  *
  * All three arrived with this layout and all three are first-class on
- * `ApolloBridge`:
+ * `ArtemisBridge`:
  *
  *  - `sessions.listAll` — every profile's history, in every project it has run
  *    in, in one call. The sidebar groups by `cwd` and labels by `profileId`,
@@ -41,7 +41,7 @@
  * folder name it replaced.
  */
 
-import type { ProfileId, ProviderId, SessionSummary } from '@rx-apollo/protocol';
+import type { ProfileId, ProviderId, SessionSummary } from '@rx-artemis/protocol';
 import { call, resolveBridge } from './bridge';
 
 /* -------------------------------------------------------------------------- */

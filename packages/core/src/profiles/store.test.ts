@@ -6,7 +6,7 @@
  *
  *  - **The v1 migration.** A profile's config directory holds a real login and
  *    real transcripts. A schema change that made those unreachable would look,
- *    to the user, exactly like Apollo having deleted them.
+ *    to the user, exactly like Artemis having deleted them.
  *  - **The delete gate.** `configDir` is a path the *user* chose, and the most
  *    useful thing to put there is their own `~/.claude`. `rm -r` against that
  *    because a switch was left on is the worst thing this file could do.
@@ -18,7 +18,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ProfileDraft } from '@rx-apollo/protocol';
+import type { ProfileDraft } from '@rx-artemis/protocol';
 
 import { CLAUDE_CREDENTIALS } from '../adapters/claude.js';
 import { managedEnvKeys } from '../adapters/types.js';
@@ -31,7 +31,7 @@ let store: ProfileStore;
 let counter: number;
 
 beforeEach(async () => {
-  userDataDir = await mkdtemp(path.join(tmpdir(), 'apollo-store-'));
+  userDataDir = await mkdtemp(path.join(tmpdir(), 'artemis-store-'));
   counter = 0;
   store = new ProfileStore({
     userDataDir,
@@ -47,7 +47,7 @@ afterEach(async () => {
   await rm(userDataDir, { recursive: true, force: true });
 });
 
-/** A directory inside Apollo's own root — the kind it created and may delete. */
+/** A directory inside Artemis's own root — the kind it created and may delete. */
 const owned = (name: string): string => path.join(profilesRoot(userDataDir), name);
 
 const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({
@@ -177,7 +177,7 @@ describe('ProfileStore — create', () => {
     });
   });
 
-  it('refuses env Apollo manages itself', async () => {
+  it('refuses env Artemis manages itself', async () => {
     await expect(
       store.create(draft({ publicEnv: { CLAUDE_CONFIG_DIR: '/elsewhere' } })),
     ).rejects.toBeInstanceOf(ProfileError);
@@ -312,7 +312,7 @@ describe('ProfileStore — reading a version 1 document', () => {
     const [profile] = await new ProfileStore({ userDataDir }).list();
 
     // The directory this points at already exists and holds the user's login
-    // and transcripts. Getting this join wrong would present as Apollo having
+    // and transcripts. Getting this join wrong would present as Artemis having
     // lost their account.
     expect(profile?.configDir).toBe(owned('legacy-old1'));
   });
@@ -408,7 +408,7 @@ describe('ProfileStore — delete', () => {
     await expect(stat(created.configDir)).resolves.toBeDefined();
   });
 
-  it('removes a directory Apollo created, on request', async () => {
+  it('removes a directory Artemis created, on request', async () => {
     const created = await store.create(draft());
     await mkdir(created.configDir, { recursive: true });
 
@@ -423,7 +423,7 @@ describe('ProfileStore — delete', () => {
     // real Claude installation — their login, every project transcript, and the
     // credential every other profile pointing there depends on. A switch in a
     // dialog is not authority to `rm -r` it.
-    const outside = path.join(userDataDir, 'not-apollos', '.claude');
+    const outside = path.join(userDataDir, 'not-artemiss', '.claude');
     await mkdir(outside, { recursive: true });
     const created = await store.create(draft({ configDir: outside }));
 

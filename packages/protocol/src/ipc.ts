@@ -2,7 +2,7 @@
  * The IPC contract.
  *
  * Channel names, a typed request/response map, and the shape the preload script
- * exposes on `window.apollo`. Main and renderer both compile against this file,
+ * exposes on `window.artemis`. Main and renderer both compile against this file,
  * so a mismatch is a build error rather than a runtime surprise.
  *
  * Two structural decisions worth understanding before you extend this:
@@ -40,70 +40,70 @@ import type { PlanUsage } from './usage.js';
 /**
  * Request/response channels, used with `ipcMain.handle` / `ipcRenderer.invoke`.
  *
- * Names are namespaced under `apollo:` so they cannot collide with anything
+ * Names are namespaced under `artemis:` so they cannot collide with anything
  * Electron or a dependency registers.
  */
 export const IPC = {
   /** List profiles as renderer-safe metadata. */
-  profilesList: 'apollo:profiles:list',
+  profilesList: 'artemis:profiles:list',
   /** Create a profile. */
-  profilesCreate: 'apollo:profiles:create',
+  profilesCreate: 'artemis:profiles:create',
   /** Update a profile's label, config directory or env. */
-  profilesUpdate: 'apollo:profiles:update',
-  /** Delete a profile and (where Apollo owns it) its config dir. */
-  profilesDelete: 'apollo:profiles:delete',
+  profilesUpdate: 'artemis:profiles:update',
+  /** Delete a profile and (where Artemis owns it) its config dir. */
+  profilesDelete: 'artemis:profiles:delete',
   /** Propose an unused config-directory path for a profile about to be created. */
-  profilesSuggestDir: 'apollo:profiles:suggest-dir',
+  profilesSuggestDir: 'artemis:profiles:suggest-dir',
 
   /** Enumerate providers and their capability descriptors. */
-  providersList: 'apollo:providers:list',
+  providersList: 'artemis:providers:list',
   /** Ask one provider's installed CLI what models it actually offers. */
-  providersModels: 'apollo:providers:models',
+  providersModels: 'artemis:providers:models',
 
   /** Start a run. */
-  runsStart: 'apollo:runs:start',
+  runsStart: 'artemis:runs:start',
   /** Send another message into a live run. */
-  runsSend: 'apollo:runs:send',
+  runsSend: 'artemis:runs:send',
   /** Ask a live run to stop what it is doing. */
-  runsInterrupt: 'apollo:runs:interrupt',
+  runsInterrupt: 'artemis:runs:interrupt',
   /** Answer an outstanding permission request. */
-  runsRespondPermission: 'apollo:runs:respond-permission',
+  runsRespondPermission: 'artemis:runs:respond-permission',
   /** Tear a run down and release its resources. */
-  runsDispose: 'apollo:runs:dispose',
+  runsDispose: 'artemis:runs:dispose',
   /** Re-sync live runs after a renderer reload. */
-  runsList: 'apollo:runs:list',
+  runsList: 'artemis:runs:list',
 
   /** List historical sessions for a provider + profile + cwd. */
-  sessionsList: 'apollo:sessions:list',
+  sessionsList: 'artemis:sessions:list',
   /** List historical sessions across every profile and every project. */
-  sessionsListAll: 'apollo:sessions:list-all',
+  sessionsListAll: 'artemis:sessions:list-all',
 
   /** Ask the OS for a directory, via a native picker. */
-  workspacePickDirectory: 'apollo:workspace:pick-directory',
+  workspacePickDirectory: 'artemis:workspace:pick-directory',
   /** Name a directory: its own name, and its repository's when it has one. */
-  workspaceDescribe: 'apollo:workspace:describe',
+  workspaceDescribe: 'artemis:workspace:describe',
 
   /** One stored session's messages, replayed as events. */
-  sessionsMessages: 'apollo:sessions:messages',
+  sessionsMessages: 'artemis:sessions:messages',
 
   /** Last-known plan usage for a profile, served from cache without fetching. */
-  usagePlanCached: 'apollo:usage:plan-cached',
+  usagePlanCached: 'artemis:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
-  usagePlanRefresh: 'apollo:usage:plan-refresh',
+  usagePlanRefresh: 'artemis:usage:plan-refresh',
 
   /**
    * Read a profile's login state from its own config directory.
    *
    * The only auth channel. There is no `sign-in` counterpart: the user runs the
    * provider's login themselves, in their own terminal, and this is polled
-   * until it reports success. Apollo used to spawn that login itself and had to
+   * until it reports success. Artemis used to spawn that login itself and had to
    * hold a five-minute subprocess open around a browser flow it could not see —
    * a command the user can read, run and re-run beats a spinner that can only
    * time out.
    */
-  authStatus: 'apollo:auth:status',
+  authStatus: 'artemis:auth:status',
   /** Sign a profile out, clearing the credentials in its config directory. */
-  authSignOut: 'apollo:auth:sign-out',
+  authSignOut: 'artemis:auth:sign-out',
 } as const;
 
 /**
@@ -112,7 +112,7 @@ export const IPC = {
  */
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
-  agentEvent: 'apollo:push:agent-event',
+  agentEvent: 'artemis:push:agent-event',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -151,7 +151,7 @@ export interface IpcFail {
  *
  * @example
  * ```ts
- * const res = await window.apollo.profiles.list({})
+ * const res = await window.artemis.profiles.list({})
  * if (!res.ok) return showError(res.error.message)
  * setProfiles(res.value.profiles)
  * ```
@@ -196,9 +196,9 @@ export interface ProfilesDeleteRequest {
    * Defaults to false: deleting an account should not silently destroy
    * transcripts.
    *
-   * **Honoured only for a directory Apollo created**, i.e. one inside its own
+   * **Honoured only for a directory Artemis created**, i.e. one inside its own
    * user-data directory. The config directory is a path the user picked and may
-   * well be their own `~/.claude`, or another profile's; asking Apollo to
+   * well be their own `~/.claude`, or another profile's; asking Artemis to
    * recursively delete one of those is a request it declines rather than
    * performs. See {@link ProfilesDeleteResponse.configDirDeleted}.
    */
@@ -211,8 +211,8 @@ export interface ProfilesDeleteResponse {
    * True when the config directory was removed as well.
    *
    * False whenever it was not — because it was not asked for, because it did
-   * not exist, or because it sits outside Apollo's own directory and is
-   * therefore not Apollo's to delete. The caller is told which happened rather
+   * not exist, or because it sits outside Artemis's own directory and is
+   * therefore not Artemis's to delete. The caller is told which happened rather
    * than left to assume the deletion took.
    */
   readonly configDirDeleted: boolean;
@@ -225,7 +225,7 @@ export interface ProfilesSuggestDirRequest {
 
 export interface ProfilesSuggestDirResponse {
   /**
-   * An absolute path inside Apollo's user-data directory that no existing
+   * An absolute path inside Artemis's user-data directory that no existing
    * profile uses. A suggestion, not a reservation: nothing is created, and the
    * user is free to replace it with a directory of their own.
    */
@@ -249,7 +249,7 @@ export interface ProvidersListResponse {
  * Ask a provider for its *live* model catalogue.
  *
  * Separate from {@link ProvidersListRequest} because it is a different kind of
- * read. `providers:list` is a description of what Apollo can drive — static,
+ * read. `providers:list` is a description of what Artemis can drive — static,
  * cheap, and answered out of the registry. This one contacts the installed CLI
  * with a profile's credential to find out which models that account actually
  * has, which costs a subprocess and can fail. Folding it into the descriptor
@@ -435,7 +435,7 @@ export interface SessionsListAllResponse {
 /**
  * Open the OS's own directory picker.
  *
- * Exists because a typed path is the single most error-prone input in Apollo: a
+ * Exists because a typed path is the single most error-prone input in Artemis: a
  * directory that does not exist reaches `spawn`, and `spawn`'s `ENOENT` for a
  * bad *cwd* is indistinguishable from its `ENOENT` for a missing *binary* —
  * which is how a folder typo ends up reported as a libc mismatch. A picker
@@ -466,8 +466,8 @@ export interface WorkspacePickDirectoryResponse {
  *
  * The sidebar heads its session list with the name of the thing being worked
  * on, and for anyone who works in repositories that name is the repository's,
- * not the directory's: sitting in `~/code/apollo/apps/desktop` you are working
- * on *apollo*, and a header reading "desktop" answers a question nobody asked.
+ * not the directory's: sitting in `~/code/artemis/apps/desktop` you are working
+ * on *artemis*, and a header reading "desktop" answers a question nobody asked.
  * The renderer cannot work this out — it has no `fs` and no way to look upward
  * from a path — so it asks.
  *
@@ -526,7 +526,7 @@ export interface SessionsMessagesResponse {
 /**
  * A profile's login state, as reported by the provider's own CLI.
  *
- * Apollo never sees a credential: the provider's login writes into the profile's
+ * Artemis never sees a credential: the provider's login writes into the profile's
  * isolated config directory, and this is the only view of what landed there.
  * Every field past `loggedIn` is optional because a signed-out directory has
  * none of them, and because which ones appear depends on the login method.
@@ -659,7 +659,7 @@ export type IpcHandlerResult<C extends IpcChannel> = IpcResult<IpcResponseMap[C]
 /**
  * Signature of a main-process handler.
  *
- * Deliberately has no `IpcMainInvokeEvent` parameter: `@rx-apollo/protocol` has
+ * Deliberately has no `IpcMainInvokeEvent` parameter: `@rx-artemis/protocol` has
  * zero dependencies and must never import electron. The main process wraps
  * these when it registers them.
  */
@@ -686,7 +686,7 @@ export type IpcPush<C extends IpcPushChannel> = IpcPushMap[C];
 export type Unsubscribe = () => void;
 
 /**
- * The object the preload script exposes as `window.apollo`.
+ * The object the preload script exposes as `window.artemis`.
  *
  * This is the renderer's entire view of the outside world. If a capability is
  * not on this interface, the renderer does not have it — no `require`, no
@@ -698,14 +698,14 @@ export type Unsubscribe = () => void;
  *
  * ```ts
  * // apps/desktop/renderer/src/global.d.ts
- * import type { ApolloBridge } from '@rx-apollo/protocol'
+ * import type { ArtemisBridge } from '@rx-artemis/protocol'
  * declare global {
- *   interface Window { readonly apollo: ApolloBridge }
+ *   interface Window { readonly artemis: ArtemisBridge }
  * }
  * ```
  */
-export interface ApolloBridge {
-  /** Apollo's version, for the about panel and bug reports. */
+export interface ArtemisBridge {
+  /** Artemis's version, for the about panel and bug reports. */
   readonly version: string;
   /** Host platform, so the UI can render the right modifier keys. */
   readonly platform: 'darwin' | 'win32' | 'linux';
@@ -718,7 +718,7 @@ export interface ApolloBridge {
     /**
      * A config-directory path to prefill the create form with.
      *
-     * Exists so the renderer never has to know how Apollo lays out its own
+     * Exists so the renderer never has to know how Artemis lays out its own
      * user-data directory — a layout it cannot see and should not encode.
      */
     suggestDir(
@@ -815,9 +815,9 @@ export interface ApolloBridge {
    *
    * There is no `signIn` here, and its absence is the design. The user runs the
    * provider's own login in their own terminal, against the config directory
-   * this profile names; Apollo's entire part is to hand them the command and
+   * this profile names; Artemis's entire part is to hand them the command and
    * poll {@link status} until it changes. Nothing on this surface accepts a key
-   * or a token, because nothing in Apollo has anywhere to put one.
+   * or a token, because nothing in Artemis has anywhere to put one.
    */
   readonly auth: {
     /** Read the profile's current login state. Cheap; safe to poll on mount. */

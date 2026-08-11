@@ -38,7 +38,7 @@
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { CheckIcon, ShieldAlertIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
-import type { PermissionRuleUpdate } from '@rx-apollo/protocol';
+import type { PermissionRuleUpdate } from '@rx-artemis/protocol';
 
 import { formatJson } from '../lib/format';
 import { DEFAULT_DENIAL, respondToPermission } from '../state/store';

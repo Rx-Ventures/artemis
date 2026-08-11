@@ -1,7 +1,7 @@
 /**
  * The contextBridge preload.
  *
- * This file is the entire attack surface between Apollo's UI and its privileged
+ * This file is the entire attack surface between Artemis's UI and its privileged
  * main process. Everything the renderer can do, it does through the object
  * exposed here — there is no `require`, no `process`, no `ipcRenderer` on the
  * other side, and `contextIsolation` keeps this script's scope in a separate
@@ -15,12 +15,12 @@
  *     arbitrary page script.
  *
  *  2. **No dynamic channel names.** Every function below closes over a constant
- *     from `@rx-apollo/protocol`. Nothing the renderer passes is ever concatenated
+ *     from `@rx-artemis/protocol`. Nothing the renderer passes is ever concatenated
  *     into a channel name, so the set of reachable channels is fixed at build
  *     time and readable in one screen.
  *
  *  3. **Exactly the contract, nothing more.** The exposed object is typed as
- *     {@link ApolloBridge}; if it grows a method the protocol does not define,
+ *     {@link ArtemisBridge}; if it grows a method the protocol does not define,
  *     the build fails.
  *
  * The bridge also never rejects. `ipcRenderer.invoke` rejects when a main
@@ -42,7 +42,7 @@ import {
   type IpcRequest,
   type IpcResponse,
   type IpcResult,
-  type ApolloBridge,
+  type ArtemisBridge,
   type ProfilesCreateRequest,
   type ProfilesDeleteRequest,
   type ProfilesSuggestDirRequest,
@@ -65,7 +65,7 @@ import {
   type UsagePlanRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Request/response                                                           */
@@ -168,7 +168,7 @@ function handlePushedEvent(_event: unknown, payload: unknown): void {
 
 function subscribeToAgentEvents(listener: (event: AgentEvent) => void): Unsubscribe {
   if (typeof listener !== 'function') {
-    throw new TypeError('apollo.runs.onEvent expects a function');
+    throw new TypeError('artemis.runs.onEvent expects a function');
   }
 
   subscribers.add(listener);
@@ -209,7 +209,7 @@ window.addEventListener('beforeunload', () => {
 /**
  * Read a value the main process passed through `webPreferences.additionalArguments`.
  *
- * `ApolloBridge.version` and `.platform` are synchronous properties, so they
+ * `ArtemisBridge.version` and `.platform` are synchronous properties, so they
  * cannot be fetched over `invoke`. `sendSync` would block the renderer's first
  * paint on an IPC round-trip. Passing them as process arguments costs nothing
  * and is available before the page loads.
@@ -225,10 +225,10 @@ function readArgument(name: string, fallback: string): string {
   return fallback;
 }
 
-function resolvePlatform(): ApolloBridge['platform'] {
-  const reported = readArgument('apollo-platform', String(process.platform));
+function resolvePlatform(): ArtemisBridge['platform'] {
+  const reported = readArgument('artemis-platform', String(process.platform));
   if (reported === 'darwin' || reported === 'win32' || reported === 'linux') return reported;
-  // Apollo ships for these three. Anything else (freebsd, say) gets the
+  // Artemis ships for these three. Anything else (freebsd, say) gets the
   // keyboard-hint behaviour closest to it rather than an undefined branch.
   return 'linux';
 }
@@ -238,12 +238,12 @@ function resolvePlatform(): ApolloBridge['platform'] {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Exactly {@link ApolloBridge} — the annotation is load-bearing. An extra method
+ * Exactly {@link ArtemisBridge} — the annotation is load-bearing. An extra method
  * here is a compile error, which is what keeps "expose only what the contract
  * defines" from being a comment nobody checks.
  */
-const bridge: ApolloBridge = Object.freeze({
-  version: readArgument('apollo-version', '0.0.0'),
+const bridge: ArtemisBridge = Object.freeze({
+  version: readArgument('artemis-version', '0.0.0'),
   platform: resolvePlatform(),
 
   profiles: Object.freeze({
@@ -290,7 +290,7 @@ const bridge: ApolloBridge = Object.freeze({
   /**
    * Two reads and no write: nothing here accepts a credential, and nothing here
    * performs a login. The user runs the provider's own command; `status` is
-   * what Apollo polls to find out whether they finished.
+   * what Artemis polls to find out whether they finished.
    */
   auth: Object.freeze({
     status: (request: AuthStatusRequest) => invoke(IPC.authStatus, request),
@@ -303,4 +303,4 @@ const bridge: ApolloBridge = Object.freeze({
   }),
 });
 
-contextBridge.exposeInMainWorld('apollo', bridge);
+contextBridge.exposeInMainWorld('artemis', bridge);

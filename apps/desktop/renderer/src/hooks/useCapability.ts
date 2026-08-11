@@ -1,14 +1,14 @@
 /**
  * Capability lookup.
  *
- * Apollo drives three providers with three unrelated transports, and the UI has
+ * Artemis drives three providers with three unrelated transports, and the UI has
  * to degrade against whichever one is active rather than assume they can all
  * do everything. Every gated control asks this hook the same question and gets
  * back both the answer and the sentence to show the user — so an unsupported
  * control renders disabled *with an explanation*, never silently missing.
  */
 
-import type { Capabilities, PermissionMode } from '@rx-apollo/protocol';
+import type { Capabilities, PermissionMode } from '@rx-artemis/protocol';
 import { useApp, activeCapabilities, activeProviderLabel } from '../state/store';
 
 /** The boolean fields of {@link Capabilities}. */

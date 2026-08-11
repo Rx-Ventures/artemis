@@ -1,17 +1,17 @@
 /**
- * Access to `window.apollo`.
+ * Access to `window.artemis`.
  *
  * Everything the renderer can do to the outside world goes through this
  * module. There is no `require`, no `ipcRenderer`, no `process` — if a
- * capability is not on `ApolloBridge`, the renderer does not have it, and the
+ * capability is not on `ArtemisBridge`, the renderer does not have it, and the
  * fix is a new IPC channel rather than a tsconfig edit.
  */
 
-import type { IpcResult, ApolloBridge } from '@rx-apollo/protocol';
+import type { IpcResult, ArtemisBridge } from '@rx-artemis/protocol';
 import { createMockBridge } from './mockBridge';
 
 export type BridgeMode =
-  /** The preload script ran and `window.apollo` is real. */
+  /** The preload script ran and `window.artemis` is real. */
   | 'preload'
   /** Dev only: no preload, so a scripted fake is standing in. */
   | 'mock'
@@ -20,7 +20,7 @@ export type BridgeMode =
 
 export interface BridgeBinding {
   readonly mode: BridgeMode;
-  readonly bridge: ApolloBridge | null;
+  readonly bridge: ArtemisBridge | null;
 }
 
 let binding: BridgeBinding | null = null;
@@ -29,7 +29,7 @@ let binding: BridgeBinding | null = null;
 export function resolveBridge(): BridgeBinding {
   if (binding) return binding;
 
-  const injected = typeof window === 'undefined' ? undefined : window.apollo;
+  const injected = typeof window === 'undefined' ? undefined : window.artemis;
   if (injected) {
     binding = { mode: 'preload', bridge: injected };
   } else if (import.meta.env.DEV) {

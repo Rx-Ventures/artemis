@@ -28,8 +28,8 @@
  * out rather than drop it.
  */
 
-import type { ProviderDescriptor, ProviderId } from '@rx-apollo/protocol';
-import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-apollo/protocol';
+import type { ProviderDescriptor, ProviderId } from '@rx-artemis/protocol';
+import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
 import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';
@@ -46,7 +46,7 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
 };
 
 /** Why a known provider is missing from this build. */
-const NOT_IMPLEMENTED_REASON = 'Not supported in this version of Apollo yet.';
+const NOT_IMPLEMENTED_REASON = 'Not supported in this version of Artemis yet.';
 
 /** Create an empty registry, optionally seeded with adapters. */
 export function createProviderRegistry(
@@ -190,7 +190,7 @@ export interface DefaultProviderRegistryOptions {
 }
 
 /**
- * The registry Apollo ships with.
+ * The registry Artemis ships with.
  *
  * **This is the one-line registration point**, and it held: adding Codex was
  * this array plus an options field. Nothing else in the app changed, because

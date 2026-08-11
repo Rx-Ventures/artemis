@@ -2,7 +2,7 @@
  * Appearance.
  * ============================================================================
  *
- * The smallest pane, on purpose. Apollo is a dark-only app with one palette and
+ * The smallest pane, on purpose. Artemis is a dark-only app with one palette and
  * one type scale — those are architecture, not preferences, and a settings pane
  * that offered to change them would be promising something the design system
  * does not support.
@@ -220,7 +220,7 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
-        Theme, density and motion are not settings. Apollo is dark-only by design, the transcript
+        Theme, density and motion are not settings. Artemis is dark-only by design, the transcript
         uses one spacing scale so that message boundaries stay readable at a glance, and the only
         animations in the app are the ones that show something arriving.
       </p>

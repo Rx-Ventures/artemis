@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { JsonValue } from '@rx-apollo/protocol';
+import type { JsonValue } from '@rx-artemis/protocol';
 
 import {
   JSON_RPC_CODES,

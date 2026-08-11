@@ -23,7 +23,7 @@
  * ```
  *
  * By default it points `CODEX_HOME` at your real `~/.codex`, because that is
- * where you are already signed in — the same thing Apollo supports a profile
+ * where you are already signed in — the same thing Artemis supports a profile
  * doing. Set `CODEX_SMOKE_HOME` to use a different directory. The *workspace*
  * the agent runs in is always a fresh `mkdtemp` that is removed on the way out.
  *
@@ -35,9 +35,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { AgentEvent, PermissionMode } from '@rx-apollo/protocol';
-import { createCodexAdapter } from '@rx-apollo/core';
-import type { ResolvedRunInput } from '@rx-apollo/core';
+import type { AgentEvent, PermissionMode } from '@rx-artemis/protocol';
+import { createCodexAdapter } from '@rx-artemis/core';
+import type { ResolvedRunInput } from '@rx-artemis/core';
 
 const PROMPT = process.argv[2] ?? 'Reply with exactly the word PONG. Do not use any tools.';
 const CODEX_HOME = process.env['CODEX_SMOKE_HOME'] ?? join(homedir(), '.codex');
@@ -133,7 +133,7 @@ function checkContract(events: readonly AgentEvent[]): string[] {
 }
 
 async function main(): Promise<number> {
-  const workspace = await mkdtemp(join(tmpdir(), 'apollo-codex-smoke-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'artemis-codex-smoke-'));
   console.log(`workspace  ${workspace}`);
   console.log(`CODEX_HOME ${CODEX_HOME}`);
   console.log(`mode       ${MODE} (answering prompts: ${ANSWER})`);

@@ -1,22 +1,22 @@
 /**
  * Signing a profile in, by handing the user their provider's own command.
  *
- * ## Apollo performs no login
+ * ## Artemis performs no login
  *
- * Apollo never sees a credential under this design. `claude auth login` opens
+ * Artemis never sees a credential under this design. `claude auth login` opens
  * the browser, completes the OAuth exchange, and writes the token into the
- * profile's own config directory. Apollo supplies one environment variable —
+ * profile's own config directory. Artemis supplies one environment variable —
  * `CLAUDE_CONFIG_DIR` — and reads a boolean back. There is no token to paste,
  * store, encrypt, mask or leak, and no `ANTHROPIC_API_KEY` /
- * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Apollo sets
+ * `CLAUDE_CODE_OAUTH_TOKEN` billing trap to get wrong, because Artemis sets
  * neither and strips both.
  *
- * ## Why the user runs it, rather than Apollo spawning it
+ * ## Why the user runs it, rather than Artemis spawning it
  *
- * Apollo used to spawn the login itself. It worked, and it was worse:
+ * Artemis used to spawn the login itself. It worked, and it was worse:
  *
  *  - The subprocess had to be held open for up to five minutes around a browser
- *    flow Apollo could not observe, so the only failure it could report was a
+ *    flow Artemis could not observe, so the only failure it could report was a
  *    timeout — for a login that had actually succeeded, or one where the CLI
  *    had asked a question nobody could see, alike.
  *  - `claude auth login` is interactive. Spawned with `stdio: 'ignore'` on
@@ -73,7 +73,7 @@ function shellQuote(value: string): string {
  * their next `claude` invocation.
  *
  * ```
- * CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Apollo/profiles/work' claude auth login
+ * CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Artemis/profiles/work' claude auth login
  * ```
  *
  * Windows shells need a different spelling (`$env:` in PowerShell, `set` in

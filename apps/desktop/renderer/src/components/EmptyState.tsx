@@ -66,10 +66,10 @@ export function EmptyState(): ReactElement {
     <Empty className="min-h-[60vh] gap-6 px-8 py-12">
       <EmptyHeader className="gap-1.5">
         <EmptyMedia>
-          <LogoMark size={34} className="text-ember/70" />
+          <LogoMark size={34} className="text-lunar/70" />
         </EmptyMedia>
         <EmptyTitle className="font-sans text-lg font-semibold tracking-tight text-ink">
-          Apollo
+          Artemis
         </EmptyTitle>
         <EmptyDescription className="text-xs leading-relaxed text-ink-muted">
           A desk for agentic coding CLIs. Currently pointed at{' '}
@@ -102,7 +102,7 @@ export function EmptyState(): ReactElement {
                   <Button
                     variant="link"
                     size="xs"
-                    className="h-auto gap-1 p-0 text-2xs text-ember"
+                    className="h-auto gap-1 p-0 text-2xs text-lunar"
                     onClick={() => openSettings('profiles')}
                   >
                     <KeyRoundIcon className="size-3" />
@@ -116,7 +116,7 @@ export function EmptyState(): ReactElement {
                   <Button
                     variant="link"
                     size="xs"
-                    className="h-auto gap-1 p-0 text-2xs text-ember"
+                    className="h-auto gap-1 p-0 text-2xs text-lunar"
                     onClick={() => setDirectoryOpen(true)}
                   >
                     <FolderIcon className="size-3" />

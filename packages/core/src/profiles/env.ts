@@ -18,7 +18,7 @@
  * provider's own login owns that, scoped to the config directory. But the
  * *stripping* still matters, and matters more: `ANTHROPIC_API_KEY` outranks the
  * config directory's login, so an ambient key would silently beat the account
- * the user signed this profile into and bill them for it. Apollo emits none of
+ * the user signed this profile into and bill them for it. Artemis emits none of
  * these variables and removes all of them.
  *
  * ## Which variable names?
@@ -37,18 +37,18 @@ import {
   configDirProblem,
   isCredentialRoutingEnvKey,
   isSecretEnvKey,
-} from '@rx-apollo/protocol';
-import type { Profile, ProfileMetadata } from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
+import type { Profile, ProfileMetadata } from '@rx-artemis/protocol';
 
 import { managedEnvKeys } from '../adapters/types.js';
 import type { ProviderCredentialSpec } from '../adapters/types.js';
 import { ProfileError } from './errors.js';
 
-/** Directory under the user-data dir that holds config dirs Apollo creates. */
+/** Directory under the user-data dir that holds config dirs Artemis creates. */
 export const PROFILES_DIR_NAME = 'profiles';
 
 /**
- * Variables Apollo sets itself for this provider, as a set.
+ * Variables Artemis sets itself for this provider, as a set.
  *
  * Managed variables are stripped from the inherited environment and rejected in
  * `publicEnv`, so a profile's account is decided by the profile and by nothing
@@ -88,13 +88,13 @@ export function profileConfigDir(profile: Profile | string): string {
   return assertConfigDir(typeof profile === 'string' ? profile : profile.configDir);
 }
 
-/** Absolute path of the directory holding config dirs Apollo creates itself. */
+/** Absolute path of the directory holding config dirs Artemis creates itself. */
 export function profilesRoot(userDataDir: string): string {
   return path.join(path.resolve(userDataDir), PROFILES_DIR_NAME);
 }
 
 /**
- * Is this config directory one Apollo created, rather than one the user
+ * Is this config directory one Artemis created, rather than one the user
  * pointed at?
  *
  * The single question that decides whether "delete this profile's directory"
@@ -106,7 +106,7 @@ export function profilesRoot(userDataDir: string): string {
  * Compared on resolved paths with a trailing separator, so `/a/profiles-other`
  * is not read as being inside `/a/profiles`.
  */
-export function isApolloOwnedConfigDir(userDataDir: string, configDir: string): boolean {
+export function isArtemisOwnedConfigDir(userDataDir: string, configDir: string): boolean {
   const root = profilesRoot(userDataDir);
   const resolved = path.resolve(configDir);
   if (resolved === root) return false;
@@ -246,7 +246,7 @@ export async function resolveStoreEnv(
  *     vars" box, nor point the CLI's own credential at another host.
  *  3. The provider's config-directory variable.
  *
- * Step 3 is the only variable Apollo sets, and it comes from
+ * Step 3 is the only variable Artemis sets, and it comes from
  * `options.credentials`. For Claude that resolves to `CLAUDE_CONFIG_DIR`, but
  * nothing in this function knows that.
  *
@@ -258,7 +258,7 @@ export async function resolveStoreEnv(
  * every run. With `ANTHROPIC_API_KEY` inherited from the user's shell, a
  * profile signed into a Max plan would bill metered API usage instead — the
  * variable wins over the directory — so its absence is enforced here rather
- * than assumed from the fact that Apollo never writes it.
+ * than assumed from the fact that Artemis never writes it.
  *
  * @throws {ProfileError} `invalid_request` for a malformed `configDir`.
  */

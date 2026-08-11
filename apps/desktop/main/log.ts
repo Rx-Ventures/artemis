@@ -42,7 +42,7 @@ function format(value: unknown): string {
 
 function emit(level: LogLevel, scope: string, message: string, extra: readonly unknown[]): void {
   if (LEVEL_ORDER[level] < LEVEL_ORDER[minimumLevel]) return;
-  const line = `[apollo:${scope}] ${scrubSecrets(message)}`;
+  const line = `[artemis:${scope}] ${scrubSecrets(message)}`;
   const rest = extra.map(format);
   // eslint-disable-next-line no-console -- the main process logs to the terminal by design.
   const sink = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
@@ -50,7 +50,7 @@ function emit(level: LogLevel, scope: string, message: string, extra: readonly u
   else sink(line);
 }
 
-/** A scoped logger. Scope shows up as `[apollo:<scope>]`. */
+/** A scoped logger. Scope shows up as `[artemis:<scope>]`. */
 export interface Logger {
   debug(message: string, ...extra: unknown[]): void;
   info(message: string, ...extra: unknown[]): void;

@@ -1,5 +1,5 @@
 /**
- * Tests for the Codex ⇄ Apollo translation.
+ * Tests for the Codex ⇄ Artemis translation.
  *
  * The mapping is the part of the adapter most likely to be wrong and most worth
  * testing, so — like the Claude mapper — it is driven entirely with fixture
@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent, JsonValue, RunId } from '@rx-apollo/protocol';
+import type { AgentEvent, JsonValue, RunId } from '@rx-artemis/protocol';
 
 import {
   createCodexMapperState,
@@ -360,7 +360,7 @@ describe('flushCodexToolCalls', () => {
   it('cancels every open call so no spinner is left running', () => {
     const state = makeState();
     feed(state, 'item/started', { item: { type: 'commandExecution', id: 'c-1', command: 'sleep 60' } });
-    feed(state, 'item/started', { item: { type: 'webSearch', id: 'w-1', query: 'apollo' } });
+    feed(state, 'item/started', { item: { type: 'webSearch', id: 'w-1', query: 'artemis' } });
 
     const flushed = flushCodexToolCalls(state);
 
@@ -503,7 +503,7 @@ describe('run.end', () => {
     expect(end).toMatchObject({ reason: 'error', error: { message: 'context length exceeded' } });
   });
 
-  it('lets Apollo’s own intent outrank the transport’s report', () => {
+  it('lets Artemis’s own intent outrank the transport’s report', () => {
     const state = makeState();
     feed(state, 'thread/started', { thread: { id: 'th-1', cwd: '/w' } });
     state.interruptRequested = true;

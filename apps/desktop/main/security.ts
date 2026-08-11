@@ -4,7 +4,7 @@
  * Everything Electron gets wrong by default, corrected in one place.
  *
  * The threat model is specific and worth stating, because it drives every
- * choice below: Apollo renders content it did not author. A transcript contains
+ * choice below: Artemis renders content it did not author. A transcript contains
  * model output; a tool result contains whatever was on disk; a session title
  * comes from a file the agent wrote. None of that is trusted input. The
  * renderer is therefore treated as a browser tab that might, one day, be
@@ -18,9 +18,9 @@
  *     `ipcRenderer` — only the frozen surface the preload exposes.
  *  2. **Content-Security-Policy** on every response, so injected markup cannot
  *     pull in remote script.
- *  3. **Navigation lockdown.** The window can only ever show Apollo's own UI.
+ *  3. **Navigation lockdown.** The window can only ever show Artemis's own UI.
  *     Every other URL is either opened in the user's real browser or dropped.
- *  4. **Network lockdown.** Chromium-side requests to anywhere but Apollo's own
+ *  4. **Network lockdown.** Chromium-side requests to anywhere but Artemis's own
  *     origin are cancelled outright.
  *
  * Note that (4) constrains the *renderer* only. The Claude Agent SDK runs in the
@@ -109,7 +109,7 @@ function developmentCsp(origin: string): string {
 /* -------------------------------------------------------------------------- */
 
 /**
- * `webPreferences` for every Apollo window.
+ * `webPreferences` for every Artemis window.
  *
  * Most of these are Electron's defaults on a modern version; they are written
  * out anyway. A default that silently flips in a future Electron release is
@@ -128,14 +128,14 @@ export function windowSecurityPreferences(preloadPath: string, extraArguments: r
 
     nodeIntegrationInWorker: false,
     nodeIntegrationInSubFrames: false,
-    // `<webview>` is a second, weaker window with its own preferences. Apollo has
+    // `<webview>` is a second, weaker window with its own preferences. Artemis has
     // no use for one, so it is turned off rather than configured.
     webviewTag: false,
     webSecurity: true,
     allowRunningInsecureContent: false,
     experimentalFeatures: false,
     // Values passed to the preload through `process.argv`. The preload reads
-    // them instead of asking main over IPC, which keeps `ApolloBridge.version`
+    // them instead of asking main over IPC, which keeps `ArtemisBridge.version`
     // and `.platform` synchronous.
     additionalArguments: [...extraArguments],
     spellcheck: false,
@@ -218,7 +218,7 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
   session.webRequest.onHeadersReceived((details, callback) => {
     // Strip any CSP the response already carried before setting ours, so a dev
     // server's header cannot end up merged with (and therefore looser than)
-    // Apollo's own.
+    // Artemis's own.
     const headers: Record<string, string[]> = {};
     for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
       if (name.toLowerCase() === 'content-security-policy') continue;
@@ -231,7 +231,7 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
   });
 
   // Chromium may ask for camera, microphone, geolocation, notifications and so
-  // on. Apollo needs none of them, and a UI that renders untrusted content
+  // on. Artemis needs none of them, and a UI that renders untrusted content
   // should never be in a position to ask.
   session.setPermissionRequestHandler((_contents, permission, callback) => {
     log.warn(`Denied a "${permission}" permission request from the renderer.`);
@@ -284,7 +284,7 @@ export function hardenWebContents(contents: WebContents, policy: SecurityPolicy)
   hardened.add(contents);
 
   // In-window navigation: a link, a redirect, `location.href = …`. The window
-  // shows Apollo's UI and nothing else, for its whole lifetime.
+  // shows Artemis's UI and nothing else, for its whole lifetime.
   contents.on('will-navigate', (event, url) => {
     if (isAllowedUrl(url, policy)) return;
     event.preventDefault();
@@ -321,7 +321,7 @@ export function hardenWebContents(contents: WebContents, policy: SecurityPolicy)
 }
 
 /**
- * Verify an IPC message came from Apollo's own top-level frame.
+ * Verify an IPC message came from Artemis's own top-level frame.
  *
  * Two checks, both necessary. The frame must be the *main* frame, so a nested
  * iframe (which is where injected content would end up) cannot call privileged
@@ -343,7 +343,7 @@ export function isTrustedFrame(
 export function installNetworkAuthGuard(app: Electron.App): void {
   app.on('login', (event) => {
     // Deliberately no `callback(...)`: not calling it cancels the request.
-    // Apollo never authenticates to a proxy or origin from the renderer, so a
+    // Artemis never authenticates to a proxy or origin from the renderer, so a
     // prompt here would only ever be a credential-phishing surface.
     event.preventDefault();
     log.warn('Cancelled an HTTP authentication prompt.');

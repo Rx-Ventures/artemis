@@ -14,7 +14,7 @@
  * and this file is what holds the argument to account: it asserts the failure
  * message lands *on the card*, next to the buttons that produced it.
  *
- * The bridge is faked at `window.apollo` rather than mocked at the module
+ * The bridge is faked at `window.artemis` rather than mocked at the module
  * boundary, so these run through the real store: the real `respondToPermission`,
  * the real `call()` wrapper, the real queue handling.
  *
@@ -25,7 +25,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { IpcResult, PermissionDecision, PermissionRequest } from '@rx-apollo/protocol';
+import type { IpcResult, PermissionDecision, PermissionRequest } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -44,12 +44,12 @@ let respond: (decision: PermissionDecision) => IpcResult<{ requestId: string }>;
 let sent: PermissionDecision[];
 
 /*
- * `window.apollo` must exist before the store module resolves the bridge, which
+ * `window.artemis` must exist before the store module resolves the bridge, which
  * it does lazily on the first call and then caches forever. Assigning it at
  * module scope — before the dynamic import below — is what makes the cached
  * binding point here rather than at the dev mock bridge.
  */
-Object.defineProperty(globalThis, 'apollo', {
+Object.defineProperty(globalThis, 'artemis', {
   configurable: true,
   value: {
     version: 'test',
@@ -74,7 +74,7 @@ const REQUEST: PermissionRequest = {
   runId: 'run-1',
   toolName: 'Bash',
   input: { command: 'rm -rf build' },
-  title: 'Apollo wants to run a shell command',
+  title: 'Artemis wants to run a shell command',
   requestedAt: Date.now(),
 };
 

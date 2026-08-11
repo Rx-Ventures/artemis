@@ -1,7 +1,7 @@
 /**
- * The `window.apollo` global.
+ * The `window.artemis` global.
  *
- * `@rx-apollo/protocol` deliberately does not declare this: the protocol package is
+ * `@rx-artemis/protocol` deliberately does not declare this: the protocol package is
  * compiled into the main process too, and a `Window` interface there would be a
  * lie — there is no DOM in the main process, and code that accidentally reached
  * for `window` would typecheck instead of failing.
@@ -10,17 +10,17 @@
  *
  * ### For the renderer
  *
- * The renderer's tsconfig references `@rx-apollo/protocol` only, not this project,
+ * The renderer's tsconfig references `@rx-artemis/protocol` only, not this project,
  * so it needs its own copy. Drop this into
  * `apps/desktop/renderer/src/global.d.ts` verbatim — `renderer/tsconfig.json`
  * already includes `*.d.ts`:
  *
  * ```ts
- * import type { ApolloBridge } from '@rx-apollo/protocol';
+ * import type { ArtemisBridge } from '@rx-artemis/protocol';
  *
  * declare global {
  *   interface Window {
- *     readonly apollo: ApolloBridge;
+ *     readonly artemis: ArtemisBridge;
  *   }
  * }
  *
@@ -28,15 +28,15 @@
  * ```
  *
  * `readonly` matters: `contextBridge.exposeInMainWorld` installs a
- * non-configurable property, so an assignment to `window.apollo` fails at
+ * non-configurable property, so an assignment to `window.artemis` fails at
  * runtime. Better to fail at compile time.
  */
 
-import type { ApolloBridge } from '@rx-apollo/protocol';
+import type { ArtemisBridge } from '@rx-artemis/protocol';
 
 declare global {
   interface Window {
-    readonly apollo: ApolloBridge;
+    readonly artemis: ArtemisBridge;
   }
 }
 

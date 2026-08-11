@@ -1,11 +1,11 @@
 /**
  * Profile persistence.
  *
- * Profiles live in a single JSON document under Apollo's user-data directory:
+ * Profiles live in a single JSON document under Artemis's user-data directory:
  *
  * ```
  * <userDataDir>/profiles.json          the records
- * <userDataDir>/profiles/<name>/       config dirs Apollo suggested
+ * <userDataDir>/profiles/<name>/       config dirs Artemis suggested
  * ```
  *
  * The document contains labels and config-directory paths. It contains no
@@ -14,12 +14,12 @@
  * inside the config directory. This file is readable plaintext by design and
  * there is nothing in it worth stealing.
  *
- * The second path above is only where Apollo's *suggestions* land. A profile's
+ * The second path above is only where Artemis's *suggestions* land. A profile's
  * `configDir` is an absolute path the user chose and may point anywhere —
  * commonly at the `~/.claude` they are already signed in to. Nothing here
  * assumes otherwise, and {@link ProfileStore.delete} is careful about it.
  *
- * `@rx-apollo/core` must not import `electron`, so the store takes its user-data
+ * `@rx-artemis/core` must not import `electron`, so the store takes its user-data
  * directory as a constructor argument rather than reaching for
  * `app.getPath('userData')`.
  *
@@ -36,7 +36,7 @@ import {
   isProviderId,
   isSecretEnvKey,
   normalizeProfileColor,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 import type {
   Profile,
   ProfileDraft,
@@ -44,12 +44,12 @@ import type {
   ProfileMetadata,
   ProfilePatch,
   ProviderId,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 import { ProfileError } from './errors.js';
 import {
   assertConfigDir,
-  isApolloOwnedConfigDir,
+  isArtemisOwnedConfigDir,
   profileConfigDir,
   profilesRoot,
   suggestConfigDir,
@@ -69,7 +69,7 @@ export const PROFILE_STORE_VERSION = 2;
  * `<userDataDir>/profiles` — plus `secretRef`, `backend` and `authMode`. It is
  * migrated on read rather than rejected: the directories those names point at
  * hold real logins and real transcripts, and a user whose profiles vanished
- * because Apollo changed its own file format would have no way to tell that
+ * because Artemis changed its own file format would have no way to tell that
  * their accounts were still there.
  */
 const PROFILE_STORE_VERSION_LEGACY = 1;
@@ -85,13 +85,13 @@ interface PersistedDocument {
 
 /** Construction options for {@link ProfileStore}. */
 export interface ProfileStoreOptions {
-  /** Apollo's user-data directory. Injected — core cannot ask Electron for it. */
+  /** Artemis's user-data directory. Injected — core cannot ask Electron for it. */
   readonly userDataDir: string;
   /**
-   * Variable names Apollo sets itself, across every registered provider —
+   * Variable names Artemis sets itself, across every registered provider —
    * normally the union of `managedEnvKeys(adapter.credentials)`.
    *
-   * Used to reject `publicEnv` entries that would override Apollo's own
+   * Used to reject `publicEnv` entries that would override Artemis's own
    * isolation choices. It is a *denylist*, so the union is the
    * right shape: over-rejecting a name one provider manages costs a user
    * nothing, while under-rejecting one silently breaks account isolation.
@@ -117,7 +117,7 @@ export interface DeleteProfileOptions {
    * transcripts.
    *
    * A *request*, not an instruction — see {@link ProfileStore.delete}, which
-   * honours it only for a directory Apollo created.
+   * honours it only for a directory Artemis created.
    */
   readonly deleteConfigDir?: boolean;
 }
@@ -125,7 +125,7 @@ export interface DeleteProfileOptions {
 /** Result of {@link ProfileStore.delete}. */
 export interface DeleteProfileResult {
   readonly id: ProfileId;
-  /** True when a config directory existed, was Apollo's, and was removed. */
+  /** True when a config directory existed, was Artemis's, and was removed. */
   readonly configDirDeleted: boolean;
 }
 
@@ -161,7 +161,7 @@ export class ProfileStore {
     this.#newId = options.newId ?? (() => randomUUID());
   }
 
-  /** Apollo's user-data directory, as given. */
+  /** Artemis's user-data directory, as given. */
   get userDataDir(): string {
     return this.#userDataDir;
   }
@@ -326,15 +326,15 @@ export class ProfileStore {
    *
    * The config directory — and therefore the credential and the session
    * history — survives unless `deleteConfigDir` is set **and** the directory is
-   * one Apollo created.
+   * one Artemis created.
    *
    * That second condition is not a formality. `configDir` is an absolute path
    * the user chose, and the most useful thing they can put there is the
    * `~/.claude` their own CLI already uses. Honouring a recursive delete
    * against it because a switch in a profile dialog was left on would destroy
    * the user's real Claude installation, every project transcript in it, and
-   * the login for whatever other profiles point at the same place. So Apollo
-   * deletes only what Apollo made, and {@link DeleteProfileResult.configDirDeleted}
+   * the login for whatever other profiles point at the same place. So Artemis
+   * deletes only what Artemis made, and {@link DeleteProfileResult.configDirDeleted}
    * reports honestly when it declined.
    */
   async delete(id: ProfileId, options: DeleteProfileOptions = {}): Promise<DeleteProfileResult> {
@@ -351,7 +351,7 @@ export class ProfileStore {
       let configDir: string | undefined;
       if (options.deleteConfigDir === true) {
         const resolved = this.configDirFor(profile);
-        if (isApolloOwnedConfigDir(this.#userDataDir, resolved)) configDir = resolved;
+        if (isArtemisOwnedConfigDir(this.#userDataDir, resolved)) configDir = resolved;
       }
 
       profiles.splice(index, 1);
@@ -458,7 +458,7 @@ export function requireLabel(label: string): string {
  *     credential from its config directory there. Accepting one would let
  *     anything that can write a profile redirect a real token off-box. See
  *     {@link isCredentialRoutingEnvKey}.
- *  3. **Anything Apollo manages itself** — the config-directory variable, and
+ *  3. **Anything Artemis manages itself** — the config-directory variable, and
  *     every credential variable that would outrank it.
  */
 export function sanitizePublicEnv(
@@ -482,13 +482,13 @@ export function sanitizePublicEnv(
     if (isCredentialRoutingEnvKey(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} controls where the profile's credential is sent, which Apollo decides rather than the profile. It cannot be set in publicEnv.`,
+        `${key} controls where the profile's credential is sent, which Artemis decides rather than the profile. It cannot be set in publicEnv.`,
       );
     }
     if (managedEnvKeys.includes(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} is set by Apollo from the profile's config directory and cannot be overridden in publicEnv`,
+        `${key} is set by Artemis from the profile's config directory and cannot be overridden in publicEnv`,
       );
     }
     if (typeof value !== 'string') {
@@ -505,7 +505,7 @@ export function sanitizePublicEnv(
 
 function parseDocument(value: unknown, file: string, userDataDir: string): readonly Profile[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ProfileError('unknown', `${file} is not a Apollo profile document`);
+    throw new ProfileError('unknown', `${file} is not a Artemis profile document`);
   }
   const document = value as { version?: unknown; profiles?: unknown };
 

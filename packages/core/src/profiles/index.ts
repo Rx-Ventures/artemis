@@ -10,7 +10,7 @@
  * ```
  *
  * There is no secret store here. The profile names a config directory, the
- * provider's own CLI login puts a credential inside it, and Apollo's part is to
+ * provider's own CLI login puts a credential inside it, and Artemis's part is to
  * set one variable and read a boolean back — see `checkAuthStatus`.
  *
  * The only shape from this module that may cross into the renderer is

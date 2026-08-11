@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, PermissionRequestEvent, RunEndEvent } from '@rx-apollo/protocol';
+import type { AgentEvent, PermissionRequestEvent, RunEndEvent } from '@rx-artemis/protocol';
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const sdkMock = vi.hoisted(() => ({
@@ -149,7 +149,7 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 const REAL_CWD = process.cwd();
 
 /** A directory that certainly does not exist. */
-const MISSING_CWD = '/apollo-tests/no-such-directory/at-all';
+const MISSING_CWD = '/artemis-tests/no-such-directory/at-all';
 
 /* -------------------------------------------------------------------------- */
 /* Run lifecycle                                                              */
@@ -781,7 +781,7 @@ describe('buildClaudeOptions', () => {
     // profile's choice, so it does not travel.
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
     expect(env['PATH']).toBe('/usr/bin');
-    expect(env['CLAUDE_AGENT_SDK_CLIENT_APP']).toBe('apollo');
+    expect(env['CLAUDE_AGENT_SDK_CLIENT_APP']).toBe('artemis');
   });
 
   it('BILLING: a subscription bundle reaches the SDK with no ANTHROPIC_API_KEY, even one inherited from the shell', () => {
@@ -864,7 +864,7 @@ describe('buildClaudeOptions', () => {
   });
 
   it('sends the claude_code preset when the run named no system prompt', () => {
-    // The default path for every Apollo run: `RunInput.systemPrompt` is optional
+    // The default path for every Artemis run: `RunInput.systemPrompt` is optional
     // and the renderer never sets it. Passing `undefined` through would ship an
     // empty system prompt and silently lose the whole Claude Code preset.
     expect(buildClaudeOptions(BASE_INPUT, context).systemPrompt).toEqual({

@@ -33,7 +33,7 @@ function TooltipTrigger({
  *
  * 1. Surface. The stock Nova tooltip is inverted — `bg-foreground` on
  *    `text-background`, i.e. a near-white bubble. That is fine for a two-word
- *    label, but Apollo's most important tooltip is the sentence explaining why
+ *    label, but Artemis's most important tooltip is the sentence explaining why
  *    a control is disabled (see `CapabilityButton`), and a paragraph of black
  *    text on white glares badly in a dark, long-session tool. Tooltips sit on
  *    the same floating surface as popovers and menus instead, so everything

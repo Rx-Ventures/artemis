@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import { CODEX_CAPABILITIES } from '../codex.js';
@@ -99,7 +99,7 @@ describe('describe()', () => {
       id: 'codex',
       label: 'Codex',
       available: false,
-      unavailableReason: 'Not supported in this version of Apollo yet.',
+      unavailableReason: 'Not supported in this version of Artemis yet.',
       capabilities: NO_CAPABILITIES,
     });
   });
@@ -247,7 +247,7 @@ describe('createDefaultProviderRegistry', () => {
     const codex = descriptors.find((d) => d.id === 'codex');
 
     // `dontAsk` means "never prompt, deny instead"; Codex's nearest mode
-    // (`never`) proceeds instead of denying. Advertising it would make Apollo
+    // (`never`) proceeds instead of denying. Advertising it would make Artemis
     // silently more permissive than the user asked for, so it is omitted rather
     // than approximated. `auto` has no Codex equivalent at all.
     expect(codex?.capabilities.permissionModes).not.toContain('dontAsk');

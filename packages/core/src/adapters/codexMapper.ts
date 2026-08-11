@@ -1,5 +1,5 @@
 /**
- * Codex ⇄ Apollo translation, as pure functions.
+ * Codex ⇄ Artemis translation, as pure functions.
  *
  * The counterpart to `mapper.ts`, and written to the same rule: everything here
  * is deterministic and free of I/O — no subprocess, no socket, no clock except
@@ -25,7 +25,7 @@
  *
  * Codex models a turn as a list of *items* with `item/started` and
  * `item/completed` bracketing each one, rather than as a stream of messages.
- * That is a better fit for Apollo than it first appears: `tool.start`/`tool.end`
+ * That is a better fit for Artemis than it first appears: `tool.start`/`tool.end`
  * fall straight out of the bracket, and an item id is a natural `toolCallId`.
  * The mismatch is on the text side, where Codex brackets an `agentMessage` item
  * whose deltas arrive in between — so `item/started` for text emits nothing and
@@ -33,7 +33,7 @@
  *
  * ## Dropped notifications
  *
- * The protocol has 69 notification variants; Apollo acts on 10. The rest are
+ * The protocol has 69 notification variants; Artemis acts on 10. The rest are
  * host-CLI presentation state (MCP startup progress, hook lifecycle, remote
  * control status, realtime audio) with no place in a normalized transcript.
  * Every one is dropped **explicitly** in {@link mapCodexNotification}'s switch,
@@ -53,7 +53,7 @@ import type {
   ToolCallId,
   ToolEndStatus,
   UsageSnapshot,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 import {
   CODEX_NOTIFICATION,
@@ -289,7 +289,7 @@ export function mapCodexNotification(
 
     /*
      * Everything below is dropped on purpose. Each line is a notification the
-     * app server really sends and Apollo really has no use for; listing them
+     * app server really sends and Artemis really has no use for; listing them
      * means a future reader can tell "considered and rejected" from "never
      * seen".
      *
@@ -297,10 +297,10 @@ export function mapCodexNotification(
      *   mcpServer/startupStatus/updated, remoteControl/status/changed,
      *   thread/status/changed, model/safetyBuffering/updated, model/rerouted,
      *   configWarning, warning, guardianWarning, deprecationNotice
-     * Lifecycle bookkeeping Apollo derives from items instead:
+     * Lifecycle bookkeeping Artemis derives from items instead:
      *   hook/started, hook/completed, serverRequest/resolved,
      *   thread/name/updated, thread/compacted
-     * Surfaces Apollo does not expose:
+     * Surfaces Artemis does not expose:
      *   turn/diff/updated, turn/plan/updated, item/commandExecution/outputDelta,
      *   thread/realtime/*, process/*, fuzzyFileSearch/*, app/list/updated
      *
@@ -318,7 +318,7 @@ function mapThreadStarted(
   payload: Record<string, unknown>,
   state: CodexMapperState,
 ): readonly AgentEvent[] {
-  // Guard rather than assert: `thread/started` also fires for threads Apollo
+  // Guard rather than assert: `thread/started` also fires for threads Artemis
   // did not open, and a second `session.started` would break the ordering
   // contract.
   if (state.sessionStarted) return [];
@@ -394,7 +394,7 @@ function mapItemStarted(
   const tool = toolDescriptor(type, item);
   // Text and reasoning items are brackets around deltas, not tool calls: the
   // start carries no content, so there is nothing to emit until the deltas
-  // arrive. `userMessage` is skipped too — Apollo sent it, and echoing it back
+  // arrive. `userMessage` is skipped too — Artemis sent it, and echoing it back
   // would double it in the transcript.
   if (tool === undefined) return [];
 
@@ -601,7 +601,7 @@ export function finalizeCodexRun(
 ): readonly AgentEvent[] {
   if (state.ended) return [];
 
-  // Apollo's own intent outranks whatever the transport reported: a turn that
+  // Artemis's own intent outranks whatever the transport reported: a turn that
   // reports `completed` because the server noticed the interrupt in time is
   // still an interrupt from the user's point of view.
   const effective = effectiveReason(state, reason);
@@ -627,7 +627,7 @@ export function finalizeCodexRun(
   return events;
 }
 
-/** Apollo's own intent outranks whatever the transport reports. */
+/** Artemis's own intent outranks whatever the transport reports. */
 function effectiveReason(state: CodexMapperState, fallback: RunEndReason): RunEndReason {
   if (state.disposeRequested) return 'disposed';
   if (state.interruptRequested) return 'interrupted';
@@ -687,9 +687,9 @@ interface ToolDescriptor {
 }
 
 /**
- * Map an item type onto a tool name Apollo can render.
+ * Map an item type onto a tool name Artemis can render.
  *
- * Codex names its item types after what they *are*; Apollo's transcript is
+ * Codex names its item types after what they *are*; Artemis's transcript is
  * built around tool names as the provider reports them. These are the names the
  * UI shows, so they are chosen to read like tools rather than like protocol
  * variants — `Shell` rather than `commandExecution`.

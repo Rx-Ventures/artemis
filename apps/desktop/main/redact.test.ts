@@ -10,7 +10,7 @@ import {
 } from './redact.js';
 
 /**
- * These tests are the executable version of Apollo's central invariant: a
+ * These tests are the executable version of Artemis's central invariant: a
  * secret never crosses IPC into the renderer. If the tripwire stops firing,
  * the invariant is being enforced by nothing but good intentions.
  */
@@ -18,7 +18,7 @@ import {
 const FAKE_KEY = 'sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyz0123456789ABCD';
 
 describe('looksLikeSecretValue', () => {
-  it('recognises the credential shapes Apollo can hold', () => {
+  it('recognises the credential shapes Artemis can hold', () => {
     expect(looksLikeSecretValue(FAKE_KEY)).toBe(true);
     expect(looksLikeSecretValue('sk-0123456789abcdefghijklmnop')).toBe(true);
     expect(looksLikeSecretValue('AKIAIOSFODNN7EXAMPLE')).toBe(true);
@@ -52,7 +52,7 @@ describe('assertNoSecrets — response policy', () => {
             { id: 'p2', label: 'Personal', providerId: 'claude', keyHint: null },
           ],
         },
-        'apollo:profiles:list',
+        'artemis:profiles:list',
       ),
     ).not.toThrow();
   });
@@ -70,11 +70,11 @@ describe('assertNoSecrets — response policy', () => {
         publicEnv: { ANTHROPIC_MODEL: 'claude-sonnet-4-6' },
       },
     };
-    expect(() => assertNoSecrets(leaked, 'apollo:profiles:create')).toThrow(SecretLeakError);
+    expect(() => assertNoSecrets(leaked, 'artemis:profiles:create')).toThrow(SecretLeakError);
   });
 
   it('catches a raw key smuggled into an unexpected field', () => {
-    expect(() => assertNoSecrets({ run: { runId: 'r1', cwd: `/tmp/${FAKE_KEY}` } }, 'apollo:runs:start')).toThrow(
+    expect(() => assertNoSecrets({ run: { runId: 'r1', cwd: `/tmp/${FAKE_KEY}` } }, 'artemis:runs:start')).toThrow(
       SecretLeakError,
     );
   });
@@ -85,7 +85,7 @@ describe('assertNoSecrets — response policy', () => {
     expect(() =>
       assertNoSecrets(
         { sessions: [{ id: 's1', title: `use ${FAKE_KEY} please`, updatedAt: 0 }], hasMore: false },
-        'apollo:sessions:list',
+        'artemis:sessions:list',
       ),
     ).not.toThrow();
   });

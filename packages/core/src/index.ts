@@ -1,7 +1,7 @@
 /**
- * `@rx-apollo/core` — the headless engine.
+ * `@rx-artemis/core` — the headless engine.
  *
- * Everything Apollo does that is not drawing pixels or talking to Electron
+ * Everything Artemis does that is not drawing pixels or talking to Electron
  * happens here: provider adapters, profile and credential resolution, and the
  * registry of live runs.
  *
@@ -33,7 +33,7 @@
  *     `ProfileMetadata`, which carries a masked hint and nothing else.
  *
  * Types shared with the renderer — events, capabilities, IPC payloads — live
- * in `@rx-apollo/protocol` and are re-exported from nowhere: import them from
+ * in `@rx-artemis/protocol` and are re-exported from nowhere: import them from
  * there directly.
  */
 

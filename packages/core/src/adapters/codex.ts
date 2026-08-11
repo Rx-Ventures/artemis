@@ -9,7 +9,7 @@
  *
  * `codex app-server` can hold many threads at once, so a single long-lived
  * process serving every run would save a spawn. It would also make one run's
- * crash everyone's crash, and put Apollo in the business of multiplexing
+ * crash everyone's crash, and put Artemis in the business of multiplexing
  * notifications by `threadId` — with the failure mode that a routing bug sends
  * one conversation's output into another's transcript.
  *
@@ -24,7 +24,7 @@
  * `ResolvedRunInput.env` is the only channel a credential travels on, and this
  * file never reads one. It sets `CODEX_HOME` — which is what scopes a profile's
  * login *and* its history — and strips every variable that could authenticate
- * the CLI some other way. Apollo holds no Codex credential at all: `codex login`
+ * the CLI some other way. Artemis holds no Codex credential at all: `codex login`
  * writes one into the profile's own directory and this adapter reads a boolean
  * back.
  */
@@ -46,8 +46,8 @@ import type {
   RunStatus,
   SessionId,
   SessionSummary,
-} from '@rx-apollo/protocol';
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { composeProviderEnv, readEnv } from './env.js';
 import {
@@ -129,7 +129,7 @@ const DISPOSE_GRACE_MS = 4_000;
  * What the Codex adapter can do, measured against the real app server rather
  * than inferred from documentation.
  *
- * `subagents` is false because although Codex has collab agents, Apollo does
+ * `subagents` is false because although Codex has collab agents, Artemis does
  * not map their items yet — advertising it would promise nesting the transcript
  * cannot render. `costReporting` is false because the protocol reports tokens
  * and rate-limit percentages but never a price.
@@ -159,7 +159,7 @@ export const CODEX_CAPABILITIES: Capabilities = {
  *
  * **The directory must already exist.** Codex refuses to start otherwise,
  * with `Error loading configuration: CODEX_HOME points to "…", but that path
- * does not exist` — it will not create one. Apollo's profile store is
+ * does not exist` — it will not create one. Artemis's profile store is
  * responsible for making it before the first run.
  */
 export const CODEX_HOME_ENV = 'CODEX_HOME';
@@ -173,7 +173,7 @@ export const CODEX_HOME_ENV = 'CODEX_HOME';
  * subscription the profile just signed into — the exact trap
  * `CLAUDE_ENV_SCRUB_KEYS` exists to prevent on the other side.
  *
- * Strip-only: Apollo sets none of them, so there is no case where one is
+ * Strip-only: Artemis sets none of them, so there is no case where one is
  * removed and then written back.
  */
 export const CODEX_CREDENTIAL_ENVS: readonly string[] = [
@@ -261,9 +261,9 @@ function normaliseAuthMethod(method: string): string {
 /**
  * How a Codex profile signs in.
  *
- * Apollo performs no login here either: `codex login`, run with `CODEX_HOME`
- * pointed at the profile's directory, writes a credential Apollo never sees.
- * Apollo sets one variable and reads a boolean back.
+ * Artemis performs no login here either: `codex login`, run with `CODEX_HOME`
+ * pointed at the profile's directory, writes a credential Artemis never sees.
+ * Artemis sets one variable and reads a boolean back.
  */
 export const CODEX_CREDENTIALS: ProviderCredentialSpec = {
   configDirVar: CODEX_HOME_ENV,
@@ -275,7 +275,7 @@ export const CODEX_CREDENTIALS: ProviderCredentialSpec = {
     logoutArgs: ['logout'],
     parseStatus: parseCodexAuthStatus,
     howTo:
-      'Runs Codex’s own sign-in against this profile’s config directory. Your browser opens to authorise ChatGPT, and the credential is written into the profile — Apollo never sees it.',
+      'Runs Codex’s own sign-in against this profile’s config directory. Your browser opens to authorise ChatGPT, and the credential is written into the profile — Artemis never sees it.',
   },
 };
 
@@ -321,21 +321,21 @@ const EFFORT_IDS = new Set(CODEX_EFFORT_LEVELS.map((level) => level.id));
 /* Permission mapping                                                         */
 /* -------------------------------------------------------------------------- */
 
-/** Codex's two axes, recovered from one Apollo permission mode. */
+/** Codex's two axes, recovered from one Artemis permission mode. */
 export interface CodexPermissions {
   readonly approvalPolicy: CodexAskForApproval;
   readonly sandboxPolicy: CodexSandboxPolicy;
 }
 
 /**
- * Collapse Apollo's single permission axis onto Codex's two.
+ * Collapse Artemis's single permission axis onto Codex's two.
  *
  * ## The mismatch
  *
- * Apollo's `PermissionMode` came from the Claude SDK, which folds "must it ask
+ * Artemis's `PermissionMode` came from the Claude SDK, which folds "must it ask
  * first?" and "what may it touch?" into one knob. Codex separates them:
  * `AskForApproval` decides when to prompt, `SandboxPolicy` decides what is
- * reachable at all. Every Apollo mode therefore picks a *pair*.
+ * reachable at all. Every Artemis mode therefore picks a *pair*.
  *
  * ## Why `dontAsk` and `auto` are not offered
  *
@@ -345,7 +345,7 @@ export interface CodexPermissions {
  * `dontAsk` is documented as "never prompt; **denies** instead of asking".
  * Codex's nearest neighbour is `never`, which never prompts and **proceeds**
  * within the sandbox. Those are opposites at exactly the moment they matter, and
- * mapping one to the other would make Apollo silently more permissive than the
+ * mapping one to the other would make Artemis silently more permissive than the
  * user asked for — the specific failure `ProviderAdapter.createRun` is required
  * to reject rather than degrade into.
  *
@@ -792,9 +792,9 @@ async function openAppServer(options: OpenAppServerOptions): Promise<AppServerSe
   try {
     await withTimeout(
       child.connection.request(CODEX_METHOD.initialize, {
-        clientInfo: { name: 'apollo', title: 'Apollo', version: '0.1.0' },
+        clientInfo: { name: 'artemis', title: 'Artemis', version: '0.1.0' },
         // No `experimentalApi`: opting in would let a CLI upgrade change the
-        // shape of methods a shipped Apollo build depends on.
+        // shape of methods a shipped Artemis build depends on.
         capabilities: {},
       }),
       HANDSHAKE_TIMEOUT_MS,
@@ -1200,7 +1200,7 @@ class CodexRun implements Run {
     const kind = approvalKind(request.method);
     if (kind === undefined) {
       // Not an approval — a dynamic tool call, an MCP elicitation, something
-      // newer. Declining is the only safe answer: Apollo has no UI for it, and
+      // newer. Declining is the only safe answer: Artemis has no UI for it, and
       // parking would hang the turn forever.
       this.#deps.diagnostic?.(`Run ${this.runId}: declining unsupported request "${request.method}".`);
       return { decision: 'decline' };
@@ -1398,7 +1398,7 @@ function toPermissionRequest(
 }
 
 /**
- * Translate one Apollo decision into the vocabulary of one server request.
+ * Translate one Artemis decision into the vocabulary of one server request.
  *
  * The three approval requests take three *different* decision types on the
  * wire. They happen to share the `accept` / `acceptForSession` / `decline` /
@@ -1408,7 +1408,7 @@ function toPermissionRequest(
  * thing that works right up until the day it silently grants more than the user
  * clicked.
  *
- * `scope: 'session'` is the mapping for Apollo's `scope: 'session'` — the
+ * `scope: 'session'` is the mapping for Artemis's `scope: 'session'` — the
  * "always allow" affordance. Anything else stays scoped to this one call.
  */
 export function toApprovalResponse(method: string, decision: PermissionDecision): JsonValue {
@@ -1504,7 +1504,7 @@ export function parseThreadList(
     const name = readString(thread, 'name');
     const preview = readString(thread, 'preview');
 
-    // Codex timestamps threads in Unix *seconds*; every Apollo timestamp is
+    // Codex timestamps threads in Unix *seconds*; every Artemis timestamp is
     // milliseconds.
     const createdAt = readNumber(thread, 'createdAt');
     const updatedAt = readNumber(thread, 'updatedAt') ?? createdAt ?? 0;
@@ -1531,7 +1531,7 @@ export function parseThreadList(
  * Codex reports up to two anonymous windows described by their duration rather
  * than by a name, so the label is derived from `windowDurationMins` — 43200
  * minutes is the monthly window a free plan reported during testing. The window
- * ids are Apollo's own vocabulary; `PlanUsageWindowId` is deliberately
+ * ids are Artemis's own vocabulary; `PlanUsageWindowId` is deliberately
  * open-ended so a provider can contribute its own.
  */
 export function parseRateLimitWindows(limits: Record<string, unknown>): PlanUsageWindow[] {

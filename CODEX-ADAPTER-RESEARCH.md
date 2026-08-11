@@ -1,4 +1,4 @@
-# Adding a Codex provider to Apollo — feasibility
+# Adding a Codex provider to Artemis — feasibility
 
 Research notes, verified against `codex-cli 0.142.3` installed locally. Every protocol
 claim below was confirmed by driving the real binary, not read off documentation.
@@ -9,7 +9,7 @@ claim below was confirmed by driving the real binary, not read off documentation
 
 The seam in `packages/core/src/adapters/types.ts` was designed against Codex as one of its
 three reference transports, and that design holds up under contact with the real protocol.
-Codex's app-server turns out to be a *closer* fit to Apollo's model than the Claude Agent
+Codex's app-server turns out to be a *closer* fit to Artemis's model than the Claude Agent
 SDK is in a couple of places (plan usage, session listing).
 
 The work is almost entirely **additive**: two new files plus a JSON-RPC client. The
@@ -46,7 +46,7 @@ account/rateLimits/updated
 turn/completed      status=completed
 ```
 
-That maps onto Apollo's nine-variant `AgentEvent` union with no gaps.
+That maps onto Artemis's nine-variant `AgentEvent` union with no gaps.
 
 ## Transport choice: `app-server`, not `exec --json`
 
@@ -72,7 +72,7 @@ tedium and drift. Output is version-specific to the CLI that generated it.
 
 ## Event mapping
 
-| Apollo `AgentEvent` | Codex source |
+| Artemis `AgentEvent` | Codex source |
 | --- | --- |
 | `session.started` | `thread/started` (+ `thread/start` response carries `id`/`sessionId`) |
 | `text.delta` | `item/agentMessage/delta` |
@@ -137,7 +137,7 @@ export const CODEX_CAPABILITIES: Capabilities = {
 
 ## The one real impedance mismatch
 
-Apollo's `PermissionMode` is a single axis (`plan | default | acceptEdits | auto |
+Artemis's `PermissionMode` is a single axis (`plan | default | acceptEdits | auto |
 dontAsk | bypassPermissions`) borrowed from the Claude SDK. Codex has **two independent
 axes**:
 
@@ -145,9 +145,9 @@ axes**:
 - `SandboxPolicy`: `dangerFullAccess | readOnly{networkAccess} | externalSandbox |
   workspaceWrite{writableRoots, networkAccess, …}`
 
-So every Apollo mode picks a *pair*:
+So every Artemis mode picks a *pair*:
 
-| Apollo mode | `approvalPolicy` | `sandboxPolicy` |
+| Artemis mode | `approvalPolicy` | `sandboxPolicy` |
 | --- | --- | --- |
 | `plan` | `never` | `readOnly` |
 | `default` | `untrusted` | `workspaceWrite` |
@@ -155,10 +155,10 @@ So every Apollo mode picks a *pair*:
 | `bypassPermissions` | `never` | `dangerFullAccess` |
 
 **Two modes are deliberately not advertised.** My initial reading was that `dontAsk`
-could map onto Codex's `never`; implementing it showed that is wrong. Apollo documents
+could map onto Codex's `never`; implementing it showed that is wrong. Artemis documents
 `dontAsk` as "never prompt; **denies** instead of asking", while Codex's `never` never
 prompts and **proceeds** within the sandbox. Those are opposites at exactly the moment
-they matter, so mapping one to the other would make Apollo silently more permissive than
+they matter, so mapping one to the other would make Artemis silently more permissive than
 the user asked for — the specific failure `createRun` is required to reject rather than
 degrade into. `auto` (a provider-side risk classifier) has no Codex equivalent at all.
 
@@ -219,7 +219,7 @@ explanatory prose in doc comments, not coupling.
 
 Not a code change but a real behavioural difference: **Codex refuses to start if
 `CODEX_HOME` does not exist** (`Error loading configuration: CODEX_HOME points to "…",
-but that path does not exist`). Apollo must `mkdir -p` the profile directory before first
+but that path does not exist`). Artemis must `mkdir -p` the profile directory before first
 use rather than relying on the CLI to create it.
 
 ## What has to be written
@@ -253,7 +253,7 @@ gets a Codex counterpart, and the Codex versions are simpler.
 - **Approval-response shapes vary per request type.** `ExecCommandApprovalResponse`,
   `FileChangeApprovalDecision` and `PermissionsRequestApprovalParams` are three different
   decision vocabularies (`accept` / `acceptForSession` / `decline` / `cancel`, plus
-  structured `acceptWithExecpolicyAmendment`). Apollo's `PermissionDecision` is one type,
+  structured `acceptWithExecpolicyAmendment`). Artemis's `PermissionDecision` is one type,
   so the adapter needs a small per-request-kind translation table. Contained, but it's the
   fiddliest part of the mapper.
 - **`text_elements` is required** on text input items — an easy shape to get wrong (it
@@ -280,7 +280,7 @@ Steps 1–6 are built and verified against the real CLI. What landed:
 | File | Lines | What |
 | --- | --- | --- |
 | [jsonrpc.ts](packages/core/src/adapters/jsonrpc.ts) | 630 | The codec (framing, id correlation, server-request dispatch) split from the subprocess, so the logic is testable without spawning |
-| [codexProtocol.ts](packages/core/src/adapters/codexProtocol.ts) | 517 | The slice of the wire protocol Apollo speaks, transcribed from `generate-ts` |
+| [codexProtocol.ts](packages/core/src/adapters/codexProtocol.ts) | 517 | The slice of the wire protocol Artemis speaks, transcribed from `generate-ts` |
 | [codexMapper.ts](packages/core/src/adapters/codexMapper.ts) | 921 | Pure notification → `AgentEvent` translation |
 | [codex.ts](packages/core/src/adapters/codex.ts) | 1661 | The adapter: process, threads, turns, approvals, disposal |
 | Tests | 1470 | 30 jsonrpc + 50 mapper + 38 adapter, plus 5 new registry tests |
@@ -298,7 +298,7 @@ app changed — the one-line registration point held.
 Driving the real adapter against the real binary via `scripts/smoke-codex.ts`:
 
 ```
-  0 session.started    session 019fee8c-… in /var/folders/…/apollo-codex-smoke-RIV8zF
+  0 session.started    session 019fee8c-… in /var/folders/…/artemis-codex-smoke-RIV8zF
   1 text.delta         "P"
   2 text.delta         "ONG"
   3 text.complete      [assistant] PONG

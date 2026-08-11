@@ -17,19 +17,19 @@
  * `CLAUDE_CONFIG_DIR` pointed at a directory, writes a credential belonging to
  * that directory alone. So a profile needs to know one thing — which directory
  * — and the account follows from it. There is no credential to paste, no
- * billing mode to choose (a plan is what Apollo supports), and no backend
+ * billing mode to choose (a plan is what Artemis supports), and no backend
  * (Bedrock, Vertex and Foundry went with the credential they authenticated).
  *
  * ## Three steps, in the order the user experiences them
  *
- *  1. **Name it and point it at a directory.** Apollo suggests one inside its
+ *  1. **Name it and point it at a directory.** Artemis suggests one inside its
  *     own data directory; the user may replace it with any absolute path,
  *     which is how you attach a profile to the `~/.claude` you are already
  *     signed in to.
- *  2. **Run one command.** Apollo generates it, the user runs it in their own
- *     terminal. Apollo does not spawn it — see `signIn.ts` for why that was
+ *  2. **Run one command.** Artemis generates it, the user runs it in their own
+ *     terminal. Artemis does not spawn it — see `signIn.ts` for why that was
  *     worse.
- *  3. **Apollo notices.** The screen polls the config directory and moves on by
+ *  3. **Artemis notices.** The screen polls the config directory and moves on by
  *     itself when the login lands.
  *
  * Step 3 is what makes step 2 tolerable: nobody has to come back and press a
@@ -37,7 +37,7 @@
  *
  * ## Two rules that outlived the credential
  *
- *  - **Apollo performs no login.** Unchanged, and now structural rather than a
+ *  - **Artemis performs no login.** Unchanged, and now structural rather than a
  *    policy — there is no code here that could grow into one.
  *  - **The directory is the account boundary.** Two profiles pointed at one
  *    directory are one account. That is allowed, because it is occasionally
@@ -55,8 +55,8 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react';
-import { configDirProblem, normalizeProfileColor, profileColorProblem } from '@rx-apollo/protocol';
-import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-apollo/protocol';
+import { configDirProblem, normalizeProfileColor, profileColorProblem } from '@rx-artemis/protocol';
+import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-artemis/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
 import { shortenPath } from '../lib/paths';
@@ -136,7 +136,7 @@ export function ProfilesSection(): ReactElement {
   return (
     <SettingsPane
       title="Profiles"
-      description="Each profile is one provider account and its own history, kept in its own config directory. Switching is manual — Apollo never pools accounts or rotates them for you."
+      description="Each profile is one provider account and its own history, kept in its own config directory. Switching is manual — Artemis never pools accounts or rotates them for you."
       actions={
         creating ? null : (
           <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
@@ -172,8 +172,8 @@ export function ProfilesSection(): ReactElement {
         {creating ? <CreateProfileFlow onDone={() => setCreating(false)} /> : null}
 
         <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
-          Apollo stores no credential of any kind. Signing in runs the provider’s own CLI against
-          the profile’s config directory, and the credential it writes stays there — Apollo sets one
+          Artemis stores no credential of any kind. Signing in runs the provider’s own CLI against
+          the profile’s config directory, and the credential it writes stays there — Artemis sets one
           environment variable and reads back whether it worked.
         </p>
       </div>
@@ -275,7 +275,7 @@ function ProfileCard({
   }, [signedIn]);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
+    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-lunar/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         {/*
           Only problems get a badge.
@@ -286,7 +286,7 @@ function ProfileCard({
           the only badge that needs acting on, was sitting in a line of green
           and orange reassurance.
 
-          Neither fact is lost. Active is the card's ember ring, which reads
+          Neither fact is lost. Active is the card's lunar ring, which reads
           faster than a word and does not compete for the same slot; signed-in
           is the account line below, which names the account rather than
           asserting that one exists.
@@ -404,7 +404,7 @@ function ProfileCard({
                 Delete “{profile.label}”?
               </AlertDialogTitle>
               <AlertDialogDescription className="text-2xs leading-relaxed">
-                The profile record is removed from Apollo. The config directory it points at —
+                The profile record is removed from Artemis. The config directory it points at —
                 including the login inside it — is left alone unless you ask below.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -421,7 +421,7 @@ function ProfileCard({
                 htmlFor={`delete-history-${profile.id}`}
                 className="text-2xs leading-relaxed font-normal text-ink-muted"
               >
-                Also delete the config directory and its session history. Apollo only does this for
+                Also delete the config directory and its session history. Artemis only does this for
                 directories it created itself — one you chose, such as your own{' '}
                 <code className="font-mono">~/.claude</code> or{' '}
                 <code className="font-mono">~/.codex</code>, is never deleted.
@@ -466,7 +466,7 @@ function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactEl
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-ember/35">
+    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
       <CardContent className="flex flex-col gap-3">
         <h2 className="text-sm font-medium text-ink">Sign in</h2>
         <SignInStep profileId={createdId} onDone={onDone} />
@@ -482,9 +482,9 @@ function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactEl
 /**
  * The command, and the wait.
  *
- * Apollo generates the line, the user runs it, and this polls until the config
+ * Artemis generates the line, the user runs it, and this polls until the config
  * directory says a credential arrived. Nothing here spawns the login — see
- * `@rx-apollo/core`'s `signIn.ts` for the three specific ways that went wrong
+ * `@rx-artemis/core`'s `signIn.ts` for the three specific ways that went wrong
  * when it did.
  */
 function SignInStep({
@@ -529,7 +529,7 @@ function SignInStep({
     <div className="flex flex-col gap-2">
       <p className="text-2xs leading-relaxed text-ink-muted">
         {provider?.signInHowTo ??
-          'Run this in a terminal to sign this profile in. Apollo watches its config directory and continues on its own.'}
+          'Run this in a terminal to sign this profile in. Artemis watches its config directory and continues on its own.'}
       </p>
 
       <div className="flex items-start gap-2">
@@ -549,7 +549,7 @@ function SignInStep({
       {/*
         A read that *failed* is not the same as a directory that is signed out,
         and the two need different reactions from the user: one means "finish
-        the login", the other means "your CLI is not where Apollo can run it".
+        the login", the other means "your CLI is not where Artemis can run it".
         Only the second is worth interrupting for.
       */}
       {status?.error ? (
@@ -839,7 +839,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-ember/35">
+    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">
@@ -910,7 +910,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                 </ReasonButton>
               </div>
               <FieldDescription className="text-2xs">
-                {providerLabel} keeps this profile’s login and its session history here. Apollo
+                {providerLabel} keeps this profile’s login and its session history here. Artemis
                 suggests a fresh directory; point it at an existing one — your own{' '}
                 <code className="font-mono">~/{homeDirName}</code>, say — to reuse an account you
                 are already signed in to.

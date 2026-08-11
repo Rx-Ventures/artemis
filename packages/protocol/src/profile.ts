@@ -1,7 +1,7 @@
 /**
  * Profiles: a label, a config directory, and optionally a colour.
  *
- * A profile is how Apollo switches accounts, and it holds exactly two things
+ * A profile is how Artemis switches accounts, and it holds exactly two things
  * the user chose that decide *behaviour*: what to call it, and which directory
  * the provider's CLI keeps its state in. Everything else — which account, which
  * plan, which credential — is a property of that directory, established by the
@@ -18,21 +18,21 @@
  * defect it could not be rid of: `ANTHROPIC_API_KEY` silently outranks a
  * subscription login, so a profile that said "bill my plan" could bill metered
  * API usage instead, and no amount of care in the editor could fix it while
- * Apollo was the thing holding the credential.
+ * Artemis was the thing holding the credential.
  *
- * So Apollo stopped holding one. `claude auth login` run with
+ * So Artemis stopped holding one. `claude auth login` run with
  * `CLAUDE_CONFIG_DIR` pointed at a profile's directory writes a credential that
  * belongs to that directory alone — verified: two directories, two accounts,
- * same machine. Apollo sets the variable and reads a boolean back. There is no
+ * same machine. Artemis sets the variable and reads a boolean back. There is no
  * token to paste, store, encrypt, mask, redact or leak, and the billing trap is
- * gone because Apollo emits neither variable and strips both.
+ * gone because Artemis emits neither variable and strips both.
  *
  * What survives from the old design is its one good rule, inverted: secrets
  * never travel over IPC *because there are none*.
  *
  * ## Why the config directory is a full path
  *
- * It used to be a bare name resolved under Apollo's user-data directory, which
+ * It used to be a bare name resolved under Artemis's user-data directory, which
  * made a profile record incapable of pointing anywhere dangerous. It is now an
  * absolute path the user picks, because the most useful thing a new user can do
  * is point a profile at the `~/.claude` they are already signed in to, and a
@@ -41,7 +41,7 @@
  * The safety that the bare name bought is not discarded, only moved. It lived
  * in one place — "delete this profile's directory" — and that is where it now
  * lives explicitly: see `ProfilesDeleteResponse.configDirDeleted`, which is
- * false, rather than destructive, for any directory Apollo did not create.
+ * false, rather than destructive, for any directory Artemis did not create.
  */
 
 import type { ProfileId } from './ids.js';
@@ -86,7 +86,7 @@ export interface Profile {
    * Validate with {@link isSecretEnvKey} *and*
    * {@link isCredentialRoutingEnvKey} before writing: anything that looks like
    * a credential does not belong in a plain file, and anything that decides
-   * where a credential is *sent* belongs to Apollo rather than to the profile.
+   * where a credential is *sent* belongs to Artemis rather than to the profile.
    */
   readonly publicEnv: Readonly<Record<string, string>>;
 
@@ -103,7 +103,7 @@ export interface Profile {
    *
    * Optional, and staying optional. A profile with no colour renders exactly
    * as it did before this field existed — no palette is assigned by default,
-   * because a colour Apollo chose says nothing the label does not already say,
+   * because a colour Artemis chose says nothing the label does not already say,
    * and it would make the profiles that *do* carry a deliberate colour
    * indistinguishable from the ones that never got one.
    *
@@ -194,7 +194,7 @@ export interface ProfilePatch {
  * invent their own wording for a rule defined here.
  *
  * The rules are deliberately few. This is a path the user typed or picked in a
- * native dialog, and Apollo's job is to reject what cannot possibly work, not
+ * native dialog, and Artemis's job is to reject what cannot possibly work, not
  * to have opinions about where someone keeps their files:
  *
  *  - **Absolute**, because it is resolved by a child process whose working
@@ -225,11 +225,11 @@ export function configDirProblem(value: unknown): string | null {
   // `C:\…` or `\\server\share`.
   const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed);
   if (!isPosixAbsolute && !isWindowsAbsolute) {
-    // `~` is not expanded anywhere in Apollo — a child process receives it
+    // `~` is not expanded anywhere in Artemis — a child process receives it
     // literally and creates a directory called `~`, which is a mess to explain
     // afterwards. Rejecting it up front is kinder than accepting it.
     return trimmed.startsWith('~')
-      ? 'Apollo cannot expand “~”. Give the full path, starting with “/”.'
+      ? 'Artemis cannot expand “~”. Give the full path, starting with “/”.'
       : 'The path must be absolute — it has to start with “/”.';
   }
 
@@ -322,7 +322,7 @@ export function isSecretEnvKey(name: string): boolean {
  * the name heuristic cleanly, and yet points the provider — and therefore the
  * credential the CLI just logged in with — at a host of the caller's choosing.
  *
- * Apollo no longer stores a credential, which removes one exfiltration route
+ * Artemis no longer stores a credential, which removes one exfiltration route
  * and not this one: the CLI still sends a real token to whatever endpoint it is
  * aimed at, and a renderer able to write one of these into `publicEnv` would
  * aim it.
@@ -336,7 +336,7 @@ export function isSecretEnvKey(name: string): boolean {
  *    the provider process, which holds the credential in memory.
  *
  * A profile legitimately needs none of these: model selection goes in
- * `publicEnv`, but *routing* is Apollo's to decide. Enforced at the IPC boundary
+ * `publicEnv`, but *routing* is Artemis's to decide. Enforced at the IPC boundary
  * and again in the profile store, so a hand-edited `profiles.json` is covered
  * too.
  *

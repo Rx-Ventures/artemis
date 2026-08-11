@@ -44,7 +44,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
-import type { JsonValue } from '@rx-apollo/protocol';
+import type { JsonValue } from '@rx-artemis/protocol';
 
 import { createDeferred } from './stream.js';
 import type { Deferred } from './stream.js';

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ProfileId, SessionSummary } from '@rx-apollo/protocol';
+import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 import {
   flattenGroups,
   groupSessionsByProject,

@@ -1,7 +1,7 @@
 /**
  * Tests for turning a profile into an environment.
  *
- * The subject shrank a great deal when Apollo stopped holding credentials —
+ * The subject shrank a great deal when Artemis stopped holding credentials —
  * there is no key to place, no auth mode to resolve, no backend flag to set. So
  * what these cover is what is left, and what is left is the part that was
  * always load-bearing:
@@ -22,7 +22,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Profile } from '@rx-apollo/protocol';
+import type { Profile } from '@rx-artemis/protocol';
 
 import { CLAUDE_CONFIG_DIR_ENV, CLAUDE_CREDENTIALS } from '../adapters/claude.js';
 import { managedEnvKeys } from '../adapters/types.js';
@@ -30,7 +30,7 @@ import type { ProviderCredentialSpec } from '../adapters/types.js';
 import { ProfileError } from './errors.js';
 import {
   assertConfigDir,
-  isApolloOwnedConfigDir,
+  isArtemisOwnedConfigDir,
   profileConfigDir,
   profilesRoot,
   resolveEnv,
@@ -41,7 +41,7 @@ import {
 
 /**
  * These tests exercise `resolveEnv` through Claude's spec, because that is the
- * one Apollo ships. The point of the parameter is that the variable names below
+ * one Artemis ships. The point of the parameter is that the variable names below
  * come *from the adapter* rather than from `resolveEnv` itself — the
  * "provider vocabulary" block at the bottom proves it with a different one.
  */
@@ -52,7 +52,7 @@ let configDir: string;
 let ENV_OPTS: { credentials: ProviderCredentialSpec };
 
 beforeEach(async () => {
-  userDataDir = await mkdtemp(path.join(tmpdir(), 'apollo-env-'));
+  userDataDir = await mkdtemp(path.join(tmpdir(), 'artemis-env-'));
   configDir = path.join(userDataDir, 'profiles', 'work');
   ENV_OPTS = { credentials: CLAUDE_CREDENTIALS };
 });
@@ -109,7 +109,7 @@ describe('resolveEnv — credentials', () => {
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
   });
 
-  it('BILLING: strips ANTHROPIC_AUTH_TOKEN, a third path Apollo does not expose', async () => {
+  it('BILLING: strips ANTHROPIC_AUTH_TOKEN, a third path Artemis does not expose', async () => {
     const env = await resolveEnv(makeProfile(), {
       ...ENV_OPTS,
       baseEnv: { ANTHROPIC_AUTH_TOKEN: 'whatever' },
@@ -192,9 +192,9 @@ describe('resolveEnv — config directory isolation', () => {
 /* Ownership                                                                  */
 /* -------------------------------------------------------------------------- */
 
-describe('isApolloOwnedConfigDir', () => {
-  it('claims a directory Apollo suggested', () => {
-    expect(isApolloOwnedConfigDir(userDataDir, path.join(profilesRoot(userDataDir), 'work'))).toBe(
+describe('isArtemisOwnedConfigDir', () => {
+  it('claims a directory Artemis suggested', () => {
+    expect(isArtemisOwnedConfigDir(userDataDir, path.join(profilesRoot(userDataDir), 'work'))).toBe(
       true,
     );
   });
@@ -202,16 +202,16 @@ describe('isApolloOwnedConfigDir', () => {
   it('disclaims the user’s own ~/.claude', () => {
     // The single check standing between a checkbox in a profile dialog and
     // `rm -r` on the user's real Claude installation.
-    expect(isApolloOwnedConfigDir(userDataDir, '/Users/me/.claude')).toBe(false);
+    expect(isArtemisOwnedConfigDir(userDataDir, '/Users/me/.claude')).toBe(false);
   });
 
   it('disclaims the profiles root itself', () => {
     // Deleting it would take every profile's history at once.
-    expect(isApolloOwnedConfigDir(userDataDir, profilesRoot(userDataDir))).toBe(false);
+    expect(isArtemisOwnedConfigDir(userDataDir, profilesRoot(userDataDir))).toBe(false);
   });
 
   it('is not fooled by a sibling with a shared prefix', () => {
-    expect(isApolloOwnedConfigDir(userDataDir, `${profilesRoot(userDataDir)}-elsewhere`)).toBe(
+    expect(isArtemisOwnedConfigDir(userDataDir, `${profilesRoot(userDataDir)}-elsewhere`)).toBe(
       false,
     );
   });

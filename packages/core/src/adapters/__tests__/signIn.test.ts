@@ -10,7 +10,7 @@
  *  - **The command** is pasted into a terminal by a human. It is the only
  *    instruction they get, so a quoting mistake is not a cosmetic defect — it
  *    is a command that silently signs in the wrong directory, or fails with a
- *    shell error the user has no way to connect back to Apollo.
+ *    shell error the user has no way to connect back to Artemis.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -115,11 +115,11 @@ describe('signInCommand', () => {
   });
 
   it('quotes a path containing spaces, which macOS produces by default', () => {
-    // `~/Library/Application Support/…` is where Apollo's own suggestions live,
+    // `~/Library/Application Support/…` is where Artemis's own suggestions live,
     // so this is the common case rather than an edge one. Unquoted, the shell
     // splits it and `claude` is run with a truncated directory.
-    expect(command('/Users/me/Library/Application Support/Apollo/profiles/work')).toBe(
-      "CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Apollo/profiles/work' claude auth login",
+    expect(command('/Users/me/Library/Application Support/Artemis/profiles/work')).toBe(
+      "CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Artemis/profiles/work' claude auth login",
     );
   });
 

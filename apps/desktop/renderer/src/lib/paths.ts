@@ -11,7 +11,7 @@
  *
  * ## Why `inferHomeDirectory` is a heuristic and why that is acceptable
  *
- * Tilde-collapsing `/Users/ada/code/apollo` → `~/code/apollo` needs the home
+ * Tilde-collapsing `/Users/ada/code/artemis` → `~/code/artemis` needs the home
  * directory, and there is no IPC channel that reports one. Rather than invent
  * a channel for a cosmetic gain, the home directory is *inferred* from the
  * paths already on screen: whichever `/Users/<name>` (or `/home/<name>`, or

@@ -95,7 +95,7 @@ import {
   SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { PermissionMode, ProfileId, ProviderModelOption } from '@rx-apollo/protocol';
+import type { PermissionMode, ProfileId, ProviderModelOption } from '@rx-artemis/protocol';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { usePermissionModes } from '../hooks/useCapability';
@@ -377,7 +377,7 @@ function ProfileSegment(): ReactElement {
         </DropdownMenuItem>
         <p className="px-2 pt-1 pb-1.5 text-2xs leading-snug text-ink-faint">
           Each profile’s account lives in its own config directory, signed in with Claude’s own CLI.
-          Apollo stores no credential.
+          Artemis stores no credential.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -465,7 +465,7 @@ function ModelSegment(): ReactElement {
         label="Model"
         icon={<CpuIcon className="size-3 shrink-0" aria-hidden="true" />}
         text={running ?? 'model'}
-        reason={`${providerLabel} does not offer a model choice, so Apollo sends no model and the provider picks its own.`}
+        reason={`${providerLabel} does not offer a model choice, so Artemis sends no model and the provider picks its own.`}
       />
     );
   }
@@ -539,7 +539,7 @@ function ModelSegment(): ReactElement {
  *
  * All three, because they answer three different questions and only the first
  * is guessable from the trigger. `resolvedModel` in particular is what an alias
- * like `sonnet` actually resolves to today — Apollo offers aliases rather than
+ * like `sonnet` actually resolves to today — Artemis offers aliases rather than
  * dated snapshots, so without it the menu never says which model that is, and
  * "which snapshot am I on" is a question people ask a bill about.
  *
@@ -634,7 +634,7 @@ function ThinkingRow(): ReactElement | null {
               className="items-start text-2xs"
             >
               <span className="flex min-w-0 flex-col">
-                <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-ember' : 'text-ink')}>
+                <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-lunar' : 'text-ink')}>
                   {level.label}
                 </span>
                 <span className="text-2xs leading-snug text-ink-faint">{level.note}</span>

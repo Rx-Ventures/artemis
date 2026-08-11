@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { JsonValue, PermissionMode, ProfileId, RunId } from '@rx-apollo/protocol';
+import type { JsonValue, PermissionMode, ProfileId, RunId } from '@rx-artemis/protocol';
 
 import {
   CODEX_CAPABILITIES,
@@ -364,7 +364,7 @@ describe('parseModelList', () => {
     });
   });
 
-  it('ignores effort levels Apollo does not publish', () => {
+  it('ignores effort levels Artemis does not publish', () => {
     const [model] = parseModelList({
       data: [{ id: 'm', supportedReasoningEfforts: [{ reasoningEffort: 'ludicrous' }] }],
     } as unknown as JsonValue);
@@ -395,7 +395,7 @@ describe('parseThreadList', () => {
   } as unknown as JsonValue;
 
   it('converts Unix seconds to milliseconds', () => {
-    // Codex timestamps in seconds; every Apollo timestamp is milliseconds.
+    // Codex timestamps in seconds; every Artemis timestamp is milliseconds.
     const [first] = parseThreadList(response, PROFILE, undefined);
     expect(first?.updatedAt).toBe(1782631679 * 1000);
     expect(first?.createdAt).toBe(1782631656 * 1000);

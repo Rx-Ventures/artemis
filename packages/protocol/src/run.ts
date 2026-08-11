@@ -3,7 +3,7 @@
  *
  * A *run* is one `createRun()` call: a prompt, the stream of events it
  * produces, and the handful of control operations available while it is alive.
- * It is Apollo's unit of work, and it is not the same thing as a provider
+ * It is Artemis's unit of work, and it is not the same thing as a provider
  * session — one session can be resumed by many runs over its lifetime.
  */
 
@@ -30,7 +30,7 @@ export type SystemPromptSpec =
  * How much reasoning effort a run should ask the model for.
  *
  * **Deliberately opaque**, exactly like `ProviderPermissionMode`. The levels
- * Apollo ships today are Claude's (`low`…`max`), and naming them here would
+ * Artemis ships today are Claude's (`low`…`max`), and naming them here would
  * make one provider's scale a universal fact. Each adapter declares its own
  * and publishes them as
  * {@link import('./provider.js').ProviderDescriptor.effortLevels}; the UI
@@ -139,7 +139,7 @@ export interface RunInput {
    *
    * The inverse of {@link fastMode}, and mutually exclusive with it in spirit
    * though not by contract — a provider that is handed both is free to resolve
-   * the conflict, and Apollo's UI does not offer them together.
+   * the conflict, and Artemis's UI does not offer them together.
    *
    * Only meaningful when the selected model advertises
    * {@link import('./provider.js').ProviderModelOption.supportsUltracode}.

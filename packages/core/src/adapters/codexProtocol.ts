@@ -1,17 +1,17 @@
 /**
- * The slice of the Codex app-server protocol Apollo actually speaks.
+ * The slice of the Codex app-server protocol Artemis actually speaks.
  *
  * ## Why this is hand-written when the CLI can generate it
  *
  * `codex app-server generate-ts --out ./schemas` emits the complete protocol —
  * roughly 170 files covering ~100 client methods, 69 notifications and 10
- * server-initiated requests. Almost none of that is reachable from Apollo:
+ * server-initiated requests. Almost none of that is reachable from Artemis:
  * there is no plugin marketplace here, no realtime audio, no Windows sandbox
  * setup, no fuzzy file search.
  *
  * Vendoring the generated tree would mean carrying all of it, regenerating it
  * on every CLI bump, and reviewing diffs dominated by surface we never call.
- * Worse, it would hide the interesting question — *which* fields does Apollo
+ * Worse, it would hide the interesting question — *which* fields does Artemis
  * depend on? — inside a wall of generated code.
  *
  * So this file declares only what the adapter reads, and every type here was
@@ -32,7 +32,7 @@
  * to a missing event rather than a crash.
  */
 
-import type { JsonValue } from '@rx-apollo/protocol';
+import type { JsonValue } from '@rx-artemis/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Method names                                                               */
@@ -43,7 +43,7 @@ import type { JsonValue } from '@rx-apollo/protocol';
  *
  * Only the stable ones. Everything gated behind `capabilities.experimentalApi`
  * is deliberately absent: opting in would let a CLI upgrade change behaviour
- * under a shipped Apollo build.
+ * under a shipped Artemis build.
  */
 export const CODEX_METHOD = {
   initialize: 'initialize',
@@ -116,7 +116,7 @@ export interface CodexInitializeResponse {
  * How much the agent asks before acting.
  *
  * Codex's first axis. `granular` exists on the wire but is not modelled: it
- * takes five independent booleans, which is a richer surface than Apollo's
+ * takes five independent booleans, which is a richer surface than Artemis's
  * single `PermissionMode` can express without inventing UI for it.
  */
 export type CodexAskForApproval = 'untrusted' | 'on-failure' | 'on-request' | 'never';
@@ -127,7 +127,7 @@ export type CodexAskForApproval = 'untrusted' | 'on-failure' | 'on-request' | 'n
  * Codex's second axis, and the one with no Claude analogue — Claude's
  * permission modes fold "may it write?" into the same knob as "must it ask?".
  * See `toCodexPermissions` in `codex.ts` for how the two axes are recovered
- * from one Apollo mode.
+ * from one Artemis mode.
  */
 export type CodexSandboxPolicy =
   | { readonly type: 'dangerFullAccess' }
@@ -252,7 +252,7 @@ export type CodexCommandExecutionStatus = 'inProgress' | 'completed' | 'failed' 
 /**
  * One entry in a turn's transcript.
  *
- * Modelled as a partial union: the eight variants Apollo renders are declared,
+ * Modelled as a partial union: the eight variants Artemis renders are declared,
  * and everything else (realtime audio, image generation, collab agents, review
  * mode) falls into {@link CodexUnknownItem} and is dropped explicitly by the
  * mapper rather than by a `default` nobody thought about.
@@ -435,7 +435,7 @@ export interface CodexPermissionsApprovalParams {
  * The three decision vocabularies.
  *
  * They overlap but are not the same type on the wire, and command execution
- * carries two structured variants the other two do not. Apollo's
+ * carries two structured variants the other two do not. Artemis's
  * `PermissionDecision` is a single allow/deny, so the adapter translates per
  * request kind rather than assuming one shape fits all — see
  * `toApprovalResponse`.

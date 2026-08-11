@@ -174,7 +174,7 @@ export function ChoiceList<T extends string>({
               'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors',
               'has-focus-visible:border-ring has-focus-visible:ring-3 has-focus-visible:ring-ring/50',
               checked
-                ? 'border-ember/45 bg-ember/5'
+                ? 'border-lunar/45 bg-lunar/5'
                 : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
               choice.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
             )}
@@ -182,7 +182,7 @@ export function ChoiceList<T extends string>({
             <RadioGroupItem
               value={choice.id}
               disabled={choice.disabled ?? false}
-              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-ember data-[state=checked]:text-ember"
+              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-lunar data-[state=checked]:text-lunar"
             />
             <span className="flex min-w-0 flex-col gap-0.5">
               <span

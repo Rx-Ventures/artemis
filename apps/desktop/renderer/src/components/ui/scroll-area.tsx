@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils"
  * once rather than at each call site.
  *
  * Forcing the wrapper to `block` restores normal block sizing, at the cost of
- * Radix's automatic horizontal-scroll measurement. Nothing in Apollo scrolls a
+ * Radix's automatic horizontal-scroll measurement. Nothing in Artemis scrolls a
  * `ScrollArea` sideways — wide content gets its own `overflow-x` container —
  * so that trade is free here. If a future pane does need it, give that pane a
  * plain overflow container instead of reverting this.
