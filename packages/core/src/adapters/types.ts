@@ -525,9 +525,9 @@ export interface ProviderSignInSpec {
   /** Arguments for the interactive login **the user runs themselves**. */
   readonly loginArgs: readonly string[];
   /**
-   * Arguments for a machine-readable status probe. Must be cheap and free of
-   * side effects: this is polled while the user is signing in, and called again
-   * whenever the UI needs to know.
+   * Arguments for a status probe. Must be cheap and free of side effects: this
+   * is polled while the user is signing in, and called again whenever the UI
+   * needs to know.
    */
   readonly statusArgs: readonly string[];
   /** Arguments that clear the credential from a config directory. */
@@ -537,6 +537,55 @@ export interface ProviderSignInSpec {
    * to the renderer as `ProviderDescriptor.signInHowTo` and shown next to it.
    */
   readonly howTo: string;
+
+  /**
+   * Read {@link statusArgs}' output into an {@link AuthStatus}.
+   *
+   * Omit for a CLI that prints the JSON object `parseAuthStatus` expects —
+   * `loggedIn`, `authMethod`, `email`, `orgName`, `subscriptionType` — which is
+   * what Claude does.
+   *
+   * This hook exists because that turned out to be Claude's convention rather
+   * than a universal one: `codex login status` prints a sentence
+   * (`Logged in using ChatGPT`) and has no `--json` flag at all. Without a per-
+   * provider parser the shared polling path reports a perfectly signed-in
+   * profile as signed out, and the user is told to run a login they have
+   * already run.
+   *
+   * **Must not throw**, for the same reason `checkAuthStatus` does not: every
+   * caller is UI that has to render something. Report trouble as
+   * `{ loggedIn: false, error }`.
+   */
+  readonly parseStatus?: (result: ProbeResult) => AuthStatus;
+}
+
+/** What a status probe produced. Handed to {@link ProviderSignInSpec.parseStatus}. */
+export interface ProbeResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  /** `null` when the process was killed or never started. */
+  readonly exitCode: number | null;
+}
+
+/**
+ * What a CLI reports about a config directory's authentication.
+ *
+ * Lives here rather than in `signIn.ts` because it is part of the seam's
+ * vocabulary: {@link ProviderSignInSpec.parseStatus} is an adapter's to
+ * implement, so the type it returns has to be visible wherever a
+ * {@link ProviderCredentialSpec} is written.
+ */
+export interface AuthStatus {
+  readonly loggedIn: boolean;
+  /** How the profile is authenticated, in the provider's own words. */
+  readonly authMethod?: string;
+  /** Present when signed in. Shown so a user can tell two accounts apart. */
+  readonly email?: string;
+  readonly orgName?: string;
+  /** Plan tier, when the provider reports one. Absent on metered billing. */
+  readonly subscriptionType?: string;
+  /** Set when the status could not be read at all, rather than read as "signed out". */
+  readonly error?: string;
 }
 
 /**
