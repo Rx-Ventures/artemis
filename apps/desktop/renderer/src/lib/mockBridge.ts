@@ -30,6 +30,7 @@ import type {
   RunsStartRequest,
   SessionSummary,
   Unsubscribe,
+  WindowState,
 } from '@rx-artemis/protocol';
 import { NO_CAPABILITIES, normalizeProfileColor } from '@rx-artemis/protocol';
 import { newId } from './id';
@@ -850,7 +851,41 @@ export function createMockBridge(): ArtemisBridge {
         return ok({ usage: planUsageFor(profileId, Date.now(), 3) });
       },
     },
+
+    /*
+     * A browser tab has no window to minimize, zoom or close, so the three
+     * commands are no-ops that answer with the state they did not change.
+     *
+     * `focused` is not faked, though, and that is the same rule as the sign-in
+     * poll counter above: the one field a tab *can* honestly report is the one
+     * worth reporting. It is what makes the header's inactive styling reachable
+     * in dev at all — hard-coding `true` would leave that branch to be seen for
+     * the first time in a packaged build.
+     */
+    window: {
+      minimize: async () => ok({ state: mockWindowState() }),
+      toggleMaximize: async () => ok({ state: mockWindowState() }),
+      close: async () => ok({ state: mockWindowState() }),
+      state: async () => ok({ state: mockWindowState() }),
+      onStateChange: (listener): Unsubscribe => {
+        const push = (): void => listener(mockWindowState());
+        globalThis.addEventListener('focus', push);
+        globalThis.addEventListener('blur', push);
+        return () => {
+          globalThis.removeEventListener('focus', push);
+          globalThis.removeEventListener('blur', push);
+        };
+      },
+    },
   };
+
+  function mockWindowState(): WindowState {
+    return {
+      maximized: false,
+      fullScreen: false,
+      focused: typeof document === 'undefined' ? true : document.hasFocus(),
+    };
+  }
 
 
   /**

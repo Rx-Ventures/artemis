@@ -39,6 +39,7 @@ import {
   AGENT_EVENT_TYPES,
   type AgentEvent,
   type IpcChannel,
+  type IpcPushChannel,
   type IpcRequest,
   type IpcResponse,
   type IpcResult,
@@ -65,6 +66,8 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type WindowRequest,
+  type WindowState,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
 } from '@rx-artemis/protocol';
@@ -139,7 +142,30 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 }
 
 /**
- * Every renderer subscriber, behind a single `ipcRenderer` listener.
+ * Minimal shape check on a pushed window state. Same standard as
+ * {@link isAgentEvent}: a guard against a malformed payload reaching a render,
+ * not validation of an untrusted sender.
+ */
+function isWindowState(value: unknown): value is WindowState {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { maximized?: unknown; fullScreen?: unknown; focused?: unknown };
+  return (
+    typeof candidate.maximized === 'boolean' &&
+    typeof candidate.fullScreen === 'boolean' &&
+    typeof candidate.focused === 'boolean'
+  );
+}
+
+interface PushChannel<T> {
+  /** Register a listener. Returns an idempotent disposer. */
+  readonly subscribe: (listener: (payload: T) => void) => Unsubscribe;
+  /** Drop every listener and detach from `ipcRenderer`. */
+  readonly reset: () => void;
+}
+
+/**
+ * Every renderer subscriber to one push channel, behind a single `ipcRenderer`
+ * listener.
  *
  * The obvious implementation registers one `ipcRenderer.on` per subscriber and
  * removes it on unsubscribe. That leaks in two ways over a long session: an
@@ -150,58 +176,89 @@ function isAgentEvent(value: unknown): value is AgentEvent {
  * One listener plus a `Set` fixes both. The `ipcRenderer` listener is attached
  * when the set becomes non-empty and detached when it empties, so a renderer
  * that has torn everything down leaves nothing attached.
+ *
+ * Written once and instantiated per channel rather than copied: the invariants
+ * above are subtle enough that a second hand-rolled copy would be where they
+ * quietly stop holding.
  */
-const subscribers = new Set<(event: AgentEvent) => void>();
-let listening = false;
+function createPushChannel<T>(options: {
+  readonly channel: IpcPushChannel;
+  /** The bridge method this backs, named in the error a bad argument raises. */
+  readonly label: string;
+  readonly isValid: (value: unknown) => value is T;
+}): PushChannel<T> {
+  const { channel, label, isValid } = options;
+  const subscribers = new Set<(payload: T) => void>();
+  let listening = false;
 
-function handlePushedEvent(_event: unknown, payload: unknown): void {
-  if (!isAgentEvent(payload)) return;
-  // Iterate a copy: a subscriber that unsubscribes (or subscribes) while being
-  // notified must not disturb this pass.
-  for (const subscriber of [...subscribers]) {
-    try {
-      subscriber(payload);
-    } catch {
-      // One broken consumer must not stop the rest of the UI from updating,
-      // and the error has already surfaced in the renderer's own console.
-    }
-  }
-}
-
-function subscribeToAgentEvents(listener: (event: AgentEvent) => void): Unsubscribe {
-  if (typeof listener !== 'function') {
-    throw new TypeError('artemis.runs.onEvent expects a function');
-  }
-
-  subscribers.add(listener);
-  if (!listening) {
-    ipcRenderer.on(IPC_PUSH.agentEvent, handlePushedEvent);
-    listening = true;
-  }
-
-  let active = true;
-  return () => {
-    // Idempotent: calling the returned function twice (a React effect cleanup
-    // running after a hot reload, say) must not remove someone else's listener.
-    if (!active) return;
-    active = false;
-    subscribers.delete(listener);
-    if (subscribers.size === 0 && listening) {
-      ipcRenderer.removeListener(IPC_PUSH.agentEvent, handlePushedEvent);
-      listening = false;
+  const deliver = (_event: unknown, payload: unknown): void => {
+    if (!isValid(payload)) return;
+    // Iterate a copy: a subscriber that unsubscribes (or subscribes) while
+    // being notified must not disturb this pass.
+    for (const subscriber of [...subscribers]) {
+      try {
+        subscriber(payload);
+      } catch {
+        // One broken consumer must not stop the rest of the UI from updating,
+        // and the error has already surfaced in the renderer's own console.
+      }
     }
   };
+
+  const detach = (): void => {
+    if (!listening) return;
+    ipcRenderer.removeListener(channel, deliver);
+    listening = false;
+  };
+
+  return {
+    subscribe(listener: (payload: T) => void): Unsubscribe {
+      if (typeof listener !== 'function') {
+        throw new TypeError(`${label} expects a function`);
+      }
+
+      subscribers.add(listener);
+      if (!listening) {
+        ipcRenderer.on(channel, deliver);
+        listening = true;
+      }
+
+      let active = true;
+      return () => {
+        // Idempotent: calling the returned function twice (a React effect
+        // cleanup running after a hot reload, say) must not remove someone
+        // else's listener.
+        if (!active) return;
+        active = false;
+        subscribers.delete(listener);
+        if (subscribers.size === 0) detach();
+      };
+    },
+    reset(): void {
+      subscribers.clear();
+      detach();
+    },
+  };
 }
+
+const agentEvents = createPushChannel<AgentEvent>({
+  channel: IPC_PUSH.agentEvent,
+  label: 'artemis.runs.onEvent',
+  isValid: isAgentEvent,
+});
+
+const windowStates = createPushChannel<WindowState>({
+  channel: IPC_PUSH.windowState,
+  label: 'artemis.window.onStateChange',
+  isValid: isWindowState,
+});
 
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
 window.addEventListener('beforeunload', () => {
-  subscribers.clear();
-  if (listening) {
-    ipcRenderer.removeListener(IPC_PUSH.agentEvent, handlePushedEvent);
-    listening = false;
-  }
+  agentEvents.reset();
+  windowStates.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -274,7 +331,7 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.runsRespondPermission, request),
     dispose: (request: RunsDisposeRequest) => invoke(IPC.runsDispose, request),
     list: (request: RunsListRequest) => invoke(IPC.runsList, request),
-    onEvent: subscribeToAgentEvents,
+    onEvent: agentEvents.subscribe,
   }),
 
   sessions: Object.freeze({
@@ -304,6 +361,22 @@ const bridge: ArtemisBridge = Object.freeze({
   usagePlan: Object.freeze({
     cached: (request: UsagePlanRequest) => invoke(IPC.usagePlanCached, request),
     refresh: (request: UsagePlanRequest) => invoke(IPC.usagePlanRefresh, request),
+  }),
+
+  /**
+   * The window's own chrome, hidden by the main process and drawn by the app.
+   *
+   * Nothing here names a window, which is the same rule as everywhere else in
+   * this file read from the other direction: no channel name is built from
+   * renderer input, and no *target* is either. Main resolves the window from
+   * the sender, so these four reach exactly one window — the one that called.
+   */
+  window: Object.freeze({
+    minimize: (request: WindowRequest) => invoke(IPC.windowMinimize, request),
+    toggleMaximize: (request: WindowRequest) => invoke(IPC.windowToggleMaximize, request),
+    close: (request: WindowRequest) => invoke(IPC.windowClose, request),
+    state: (request: WindowRequest) => invoke(IPC.windowState, request),
+    onStateChange: windowStates.subscribe,
   }),
 });
 

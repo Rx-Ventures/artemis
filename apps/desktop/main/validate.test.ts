@@ -9,6 +9,7 @@ import {
   validateRunsSend,
   validateRunsStart,
   validateSessionsList,
+  validateWindowRequest,
 } from './validate.js';
 
 /**
@@ -583,5 +584,33 @@ describe('validateSessionsList', () => {
     expect(() =>
       validateSessionsList({ providerId: 'claude', profileId: 'p1', cwd: '/a', limit: 10_000_000 }),
     ).toThrow(ValidationError);
+  });
+});
+
+/**
+ * The window channels are the one place where "rebuilt, not passed through" is
+ * load-bearing on its own rather than as defence in depth.
+ *
+ * Their handlers act on `context.window` — the window the message came from —
+ * and they are reachable by any renderer. If a field ever survived this
+ * validator, the next person to add a `windowId` to the handler would have
+ * built a way for one window to close another without noticing they had.
+ */
+describe('validateWindowRequest', () => {
+  it('accepts an empty request', () => {
+    expect(validateWindowRequest({})).toEqual({});
+  });
+
+  it('drops every field, including one that names another window', () => {
+    const smuggled = validateWindowRequest({ windowId: 7, webContentsId: 3, force: true });
+    expect(smuggled).toEqual({});
+  });
+
+  it('rejects a payload that is not an object', () => {
+    expect(() => validateWindowRequest('close')).toThrow(ValidationError);
+  });
+
+  it('treats a missing payload as empty, like every other channel', () => {
+    expect(validateWindowRequest(undefined)).toEqual({});
   });
 });
