@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import {
@@ -98,7 +98,7 @@ describe('describe()', () => {
       id: 'codex',
       label: 'Codex',
       available: false,
-      unavailableReason: 'Not supported in this version of Apollo yet.',
+      unavailableReason: 'Not supported in this version of Artemis yet.',
       capabilities: NO_CAPABILITIES,
     });
   });

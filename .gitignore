@@ -21,14 +21,14 @@ apps/desktop/out/
 npm-debug.log*
 pnpm-debug.log*
 
-# Local env. Apollo keeps real secrets in the OS keychain via safeStorage, never
+# Local env. Artemis keeps real secrets in the OS keychain via safeStorage, never
 # in files, but keep this ignored so nobody is tempted.
 .env
 .env.*
 !.env.example
 
 # Local test/profile scratch data
-.apollo-dev/
+.artemis-dev/
 coverage/
 
 # Worktrees created by other sessions

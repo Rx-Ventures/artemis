@@ -2,7 +2,7 @@
  * This project's session history.
  * ============================================================================
  *
- *     ▾ apollo · 22            [ filter… ]
+ *     ▾ artemis · 22            [ filter… ]
  *         Wire the adapter seam
  *         ⌥ main · ▪ Work
  *         Profile store encryption
@@ -24,8 +24,8 @@
  * title: the separate project-title row above it said the same word one line
  * higher and has gone.
  *
- * Repository, not directory. Working in `~/code/apollo/apps/desktop` you are
- * working on *apollo*; a header reading "desktop" is technically true and
+ * Repository, not directory. Working in `~/code/artemis/apps/desktop` you are
+ * working on *artemis*; a header reading "desktop" is technically true and
  * useless. The renderer cannot tell the difference on its own — it has no `fs`
  * — so the main process is asked once per directory change and the answer is
  * cached in the store. Until it lands, and in a build that cannot answer, the
@@ -97,7 +97,7 @@ import {
   InboxIcon,
   SearchIcon,
 } from 'lucide-react';
-import type { ProfileId, SessionSummary } from '@rx-apollo/protocol';
+import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import type { WorkspaceNames } from '../lib/extensions';
@@ -211,7 +211,7 @@ export function SessionList(): ReactElement {
               <button
                 type="button"
                 onClick={() => void refreshSessions()}
-                className="mt-1 block text-2xs text-ember underline-offset-2 hover:underline"
+                className="mt-1 block text-2xs text-lunar underline-offset-2 hover:underline"
               >
                 Try again
               </button>
@@ -277,7 +277,7 @@ function ProjectHeader({ count }: { readonly count: number }): ReactElement {
       />
       <Icon
         aria-hidden="true"
-        className={cn('size-3 shrink-0', name === null ? 'text-amber' : 'text-ember')}
+        className={cn('size-3 shrink-0', name === null ? 'text-amber' : 'text-lunar')}
       />
       <span
         className={cn(
@@ -414,7 +414,7 @@ const Row = memo(function Row({
         onClick={() => resumeSession(session)}
         className={cn(
           'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
-          active && 'border-ember/70 bg-raised/60',
+          active && 'border-lunar/70 bg-raised/60',
         )}
       >
         {/* `shrink-0` on both lines: see note 2 in the file header. Without it

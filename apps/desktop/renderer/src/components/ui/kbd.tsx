@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
  * MODIFIED FROM THE REGISTRY.
  *
  * The registry version carries `in-data-[slot=tooltip-content]:*` overrides
- * that repaint the key cap for the stock *inverted* tooltip. Apollo's tooltip
+ * that repaint the key cap for the stock *inverted* tooltip. Artemis's tooltip
  * sits on the normal floating surface (see `tooltip.tsx`), so those overrides
  * would invert a key cap that is already on the right background. Removed —
  * one styling for a key cap, wherever it appears.

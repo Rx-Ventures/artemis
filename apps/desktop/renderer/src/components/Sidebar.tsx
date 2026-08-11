@@ -4,9 +4,9 @@
  *
  *      ╭────────────────────────────────╮
  *      │ [ + New session       ⌘N ] [◧] │  ← the thing you came here to do
- *      │ ~/code/apollo                  │  ← and where it will happen
+ *      │ ~/code/artemis                  │  ← and where it will happen
  *      ├────────────────────────────────┤
- *      │ ▾ apollo · 22                  │  ← the repo this window is in
+ *      │ ▾ artemis · 22                  │  ← the repo this window is in
  *      │    Wire the adapter seam       │  ← this project only
  *      │    ⌥ main · ▪ Work             │
  *      │    …                           │
@@ -378,7 +378,7 @@ function ResizeHandle({
           setSidebarWidth(width + KEYBOARD_STEP);
         }
       }}
-      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-ember/30 focus-visible:bg-ember/40"
+      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-lunar/30 focus-visible:bg-lunar/40"
     />
   );
 }

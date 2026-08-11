@@ -1,5 +1,5 @@
 /**
- * How a live `ModelInfo` becomes a row in Apollo's model picker.
+ * How a live `ModelInfo` becomes a row in Artemis's model picker.
  *
  * These are regressions, not unit-test box-ticking. The picker was built and
  * verified against a mock catalogue whose `displayName`s were already the short

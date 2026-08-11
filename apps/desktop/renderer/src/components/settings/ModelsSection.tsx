@@ -2,7 +2,7 @@
  * The model catalogue.
  * ============================================================================
  *
- * The one place in Apollo where the full lineup is visible: every model the
+ * The one place in Artemis where the full lineup is visible: every model the
  * account actually offers, under its real name, with the wire id it resolves
  * to and the flags it honours. Everywhere else in the app the same list is
  * squeezed into a 20px status-line segment or a dropdown, and both of those
@@ -30,7 +30,7 @@
  *     only one model at a time decides whether they mean anything. So the
  *     toggles are gated on the *selected* model and, when they are unavailable,
  *     say so in a sentence instead of vanishing. With no model chosen at all
- *     the provider picks one at run time and Apollo cannot know whether the flag
+ *     the provider picks one at run time and Artemis cannot know whether the flag
  *     would be honoured, which is a different reason and gets a different
  *     sentence.
  *
@@ -42,7 +42,7 @@
 
 import type { ReactElement } from 'react';
 import { BoxesIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
-import type { ProviderModelOption } from '@rx-apollo/protocol';
+import type { ProviderModelOption } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ToneBadge } from '../primitives';
@@ -158,7 +158,7 @@ function Provenance({
         <span className="text-2xs leading-relaxed text-ink-muted">
           {live
             ? `This list came from the installed ${providerLabel} CLI, asked with this profile’s credential.`
-            : `Nobody has confirmed this list. It is the lineup this build of Apollo ships for ${providerLabel}, which goes stale as soon as a model is added or withdrawn.`}
+            : `Nobody has confirmed this list. It is the lineup this build of Artemis ships for ${providerLabel}, which goes stale as soon as a model is added or withdrawn.`}
         </span>
       </div>
       {error ? (
@@ -196,7 +196,7 @@ function flagReason(
     return `${providerLabel} offers no model choice here, so there is no model to ask for ${flag}.`;
   }
   if (!selected) {
-    return `No model is chosen, so the provider picks one at run time and Apollo cannot tell whether ${flag} would be honoured. Choose a model below.`;
+    return `No model is chosen, so the provider picks one at run time and Artemis cannot tell whether ${flag} would be honoured. Choose a model below.`;
   }
   if (!supported) {
     return `${selected.displayName ?? selected.label} does not accept ${flag}.`;
@@ -409,7 +409,7 @@ function ModelRow({
     <Item
       variant="outline"
       size="sm"
-      className={cn('items-start bg-panel', selected ? 'border-ember/45' : 'border-line')}
+      className={cn('items-start bg-panel', selected ? 'border-lunar/45' : 'border-line')}
     >
       <ItemMedia className="pt-0.5">
         <Checkbox
@@ -425,7 +425,7 @@ function ModelRow({
       <ItemContent>
         <ItemTitle className="flex-wrap text-xs text-ink">
           {name}
-          {selected ? <ToneBadge tone="ember">in use</ToneBadge> : null}
+          {selected ? <ToneBadge tone="lunar">in use</ToneBadge> : null}
           {model.supportsFastMode ? <ToneBadge tone="mint">fast mode</ToneBadge> : null}
           {model.supportsUltracode ? <ToneBadge tone="cyan">ultracode</ToneBadge> : null}
           {model.adaptiveThinking ? <ToneBadge tone="sage">adaptive</ToneBadge> : null}
@@ -436,8 +436,8 @@ function ModelRow({
         </ItemDescription>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-2xs text-ink-faint">
-          {/* The id Apollo sends, and — when the provider publishes one — the
-              concrete model that id resolves to. Apollo offers aliases rather
+          {/* The id Artemis sends, and — when the provider publishes one — the
+              concrete model that id resolves to. Artemis offers aliases rather
               than dated snapshots, so without the second half a user cannot
               tell which snapshot `sonnet` is pointing at this week. */}
           <span className="text-ink-muted">{model.id}</span>

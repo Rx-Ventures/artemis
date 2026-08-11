@@ -30,14 +30,14 @@ beforeAll(async () => {
   // `mkdtemp` under `/var` on macOS, which is a symlink to `/private/var`. The
   // paths compared below all come back out of the same string, so the symlink
   // never enters the assertions.
-  root = await mkdtemp(join(tmpdir(), 'apollo-repo-'));
+  root = await mkdtemp(join(tmpdir(), 'artemis-repo-'));
 
-  clone = join(root, 'apollo');
+  clone = join(root, 'artemis');
   nested = join(clone, 'apps', 'desktop');
   await mkdir(join(clone, '.git'), { recursive: true });
   await mkdir(nested, { recursive: true });
 
-  worktree = join(root, 'apollo-fix-thing');
+  worktree = join(root, 'artemis-fix-thing');
   await mkdir(worktree);
   await writeFile(join(worktree, '.git'), `gitdir: ${join(clone, '.git', 'worktrees', 'fix')}\n`);
 
@@ -54,9 +54,9 @@ describe('describeWorkspace', () => {
     const result = await describeWorkspace(clone);
     expect(result).toEqual({
       path: clone,
-      name: 'apollo',
+      name: 'artemis',
       repoRoot: clone,
-      repoName: 'apollo',
+      repoName: 'artemis',
     });
   });
 
@@ -65,7 +65,7 @@ describe('describeWorkspace', () => {
     // is what the person would say they are working on.
     const result = await describeWorkspace(nested);
     expect(result.name).toBe('desktop');
-    expect(result.repoName).toBe('apollo');
+    expect(result.repoName).toBe('artemis');
     expect(result.repoRoot).toBe(clone);
   });
 
@@ -74,7 +74,7 @@ describe('describeWorkspace', () => {
     expect(result.repoRoot).toBe(worktree);
     // Its own name, deliberately — two checkouts of one repository are two
     // different places to be working, and the sidebar is naming a place.
-    expect(result.repoName).toBe('apollo-fix-thing');
+    expect(result.repoName).toBe('artemis-fix-thing');
   });
 
   it('reports no repository for an ordinary directory', async () => {

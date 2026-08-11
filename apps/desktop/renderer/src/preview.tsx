@@ -26,7 +26,7 @@ import {
   TrashIcon,
 } from 'lucide-react';
 
-import { ApolloProviders } from './components/providers';
+import { ArtemisProviders } from './components/providers';
 import { IconButton, ReasonButton, WithReason } from './components/disabled-reason';
 import { CodeBlock, Row, StatusDot, ToneBadge, type Tone } from './components/primitives';
 
@@ -92,7 +92,7 @@ function Section({ title, children }: { title: string; children: ReactNode }): R
   );
 }
 
-const TONES: readonly Tone[] = ['neutral', 'ember', 'cyan', 'sage', 'mint', 'amber', 'signal'];
+const TONES: readonly Tone[] = ['neutral', 'lunar', 'cyan', 'sage', 'mint', 'amber', 'signal'];
 
 const SWATCHES: readonly (readonly [string, string])[] = [
   ['abyss', 'bg-abyss'],
@@ -101,7 +101,7 @@ const SWATCHES: readonly (readonly [string, string])[] = [
   ['float', 'bg-float'],
   ['inset', 'bg-inset'],
   ['line', 'bg-line'],
-  ['ember', 'bg-ember'],
+  ['lunar', 'bg-lunar'],
   ['cyan', 'bg-cyan'],
   ['sage', 'bg-sage'],
   ['mint', 'bg-mint'],
@@ -116,9 +116,9 @@ function Gallery(): ReactElement {
     <div className="h-full overflow-auto bg-abyss">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 p-8">
         <header className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold tracking-tight text-ink">Apollo design system</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-ink">Artemis design system</h1>
           <p className="text-sm text-ink-muted">
-            Graphite and ember. Dark only, dense, no gradients.
+            Charcoal and moonlight. Dark only, dense, no gradients.
           </p>
         </header>
 
@@ -203,7 +203,7 @@ function Gallery(): ReactElement {
           {TONES.map((tone) => (
             <StatusDot key={tone} tone={tone} />
           ))}
-          <StatusDot tone="ember" pulse />
+          <StatusDot tone="lunar" pulse />
         </Section>
 
         <Section title="Form controls">
@@ -327,7 +327,7 @@ function Gallery(): ReactElement {
               </div>
               <div className="p-2.5">
                 <Row label="Run">01JD8K2QW9</Row>
-                {/* "Claude", not "Claude Code": Apollo names the provider, never
+                {/* "Claude", not "Claude Code": Artemis names the provider, never
                     Anthropic's product. */}
                 <Row label="Provider" mono={false}>
                   Claude
@@ -418,12 +418,12 @@ function Gallery(): ReactElement {
 }
 
 const container = document.getElementById('root');
-if (!container) throw new Error('Apollo preview: #root is missing from preview.html');
+if (!container) throw new Error('Artemis preview: #root is missing from preview.html');
 
 createRoot(container).render(
   <StrictMode>
-    <ApolloProviders>
+    <ArtemisProviders>
       <Gallery />
-    </ApolloProviders>
+    </ArtemisProviders>
   </StrictMode>,
 );

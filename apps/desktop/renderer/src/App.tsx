@@ -5,12 +5,12 @@
  * A header over a floating sidebar and a working column, over one status line:
  *
  *     +------------------------------------------------------------------+
- *     | [◧]  apollo › Wire the adapter seam              [+]  [⚙]  HEADER  |
+ *     | [◧]  artemis › Wire the adapter seam              [+]  [⚙]  HEADER  |
  *     +------------------------------------------------------------------+
  *     |  ╭──────────────────╮ |                                          |
- *     |  │ ▣ apollo       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
+ *     |  │ ▣ artemis       [◧]│ |  TRANSCRIPT   (scrolls, streams)         |
  *     |  │ [ + New session ]│ |                                          |
- *     |  │ ~/code/apollo     │ |                                          |
+ *     |  │ ~/code/artemis     │ |                                          |
  *     |  │ ── SESSIONS ──   │ +------------------------------------------+
  *     |  │  this project    │ |  COMPOSER                                |
  *     |  │ ⌂ All projects ▴ │ |------------------------------------------|
@@ -104,7 +104,7 @@ export function App(): ReactElement {
    */
   useEffect(() => {
     const unsubscribe = installEventBridge();
-    // The sidebar's history is not only written by this window — another Apollo
+    // The sidebar's history is not only written by this window — another Artemis
     // window, or the user's own CLI in a terminal, writes into the same store.
     // The feed is what keeps the list current without a reload; see
     // `startSessionFeed`.
@@ -216,10 +216,10 @@ function DeadEnd(): ReactElement {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-abyss px-8 text-center">
       <LogoMark size={30} className="text-signal" />
-      <h1 className="text-lg font-semibold tracking-tight text-ink">Apollo could not start</h1>
+      <h1 className="text-lg font-semibold tracking-tight text-ink">Artemis could not start</h1>
       <p className="max-w-md text-xs leading-relaxed text-ink-muted">
         The preload bridge is missing, so this window has no way to reach the main process. Nothing
-        in the interface would work. Restart Apollo; if it keeps happening, the app’s preload script
+        in the interface would work. Restart Artemis; if it keeps happening, the app’s preload script
         failed to load.
       </p>
     </div>

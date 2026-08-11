@@ -1,10 +1,10 @@
 /**
- * A fake `ApolloBridge`, for developing the renderer without a main process.
+ * A fake `ArtemisBridge`, for developing the renderer without a main process.
  *
  * This exists so the UI can be exercised — streaming, permissions, capability
  * degradation, errors — before the Electron layers are wired up, and so a
  * contributor can run the renderer alone. It is installed **only** when
- * `import.meta.env.DEV` is set and `window.apollo` is absent, and when it is
+ * `import.meta.env.DEV` is set and `window.artemis` is absent, and when it is
  * active the status bar says so in as many words. It never masquerades as a
  * real bridge and it is dead code in a packaged build.
  *
@@ -18,7 +18,7 @@ import type {
   AuthStatusInfo,
   Capabilities,
   IpcResult,
-  ApolloBridge,
+  ArtemisBridge,
   PermissionDecision,
   PermissionRequest,
   PlanUsage,
@@ -30,8 +30,8 @@ import type {
   RunsStartRequest,
   SessionSummary,
   Unsubscribe,
-} from '@rx-apollo/protocol';
-import { normalizeProfileColor } from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
+import { normalizeProfileColor } from '@rx-artemis/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -44,7 +44,7 @@ const mockSignInCommand = (profileId: string): string => {
 
 const MOCK_CONFIG_DIRS: Record<string, string> = {
   'demo-personal': '/Users/demo/.claude',
-  'demo-work': '/Users/demo/Library/Application Support/Apollo/profiles/demo-work',
+  'demo-work': '/Users/demo/Library/Application Support/Artemis/profiles/demo-work',
 };
 
 /** An event minus the envelope fields the transport stamps on. */
@@ -191,7 +191,7 @@ const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
 const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
 
-export function createMockBridge(): ApolloBridge {
+export function createMockBridge(): ArtemisBridge {
   const listeners = new Set<(event: AgentEvent) => void>();
   const runs = new Map<string, MockRun>();
   const handles = new Map<string, RunHandle>();
@@ -213,9 +213,9 @@ export function createMockBridge(): ApolloBridge {
       id: 'demo-work',
       label: 'Demo — work',
       providerId: 'claude',
-      // And one Apollo suggested, so both shapes are visible in dev — only the
-      // second is one Apollo will offer to delete.
-      configDir: '/Users/demo/Library/Application Support/Apollo/profiles/demo-work',
+      // And one Artemis suggested, so both shapes are visible in dev — only the
+      // second is one Artemis will offer to delete.
+      configDir: '/Users/demo/Library/Application Support/Artemis/profiles/demo-work',
     },
   ];
 
@@ -305,7 +305,7 @@ export function createMockBridge(): ApolloBridge {
       toolCallId: readCall,
       name: 'Read',
       status: 'ok',
-      resultText: '{\n  "name": "apollo",\n  "private": true\n}',
+      resultText: '{\n  "name": "artemis",\n  "private": true\n}',
       durationMs: 420,
     });
 
@@ -342,7 +342,7 @@ export function createMockBridge(): ApolloBridge {
       toolName: 'Bash',
       input: { command: 'pnpm -r test', description: 'Run the workspace test suite' },
       toolCallId: bashCall,
-      title: 'Apollo wants to run a shell command',
+      title: 'Artemis wants to run a shell command',
       displayName: 'Run command',
       description: 'Executes `pnpm -r test` in the working directory.',
       reason: 'Bash is not on the allow-list for this project.',
@@ -408,7 +408,7 @@ export function createMockBridge(): ApolloBridge {
   const minutes = (n: number): number => Date.now() - n * 60_000;
 
   const PROJECTS: readonly (readonly [string, number])[] = [
-    ['/Users/dev/code/apollo', 22],
+    ['/Users/dev/code/artemis', 22],
     ['/Users/dev/code/api-gateway', 9],
     ['/Users/dev/scratch/spike-rope', 3],
     ['/Users/dev/work/very/deeply/nested/monorepo/packages/renderer', 4],
@@ -452,7 +452,7 @@ export function createMockBridge(): ApolloBridge {
       label: 'Claude',
       capabilities: CLAUDE_CAPS,
       signInHowTo:
-        'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Apollo. Apollo watches that directory and continues on its own once you are done.',
+        'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Artemis. Artemis watches that directory and continues on its own once you are done.',
       // Same pattern again for the status line's model and thinking pickers:
       // both lists come off the descriptor, so a provider that offers neither
       // renders them disabled-with-a-reason rather than showing this one's.
@@ -535,7 +535,7 @@ export function createMockBridge(): ApolloBridge {
       suggestDir: async ({ label }) => {
         const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         return ok({
-          configDir: `/Users/demo/Library/Application Support/Apollo/profiles/${slug || 'profile'}`,
+          configDir: `/Users/demo/Library/Application Support/Artemis/profiles/${slug || 'profile'}`,
         });
       },
       remove: async ({ id }) => {

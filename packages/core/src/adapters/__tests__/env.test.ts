@@ -47,7 +47,7 @@ describe('composeProviderEnv', () => {
 
   it('strips an inherited API key from a subscription profile — the API key would otherwise win', () => {
     // The asymmetric case, and the reason this list has to cover *both*
-    // credential variables rather than only the one Apollo used to support:
+    // credential variables rather than only the one Artemis used to support:
     // ANTHROPIC_API_KEY takes precedence over CLAUDE_CODE_OAUTH_TOKEN, so an
     // ambient key would silently turn a subscription run into metered spend.
     const env = composeProviderEnv(
@@ -76,10 +76,10 @@ describe('composeProviderEnv', () => {
 
   it('lets the profile win over anything inherited', () => {
     const env = composeProviderEnv(
-      { PATH: '/opt/apollo/bin', CLAUDE_CONFIG_DIR: '/app/profiles/work' },
+      { PATH: '/opt/artemis/bin', CLAUDE_CONFIG_DIR: '/app/profiles/work' },
       { hostEnv: HOST, scrubKeys: CLAUDE_ENV_SCRUB_KEYS },
     );
-    expect(env['PATH']).toBe('/opt/apollo/bin');
+    expect(env['PATH']).toBe('/opt/artemis/bin');
     expect(env['CLAUDE_CONFIG_DIR']).toBe('/app/profiles/work');
   });
 

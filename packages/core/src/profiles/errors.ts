@@ -1,11 +1,11 @@
 /**
- * Error primitives for `@rx-apollo/core`.
+ * Error primitives for `@rx-artemis/core`.
  *
  * Two problems this solves:
  *
  *  1. **`Error` does not survive structured clone.** Anything that can fail on
  *     its way to the renderer has to be reducible to a plain
- *     {@link AgentError}. {@link ApolloError.toAgentError} is that reduction.
+ *     {@link AgentError}. {@link ArtemisError.toAgentError} is that reduction.
  *  2. **Errors get rendered and logged.** A stack trace or a provider message
  *     that happens to contain an API key would leak it into the UI and into
  *     log files. Every message that passes through here is scrubbed.
@@ -15,7 +15,7 @@
  * and neither may depend on the session machinery.
  */
 
-import type { AgentError, AgentErrorCode, JsonValue } from '@rx-apollo/protocol';
+import type { AgentError, AgentErrorCode, JsonValue } from '@rx-artemis/protocol';
 
 /** Every {@link AgentErrorCode}, for validating error-shaped values at runtime. */
 const AGENT_ERROR_CODES = [
@@ -61,7 +61,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 /**
  * Replace anything that looks like a credential with a placeholder.
  *
- * Applied to every message that becomes a {@link ApolloError} or an
+ * Applied to every message that becomes a {@link ArtemisError} or an
  * {@link AgentError}. Safe to call on arbitrary text; it never throws.
  *
  * Deliberately not exported: the adapters layer publishes its own scrubber for
@@ -79,8 +79,8 @@ function scrubSecrets(text: string): string {
   return out;
 }
 
-/** Extra detail attached to a {@link ApolloError}. */
-export interface ApolloErrorOptions {
+/** Extra detail attached to a {@link ArtemisError}. */
+export interface ArtemisErrorOptions {
   /** The underlying failure, kept for logs in the main process only. */
   readonly cause?: unknown;
   /** Structured diagnostics. Must be JSON-cloneable and secret-free. */
@@ -100,14 +100,14 @@ export interface ApolloErrorOptions {
  * IPC boundary, so the main process can map it to an `IpcFail` without
  * guessing at a code.
  */
-export class ApolloError extends Error {
+export class ArtemisError extends Error {
   readonly code: AgentErrorCode;
   readonly details: JsonValue | undefined;
   readonly retryable: boolean | undefined;
   readonly providerCode: string | undefined;
   readonly httpStatus: number | undefined;
 
-  constructor(code: AgentErrorCode, message: string, options: ApolloErrorOptions = {}) {
+  constructor(code: AgentErrorCode, message: string, options: ArtemisErrorOptions = {}) {
     super(scrubSecrets(message), options.cause === undefined ? undefined : { cause: options.cause });
     this.name = new.target.name;
     this.code = code;
@@ -137,11 +137,11 @@ export class ApolloError extends Error {
 }
 
 /** A profile could not be read, written, validated or credentialed. */
-export class ProfileError extends ApolloError {}
+export class ProfileError extends ArtemisError {}
 
 /** True for anything thrown by core that already carries a normalized code. */
-export function isApolloError(value: unknown): value is ApolloError {
-  return value instanceof ApolloError;
+export function isArtemisError(value: unknown): value is ArtemisError {
+  return value instanceof ArtemisError;
 }
 
 /** True for a plain object that already satisfies {@link AgentError}. */
@@ -162,7 +162,7 @@ function isAgentErrorLike(value: unknown): value is AgentError {
  * @param fallback code to use when nothing better can be inferred
  */
 export function normalizeAgentError(error: unknown, fallback: AgentErrorCode = 'unknown'): AgentError {
-  if (isApolloError(error)) return error.toAgentError();
+  if (isArtemisError(error)) return error.toAgentError();
   if (isAgentErrorLike(error)) return { ...error, message: scrubSecrets(error.message) };
 
   // The adapters layer throws `AdapterError`, which carries a fully-formed

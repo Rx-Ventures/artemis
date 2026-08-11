@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand';
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type {
   AuthStatusInfo,
   AgentError,
@@ -42,7 +42,7 @@ import type {
   SessionSummary,
   TokenUsage,
   UsageSnapshot,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   describeWorkspace,
@@ -179,7 +179,7 @@ export interface AppState {
    * been fetched.
    *
    * Separate from the provider descriptor's static `models` because the two
-   * answer different questions: the descriptor says what this build of Apollo
+   * answer different questions: the descriptor says what this build of Artemis
    * knows about, this says what the installed CLI, signed in as this profile,
    * is willing to run. {@link activeModels} prefers this and falls back to the
    * descriptor, so no caller has to know which one it got.
@@ -308,7 +308,7 @@ export interface AppState {
 /* Preferences                                                                */
 /* -------------------------------------------------------------------------- */
 
-const PREFS_KEY = 'apollo.prefs.v1';
+const PREFS_KEY = 'artemis.prefs.v1';
 
 /** Sidebar width bounds. Narrower than the minimum stops being a list. */
 export const SIDEBAR_MIN_WIDTH = 200;
@@ -668,7 +668,7 @@ export function selectedModelOption(state: AppState): ProviderModelOption | unde
  * Whether the fast-mode toggle should be offered at all.
  *
  * False when no model is explicitly selected, and that is deliberate rather
- * than conservative-by-accident: with the provider default in force Apollo does
+ * than conservative-by-accident: with the provider default in force Artemis does
  * not know which model will run, so it cannot know whether the flag would be
  * honoured. An enabled toggle that the run silently ignores is worse than a
  * disabled one with a reason attached — the user believes it took effect.
@@ -1503,7 +1503,7 @@ const SESSION_POLL_LIVE_MS = 4_000;
 /**
  * And while nothing is running.
  *
- * Not zero, because this window is not the only writer: a second Apollo window,
+ * Not zero, because this window is not the only writer: a second Artemis window,
  * or the user's own `claude` in a terminal, writes into the same history that
  * this sidebar lists. Polling is what makes those appear without a reload.
  */
@@ -2075,11 +2075,11 @@ export async function deleteProfile(id: ProfileId, deleteConfigDir: boolean): Pr
     return false;
   }
   // `configDirDeleted` can be false even when it was asked for: the main
-  // process refuses to delete a directory Apollo did not create. Reporting
+  // process refuses to delete a directory Artemis did not create. Reporting
   // what actually happened matters more here than usual — the user may have
   // expected their `~/.claude` to be gone, and it is not.
   if (deleteConfigDir && !result.value.configDirDeleted) {
-    pushBanner('info', 'Profile deleted. Its config directory was left alone — Apollo only deletes directories it created.');
+    pushBanner('info', 'Profile deleted. Its config directory was left alone — Artemis only deletes directories it created.');
   } else if (result.value.configDirDeleted) {
     pushBanner('info', 'Profile and its session history were deleted');
   }

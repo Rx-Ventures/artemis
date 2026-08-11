@@ -1,5 +1,5 @@
 /**
- * Tests for the pure Claude → Apollo mapper.
+ * Tests for the pure Claude → Artemis mapper.
  *
  * Every fixture below is a handwritten SDK message. Nothing is spawned, no
  * network is touched, and the clock is injected — which is the whole reason the
@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent, SessionStartedEvent, TextCompleteEvent, TextDeltaEvent, ThinkingDeltaEvent, ToolEndEvent, ToolStartEvent, RunEndEvent, UsageEvent } from '@rx-apollo/protocol';
+import type { AgentEvent, SessionStartedEvent, TextCompleteEvent, TextDeltaEvent, ThinkingDeltaEvent, ToolEndEvent, ToolStartEvent, RunEndEvent, UsageEvent } from '@rx-artemis/protocol';
 import type { SDKMessage, SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import {
@@ -640,7 +640,7 @@ describe('tool calls', () => {
     const events = run(state, [
       assistantMessage({
         content: [
-          { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'apollo' } },
+          { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'artemis' } },
         ],
       }),
       assistantMessage({
@@ -687,7 +687,7 @@ describe('tool calls', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('user messages', () => {
-  it('does not echo the prompt Apollo itself sent', () => {
+  it('does not echo the prompt Artemis itself sent', () => {
     const state = makeState();
     const events = run(state, [
       {
@@ -695,7 +695,7 @@ describe('user messages', () => {
         parent_tool_use_id: null,
         uuid: 'u',
         session_id: 's',
-        message: { role: 'user', content: 'what Apollo just sent' },
+        message: { role: 'user', content: 'what Artemis just sent' },
       },
     ]);
     expect(events).toEqual([]);
@@ -894,7 +894,7 @@ describe('run.end', () => {
     expect(end.error?.code).toBe('rate_limit');
   });
 
-  it('lets Apollo’s own intent outrank the transport’s story', () => {
+  it('lets Artemis’s own intent outrank the transport’s story', () => {
     const disposed = makeState();
     disposed.disposeRequested = true;
     const disposedEnd = run(disposed, [resultMessage()]).at(-1) as RunEndEvent;

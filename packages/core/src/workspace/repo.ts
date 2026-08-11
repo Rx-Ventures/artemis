@@ -5,7 +5,7 @@
  *
  * The sidebar names the thing you are working on. For a directory that sits
  * inside a repository, the name of that thing is the repository's: in
- * `~/code/apollo/apps/desktop` you are working on *apollo*, and "desktop" is
+ * `~/code/artemis/apps/desktop` you are working on *artemis*, and "desktop" is
  * the answer to a question nobody asked. Both names are here, and the caller
  * picks — {@link WorkspaceDescription.repoName} when there is one, otherwise
  * {@link WorkspaceDescription.name}.
@@ -21,7 +21,7 @@
  *
  * Walking up looking for `.git` needs none of that. It is a handful of `stat`
  * calls, it cannot fail in a way worth reporting, and it agrees with git on
- * every layout Apollo can encounter:
+ * every layout Artemis can encounter:
  *
  *  - **A normal clone** has `.git/` at the root.
  *  - **A linked worktree** has a `.git` *file* at its root holding a `gitdir:`

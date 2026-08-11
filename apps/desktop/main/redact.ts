@@ -1,9 +1,9 @@
 /**
  * Outbound leak detection.
  *
- * The single most important invariant in Apollo is that **a secret never crosses
+ * The single most important invariant in Artemis is that **a secret never crosses
  * the IPC boundary into the renderer**. The profile handlers are written to
- * return {@link import('@rx-apollo/protocol').ProfileMetadata}, never `Profile` —
+ * return {@link import('@rx-artemis/protocol').ProfileMetadata}, never `Profile` —
  * but "written to" is a property of today's code, not of tomorrow's refactor.
  * This module is the tripwire that makes the invariant hold mechanically.
  *
@@ -13,7 +13,7 @@
  *     renderer receives. `publicEnv` is what distinguishes `Profile` from
  *     `ProfileMetadata`, so its presence means someone returned the wrong
  *     shape. `secretRef`, `apiKey` and friends mean someone returned a
- *     credential outright — Apollo has none to return any more, which makes
+ *     credential outright — Artemis has none to return any more, which makes
  *     their appearance a regression rather than a mistake. This check is cheap
  *     and it catches the realistic bug.
  *
@@ -35,7 +35,7 @@
  * patterns) and {@link ScanPolicy.opaqueKeys} (not descended into at all,
  * because a tool result can be megabytes of arbitrary JSON).
  *
- * The distinction is what makes the check usable: everything Apollo itself
+ * The distinction is what makes the check usable: everything Artemis itself
  * assembles is scanned strictly, and only provider/user content is exempt.
  */
 
@@ -67,9 +67,9 @@ export class SecretLeakError extends Error {
  * Deliberately anchored on recognisable prefixes rather than entropy: an
  * entropy heuristic would flag base64 tool output constantly, and a check that
  * cries wolf gets deleted. These are the shapes that actually appear in a
- * credential Apollo could plausibly hold.
+ * credential Artemis could plausibly hold.
  *
- * The `sk-` rule is the one named in Apollo's security brief; the rest are
+ * The `sk-` rule is the one named in Artemis's security brief; the rest are
  * defence in depth for the Bedrock / Vertex / Foundry backends.
  */
 const SECRET_VALUE_RULES: readonly { readonly rule: string; readonly pattern: RegExp }[] = [
@@ -126,7 +126,7 @@ export interface ScanPolicy {
   readonly contentKeys: ReadonlySet<string>;
   /**
    * Keys whose subtree is not walked at all: arbitrarily large, arbitrarily
-   * shaped provider data that Apollo did not author.
+   * shaped provider data that Artemis did not author.
    */
   readonly opaqueKeys: ReadonlySet<string>;
   readonly maxDepth: number;
@@ -134,7 +134,7 @@ export interface ScanPolicy {
 }
 
 /**
- * The `Profile` fields that {@link import('@rx-apollo/protocol').ProfileMetadata}
+ * The `Profile` fields that {@link import('@rx-artemis/protocol').ProfileMetadata}
  * deliberately omits, plus the obvious credential field names.
  *
  * Seeing any of these in a renderer-bound payload means the wrong type was
@@ -142,7 +142,7 @@ export interface ScanPolicy {
  *
  * `publicEnv` is what now distinguishes the two shapes, and `secretRef` /
  * `apiKey` are kept as tripwires for a credential field returning — they no
- * longer exist anywhere in Apollo, so any reappearance is a regression worth
+ * longer exist anywhere in Artemis, so any reappearance is a regression worth
  * failing closed on.
  *
  * **`configDir` is deliberately absent from this list.** It used to be here as
@@ -153,7 +153,7 @@ export interface ScanPolicy {
  */
 const PROFILE_LEAK_KEYS = ['secretref', 'apikey', 'api_key', 'publicenv'];
 
-/** Scan policy for `ipcMain.handle` responses. Strict: Apollo authors these. */
+/** Scan policy for `ipcMain.handle` responses. Strict: Artemis authors these. */
 export const RESPONSE_SCAN_POLICY: ScanPolicy = {
   forbiddenKeys: new Set([
     ...PROFILE_LEAK_KEYS,
@@ -174,7 +174,7 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
- * Scan policy for pushed {@link import('@rx-apollo/protocol').AgentEvent}s.
+ * Scan policy for pushed {@link import('@rx-artemis/protocol').AgentEvent}s.
  *
  * Looser on values, because an agent event is almost entirely model output and
  * tool results, and just as strict on structure — no profile field has any

@@ -1,12 +1,12 @@
 /**
  * The IPC layer.
  *
- * `@rx-apollo/protocol` defines the channels, the request and response types, and
+ * `@rx-artemis/protocol` defines the channels, the request and response types, and
  * the rule that handlers resolve an {@link IpcResult} instead of rejecting.
  * This file is the main-process half of that contract, and it adds three things
  * the type system cannot express:
  *
- *  1. **Sender verification.** Every message must come from Apollo's own
+ *  1. **Sender verification.** Every message must come from Artemis's own
  *     top-level frame at an allowed URL. A nested frame cannot reach these
  *     handlers.
  *  2. **Validation.** Payloads arrive as `unknown` and are checked and rebuilt
@@ -27,7 +27,7 @@
  * defined by the protocol, and the renderer demultiplexes on `event.runId`.
  * A channel per run would force the preload to build channel names out of
  * renderer-supplied strings, which is precisely the dynamic-channel pattern the
- * preload is forbidden to have. The protocol's `ApolloBridge.runs.onEvent` is
+ * preload is forbidden to have. The protocol's `ArtemisBridge.runs.onEvent` is
  * likewise a single global subscription, so one channel is also what the
  * contract asks for.
  */
@@ -54,9 +54,9 @@ import {
   type IpcResponse,
   type Unsubscribe,
   type WorkspacePickDirectoryRequest,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
-import { checkWorkingDirectory, describeWorkspace } from '@rx-apollo/core';
+import { checkWorkingDirectory, describeWorkspace } from '@rx-artemis/core';
 
 import type { EngineHost } from './engine.js';
 import {
@@ -202,7 +202,7 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      *
      * Everywhere else, a fault becomes an `IpcFail` and the UI says so. Here
      * the UI cannot usefully say anything: the caller is a model picker, and
-     * "Apollo could not read your model list" leaves the user staring at an
+     * "Artemis could not read your model list" leaves the user staring at an
      * empty menu with no way to change a setting. The engine already resolves
      * the adapter's built-in list for every ordinary failure — no CLI, no
      * credential, no network — so the only thing left to catch is the engine
@@ -434,7 +434,7 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
  * Ask the OS for a directory.
  *
  * Parented to the requesting window when there is one, so the dialog is modal
- * to Apollo rather than floating free (and, on macOS, sheets onto the window it
+ * to Artemis rather than floating free (and, on macOS, sheets onto the window it
  * is blocking). A destroyed window falls back to an app-modal dialog instead of
  * failing: the user asked for a folder, and losing the parent is not a reason
  * to refuse.
@@ -505,7 +505,7 @@ function toCloneable<T>(value: T, channel: IpcChannel): T {
 }
 
 /**
- * Reject anything that is not Apollo's own top-level frame.
+ * Reject anything that is not Artemis's own top-level frame.
  *
  * `senderFrame` can be null when the frame died between sending and being
  * handled, and reading `.url` on a destroyed frame throws — both are treated as

@@ -1,9 +1,9 @@
 /**
- * Apollo — Electron main process.
+ * Artemis — Electron main process.
  *
  * This process owns everything the renderer is not allowed to touch: decrypted
  * API keys, the filesystem, and the engine that drives agent runs. It is the
- * only place in Apollo where a credential exists in plaintext, and then only for
+ * only place in Artemis where a credential exists in plaintext, and then only for
  * as long as it takes to hand it to a provider's environment bundle.
  *
  * Startup order matters and is deliberate:
@@ -16,7 +16,7 @@
  *     window is ever briefly unprotected.
  *  4. Start the engine, register IPC, and only then open a window.
  *
- * A failure at step 2 or 4 does not stop the app. Apollo opens anyway and tells
+ * A failure at step 2 or 4 does not stop the app. Artemis opens anyway and tells
  * the user what is wrong — an app that refuses to launch cannot explain itself.
  */
 
@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
 
-import { profilesRoot } from '@rx-apollo/core';
+import { profilesRoot } from '@rx-artemis/core';
 
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
@@ -52,34 +52,52 @@ const log = createLogger('main');
  * other, or Windows treats the running app and its installed shortcut as two
  * unrelated applications.
  */
-const APP_USER_MODEL_ID = 'dev.apollo.app';
+const APP_USER_MODEL_ID = 'dev.artemis.app';
 
 /**
  * Set before anything reads a path.
  *
  * `app.getPath('userData')` is derived from the app name, and the package is
- * called `@rx-apollo/desktop` — which would put user data in a nested
- * `@rx-apollo/desktop` directory and name the OS keychain entry after it. Naming
+ * called `@rx-artemis/desktop` — which would put user data in a nested
+ * `@rx-artemis/desktop` directory and name the OS keychain entry after it. Naming
  * the app here keeps the credential store's identity stable and legible.
  */
-app.setName('Apollo');
+app.setName('Artemis');
 
 /**
- * Adopt the user data left behind by the previous name.
+ * Every name this app has shipped under, newest first.
  *
- * The app used to be called Libra, and `app.getPath('userData')` is derived
- * from the app name — so renaming it silently pointed the app at an empty
- * directory and lost every profile and every session history the user had.
- * This moves the old directory across, once, on the first launch that finds one.
+ * `app.getPath('userData')` is derived from the app name, so each rename
+ * silently pointed the app at an empty directory and lost every profile and
+ * every session history the user had. This list is how the current build finds
+ * the one it left behind.
+ *
+ * **Append to the front, never edit or remove an entry.** A user who skipped a
+ * version upgrades straight from whichever name they last ran, and dropping an
+ * entry is indistinguishable from deleting their data. Libra is two names back
+ * and still has to be here for exactly that reason.
+ */
+const PREVIOUS_APP_NAMES = ['Apollo', 'Libra'] as const;
+
+/**
+ * Adopt the user data left behind by a previous name.
+ *
+ * Moves the newest surviving directory across, once, on the first launch that
+ * finds one — newest first, because someone who ran Apollo *and* Libra has
+ * stale Libra data sitting beside the directory they actually care about, and
+ * taking the older one would silently roll them back.
  *
  * ## `secrets.v1.json` is deleted rather than carried
  *
- * Apollo no longer has a secret store — the provider's own CLI holds the
+ * Artemis no longer has a secret store — the provider's own CLI holds the
  * credential, inside the profile's config directory, which *does* come across
  * with the rename. So the old encrypted file has nothing to be read by. It is
  * removed rather than left in place, because a file of undecryptable
  * ciphertext sitting in the user-data directory invites exactly one question
- * later ("what is this, and does it still matter?") whose answer is "no".
+ * later ("what is this, and does it still matter?") whose answer is "no". Only
+ * a Libra-era directory can still contain one; the call is unconditional
+ * because `force` makes a miss free and a special case would need a comment
+ * longer than the line it saved.
  *
  * Runs before `app.whenReady()` and synchronously, because everything that
  * follows reads `userData`. A failure is logged and swallowed — a migration
@@ -88,15 +106,23 @@ app.setName('Apollo');
  */
 function adoptPreviousUserData(): void {
   const current = app.getPath('userData');
-  const previous = join(dirname(current), 'Libra');
-  if (previous === current) return;
 
   try {
-    if (existsSync(current) || !existsSync(previous)) return;
-    renameSync(previous, current);
-    // Nothing reads this any more, and nothing can. See above.
-    rmSync(join(current, 'secrets.v1.json'), { force: true });
-    log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
+    // Never overwrite data this name already has: whatever is here now is
+    // newer than anything an older name left behind.
+    if (existsSync(current)) return;
+
+    const parent = dirname(current);
+    for (const name of PREVIOUS_APP_NAMES) {
+      const previous = join(parent, name);
+      if (previous === current || !existsSync(previous)) continue;
+
+      renameSync(previous, current);
+      // Nothing reads this any more, and nothing can. See above.
+      rmSync(join(current, 'secrets.v1.json'), { force: true });
+      log.info(`Adopted user data from the previous app name: ${previous} → ${current}`);
+      return;
+    }
   } catch (error) {
     log.error('Could not adopt user data from the previous app name', error);
   }
@@ -146,7 +172,7 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     height: 860,
     minWidth: 720,
     minHeight: 480,
-    title: 'Apollo',
+    title: 'Artemis',
     // Painting the window before the renderer has anything to show produces a
     // white flash on a dark desktop. Start hidden, reveal on `ready-to-show`.
     show: false,
@@ -158,8 +184,8 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0a09' : '#ffffff',
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: windowSecurityPreferences(preloadPath, [
-      `--apollo-version=${app.getVersion()}`,
-      `--apollo-platform=${process.platform}`,
+      `--artemis-version=${app.getVersion()}`,
+      `--artemis-platform=${process.platform}`,
     ]),
   });
 
@@ -197,9 +223,9 @@ function reportEngineProblem(): void {
   const detail = engineHost.failureMessage ?? 'The engine did not start.';
   log.error(`Engine unavailable: ${detail}`);
   dialog.showErrorBox(
-    'Apollo could not start its engine',
+    'Artemis could not start its engine',
     `${detail}\n\nRuns and profiles are unavailable. If you are running from source, build the workspace ` +
-      'packages first (`pnpm build:libs`) and restart Apollo.',
+      'packages first (`pnpm build:libs`) and restart Artemis.',
   );
 }
 
@@ -208,11 +234,11 @@ function reportEngineProblem(): void {
 /* -------------------------------------------------------------------------- */
 
 /**
- * A second `apollo` process should raise the first one's window, not open a
+ * A second `artemis` process should raise the first one's window, not open a
  * second copy with a second engine writing the same profile file.
  */
 if (!app.requestSingleInstanceLock()) {
-  log.info('Another Apollo instance is already running; exiting.');
+  log.info('Another Artemis instance is already running; exiting.');
   app.quit();
 } else {
   app.on('second-instance', focusExistingWindow);
@@ -242,7 +268,7 @@ async function bootstrap(): Promise<void> {
   app.on('web-contents-created', (_event, contents) => hardenWebContents(contents, policy));
 
   const userDataDir = app.getPath('userData');
-  // Where Apollo's *suggested* config directories live. A profile may point
+  // Where Artemis's *suggested* config directories live. A profile may point
   // anywhere, but the suggestions land here and hold real logins and
   // transcripts, so the root is created owner-only rather than inheriting the
   // process umask. Core creates each directory inside it on demand.

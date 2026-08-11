@@ -1,5 +1,5 @@
 /**
- * Claude ⇄ Apollo translation, as pure functions.
+ * Claude ⇄ Artemis translation, as pure functions.
  *
  * Everything in this file is deterministic and free of I/O: no process is
  * spawned, no clock is read (the clock is injected), no SDK function is called.
@@ -61,8 +61,8 @@ import type {
   ToolEndStatus,
   UsageScope,
   UsageSnapshot,
-} from '@rx-apollo/protocol';
-import { isPermissionMode } from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
+import { isPermissionMode } from '@rx-artemis/protocol';
 
 import type {
   ModelUsage,
@@ -377,9 +377,9 @@ export function mapSdkMessage(
       return [];
 
     case 'auth_status':
-      // Interactive-login progress. Every credential Apollo uses — API key or
+      // Interactive-login progress. Every credential Artemis uses — API key or
       // subscription token — is one the user obtained themselves and pasted in,
-      // so Apollo never drives an interactive auth flow and this should not fire
+      // so Artemis never drives an interactive auth flow and this should not fire
       // at all; if it does, it is not something to render.
       return [];
 
@@ -457,7 +457,7 @@ function mapSystemMessage(
     case 'hook_started':
     case 'hook_progress':
     case 'hook_response':
-      // Hooks come from settings files. Apollo runs with `settingSources: []` by
+      // Hooks come from settings files. Artemis runs with `settingSources: []` by
       // default, so these normally never fire; when a user opts in, hook output
       // is their own tooling's business, not transcript content.
       return [];
@@ -493,7 +493,7 @@ function mapSystemMessage(
     case 'elicitation_complete':
     case 'mirror_error':
     case 'worker_shutting_down':
-      // Infrastructure telemetry with no user-facing meaning in Apollo.
+      // Infrastructure telemetry with no user-facing meaning in Artemis.
       return [];
 
     default:
@@ -797,7 +797,7 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
   const content = message.message.content;
 
   if (typeof content === 'string') {
-    // A plain string user turn. Apollo's own prompts come back this way; the
+    // A plain string user turn. Artemis's own prompts come back this way; the
     // renderer already rendered those, so only replayed history and
     // provider-synthesised turns are surfaced.
     if (isReplay || message.isSynthetic === true) {
@@ -987,7 +987,7 @@ function mapResultMessage(
 }
 
 function resolveRunEndReason(message: SDKResultMessage, state: ClaudeMapperState): RunEndReason {
-  // Apollo's own intent wins: if we asked the provider to stop, "interrupted" is
+  // Artemis's own intent wins: if we asked the provider to stop, "interrupted" is
   // the truthful reason even though the SDK reports an execution error.
   if (state.disposeRequested) return 'disposed';
   if (state.interruptRequested) return 'interrupted';
@@ -1278,7 +1278,7 @@ export interface ClaudePermissionPromptInfo {
 
 /** Arguments to {@link buildPermissionRequest}. */
 export interface BuildPermissionRequestParams {
-  /** Apollo's own id. Deliberately *not* the SDK's transport `requestId`. */
+  /** Artemis's own id. Deliberately *not* the SDK's transport `requestId`. */
   readonly id: PermissionRequestId;
   readonly runId: RunId;
   readonly toolName: string;
@@ -1293,7 +1293,7 @@ export interface BuildPermissionRequestParams {
  * The SDK's `requestId` (the control-request envelope id) is *not* used as the
  * protocol id: it is transport plumbing, it must be echoed verbatim on the SDK
  * side, and leaking it into the renderer would couple the UI to Claude's wire
- * protocol. Apollo mints its own id and keeps the pairing adapter-internal.
+ * protocol. Artemis mints its own id and keeps the pairing adapter-internal.
  */
 export function buildPermissionRequest(params: BuildPermissionRequestParams): PermissionRequest {
   const info = params.info;
@@ -1324,7 +1324,7 @@ export function buildPermissionRequest(params: BuildPermissionRequestParams): Pe
  *
  * `'once'` has no destination — it means "do not persist anything" — so it maps
  * to `null` and the caller emits no `PermissionUpdate` at all. The SDK's
- * `'cliArg'` destination has no protocol equivalent and Apollo never produces
+ * `'cliArg'` destination has no protocol equivalent and Artemis never produces
  * it.
  */
 export function mapPermissionScope(scope: PermissionScope): PermissionUpdateDestination | null {
@@ -1409,7 +1409,7 @@ function fromSdkDestination(destination: PermissionUpdateDestination): Permissio
     case 'userSettings':
       return 'user';
     case 'cliArg':
-      // No protocol equivalent, and offering it in the UI would suggest Apollo
+      // No protocol equivalent, and offering it in the UI would suggest Artemis
       // can rewrite its own command line. Dropped.
       return null;
     default:

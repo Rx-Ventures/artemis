@@ -1,5 +1,5 @@
 /**
- * Headless end-to-end smoke test for `@rx-apollo/core`.
+ * Headless end-to-end smoke test for `@rx-artemis/core`.
  *
  * Runs the entire engine with no Electron anywhere in the process:
  *
@@ -23,14 +23,14 @@
  *
  * ```sh
  * export ANTHROPIC_API_KEY=sk-ant-…
- * pnpm build:libs          # smoke.ts imports @rx-apollo/core's built output
+ * pnpm build:libs          # smoke.ts imports @rx-artemis/core's built output
  * pnpm smoke               # or: npx tsx scripts/smoke.ts "your prompt here"
  * ```
  *
  * Everything it writes — the profile store, the credential, the isolated config
  * directory and the working directory the agent is pointed at — lives in one
  * `mkdtemp` directory that is removed on the way out. It never touches your real
- * Apollo data, and the key it uses is the one already in your environment: no
+ * Artemis data, and the key it uses is the one already in your environment: no
  * credential is written anywhere except that temporary directory, encrypted by
  * nothing, which is why it is deleted.
  *
@@ -51,8 +51,8 @@ import {
   resolveEnv,
   RunRegistry,
   signInCommand,
-} from '@rx-apollo/core';
-import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@rx-apollo/protocol';
+} from '@rx-artemis/core';
+import type { AgentEvent, ProfileId, ProviderId, RunInput } from '@rx-artemis/protocol';
 
 /** How long to wait for a run to finish before giving up and tearing down. */
 const RUN_TIMEOUT_MS = 120_000;
@@ -122,7 +122,7 @@ async function main(): Promise<number> {
     signed in — the same thing the app needs, obtained the same way.
 
     It deliberately does *not* read `ANTHROPIC_API_KEY` or
-    `CLAUDE_CODE_OAUTH_TOKEN` any more. Apollo strips both from every run, so a
+    `CLAUDE_CODE_OAUTH_TOKEN` any more. Artemis strips both from every run, so a
     smoke test that authenticated with one would be exercising a path the
     product does not have.
   */
@@ -134,7 +134,7 @@ async function main(): Promise<number> {
     console.error(
       `Not signed in at ${configDir}.\n` +
         `${status.error ?? ''}\n` +
-        'Apollo performs no login of its own — run the CLI’s, the way the app tells you to:\n\n' +
+        'Artemis performs no login of its own — run the CLI’s, the way the app tells you to:\n\n' +
         `  ${signInCommand({ credentials, configDir })}\n\n` +
         'Or point this script at a directory that is already signed in:\n\n' +
         '  export CLAUDE_CONFIG_DIR=/path/to/config/dir\n',
@@ -144,16 +144,16 @@ async function main(): Promise<number> {
 
   const prompt = process.argv.slice(2).join(' ').trim() || DEFAULT_PROMPT;
 
-  // One disposable directory for everything: Apollo's "user data", and the
+  // One disposable directory for everything: Artemis's "user data", and the
   // working directory the agent is pointed at.
-  const root = await mkdtemp(join(tmpdir(), 'apollo-smoke-'));
+  const root = await mkdtemp(join(tmpdir(), 'artemis-smoke-'));
   const userDataDir = join(root, 'userData');
   const workdir = join(root, 'workspace');
   const { mkdir } = await import('node:fs/promises');
   await mkdir(userDataDir, { recursive: true });
   await mkdir(workdir, { recursive: true });
 
-  console.log(`Apollo smoke test`);
+  console.log(`Artemis smoke test`);
   console.log(`  scratch : ${root}`);
   console.log(`  workdir : ${workdir}`);
   console.log(`  config  : ${configDir}`);

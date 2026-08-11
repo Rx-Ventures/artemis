@@ -16,7 +16,7 @@
  * where a disabled row is easy to skip past silently — so a gated group here
  * keeps its heading and replaces its items with the sentence explaining why
  * there are none. A user who cannot find "Resume session" learns that this
- * provider cannot resume one, instead of concluding Apollo lost the feature.
+ * provider cannot resume one, instead of concluding Artemis lost the feature.
  *
  * Two capabilities gate the session entries and they are genuinely independent:
  *
@@ -72,7 +72,7 @@ import {
   SquareTerminalIcon,
   ZapIcon,
 } from 'lucide-react';
-import type { ProviderId, SessionSummary } from '@rx-apollo/protocol';
+import type { ProviderId, SessionSummary } from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
@@ -302,7 +302,7 @@ function RootPage({
         </CommandItem>
         <GatedItem
           supported={models.length > 0}
-          reason="This provider does not offer a model choice, so Apollo sends no model and the provider picks its own."
+          reason="This provider does not offer a model choice, so Artemis sends no model and the provider picks its own."
           onSelect={() => onPage('models')}
         >
           <CpuIcon />
@@ -353,7 +353,7 @@ function RootPage({
             {level.id === ULTRACODE_LEVEL ? <SparklesIcon /> : <BrainIcon />}
             Thinking: {level.label}
             {level.id === thinking ? (
-              <span className="ml-auto font-mono text-2xs text-ember">current</span>
+              <span className="ml-auto font-mono text-2xs text-lunar">current</span>
             ) : null}
           </GatedItem>
         ))}
@@ -471,7 +471,7 @@ function GatedItem({
  * Deliberately *not* grouped the way the sidebar groups them: `cmdk` filters a
  * flat list, and folding rows under headings would hide matches from the search
  * that is the whole point of this surface. The project and the profile are put
- * on each row instead, and into the row's search value, so "apollo auth" and
+ * on each row instead, and into the row's search value, so "artemis auth" and
  * "work account" both find something.
  */
 function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactElement {
@@ -620,7 +620,7 @@ function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElem
                   {provider.label}
                 </span>
                 {provider.id === activeId ? (
-                  <span className="ml-auto font-mono text-2xs text-ember">active</span>
+                  <span className="ml-auto font-mono text-2xs text-lunar">active</span>
                 ) : null}
               </span>
               {provider.available ? null : (
@@ -676,12 +676,12 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
               ) : null}
               {model.supportsUltracode === true ? (
                 <SparklesIcon
-                  className="size-3 shrink-0 text-ember"
+                  className="size-3 shrink-0 text-lunar"
                   aria-label="offers ultracode"
                 />
               ) : null}
               {current === model.id ? (
-                <span className="ml-auto font-mono text-2xs text-ember">selected</span>
+                <span className="ml-auto font-mono text-2xs text-lunar">selected</span>
               ) : null}
             </span>
             <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>

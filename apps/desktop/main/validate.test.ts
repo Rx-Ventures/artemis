@@ -117,7 +117,7 @@ describe('validateProfilesCreate', () => {
   });
 
   it('rejects a tilde rather than creating a directory literally named "~"', () => {
-    // Nothing in Apollo expands `~`; a child process would receive it verbatim.
+    // Nothing in Artemis expands `~`; a child process would receive it verbatim.
     expect(() =>
       validateProfilesCreate({
         draft: { label: 'W', providerId: 'claude', configDir: '~/.claude' },
@@ -295,7 +295,7 @@ describe('validateRunsRespondPermission', () => {
     ).toThrow(ValidationError);
   });
 
-  it('rejects the SDK-only cliArg destination, which Apollo must never produce', () => {
+  it('rejects the SDK-only cliArg destination, which Artemis must never produce', () => {
     expect(() =>
       validateRunsRespondPermission({
         runId: 'r1',

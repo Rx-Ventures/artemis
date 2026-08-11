@@ -22,14 +22,14 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type {
   Capabilities,
   ProviderDescriptor,
   ProviderEffortOption,
   ProviderModelOption,
   SessionSummary,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { CommandPalette } from '@/components/CommandPalette';

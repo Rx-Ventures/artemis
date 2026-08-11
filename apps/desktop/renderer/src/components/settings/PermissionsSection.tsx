@@ -3,7 +3,7 @@
  * ============================================================================
  *
  * What the agent is allowed to do without asking first, and — for the parts
- * Apollo cannot yet decide — an honest account of who does decide.
+ * Artemis cannot yet decide — an honest account of who does decide.
  *
  * ---------------------------------------------------------------------------
  * THE MODE LIST COMES FROM THE PROVIDER, ALWAYS
@@ -33,13 +33,13 @@
  * list and drop it on close, which is the worst outcome available. So the
  * controls are here, disabled, each carrying the sentence that says what would
  * have to exist for them to work. That is the same rule every capability-gated
- * control in this app follows, applied to a gap in Apollo rather than a gap in
+ * control in this app follows, applied to a gap in Artemis rather than a gap in
  * the provider.
  */
 
 import type { ReactElement } from 'react';
 import { ShieldIcon } from 'lucide-react';
-import type { PermissionMode } from '@rx-apollo/protocol';
+import type { PermissionMode } from '@rx-artemis/protocol';
 
 import { WithReason } from '../disabled-reason';
 import { usePermissionModes } from '../../hooks/useCapability';
@@ -76,7 +76,7 @@ const MODE_NOTES: Record<PermissionMode, string> = {
  * boxes with no explanation on the box itself.
  */
 const NO_TOOL_POLICY =
-  'Apollo has nowhere to keep this yet. The protocol carries it per run, but no setting writes it, so anything typed here would be lost when this dialog closes.';
+  'Artemis has nowhere to keep this yet. The protocol carries it per run, but no setting writes it, so anything typed here would be lost when this dialog closes.';
 
 export function PermissionsSection(): ReactElement {
   const modes = usePermissionModes();
@@ -115,7 +115,7 @@ export function PermissionsSection(): ReactElement {
               <EmptyTitle className="text-ink">No permission modes to choose from</EmptyTitle>
               <EmptyDescription className="text-2xs">
                 {providerLabel} does not expose permission modes. It decides on its own whether to
-                prompt, and Apollo has no way to ask it for something different.
+                prompt, and Artemis has no way to ask it for something different.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -161,7 +161,7 @@ export function PermissionsSection(): ReactElement {
         />
         <p className="text-2xs leading-relaxed text-ink-faint">
           Until these are real settings, tool policy comes from wherever the provider’s own CLI
-          reads it — its config file for this project. Apollo sends no allow list, no deny list and no
+          reads it — its config file for this project. Artemis sends no allow list, no deny list and no
           extra directories, so nothing here is silently overriding what you configured there.
         </p>
       </SettingsGroup>

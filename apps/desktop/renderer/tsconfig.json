@@ -24,7 +24,7 @@
 
     /* No "node" here, deliberately. The renderer is a browser context: it has no
        fs, no process, no electron, and no secrets. Everything it can do goes
-       through the preload bridge described by @rx-apollo/protocol. */
+       through the preload bridge described by @rx-artemis/protocol. */
     "types": ["vite/client"],
 
     "jsx": "react-jsx",

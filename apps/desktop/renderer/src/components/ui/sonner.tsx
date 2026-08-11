@@ -5,7 +5,7 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
 /**
  * MODIFIED FROM THE REGISTRY.
  *
- * The registry version reads the active theme from `next-themes`. Apollo is an
+ * The registry version reads the active theme from `next-themes`. Artemis is an
  * Electron app with a single dark theme declared in `index.css`, so there is no
  * theme provider to read from and pulling in a Next.js-oriented dependency to
  * learn a constant made no sense — `theme` is pinned to `"dark"` instead and

@@ -51,16 +51,16 @@
  *
  * `Message`'s `align` flips the whole row, gutter included, so a user turn puts
  * its label on the right where the bubble is. That is the back-and-forth: the
- * user speaks from the right in a filled ember bubble, everything the agent
+ * user speaks from the right in a filled lunar bubble, everything the agent
  * does answers from the left.
  *
  * Three choices inside that worth stating, because each had an obvious
  * alternative:
  *
  *  - **The user bubble is `tinted`, not `default`.** `default` fills with
- *    `--primary`, which here is ember at 80% lightness. A one-line prompt would
+ *    `--primary`, which here is lunar at 73% lightness. A one-line prompt would
  *    survive that; a pasted twenty-line spec is a floodlight in a dark room
- *    someone is sitting in for eight hours. `tinted` is the same ember hue at
+ *    someone is sitting in for eight hours. `tinted` is the same lunar hue at
  *    30% lightness — unmistakably "yours", legible in `--ink`, and quiet.
  *  - **The agent bubble is `ghost`.** Agent output here is code-heavy markdown
  *    — fenced blocks, tables, diff-adjacent prose — not chat banter. A filled
@@ -349,11 +349,11 @@ function Line({
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   return (
-    <Line label="you" tone="ember" ts={item.ts} align="end" className="turn-in mt-3">
+    <Line label="you" tone="lunar" ts={item.ts} align="end" className="turn-in mt-3">
       <Bubble
         align="end"
         variant="tinted"
-        // Dimmed means "Apollo has not confirmed delivery" — a prompt whose
+        // Dimmed means "Artemis has not confirmed delivery" — a prompt whose
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
       >
@@ -362,7 +362,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             it is sent as it did before. `rounded-br-sm` is the tail — the one
             square corner points back at the author, which is what makes an
             aligned bubble read as *from* someone rather than merely offset. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border-ember/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
+        <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
           {item.text}
         </BubbleContent>
       </Bubble>
@@ -711,7 +711,7 @@ function Stat({
   return (
     <span className="flex items-baseline gap-1">
       <span className="font-mono text-2xs text-ink-faint">{label}</span>
-      <span className={cn('font-mono text-2xs', emphasis ? 'text-ember' : 'text-ink-muted')}>
+      <span className={cn('font-mono text-2xs', emphasis ? 'text-lunar' : 'text-ink-muted')}>
         {value}
       </span>
     </span>

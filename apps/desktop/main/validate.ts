@@ -2,7 +2,7 @@
  * Inbound IPC validation.
  *
  * The renderer is untrusted by construction. Not because we expect the user to
- * attack their own app, but because the renderer is the one process in Apollo
+ * attack their own app, but because the renderer is the one process in Artemis
  * that displays attacker-influenced content: a transcript, a tool result, a
  * file the agent read. If anything ever achieves script execution there, this
  * file is the wall between it and the main process's filesystem access,
@@ -66,7 +66,7 @@ import {
   type UsagePlanRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 import { ValidationError } from './errors.js';
 
@@ -322,7 +322,7 @@ function optionalJsonObject(
 /**
  * Non-sensitive environment variables for a profile.
  *
- * The checks here duplicate `@rx-apollo/core`'s. That is deliberate: `publicEnv` is
+ * The checks here duplicate `@rx-artemis/core`'s. That is deliberate: `publicEnv` is
  * written to an unencrypted config file, so "someone pasted
  * `ANTHROPIC_AUTH_TOKEN` into the extra-env box" has to be caught before the
  * value reaches any layer that might persist it.
@@ -359,7 +359,7 @@ function optionalPublicEnv(value: unknown, field: string): Record<string, string
       throw new ValidationError(
         `${field}.${key}`,
         'controls where the profile’s credential is sent. Endpoint, proxy and TLS-trust ' +
-          'variables are decided by Apollo, not by a profile',
+          'variables are decided by Artemis, not by a profile',
       );
     }
     out[key] = requireString(source[key], `${field}.${key}`, LIMITS.envValue);
@@ -482,9 +482,9 @@ function validatePermissionDecision(value: unknown, field: string): PermissionDe
  * A profile draft.
  *
  * Note what it no longer carries: a credential. There is no plaintext secret
- * anywhere in this IPC surface, in either direction, because Apollo stores
+ * anywhere in this IPC surface, in either direction, because Artemis stores
  * none — the provider's own login writes one into the config directory named
- * below and Apollo never sees it.
+ * below and Artemis never sees it.
  */
 function validateProfileDraft(value: unknown, field: string): ProfileDraft {
   const draft = requireObject(value, field);
@@ -703,7 +703,7 @@ export function validateProvidersList(raw: unknown): ProvidersListRequest {
  *
  * `cwd` is optional here but absolute when present. The provider resolves its
  * configuration relative to it, so a relative path would be resolved against
- * the main process's `process.cwd()` — an artefact of how Apollo was launched,
+ * the main process's `process.cwd()` — an artefact of how Artemis was launched,
  * and never what the renderer meant.
  */
 export function validateProvidersModels(raw: unknown): ProvidersModelsRequest {
@@ -794,7 +794,7 @@ export function validateSessionsListAll(raw: unknown): SessionsListAllRequest {
  * `defaultPath` only decides where the dialog opens; the user still has to
  * choose. It is required to be absolute all the same — a relative path would
  * be resolved against the main process's `process.cwd()`, which is an
- * implementation detail of how Apollo was launched and has nothing to do with
+ * implementation detail of how Artemis was launched and has nothing to do with
  * anything the user can see.
  *
  * The dialog's title and button text are deliberately **not** accepted. They

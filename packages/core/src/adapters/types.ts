@@ -1,7 +1,7 @@
 /**
  * The provider-adapter seam.
  *
- * This is the single most important design element in `@rx-apollo/core`. Apollo
+ * This is the single most important design element in `@rx-artemis/core`. Artemis
  * drives *agentic coding CLIs*, and the three we plan to support have three
  * completely unrelated transports:
  *
@@ -15,7 +15,7 @@
  *
  *  1. **Everything a provider produces is normalized before it crosses the
  *     seam.** An adapter's only output is the nine-variant
- *     {@link import('@rx-apollo/protocol').AgentEvent} union. Nothing
+ *     {@link import('@rx-artemis/protocol').AgentEvent} union. Nothing
  *     provider-specific — no SDK message, no JSONL line, no HTTP body — is
  *     visible above this file.
  *  2. **Everything a provider *cannot* do is declared up front.** Adapters
@@ -27,7 +27,7 @@
  *
  * Note what is *not* here. `ProviderAdapter` and `Run` describe live objects —
  * async iterables, deferred permission prompts, disposal semantics — which is
- * exactly why they live in core rather than in `@rx-apollo/protocol`: they never
+ * exactly why they live in core rather than in `@rx-artemis/protocol`: they never
  * cross the Electron IPC boundary. Protocol supplies every type they are built
  * from; this file assembles those into an interface an adapter implements.
  *
@@ -58,7 +58,7 @@ import type {
   RunStatus,
   SessionId,
   SessionSummary,
-} from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
 
 /* -------------------------------------------------------------------------- */
 /* Environment                                                                */
@@ -86,7 +86,7 @@ export type EnvBundle = Readonly<Record<string, string | undefined>>;
  *               what enables `CLAUDE.md` loading for the Claude provider.
  * - `local`   — the machine-local project overrides (`.claude/settings.local.json`).
  *
- * **The default is the empty list.** Apollo ships as a third-party app; running
+ * **The default is the empty list.** Artemis ships as a third-party app; running
  * with the user's personal agent configuration silently merged in would make
  * behaviour unreproducible and could pull in hooks, MCP servers and permission
  * rules the user never intended to grant to *this* app. Opting in is an
@@ -507,10 +507,10 @@ export interface AdapterAvailability {
 /**
  * How the user signs a profile in, in the provider's own vocabulary.
  *
- * Apollo does not perform the login. It composes a command, shows it to the
+ * Artemis does not perform the login. It composes a command, shows it to the
  * user, and polls the status probe until the answer changes — so every string
  * here ends up either in a terminal the user pastes into or in a subprocess
- * Apollo spawns to read a boolean back.
+ * Artemis spawns to read a boolean back.
  *
  * Naming the argv here rather than in the sign-in module is the same seam
  * {@link Capabilities} draws: `['auth', 'login']` is Claude's spelling, and a
@@ -544,10 +544,10 @@ export interface ProviderSignInSpec {
  *
  * Once, this described how a *credential* became an environment: which variable
  * to write an API key into, which flag selected a hosting backend, which of
- * several modes was being billed. Apollo held the credential, and the spec
+ * several modes was being billed. Artemis held the credential, and the spec
  * existed to get it into the right variable for the right provider.
  *
- * Apollo holds no credential now, so what is left is the one variable that
+ * Artemis holds no credential now, so what is left is the one variable that
  * matters and the list of variables that must not be allowed to interfere. The
  * seam is unchanged and still load-bearing: nothing outside an adapter names
  * `CLAUDE_CONFIG_DIR`, so a second provider is still a one-line registration
@@ -562,17 +562,17 @@ export interface ProviderCredentialSpec {
   readonly configDirVar: string;
 
   /**
-   * Credential variables Apollo strips from the inherited environment and
+   * Credential variables Artemis strips from the inherited environment and
    * refuses in `publicEnv` — **and never sets**.
    *
    * Every one of these is a way to authenticate the provider without going
    * through the profile's config directory, and each of them *outranks* that
    * directory when present. An `ANTHROPIC_API_KEY` exported in the user's shell
    * beats the subscription the user just signed this profile into, and bills
-   * metered usage instead. Since Apollo emits none of them, the entire list is
+   * metered usage instead. Since Artemis emits none of them, the entire list is
    * strip-only: there is no "selected" variable to spare.
    *
-   * This is what makes "Apollo cannot be authenticated by accident" structural
+   * This is what makes "Artemis cannot be authenticated by accident" structural
    * rather than merely unimplemented.
    */
   readonly credentialEnvKeys: readonly string[];
@@ -586,9 +586,9 @@ export interface ProviderCredentialSpec {
  *
  * The config-directory variable plus every credential variable. Callers use it
  * both to scrub the inherited environment and to reject `publicEnv` entries
- * that would override Apollo's own choices.
+ * that would override Artemis's own choices.
  *
- * Note that Apollo writes exactly one of these — the config directory — and
+ * Note that Artemis writes exactly one of these — the config directory — and
  * strips the rest unconditionally. There is no case in which a credential
  * variable is stripped and then written back.
  */
@@ -608,7 +608,7 @@ export function signInArgv(spec: ProviderCredentialSpec): readonly string[] {
 }
 
 /**
- * A provider Apollo can drive.
+ * A provider Artemis can drive.
  *
  * Adapters are **stateless singletons with respect to runs**: one adapter
  * instance serves every run for its provider, and all per-run state lives on
@@ -709,7 +709,7 @@ export interface ProviderAdapter {
    * failing and no way to notice from the UI. A flag whose correctness depends
    * on nobody ever copying an array is not a flag, it is a landmine. This is
    * the mechanism by which the settings screen tells the user "this is the
-   * built-in list, Apollo could not reach the CLI" — it has to be robust, or it
+   * built-in list, Artemis could not reach the CLI" — it has to be robust, or it
    * is worse than absent.
    */
   listModels?(query: ModelListQuery): Promise<ModelCatalogue>;
@@ -822,7 +822,7 @@ export interface ProviderAdapter {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The set of providers this Apollo build can drive. See `./registry.ts` for the
+ * The set of providers this Artemis build can drive. See `./registry.ts` for the
  * implementation and for the one-line registration point.
  */
 export interface ProviderRegistry {

@@ -8,7 +8,7 @@
  * ## Streaming input is not optional
  *
  * `query()` accepts either a `string` prompt or an `AsyncIterable<SDKUserMessage>`.
- * Apollo must always use the iterable form, for two reasons that are easy to miss
+ * Artemis must always use the iterable form, for two reasons that are easy to miss
  * from the type signature alone:
  *
  *  1. **There is no `send()` on `Query`.** Multi-turn input works by pushing
@@ -31,7 +31,7 @@
  *
  * ## Configuration isolation
  *
- * `settingSources` defaults to `[]`. Apollo is a third-party desktop app, and
+ * `settingSources` defaults to `[]`. Artemis is a third-party desktop app, and
  * silently merging the user's `~/.claude` configuration would import their
  * hooks, MCP servers and permission rules into an app they never granted them
  * to. Callers opt in per run. `./env.ts` does the matching job for environment
@@ -75,8 +75,8 @@ import type {
   SessionId,
   SessionSummary,
   SystemPromptSpec,
-} from '@rx-apollo/protocol';
-import { NO_CAPABILITIES } from '@rx-apollo/protocol';
+} from '@rx-artemis/protocol';
+import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
@@ -155,7 +155,7 @@ export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 
 /**
  * Env vars that authenticate the Claude CLI *without* going through the config
- * directory — and therefore the exact set Apollo has to keep unset.
+ * directory — and therefore the exact set Artemis has to keep unset.
  *
  * Each of these outranks the credential the config directory holds. An
  * `ANTHROPIC_API_KEY` exported in the user's shell beats the subscription their
@@ -163,7 +163,7 @@ export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
  * silent, arrives on the bill rather than on screen, and is indistinguishable
  * from "account switching does not work".
  *
- * Apollo sets none of them, in any circumstance, and strips all of them from
+ * Artemis sets none of them, in any circumstance, and strips all of them from
  * every run's inherited environment.
  */
 export const CLAUDE_CREDENTIAL_ENVS = [
@@ -193,15 +193,15 @@ export const CLAUDE_CREDENTIAL_ENVS = [
  * Keychain, which reads as though a config directory could not isolate them.
  * The observed behaviour above says otherwise, and it is what this is built on.)
  *
- * ## Why Apollo emits no credential
+ * ## Why Artemis emits no credential
  *
  * It used to. A profile held a pasted API key or subscription token and this
  * spec named the variable to write it into. Two things were wrong with that,
- * and neither was fixable while Apollo held the credential: the secret sat in
- * Apollo's own store, and `ANTHROPIC_API_KEY` *overrides* a subscription login,
+ * and neither was fixable while Artemis held the credential: the secret sat in
+ * Artemis's own store, and `ANTHROPIC_API_KEY` *overrides* a subscription login,
  * so a profile meant to bill a plan could silently bill API credit instead.
  *
- * Now the CLI's own per-profile login supplies the credential and Apollo emits
+ * Now the CLI's own per-profile login supplies the credential and Artemis emits
  * none of the three variables that could compete with it — it only strips them.
  * A stale value in the user's shell cannot beat a good login, because there is
  * no case in which one of these variables survives into a run.
@@ -219,7 +219,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
       is one more thing to explain in a line that has to survive being pasted
       into a terminal.
 
-      `--console` is deliberately not offered. Apollo supports plan-billed
+      `--console` is deliberately not offered. Artemis supports plan-billed
       accounts, so a mode picker with one entry is a picker that only teaches
       the user there was a decision to get wrong.
     */
@@ -227,7 +227,7 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
     statusArgs: ['auth', 'status', '--json'],
     logoutArgs: ['auth', 'logout'],
     howTo:
-      'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Apollo. Apollo watches that directory and continues on its own once you are done.',
+      'Run this in a terminal. It opens your browser, signs in to your Claude account, and writes the credential into this profile’s config directory — nothing passes through Artemis. Artemis watches that directory and continues on its own once you are done.',
   },
 };
 
@@ -324,7 +324,7 @@ export interface ClaudeModelQuery {
  * the picker use aliases instead of dated snapshots, taken one step further: a
  * hard-coded list is wrong the day a model ships, and no amount of diligence
  * fixes that from inside this file. The CLI already knows the answer, including
- * the things Apollo cannot infer — the provider's own display names, which
+ * the things Artemis cannot infer — the provider's own display names, which
  * effort levels each model really accepts, and which support fast mode.
  *
  * ## Why this opens a query it never prompts
@@ -373,7 +373,7 @@ export async function fetchClaudeModels(
       hostEnv: request.hostEnv,
       scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
     });
-    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
+    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'artemis';
 
     sdkQuery = query({
       prompt: idlePrompt,
@@ -396,11 +396,11 @@ export async function fetchClaudeModels(
     /*
      * The CLI's own list includes a "Default (recommended)" row — an alias that
      * points at whichever model it currently prefers rather than naming one.
-     * It is dropped here for the same reason Apollo's picker no longer offers a
+     * It is dropped here for the same reason Artemis's picker no longer offers a
      * "provider default": a row that names no model cannot tell the user what
      * the next run will cost or how capable it will be, and it sits at the top
      * of the list collecting the clicks of people who have not decided yet.
-     * Every row Apollo shows is a real, named model.
+     * Every row Artemis shows is a real, named model.
      */
     const mapped = infos
       .map(toModelOption)
@@ -660,7 +660,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
      * `cwd` out of the transcript rather than from the directory name. That
      * matters: the directory name is a lossy encoding of the path (every
      * non-alphanumeric character becomes `-`), so reconstructing a cwd from it
-     * would be a guess. Since every Apollo profile has its own
+     * would be a guess. Since every Artemis profile has its own
      * `CLAUDE_CONFIG_DIR`, one such call per profile covers the whole
      * (profile × project) space, and a session's profile falls out of *which*
      * config directory it was found in — no extra bookkeeping anywhere.
@@ -922,9 +922,9 @@ export function buildClaudeOptions(
     scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
   });
 
-  // Identify Apollo in the provider's User-Agent, unless the profile already
+  // Identify Artemis in the provider's User-Agent, unless the profile already
   // chose an identifier.
-  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'apollo';
+  env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'artemis';
 
   const permissionMode = input.permissionMode;
 
@@ -989,7 +989,7 @@ export function buildClaudeOptions(
  * `Settings`, which `Options.settings` loads into the flag layer (the same one
  * the CLI's `--settings` flag feeds, and the highest-priority user-controlled
  * tier). Both are session-scoped by design: the SDK documents that interactive
- * ultracode toggles never persist, which matches Apollo's model exactly, since
+ * ultracode toggles never persist, which matches Artemis's model exactly, since
  * every run is configured from the status line rather than from a config file.
  *
  * Returns `undefined` rather than `{}` when neither is set. Passing an empty
@@ -1441,7 +1441,7 @@ class ClaudeRun implements Run {
     };
   }
 
-  /** Apollo's own intent outranks whatever the transport reports. */
+  /** Artemis's own intent outranks whatever the transport reports. */
   #exitReason(fallback: RunEndReason): RunEndReason {
     if (this.#state.disposeRequested) return 'disposed';
     if (this.#state.interruptRequested) return 'interrupted';
@@ -1566,7 +1566,7 @@ class ClaudeRun implements Run {
  *
  * The SDK's standalone `listSessions()` takes no config-directory option — it
  * resolves the store from the ambient `process.env.CLAUDE_CONFIG_DIR` (falling
- * back to `~/.claude`). Apollo's whole per-profile isolation model depends on
+ * back to `~/.claude`). Artemis's whole per-profile isolation model depends on
  * pointing it somewhere else, so the variable has to be swapped around the
  * call and restored afterwards.
  *

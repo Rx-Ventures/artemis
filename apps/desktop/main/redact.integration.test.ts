@@ -3,7 +3,7 @@
  *
  * `redact.test.ts` tests the scanner against hand-written payloads. That proves
  * the rules fire, but it cannot prove the two things this file cares about,
- * both of which are properties of the seam between `@rx-apollo/core` and
+ * both of which are properties of the seam between `@rx-artemis/core` and
  * `apps/desktop/main` rather than of either side alone:
  *
  *  1. **No false negative.** A real `Profile` — the exact object
@@ -23,8 +23,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createDefaultProviderRegistry, toMetadata } from '@rx-apollo/core';
-import type { Profile } from '@rx-apollo/protocol';
+import { createDefaultProviderRegistry, toMetadata } from '@rx-artemis/core';
+import type { Profile } from '@rx-artemis/protocol';
 
 import {
   assertNoSecrets,
@@ -37,7 +37,7 @@ const profile: Profile = {
   id: 'p_1',
   label: 'Work',
   providerId: 'claude',
-  configDir: '/Users/me/Library/Application Support/Apollo/profiles/work',
+  configDir: '/Users/me/Library/Application Support/Artemis/profiles/work',
   publicEnv: { AWS_REGION: 'us-east-1' },
 };
 
@@ -46,7 +46,7 @@ describe('the leak tripwire against real core output', () => {
     // `publicEnv` is what distinguishes it from the metadata projection, and it
     // is the key the scanner catches.
     expect(() =>
-      assertNoSecrets({ profiles: [profile] }, 'apollo:profiles:list', RESPONSE_SCAN_POLICY),
+      assertNoSecrets({ profiles: [profile] }, 'artemis:profiles:list', RESPONSE_SCAN_POLICY),
     ).toThrow(SecretLeakError);
   });
 
@@ -59,7 +59,7 @@ describe('the leak tripwire against real core output', () => {
     expect(metadata.configDir).toBe(profile.configDir);
     expect(looksLikeSecretValue(metadata.configDir)).toBe(false);
     expect(() =>
-      assertNoSecrets({ profiles: [metadata] }, 'apollo:profiles:list', RESPONSE_SCAN_POLICY),
+      assertNoSecrets({ profiles: [metadata] }, 'artemis:profiles:list', RESPONSE_SCAN_POLICY),
     ).not.toThrow();
   });
 
@@ -67,7 +67,7 @@ describe('the leak tripwire against real core output', () => {
     const metadata = toMetadata({ ...profile, configDir: '/Users/me/.claude' });
 
     expect(() =>
-      assertNoSecrets({ profiles: [metadata] }, 'apollo:profiles:list', RESPONSE_SCAN_POLICY),
+      assertNoSecrets({ profiles: [metadata] }, 'artemis:profiles:list', RESPONSE_SCAN_POLICY),
     ).not.toThrow();
   });
 
@@ -75,7 +75,7 @@ describe('the leak tripwire against real core output', () => {
     const descriptors = await createDefaultProviderRegistry().describe();
 
     expect(() =>
-      assertNoSecrets({ providers: descriptors }, 'apollo:providers:list', RESPONSE_SCAN_POLICY),
+      assertNoSecrets({ providers: descriptors }, 'artemis:providers:list', RESPONSE_SCAN_POLICY),
     ).not.toThrow();
   });
 
@@ -99,7 +99,7 @@ describe('the leak tripwire against real core output', () => {
     expect(() =>
       assertNoSecrets(
         { providers: [{ id: 'claude', credentials: adapter.credentials }] },
-        'apollo:providers:list',
+        'artemis:providers:list',
         RESPONSE_SCAN_POLICY,
       ),
     ).toThrow(SecretLeakError);
