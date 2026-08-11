@@ -835,10 +835,11 @@ function LocationSegment(): ReactElement {
             size="xs"
             onClick={() => setOpen(true)}
             aria-label="Working directory — change it"
-            className={cn(
-              'h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal',
-              unset ? 'text-amber' : 'text-ink-faint',
-            )}
+            // Faint either way. "No directory" is the same absent-value
+            // placeholder the header and the sidebar show, and colouring one of
+            // the three left the bar disagreeing with them about how alarming
+            // an unconfigured app is.
+            className="h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal text-ink-faint"
           >
             <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
             <span className={cn('truncate', !unset && 'text-ink-muted')}>
