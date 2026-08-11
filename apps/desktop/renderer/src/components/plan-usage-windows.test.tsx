@@ -59,6 +59,11 @@ const CLAUDE_USAGE: PlanUsage = {
     { id: 'seven_day', label: '7 days', utilization: 23, resetsAt: Date.now() + 86_400_000 },
     { id: 'seven_day_oauth_apps', label: '7 days', utilization: 4, resetsAt: null },
     { id: 'extra_usage', label: 'Extra usage', utilization: 0, resetsAt: null },
+    // An internal experiment flag that arrives as a real window object — the
+    // only one of its codename family that does — and drew a permanent 0% bar.
+    { id: 'nimbus_quill', label: 'nimbus quill', utilization: 0, resetsAt: null },
+    // Usage credits at zero: the state most accounts are permanently in.
+    { id: 'spend', label: 'Usage Credits', utilization: 0, resetsAt: null },
   ],
   fetchedAt: Date.now(),
 };
@@ -81,7 +86,7 @@ describe('plan usage windows', () => {
     expect(screen.queryByText('No limits reported for this plan.')).toBeNull();
   });
 
-  it('still drops the two windows nobody asks about mid-run', async () => {
+  it('still drops the windows nobody asks about mid-run', async () => {
     answer = CLAUDE_USAGE;
     mount(<ProfilePlanUsage profileId="p2" supported providerLabel="Claude" />);
 
@@ -91,6 +96,23 @@ describe('plan usage windows', () => {
     expect(screen.queryByText('Extra usage')).toBeNull();
     // Two `7 days` rows would mean the oauth-apps window came through with it.
     expect(screen.getAllByText('7 days').length).toBe(1);
+    // An experiment flag is not a limit, whatever shape it arrives in.
+    expect(screen.queryByText('nimbus quill')).toBeNull();
+    // Credits at zero are the permanent state of most accounts, not news.
+    expect(screen.queryByText('Usage Credits')).toBeNull();
+  });
+
+  it('shows Usage Credits once there is actually spend to report', async () => {
+    answer = {
+      ...CLAUDE_USAGE,
+      windows: CLAUDE_USAGE.windows.map((w) =>
+        w.id === 'spend' ? { ...w, utilization: 12 } : w,
+      ),
+    };
+    mount(<ProfilePlanUsage profileId="p4" supported providerLabel="Claude" />);
+
+    await waitFor(() => expect(screen.getByText('Usage Credits')).toBeTruthy());
+    expect(screen.getByText('12%')).toBeTruthy();
   });
 
   it('says so plainly when a plan really reports nothing', async () => {

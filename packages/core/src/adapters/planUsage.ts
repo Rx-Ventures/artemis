@@ -40,8 +40,8 @@ const USAGE_METHOD_NAMES = [
 /**
  * Display order and labels. Anything unrecognised is appended, not dropped.
  *
- * `model_scoped` is deliberately absent: it is not one window. See
- * {@link expandModelScoped}.
+ * `model_scoped` and `spend` are deliberately absent: neither is a plain
+ * window. See {@link expandModelScoped} and {@link spendWindow}.
  */
 const KNOWN_WINDOWS: readonly { id: PlanUsageWindowId; label: string }[] = [
   { id: 'five_hour', label: '5 hours' },
@@ -107,6 +107,35 @@ function expandModelScoped(value: unknown): PlanUsageWindow[] {
     });
   }
   return out;
+}
+
+/** The fields we read off the `spend` entry. A wire shape, only ever read. */
+interface RawSpend {
+  percent?: number | null;
+}
+
+/**
+ * `spend` is the usage-credits balance, not a rate-limit window.
+ *
+ * Its shape is its own: the fraction consumed arrives as `percent` — of the
+ * credit cap, not of a window — alongside money fields this protocol has no
+ * vocabulary for, and there is no `resets_at` because credits do not come back
+ * on a clock. Read through the generic passthrough it rendered as a row
+ * labelled "spend" reporting `null` forever: the same looked-broken-while-
+ * hiding-the-number failure `model_scoped` used to be.
+ *
+ * "Usage Credits" rather than "spend" because that is what the provider's own
+ * copy calls the feature — the payload's disclaimer opens "Usage credits cover
+ * you when you hit your plan limits".
+ */
+function spendWindow(value: unknown): PlanUsageWindow | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  return {
+    id: 'spend',
+    label: 'Usage Credits',
+    utilization: clampUtilization((value as RawSpend).percent),
+    resetsAt: null,
+  };
 }
 
 /**
@@ -190,12 +219,16 @@ export function mapPlanUsage(raw: unknown, fetchedAt: number): PlanUsage {
   // Then the per-model buckets, which are a list rather than a window.
   windows.push(...expandModelScoped(limits['model_scoped']));
 
+  // Then usage credits, which carry their own shape — see `spendWindow`.
+  const spend = spendWindow(limits['spend']);
+  if (spend !== null) windows.push(spend);
+
   // Then anything the provider has added since this file was written. Passing
   // an unrecognised window through unlabelled beats hiding a limit the user is
   // actually being held to.
   for (const [id, entry] of Object.entries(limits)) {
     if (!entry) continue;
-    if (id === 'model_scoped') continue;
+    if (id === 'model_scoped' || id === 'spend') continue;
     if (KNOWN_WINDOWS.some((w) => w.id === id)) continue;
     // An unfamiliar *array* cannot be rendered as one window — that mistake is
     // what `model_scoped` was. Skip it rather than emit a row of nulls.
