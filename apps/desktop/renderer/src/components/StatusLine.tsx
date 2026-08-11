@@ -803,12 +803,18 @@ function RunSegment(): ReactElement | null {
 /**
  * Working directory and branch.
  *
- * The directory half is now a control rather than a readout: it opens the same
- * chooser the sidebar and the palette use, which offers the host's folder
- * picker when the bridge exposes one and a validated path field when it does
- * not. It is still not an *inline* editable field — a half-typed path committed
- * by a stray blur is exactly the failure a bar like this invites — so it opens
- * a dialog and commits deliberately.
+ * This is now the app's primary directory control, not one of two: the sidebar
+ * used to carry a second one, which framed the directory as a property of the
+ * window when it belongs to the session. This bar is where it belongs, because
+ * this bar's whole subject is what the next prompt will do.
+ *
+ * It is a control rather than a readout: it opens the same chooser the palette
+ * and the empty state use, which offers the host's folder picker when the
+ * bridge exposes one and a validated path field when it does not. It is still
+ * not an *inline* editable field — a half-typed path committed by a stray blur
+ * is exactly the failure a bar like this invites — so it opens a dialog and
+ * commits deliberately. Committing may end the current session; `setCwd` in the
+ * store explains why, and the dialog says so.
  *
  * The branch is a last-known value read off session history for this directory;
  * see `lastKnownBranch` for why it cannot be live.

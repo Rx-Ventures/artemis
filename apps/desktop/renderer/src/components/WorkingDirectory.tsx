@@ -17,13 +17,24 @@
  * Failures are shown verbatim. When the picker refuses, its own sentence is
  * what appears — "could not set the working directory" would throw away the
  * only useful part of the failure.
+ *
+ * ## Committing here may end the current session
+ *
+ * The directory is the session's, not the window's, so moving it starts a fresh
+ * session rather than pointing the current one somewhere its transcript was
+ * never written — `setCwd` in the store owns that rule and every route in here
+ * goes through it. The copy says so before the click rather than leaving the
+ * user to infer it from a transcript that just emptied.
+ *
+ * Reached from the status line, the command palette and the empty state. The
+ * sidebar used to be a fourth; see the note at the foot of this file.
  */
 
 import { useState, type ReactElement } from 'react';
-import { FolderOpenIcon, FolderSearchIcon, TriangleAlertIcon } from 'lucide-react';
+import { FolderSearchIcon, TriangleAlertIcon } from 'lucide-react';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON } from '../lib/extensions';
-import { absolutePathHint, isAbsolutePath, shortenPath } from '../lib/paths';
+import { absolutePathHint, isAbsolutePath } from '../lib/paths';
 import { chooseWorkingDirectory, setCwd, useApp } from '../state/store';
 import { ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
@@ -36,7 +47,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { cn } from '@/lib/utils';
 
 /* -------------------------------------------------------------------------- */
 /* The chooser                                                                */
@@ -137,7 +147,8 @@ export function DirectoryChooser({
           className="font-mono text-xs md:text-xs"
         />
         <p id="artemis-cwd-hint" className="text-2xs leading-snug text-ink-faint">
-          {absolutePathHint(platform)} Changing it re-lists this project’s sessions.
+          {absolutePathHint(platform)} Moving it starts a new session — a session only resumes in
+          the directory it was created in.
         </p>
       </div>
 
@@ -180,7 +191,8 @@ export function WorkingDirectoryDialog({
         <DialogHeader>
           <DialogTitle className="text-sm">Set working directory</DialogTitle>
           <DialogDescription className="text-2xs">
-            The agent runs here, and this is the project its sessions are recorded under.
+            The agent runs here, and this is the project its sessions are recorded under. Moving it
+            starts a new session.
           </DialogDescription>
         </DialogHeader>
         <DirectoryChooser onDone={() => onOpenChange(false)} />
@@ -189,44 +201,17 @@ export function WorkingDirectoryDialog({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Trigger                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The sidebar's directory row: what is selected now, and a way to change it.
+/*
+ * REMOVED: `WorkingDirectoryButton`.
  *
- * Shows the shortened path with the full one on hover, and turns amber when
- * there is none — an unset working directory blocks every run, so it is stated
- * where the user will act on it rather than only in an error after they type a
- * prompt.
+ * The sidebar's directory row — a folder icon and the shortened path, under New
+ * session. It presented the directory as a standing property of the window that
+ * the next session would inherit, which is the opposite of what it is: the
+ * directory belongs to the session, and changing it ends that session rather
+ * than moving it (`setCwd` in the store).
+ *
+ * The status line already states it in the right scope, under the composer,
+ * beside the other facts about what the next prompt will do — and opens this
+ * same dialog. Two triggers for one value was one too many; the one that
+ * implied the wrong ownership went.
  */
-export function WorkingDirectoryButton({ className }: { readonly className?: string }): ReactElement {
-  const cwd = useApp((s) => s.cwd);
-  const platform = useApp((s) => s.platform);
-  const [open, setOpen] = useState(false);
-  const unset = cwd.trim().length === 0;
-
-  return (
-    <>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setOpen(true)}
-        title={unset ? 'No working directory set' : cwd}
-        aria-label="Set working directory"
-        className={cn(
-          'h-6 w-full justify-start gap-1.5 px-1.5 font-mono text-2xs font-normal',
-          unset ? 'text-amber' : 'text-ink-muted',
-          className,
-        )}
-      >
-        <FolderOpenIcon className="size-3 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate">
-          {unset ? 'Set working directory' : shortenPath(cwd, { platform, max: 30 })}
-        </span>
-      </Button>
-      <WorkingDirectoryDialog open={open} onOpenChange={setOpen} />
-    </>
-  );
-}
