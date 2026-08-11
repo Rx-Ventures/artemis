@@ -1126,37 +1126,87 @@ export function activeModels(state: SessionState): readonly ProviderModelOption[
 }
 
 /**
+ * Cache a constructed selector value on its inputs — with one slot per pane.
+ * ============================================================================
+ *
+ * Every selector below that *builds* a value has to be memoised on its inputs,
+ * for the reason the {@link NO_OPTIONS} note gives: it is read through a zustand
+ * hook, which decides whether to re-render by comparing the result to the last
+ * one by identity, so a fresh array on every read is an unbounded render loop.
+ *
+ * A single cached result is enough for a selector over the *window* — there is
+ * one grid, so `allPanes` above can hold one entry and always hit. It is not
+ * enough for a selector over a *pane*. These take `SessionState`, and a split
+ * window has up to {@link MAX_PANES} of those, each with its own catalogue:
+ * `refreshModels` is per pane by design, so two columns signed in as two
+ * accounts hold two distinct `models` arrays even when the accounts offer the
+ * same models.
+ *
+ * With one slot and four panes, the columns evict each other. Pane A reads and
+ * caches; pane B reads, misses, and takes the slot; pane A's next read misses
+ * against B's entry and builds a fresh array — so A's value changes identity
+ * without A's state changing at all. React re-renders A, which evicts B, which
+ * re-renders B, which evicts A. That is the "Maximum update depth exceeded"
+ * that blanks the window once a second conversation is open, and it is why the
+ * bound here is the pane limit rather than one.
+ *
+ * Entries are promoted on a hit, so the resident set is the panes actually on
+ * screen rather than the first {@link MAX_PANES} tuples ever seen. Each pane
+ * contributes exactly one live tuple at a time, so the live set always fits and
+ * a pane that changes model merely pushes its own stale entry out.
+ */
+function memoisePerPane<I extends readonly unknown[], O>(
+  compute: (...inputs: I) => O,
+): (...inputs: I) => O {
+  const entries: { readonly inputs: I; readonly out: O }[] = [];
+
+  return (...inputs: I): O => {
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i] as { readonly inputs: I; readonly out: O };
+      if (!entry.inputs.every((value, n) => value === inputs[n])) continue;
+      if (i > 0) {
+        entries.splice(i, 1);
+        entries.unshift(entry);
+      }
+      return entry.out;
+    }
+
+    const out = compute(...inputs);
+    entries.unshift({ inputs, out });
+    if (entries.length > MAX_PANES) entries.length = MAX_PANES;
+    return out;
+  };
+}
+
+/**
  * The catalogue narrowed to the user's pinned models, in catalogue order.
  *
- * Memoised on the identity of its two inputs, and that is not an optimisation.
- * This is read through `useApp(selector)`, which decides whether to re-render
- * by comparing the result to the last one by identity; a `filter` returns a
- * fresh array every call, so an unmemoised version would report a change on
- * every store read and React would loop until it hit its update-depth ceiling.
- * Same hazard the {@link NO_OPTIONS} note describes, one level up.
+ * Memoised on the identity of its two inputs, and that is not an optimisation:
+ * a `filter` returns a fresh array every call, so an unmemoised version would
+ * report a change on every store read and React would loop until it hit its
+ * update-depth ceiling. Same hazard the {@link NO_OPTIONS} note describes, one
+ * level up. Per pane, for the reason {@link memoisePerPane} gives.
  */
-let quickCatalogue: readonly ProviderModelOption[] | null = null;
-let quickIds: readonly string[] | null = null;
-let quickResult: readonly ProviderModelOption[] = NO_OPTIONS;
+const computeQuickModels = memoisePerPane(
+  (
+    catalogue: readonly ProviderModelOption[],
+    ids: readonly string[],
+  ): readonly ProviderModelOption[] => {
+    // No picks means "not curated", not "picked nothing" — a user who has never
+    // opened settings still needs a usable picker, so the whole catalogue stands
+    // in. Filtering to nothing would leave the status line with a menu that opens
+    // onto an empty list and no way to fix it from there.
+    const next = ids.length === 0 ? catalogue : catalogue.filter((m) => ids.includes(m.id));
+
+    // A pinned set that matches nothing in the current catalogue (the ids came
+    // from another provider, or the models were withdrawn) falls back the same
+    // way an uncurated one does, for the same reason.
+    return next.length === 0 ? catalogue : next;
+  },
+);
 
 export function quickModels(state: SessionState): readonly ProviderModelOption[] {
-  const catalogue = activeModels(state);
-  const ids = state.quickModelIds;
-  if (catalogue === quickCatalogue && ids === quickIds) return quickResult;
-
-  // No picks means "not curated", not "picked nothing" — a user who has never
-  // opened settings still needs a usable picker, so the whole catalogue stands
-  // in. Filtering to nothing would leave the status line with a menu that opens
-  // onto an empty list and no way to fix it from there.
-  const next = ids.length === 0 ? catalogue : catalogue.filter((m) => ids.includes(m.id));
-
-  quickCatalogue = catalogue;
-  quickIds = ids;
-  // A pinned set that matches nothing in the current catalogue (the ids came
-  // from another provider, or the models were withdrawn) falls back the same
-  // way an uncurated one does, for the same reason.
-  quickResult = next.length === 0 ? catalogue : next;
-  return quickResult;
+  return computeQuickModels(activeModels(state), state.quickModelIds);
 }
 
 /**
@@ -1319,68 +1369,53 @@ export function thinkingLevels(state: SessionState): readonly ThinkingLevel[] {
   const provider = activeEffortLevels(state);
   if (provider.length === 0) return NO_THINKING;
 
-  const model = selectedModelOption(state);
-  const offersUltra = providerOffersUltracode(state);
-
-  /*
-   * Memoised on input identity, and not for speed.
-   *
-   * This builds a fresh array, and it is read through `useApp(thinkingLevels)`
-   * — a zustand selector. A new array on every store read fails zustand's
-   * identity check every time, which re-renders, which reads again: React bails
-   * out with "Maximum update depth exceeded" and the menu never opens. That is
-   * not hypothetical; it is what happened, and `quickModels` above carries the
-   * same guard for the same reason. Any selector in this file that constructs a
-   * value must cache it on its inputs.
-   */
-  if (
-    thinkingCache !== null &&
-    thinkingCache.provider === provider &&
-    thinkingCache.model === model &&
-    thinkingCache.ultra === (model?.supportsUltracode === true) &&
-    thinkingCache.offersUltra === offersUltra
-  ) {
-    return thinkingCache.out;
-  }
-
-  // `undefined` means "every level the provider offers"; `[]` means none.
-  const allowed = model?.effortLevels;
-  const rungs: ThinkingLevel[] = provider
-    .filter((level) => allowed === undefined || allowed.includes(level.id))
-    .map((level) => ({ id: level.id, label: level.label, note: level.note, available: true }));
-
-  const out: readonly ThinkingLevel[] =
-    rungs.length === 0
-      ? NO_THINKING
-      : offersUltra
-        ? [
-            ...rungs,
-            {
-              id: ULTRACODE_LEVEL,
-              label: 'Ultracode',
-              note: 'Maximum effort plus standing multi-agent orchestration. The most compute this model will spend on one turn.',
-              available: model?.supportsUltracode === true,
-            },
-          ]
-        : rungs;
-
-  thinkingCache = {
+  return computeThinkingLevels(
     provider,
-    model,
-    ultra: model?.supportsUltracode === true,
-    offersUltra,
-    out,
-  };
-  return out;
+    selectedModelOption(state),
+    providerOffersUltracode(state),
+  );
 }
 
-let thinkingCache: {
-  readonly provider: readonly ProviderEffortOption[];
-  readonly model: ProviderModelOption | undefined;
-  readonly ultra: boolean;
-  readonly offersUltra: boolean;
-  readonly out: readonly ThinkingLevel[];
-} | null = null;
+/*
+ * Memoised on input identity, and not for speed.
+ *
+ * This builds a fresh array, and it is read through `usePane(thinkingLevels)` —
+ * a zustand selector. A new array on every store read fails zustand's identity
+ * check every time, which re-renders, which reads again: React bails out with
+ * "Maximum update depth exceeded" and the menu never opens. That is not
+ * hypothetical; it is what happened, and `quickModels` above carries the same
+ * guard for the same reason. Any selector in this file that constructs a value
+ * must cache it on its inputs — and, since these run per pane, must cache one
+ * result per pane. See {@link memoisePerPane}.
+ *
+ * `model` carries `supportsUltracode`, so it is not a separate input: two model
+ * options that differ in it are different objects and miss the cache already.
+ */
+const computeThinkingLevels = memoisePerPane(
+  (
+    provider: readonly ProviderEffortOption[],
+    model: ProviderModelOption | undefined,
+    offersUltra: boolean,
+  ): readonly ThinkingLevel[] => {
+    // `undefined` means "every level the provider offers"; `[]` means none.
+    const allowed = model?.effortLevels;
+    const rungs: ThinkingLevel[] = provider
+      .filter((level) => allowed === undefined || allowed.includes(level.id))
+      .map((level) => ({ id: level.id, label: level.label, note: level.note, available: true }));
+
+    if (rungs.length === 0) return NO_THINKING;
+    if (!offersUltra) return rungs;
+    return [
+      ...rungs,
+      {
+        id: ULTRACODE_LEVEL,
+        label: 'Ultracode',
+        note: 'Maximum effort plus standing multi-agent orchestration. The most compute this model will spend on one turn.',
+        available: model?.supportsUltracode === true,
+      },
+    ];
+  },
+);
 
 const NO_THINKING: readonly ThinkingLevel[] = [];
 
