@@ -681,17 +681,12 @@ export interface WorkspaceDescribeResponse {
  * exactly one file and nothing else.
  */
 export interface PreviewOpenRequest {
-  /** Absolute path to an `.html`, `.htm` or `.svg` file. */
+  /** Absolute path to an `.html`, `.htm`, `.svg`, `.md` or `.markdown` file. */
   readonly path: string;
 }
 
-export interface PreviewOpenResponse {
-  /**
-   * What to put in the frame's `src`. Single-use in spirit — it names a
-   * snapshot main is holding, not the path — and stops resolving once enough
-   * later previews have pushed it out.
-   */
-  readonly url: string;
+/** What every preview carries, however it is shown. */
+export interface PreviewBase {
   /** The file's own name, for the pane's caption. */
   readonly title: string;
   /** The path as asked about, echoed so the caption can say where it came from. */
@@ -699,6 +694,45 @@ export interface PreviewOpenResponse {
   /** Size of the snapshot, for the caption's detail line. */
   readonly bytes: number;
 }
+
+/**
+ * A page to be framed: HTML or SVG, served from the preview scheme.
+ *
+ * The renderer never receives the markup. It gets a URL and hands it to a
+ * sandboxed frame, which is what keeps a document that executes script out of
+ * the renderer's own.
+ */
+export interface PreviewFrame extends PreviewBase {
+  readonly kind: 'frame';
+  /**
+   * What to put in the frame's `src`. Single-use in spirit — it names a
+   * snapshot main is holding, not the path — and stops resolving once enough
+   * later previews have pushed it out.
+   */
+  readonly url: string;
+}
+
+/**
+ * Markdown, as source, for the renderer's own pipeline.
+ *
+ * The opposite transport from {@link PreviewFrame}, and deliberately so.
+ * Markdown is not a program: there is nothing in it to execute, so there is
+ * nothing to sandbox, and sending the text is *stricter* than serving generated
+ * HTML into a frame that permits inline script. It also means one markdown
+ * renderer in the app rather than two. See `PreviewPane`.
+ */
+export interface PreviewMarkdown extends PreviewBase {
+  readonly kind: 'markdown';
+  /** The file's text, verbatim. */
+  readonly text: string;
+}
+
+/**
+ * How a preview arrives. Discriminated on `kind`, because the two are genuinely
+ * different deliveries — a URL for a frame, or text to render in place — rather
+ * than one shape with an unused field.
+ */
+export type PreviewOpenResponse = PreviewFrame | PreviewMarkdown;
 
 /** Open one stored session. */
 export interface SessionsMessagesRequest {

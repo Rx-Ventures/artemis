@@ -69,6 +69,8 @@ import { basename, extname } from 'node:path';
 
 import { protocol } from 'electron';
 
+import type { PreviewOpenResponse } from '@rx-artemis/protocol';
+
 import { createLogger } from './log.js';
 
 const log = createLogger('preview');
@@ -83,18 +85,26 @@ const log = createLogger('preview');
 export const PREVIEW_SCHEME = 'artemis-preview';
 
 /**
- * What a preview may be.
+ * What a preview may be, and how each is delivered.
  *
- * Deliberately short. Every entry here is something whose *rendered* form is the
- * point and which the transcript cannot already show — an `.html` page, and an
- * `.svg` that would otherwise be four hundred lines of path data. Markdown is
- * absent because the transcript renders markdown already; a preview pane for it
- * would be a second, worse copy of something the reader can see in place.
+ * Two kinds, because two things are genuinely different. An `.html` page or an
+ * `.svg` is a document a browser engine has to lay out — and, for HTML, one that
+ * may execute script — so it is *framed*, from the scheme below. Markdown is
+ * text: there is nothing in it to execute and nothing to lay out that the app
+ * cannot already lay out, so it is handed to the renderer as source.
+ *
+ * That split is why markdown is here at all, having once been excluded. The
+ * argument against it was that the transcript renders markdown already — true,
+ * but only of markdown *in the conversation*. A `.md` file the agent writes to
+ * disk is not in the conversation, and until it could be previewed there was
+ * nowhere in Artemis to read it.
  */
-const RENDERABLE: Readonly<Record<string, string>> = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.svg': 'image/svg+xml',
+const RENDERABLE: Readonly<Record<string, { kind: 'frame'; mediaType: string } | { kind: 'markdown' }>> = {
+  '.html': { kind: 'frame', mediaType: 'text/html; charset=utf-8' },
+  '.htm': { kind: 'frame', mediaType: 'text/html; charset=utf-8' },
+  '.svg': { kind: 'frame', mediaType: 'image/svg+xml' },
+  '.md': { kind: 'markdown' },
+  '.markdown': { kind: 'markdown' },
 };
 
 /** True for a path this module is willing to render. Used by the IPC handler. */
@@ -172,28 +182,20 @@ interface Preview {
  */
 const granted = new Map<string, Preview>();
 
-/** What the renderer needs to mount a frame and caption it. */
-export interface PreviewGrant {
-  /** The URL to put in the frame's `src`. */
-  readonly url: string;
-  /** The file's own name, for the pane's caption. */
-  readonly title: string;
-  /** Absolute path, so the caption can say where the page came from. */
-  readonly path: string;
-  readonly bytes: number;
-}
-
 /**
- * Read a file and make it servable, returning the URL that will serve it.
+ * Read a file and make it renderable.
  *
- * Throws a plain `Error` on anything that stops it — the IPC layer turns that
- * into a typed failure, and every message here is written to be shown to the
- * person who clicked Preview.
+ * Returns either a URL for a frame or the text itself, depending on what the
+ * file is — see {@link RENDERABLE}. Throws a plain `Error` on anything that
+ * stops it: the IPC layer turns that into a typed failure, and every message
+ * here is written to be shown to the person who clicked Preview.
  */
-export async function grantPreview(path: string): Promise<PreviewGrant> {
-  const mediaType = RENDERABLE[extname(path).toLowerCase()];
-  if (mediaType === undefined) {
-    throw new Error(`Artemis can only preview HTML and SVG files, and ${basename(path)} is neither.`);
+export async function grantPreview(path: string): Promise<PreviewOpenResponse> {
+  const renderable = RENDERABLE[extname(path).toLowerCase()];
+  if (renderable === undefined) {
+    throw new Error(
+      `Artemis can preview HTML, SVG and Markdown files, and ${basename(path)} is none of those.`,
+    );
   }
 
   const info = await stat(path).catch(() => null);
@@ -206,13 +208,23 @@ export async function grantPreview(path: string): Promise<PreviewGrant> {
   }
 
   const body = await readFile(path);
+  const title = basename(path);
+
+  /*
+   * Markdown never reaches the scheme below. It is decoded here and sent as
+   * text, so nothing is granted, nothing is retained, and there is no URL to
+   * expire — the pane holds the only copy for as long as it is open.
+   */
+  if (renderable.kind === 'markdown') {
+    return { kind: 'markdown', text: body.toString('utf8'), title, path, bytes: body.byteLength };
+  }
+  const mediaType = renderable.mediaType;
 
   // Hex, and lowercase, because it becomes the URL's *host*: a standard scheme
   // lowercases and rejects a host with anything exotic in it, so a token that
   // was merely random-looking would fail to resolve for reasons no error
   // message would explain.
   const token = randomBytes(16).toString('hex');
-  const title = basename(path);
   granted.set(token, { body, mediaType, title, path });
 
   while (granted.size > MAX_RETAINED) {
@@ -221,7 +233,7 @@ export async function grantPreview(path: string): Promise<PreviewGrant> {
     granted.delete(oldest.value);
   }
 
-  return { url: `${PREVIEW_SCHEME}://${token}/`, title, path, bytes: body.byteLength };
+  return { kind: 'frame', url: `${PREVIEW_SCHEME}://${token}/`, title, path, bytes: body.byteLength };
 }
 
 /** Forget every granted preview. For teardown. */

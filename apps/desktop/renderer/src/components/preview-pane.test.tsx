@@ -22,7 +22,7 @@
  * this runs through the real store: the real `openPreview`, the real `call()`.
  */
 
-import type { AgentEvent, IpcResult } from '@rx-artemis/protocol';
+import type { AgentEvent, IpcResult, PreviewOpenResponse } from '@rx-artemis/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -39,12 +39,7 @@ vi.stubGlobal('DOMRectReadOnly', class {});
 /** Paths the renderer actually asked to preview, in order. */
 let asked: string[];
 /** What the fake main process answers next. */
-let answer: (path: string) => IpcResult<{
-  url: string;
-  title: string;
-  path: string;
-  bytes: number;
-}>;
+let answer: (path: string) => IpcResult<PreviewOpenResponse>;
 
 Object.defineProperty(globalThis, 'artemis', {
   configurable: true,
@@ -123,7 +118,13 @@ beforeEach(() => {
   asked = [];
   answer = (path) => ({
     ok: true,
-    value: { url: 'artemis-preview://abc123/', title: 'report.html', path, bytes: 1157 },
+    value: {
+      kind: 'frame' as const,
+      url: 'artemis-preview://abc123/',
+      title: 'report.html',
+      path,
+      bytes: 1157,
+    },
   });
   appTranscript().reset();
   appTranscript().flush();
@@ -236,6 +237,7 @@ describe('the preview pane', () => {
   it('frames the URL the main process returned, and never a path', () => {
     useApp.setState({
       preview: {
+        kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
@@ -257,6 +259,7 @@ describe('the preview pane', () => {
   it('sandboxes the frame with scripts but never with same-origin', () => {
     useApp.setState({
       preview: {
+        kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
@@ -270,9 +273,50 @@ describe('the preview pane', () => {
     expect(sandbox).not.toContain('allow-same-origin');
   });
 
+  /*
+   * Markdown takes the other path entirely: no frame, no URL, no scheme. The
+   * text is rendered here by the same pipeline the transcript uses, which is
+   * what makes a `<script>` in a `.md` file inert — `react-markdown` without
+   * `rehype-raw` shows raw HTML as text rather than running it.
+   */
+  it('renders markdown in place rather than framing it', () => {
+    useApp.setState({
+      preview: {
+        kind: 'markdown',
+        text: '# Release notes\n\nShipped **today**.',
+        title: 'NOTES.md',
+        path: '/Users/me/project/NOTES.md',
+        bytes: 36,
+      },
+    });
+    renderPane();
+
+    expect(screen.getByRole('heading', { name: 'Release notes' })).not.toBeNull();
+    expect(screen.getByText('today').tagName).toBe('STRONG');
+    // No frame at all — nothing was served, so there is nothing to sandbox.
+    expect(screen.queryByTitle('NOTES.md')).toBeNull();
+  });
+
+  it('shows HTML written into markdown as text, never as markup', () => {
+    useApp.setState({
+      preview: {
+        kind: 'markdown',
+        text: 'before\n\n<script>window.stolen = 1;</script>\n\nafter',
+        title: 'NOTES.md',
+        path: '/Users/me/project/NOTES.md',
+        bytes: 48,
+      },
+    });
+    const { container } = renderPane();
+
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.textContent).toContain('window.stolen');
+  });
+
   it('closes on request, which is all the renderer has to do', () => {
     useApp.setState({
       preview: {
+        kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',

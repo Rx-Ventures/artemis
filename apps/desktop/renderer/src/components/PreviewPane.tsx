@@ -26,6 +26,24 @@
  * artifact beside the conversation, resizable against it — and the grid keeps
  * its invariant that every cell is a conversation.
  *
+ * ## Two kinds, two treatments
+ *
+ * An HTML page or an SVG goes in a frame. Markdown does not: it arrives as
+ * *text* and is rendered here by the same `react-markdown` pipeline the
+ * transcript uses.
+ *
+ * That is not a shortcut, it is the stricter option. Converting markdown to
+ * HTML and serving it into the frame would put generated markup inside the one
+ * context in this app that permits inline script, to display something that
+ * cannot contain a program in the first place. Rendering it in place keeps it
+ * out of that context entirely — and `react-markdown` does not render raw HTML
+ * (no `rehype-raw` here, exactly as in the transcript), so a `<script>` written
+ * into a `.md` file is displayed as text rather than run.
+ *
+ * The visible consequence is that a markdown file's embedded HTML shows as
+ * source. That is the honest trade for not having a second, weaker markdown
+ * path, and it matches what the transcript already does with the same input.
+ *
  * ## The frame's sandbox is the load-bearing line in this file
  *
  * `sandbox="allow-scripts"` and **nothing else**. An artifact is script — it is
@@ -50,7 +68,9 @@
  */
 
 import { type ReactElement } from 'react';
-import { PanelRightCloseIcon, SquareArrowOutUpRightIcon } from 'lucide-react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { FileTextIcon, PanelRightCloseIcon, SquareArrowOutUpRightIcon } from 'lucide-react';
 
 import { formatBytes } from '../lib/attachments';
 import { closePreview, useApp } from '../state/store';
@@ -70,10 +90,13 @@ export function PreviewPane(): ReactElement | null {
           drew its own chrome would read as a different application stapled to
           the side. */}
       <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-line px-2.5">
-        <SquareArrowOutUpRightIcon
-          className="size-3 shrink-0 text-ink-faint"
-          aria-hidden="true"
-        />
+        {/* The glyph says which of the two this is — a page, or a document —
+            which is also the difference between what will and will not run. */}
+        {preview.kind === 'frame' ? (
+          <SquareArrowOutUpRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+        ) : (
+          <FileTextIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+        )}
         <span title={preview.path} className="min-w-0 flex-1 truncate text-2xs font-medium text-ink">
           {preview.title}
         </span>
@@ -90,25 +113,41 @@ export function PreviewPane(): ReactElement | null {
         </IconButton>
       </div>
 
-      {/*
-        White, not `--panel`. A page written to be looked at in a browser
-        assumes a browser's default background, and an artifact that never set
-        `body { background }` — most of them — would otherwise render its black
-        text onto Artemis's near-black panel and appear blank. The frame is a
-        window onto somewhere else, and it is honest for it to look like one.
-      */}
-      <iframe
-        key={preview.url}
-        src={preview.url}
-        title={preview.title}
-        sandbox="allow-scripts"
-        // `referrerPolicy` and `loading` are belt and braces: there is nothing
-        // for the frame to fetch and nothing to refer it, but a future edit that
-        // loosens the served CSP should not silently gain either.
-        referrerPolicy="no-referrer"
-        loading="eager"
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+      {preview.kind === 'frame' ? (
+        /*
+          White, not `--panel`. A page written to be looked at in a browser
+          assumes a browser's default background, and an artifact that never set
+          `body { background }` — most of them — would otherwise render its black
+          text onto Artemis's near-black panel and appear blank. The frame is a
+          window onto somewhere else, and it is honest for it to look like one.
+        */
+        <iframe
+          key={preview.url}
+          src={preview.url}
+          title={preview.title}
+          sandbox="allow-scripts"
+          // `referrerPolicy` and `loading` are belt and braces: there is nothing
+          // for the frame to fetch and nothing to refer it, but a future edit that
+          // loosens the served CSP should not silently gain either.
+          referrerPolicy="no-referrer"
+          loading="eager"
+          className="min-h-0 w-full flex-1 border-0 bg-white"
+        />
+      ) : (
+        /*
+          Markdown, in Artemis's own type rather than a browser's. The opposite
+          call from the frame above, and for the opposite reason: this is not a
+          window onto somewhere else, it is a document being read *in* the app,
+          so it takes the app's background and the same `.md` styling the
+          transcript uses. A reader should not have to switch visual gear
+          between an answer and the file that answer wrote.
+        */
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+          <div className="md mx-auto max-w-3xl text-ink">
+            <Markdown remarkPlugins={[remarkGfm]}>{preview.text}</Markdown>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

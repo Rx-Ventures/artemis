@@ -53,6 +53,7 @@ import type {
   PlanMeterFocus,
   PlanRecommendation,
   PlanUsage,
+  PreviewOpenResponse,
   ProfileDraft,
   ProfileId,
   ProfileMetadata,
@@ -148,22 +149,15 @@ export type RunSummary = 'always' | 'failures' | 'never';
 export type { PlanMeterFocus };
 
 /**
- * A page being previewed, as the pane needs it.
+ * What is being previewed, as the pane needs it.
  *
- * Everything here came back from `preview.open` — the renderer builds none of
- * it, and in particular does not construct the URL. That is the shape of the
- * whole feature in one type: the renderer names a path it read out of a tool
- * call, and gets back something it is allowed to frame.
+ * The protocol's own type, re-exported rather than restated. Everything in it
+ * came back from `preview.open` — the renderer builds none of it, and in
+ * particular does not construct the URL. That is the shape of the whole feature
+ * in one type: the renderer names a path it read out of a tool call, and gets
+ * back either something it is allowed to frame or text it can render itself.
  */
-export interface PreviewState {
-  /** What the frame loads. An `artemis-preview:` URL naming a snapshot. */
-  readonly url: string;
-  /** The file's own name, for the caption. */
-  readonly title: string;
-  /** Where the page came from, for the caption's tooltip. */
-  readonly path: string;
-  readonly bytes: number;
-}
+export type PreviewState = PreviewOpenResponse;
 
 /** A dismissible message on the error surface. */
 export interface Banner {

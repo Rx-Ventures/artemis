@@ -31,9 +31,20 @@ describe('previewablePath', () => {
     expect(previewablePath(edit('/a/c.svg', 'svg'), '/a', 'darwin')).toBe('/a/c.svg');
   });
 
-  it('declines anything that is not a page', () => {
+  /*
+   * Markdown, which the transcript renders for conversation but which had
+   * nowhere to be read from when the agent wrote it to a *file*.
+   */
+  it('offers markdown, in both spellings', () => {
+    expect(previewablePath(edit('/a/README.md', 'md'), '/a', 'darwin')).toBe('/a/README.md');
+    expect(previewablePath(edit('/a/notes.markdown', 'markdown'), '/a', 'darwin')).toBe(
+      '/a/notes.markdown',
+    );
+  });
+
+  it('declines anything that is not a page or a document', () => {
     expect(previewablePath(edit('/a/index.ts', 'ts'), '/a', 'darwin')).toBeNull();
-    expect(previewablePath(edit('/a/notes.md', 'md'), '/a', 'darwin')).toBeNull();
+    expect(previewablePath(edit('/a/data.json', 'json'), '/a', 'darwin')).toBeNull();
     // No extension at all — `detectFileEdit` reports this as an empty string.
     expect(previewablePath(edit('/a/Makefile', ''), '/a', 'darwin')).toBeNull();
   });

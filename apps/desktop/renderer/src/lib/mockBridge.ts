@@ -804,12 +804,24 @@ export function createMockBridge(): ArtemisBridge {
     preview: {
       open: async ({ path }) => {
         const name = path.split('/').at(-1) ?? path;
+
+        // Markdown needs no main process at all — the pane renders the text
+        // itself — so this half of the mock is the real behaviour, not a stand-in.
+        if (/\.(md|markdown)$/i.test(name)) {
+          const text =
+            `# ${name}\n\nA **mock** markdown preview.\n\n` +
+            '- rendered by the same pipeline as the transcript\n' +
+            '- no frame, no script\n\n' +
+            '```ts\nconst answer = 42;\n```\n';
+          return ok({ kind: 'markdown', text, title: name, path, bytes: text.length });
+        }
+
         if (!/\.(html?|svg)$/i.test(name)) {
           return {
             ok: false,
             error: {
               code: 'invalid_request',
-              message: `Artemis can only preview HTML and SVG files, and ${name} is neither.`,
+              message: `Artemis can preview HTML, SVG and Markdown files, and ${name} is none of those.`,
             },
           };
         }
@@ -818,6 +830,7 @@ export function createMockBridge(): ArtemisBridge {
           'place-items:center;height:100vh;margin:0}</style>' +
           `<div><strong>${name}</strong><br>Mock preview — no main process.</div>`;
         return ok({
+          kind: 'frame',
           url: `data:text/html;charset=utf-8,${encodeURIComponent(body)}`,
           title: name,
           path,

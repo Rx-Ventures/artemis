@@ -24,7 +24,7 @@ import type { FileEdit } from './diff';
 import { isAbsolutePath, separatorFor, type Platform } from './paths';
 
 /** Extensions the preview pane can render. See the note above about the copy. */
-const RENDERABLE = new Set(['html', 'htm', 'svg']);
+const RENDERABLE = new Set(['html', 'htm', 'svg', 'md', 'markdown']);
 
 /**
  * The absolute path of a page this tool call wrote, or `null`.
