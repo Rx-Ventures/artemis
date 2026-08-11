@@ -68,6 +68,7 @@ import {
 import { createLogger } from './log.js';
 import { assertNoSecrets, EVENT_SCAN_POLICY, RESPONSE_SCAN_POLICY } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import type { Updater } from './updater.js';
 import {
   validateProfilesCreate,
   validateProfilesDelete,
@@ -90,6 +91,10 @@ import {
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
+  validateUpdatesDismiss,
+  validateUpdatesInstall,
+  validateUpdatesRestart,
+  validateUpdatesState,
   validateWindowRequest,
   validateWorkspaceDescribe,
   validateWorkspacePickDirectory,
@@ -136,6 +141,7 @@ export interface HandlerContext {
 export interface IpcLayerOptions {
   readonly engine: EngineHost;
   readonly policy: SecurityPolicy;
+  readonly updater: Updater;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -150,7 +156,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy } = options;
+  const { engine, policy, updater } = options;
 
   const handlers: ChannelHandlers = {
     /* ---------------------------------------------------------------- */
@@ -478,6 +484,42 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.windowState]: {
       validate: validateWindowRequest,
       handle: async (_request, context) => ({ state: readWindowState(context.window) }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Updates                                                          */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Three channels, one shape of answer: the updater's state now, so the
+     * banner never assumes a command landed — the same contract as the window
+     * channels. Note what the requests *cannot* say: no URL, no path, no
+     * version to install. The renderer can consent to what main found, and
+     * silence one version, and that is all.
+     */
+    [IPC.updatesState]: {
+      validate: validateUpdatesState,
+      handle: async () => ({ state: updater.state() }),
+    },
+
+    [IPC.updatesInstall]: {
+      validate: validateUpdatesInstall,
+      handle: async () => ({ state: updater.install() }),
+    },
+
+    /**
+     * The only way a restart happens. `install` parks at `ready` and stays
+     * there — across hours, or forever — until this channel is invoked by the
+     * user's own click. At any phase but `ready` it is a read.
+     */
+    [IPC.updatesRestart]: {
+      validate: validateUpdatesRestart,
+      handle: async () => ({ state: updater.restart() }),
+    },
+
+    [IPC.updatesDismiss]: {
+      validate: validateUpdatesDismiss,
+      handle: async (request) => ({ state: await updater.dismiss(request.version) }),
     },
   };
 

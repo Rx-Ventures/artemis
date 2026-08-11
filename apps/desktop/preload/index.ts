@@ -66,6 +66,11 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type PlanUsagePush,
+  type UpdateState,
+  type UpdatesDismissRequest,
+  type UpdatesInstallRequest,
+  type UpdatesRestartRequest,
+  type UpdatesStateRequest,
   type UsagePlanRequest,
   type WindowRequest,
   type WindowState,
@@ -179,6 +184,30 @@ function isPlanUsagePush(value: unknown): value is PlanUsagePush {
   );
 }
 
+/**
+ * Minimal shape check on a pushed updater state. Same standard as
+ * {@link isAgentEvent}: a guard against a malformed payload reaching a
+ * render, not validation of an untrusted sender.
+ */
+function isUpdateState(value: unknown): value is UpdateState {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as {
+    phase?: unknown;
+    version?: unknown;
+    message?: unknown;
+    releaseUrl?: unknown;
+  };
+  const phases = ['idle', 'available', 'working', 'ready', 'restarting', 'error'];
+  const nullableString = (field: unknown): boolean => field === null || typeof field === 'string';
+  return (
+    typeof candidate.phase === 'string' &&
+    phases.includes(candidate.phase) &&
+    nullableString(candidate.version) &&
+    nullableString(candidate.message) &&
+    nullableString(candidate.releaseUrl)
+  );
+}
+
 interface PushChannel<T> {
   /** Register a listener. Returns an idempotent disposer. */
   readonly subscribe: (listener: (payload: T) => void) => Unsubscribe;
@@ -282,6 +311,12 @@ const planUsages = createPushChannel<PlanUsagePush>({
   isValid: isPlanUsagePush,
 });
 
+const updateStates = createPushChannel<UpdateState>({
+  channel: IPC_PUSH.updateState,
+  label: 'artemis.updates.onChange',
+  isValid: isUpdateState,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
@@ -289,6 +324,7 @@ window.addEventListener('beforeunload', () => {
   agentEvents.reset();
   windowStates.reset();
   planUsages.reset();
+  updateStates.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -408,6 +444,14 @@ const bridge: ArtemisBridge = Object.freeze({
     close: (request: WindowRequest) => invoke(IPC.windowClose, request),
     state: (request: WindowRequest) => invoke(IPC.windowState, request),
     onStateChange: windowStates.subscribe,
+  }),
+
+  updates: Object.freeze({
+    state: (request: UpdatesStateRequest) => invoke(IPC.updatesState, request),
+    install: (request: UpdatesInstallRequest) => invoke(IPC.updatesInstall, request),
+    restart: (request: UpdatesRestartRequest) => invoke(IPC.updatesRestart, request),
+    dismiss: (request: UpdatesDismissRequest) => invoke(IPC.updatesDismiss, request),
+    onChange: updateStates.subscribe,
   }),
 });
 

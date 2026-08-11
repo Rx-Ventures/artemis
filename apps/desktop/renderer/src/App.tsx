@@ -86,6 +86,7 @@
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { AppHeader } from './components/AppHeader';
+import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { ErrorSurface } from './components/ErrorSurface';
 import { RunInfoDialog } from './components/RunInfoDialog';
@@ -240,6 +241,13 @@ export function App(): ReactElement {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-abyss">
       <AppHeader />
+      {/*
+        Full window width, sidebar included, unlike the ErrorSurface strip
+        below: an update is a fact about the installation rather than about
+        any one column, and every window shows the same one. See the
+        component's own header for why it does not go through the store.
+      */}
+      <UpdateBanner />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {/*

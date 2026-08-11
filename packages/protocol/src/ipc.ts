@@ -130,6 +130,21 @@ export const IPC = {
   windowClose: 'artemis:window:close',
   /** Read the window's chrome state, for the first paint. */
   windowState: 'artemis:window:state',
+
+  /**
+   * App updates.
+   *
+   * Four channels and no configuration surface: the renderer can read the
+   * updater's state, ask it to install what it found, restart into what was
+   * installed, and silence one version.
+   * Where updates come from, how they are fetched and how the bundle is swapped
+   * are the main process's business alone — the renderer never sees a URL, a
+   * path or a checksum.
+   */
+  updatesState: 'artemis:updates:state',
+  updatesInstall: 'artemis:updates:install',
+  updatesRestart: 'artemis:updates:restart',
+  updatesDismiss: 'artemis:updates:dismiss',
 } as const;
 
 /**
@@ -160,6 +175,15 @@ export const IPC_PUSH = {
    * @see PlanUsagePush
    */
   planUsage: 'artemis:push:plan-usage',
+  /**
+   * Carries an {@link UpdateState} whenever the updater's state changes.
+   *
+   * Pushed rather than polled because everything interesting happens while the
+   * renderer is not asking: the periodic check that finds a new version, the
+   * download that finishes, the swap that fails. The pull channel
+   * ({@link IPC.updatesState}) exists only for the first paint.
+   */
+  updateState: 'artemis:push:update-state',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -795,6 +819,76 @@ export interface WindowStateResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Updates                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two parameterless update requests. Empty for the reason
+ * {@link WindowRequest} is: there is exactly one updater and nothing about it
+ * is addressable, so a field here could only ever be a lie.
+ */
+export type UpdatesStateRequest = Record<string, never>;
+/** @see UpdatesStateRequest */
+export type UpdatesInstallRequest = Record<string, never>;
+/** @see UpdatesStateRequest */
+export type UpdatesRestartRequest = Record<string, never>;
+
+/**
+ * Silence the banner for one version.
+ *
+ * Carries the version rather than meaning "whatever is showing" so that a
+ * dismiss racing a new offer cannot silence the wrong one: dismissing 0.3.0
+ * in the same instant 0.4.0 arrives leaves 0.4.0 offered.
+ */
+export interface UpdatesDismissRequest {
+  readonly version: string;
+}
+
+/**
+ * Where the updater is in its life.
+ *
+ * One state object rather than a family of events, so the renderer's banner is
+ * a pure function of the latest push and a missed transition costs nothing.
+ *
+ *  - `idle`        — nothing to say; the banner does not render.
+ *  - `available`   — `version` is downloadable. The banner offers it.
+ *  - `working`     — download / verify / swap in progress. One phase, because
+ *                    the renderer draws all three the same way: a spinner and
+ *                    a "don't quit yet". The steps are main's business.
+ *  - `ready`       — installed, and *nothing more happens on its own*. The
+ *                    swap has landed on disk, but the running process is the
+ *                    old version and stays so until the user says restart —
+ *                    or quits normally, in which case the next launch is the
+ *                    new version anyway. The restart is the user's, never the
+ *                    updater's.
+ *  - `restarting`  — the user said restart; gone in a moment.
+ *  - `error`       — the attempt failed and the app is untouched. `message`
+ *                    says why, in words already safe to show.
+ */
+export interface UpdateState {
+  readonly phase: 'idle' | 'available' | 'working' | 'ready' | 'restarting' | 'error';
+  /** The version on offer (or being installed / failed), null when idle. */
+  readonly version: string | null;
+  /** Human-readable failure, null except when `phase` is `error`. */
+  readonly message: string | null;
+  /**
+   * The release page, for the manual path when the in-place update cannot run
+   * (no way to reach the feed, an app bundle that cannot be swapped). Null
+   * whenever the automatic path is expected to work.
+   */
+  readonly releaseUrl: string | null;
+}
+
+/**
+ * The answer to every update channel: the updater's state *now*. The same
+ * contract as {@link WindowStateResponse} — commands reply with the resulting
+ * state, so the banner never has to assume its command landed.
+ */
+export interface UpdatesStateResponse {
+  readonly state: UpdateState;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -828,6 +922,10 @@ export type IpcRequestMap = {
   [IPC.windowToggleMaximize]: WindowRequest;
   [IPC.windowClose]: WindowRequest;
   [IPC.windowState]: WindowRequest;
+  [IPC.updatesState]: UpdatesStateRequest;
+  [IPC.updatesInstall]: UpdatesInstallRequest;
+  [IPC.updatesRestart]: UpdatesRestartRequest;
+  [IPC.updatesDismiss]: UpdatesDismissRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -860,6 +958,10 @@ export type IpcResponseMap = {
   [IPC.windowToggleMaximize]: WindowStateResponse;
   [IPC.windowClose]: WindowStateResponse;
   [IPC.windowState]: WindowStateResponse;
+  [IPC.updatesState]: UpdatesStateResponse;
+  [IPC.updatesInstall]: UpdatesStateResponse;
+  [IPC.updatesRestart]: UpdatesStateResponse;
+  [IPC.updatesDismiss]: UpdatesStateResponse;
 };
 
 /** Request type for a channel. */
@@ -890,6 +992,7 @@ export type IpcPushMap = {
   [IPC_PUSH.agentEvent]: AgentEvent;
   [IPC_PUSH.windowState]: WindowState;
   [IPC_PUSH.planUsage]: PlanUsagePush;
+  [IPC_PUSH.updateState]: UpdateState;
 };
 
 /** Payload type for a push channel. */
@@ -1098,6 +1201,41 @@ export interface ArtemisBridge {
      * still in flight.
      */
     onStateChange(listener: (state: WindowState) => void): Unsubscribe;
+  };
+
+  /**
+   * App updates, reduced to what a banner needs.
+   *
+   * The renderer can find out where the updater is, say yes, and say "not this
+   * version". It cannot point the updater anywhere, see where downloads land,
+   * or influence how the app is replaced — the whole mechanism lives in the
+   * main process, and this surface is deliberately too small to steer it.
+   */
+  readonly updates: {
+    /** The updater's state right now, for the first paint before any push. */
+    state(request: UpdatesStateRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /**
+     * Download, verify and install the offered version. Resolves as soon as
+     * the attempt is underway — progress arrives on {@link onChange}, not in
+     * this reply. Installing never restarts anything: the flow parks at
+     * `ready` and waits for {@link restart}.
+     */
+    install(request: UpdatesInstallRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /**
+     * Relaunch into the installed version. Only meaningful at `ready`; at any
+     * other phase it answers with the current state and does nothing. This is
+     * the single place a restart can come from — the updater itself never
+     * initiates one.
+     */
+    restart(request: UpdatesRestartRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /** Silence the banner for one version. The next version offers again. */
+    dismiss(request: UpdatesDismissRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /**
+     * Subscribe to updater-state changes. Call this before {@link state}, for
+     * the reason {@link runs.onEvent} says: a change can land while the read
+     * is still in flight.
+     */
+    onChange(listener: (state: UpdateState) => void): Unsubscribe;
   };
 }
 
