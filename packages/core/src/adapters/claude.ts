@@ -60,10 +60,19 @@ import type {
   Settings,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
+/*
+ * The message-content types the SDK builds `SDKUserMessage.message` out of, but
+ * does not re-export: it imports them from `@anthropic-ai/sdk/resources` and
+ * keeps them internal. Reached for directly, therefore, and type-only — nothing
+ * here survives compilation, and the package is already in the tree as the
+ * Agent SDK's own dependency.
+ */
+import type { ImageBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 
 import type {
   AgentError,
   AgentEvent,
+  Attachment,
   Capabilities,
   PermissionDecision,
   PermissionRequestId,
@@ -77,7 +86,7 @@ import type {
   SessionSummary,
   SystemPromptSpec,
 } from '@rx-artemis/protocol';
-import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import { isImageAttachment, NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
@@ -157,6 +166,7 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
   usageReporting: true, // `result.usage` / `result.modelUsage`
   costReporting: true, // `total_cost_usd` / `ModelUsage.costUSD`
   planUsageReporting: true, // the SDK's structured `/usage` control request
+  imageInput: true, // base64 `image` blocks in the user message's content
 };
 
 /** Env var selecting an isolated Claude config — and therefore session — directory. */
@@ -1315,7 +1325,7 @@ class ClaudeRun implements Run {
   start(): void {
     // Seed the input pump before the SDK starts pulling, so the first turn has
     // its prompt waiting rather than racing for it.
-    this.#promptQueue.push(this.#userMessage(this.#input.prompt));
+    this.#promptQueue.push(this.#userMessage(this.#input.prompt, this.#input.attachments));
 
     const external = this.#input.abortSignal;
     if (external !== undefined) {
@@ -1402,7 +1412,7 @@ class ClaudeRun implements Run {
    * `midRunSteering` stays `true` because the fold genuinely works and is the
    * common case; this is about not overstating it.
    */
-  async send(text: string): Promise<SendResult> {
+  async send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
     if (this.#state.ended) {
       throw adapterError(
         'invalid_request',
@@ -1421,7 +1431,7 @@ class ClaudeRun implements Run {
       );
     }
 
-    this.#promptQueue.push(this.#userMessage(text));
+    this.#promptQueue.push(this.#userMessage(text, attachments));
     return { deliveredImmediately: false };
   }
 
@@ -1658,10 +1668,43 @@ class ClaudeRun implements Run {
     if (event.type === 'run.end') this.#eventQueue.close();
   }
 
-  #userMessage(text: string): SDKUserMessage {
+  /**
+   * One user turn, as the SDK's streaming input wants it.
+   *
+   * With no images this stays a plain string rather than a one-element block
+   * array. The two are equivalent to the API, but the string is what the SDK's
+   * own examples send and what every transcript reader in the ecosystem expects
+   * to find in the `.jsonl` — including Artemis's own history reader, which
+   * would otherwise need to learn a second shape to display prompts it wrote
+   * itself.
+   *
+   * With images, blocks — and the images come *first*. Anthropic's guidance is
+   * explicit that a question placed before its image is answered worse, and the
+   * ordering is free to get right here.
+   */
+  #userMessage(text: string, attachments?: readonly Attachment[]): SDKUserMessage {
+    const images = (attachments ?? []).filter(isImageAttachment);
+    const content: MessageParam['content'] =
+      images.length === 0
+        ? text
+        : [
+            ...images.map(
+              (image): ImageBlockParam => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mediaType, data: image.data },
+              }),
+            ),
+            // An empty text block is a 400 from the Messages API, so a prompt
+            // that is *only* images sends its blocks alone. The composer does
+            // not allow that today — Send needs text — but this is a wire
+            // format, and "the UI prevents it" is not a reason for the wire to
+            // be malformed if it ever stops preventing it.
+            ...(text.length === 0 ? [] : [{ type: 'text' as const, text }]),
+          ];
+
     return {
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
     };
   }

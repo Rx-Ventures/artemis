@@ -270,6 +270,86 @@ describe('streaming input', () => {
     await run.dispose();
   });
 
+  /**
+   * Images.
+   *
+   * The shape matters more than it looks: `content` stays a plain string when
+   * there are no images, because that is what the SDK writes to its session
+   * `.jsonl` and what Artemis's own history reader parses back out.
+   */
+  describe('attachments', () => {
+    const IMAGE = {
+      kind: 'image',
+      id: 'img-1',
+      mediaType: 'image/png',
+      data: 'aGVsbG8=',
+    } as const;
+
+    it('sends images as content blocks, ahead of the text', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: 'what is wrong here?',
+        attachments: [IMAGE],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.value).toMatchObject({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+            { type: 'text', text: 'what is wrong here?' },
+          ],
+        },
+      });
+      await run.dispose();
+    });
+
+    it('keeps a plain string when there are no images', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({ ...BASE_INPUT, attachments: [] });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect((first.value as SDKUserMessage).message.content).toBe('refactor the parser');
+      await run.dispose();
+    });
+
+    it('carries images on a mid-run send too', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      await iterator.next();
+
+      await run.send('and this one', [{ ...IMAGE, id: 'img-2' }]);
+      const second = await iterator.next();
+      expect((second.value as SDKUserMessage).message.content).toMatchObject([
+        { type: 'image' },
+        { type: 'text', text: 'and this one' },
+      ]);
+      await run.dispose();
+    });
+
+    it('omits an empty text block, which the Messages API rejects', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: '',
+        attachments: [IMAGE],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect((first.value as SDKUserMessage).message.content).toEqual([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+      ]);
+      await run.dispose();
+    });
+  });
+
   it('refuses to send once teardown has closed the prompt queue', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);

@@ -135,6 +135,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+import { isImageAttachment } from '@rx-artemis/protocol';
+
 import { useToolGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { detectFileEdit } from '../lib/diff';
 import { activeCapabilities, useApp, type ConversationWidth } from '../state/store';
@@ -460,6 +462,25 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             square corner points back at the author, which is what makes an
             aligned bubble read as *from* someone rather than merely offset. */}
         <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
+          {/* Images above the text, in the order the model receives them. A
+              transcript that showed them the other way round would be a record
+              of a prompt nobody sent. */}
+          {item.attachments && item.attachments.length > 0 ? (
+            <div className="mb-2 flex flex-wrap justify-end gap-1.5">
+              {item.attachments.filter(isImageAttachment).map((attachment) => (
+                <img
+                  key={attachment.id}
+                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                  alt={attachment.name ?? 'Attached image'}
+                  title={attachment.name ?? 'Attached image'}
+                  // Capped rather than full-bleed: a tall screenshot at full
+                  // width would push the prompt it belongs to off the screen,
+                  // and this is a record of what was sent, not a viewer.
+                  className="max-h-48 max-w-full rounded-md border border-lunar/25 object-contain"
+                />
+              ))}
+            </div>
+          ) : null}
           {item.text}
         </BubbleContent>
       </Bubble>

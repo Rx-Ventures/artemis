@@ -8,9 +8,19 @@
  * response parsing, approval translation — is what this file pins down.
  */
 
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import type { JsonValue, PermissionMode, ProfileId, RunId } from '@rx-artemis/protocol';
+import type {
+  ImageAttachment,
+  JsonValue,
+  PermissionMode,
+  ProfileId,
+  RunId,
+} from '@rx-artemis/protocol';
 
 import {
   CODEX_CAPABILITIES,
@@ -22,6 +32,7 @@ import {
   parseModelList,
   parseRateLimitWindows,
   parseThreadList,
+  stageCodexImages,
   toApprovalResponse,
   toCodexPermissions,
   validateCodexRunInput,
@@ -69,7 +80,87 @@ describe('capabilities', () => {
       planUsageReporting: true,
       costReporting: false,
       subagents: false,
+      imageInput: true,
     });
+  });
+});
+
+/**
+ * Staging images.
+ *
+ * Against the real filesystem, in a real temp directory. Mocking `node:fs` here
+ * would test the mock — the whole point of this code is that a byte payload
+ * becomes a file another process can open, and only the filesystem can say
+ * whether it did.
+ */
+describe('stageCodexImages', () => {
+  /** "hello" in base64, so the file's contents are checkable by eye. */
+  const HELLO = 'aGVsbG8=';
+
+  const image = (over: Partial<ImageAttachment> = {}): ImageAttachment => ({
+    kind: 'image',
+    id: 'img-1',
+    mediaType: 'image/png',
+    data: HELLO,
+    ...over,
+  });
+
+  async function withTempDir<T>(body: (dir: string) => Promise<T>): Promise<T> {
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-codex-test-'));
+    try {
+      return await body(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('writes the decoded bytes and points at them by path', async () => {
+    await withTempDir(async (dir) => {
+      const [item] = await stageCodexImages(dir, [image()]);
+      expect(item).toEqual({ type: 'localImage', path: join(dir, 'image-1.png') });
+      expect(await readFile(join(dir, 'image-1.png'), 'utf8')).toBe('hello');
+    });
+  });
+
+  it('gives each file the extension its media type implies', async () => {
+    // Not cosmetic: Codex derives the `data:` URL's media type from the path,
+    // so a `.png` holding JPEG bytes is a mislabelled image sent to the API.
+    await withTempDir(async (dir) => {
+      const items = await stageCodexImages(dir, [
+        image({ mediaType: 'image/jpeg' }),
+        image({ mediaType: 'image/gif' }),
+        image({ mediaType: 'image/webp' }),
+      ]);
+      expect(items.map((item) => item.path)).toEqual([
+        join(dir, 'image-1.jpg'),
+        join(dir, 'image-2.gif'),
+        join(dir, 'image-3.webp'),
+      ]);
+    });
+  });
+
+  it('continues numbering from an offset, so a steer cannot overwrite the prompt', async () => {
+    await withTempDir(async (dir) => {
+      await stageCodexImages(dir, [image()]);
+      const [second] = await stageCodexImages(dir, [image({ id: 'img-2' })], 1);
+      expect(second?.path).toBe(join(dir, 'image-2.png'));
+    });
+  });
+
+  it('never builds a path out of the attachment name', async () => {
+    // `name` came from a filename. It is the one field here that something
+    // upstream could shape, and a counter cannot traverse.
+    await withTempDir(async (dir) => {
+      const [item] = await stageCodexImages(dir, [image({ name: '../../../etc/passwd' })]);
+      expect(item?.path).toBe(join(dir, 'image-1.png'));
+    });
+  });
+
+  it('fails loudly when the directory cannot be written to', async () => {
+    // Rather than dropping the image and sending the text: a question about a
+    // screenshot the model never received gets a confident, useless answer.
+    const missing = join(tmpdir(), 'artemis-codex-does-not-exist', 'nested');
+    await expect(stageCodexImages(missing, [image()])).rejects.toSatisfy(isAdapterError);
   });
 });
 

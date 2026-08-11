@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NO_CAPABILITIES, PERMISSION_MODES } from '@rx-artemis/protocol';
 import type {
   AgentEvent,
+  Attachment,
   Capabilities,
   PermissionDecision,
   RunEndEvent,
@@ -45,6 +46,7 @@ const FULL_CAPABILITIES: Capabilities = {
  */
 class FakeRun {
   readonly sent: string[] = [];
+  readonly sentAttachments: (readonly Attachment[])[] = [];
   readonly answered: Array<{ requestId: string; decision: PermissionDecision }> = [];
   readonly events: AsyncIterable<AgentEvent>;
 
@@ -79,8 +81,9 @@ class FakeRun {
     this.#pulse();
   }
 
-  send(text: string): Promise<SendResult> {
+  send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
     this.sent.push(text);
+    if (attachments !== undefined) this.sentAttachments.push(attachments);
     return Promise.resolve(this.sendResult);
   }
 
@@ -391,6 +394,40 @@ describe('RunRegistry — starting', () => {
     await expect(
       registry.start(input({ resumeSessionId: 'old', forkSession: true })),
     ).rejects.toBeInstanceOf(RunError);
+  });
+
+  /**
+   * Images, on an adapter that cannot take them.
+   *
+   * Refused rather than stripped, and it is the same refusal on both routes.
+   * The composer gates the button, so the way to arrive here is to attach under
+   * one provider and switch before sending — at which point sending the text
+   * alone puts a question about a screenshot in front of a model that never
+   * received one.
+   */
+  it('refuses images an adapter cannot carry, on start and mid-run alike', async () => {
+    const image: Attachment = {
+      kind: 'image',
+      id: 'img-1',
+      mediaType: 'image/png',
+      data: 'aGVsbG8=',
+    };
+
+    const textOnly = harness({ capabilities: { ...FULL_CAPABILITIES, imageInput: false } });
+    await expect(textOnly.registry.start(input({ attachments: [image] }))).rejects.toBeInstanceOf(
+      RunError,
+    );
+    const started = await textOnly.registry.start(input());
+    await expect(textOnly.registry.send(started.runId, 'look', [image])).rejects.toBeInstanceOf(
+      RunError,
+    );
+    expect(textOnly.runs[0]?.sentAttachments).toEqual([]);
+
+    // And forwarded, unchanged, by one that can.
+    const capable = harness({ capabilities: { ...FULL_CAPABILITIES, imageInput: true } });
+    const handle = await capable.registry.start(input());
+    await capable.registry.send(handle.runId, 'look', [image]);
+    expect(capable.runs[0]?.sentAttachments).toEqual([[image]]);
   });
 
   it('surfaces an adapter that fails to create a run, without registering it', async () => {

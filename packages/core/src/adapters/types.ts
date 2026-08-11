@@ -44,6 +44,7 @@ import type {
   AgentError,
   AgentErrorCode,
   AgentEvent,
+  Attachment,
   Capabilities,
   PermissionDecision,
   PermissionRequestId,
@@ -244,8 +245,13 @@ export interface Run {
    * flight. Without it, an adapter has two honest options: queue the text and
    * return `deliveredImmediately: false`, or reject with an
    * `invalid_request` {@link AdapterError}. It must not silently drop the text.
+   *
+   * `attachments` follows the same contract as {@link RunInput.attachments}.
+   * The registry refuses them for an adapter that does not declare
+   * {@link Capabilities.imageInput}, so an implementation only has to handle
+   * them if it advertises them.
    */
-  send(text: string): Promise<SendResult>;
+  send(text: string, attachments?: readonly Attachment[]): Promise<SendResult>;
 
   /**
    * Ask the provider to stop what it is doing.

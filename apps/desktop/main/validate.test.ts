@@ -6,6 +6,7 @@ import {
   validateProfilesSuggestDir,
   validateProfilesUpdate,
   validateRunsRespondPermission,
+  validateRunsSend,
   validateRunsStart,
   validateSessionsList,
 } from './validate.js';
@@ -73,6 +74,127 @@ describe('validateRunsStart', () => {
     });
     expect(result.input.metadata).toEqual({ tab: 'a' });
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+});
+
+/**
+ * Attachments.
+ *
+ * The renderer enforces every one of these limits before the send, so a user
+ * never meets them. These tests are about the other caller — a renderer that
+ * has been compromised, or a bug — because this is the last place a payload can
+ * be refused before it is written to a file and billed to an account.
+ */
+describe('attachments', () => {
+  /** A 1×1 PNG. Small, real, and decodes. */
+  const PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  const image = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    kind: 'image',
+    id: 'img_1',
+    mediaType: 'image/png',
+    data: PNG,
+    ...over,
+  });
+
+  it('accepts an image on a run and on a mid-run send', () => {
+    const started = validateRunsStart({ input: { ...VALID_RUN, attachments: [image()] } });
+    expect(started.input.attachments).toHaveLength(1);
+    expect(started.input.attachments?.[0]?.mediaType).toBe('image/png');
+
+    const sent = validateRunsSend({ runId: 'run_1', text: 'look', attachments: [image()] });
+    expect(sent.attachments).toHaveLength(1);
+  });
+
+  it('treats an empty list as no attachments at all', () => {
+    // So `compact` drops the key rather than forwarding `[]`, which an adapter
+    // would otherwise have to distinguish from "none" for no reason.
+    expect(validateRunsStart({ input: { ...VALID_RUN, attachments: [] } }).input.attachments).toBeUndefined();
+  });
+
+  it('rejects a media type no provider reads', () => {
+    // SVG is the one worth naming: it is a document that can carry script, and
+    // it is the format someone would most plausibly try.
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ mediaType: 'image/svg+xml' })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a data: prefix rather than quietly stripping it', () => {
+    expect(() =>
+      validateRunsStart({
+        input: { ...VALID_RUN, attachments: [image({ data: `data:image/png;base64,${PNG}` })] },
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects payloads that are not base64', () => {
+    // `Buffer.from(…, 'base64')` would accept both of these by discarding what
+    // it could not read, which is why the check is a regex.
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: 'not base64!!' })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: 'iVBO=RwLA' })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects an image over the per-image ceiling', () => {
+    // 8MB of valid base64, well past the 5MB limit.
+    const huge = 'A'.repeat(4 * 1024 * 1024 * 8 / 3);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ data: huge })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects more images than a prompt can carry', () => {
+    const five = Array.from({ length: 5 }, (_, index) => image({ id: `img_${String(index)}` }));
+    expect(() => validateRunsStart({ input: { ...VALID_RUN, attachments: five } })).toThrow(ValidationError);
+  });
+
+  it('rejects two attachments sharing an id', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image(), image()] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects an id that is really a path', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ id: '../../etc/passwd' })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('drops a caller-supplied path', () => {
+    // The shape the protocol deliberately does not have. A renderer that sends
+    // one is asking the main process to read a file of its choosing.
+    const result = validateRunsStart({
+      input: { ...VALID_RUN, attachments: [image({ path: '/Users/someone/.ssh/id_rsa' })] },
+    });
+    expect(result.input.attachments?.[0]).not.toHaveProperty('path');
+  });
+
+  it('keeps a filename as a label but caps its length', () => {
+    const named = validateRunsStart({
+      input: { ...VALID_RUN, attachments: [image({ name: 'shot.png' })] },
+    });
+    expect(named.input.attachments?.[0]?.name).toBe('shot.png');
+
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ name: 'x'.repeat(500) })] } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects anything that is not an image', () => {
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: [image({ kind: 'file' })] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: ['not an object'] } }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateRunsStart({ input: { ...VALID_RUN, attachments: { 0: image() } } }),
+    ).toThrow(ValidationError);
   });
 });
 

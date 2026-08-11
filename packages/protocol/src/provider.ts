@@ -131,6 +131,19 @@ export interface Capabilities {
    * offer the control, `available` decides what the control says.
    */
   readonly planUsageReporting: boolean;
+
+  /**
+   * A prompt can carry images — {@link import('./run.js').RunInput.attachments}
+   * and the `attachments` argument to `Run.send()`.
+   *
+   * This is about the *transport*, not the model: it says the adapter has
+   * somewhere to put an image on the wire. Whether the model behind the
+   * selected profile can actually see one is a separate question no adapter can
+   * answer up front, and the two fail differently — an adapter without a
+   * transport drops the image silently, whereas a text-only model sent an image
+   * says so in its reply.
+   */
+  readonly imageInput: boolean;
 }
 
 /**
@@ -152,6 +165,7 @@ export const NO_CAPABILITIES: Capabilities = {
   usageReporting: false,
   costReporting: false,
   planUsageReporting: false,
+  imageInput: false,
 };
 
 /**

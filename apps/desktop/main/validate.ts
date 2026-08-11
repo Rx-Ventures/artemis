@@ -28,14 +28,20 @@
 import { isAbsolute } from 'node:path';
 
 import {
+  base64Bytes,
   configDirProblem,
+  IMAGE_ATTACHMENT_LIMITS,
+  IMAGE_MEDIA_TYPES,
   isCredentialRoutingEnvKey,
+  isImageMediaType,
   isPermissionMode,
   isProviderEffort,
   isProviderId,
   isSecretEnvKey,
   normalizeProfileColor,
   profileColorProblem,
+  type Attachment,
+  type ImageAttachment,
   type JsonObject,
   type JsonValue,
   type PermissionDecision,
@@ -572,6 +578,113 @@ function optionalSystemPrompt(value: unknown, field: string): SystemPromptSpec |
   }
 }
 
+/**
+ * Base64 as the Messages API wants it: standard alphabet, correct padding, no
+ * whitespace and no `data:` prefix.
+ *
+ * Checked with a regex rather than by round-tripping through `Buffer`, because
+ * `Buffer.from(x, 'base64')` does not validate — it discards anything outside
+ * the alphabet and returns whatever it managed to decode. A payload that is
+ * half base64 and half something else would sail through a decode check and
+ * reach the provider as a corrupt image, or reach `writeFile` in the Codex
+ * adapter as a file whose contents nobody predicted.
+ *
+ * The `(?:[A-Za-z0-9+/]{4})*` grouping is what makes the length a multiple of
+ * four, which is also what stops a payload from being padded in the middle.
+ */
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * One image crossing IPC.
+ *
+ * The renderer enforces every one of these limits too, so the user finds out
+ * while the image is still in the composer. That is a courtesy, not the
+ * boundary: a renderer is not a trusted enforcer of its own limits, and this
+ * is the last place the payload can be refused before it is written to a file
+ * (Codex) or billed to the user's account (both).
+ */
+function validateImageAttachment(value: unknown, field: string): ImageAttachment {
+  const attachment = requireObject(value, field);
+
+  if (attachment['kind'] !== 'image') {
+    throw new ValidationError(`${field}.kind`, 'must be "image"');
+  }
+
+  const mediaType = attachment['mediaType'];
+  if (!isImageMediaType(mediaType)) {
+    throw new ValidationError(
+      `${field}.mediaType`,
+      `must be one of ${IMAGE_MEDIA_TYPES.join(', ')}`,
+    );
+  }
+
+  const data = attachment['data'];
+  if (typeof data !== 'string') throw new ValidationError(`${field}.data`, 'must be a string');
+  if (data.length === 0) throw new ValidationError(`${field}.data`, 'must not be empty');
+  // Length before shape: the regex is linear, but refusing a 40MB string after
+  // scanning all of it is work done for a payload that was never going to be
+  // accepted.
+  const bytes = base64Bytes(data);
+  if (bytes > IMAGE_ATTACHMENT_LIMITS.bytesPerImage) {
+    throw new ValidationError(
+      `${field}.data`,
+      `must decode to at most ${String(IMAGE_ATTACHMENT_LIMITS.bytesPerImage)} bytes`,
+    );
+  }
+  if (!BASE64_PATTERN.test(data)) {
+    throw new ValidationError(`${field}.data`, 'must be base64 with no data: prefix');
+  }
+
+  return compact<ImageAttachment>({
+    kind: 'image',
+    id: requireId(attachment['id'], `${field}.id`),
+    mediaType,
+    data,
+    // A filename, so it is untrusted display text: length-capped like every
+    // other label, and never used to build a path — see `#imageInputs` in the
+    // Codex adapter, which names its files after a counter for this reason.
+    name: optionalString(attachment['name'], `${field}.name`, IMAGE_ATTACHMENT_LIMITS.nameLength),
+    width: optionalInteger(attachment['width'], `${field}.width`, 1, 1_000_000),
+    height: optionalInteger(attachment['height'], `${field}.height`, 1, 1_000_000),
+  });
+}
+
+function optionalAttachments(value: unknown, field: string): readonly Attachment[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ValidationError(field, 'must be an array');
+  if (value.length === 0) return undefined;
+  if (value.length > IMAGE_ATTACHMENT_LIMITS.count) {
+    throw new ValidationError(
+      field,
+      `must have at most ${String(IMAGE_ATTACHMENT_LIMITS.count)} entries`,
+    );
+  }
+
+  const attachments = value.map((entry, index) =>
+    validateImageAttachment(entry, `${field}[${index}]`),
+  );
+
+  // The per-image ceiling bounds one payload; this bounds the request. Four
+  // images each just under the limit is four times the memory of one, in the
+  // main process, held while they are copied to a subprocess.
+  const total = attachments.reduce((sum, attachment) => sum + base64Bytes(attachment.data), 0);
+  if (total > IMAGE_ATTACHMENT_LIMITS.bytesTotal) {
+    throw new ValidationError(
+      field,
+      `must decode to at most ${String(IMAGE_ATTACHMENT_LIMITS.bytesTotal)} bytes in total`,
+    );
+  }
+
+  // Duplicate ids would make the transcript's thumbnails ambiguous and are
+  // never something the composer produces.
+  const ids = new Set(attachments.map((attachment) => attachment.id));
+  if (ids.size !== attachments.length) {
+    throw new ValidationError(field, 'must not contain two attachments with the same id');
+  }
+
+  return attachments;
+}
+
 function validateRunInput(value: unknown, field: string): RunInput {
   const input = requireObject(value, field);
 
@@ -606,6 +719,7 @@ function validateRunInput(value: unknown, field: string): RunInput {
     profileId: requireId(input['profileId'], `${field}.profileId`),
     cwd: requireAbsolutePath(input['cwd'], `${field}.cwd`),
     prompt,
+    attachments: optionalAttachments(input['attachments'], `${field}.attachments`),
     runId: optionalId(input['runId'], `${field}.runId`),
     resumeSessionId: optionalId(input['resumeSessionId'], `${field}.resumeSessionId`),
     forkSession: optionalBoolean(input['forkSession'], `${field}.forkSession`),
@@ -727,7 +841,11 @@ export function validateRunsSend(raw: unknown): RunsSendRequest {
   const text = request['text'];
   if (typeof text !== 'string') throw new ValidationError('text', 'must be a string');
   if (text.length > LIMITS.text) throw new ValidationError('text', `must be at most ${LIMITS.text} characters`);
-  return { runId: requireId(request['runId'], 'runId'), text };
+  return compact<RunsSendRequest>({
+    runId: requireId(request['runId'], 'runId'),
+    text,
+    attachments: optionalAttachments(request['attachments'], 'attachments'),
+  });
 }
 
 export function validateRunsInterrupt(raw: unknown): RunsInterruptRequest {

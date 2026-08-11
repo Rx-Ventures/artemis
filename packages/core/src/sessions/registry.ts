@@ -39,6 +39,7 @@ import type {
   AgentError,
   AgentErrorCode,
   AgentEvent,
+  Attachment,
   PermissionDecision,
   PermissionRequestId,
   ProviderId,
@@ -439,9 +440,21 @@ export class RunRegistry {
    * {@link SendResult.deliveredImmediately}, derived from the adapter's
    * `midRunSteering` capability.
    */
-  async send(runId: RunId, text: string): Promise<RunSendOutcome> {
+  async send(
+    runId: RunId,
+    text: string,
+    attachments?: readonly Attachment[],
+  ): Promise<RunSendOutcome> {
     const entry = this.#requireActive(runId);
-    const result = await entry.run.send(text);
+    // The same refusal `assertRunnable` makes for a starting run, so an image
+    // cannot reach an adapter that cannot take one by the mid-run route.
+    if (attachments !== undefined && attachments.length > 0 && !entry.handle.capabilities.imageInput) {
+      throw new RunError(
+        'invalid_request',
+        `Provider "${entry.handle.providerId}" cannot accept images in a prompt`,
+      );
+    }
+    const result = await entry.run.send(text, attachments);
     // Trust the adapter's own answer; fall back to its advertised capability
     // only if it returned nothing.
     const deliveredImmediately =
@@ -819,6 +832,18 @@ function assertRunnable(input: RunInput, adapter: ProviderAdapter): void {
   }
   if (input.forkSession === true && input.resumeSessionId !== undefined && !caps.forkSession) {
     throw new RunError('invalid_request', `Provider "${adapter.id}" cannot fork sessions`);
+  }
+  // Refused rather than dropped, like every other unsupported setting here.
+  // The composer will not let a user attach an image to a provider that cannot
+  // take one, so the way to arrive here is to attach under one provider and
+  // switch to another before sending — at which point silently sending the text
+  // alone would put a question about an image in front of a model that never
+  // received it, and the answer would be confident and wrong.
+  if (input.attachments !== undefined && input.attachments.length > 0 && !caps.imageInput) {
+    throw new RunError(
+      'invalid_request',
+      `Provider "${adapter.id}" cannot accept images in a prompt`,
+    );
   }
 }
 

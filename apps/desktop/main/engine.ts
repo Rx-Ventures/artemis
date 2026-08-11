@@ -44,6 +44,7 @@
 
 import type {
   AgentEvent,
+  Attachment,
   PermissionDecision,
   PermissionRequestId,
   Profile,
@@ -148,7 +149,11 @@ export interface ArtemisEngine {
   suggestConfigDir(label: string): Promise<string>;
 
   startRun(input: RunInput): Promise<RunHandle>;
-  sendToRun(runId: RunId, text: string): Promise<{ readonly deliveredImmediately: boolean }>;
+  sendToRun(
+    runId: RunId,
+    text: string,
+    attachments?: readonly Attachment[],
+  ): Promise<{ readonly deliveredImmediately: boolean }>;
   interruptRun(runId: RunId): Promise<{ readonly stillQueued?: readonly string[] }>;
   respondToPermission(
     runId: RunId,
@@ -496,7 +501,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       namer.noteRun(input, handle.runId);
       return handle;
     },
-    sendToRun: (runId, text) => runs.send(runId, text),
+    sendToRun: (runId, text, attachments) => runs.send(runId, text, attachments),
     interruptRun: (runId) => runs.interrupt(runId),
     respondToPermission: async (runId, requestId, decision) => {
       await runs.respondToPermission(runId, requestId, decision);

@@ -25,6 +25,7 @@
 
 import type { AgentEvent } from './events.js';
 import type { AgentError } from './errors.js';
+import type { Attachment } from './attachment.js';
 import type { PermissionDecision } from './permissions.js';
 import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js';
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
@@ -309,6 +310,11 @@ export interface RunsStartResponse {
 export interface RunsSendRequest {
   readonly runId: RunId;
   readonly text: string;
+  /**
+   * Images to send with {@link text}. Same contract as
+   * {@link import('./run.js').RunInput.attachments}, for the mid-run case.
+   */
+  readonly attachments?: readonly Attachment[];
 }
 
 export interface RunsSendResponse {
