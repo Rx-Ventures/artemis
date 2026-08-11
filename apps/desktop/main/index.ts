@@ -77,13 +77,13 @@ app.setName('Artemis');
  * entry is indistinguishable from deleting their data. Libra is two names back
  * and still has to be here for exactly that reason.
  */
-const PREVIOUS_APP_NAMES = ['Apollo', 'Libra'] as const;
+const PREVIOUS_APP_NAMES = ['Artemis', 'Libra'] as const;
 
 /**
  * Adopt the user data left behind by a previous name.
  *
  * Moves the newest surviving directory across, once, on the first launch that
- * finds one — newest first, because someone who ran Apollo *and* Libra has
+ * finds one — newest first, because someone who ran Artemis *and* Libra has
  * stale Libra data sitting beside the directory they actually care about, and
  * taking the older one would silently roll them back.
  *

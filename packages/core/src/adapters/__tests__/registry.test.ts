@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
+import { CODEX_CAPABILITIES } from '../codex.js';
 import {
   PROVIDER_LABELS,
   createDefaultProviderRegistry,
@@ -164,10 +165,13 @@ describe('describe()', () => {
 });
 
 describe('createDefaultProviderRegistry', () => {
-  it('ships with Claude registered and its real capability set', async () => {
+  it('ships with Claude and Codex registered, in PROVIDER_IDS order', () => {
     const registry = createDefaultProviderRegistry();
-    expect(registry.list().map((a) => a.id)).toEqual(['claude']);
+    expect(registry.list().map((a) => a.id)).toEqual(['claude', 'codex']);
+  });
 
+  it('gives Claude its real capability set', async () => {
+    const registry = createDefaultProviderRegistry();
     const [claude] = await registry.describe();
     expect(claude?.label).toBe('Claude');
     expect(claude?.capabilities).toEqual(CLAUDE_CAPABILITIES);
@@ -214,11 +218,51 @@ describe('createDefaultProviderRegistry', () => {
 
   it('offers no sign-in instructions for a provider that is not registered', async () => {
     const descriptors = await createDefaultProviderRegistry().describe();
+    const opencode = descriptors.find((d) => d.id === 'opencode');
+
+    // Silence rather than another adapter's command rendered under OpenCode's
+    // name. Codex used to be the example here; it is registered now, so the
+    // still-unimplemented provider carries the case.
+    expect(opencode?.signInHowTo).toBeUndefined();
+    expect(opencode?.available).toBe(false);
+  });
+
+  it('gives Codex a capability set that differs from Claude’s', async () => {
+    const descriptors = await createDefaultProviderRegistry().describe();
     const codex = descriptors.find((d) => d.id === 'codex');
 
-    // Silence rather than Claude's command rendered under Codex's name.
-    expect(codex?.signInHowTo).toBeUndefined();
-    expect(codex?.available).toBe(false);
+    expect(codex?.label).toBe('Codex');
+    expect(codex?.capabilities).toEqual(CODEX_CAPABILITIES);
+
+    // The point of the seam: two providers, genuinely different answers. If
+    // these ever match Claude's, the descriptor is being filled in from the
+    // wrong adapter.
+    expect(codex?.capabilities.subagents).toBe(false);
+    expect(codex?.capabilities.costReporting).toBe(false);
+    expect(codex?.capabilities.planUsageReporting).toBe(true);
+  });
+
+  it('advertises only the permission modes Codex can honour exactly', async () => {
+    const descriptors = await createDefaultProviderRegistry().describe();
+    const codex = descriptors.find((d) => d.id === 'codex');
+
+    // `dontAsk` means "never prompt, deny instead"; Codex's nearest mode
+    // (`never`) proceeds instead of denying. Advertising it would make Artemis
+    // silently more permissive than the user asked for, so it is omitted rather
+    // than approximated. `auto` has no Codex equivalent at all.
+    expect(codex?.capabilities.permissionModes).not.toContain('dontAsk');
+    expect(codex?.capabilities.permissionModes).not.toContain('auto');
+    expect(codex?.capabilities.permissionModes).toContain('plan');
+    expect(codex?.capabilities.permissionModes).toContain('bypassPermissions');
+  });
+
+  it('publishes no Codex credential vocabulary either', async () => {
+    const descriptors = await createDefaultProviderRegistry().describe();
+    const serialized = JSON.stringify(descriptors.find((d) => d.id === 'codex'));
+
+    expect(serialized).not.toContain('OPENAI_API_KEY');
+    expect(serialized).not.toContain('CODEX_HOME');
+    expect(serialized).not.toContain('configDirVar');
   });
 });
 

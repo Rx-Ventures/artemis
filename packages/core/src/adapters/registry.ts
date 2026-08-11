@@ -33,6 +33,8 @@ import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
 import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';
+import { createCodexAdapter } from './codex.js';
+import type { CodexAdapterOptions } from './codex.js';
 import { adapterError } from './types.js';
 import type { AdapterAvailability, ProviderAdapter, ProviderRegistry } from './types.js';
 
@@ -183,22 +185,25 @@ async function resolveAvailability(
 export interface DefaultProviderRegistryOptions {
   /** Forwarded to the Claude adapter. */
   readonly claude?: ClaudeAdapterOptions;
+  /** Forwarded to the Codex adapter. */
+  readonly codex?: CodexAdapterOptions;
 }
 
 /**
  * The registry Artemis ships with.
  *
- * **This is the one-line registration point.** A Codex adapter is added by
- * appending `createCodexAdapter(options?.codex)` to the array below; nothing
- * else in the app changes, because everything downstream reads capabilities
- * rather than provider identity.
+ * **This is the one-line registration point**, and it held: adding Codex was
+ * this array plus an options field. Nothing else in the app changed, because
+ * everything downstream reads capabilities rather than provider identity — the
+ * permission-mode picker, the model picker and the history pane all rebuild
+ * themselves from the descriptor.
  */
 export function createDefaultProviderRegistry(
   options?: DefaultProviderRegistryOptions,
 ): ProviderRegistry {
   return createProviderRegistry([
     createClaudeAdapter(options?.claude),
-    // createCodexAdapter(options?.codex),
+    createCodexAdapter(options?.codex),
     // createOpenCodeAdapter(options?.opencode),
   ]);
 }
