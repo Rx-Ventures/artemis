@@ -275,14 +275,19 @@ function ProjectHeader({ count }: { readonly count: number }): ReactElement {
           collapsed && '-rotate-90',
         )}
       />
+      {/*
+       * The unnamed case is faint, not amber — a placeholder for something
+       * unset, not a warning. It reads as absent next to a real project's
+       * lunar folder and full-strength ink, which is the actual distinction.
+       */}
       <Icon
         aria-hidden="true"
-        className={cn('size-3 shrink-0', name === null ? 'text-amber' : 'text-lunar')}
+        className={cn('size-3 shrink-0', name === null ? 'text-ink-faint' : 'text-lunar')}
       />
       <span
         className={cn(
           'min-w-0 truncate text-xs font-medium tracking-tight',
-          name === null ? 'text-amber' : 'text-ink',
+          name === null ? 'text-ink-faint' : 'text-ink',
         )}
       >
         {name ?? 'No project'}
@@ -301,7 +306,7 @@ function ProjectHeader({ count }: { readonly count: number }): ReactElement {
  * — the last of which is the answer for a build with no `workspace.describe`
  * and for the moment before the first reply lands. `null` means there is no
  * working directory at all, which is a different thing from an unnamed one and
- * is rendered as its own amber state.
+ * is rendered as its own faint placeholder state.
  */
 function projectLabel(
   cwd: string,

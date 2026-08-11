@@ -140,7 +140,12 @@ export function AppHeader(): ReactElement {
 
       <div className="mx-1 flex min-w-0 flex-1 items-center gap-1.5">
         {project === null ? (
-          <span className="shrink-0 text-xs text-amber">No project</span>
+          /* Faint, not amber. This is a placeholder for a value nobody has set
+             yet, sitting in the window's own chrome — it is not a warning, and
+             it was colouring the first thing in the header on every fresh
+             launch. The empty state says "not ready to run" in as many words,
+             which is where that belongs. */
+          <span className="shrink-0 text-xs text-ink-faint">No project</span>
         ) : (
           /* Full path on hover — the basename alone is ambiguous across
              checkouts, and two worktrees of the same repo share it. */
