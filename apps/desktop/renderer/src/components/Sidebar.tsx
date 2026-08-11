@@ -103,6 +103,7 @@ import {
   setSidebarWidth,
   useApp,
 } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
 import { IconButton, ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
@@ -125,6 +126,9 @@ import {
 export function Sidebar(): ReactElement | null {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const width = useApp((s) => s.sidebarWidth);
+  // The sidebar sits outside every column, so this is the focused one — which
+  // is what New session should clear and what the project switcher should move.
+  const pane = usePaneRef();
   const asideRef = useRef<HTMLElement>(null);
 
   if (collapsed) return null;
@@ -141,7 +145,7 @@ export function Sidebar(): ReactElement | null {
           <div className="flex items-center gap-1.5">
             <Button
               size="sm"
-              onClick={newSession}
+              onClick={() => newSession(pane)}
               className="min-w-0 flex-1 justify-start gap-1.5"
             >
               <PlusIcon />
@@ -227,7 +231,8 @@ export function Sidebar(): ReactElement | null {
  */
 function ProjectSwitcher(): ReactElement {
   const sessions = useApp((s) => s.sessions);
-  const cwd = useApp((s) => s.cwd);
+  const pane = usePaneRef();
+  const cwd = usePane((s) => s.cwd);
   const platform = useApp((s) => s.platform);
   const scope = useApp((s) => s.sessionsScope);
   const listing = useCapability('listSessions');
@@ -298,7 +303,7 @@ function ProjectSwitcher(): ReactElement {
             // Just the directory. `setCwd` clears the resume target itself now,
             // in the right order, for every caller — this used to be the one
             // place that remembered to.
-            onSelect={() => setCwd(group.cwd)}
+            onSelect={() => setCwd(group.cwd, pane)}
           >
             <Item size="xs" className="w-full">
               <ItemMedia variant="icon">

@@ -38,7 +38,8 @@ import { useState, type ReactElement } from 'react';
 import { FolderIcon, KeyRoundIcon, TriangleAlertIcon } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
-import { activeProviderLabel, openSettings, useApp } from '../state/store';
+import { activeProviderLabel, openSettings } from '../state/store';
+import { usePane } from '../state/paneContext';
 import { WorkingDirectoryDialog } from './WorkingDirectory';
 import { LogoMark } from './logo';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -54,10 +55,10 @@ import {
 import { Kbd } from '@/components/ui/kbd';
 
 export function EmptyState(): ReactElement {
-  const profile = useApp((s) => s.profiles.find((p) => p.id === s.activeProfileId));
-  const cwd = useApp((s) => s.cwd);
-  const provider = useApp(activeProviderLabel);
-  const resuming = useApp((s) => s.resumeSessionId);
+  const profile = usePane((s) => s.profiles.find((p) => p.id === s.activeProfileId));
+  const cwd = usePane((s) => s.cwd);
+  const provider = usePane(activeProviderLabel);
+  const resuming = usePane((s) => s.resumeSessionId);
   const [directoryOpen, setDirectoryOpen] = useState(false);
 
   const missingProfile = profile === undefined;

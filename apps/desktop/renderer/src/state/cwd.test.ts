@@ -18,7 +18,23 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { setCwd, transcript, useApp } from './store';
+import { focusedPane, setCwd, useApp } from './store';
+import { paneState, setPaneState } from './pane';
+
+/*
+ * One column, and every assertion below is about it.
+ *
+ * Session state moved out of `useApp` into a pane when split view landed — see
+ * `state/pane.ts`. These helpers are the whole difference: `pane()` is the
+ * column the store's actions default to, and `session()` / `setSession()` read
+ * and write what `useApp.getState()` used to hold. `transcript` is the
+ * column's, too — there is one per pane now.
+ */
+const pane = () => focusedPane();
+const session = () => paneState(pane());
+const setSession = (patch) => setPaneState(pane(), patch);
+const transcript = () => pane().transcript;
+
 
 const LIVE_RUN = {
   runId: 'r1',
@@ -55,37 +71,38 @@ function flushed(): Promise<void> {
 
 /** A window sitting in `/a`, with an earlier session selected in it. */
 function withSelectedSession(): void {
-  useApp.setState({
+  useApp.setState({ banners: [] });
+  setSession({
     cwd: '/a',
     resumeSessionId: 'sess-1111',
     run: null,
-    banners: [],
     permissionQueue: [],
   });
-  transcript.reset();
-  transcript.note('info', 'Something the user was reading');
+  transcript().reset();
+  transcript().note('info', 'Something the user was reading');
 }
 
 beforeEach(() => {
-  useApp.setState({ cwd: '', resumeSessionId: null, run: null, banners: [] });
-  transcript.reset();
+  useApp.setState({ banners: [] });
+  setSession({ cwd: '', resumeSessionId: null, run: null });
+  transcript().reset();
 });
 
-afterEach(() => transcript.reset());
+afterEach(() => transcript().reset());
 
 describe('setCwd', () => {
   it('just moves when no session is selected', () => {
     setCwd('/b');
 
-    expect(useApp.getState().cwd).toBe('/b');
-    expect(useApp.getState().resumeSessionId).toBeNull();
+    expect(session().cwd).toBe('/b');
+    expect(session().resumeSessionId).toBeNull();
     // Nothing was interrupted, so nothing is announced.
-    expect(transcript.isEmpty).toBe(true);
+    expect(transcript().isEmpty).toBe(true);
   });
 
   it('trims what it is given', () => {
     setCwd('  /b  ');
-    expect(useApp.getState().cwd).toBe('/b');
+    expect(session().cwd).toBe('/b');
   });
 
   it('drops the selected session rather than aiming it at a new directory', () => {
@@ -93,10 +110,10 @@ describe('setCwd', () => {
 
     setCwd('/b');
 
-    expect(useApp.getState().cwd).toBe('/b');
+    expect(session().cwd).toBe('/b');
     // The point of the whole exercise: a session id from `/a` must not survive
     // into a window pointed at `/b`, where the provider cannot resolve it.
-    expect(useApp.getState().resumeSessionId).toBeNull();
+    expect(session().resumeSessionId).toBeNull();
   });
 
   it('says that it started a new session, in the new transcript', async () => {
@@ -106,7 +123,7 @@ describe('setCwd', () => {
 
     // One item: the note. The previous conversation was reset out from under
     // it, and the note has to land *after* that reset or it goes with it.
-    expect(transcript.length).toBe(1);
+    expect(transcript().length).toBe(1);
 
     // The id list is published on a flush, not on the write — the model
     // coalesces so that streaming does not re-render per token. Outside a
@@ -114,8 +131,8 @@ describe('setCwd', () => {
     // snapshot that is still empty by design.
     await flushed();
 
-    const [id] = transcript.getListSnapshot();
-    const item = transcript.getItem(id ?? '');
+    const [id] = transcript().getListSnapshot();
+    const item = transcript().getItem(id ?? '');
     expect(item?.kind).toBe('notice');
     expect(item?.text).toContain('new session');
     expect(item?.detail).toContain('/b');
@@ -123,28 +140,28 @@ describe('setCwd', () => {
 
   it('ignores a re-pick of the directory already selected', () => {
     withSelectedSession();
-    const before = transcript.length;
+    const before = transcript().length;
 
     // The native picker opens *at* the current directory, so "Browse… → Choose"
     // with no navigation lands here every time. Treating that as a change would
     // throw away the session the user is reading.
     setCwd('/a');
 
-    expect(useApp.getState().cwd).toBe('/a');
-    expect(useApp.getState().resumeSessionId).toBe('sess-1111');
-    expect(transcript.length).toBe(before);
+    expect(session().cwd).toBe('/a');
+    expect(session().resumeSessionId).toBe('sess-1111');
+    expect(transcript().length).toBe(before);
   });
 
   it('refuses while a run is live, and says why', () => {
     withSelectedSession();
-    useApp.setState({ run: LIVE_RUN });
+    setSession({ run: LIVE_RUN });
 
     setCwd('/b');
 
     // Ending a live run is a real loss of work and is not what reaching for a
     // folder picker asks for. Nothing moved.
-    expect(useApp.getState().cwd).toBe('/a');
-    expect(useApp.getState().resumeSessionId).toBe('sess-1111');
+    expect(session().cwd).toBe('/a');
+    expect(session().resumeSessionId).toBe('sess-1111');
 
     const banner = useApp.getState().banners.at(-1);
     expect(banner?.level).toBe('warn');

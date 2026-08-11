@@ -36,6 +36,7 @@ import {
   setInfo,
   useApp,
 } from '../state/store';
+import { usePane } from '../state/paneContext';
 import { Row, StatusDot, ToneBadge, type Tone } from './primitives';
 import {
   Dialog,
@@ -72,7 +73,7 @@ const STATUS_TONE: Record<string, Tone> = {
 
 export function RunInfoDialog(): ReactElement {
   const open = useApp((s) => s.infoOpen);
-  const providerLabel = useApp(activeProviderLabel);
+  const providerLabel = usePane(activeProviderLabel);
 
   return (
     <Dialog open={open} onOpenChange={setInfo}>
@@ -141,9 +142,9 @@ function Section({
 }
 
 function RunBlock(): ReactElement {
-  const run = useApp((s) => s.run);
-  const model = useApp(activeModel);
-  const effort = useApp(activeEffort);
+  const run = usePane((s) => s.run);
+  const model = usePane(activeModel);
+  const effort = usePane(activeEffort);
 
   if (!run) {
     return (
@@ -214,7 +215,7 @@ function ElapsedRow({ startedAt }: { readonly startedAt: number }): ReactElement
  * and the profile screen is where the authoritative check lives.
  */
 function AccountBlock(): ReactElement {
-  const profile = useApp(activeProfile);
+  const profile = usePane(activeProfile);
   const platform = useApp((s) => s.platform);
   const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
 
@@ -246,9 +247,9 @@ function AccountBlock(): ReactElement {
 }
 
 function UsageBlock(): ReactElement {
-  const usage = useApp((s) => s.run?.usage);
-  const reporting = useApp((s) => activeCapabilities(s).usageReporting);
-  const costing = useApp((s) => activeCapabilities(s).costReporting);
+  const usage = usePane((s) => s.run?.usage);
+  const reporting = usePane((s) => activeCapabilities(s).usageReporting);
+  const costing = usePane((s) => activeCapabilities(s).costReporting);
 
   if (!reporting) {
     return <p className="py-1 text-2xs text-ink-faint">This provider does not report token usage.</p>;
@@ -302,7 +303,7 @@ function UsageBlock(): ReactElement {
 }
 
 function CapabilityMatrix(): ReactElement {
-  const capabilities: Capabilities = useApp(activeCapabilities);
+  const capabilities: Capabilities = usePane(activeCapabilities);
   return (
     <>
       {CAPABILITY_NOTES.map(([key, note]) => {
@@ -349,7 +350,7 @@ function CapabilityMatrix(): ReactElement {
 }
 
 function ToolsBlock(): ReactElement | null {
-  const tools = useApp((s) => s.run?.tools);
+  const tools = usePane((s) => s.run?.tools);
   if (!tools || tools.length === 0) return null;
   return (
     <Section title="Tools available to this run">

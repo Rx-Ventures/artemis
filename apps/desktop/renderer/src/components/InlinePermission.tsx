@@ -42,6 +42,7 @@ import type { PermissionRuleUpdate } from '@rx-artemis/protocol';
 
 import { formatJson } from '../lib/format';
 import { DEFAULT_DENIAL, respondToPermission } from '../state/store';
+import { usePaneRef } from '../state/paneContext';
 import type { PermissionItem } from '../state/transcript';
 import { CodeBlock, Fold, ToneBadge } from './primitives';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -87,6 +88,11 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
     card.focus({ preventScroll: true });
   }, []);
 
+  // The card answers the run in *its own* column. A prompt parked on the left
+  // must stay answerable while the user works on the right, so the decision is
+  // routed by the pane the card is rendered in rather than by what has focus.
+  const pane = usePaneRef();
+
   const decide = (run: () => Promise<string | null>): void => {
     if (busy) return;
     setBusy(true);
@@ -98,20 +104,28 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
 
   const allow = (updates?: readonly PermissionRuleUpdate[]): void =>
     decide(() =>
-      respondToPermission(request.id, {
-        behavior: 'allow',
-        scope: updates ? 'session' : 'once',
-        ...(updates ? { updatedPermissions: updates } : {}),
-      }),
+      respondToPermission(
+        request.id,
+        {
+          behavior: 'allow',
+          scope: updates ? 'session' : 'once',
+          ...(updates ? { updatedPermissions: updates } : {}),
+        },
+        pane,
+      ),
     );
 
   const deny = (interrupt: boolean): void =>
     decide(() =>
-      respondToPermission(request.id, {
-        behavior: 'deny',
-        message: reason.trim().length > 0 ? reason.trim() : DEFAULT_DENIAL,
-        ...(interrupt ? { interrupt: true } : {}),
-      }),
+      respondToPermission(
+        request.id,
+        {
+          behavior: 'deny',
+          message: reason.trim().length > 0 ? reason.trim() : DEFAULT_DENIAL,
+          ...(interrupt ? { interrupt: true } : {}),
+        },
+        pane,
+      ),
     );
 
   const suggestions = request.suggestions ?? [];

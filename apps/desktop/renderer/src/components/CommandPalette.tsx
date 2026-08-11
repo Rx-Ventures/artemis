@@ -102,6 +102,7 @@ import {
   ultracodeAvailable,
   useApp,
 } from '../state/store';
+import { usePane } from '../state/paneContext';
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
@@ -214,17 +215,17 @@ function RootPage({
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
   const forking = useCapability('forkSession');
-  const resumeId = useApp((s) => s.resumeSessionId);
-  const forkOnResume = useApp((s) => s.forkOnResume);
+  const resumeId = usePane((s) => s.resumeSessionId);
+  const forkOnResume = usePane((s) => s.forkOnResume);
   const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
-  const models = useApp(activeModels);
-  const model = useApp(selectedModelOption);
-  const fastOk = useApp(fastModeAvailable);
-  const fastOffered = useApp(providerOffersFastMode);
-  const levels = useApp(thinkingLevels);
-  const thinking = useApp(activeThinkingLevel);
-  const fast = useApp((s) => s.fastMode);
-  const ultra = useApp((s) => s.ultracode);
+  const models = usePane(activeModels);
+  const model = usePane(selectedModelOption);
+  const fastOk = usePane(fastModeAvailable);
+  const fastOffered = usePane(providerOffersFastMode);
+  const levels = usePane(thinkingLevels);
+  const thinking = usePane(activeThinkingLevel);
+  const fast = usePane((s) => s.fastMode);
+  const ultra = usePane((s) => s.ultracode);
 
   return (
     <>
@@ -603,7 +604,7 @@ function SessionRow({
  */
 function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElement {
   const providers = useApp((s) => s.providers);
-  const activeId = useApp((s) => s.activeProviderId);
+  const activeId = usePane((s) => s.activeProviderId);
 
   return (
     <>
@@ -652,8 +653,8 @@ function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElem
 /* -------------------------------------------------------------------------- */
 
 function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement {
-  const models = useApp(activeModels);
-  const current = useApp((s) => s.model);
+  const models = usePane(activeModels);
+  const current = usePane((s) => s.model);
 
   return (
     <>

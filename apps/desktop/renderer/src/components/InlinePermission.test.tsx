@@ -67,7 +67,7 @@ Object.defineProperty(globalThis, 'artemis', {
 });
 
 const { InlinePermission } = await import('@/components/InlinePermission');
-const { useApp, transcript } = await import('@/state/store');
+const { appSession, appTranscript, seedApp } = await import('@/state/testkit');
 
 const REQUEST: PermissionRequest = {
   id: 'perm-1',
@@ -96,8 +96,8 @@ function mount(ui: ReactNode): void {
 beforeEach(() => {
   sent = [];
   respond = () => ({ ok: true, value: { requestId: REQUEST.id } });
-  transcript.reset();
-  useApp.setState({
+  appTranscript().reset();
+  seedApp({
     run: {
       runId: 'run-1',
       status: 'awaiting_permission',
@@ -182,7 +182,7 @@ describe('the failure path', () => {
     });
 
     await waitFor(() => {
-      expect(useApp.getState().permissionQueue).toHaveLength(0);
+      expect(appSession().permissionQueue).toHaveLength(0);
     });
   });
 });

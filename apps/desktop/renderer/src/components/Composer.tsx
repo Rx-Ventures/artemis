@@ -54,8 +54,9 @@ import {
   pushBanner,
   setForkOnResume,
   submitPrompt,
-  useApp,
 } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
+import { paneState, setPaneState } from '../state/pane';
 import {
   attachmentSrc,
   fileKindLabel,
@@ -102,7 +103,6 @@ function reportRejections(rejected: readonly AttachmentRejection[]): void {
 }
 
 export function Composer(): ReactElement {
-  const [text, setText] = useState('');
   /**
    * How far back through `promptHistory` recall has walked. `null` is "not
    * recalling" — the distinction matters, because index 0 is a real entry.
@@ -121,15 +121,34 @@ export function Composer(): ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const live = useApp(isLive);
-  const status = useApp((s) => s.run?.status ?? null);
-  const pending = useApp((s) => s.permissionQueue.length);
+  /*
+   * Everything below is this column's, and none of it is the window's. A
+   * composer in a split view that read the focused pane would send the right
+   * column's prompt into the left column's run the moment focus moved — which
+   * is why the pane is taken once, here, and passed to every action rather
+   * than left to default.
+   */
+  const pane = usePaneRef();
+  /*
+   * The draft lives in the pane, not in `useState` here.
+   *
+   * Opening or closing a column re-parents the surviving column in the React
+   * tree, which unmounts it — so component-local text would be discarded by an
+   * action about *the other* conversation. See `SessionState.draft`.
+   */
+  const text = usePane((s) => s.draft);
+  const setText = useCallback(
+    (value: string) => setPaneState(pane, { draft: value }),
+    [pane],
+  );
+  const live = usePane(isLive);
+  const pending = usePane((s) => s.permissionQueue.length);
   const steering = useCapability('midRunSteering');
   const images = useCapability('imageInput');
   const files = useCapability('fileInput');
-  const resuming = useApp((s) => s.resumeSessionId);
-  const fork = useApp((s) => s.forkOnResume);
-  const history = useApp((s) => s.promptHistory);
+  const resuming = usePane((s) => s.resumeSessionId);
+  const fork = usePane((s) => s.forkOnResume);
+  const history = usePane((s) => s.promptHistory);
 
   const locked = live && !steering.supported;
 
@@ -230,7 +249,9 @@ export function Composer(): ReactElement {
     // it silently on the next one too.
     setAttachments([]);
 
-    void submitPrompt(value, sent).then((accepted) => {
+    // Into *this* pane. A composer that let the argument default would send the
+    // right column's prompt into the left column's run the moment focus moved.
+    void submitPrompt(value, sent, pane).then((accepted) => {
       // …but a prompt that never left is a different thing. `submitPrompt`
       // refuses outright when there is no working directory or no profile, and
       // it says so by returning false; the text survives that on Up-arrow
@@ -245,7 +266,7 @@ export function Composer(): ReactElement {
         setAttachments((current) => (current.length === 0 ? sent : current));
       }
     });
-  }, [attachments, text]);
+  }, [attachments, text, pane, setText]);
 
   /**
    * Walk the prompt history.
@@ -269,7 +290,7 @@ export function Composer(): ReactElement {
       setText(history[next] ?? '');
       return true;
     },
-    [history, recall],
+    [history, recall, setText],
   );
 
   // Nothing renders under the input row, deliberately: two rows lived there —
@@ -425,8 +446,8 @@ export function Composer(): ReactElement {
                 // user is guaranteed to be typing.
                 if (event.key === 'Escape') {
                   event.preventDefault();
-                  void denyPendingPermission().then((denied) => {
-                    if (!denied && useApp.getState().run?.status !== 'ended') void interruptRun();
+                  void denyPendingPermission(pane).then((denied) => {
+                    if (!denied && paneState(pane).run?.status !== 'ended') void interruptRun(pane);
                   });
                   return;
                 }
@@ -544,7 +565,7 @@ export function Composer(): ReactElement {
         {live ? (
           <Button
             variant="destructive"
-            onClick={() => void interruptRun()}
+            onClick={() => void interruptRun(pane)}
             title={`Stop the run (${keyLabel('escape')})`}
           >
             <CircleStopIcon />

@@ -34,6 +34,7 @@ import { Composer } from '@/components/Composer';
 import { Sidebar } from '@/components/Sidebar';
 import { StatusLine } from '@/components/StatusLine';
 import { useApp } from '@/state/store';
+import { appSession, seedApp } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -59,7 +60,7 @@ const CAPABILITIES = {
 };
 
 beforeEach(() => {
-  useApp.setState({
+  seedApp({
     providers: [
       {
         id: 'claude',
@@ -114,7 +115,7 @@ describe('the working directory', () => {
   });
 
   it('names the folder rather than the whole path', () => {
-    useApp.setState({ cwd: '/Users/me/projects/deeply/nested/artemis', workspace: null });
+    seedApp({ cwd: '/Users/me/projects/deeply/nested/artemis', workspace: null });
     mount(<Composer />);
 
     const chip = screen.getByLabelText('Working directory — change it');

@@ -44,7 +44,8 @@ import type { PermissionMode } from '@rx-artemis/protocol';
 import { WithReason } from '../disabled-reason';
 import { usePermissionModes } from '../../hooks/useCapability';
 import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
-import { activeProviderLabel, setPermissionMode, useApp } from '../../state/store';
+import { activeProviderLabel, setPermissionMode } from '../../state/store';
+import { usePane } from '../../state/paneContext';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Textarea } from '@/components/ui/textarea';
@@ -80,8 +81,8 @@ const NO_TOOL_POLICY =
 
 export function PermissionsSection(): ReactElement {
   const modes = usePermissionModes();
-  const mode = useApp((s) => s.permissionMode);
-  const providerLabel = useApp(activeProviderLabel);
+  const mode = usePane((s) => s.permissionMode);
+  const providerLabel = usePane(activeProviderLabel);
 
   /**
    * A stored mode the current provider does not accept.

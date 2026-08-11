@@ -36,6 +36,7 @@ import { FolderIcon, FolderSearchIcon, GitBranchIcon, TriangleAlertIcon } from '
 import { hasNativeDirectoryPicker, NO_PICKER_REASON } from '../lib/extensions';
 import { absolutePathHint, isAbsolutePath, lastSegment } from '../lib/paths';
 import { chooseWorkingDirectory, lastKnownBranch, setCwd, useApp } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import { ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -66,7 +67,8 @@ export function DirectoryChooser({
   onCancel,
   autoFocus = true,
 }: DirectoryChooserProps): ReactElement {
-  const cwd = useApp((s) => s.cwd);
+  const pane = usePaneRef();
+  const cwd = usePane((s) => s.cwd);
   const platform = useApp((s) => s.platform);
   const [draft, setDraft] = useState(cwd);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +81,7 @@ export function DirectoryChooser({
   const browse = async (): Promise<void> => {
     setBusy(true);
     setError(null);
-    const choice = await chooseWorkingDirectory();
+    const choice = await chooseWorkingDirectory(pane);
     setBusy(false);
     if (choice.status === 'chosen') {
       setDraft(choice.path);
@@ -100,7 +102,7 @@ export function DirectoryChooser({
       setError(absolutePathHint(platform));
       return;
     }
-    setCwd(typed);
+    setCwd(typed, pane);
     setError(null);
     onDone?.();
   };
@@ -234,9 +236,9 @@ export function WorkingDirectoryDialog({
  * and the dialog says so before the click.
  */
 export function WorkingDirectoryChip(): ReactElement {
-  const cwd = useApp((s) => s.cwd);
-  const workspace = useApp((s) => s.workspace);
-  const branch = useApp(lastKnownBranch);
+  const cwd = usePane((s) => s.cwd);
+  const workspace = usePane((s) => s.workspace);
+  const branch = usePane(lastKnownBranch);
   const [open, setOpen] = useState(false);
 
   const unset = cwd.trim().length === 0;
