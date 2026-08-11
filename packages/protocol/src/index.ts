@@ -18,6 +18,7 @@
  * | `events`        | the `AgentEvent` union                                     |
  * | `usage`         | `TokenUsage`, `UsageSnapshot`                              |
  * | `errors`        | `AgentError`, `AgentErrorCode`                             |
+ * | `attachment`    | `Attachment`, `ImageAttachment`, `ImageMediaType`          |
  * | `run`           | `RunInput`, `RunHandle`, `RunStatus`                       |
  * | `session`       | `SessionSummary`                                           |
  * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
@@ -36,6 +37,7 @@ export * from './permissions.js';
 export * from './usage.js';
 export * from './errors.js';
 export * from './events.js';
+export * from './attachment.js';
 export * from './run.js';
 export * from './session.js';
 export * from './profile.js';

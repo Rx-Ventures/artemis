@@ -156,6 +156,35 @@ export interface CodexTextInput {
   readonly text_elements: readonly never[];
 }
 
+/**
+ * An image, named by a path on this machine.
+ *
+ * The wire union (`UserInput` in the app server's generated bindings) also has
+ * an `{ type: 'image', url }` variant, and Artemis does not use it: `url` is
+ * fetched by the CLI, so a `data:` URL is an untested path through someone
+ * else's parser and an `https:` one is a network request Artemis did not make
+ * and cannot see. `localImage` is what Codex's own client sends for a pasted
+ * screenshot, which makes it the variant that stays working.
+ *
+ * The path must be readable by the CLI process for as long as the turn takes to
+ * submit — see `#materializeAttachments` in `codex.ts` for who writes it and
+ * when it is cleaned up.
+ */
+export interface CodexLocalImageInput {
+  readonly type: 'localImage';
+  readonly path: string;
+  /**
+   * How much of the image to send. Omitted, which the server reads as `auto`
+   * and is the only setting with nothing behind it to choose from: Artemis has
+   * no UI for image fidelity, and picking `high` on the user's behalf spends
+   * their tokens on a decision they were not asked about.
+   */
+  readonly detail?: 'auto' | 'low' | 'high' | 'original';
+}
+
+/** One item in a turn's input. */
+export type CodexUserInput = CodexTextInput | CodexLocalImageInput;
+
 export interface CodexThreadStartParams {
   readonly cwd?: string;
 }
@@ -167,7 +196,7 @@ export interface CodexThreadResumeParams {
 
 export interface CodexTurnStartParams {
   readonly threadId: string;
-  readonly input: readonly CodexTextInput[];
+  readonly input: readonly CodexUserInput[];
   readonly cwd?: string;
   readonly approvalPolicy?: CodexAskForApproval;
   readonly sandboxPolicy?: CodexSandboxPolicy;
@@ -179,7 +208,7 @@ export interface CodexTurnSteerParams {
   readonly threadId: string;
   /** The server rejects the steer if this does not match the live turn. */
   readonly expectedTurnId: string;
-  readonly input: readonly CodexTextInput[];
+  readonly input: readonly CodexUserInput[];
 }
 
 /* -------------------------------------------------------------------------- */

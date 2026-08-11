@@ -270,6 +270,158 @@ describe('streaming input', () => {
     await run.dispose();
   });
 
+  /**
+   * Images.
+   *
+   * The shape matters more than it looks: `content` stays a plain string when
+   * there are no images, because that is what the SDK writes to its session
+   * `.jsonl` and what Artemis's own history reader parses back out.
+   */
+  describe('attachments', () => {
+    const IMAGE = {
+      kind: 'image',
+      id: 'img-1',
+      mediaType: 'image/png',
+      data: 'aGVsbG8=',
+    } as const;
+
+    it('sends images as content blocks, ahead of the text', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: 'what is wrong here?',
+        attachments: [IMAGE],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.value).toMatchObject({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+            { type: 'text', text: 'what is wrong here?' },
+          ],
+        },
+      });
+      await run.dispose();
+    });
+
+    it('keeps a plain string when there are no images', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({ ...BASE_INPUT, attachments: [] });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect((first.value as SDKUserMessage).message.content).toBe('refactor the parser');
+      await run.dispose();
+    });
+
+    it('carries images on a mid-run send too', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      await iterator.next();
+
+      await run.send('and this one', [{ ...IMAGE, id: 'img-2' }]);
+      const second = await iterator.next();
+      expect((second.value as SDKUserMessage).message.content).toMatchObject([
+        { type: 'image' },
+        { type: 'text', text: 'and this one' },
+      ]);
+      await run.dispose();
+    });
+
+    it('sends a PDF as a document block and stages it as well', async () => {
+      // Both, deliberately. The block is what gives the model vision over the
+      // rendered pages — layout, tables, scanned text — which reading the file
+      // with a tool does not recover; the staged copy lets the agent run
+      // something over it. The staged PDF is *not* named in the note, because
+      // pointing the agent at a file it can already see invites a wasted read.
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: 'summarise this',
+        attachments: [
+          { kind: 'file', id: 'f1', name: 'report.pdf', mediaType: 'application/pdf', data: 'aGk=' },
+        ],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const content = (await iterator.next()).value as SDKUserMessage;
+      const blocks = content.message.content as { type: string; title?: string }[];
+
+      expect(blocks[0]).toMatchObject({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: 'aGk=' },
+        title: 'report.pdf',
+      });
+      const text = blocks.find((block) => block.type === 'text') as { text: string };
+      expect(text.text).toBe('summarise this');
+      await run.dispose();
+    });
+
+    it('names a staged file in the prompt, because nothing else tells the agent', async () => {
+      // This sentence is the entire mechanism for non-image attachments.
+      // Without it the file is on disk and nobody knows: the agent answers from
+      // the prompt text alone and nothing reports that it was ignored.
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: 'what is in it?',
+        attachments: [{ kind: 'file', id: 'f1', name: 'sales.csv', data: 'aGk=' }],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const message = (await iterator.next()).value as SDKUserMessage;
+      // A plain string, because a file adds no content blocks.
+      const text = message.message.content as string;
+
+      expect(text).toContain('sales.csv');
+      expect(text).toMatch(/attached 1 file/);
+      // The user's own words survive, after the note.
+      expect(text.endsWith('what is in it?')).toBe(true);
+      await run.dispose();
+    });
+
+    it('grants the staging directory so the agent may read what was staged', async () => {
+      // Claude gates reads outside the working directory, so staging a file
+      // without granting its directory produces the worst outcome available:
+      // the agent reports that a file the user can see in the transcript does
+      // not exist.
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        attachments: [{ kind: 'file', id: 'f1', name: 'sales.csv', data: 'aGk=' }],
+      });
+
+      const granted = harness().options['additionalDirectories'] as string[];
+      expect(granted).toHaveLength(1);
+      // The same directory the file was staged into.
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const text = (await iterator.next()).value as SDKUserMessage;
+      expect(String(text.message.content)).toContain(granted[0] ?? ' ');
+      await run.dispose();
+    });
+
+    it('omits an empty text block, which the Messages API rejects', async () => {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun({
+        ...BASE_INPUT,
+        prompt: '',
+        attachments: [IMAGE],
+      });
+
+      const iterator = harness().prompt[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect((first.value as SDKUserMessage).message.content).toEqual([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+      ]);
+      await run.dispose();
+    });
+  });
+
   it('refuses to send once teardown has closed the prompt queue', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);

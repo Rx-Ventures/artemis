@@ -7,6 +7,7 @@
  * session — one session can be resumed by many runs over its lifetime.
  */
 
+import type { Attachment } from './attachment.js';
 import type { Capabilities, ProviderId } from './provider.js';
 import type { JsonObject } from './json.js';
 import type { PermissionMode } from './permissions.js';
@@ -76,6 +77,24 @@ export interface RunInput {
   readonly cwd: string;
   /** The user's message. For a resumed session this is the next turn. */
   readonly prompt: string;
+
+  /**
+   * Images to send with {@link prompt}. Requires
+   * {@link Capabilities.imageInput}.
+   *
+   * Adapters put these *before* the text in the message they build, which is
+   * what Anthropic recommends and what Codex's own client does: a model reading
+   * "what is wrong with this screenshot?" before it has seen the screenshot
+   * answers a different, worse question.
+   *
+   * A run that carries these against a provider without the capability is
+   * **refused**, not quietly stripped — an image dropped on the way to the
+   * model turns "what is wrong with this screenshot?" into a question about
+   * nothing, and the answer comes back confident. The composer keeps a user
+   * from getting there; the refusal covers the case where the provider changed
+   * between attaching and sending.
+   */
+  readonly attachments?: readonly Attachment[];
 
   /**
    * Caller-supplied run id. Omit and core mints one. Supplying it lets the

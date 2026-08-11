@@ -24,14 +24,26 @@
  *    than quietly swallowing keystrokes, and Send says the same thing.
  *  - **Stop is always available while a run is live**, and is not
  *    capability-gated. A run that cannot be stopped is a wedged app.
+ *  - **Images attach by paste, by drop, or from a picker**, and all three land
+ *    in the same place. Paste is the one that matters: a screenshot goes to the
+ *    clipboard, and the gesture after taking one is Cmd+V.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactElement } from 'react';
 import {
   CircleStopIcon,
+  FileTextIcon,
   GitForkIcon,
+  PaperclipIcon,
   SendHorizontalIcon,
+  XIcon,
 } from 'lucide-react';
+import {
+  ATTACHMENT_LIMITS,
+  attachmentBytes,
+  isImageAttachment,
+  type Attachment,
+} from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
@@ -39,10 +51,19 @@ import {
   denyPendingPermission,
   interruptRun,
   isLive,
+  pushBanner,
   setForkOnResume,
   submitPrompt,
   useApp,
 } from '../state/store';
+import {
+  attachmentSrc,
+  fileKindLabel,
+  filesFrom,
+  formatBytes,
+  readAttachments,
+  type AttachmentRejection,
+} from '../lib/attachments';
 import { ReasonButton, WithReason } from './disabled-reason';
 import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
@@ -60,6 +81,26 @@ const SUPPORTS_FIELD_SIZING =
   typeof CSS.supports === 'function' &&
   CSS.supports('field-sizing', 'content');
 
+/**
+ * Report what could not be attached.
+ *
+ * One banner for the batch rather than one per file: dropping a folder of
+ * twelve things onto the composer is a single mistake, and twelve banners about
+ * it is a second one.
+ */
+function reportRejections(rejected: readonly AttachmentRejection[]): void {
+  if (rejected.length === 0) return;
+  const [first] = rejected;
+  if (first === undefined) return;
+  pushBanner(
+    'warn',
+    rejected.length === 1
+      ? `Could not attach ${first.name}`
+      : `Could not attach ${String(rejected.length)} files`,
+    rejected.map((entry) => `${entry.name}: ${entry.reason}`).join('\n'),
+  );
+}
+
 export function Composer(): ReactElement {
   const [text, setText] = useState('');
   /**
@@ -67,17 +108,84 @@ export function Composer(): ReactElement {
    * recalling" — the distinction matters, because index 0 is a real entry.
    */
   const [recall, setRecall] = useState<number | null>(null);
+  const [attachments, setAttachments] = useState<readonly Attachment[]>([]);
+  /**
+   * Whether a drag is currently over the composer.
+   *
+   * A counter would be the usual fix for `dragleave` firing as the pointer
+   * crosses a child element, but the drop target here has no children the
+   * pointer can reach — the highlight is drawn on the wrapper and the textarea
+   * inside it is the only child. `relatedTarget` handles the rest.
+   */
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const live = useApp(isLive);
   const status = useApp((s) => s.run?.status ?? null);
   const pending = useApp((s) => s.permissionQueue.length);
   const steering = useCapability('midRunSteering');
+  const images = useCapability('imageInput');
+  const files = useCapability('fileInput');
   const resuming = useApp((s) => s.resumeSessionId);
   const fork = useApp((s) => s.forkOnResume);
   const history = useApp((s) => s.promptHistory);
 
   const locked = live && !steering.supported;
+
+  /** Slots left, per kind — the two have separate budgets. */
+  const imageCount = attachments.filter(isImageAttachment).length;
+  const slots = {
+    images: ATTACHMENT_LIMITS.images - imageCount,
+    files: ATTACHMENT_LIMITS.files - (attachments.length - imageCount),
+  };
+  const full = slots.images <= 0 && slots.files <= 0;
+  /** Nothing at all can be attached — the provider takes neither kind. */
+  const attachable = images.supported || files.supported;
+
+  /**
+   * Take files from wherever they came from.
+   *
+   * Every entry point funnels through here so that the count limits, the image
+   * resizing and the rejection reporting cannot drift apart between paste, drop
+   * and the picker.
+   */
+  const attach = useCallback(
+    async (dropped: readonly File[]): Promise<void> => {
+      if (dropped.length === 0) return;
+      if (!attachable) {
+        pushBanner('warn', 'This provider cannot take attachments', images.reason);
+        return;
+      }
+
+      // Read against the slots free *now*; the state update below re-checks
+      // against the slots free when it lands, because reading is async and the
+      // user can paste twice in the time it takes. A kind the provider cannot
+      // carry gets zero slots, so it is rejected with a reason rather than
+      // attached and silently dropped at send time.
+      const { accepted, rejected } = await readAttachments(dropped, {
+        images: images.supported ? slots.images : 0,
+        files: files.supported ? slots.files : 0,
+      });
+      reportRejections(rejected);
+      if (accepted.length === 0) return;
+      setAttachments((current) => {
+        const merged = [...current, ...accepted];
+        const keptImages = merged.filter(isImageAttachment).slice(0, ATTACHMENT_LIMITS.images);
+        const keptFiles = merged
+          .filter((attachment) => !isImageAttachment(attachment))
+          .slice(0, ATTACHMENT_LIMITS.files);
+        // Re-ordered so images lead, which is the order they are sent in and
+        // the order the strip reads best in — thumbnails, then filenames.
+        return [...keptImages, ...keptFiles];
+      });
+    },
+    [attachable, files.supported, images.reason, images.supported, slots.files, slots.images],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  }, []);
 
   const grow = useCallback(() => {
     if (SUPPORTS_FIELD_SIZING) return;
@@ -89,13 +197,55 @@ export function Composer(): ReactElement {
 
   useEffect(grow, [grow, text]);
 
+  /*
+   * Swallow drops that miss the composer.
+   *
+   * Without this the window itself handles the drop, which for a file means a
+   * navigation to `file://…`. The main process already refuses that (see
+   * `hardenWebContents`), so nothing unsafe happens — but "nothing unsafe" is
+   * the whole app going blank in the failure case, and a near-miss on the
+   * composer is a normal thing for a person to do with a picture.
+   */
+  useEffect(() => {
+    const swallow = (event: Event): void => {
+      event.preventDefault();
+    };
+    window.addEventListener('dragover', swallow);
+    window.addEventListener('drop', swallow);
+    return () => {
+      window.removeEventListener('dragover', swallow);
+      window.removeEventListener('drop', swallow);
+    };
+  }, []);
+
   const send = useCallback(() => {
     const value = textareaRef.current?.value ?? text;
     if (value.trim().length === 0) return;
-    void submitPrompt(value);
+
+    const sent = attachments;
     setText('');
     setRecall(null);
-  }, [text]);
+    // Cleared with the text rather than on the round-trip: an attachment
+    // belongs to the prompt it went with, and leaving it in the field would put
+    // it silently on the next one too.
+    setAttachments([]);
+
+    void submitPrompt(value, sent).then((accepted) => {
+      // …but a prompt that never left is a different thing. `submitPrompt`
+      // refuses outright when there is no working directory or no profile, and
+      // it says so by returning false; the text survives that on Up-arrow
+      // recall, and images have no such second chance. Putting them back is the
+      // difference between a fixable mistake and a trip back to the screenshot
+      // tool.
+      //
+      // Only into a strip the user has not refilled in the meantime — reading
+      // `current` rather than closing over the old value is what makes an image
+      // pasted during the round-trip survive.
+      if (!accepted && sent.length > 0) {
+        setAttachments((current) => (current.length === 0 ? sent : current));
+      }
+    });
+  }, [attachments, text]);
 
   /**
    * Walk the prompt history.
@@ -172,7 +322,51 @@ export function Composer(): ReactElement {
           locked, so the button would fall out of the field in the one state
           nobody is looking at it in.
         */}
-        <div className="relative min-w-0 flex-1">
+        {/*
+          The drop target is the whole field wrapper, not the textarea.
+
+          A textarea has its own drag behaviour — a dragged *file* over one shows
+          an insertion caret, as though it were about to be typed — and the
+          wrapper is what the thumbnail strip lives in anyway, so the highlight
+          covers everything a person would aim at.
+        */}
+        <div
+          className={cn(
+            'relative min-w-0 flex-1 rounded-md',
+            dragging && 'ring-2 ring-accent ring-offset-2 ring-offset-bg',
+          )}
+          onDragOver={(event: DragEvent<HTMLDivElement>) => {
+            if (!event.dataTransfer.types.includes('Files')) return;
+            // Both required: without `preventDefault` the browser refuses the
+            // drop, and without `dropEffect` the cursor claims it will move the
+            // file rather than copy it.
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+            setDragging(true);
+          }}
+          onDragLeave={(event: DragEvent<HTMLDivElement>) => {
+            // `relatedTarget` is where the pointer went. Still inside means the
+            // pointer crossed the textarea, not the edge.
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            setDragging(false);
+          }}
+          onDrop={(event: DragEvent<HTMLDivElement>) => {
+            event.preventDefault();
+            setDragging(false);
+            const files = filesFrom(event.dataTransfer);
+            if (files.length === 0) {
+              // Dropped something, but nothing we can use. Silence here reads
+              // as a broken drop target.
+              if (event.dataTransfer.files.length > 0) {
+                pushBanner('warn', 'Only images can be attached to a prompt');
+              }
+              return;
+            }
+            void attach(files);
+          }}
+        >
+          <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
+
           <WithReason
             reason={locked ? steering.reason : undefined}
             className="w-full"
@@ -201,6 +395,21 @@ export function Composer(): ReactElement {
                 // Any edit leaves recall: the text on screen is no longer a
                 // history entry, so Up should start again from the newest.
                 setRecall(null);
+              }}
+              /*
+                Paste is the reason this feature exists.
+
+                `preventDefault` runs only when the clipboard actually held an
+                image. Copying a *file* in Finder puts both the file and its
+                name on the clipboard, and a paste that ate the text as well
+                would be a regression for anyone pasting a path — so the text
+                keeps its default behaviour and the image is taken alongside it.
+              */
+              onPaste={(event) => {
+                const files = filesFrom(event.clipboardData);
+                if (files.length === 0) return;
+                event.preventDefault();
+                void attach(files);
               }}
               onKeyDown={(event) => {
                 const el = event.currentTarget;
@@ -235,10 +444,11 @@ export function Composer(): ReactElement {
                 }
               }}
               className={cn(
-                // `pr-10` reserves the button's lane — 28px of button, 4px of
-                // inset, 8px of gap. Without it a long single-line prompt runs
-                // under the glyph and its last word is unreadable.
-                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-10 pl-2.5 font-mono text-sm leading-relaxed md:text-sm',
+                // `pr-18` reserves the buttons' lane — two 28px buttons, 4px of
+                // inset each side, 2px between them, and 8px of gap before the
+                // text. Without it a long single-line prompt runs under the
+                // glyphs and its last word is unreadable.
+                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-18 pl-2.5 font-mono text-sm leading-relaxed md:text-sm',
                 locked && 'cursor-not-allowed',
               )}
             />
@@ -247,32 +457,88 @@ export function Composer(): ReactElement {
           {/*
             Inside the field, pinned to its bottom-right.
 
-            Square and *fixed* at 28px, which is the field's 36px minimum less
-            4px of inset each side — so at one line it reads as filling the
-            height, and when the text wraps it keeps that size and travels down
-            with the growing edge. Anchoring to `bottom` rather than centring is
-            what makes that true: a centred button would drift to the middle of
-            a tall field and stop lining up with the line being typed.
+            Each button is square and *fixed* at 28px, which is the field's 36px
+            minimum less 4px of inset each side — so at one line they read as
+            filling the height, and when the text wraps they keep that size and
+            travel down with the growing edge. Anchoring the row to `bottom`
+            rather than centring is what makes that true: centred, they would
+            drift to the middle of a tall field and stop lining up with the line
+            being typed.
 
             Ghost, not the accent fill. Send is the default action of the Enter
             key, not a call to action competing with the text — the brightest
             thing in the composer should be what the user is writing.
 
-            Icon only. The word carried nothing the glyph and the Enter hint in
-            the empty state do not; `aria-label` and the title keep it named for
-            anyone not reading the glyph.
+            Icons only. The words carried nothing the glyphs and the Enter hint
+            in the empty state do not; `aria-label` and the titles keep them
+            named for anyone not reading the glyph.
           */}
-          <ReasonButton
-            variant="ghost"
-            onClick={send}
-            disabled={locked || text.trim().length === 0}
-            disabledReason={locked ? steering.reason : undefined}
-            aria-label={`Send the prompt (${keyLabel('enter')})`}
-            title={`Send the prompt (${keyLabel('enter')})`}
-            className="absolute right-1 bottom-1 size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
-          >
-            <SendHorizontalIcon />
-          </ReasonButton>
+          <div className="absolute right-1 bottom-1 flex items-center gap-0.5">
+            {/*
+              Attach sits to Send's left, in the same lane and at the same size.
+
+              Ordering is the reading order of the action: pick the picture,
+              then send it. It is also the safer of the two arrangements — Send
+              stays the rightmost thing in the field, where it has always been,
+              so muscle memory does not open a file dialog.
+
+              The hidden input is what actually opens the picker. A native
+              dialog through the main process would hand back a *path*, which
+              would then have to be read on the renderer's say-so; the input
+              element hands over the bytes the user themselves selected and
+              needs no new IPC channel to do it.
+
+              No `accept` filter, deliberately. The agent has `Read`, `Grep` and
+              a shell, so the set of files it can do something with is wider
+              than any list here would stay current with — and an `accept` that
+              greys out the user's own `.parquet` in the OS picker is a worse
+              answer than attaching it and letting the agent try.
+            */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                const picked = Array.from(event.target.files ?? []);
+                // Reset first: picking the same file twice in a row fires no
+                // `change` at all if the value is still sitting there.
+                event.target.value = '';
+                void attach(picked);
+              }}
+            />
+            <ReasonButton
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={locked || !attachable || full}
+              disabledReason={
+                !attachable
+                  ? images.reason
+                  : full
+                    ? `A prompt can carry ${String(ATTACHMENT_LIMITS.images)} images and ${String(ATTACHMENT_LIMITS.files)} files.`
+                    : locked
+                      ? steering.reason
+                      : undefined
+              }
+              aria-label="Attach a file"
+              title="Attach a file — or paste or drop one"
+              className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+            >
+              <PaperclipIcon />
+            </ReasonButton>
+
+            <ReasonButton
+              variant="ghost"
+              onClick={send}
+              disabled={locked || text.trim().length === 0}
+              disabledReason={locked ? steering.reason : undefined}
+              aria-label={`Send the prompt (${keyLabel('enter')})`}
+              title={`Send the prompt (${keyLabel('enter')})`}
+              className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+            >
+              <SendHorizontalIcon />
+            </ReasonButton>
+          </div>
         </div>
 
         {live ? (
@@ -290,3 +556,97 @@ export function Composer(): ReactElement {
     </div>
   );
 }
+
+/**
+ * What is attached, above the field it will be sent from.
+ *
+ * Two shapes, because the two kinds answer "which one is this?" differently.
+ *
+ * An **image** shows its picture. Half of what lands here is a pasted
+ * screenshot with no filename at all, and of the half that has one, "Screenshot
+ * 2026-08-11 at 14.03.22.png" tells the user nothing about which screenshot it
+ * is. The picture is the label.
+ *
+ * A **file** has nothing to show, so it shows what it is: name, kind and size.
+ * The size is there because it is the number that decides whether attaching it
+ * was a good idea, and because it is the same number the agent will be told.
+ *
+ * Nothing renders when there is nothing attached — not an empty row, not a
+ * dashed drop zone. The composer is a place to type, and a permanent box
+ * advertising a feature you are not using is the chrome this file has spent
+ * several rounds removing.
+ */
+function AttachmentStrip({
+  attachments,
+  onRemove,
+}: {
+  readonly attachments: readonly Attachment[];
+  readonly onRemove: (id: string) => void;
+}): ReactElement | null {
+  if (attachments.length === 0) return null;
+
+  return (
+    <ul className="mb-1.5 flex flex-wrap items-start gap-1.5" aria-label="Attachments">
+      {attachments.map((attachment) => (
+        <li key={attachment.id} className="relative">
+          {isImageAttachment(attachment) ? (
+            <img
+              src={attachmentSrc(attachment)}
+              // The filename when there is one, so a screen reader and a hover
+              // both name the thing. `alt` is not decorative here: this is
+              // content the user added and can remove.
+              alt={attachment.name ?? 'Attached image'}
+              title={attachment.name ?? 'Attached image'}
+              className="size-14 rounded-md border border-line object-cover"
+            />
+          ) : (
+            /*
+              Sized to the thumbnails' height so the strip keeps one baseline,
+              but free to be as wide as the name needs up to a cap — a filename
+              squeezed into a square would defeat the point of showing it.
+            */
+            <div
+              title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
+              className="flex h-14 max-w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5"
+            >
+              <FileTextIcon className="size-4 shrink-0 text-ink-muted" />
+              <span className="min-w-0">
+                {/* `break-all` over `truncate`: the informative half of a
+                    filename is often its end (`…-final-v3.csv`), and a middle
+                    ellipsis is not something CSS can do. Two lines of a long
+                    name beats one line of its prefix. */}
+                <span className="line-clamp-2 font-mono text-2xs leading-tight break-all text-ink">
+                  {attachment.name}
+                </span>
+                <span className="block text-2xs text-ink-muted">
+                  {fileKindLabel(attachment)} · {formatBytes(attachmentBytes(attachment))}
+                </span>
+              </span>
+            </div>
+          )}
+          {/*
+            Remove is always visible, not hover-only.
+
+            A control that appears on hover is a control that does not exist for
+            anyone navigating by keyboard, and the whole point of this strip is
+            that something attached by accident — the wrong screenshot, a paste
+            into the wrong window — can be taken back before it is sent and
+            billed for.
+          */}
+          <button
+            type="button"
+            onClick={() => {
+              onRemove(attachment.id);
+            }}
+            aria-label={`Remove ${attachment.name ?? 'this image'}`}
+            title="Remove"
+            className="absolute -top-1 -right-1 flex size-4.5 items-center justify-center rounded-full border border-line bg-panel text-ink-muted opacity-80 transition-opacity hover:text-ink hover:opacity-100 focus-visible:opacity-100"
+          >
+            <XIcon className="size-3" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+

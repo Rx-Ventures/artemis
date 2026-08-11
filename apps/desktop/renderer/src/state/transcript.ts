@@ -31,6 +31,7 @@
 import type {
   AgentError,
   AgentEvent,
+  Attachment,
   JsonObject,
   JsonValue,
   PermissionRequest,
@@ -55,6 +56,16 @@ export interface UserItem extends ItemBase {
   readonly kind: 'user';
   readonly text: string;
   readonly pending: boolean;
+  /**
+   * Images sent with the message.
+   *
+   * The full attachments, base64 and all, kept for as long as the transcript
+   * holds the turn — which is what lets the thumbnail render without a fetch,
+   * and is the reason `IMAGE_ATTACHMENT_LIMITS` is as small as it is. Replayed
+   * history has none: the providers' stored transcripts record what the model
+   * was sent, and reconstructing a thumbnail from that is a different feature.
+   */
+  readonly attachments?: readonly Attachment[];
 }
 
 /** One assistant text block, streamed or whole. */
@@ -343,9 +354,16 @@ export class TranscriptModel {
   /* ---- writes --------------------------------------------------------- */
 
   /** Add the user's message optimistically, before the round-trip returns. */
-  pushUserMessage(text: string): string {
+  pushUserMessage(text: string, attachments?: readonly Attachment[]): string {
     const id = `u:${++this.counter}`;
-    this.insert({ id, ts: Date.now(), kind: 'user', text, pending: true });
+    this.insert({
+      id,
+      ts: Date.now(),
+      kind: 'user',
+      text,
+      pending: true,
+      ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+    });
     this.unconfirmedUser.push(id);
     return id;
   }

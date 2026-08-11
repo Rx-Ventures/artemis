@@ -241,7 +241,9 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.runsSend]: {
       validate: validateRunsSend,
       handle: async (request) => {
-        const result = await engine.require().sendToRun(request.runId, request.text);
+        const result = await engine
+          .require()
+          .sendToRun(request.runId, request.text, request.attachments);
         return { runId: request.runId, deliveredImmediately: result.deliveredImmediately };
       },
     },

@@ -10,7 +10,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { JsonValue, PermissionMode, ProfileId, RunId } from '@rx-artemis/protocol';
+import type {
+  JsonValue,
+  PermissionMode,
+  ProfileId,
+  RunId,
+} from '@rx-artemis/protocol';
 
 import {
   CODEX_CAPABILITIES,
@@ -69,6 +74,8 @@ describe('capabilities', () => {
       planUsageReporting: true,
       costReporting: false,
       subagents: false,
+      imageInput: true,
+      fileInput: true,
     });
   });
 });

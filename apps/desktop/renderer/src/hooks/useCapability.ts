@@ -28,6 +28,8 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   usageReporting: 'token usage reporting',
   costReporting: 'cost reporting',
   planUsageReporting: 'plan usage reporting',
+  imageInput: 'images in a prompt',
+  fileInput: 'file attachments',
 };
 
 export interface CapabilityStatus {

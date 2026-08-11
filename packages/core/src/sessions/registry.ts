@@ -39,6 +39,8 @@ import type {
   AgentError,
   AgentErrorCode,
   AgentEvent,
+  Attachment,
+  Capabilities,
   PermissionDecision,
   PermissionRequestId,
   ProviderId,
@@ -49,6 +51,7 @@ import type {
   RunInput,
   Unsubscribe,
 } from '@rx-artemis/protocol';
+import { isFileAttachment, isImageAttachment } from '@rx-artemis/protocol';
 
 import type {
   ConfigSource,
@@ -439,9 +442,23 @@ export class RunRegistry {
    * {@link SendResult.deliveredImmediately}, derived from the adapter's
    * `midRunSteering` capability.
    */
-  async send(runId: RunId, text: string): Promise<RunSendOutcome> {
+  async send(
+    runId: RunId,
+    text: string,
+    attachments?: readonly Attachment[],
+  ): Promise<RunSendOutcome> {
     const entry = this.#requireActive(runId);
-    const result = await entry.run.send(text);
+    // The same refusal `assertRunnable` makes for a starting run, so an
+    // attachment cannot reach an adapter that cannot take one by the mid-run
+    // route.
+    const unsupported = unsupportedAttachment(attachments, entry.handle.capabilities);
+    if (unsupported !== undefined) {
+      throw new RunError(
+        'invalid_request',
+        `Provider "${entry.handle.providerId}" cannot accept ${unsupported} in a prompt`,
+      );
+    }
+    const result = await entry.run.send(text, attachments);
     // Trust the adapter's own answer; fall back to its advertised capability
     // only if it returned nothing.
     const deliveredImmediately =
@@ -820,6 +837,36 @@ function assertRunnable(input: RunInput, adapter: ProviderAdapter): void {
   if (input.forkSession === true && input.resumeSessionId !== undefined && !caps.forkSession) {
     throw new RunError('invalid_request', `Provider "${adapter.id}" cannot fork sessions`);
   }
+  // Refused rather than dropped, like every other unsupported setting here.
+  // The composer will not let a user attach to a provider that cannot take
+  // one, so the way to arrive here is to attach under one provider and switch
+  // to another before sending — at which point silently sending the text alone
+  // would put a question about a screenshot in front of a model that never
+  // received it, and the answer would be confident and wrong.
+  const unsupported = unsupportedAttachment(input.attachments, caps);
+  if (unsupported !== undefined) {
+    throw new RunError(
+      'invalid_request',
+      `Provider "${adapter.id}" cannot accept ${unsupported} in a prompt`,
+    );
+  }
+}
+
+/**
+ * Name the kind of attachment a capability set cannot carry, if any.
+ *
+ * Per kind rather than as one flag, because the two travel by different
+ * mechanisms and an adapter can plausibly have one and not the other — images
+ * need a place on the wire, files need the adapter to stage them and say where.
+ */
+function unsupportedAttachment(
+  attachments: readonly Attachment[] | undefined,
+  caps: Capabilities,
+): 'images' | 'files' | undefined {
+  if (attachments === undefined || attachments.length === 0) return undefined;
+  if (!caps.imageInput && attachments.some(isImageAttachment)) return 'images';
+  if (!caps.fileInput && attachments.some(isFileAttachment)) return 'files';
+  return undefined;
 }
 
 /** Wrap a caught value as a {@link RunError} without losing its code. */

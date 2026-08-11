@@ -18,6 +18,7 @@ import type {
   AuthStatusInfo,
   AgentError,
   AgentEvent,
+  Attachment,
   Capabilities,
   IpcError,
   PermissionDecision,
@@ -2100,24 +2101,42 @@ const STATUS_RANK: Record<RunStatus, number> = {
   ended: 2,
 };
 
-export async function submitPrompt(text: string): Promise<void> {
+/**
+ * Send a prompt.
+ *
+ * Returns **false when the composer still owns the prompt** — when this refused
+ * before anything was written to the transcript, so nothing anywhere is
+ * displaying what the user typed. The composer keeps the attachments in that
+ * case, because unlike the text they have no Up-arrow recall behind them: a
+ * screenshot cleared out of the field on a "set a working directory" error is
+ * gone, and taking it again is a trip out of the app.
+ *
+ * True once the message is in the transcript, including when the delivery then
+ * fails: the prompt is on screen, the failure has a banner, and the record of
+ * what was attached to it belongs with the message rather than back in an empty
+ * composer.
+ */
+export async function submitPrompt(
+  text: string,
+  attachments?: readonly Attachment[],
+): Promise<boolean> {
   const prompt = text.trim();
-  if (prompt.length === 0) return;
+  if (prompt.length === 0) return false;
 
   const { bridge } = resolveBridge();
   const state = useApp.getState();
   if (!bridge) {
     pushBanner('error', 'No bridge to the main process', 'The preload script did not load.');
-    return;
+    return false;
   }
   if (!state.activeProfileId) {
     pushBanner('error', 'Pick a profile first', 'A run needs credentials, which come from a profile.');
     setScreen('profiles');
-    return;
+    return false;
   }
   if (state.cwd.trim().length === 0) {
     pushBanner('error', 'Set a working directory', 'The agent needs an absolute path to work in.');
-    return;
+    return false;
   }
 
   // Recorded before the send is attempted. Up-arrow recall is about getting a
@@ -2127,16 +2146,38 @@ export async function submitPrompt(text: string): Promise<void> {
 
   const live = isLive(state) ? state.run : null;
 
+  // Filtered against the capabilities of the run that will actually carry them
+  // — the *live* run mid-steer, the active provider otherwise. Those differ
+  // after a provider switch mid-run, and the wrong one would either drop a
+  // supported attachment or send one into a run that will refuse it.
+  //
+  // Per kind, because a provider can plausibly take one and not the other, and
+  // dropping the whole set because half of it is unsupported would lose files
+  // the run could have carried.
+  const carrier = live ? live.capabilities : activeCapabilities(state);
+  const kept = (attachments ?? []).filter((attachment) =>
+    attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
+  );
+  const sending = kept.length > 0 ? kept : undefined;
+
   if (live) {
     if (!live.capabilities.midRunSteering) {
       pushBanner('warn', 'This provider cannot take input mid-run');
-      return;
+      return false;
     }
-    const steerId = transcript.pushUserMessage(prompt);
-    const result = await call(() => bridge.runs.send({ runId: live.runId, text: prompt }));
+    const steerId = transcript.pushUserMessage(prompt, sending);
+    const result = await call(() =>
+      bridge.runs.send({
+        runId: live.runId,
+        text: prompt,
+        ...(sending === undefined ? {} : { attachments: sending }),
+      }),
+    );
     if (!result.ok) {
       reportFailure('Could not deliver the message', result.error);
-      return;
+      // True: the message is in the transcript, dimmed, with its attachments. See
+      // the note on this function for why that counts as sent from here.
+      return true;
     }
     transcript.confirmUserMessage(steerId);
     if (!result.value.deliveredImmediately) {
@@ -2146,12 +2187,12 @@ export async function submitPrompt(text: string): Promise<void> {
         'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
       );
     }
-    return;
+    return true;
   }
 
   const runId = newId('run');
   const capabilities = activeCapabilities(state);
-  const promptId = transcript.pushUserMessage(prompt);
+  const promptId = transcript.pushUserMessage(prompt, sending);
   useApp.setState({
     run: {
       runId,
@@ -2192,6 +2233,7 @@ export async function submitPrompt(text: string): Promise<void> {
     prompt,
     runId,
     includePartialMessages: capabilities.partialMessages,
+    ...(sending === undefined ? {} : { attachments: sending }),
     ...(model ? { model: model.id } : {}),
     ...(effort ? { effort: effort.id } : {}),
     ...(supportsFast ? { fastMode: state.fastMode } : {}),
@@ -2211,10 +2253,13 @@ export async function submitPrompt(text: string): Promise<void> {
   if (!result.ok) {
     reportFailure('Could not start the run', result.error);
     endRunLocally(runId, 'error', result.error);
-    return;
+    // As above: the prompt and its attachments are in the transcript, so the
+    // composer is right to have let go of them.
+    return true;
   }
   transcript.confirmUserMessage(promptId);
   mergeHandle(result.value.run);
+  return true;
 }
 
 function mergeHandle(handle: RunHandle): void {
