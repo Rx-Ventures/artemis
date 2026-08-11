@@ -31,7 +31,7 @@ import type {
   SessionSummary,
   Unsubscribe,
 } from '@rx-artemis/protocol';
-import { normalizeProfileColor } from '@rx-artemis/protocol';
+import { NO_CAPABILITIES, normalizeProfileColor } from '@rx-artemis/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -80,7 +80,10 @@ const CODEX_CAPS: Capabilities = {
   resumeSession: true,
   usageReporting: true,
   costReporting: false,
-  planUsageReporting: false,
+  // True, as the real adapter declares: Codex answers `account/rateLimits/read`
+  // like Claude answers its own. What differs is the *shape* of the answer —
+  // see `mockCodexPlanUsage`.
+  planUsageReporting: true,
 };
 
 /**
@@ -478,13 +481,50 @@ export function createMockBridge(): ArtemisBridge {
       id: 'codex',
       label: 'Codex',
       capabilities: CODEX_CAPS,
-      // Unregistered, so no sign-in instructions, models or effort levels —
+      signInHowTo:
+        'Runs Codex’s own sign-in against this profile’s config directory. Your browser opens to authorise ChatGPT, and the credential is written into the profile — Artemis never sees it.',
+      // Available, because it is: the adapter is registered in the shipped
+      // registry. It was listed as unavailable here long after that stopped
+      // being true, which made the one flow this mock is for — create a profile
+      // on a *second* provider and sign it in — impossible to reach in dev.
+      //
+      // The capabilities above are still deliberately not a transcription of the
+      // real adapter. A provider shaped differently from Claude is the point:
+      // that is what the degradation rules are rendered against.
+      models: [
+        {
+          id: 'gpt-5.5',
+          label: 'GPT-5.5',
+          note: 'Frontier model for complex coding, research, and real-world work.',
+          effortLevels: ['low', 'medium', 'high', 'xhigh'],
+        },
+        {
+          id: 'gpt-5.4-mini',
+          label: 'GPT-5.4 mini',
+          note: 'Faster and cheaper, for routine edits and quick questions.',
+          effortLevels: ['low', 'medium', 'high'],
+        },
+      ],
+      effortLevels: [
+        { id: 'low', label: 'Low', note: 'Fast responses with lighter reasoning.' },
+        { id: 'medium', label: 'Medium', note: 'Balances speed and reasoning depth.' },
+        { id: 'high', label: 'High', note: 'Greater reasoning depth for complex problems.' },
+        { id: 'xhigh', label: 'Extra high', note: 'Maximum reasoning depth. Slowest.' },
+      ],
+      available: true,
+    },
+    {
+      id: 'opencode',
+      label: 'OpenCode',
+      capabilities: NO_CAPABILITIES,
+      // The unavailable row, which is a state worth being able to see in dev:
       // every picker in the app renders its own "this provider offers none"
-      // state, which is the case worth being able to see in dev.
+      // case, and the profile form offers it disabled with this sentence
+      // attached rather than dropping it.
       models: [],
       effortLevels: [],
       available: false,
-      unavailableReason: 'No adapter registered in this build.',
+      unavailableReason: 'Not supported in this version of Artemis yet.',
     },
   ];
 
@@ -734,13 +774,27 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     usagePlan: {
-      cached: async () => ok({ usage: mockPlanUsage(Date.now() - 4 * 60_000, 0) }),
-      refresh: async () => {
+      cached: async ({ profileId }) => ok({ usage: planUsageFor(profileId, Date.now() - 4 * 60_000, 0) }),
+      refresh: async ({ profileId }) => {
         await new Promise((resolve) => setTimeout(resolve, 700));
-        return ok({ usage: mockPlanUsage(Date.now(), 3) });
+        return ok({ usage: planUsageFor(profileId, Date.now(), 3) });
       },
     },
   };
+
+  /**
+   * Plan usage in the shape the profile's *own* provider reports it.
+   *
+   * Not a detail. Codex meters into two anonymous windows it calls `primary`
+   * and `secondary`; Claude names five-hourly, weekly and per-model buckets.
+   * Serving Claude's shape for every profile is what let a meter that silently
+   * filtered on Claude's window ids look correct in dev right up until it met a
+   * real Codex account and rendered nothing.
+   */
+  function planUsageFor(profileId: string, fetchedAt: number, drift: number): PlanUsage {
+    const provider = profiles.find((p) => p.id === profileId)?.providerId;
+    return provider === 'codex' ? mockCodexPlanUsage(fetchedAt, drift) : mockPlanUsage(fetchedAt, drift);
+  }
 }
 
 /**
@@ -783,6 +837,30 @@ function mockPlanUsage(fetchedAt: number, drift: number): PlanUsage {
         label: '7 days · Fable',
         utilization: 78 + drift,
         resetsAt: fetchedAt + 71 * hour,
+      },
+    ],
+  };
+}
+
+/**
+ * The same question answered by a provider with its own vocabulary.
+ *
+ * Transcribed from a live `account/rateLimits/read`: one window, named after
+ * nothing in {@link PlanUsageWindowId}'s documented list, with the duration
+ * carried as a label rather than as an id. Everything downstream has to cope
+ * with that from data rather than from a table of names it recognises.
+ */
+function mockCodexPlanUsage(fetchedAt: number, drift: number): PlanUsage {
+  return {
+    available: true,
+    subscriptionType: 'team',
+    fetchedAt,
+    windows: [
+      {
+        id: 'primary',
+        label: '7 days',
+        utilization: 12 + drift,
+        resetsAt: fetchedAt + 71 * 60 * 60 * 1000,
       },
     ],
   };

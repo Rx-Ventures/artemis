@@ -86,6 +86,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { ButtonGroup } from '@/components/ui/button-group';
 import { Card, CardContent } from '@/components/ui/card';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -495,7 +496,14 @@ function SignInStep({
   readonly onDone: () => void;
 }): ReactElement {
   const { status, command, checking } = useAuthStatus(profileId, true);
-  const provider = useApp((s) => s.providers.find((p) => p.id === s.activeProviderId));
+  // The profile's provider, not the active one — the same rule `ProfileCard`
+  // follows. `command` already comes from the profile's own adapter, so reading
+  // the prose off the active provider was a way to explain a `codex login` in
+  // Claude's words.
+  const provider = useApp((s) => {
+    const owner = s.profiles.find((p) => p.id === profileId)?.providerId;
+    return s.providers.find((p) => p.id === (owner ?? s.activeProviderId));
+  });
   const [copied, setCopied] = useState(false);
   const signedIn = status?.loggedIn === true;
 
@@ -706,7 +714,26 @@ interface FormProps {
 
 function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const fallbackProvider = useApp((s) => s.activeProviderId);
+  const providers = useApp((s) => s.providers);
   const platform = useApp((s) => s.platform);
+
+  /**
+   * Which CLI the new profile belongs to.
+   *
+   * Seeded from the active provider, which is what this form used to assume
+   * outright — and that assumption was the only thing standing between a user
+   * and a second provider's account. A profile is created from *this* screen,
+   * the app is pointed at Claude, so every profile it could make was a Claude
+   * one; the Codex adapter was wired, the CLI was installed, and there was still
+   * no way to sign in to it without first knowing to change an unrelated setting
+   * in the command palette.
+   *
+   * Create-only. An existing profile's provider is not editable, because the
+   * config directory below belongs to that provider's CLI — changing one without
+   * the other would point `codex login` at a directory full of Claude's session
+   * history.
+   */
+  const [chosenProvider, setChosenProvider] = useState<ProviderId>(fallbackProvider);
 
   const [label, setLabel] = useState(profile?.label ?? '');
   const [configDir, setConfigDir] = useState(profile?.configDir ?? '');
@@ -716,7 +743,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const [busy, setBusy] = useState(false);
 
   const editing = profile !== undefined;
-  const providerId: ProviderId = profile?.providerId ?? fallbackProvider;
+  const providerId: ProviderId = profile?.providerId ?? chosenProvider;
   const native = hasNativeDirectoryPicker();
   const providerLabel = useApp(
     (s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId,
@@ -849,6 +876,38 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
               </h2>
               {profile ? <ToneBadge>{profile.id.slice(0, 8)}</ToneBadge> : null}
             </div>
+
+            {/*
+              Create only, and first: it decides what every field under it means.
+              An unavailable provider is offered and explained rather than
+              dropped — "the Codex CLI is not on your PATH" is a thing the user
+              can act on, and a missing row is not.
+            */}
+            {editing ? null : (
+              <Field>
+                <FieldLabel className="text-2xs text-ink-faint uppercase">Provider</FieldLabel>
+                <ButtonGroup>
+                  {providers.map((option) => (
+                    <ReasonButton
+                      key={option.id}
+                      type="button"
+                      size="sm"
+                      variant={option.id === providerId ? 'secondary' : 'outline'}
+                      aria-pressed={option.id === providerId}
+                      disabled={!option.available}
+                      disabledReason={option.unavailableReason}
+                      onClick={() => setChosenProvider(option.id)}
+                    >
+                      {option.label}
+                    </ReasonButton>
+                  ))}
+                </ButtonGroup>
+                <FieldDescription className="text-2xs">
+                  Which CLI this account belongs to. It cannot be changed afterwards — the config
+                  directory below is that CLI's, and its own sign-in is what writes into it.
+                </FieldDescription>
+              </Field>
+            )}
 
             <Field>
               <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">

@@ -51,6 +51,8 @@ import {
   activeEffortLevels,
   activeModels,
   activeProviderLabel,
+  providerOffersFastMode,
+  providerOffersUltracode,
   refreshModels,
   selectedModelOption,
   setFastMode,
@@ -181,20 +183,17 @@ function Provenance({
 /**
  * Why a per-model flag cannot be set right now, or `undefined`.
  *
- * Three distinct answers, because they ask for three different things from the
- * user: choose a model, choose a *different* model, or nothing at all because
- * this provider has no models to choose between.
+ * Two answers, because they ask two different things of the user: choose a
+ * model, or choose a *different* model. There used to be a third — "this
+ * provider has no models at all" — and it is gone because that case no longer
+ * reaches here: a provider with nothing to ask does not get the row. See
+ * `providerOffersFastMode`.
  */
 function flagReason(
   flag: 'fast mode' | 'ultracode',
   selected: ProviderModelOption | undefined,
   supported: boolean,
-  hasCatalogue: boolean,
-  providerLabel: string,
 ): string | undefined {
-  if (!hasCatalogue) {
-    return `${providerLabel} offers no model choice here, so there is no model to ask for ${flag}.`;
-  }
   if (!selected) {
     return `No model is chosen, so the provider picks one at run time and Artemis cannot tell whether ${flag} would be honoured. Choose a model below.`;
   }
@@ -204,47 +203,53 @@ function flagReason(
   return undefined;
 }
 
-function Defaults(): ReactElement {
+/**
+ * The two standing flags — for the providers that have them.
+ *
+ * A flag no model in this catalogue offers is not rendered at all, which is the
+ * one place this app hides a control instead of explaining it. The rule it bends
+ * to is worth stating: an explained-disabled control is better than a hidden one
+ * *because the user can act on the explanation*. "Codex does not accept fast
+ * mode" is not actionable — there is no model to switch to and no setting to
+ * change — so the switch would sit dead forever under a sentence that reads like
+ * an error. The per-*model* case is still explained, because switching models is
+ * exactly the action that fixes it.
+ *
+ * With neither flag offered the whole group goes, rather than leaving a heading
+ * over nothing.
+ */
+function Defaults(): ReactElement | null {
   const selected = useApp(selectedModelOption);
-  const providerLabel = useApp(activeProviderLabel);
-  const hasCatalogue = useApp((s) => activeModels(s).length > 0);
+  const offersFast = useApp(providerOffersFastMode);
+  const offersUltra = useApp(providerOffersUltracode);
   const fastMode = useApp((s) => s.fastMode);
   const ultracode = useApp((s) => s.ultracode);
 
-  const fastReason = flagReason(
-    'fast mode',
-    selected,
-    selected?.supportsFastMode === true,
-    hasCatalogue,
-    providerLabel,
-  );
-  const ultraReason = flagReason(
-    'ultracode',
-    selected,
-    selected?.supportsUltracode === true,
-    hasCatalogue,
-    providerLabel,
-  );
+  if (!offersFast && !offersUltra) return null;
 
   return (
     <SettingsGroup label="Defaults for the next run">
       <ItemGroup className="gap-2">
-        <FlagRow
-          id="settings-fast-mode"
-          title="Fast mode"
-          description="Trade reasoning depth for latency. Sent only when the chosen model accepts it — the preference itself survives a switch to one that does not."
-          checked={fastMode}
-          reason={fastReason}
-          onChange={setFastMode}
-        />
-        <FlagRow
-          id="settings-ultracode"
-          title="Ultracode"
-          description="Spend materially more compute on a single turn. The opposite trade to fast mode, and independent of it: a model may offer either, both or neither."
-          checked={ultracode}
-          reason={ultraReason}
-          onChange={setUltracode}
-        />
+        {offersFast ? (
+          <FlagRow
+            id="settings-fast-mode"
+            title="Fast mode"
+            description="Trade reasoning depth for latency. Sent only when the chosen model accepts it — the preference itself survives a switch to one that does not."
+            checked={fastMode}
+            reason={flagReason('fast mode', selected, selected?.supportsFastMode === true)}
+            onChange={setFastMode}
+          />
+        ) : null}
+        {offersUltra ? (
+          <FlagRow
+            id="settings-ultracode"
+            title="Ultracode"
+            description="Spend materially more compute on a single turn. The opposite trade to fast mode, and independent of it: a model may offer either, both or neither."
+            checked={ultracode}
+            reason={flagReason('ultracode', selected, selected?.supportsUltracode === true)}
+            onChange={setUltracode}
+          />
+        ) : null}
       </ItemGroup>
     </SettingsGroup>
   );

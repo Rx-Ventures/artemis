@@ -85,6 +85,7 @@ import {
   openSettings,
   refreshProviders,
   refreshSessions,
+  providerOffersFastMode,
   resumeSession,
   selectedModelOption,
   setFastMode,
@@ -219,6 +220,7 @@ function RootPage({
   const models = useApp(activeModels);
   const model = useApp(selectedModelOption);
   const fastOk = useApp(fastModeAvailable);
+  const fastOffered = useApp(providerOffersFastMode);
   const levels = useApp(thinkingLevels);
   const thinking = useApp(activeThinkingLevel);
   const fast = useApp((s) => s.fastMode);
@@ -318,21 +320,30 @@ function RootPage({
          * Turning either on turns the other off; `setFastMode` carries
          * that rule and says why.
          */}
-        <GatedItem
-          supported={fastOk}
-          reason={
-            model
-              ? `${model.label} does not offer fast mode.`
-              : 'Choose a model that offers fast mode.'
-          }
-          onSelect={() => {
-            setFastMode(!fast);
-            onClose();
-          }}
-        >
-          <ZapIcon />
-          {fast ? 'Turn fast mode off' : 'Turn fast mode on'}
-        </GatedItem>
+        {/*
+          Listed disabled when this *model* has no fast mode — the palette is a
+          place people search by name, and a command that vanishes is a command
+          they conclude does not exist. Not listed at all when the *provider* has
+          none: on Codex there is no model to switch to and the command could
+          never do anything, so the search result would be the lie instead.
+        */}
+        {fastOffered ? (
+          <GatedItem
+            supported={fastOk}
+            reason={
+              model
+                ? `${model.label} does not offer fast mode.`
+                : 'Choose a model that offers fast mode.'
+            }
+            onSelect={() => {
+              setFastMode(!fast);
+              onClose();
+            }}
+          >
+            <ZapIcon />
+            {fast ? 'Turn fast mode off' : 'Turn fast mode on'}
+          </GatedItem>
+        ) : null}
         {/*
           Thinking is one ladder now, `low` up to ultracode, so the palette
           offers the rungs rather than a separate ultracode switch. A rung the

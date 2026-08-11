@@ -233,6 +233,72 @@ export interface ProviderModelOption {
 }
 
 /**
+ * Strip the parts of a model id that decorate it without naming a model.
+ *
+ * Two suffixes, both *lexical conventions* rather than names:
+ *
+ *  - A bracketed variant — `opus[1m]`, `claude-opus-5[1m]`. It qualifies a
+ *    model; it does not name a different one.
+ *  - A dated snapshot — `claude-haiku-4-5-20251001`. That is the release, not
+ *    the model.
+ *
+ * Nothing here knows what any provider calls its models, which is the rule this
+ * file is built on. It removes decoration and compares what is left.
+ */
+function bareModelId(id: string): string {
+  return id
+    .trim()
+    .toLowerCase()
+    .replace(/\[[^\]]*\]$/, '')
+    .replace(/-\d{8}$/, '');
+}
+
+/**
+ * Every string that identifies this model, normalised.
+ *
+ * ## Why an id needs normalising at all
+ *
+ * A model is identified by its {@link ProviderModelOption.id}, and that id is
+ * **not stable across catalogues**. The same model is `fable` in the Claude
+ * adapter's built-in list and `claude-fable-5[1m]` in the live one the CLI
+ * publishes, because the two lists are written by different authors for
+ * different purposes: one is a conservative alias this app ships, the other is
+ * the provider's own vocabulary. So anything persisted against one list — a
+ * pinned shortlist, a selected model — silently stops matching when the other
+ * arrives, and a model the user chose vanishes from their picker without a word.
+ *
+ * {@link resolvedModel} exists precisely to bridge that, and this is the bridge:
+ * both lists resolve Fable to `claude-fable-5`, so the two rows share a key even
+ * though their ids do not.
+ *
+ * Two rows that differ only by variant or release date come back with the same
+ * key on purpose. Every caller asking this question — "is the model the user
+ * picked still in this list?" — means the model rather than the build.
+ */
+export function modelIdentity(option: ProviderModelOption): readonly string[] {
+  const keys: string[] = [];
+  for (const candidate of [option.id, option.resolvedModel]) {
+    if (candidate === undefined) continue;
+    const key = bareModelId(candidate);
+    if (key.length > 0 && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * Do two catalogue entries name the same model?
+ *
+ * Used to carry a persisted choice across a catalogue swap — see
+ * {@link modelIdentity} for why ids alone cannot answer it. Both sides must be
+ * real options: a bare id string carries no `resolvedModel`, and without one
+ * there is nothing to match `fable` against `claude-fable-5[1m]` with.
+ */
+export function isSameModel(a: ProviderModelOption, b: ProviderModelOption): boolean {
+  const keys = modelIdentity(b);
+  return modelIdentity(a).some((key) => keys.includes(key));
+}
+
+/**
  * One reasoning-effort level, as the renderer sees it.
  *
  * "How hard should the model think before answering" is a knob several
