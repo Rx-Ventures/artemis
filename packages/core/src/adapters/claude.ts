@@ -48,6 +48,7 @@ import {
   getSessionMessages as sdkGetSessionMessages,
   listSessions as sdkListSessions,
   query,
+  renameSession as sdkRenameSession,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
@@ -99,6 +100,12 @@ import { readPlanUsage } from './planUsage.js';
 import { AsyncQueue, createDeferred } from './stream.js';
 import type { Deferred } from './stream.js';
 import {
+  SESSION_TITLE_INSTRUCTIONS,
+  buildTitlePrompt,
+  cleanSessionTitle,
+  isDeclinedTitle,
+} from './titles.js';
+import {
   adapterError,
   toAgentError,
   scrubSecrets,
@@ -120,6 +127,8 @@ import type {
   SessionListPage,
   SessionListQuery,
   SessionMessagesQuery,
+  SessionTitleQuery,
+  SessionTitleUpdate,
   SessionTranscript,
 } from './types.js';
 
@@ -232,6 +241,50 @@ export const CLAUDE_CREDENTIALS: ProviderCredentialSpec = {
 };
 
 /**
+ * Claude's families, smallest first, as {@link ProviderModelOption.tier}.
+ *
+ * This is the one place in Artemis that is allowed to know that `haiku` is
+ * smaller than `opus`, and it is here for the reason every other model fact is:
+ * a family name is the provider's vocabulary. The protocol carries an ordinal
+ * and no opinion; the adapter supplies the opinion.
+ *
+ * Families rather than models, because the tier has to survive the live
+ * catalogue. That list arrives with ids this build has never seen —
+ * `claude-haiku-4-6`, a snapshot, a bracketed variant — and the family is the
+ * part of the id that keeps meaning what it meant. A family missing from this
+ * table gets **no tier at all** rather than a guessed one: `lowestTierModel`
+ * treats unknown as "do not spend on this", which is the correct answer for a
+ * model nobody here can place.
+ */
+const CLAUDE_FAMILY_TIERS = {
+  haiku: 0,
+  sonnet: 1,
+  opus: 2,
+  fable: 3,
+} as const satisfies Readonly<Record<string, number>>;
+
+/**
+ * The tier of a Claude model id, or `undefined` for a family we do not know.
+ *
+ * Reads the family off the wire id by the same rules {@link shortModelName}
+ * uses — strip the vendor prefix, the dated snapshot suffix and the bracketed
+ * variant — because those three decorations are exactly what stands between
+ * `claude-haiku-4-5-20251001` and the word `haiku`.
+ */
+export function claudeModelTier(id: string | undefined): number | undefined {
+  if (id === undefined) return undefined;
+  const family = id
+    .trim()
+    .toLowerCase()
+    .replace(/^claude-/, '')
+    .replace(/\[[^\]]*\]$/, '')
+    .replace(/-\d{8}$/, '')
+    .split('-')[0];
+  if (family === undefined) return undefined;
+  return (CLAUDE_FAMILY_TIERS as Readonly<Record<string, number>>)[family];
+}
+
+/**
  * Models the picker falls back to, in display order. First entry is the default.
  *
  * **This list is a fallback, not the catalogue.** The authoritative list comes
@@ -268,6 +321,7 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
     effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     supportsUltracode: true,
     adaptiveThinking: true,
+    tier: CLAUDE_FAMILY_TIERS.fable,
   },
   {
     id: 'opus',
@@ -279,6 +333,7 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
     supportsFastMode: true,
     supportsUltracode: true,
     adaptiveThinking: true,
+    tier: CLAUDE_FAMILY_TIERS.opus,
   },
   {
     id: 'sonnet',
@@ -289,6 +344,7 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
     effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     supportsUltracode: true,
     adaptiveThinking: true,
+    tier: CLAUDE_FAMILY_TIERS.sonnet,
   },
   {
     id: 'haiku',
@@ -296,6 +352,7 @@ export const CLAUDE_MODELS: readonly ProviderModelOption[] = [
     displayName: 'Claude Haiku 4.5',
     resolvedModel: 'claude-haiku-4-5-20251001',
     note: 'Fastest and cheapest. Best for small, mechanical edits.',
+    tier: CLAUDE_FAMILY_TIERS.haiku,
   },
 ];
 
@@ -493,6 +550,9 @@ function toModelOption(info: ModelInfo): ProviderModelOption {
     displayName: info.displayName,
     resolvedModel: info.resolvedModel,
     note: info.description,
+    // The resolution first: `value` may be an alias the CLI invented, while
+    // `resolvedModel` always names a real model and therefore a real family.
+    tier: claudeModelTier(info.resolvedModel ?? info.value),
     // `supportsEffort: false` means "takes no effort setting", which is an
     // empty array here — distinct from `undefined`, which means "every level".
     effortLevels: info.supportsEffort === false ? [] : levels ? [...levels] : undefined,
@@ -545,6 +605,17 @@ const INTERRUPT_TIMEOUT_MS = 8_000;
 
 /** Lines of provider stderr kept for diagnosing a failed run. */
 const STDERR_TAIL_LINES = 20;
+
+/**
+ * How long a naming call gets before it is abandoned.
+ *
+ * Generous for what it is — the smallest model answering six words takes a
+ * second or two — because the cost of waiting is nothing (it runs beside a real
+ * run, and nothing is blocked on it) while the cost of a premature give-up is a
+ * session that stays unnamed. It exists so a wedged subprocess cannot sit there
+ * forever, not to keep the feature snappy.
+ */
+const TITLE_TIMEOUT_MS = 30_000;
 
 /* -------------------------------------------------------------------------- */
 /* Adapter                                                                    */
@@ -777,6 +848,132 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       });
 
       return { events, hasMore };
+    },
+
+    /**
+     * Name a conversation from its opening message.
+     *
+     * A one-shot completion with everything a run has switched off, and each
+     * switch is load-bearing rather than tidy:
+     *
+     *  - **`persistSession: false`** — without it this call writes a session
+     *      file of its own, and a feature whose entire job is to label the
+     *      history pane would put a junk row in it on every new conversation.
+     *      This is the option the whole approach depends on.
+     *  - **`tools: []`** — the restriction knob (see `buildOptions` for why it
+     *      is `tools` and not `allowedTools`). A naming call that could reach
+     *      Bash is a naming call that can be talked into using it by the very
+     *      text it was asked to summarise.
+     *  - **`maxTurns: 1`** — one answer, no agentic loop. With no tools there
+     *      is nothing to loop over, so this is the second lock on the same door.
+     *  - **`settingSources: []`** — the same isolation every other path here
+     *      gets: no hooks, no MCP servers, no `CLAUDE.md` pulled in to pad a
+     *      six-word answer.
+     *  - **A replacing `systemPrompt`** — a bare string, which is the *only*
+     *      form that displaces the coding-agent preset (see `mapSystemPrompt`).
+     *      Keeping the preset would spend far more tokens describing tools this
+     *      call cannot use than it spends on the title.
+     *
+     * Resolves `null` on every failure, per the seam's contract. A machine with
+     * no CLI, an account that cannot use the model it was handed, or a model
+     * that answered with a paragraph all mean the same thing to the caller:
+     * this session keeps the name it would otherwise have had.
+     */
+    async suggestSessionTitle(request: SessionTitleQuery): Promise<string | null> {
+      // Aborting the controller is what actually reclaims the subprocess, so
+      // the caller's signal is bridged onto it rather than checked in a loop.
+      const abort = new AbortController();
+      const forwardAbort = (): void => {
+        abort.abort();
+      };
+      if (request.abortSignal?.aborted === true) return null;
+      request.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
+
+      let sdkQuery: Query | undefined;
+      try {
+        const env = composeProviderEnv(request.env, {
+          inheritHostEnv: request.inheritHostEnv,
+          hostEnv,
+          scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
+        });
+        env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'artemis';
+
+        sdkQuery = query({
+          prompt: buildTitlePrompt(request.prompt),
+          options: {
+            cwd: request.cwd,
+            env,
+            model: request.model,
+            abortController: abort,
+            settingSources: [],
+            persistSession: false,
+            includePartialMessages: false,
+            maxTurns: 1,
+            tools: [],
+            systemPrompt: SESSION_TITLE_INSTRUCTIONS,
+          },
+        });
+
+        const answer = await withTimeout(readTitleAnswer(sdkQuery), TITLE_TIMEOUT_MS);
+        if (!answer.ok) {
+          diagnostic?.(`Could not name the session: ${answer.reason}`);
+          return null;
+        }
+
+        const title = cleanSessionTitle(answer.text);
+        if (title === null && !isDeclinedTitle(answer.text)) {
+          // Worth a line: a model that keeps answering with prose is a prompt
+          // problem, and this is the only place that would ever show it. A
+          // model that *declined* is excluded — that is the prompt working, and
+          // logging it made "hey" look like a fault on every new session.
+          diagnostic?.(
+            `Discarded an unusable session title: ${JSON.stringify(answer.text.slice(0, 120))}`,
+          );
+        }
+        return title;
+      } catch (error) {
+        diagnostic?.(`Could not name the session: ${describe(error)}`, error);
+        return null;
+      } finally {
+        request.abortSignal?.removeEventListener('abort', forwardAbort);
+        abort.abort();
+        try {
+          await sdkQuery?.return?.(undefined);
+        } catch {
+          /* the abort above is what actually reclaims the subprocess */
+        }
+      }
+    },
+
+    /**
+     * Write a title onto a stored session.
+     *
+     * `renameSession` appends a custom-title entry to the session's JSONL,
+     * which is the same thing the CLI's own `/rename` writes — so the name
+     * Artemis generated is read straight back by `listSessions` as
+     * `customTitle`, and the user's own `claude` sees it too.
+     *
+     * The config-directory swap is the same one listing and history use, and
+     * for the same reason: the SDK's standalone session functions take no
+     * environment and resolve the store from `process.env`. `dir` narrows the
+     * search to one project, which matters here more than it does for a read —
+     * without it the SDK walks every project directory looking for the id.
+     */
+    async setSessionTitle(update: SessionTitleUpdate): Promise<void> {
+      const configDir = readEnv(update.env, CLAUDE_CONFIG_DIR_ENV);
+      try {
+        await withClaudeConfigDir(configDir, () =>
+          sdkRenameSession(
+            update.sessionId,
+            update.title,
+            update.cwd === undefined ? undefined : { dir: update.cwd },
+          ),
+        );
+      } catch (error) {
+        throw adapterError('unknown', `Could not rename the Claude session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
     },
 
     async fetchPlanUsage(input: PlanUsageQuery): Promise<PlanUsage> {
@@ -1606,6 +1803,60 @@ function withClaudeConfigDir<T>(
     () => undefined,
   );
   return run;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Session titles                                                             */
+/* -------------------------------------------------------------------------- */
+
+/** What a naming query came to: an answer, or why there is not one. */
+type TitleAnswer =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Drain a naming query down to the one string it produced.
+ *
+ * The `result` message is what this reads, rather than the assistant text
+ * blocks: it is the SDK's own answer for "what did that query come to", it
+ * arrives exactly once, and reading it means a model that thought out loud
+ * before answering does not have its thinking concatenated onto the title.
+ *
+ * ## `subtype: 'success'` does not mean it succeeded
+ *
+ * This is the trap, and it is not hypothetical — it is what an unauthenticated
+ * config directory produces, observed verbatim:
+ *
+ * ```json
+ * { "type": "result", "subtype": "success", "is_error": true,
+ *   "result": "Not logged in · Please run /login", "terminal_reason": "api_error" }
+ * ```
+ *
+ * A failure arrives wearing the success subtype with `is_error` set beside it,
+ * and `result` holds the *error text* in the same field a title would occupy.
+ * Reading the subtype alone would have named the user's session
+ * `Not logged in · Please run /login` — a string that passes every check in
+ * `cleanSessionTitle`, because it is a short, well-formed, capitalised phrase.
+ * Both fields are therefore required to agree before the text is believed.
+ *
+ * Failures are reported rather than swallowed. Returning a bare `null` for all
+ * of them is what made a wholly unauthenticated profile look identical to a
+ * model that declined to answer: sessions silently stopped being named and
+ * nothing anywhere said why.
+ */
+async function readTitleAnswer(sdkQuery: Query): Promise<TitleAnswer> {
+  for await (const message of sdkQuery) {
+    if (message.type !== 'result') continue;
+    if (message.subtype !== 'success' || message.is_error) {
+      // `result` carries the provider's own explanation on the error path, and
+      // it is the only description of the failure anyone will get: the SDK
+      // throws on the *next* pull, which a caller that stops here never makes.
+      const detail = message.subtype === 'success' ? message.result : message.subtype;
+      return { ok: false, reason: detail || 'the provider reported an error' };
+    }
+    return { ok: true, text: message.result };
+  }
+  return { ok: false, reason: 'the provider produced no result' };
 }
 
 /* -------------------------------------------------------------------------- */

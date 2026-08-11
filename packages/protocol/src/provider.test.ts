@@ -14,11 +14,15 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isSameModel, modelIdentity } from './provider.js';
+import { isSameModel, lowestTierModel, modelIdentity } from './provider.js';
 import type { ProviderModelOption } from './provider.js';
 
 function option(id: string, resolvedModel?: string): ProviderModelOption {
   return { id, label: id, note: '', ...(resolvedModel === undefined ? {} : { resolvedModel }) };
+}
+
+function tiered(id: string, tier?: number): ProviderModelOption {
+  return { id, label: id, note: '', ...(tier === undefined ? {} : { tier }) };
 }
 
 describe('modelIdentity', () => {
@@ -90,5 +94,44 @@ describe('isSameModel', () => {
 
   it('does not match two providers that happen to publish no resolution', () => {
     expect(isSameModel(option('gpt-5.5'), option('gpt-5.4-mini'))).toBe(false);
+  });
+});
+
+/**
+ * Picking the model background work is billed to.
+ *
+ * The failure mode this guards is a charge rather than a wrong pixel: get it
+ * wrong and every new session is named by a frontier model. Display order is
+ * specifically not the answer — both real catalogues lead with their flagship.
+ */
+describe('lowestTierModel', () => {
+  it('ignores display order and takes the smallest tier', () => {
+    // Claude's own order: flagship first, cheapest last.
+    const models = [tiered('fable', 3), tiered('opus', 2), tiered('sonnet', 1), tiered('haiku', 0)];
+    expect(lowestTierModel(models)?.id).toBe('haiku');
+  });
+
+  it('still finds it when the cheapest model is listed first', () => {
+    expect(lowestTierModel([tiered('mini', 0), tiered('frontier', 1)])?.id).toBe('mini');
+  });
+
+  it('answers nothing when no row declares a tier', () => {
+    // A live catalogue full of models this build has never heard of. Guessing
+    // here would bill an account to save a lookup.
+    expect(lowestTierModel([option('who-knows'), option('nor-this')])).toBeUndefined();
+  });
+
+  it('skips untiered rows rather than treating them as cheapest', () => {
+    const models = [option('unplaceable'), tiered('sonnet', 1)];
+    expect(lowestTierModel(models)?.id).toBe('sonnet');
+  });
+
+  it('breaks a tie on display order, which is the provider’s own preference', () => {
+    expect(lowestTierModel([tiered('first', 0), tiered('second', 0)])?.id).toBe('first');
+  });
+
+  it('answers nothing for an empty or absent catalogue', () => {
+    expect(lowestTierModel([])).toBeUndefined();
+    expect(lowestTierModel(undefined)).toBeUndefined();
   });
 });

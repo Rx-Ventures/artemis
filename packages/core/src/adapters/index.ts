@@ -6,6 +6,7 @@
  * | `types`      | `ProviderAdapter`, `Run`, `ResolvedRunInput`, `AdapterError`    |
  * | `stream`     | `AsyncQueue`, `createDeferred` — the async plumbing adapters share |
  * | `env`        | `composeProviderEnv` — how a profile becomes a process environment |
+ * | `titles`     | what to ask a model for a session name, and how to believe it   |
  * | `mapper`     | pure Claude ⇄ Artemis translation (no SDK loaded, fully testable) |
  * | `claude`     | the Claude adapter: streaming input, permissions, disposal      |
  * | `jsonrpc`    | line-delimited JSON-RPC, for adapters that drive a subprocess   |
@@ -21,6 +22,7 @@
 export * from './types.js';
 export * from './stream.js';
 export * from './env.js';
+export * from './titles.js';
 export * from './jsonrpc.js';
 export * from './mapper.js';
 export * from './claude.js';

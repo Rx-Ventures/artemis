@@ -230,6 +230,29 @@ export interface ProviderModelOption {
    * explain why the effort picker may not visibly change anything.
    */
   readonly adaptiveThinking?: boolean;
+
+  /**
+   * Where this model sits in its provider's own lineup, `0` being the smallest
+   * and cheapest tier that provider ships.
+   *
+   * Not a price and not a benchmark — an *ordinal within one catalogue*, which
+   * is the most this file can honestly carry. Nothing here knows what a token
+   * costs, and comparing a tier across providers would be meaningless.
+   *
+   * It exists because one caller has a question that display order cannot
+   * answer: {@link lowestTierModel}, which picks the model Artemis spends on
+   * background work such as naming a session. Display order is the *provider's*
+   * order — the live Claude catalogue leads with its flagship, the built-in
+   * fallback list does too — so "the last row" is a coincidence rather than a
+   * fact, and a coincidence is not something to bill someone's account against.
+   *
+   * **Optional, and absent means "unknown" rather than "cheapest".** A row an
+   * adapter cannot place is one nobody should be spending on by default, and
+   * every selector here treats it that way. Adapters derive it from their own
+   * vocabulary: the Claude adapter reads the family out of the wire id, because
+   * `haiku` and `opus` mean something *there* and nowhere above it.
+   */
+  readonly tier?: number;
 }
 
 /**
@@ -296,6 +319,31 @@ export function modelIdentity(option: ProviderModelOption): readonly string[] {
 export function isSameModel(a: ProviderModelOption, b: ProviderModelOption): boolean {
   const keys = modelIdentity(b);
   return modelIdentity(a).some((key) => keys.includes(key));
+}
+
+/**
+ * The smallest model in a catalogue, or `undefined` if it does not say.
+ *
+ * "Smallest" is {@link ProviderModelOption.tier}, and the undefined case is the
+ * important half of this function. A catalogue where no row declares a tier —
+ * a provider that has not adopted the field, a live listing full of models this
+ * build has never heard of — produces *no answer*, not a guess. The alternative
+ * is picking the first or last row and hoping, which spends the user's account
+ * on a frontier model to save four words of typing.
+ *
+ * Ties go to display order, which is the provider's own preference among models
+ * it considers equivalent.
+ */
+export function lowestTierModel(
+  models: readonly ProviderModelOption[] | undefined,
+): ProviderModelOption | undefined {
+  let best: ProviderModelOption | undefined;
+  for (const model of models ?? []) {
+    if (model.tier === undefined) continue;
+    // Strictly less than, so the earliest row wins a tie.
+    if (best === undefined || model.tier < (best.tier ?? Number.POSITIVE_INFINITY)) best = model;
+  }
+  return best;
 }
 
 /**

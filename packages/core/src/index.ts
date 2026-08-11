@@ -16,6 +16,7 @@
  * │ resolveEnv      profile → the env bundle a run executes with         │
  * ├── sessions ──────────────────────────────────────────────────────────┤
  * │ RunRegistry     live runs by id, event fan-out, guaranteed teardown  │
+ * │ SessionNamer    names a new session from its opening message         │
  * ├── workspace ─────────────────────────────────────────────────────────┤
  * │ checkWorkingDirectory  is this cwd real, a directory, and readable?  │
  * │ describeWorkspace      what is it called — repository, or folder?    │

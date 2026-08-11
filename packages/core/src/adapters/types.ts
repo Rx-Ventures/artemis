@@ -387,6 +387,55 @@ export interface ModelCatalogue {
   readonly live: boolean;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Session titles                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What naming a session from its opening message needs.
+ *
+ * The {@link model} is chosen by the caller rather than left to the provider's
+ * default, and that is the whole point of the feature: this is a throwaway
+ * sentence, so it runs on the smallest model the account has
+ * (`lowestTierModel`) instead of the one the user picked for real work.
+ */
+export interface SessionTitleQuery {
+  /** The user's opening message. Adapters may truncate it before sending. */
+  readonly prompt: string;
+  /** Model id to name with, as the provider spells it. Never omitted. */
+  readonly model: string;
+  /**
+   * The profile's resolved environment. Credential-bearing, unlike the read
+   * paths above: this one contacts the model.
+   */
+  readonly env: EnvBundle;
+  /** Somewhere real to run. See {@link ModelListQuery.cwd}. */
+  readonly cwd: string;
+  /** See {@link ResolvedRunInput.inheritHostEnv}. */
+  readonly inheritHostEnv?: boolean;
+  /** Abandon the naming call — app shutdown, or the run it belongs to ending. */
+  readonly abortSignal?: AbortSignal;
+}
+
+/**
+ * What writing a title onto a stored session needs.
+ *
+ * Separate from {@link SessionTitleQuery} because the two halves are separate
+ * capabilities: a provider may be able to run a cheap completion and have
+ * nowhere to put the answer, or the reverse. The environment here is the
+ * *store* environment — writing a title touches the session file and nothing
+ * that needs a credential.
+ */
+export interface SessionTitleUpdate {
+  readonly sessionId: SessionId;
+  /** Already cleaned and length-capped by the caller. */
+  readonly title: string;
+  /** The directory the session ran in. Narrows the search; omit to search all. */
+  readonly cwd?: string;
+  /** The profile's resolved environment — this is what locates the store. */
+  readonly env: EnvBundle;
+}
+
 /** What reading one session's stored messages needs. */
 export interface SessionMessagesQuery {
   readonly profileId: ProfileId;
@@ -832,6 +881,60 @@ export interface ProviderAdapter {
    * replayed history and anything sent next land in one continuous view.
    */
   getSessionMessages?(query: SessionMessagesQuery): Promise<SessionTranscript>;
+
+  /**
+   * Name a session from its opening message, using the model the caller names.
+   *
+   * Present **iff** the provider can run a completion that is not a turn of the
+   * user's conversation. Paired with {@link setSessionTitle}: naming a session
+   * takes both, and `SessionNamer` skips a provider missing either.
+   *
+   * Deliberately not paired with a {@link Capabilities} flag, on the same
+   * reasoning as {@link listModels}: a flag exists so the UI can degrade
+   * *before* calling, and there is nothing here to degrade. Nothing is
+   * rendered, nothing is offered, and a provider that cannot do it simply has
+   * sessions named the way they were named before — by the provider's own
+   * summary, or by the first prompt.
+   *
+   * Four obligations:
+   *
+   *  1. **It is not a run.** No tools, no filesystem settings, no permission
+   *     prompts, and — where the provider can express it — no transcript
+   *     written to the session store. A naming call that leaves a session
+   *     behind would put a phantom row in the very list it exists to label.
+   *  2. **Bounded.** One turn, a short output, and a timeout. This is spending
+   *     the user's account on chrome; it must be small and it must end.
+   *  3. **Resolve rather than reject.** No credential, no network, a model the
+   *     account cannot use — all ordinary states, and none of them worth an
+   *     error path in the caller. Return `null`, which reads as "no name",
+   *     and the session keeps the title it would have had anyway.
+   *  4. **Return a title or nothing.** Adapters clean their own output with
+   *     `cleanSessionTitle`; a caller must never have to strip quotes,
+   *     preambles or a stray code fence off a value from this method.
+   */
+  suggestSessionTitle?(query: SessionTitleQuery): Promise<string | null>;
+
+  /**
+   * Store a title against a past session, as if the user had renamed it.
+   *
+   * Present **iff** the provider's own session store has a title field Artemis
+   * can write. That is what makes this the right place to keep a generated
+   * name: it is the same field a rename writes, so the name survives, appears
+   * in the provider's own tooling, and is read back by
+   * {@link listSessions} without a second store to merge in.
+   *
+   * The consequence is deliberate and worth naming: `SessionSummary.titleIsCustom`
+   * becomes true for a title Artemis generated rather than one the user typed.
+   * The flag means "this session has a name of its own, not a summary the
+   * provider derived", which is exactly what a generated name is — and it is
+   * why naming happens **once, on a session's first turn**, where there is no
+   * user-set title to overwrite.
+   *
+   * Unlike {@link suggestSessionTitle} this one may reject: it is a write, the
+   * caller has already paid for the title, and "the store refused" is worth a
+   * log line rather than silence.
+   */
+  setSessionTitle?(update: SessionTitleUpdate): Promise<void>;
 
   /**
    * Probe whether this provider is usable on this machine.
