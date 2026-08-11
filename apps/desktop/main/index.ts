@@ -36,6 +36,7 @@ import { EngineHost } from './engine.js';
 import { broadcast, forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
+import { adoptLoginShellPath } from './shellPath.js';
 import { createUpdater } from './updater.js';
 import {
   applySessionPolicy,
@@ -235,6 +236,12 @@ if (!app.requestSingleInstanceLock()) {
 
 async function bootstrap(): Promise<void> {
   await app.whenReady();
+
+  // Before anything spawns by name: a Finder launch arrives with launchd's
+  // bare PATH, on which the user's `claude` and `gh` do not exist. See
+  // shellPath.ts — this is the difference between the installed app working
+  // and `spawn claude ENOENT`.
+  await adoptLoginShellPath();
 
   // Windows uses this to group taskbar entries and route notifications.
   //
