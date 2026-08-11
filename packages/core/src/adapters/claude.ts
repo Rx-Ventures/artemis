@@ -157,6 +157,7 @@ import type {
   SessionDeleteQuery,
   SessionListPage,
   SessionListQuery,
+  SessionMessageCountQuery,
   SessionMessagesQuery,
   SessionTitleQuery,
   SessionTitleUpdate,
@@ -910,6 +911,37 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         };
       }
       return { available: true };
+    },
+
+    /**
+     * Count without mapping.
+     *
+     * The same read `getSessionMessages` does — the SDK gives no cheaper way to
+     * ask "how many?" — but it stops at `.length` instead of turning every
+     * stored record into events, which is where the cost of the read actually
+     * is. Runs on the path of starting a resumed run, so what it skips matters:
+     * a long conversation is a file read and a JSON parse, not a transcript
+     * rebuild.
+     *
+     * Throws on a failed read rather than answering `0`, because the caller
+     * has to be able to tell "this session is empty" from "I could not look".
+     * A zero it invented would make a reloading window replay the whole
+     * conversation twice.
+     */
+    async countSessionMessages(input: SessionMessageCountQuery): Promise<number> {
+      const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
+      try {
+        const stored = await withClaudeConfigDir(configDir, () =>
+          sdkGetSessionMessages(input.sessionId, {
+            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+          }),
+        );
+        return stored.length;
+      } catch (error) {
+        throw adapterError('unknown', `Could not read that session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
     },
 
     async getSessionMessages(input: SessionMessagesQuery): Promise<SessionTranscript> {

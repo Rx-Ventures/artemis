@@ -185,6 +185,20 @@ export interface ArtemisEngine {
   listRuns(options: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
 
   /**
+   * A run's retained events, for a window that reloaded out from under it.
+   *
+   * Synchronous in the registry and kept synchronous here: it is a read of an
+   * in-memory buffer, and the reload path calls it once per live run before the
+   * first paint. `truncated` is computed rather than inferred by the caller —
+   * only the registry knows whether the events it dropped were ones this caller
+   * asked for.
+   */
+  runEvents(options: {
+    readonly runId: RunId;
+    readonly afterSeq?: number;
+  }): { readonly events: readonly AgentEvent[]; readonly truncated: boolean };
+
+  /**
    * Last-known plan usage, or null if never fetched. Synchronous and free.
    *
    * Paired with {@link refreshPlanUsage} so the UI can render instantly from
@@ -562,6 +576,17 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await runs.dispose(runId);
     },
     listRuns: (query) => Promise.resolve(runs.list(query.cwd)),
+
+    runEvents: (query) => {
+      const afterSeq = query.afterSeq ?? -1;
+      const events = runs.eventsSince(query.runId, afterSeq);
+      // The buffer drops from the front, so a first event that is not the one
+      // immediately after `afterSeq` is the only evidence that something was
+      // lost. Derived here because `eventsSince` returns a plain slice and the
+      // renderer has no way to tell a short run from a trimmed one.
+      const first = events[0];
+      return { events, truncated: first !== undefined && first.seq > afterSeq + 1 };
+    },
 
     /**
      * Read a profile's session history.
