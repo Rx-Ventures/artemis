@@ -22,9 +22,9 @@ jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -37,28 +37,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Apple Silicon only for now — it is what the office runs. The Intel
+        # and Windows entries below are parked, not gone: both built and
+        # boot-verified on their runners (2026-08-11), so restoring a target
+        # is uncommenting it.
         include:
           - name: macos-arm64
             runs-on: macos-latest
             build-args: --mac --arm64
             feed-rename: latest-mac-arm64.yml
             app-binary: apps/desktop/release/mac-arm64/Artemis.app/Contents/MacOS/Artemis
-          - name: macos-x64
-            runs-on: macos-15-intel
-            build-args: --mac --x64
-            feed-rename: latest-mac-x64.yml
-            app-binary: apps/desktop/release/mac/Artemis.app/Contents/MacOS/Artemis
-          - name: windows-x64
-            runs-on: windows-latest
-            build-args: --win --x64
-            feed-rename: ''
-            app-binary: apps/desktop/release/win-unpacked/Artemis.exe
+          # - name: macos-x64
+          #   runs-on: macos-15-intel
+          #   build-args: --mac --x64
+          #   feed-rename: latest-mac-x64.yml
+          #   app-binary: apps/desktop/release/mac/Artemis.app/Contents/MacOS/Artemis
+          # - name: windows-x64
+          #   runs-on: windows-latest
+          #   build-args: --win --x64
+          #   feed-rename: ''
+          #   app-binary: apps/desktop/release/win-unpacked/Artemis.exe
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.runs-on }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -74,7 +78,7 @@ jobs:
       # The packaged app must actually boot before anything is published.
       - shell: bash
         run: pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           if-no-files-found: error
@@ -90,8 +94,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
