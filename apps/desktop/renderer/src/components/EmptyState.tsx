@@ -7,7 +7,7 @@
  * the user discover it by typing a prompt and getting an error back.
  *
  * Both blockers are fixable from here, which matters more than it used to. The
- * directory now has exactly one other control — the status line's, because the
+ * directory now has exactly one other control — the composer's chip, because the
  * directory belongs to the session rather than to the window — and "you cannot
  * run yet" is not a message to pair with "go and find the control yourself".
  * So this offers the same dialog rather than pointing at a bar.

@@ -287,13 +287,22 @@ export interface AppState {
   readonly sidebarCollapsed: boolean;
   readonly sidebarWidth: number;
   /**
-   * Whether the sidebar's project section is folded shut.
+   * Directories whose session group is folded shut in the sidebar.
    *
-   * Persisted alongside the geometry and for the same reason: it is a piece of
-   * furniture the user arranged, and re-opening a section they closed on every
-   * launch is the same discourtesy as resetting a width they dragged.
+   * Persisted alongside the geometry and for the same reason: it is furniture
+   * the user arranged, and re-opening a section they closed on every launch is
+   * the same discourtesy as resetting a width they dragged.
+   *
+   * Holds the *collapsed* directories, not the open ones, so anything not
+   * mentioned is open. That polarity is what lets a project the user has never
+   * seen — one that first appears long after this was written — arrive expanded
+   * rather than folded shut, which would read as the list having lost it.
+   *
+   * An array rather than a `Set` because it is persisted as JSON and compared by
+   * reference for re-renders; a `Set` would need conversion at both ends and
+   * gives nothing back at this size.
    */
-  readonly sessionsCollapsed: boolean;
+  readonly collapsedProjects: readonly string[];
   /**
    * What the working directory is called — the repository's name when it is in
    * one, and the directory's own either way.
@@ -379,7 +388,7 @@ interface Prefs {
   effort?: string | null;
   sidebarCollapsed?: boolean;
   sidebarWidth?: number;
-  sessionsCollapsed?: boolean;
+  collapsedProjects?: readonly string[];
   settingsSection?: SettingsSection;
   quickModelIds?: readonly string[];
   fastMode?: boolean;
@@ -480,11 +489,10 @@ function loadPrefs(): Prefs {
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
     contextWindows: numberMap(raw['contextWindows']),
-    // Coerced rather than passed through: it is read straight into state with
-    // `?? false`, so a non-boolean left here by a hand edit would reach a
-    // conditional as a truthy string and fold the session list shut with no
-    // way to tell why.
-    sessionsCollapsed: boolOrUndefined(raw['sessionsCollapsed']),
+    // Filtered rather than passed through: this is compared against directory
+    // strings, so a non-string left here by a hand edit would simply never
+    // match and fold nothing — a silent no-op is worse than dropping the entry.
+    collapsedProjects: stringList(raw['collapsedProjects']),
   };
 }
 
@@ -499,7 +507,7 @@ function savePrefs(): void {
     effort: s.effort,
     sidebarCollapsed: s.sidebarCollapsed,
     sidebarWidth: s.sidebarWidth,
-    sessionsCollapsed: s.sessionsCollapsed,
+    collapsedProjects: s.collapsedProjects,
     settingsSection: s.settingsSection,
     quickModelIds: s.quickModelIds,
     fastMode: s.fastMode,
@@ -565,7 +573,7 @@ export const useApp = create<AppState>(() => ({
 
   sidebarCollapsed: prefs.sidebarCollapsed ?? false,
   sidebarWidth: clampSidebarWidth(prefs.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH),
-  sessionsCollapsed: prefs.sessionsCollapsed ?? false,
+  collapsedProjects: prefs.collapsedProjects ?? [],
   workspace: null,
 }));
 
@@ -1469,14 +1477,21 @@ export function setSidebarWidth(width: number): void {
   savePrefs();
 }
 
-/** Fold the project's session list shut, or open it. */
-export function setSessionsCollapsed(collapsed: boolean): void {
-  useApp.setState({ sessionsCollapsed: collapsed });
-  savePrefs();
-}
-
-export function toggleSessionsCollapsed(): void {
-  useApp.setState((s) => ({ sessionsCollapsed: !s.sessionsCollapsed }));
+/**
+ * Fold one project's sessions shut, or open them.
+ *
+ * Stored as the list of *collapsed* directories rather than open ones, so the
+ * default for a project nobody has touched — including every project that
+ * appears for the first time after this preference was written — is open. The
+ * opposite polarity would have a new project arrive folded shut, which reads as
+ * the list having lost it.
+ */
+export function toggleProjectCollapsed(cwd: string): void {
+  useApp.setState((s) => ({
+    collapsedProjects: s.collapsedProjects.includes(cwd)
+      ? s.collapsedProjects.filter((entry) => entry !== cwd)
+      : [...s.collapsedProjects, cwd],
+  }));
   savePrefs();
 }
 
@@ -1705,10 +1720,21 @@ export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
   const state = useApp.getState();
 
-  // `listSessions` gates the whole list. Cleared rather than left stale: a
-  // provider that cannot enumerate history has none to show, and the sidebar
-  // renders the capability's own reason in place of the rows.
-  if (!bridge || !activeCapabilities(state).listSessions) {
+  /*
+   * Deliberately not gated on the active provider's `listSessions`.
+   *
+   * It was, and that emptied the sidebar every time the selected account
+   * changed to one whose CLI cannot enumerate history — signing into Codex
+   * blanked every Claude session on screen. The listing spans providers, so
+   * "can the provider I happen to have selected list its own history" is the
+   * wrong question to ask of it: the backend already skips adapters that cannot
+   * answer and returns everything else, and what the user is owed is the record
+   * of what they have done rather than a view onto the current selection.
+   *
+   * The sidebar still says so, above the rows rather than in place of them —
+   * see `SessionList`.
+   */
+  if (!bridge) {
     useApp.setState({ sessions: [], sessionsError: null, sessionsLoading: false });
     return;
   }

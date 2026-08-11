@@ -44,6 +44,7 @@ import {
   useApp,
 } from '../state/store';
 import { ReasonButton, WithReason } from './disabled-reason';
+import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -150,74 +151,129 @@ export function Composer(): ReactElement {
         </div>
       ) : null}
 
-      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 px-3 pt-2 pb-1">
-        <WithReason
-          reason={locked ? steering.reason : undefined}
-          className="min-w-0 flex-1"
-          side="top"
-        >
-          <Textarea
-            ref={textareaRef}
-            value={text}
-            disabled={locked}
-            rows={1}
-            spellCheck={false}
-            aria-label="Prompt"
-            placeholder={
-              locked
-                ? `Waiting for the run to finish — ${steering.reason}`
-                : pending > 0
-                  ? 'A tool call is waiting for your approval above…'
-                  : live
-                    ? 'Steer the run…'
-                    : resuming
-                      ? 'Continue the selected session…'
-                      : 'Ask Artemis to do something…'
-            }
-            onChange={(event) => {
-              setText(event.target.value);
-              // Any edit leaves recall: the text on screen is no longer a
-              // history entry, so Up should start again from the newest.
-              setRecall(null);
-            }}
-            onKeyDown={(event) => {
-              const el = event.currentTarget;
+      {/*
+        The directory, above the input and aligned to its left edge.
 
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                send();
-                return;
-              }
+        It is a heading for what follows rather than a setting on it. Everything
+        on the status line *under* the composer answers "what will the next
+        prompt do"; this answers "where am I", which is the frame the rest sits
+        inside. Reading order matches: place, then prompt, then settings.
+      */}
+      <div className="mx-auto flex w-full max-w-4xl items-center px-3 pt-1.5">
+        <WorkingDirectoryChip />
+      </div>
 
-              // Escape from inside the composer, because the global handler
-              // deliberately ignores text fields and this is the one place the
-              // user is guaranteed to be typing.
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                void denyPendingPermission().then((denied) => {
-                  if (!denied && useApp.getState().run?.status !== 'ended') void interruptRun();
-                });
-                return;
+      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 px-3 pt-1 pb-1">
+        {/*
+          The positioning context for Send is this element, not `WithReason`.
+          `WithReason` renders its children bare — no wrapper, no `className` —
+          whenever there is no reason to show, which is the normal case here. A
+          `relative` handed to it would exist only while the composer was
+          locked, so the button would fall out of the field in the one state
+          nobody is looking at it in.
+        */}
+        <div className="relative min-w-0 flex-1">
+          <WithReason
+            reason={locked ? steering.reason : undefined}
+            className="w-full"
+            side="top"
+          >
+            <Textarea
+              ref={textareaRef}
+              value={text}
+              disabled={locked}
+              rows={1}
+              spellCheck={false}
+              aria-label="Prompt"
+              placeholder={
+                locked
+                  ? `Waiting for the run to finish — ${steering.reason}`
+                  : pending > 0
+                    ? 'A tool call is waiting for your approval above…'
+                    : live
+                      ? 'Steer the run…'
+                      : resuming
+                        ? 'Continue the selected session…'
+                        : 'Ask Artemis to do something…'
               }
+              onChange={(event) => {
+                setText(event.target.value);
+                // Any edit leaves recall: the text on screen is no longer a
+                // history entry, so Up should start again from the newest.
+                setRecall(null);
+              }}
+              onKeyDown={(event) => {
+                const el = event.currentTarget;
 
-              // Recall only from the very start of the field. Anywhere else Up
-              // and Down are caret movement, and stealing them would make a
-              // multi-line prompt unnavigable.
-              const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
-              if (event.key === 'ArrowUp' && atStart && (text.length === 0 || recall !== null)) {
-                if (walk(-1)) event.preventDefault();
-                return;
-              }
-              if (event.key === 'ArrowDown' && recall !== null && atStart) {
-                if (walk(1)) event.preventDefault();
-              }
-            }}
-            className={cn(
-              'max-h-[35vh] min-h-9 w-full resize-none bg-inset px-2.5 py-2 font-mono text-sm leading-relaxed md:text-sm',
-              locked && 'cursor-not-allowed',
-            )}
-          />
-        </WithReason>
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  send();
+                  return;
+                }
+
+                // Escape from inside the composer, because the global handler
+                // deliberately ignores text fields and this is the one place the
+                // user is guaranteed to be typing.
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  void denyPendingPermission().then((denied) => {
+                    if (!denied && useApp.getState().run?.status !== 'ended') void interruptRun();
+                  });
+                  return;
+                }
+
+                // Recall only from the very start of the field. Anywhere else Up
+                // and Down are caret movement, and stealing them would make a
+                // multi-line prompt unnavigable.
+                const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
+                if (event.key === 'ArrowUp' && atStart && (text.length === 0 || recall !== null)) {
+                  if (walk(-1)) event.preventDefault();
+                  return;
+                }
+                if (event.key === 'ArrowDown' && recall !== null && atStart) {
+                  if (walk(1)) event.preventDefault();
+                }
+              }}
+              className={cn(
+                // `pr-10` reserves the button's lane — 28px of button, 4px of
+                // inset, 8px of gap. Without it a long single-line prompt runs
+                // under the glyph and its last word is unreadable.
+                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-10 pl-2.5 font-mono text-sm leading-relaxed md:text-sm',
+                locked && 'cursor-not-allowed',
+              )}
+            />
+          </WithReason>
+
+          {/*
+            Inside the field, pinned to its bottom-right.
+
+            Square and *fixed* at 28px, which is the field's 36px minimum less
+            4px of inset each side — so at one line it reads as filling the
+            height, and when the text wraps it keeps that size and travels down
+            with the growing edge. Anchoring to `bottom` rather than centring is
+            what makes that true: a centred button would drift to the middle of
+            a tall field and stop lining up with the line being typed.
+
+            Ghost, not the accent fill. Send is the default action of the Enter
+            key, not a call to action competing with the text — the brightest
+            thing in the composer should be what the user is writing.
+
+            Icon only. The word carried nothing the glyph and the Enter hint in
+            the empty state do not; `aria-label` and the title keep it named for
+            anyone not reading the glyph.
+          */}
+          <ReasonButton
+            variant="ghost"
+            onClick={send}
+            disabled={locked || text.trim().length === 0}
+            disabledReason={locked ? steering.reason : undefined}
+            aria-label={`Send the prompt (${keyLabel('enter')})`}
+            title={`Send the prompt (${keyLabel('enter')})`}
+            className="absolute right-1 bottom-1 size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+          >
+            <SendHorizontalIcon />
+          </ReasonButton>
+        </div>
 
         {live ? (
           <Button
@@ -229,23 +285,6 @@ export function Composer(): ReactElement {
             Stop
           </Button>
         ) : null}
-
-        {/*
-          Icon only. The word was carrying nothing the icon and the Enter hint
-          in the empty state do not already carry, and it made the widest
-          control on this row the one that says the least. `aria-label` and the
-          title keep it named for anyone not reading the glyph.
-        */}
-        <ReasonButton
-          size="icon"
-          onClick={send}
-          disabled={locked || text.trim().length === 0}
-          disabledReason={locked ? steering.reason : undefined}
-          aria-label={`Send the prompt (${keyLabel('enter')})`}
-          title={`Send the prompt (${keyLabel('enter')})`}
-        >
-          <SendHorizontalIcon />
-        </ReasonButton>
       </div>
 
     </div>

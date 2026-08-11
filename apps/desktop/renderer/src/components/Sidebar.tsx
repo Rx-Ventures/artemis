@@ -1,26 +1,26 @@
 /**
- * The sidebar — a floating card, scoped to one project.
+ * The sidebar — a floating card carrying every session.
  * ============================================================================
  *
  *      ╭────────────────────────────────╮
  *      │ [ + New session       ⌘N ] [◧] │  ← the thing you came here to do
  *      ├────────────────────────────────┤
- *      │ ▾ artemis · 22                 │  ← the repo this session is in
- *      │    Wire the adapter seam       │  ← this project only
+ *      │ ▾ Sessions · 47                │
+ *      │   artemis ·22 ─────────────────│  ← the project you are in, pinned
+ *      │    Wire the adapter seam       │
  *      │    ⌥ main · ▪ Work             │
+ *      │   api ·9 ──────────────────────│  ← and every other project
  *      │    …                           │
  *      ├────────────────────────────────┤
- *      │ ⌂ All projects · 7          ▴  │  ← jump to another repo
+ *      │ ⌂ Start somewhere else      ▴  │  ← a project with no history yet
  *      ╰────────────────────────────────╯
  *
  * ## It is a card sitting on the window, not a column bolted to its edge
  *
  * The pane used to be a full-height bordered column flush against the left and
  * bottom of the window, which made it read as part of the frame — furniture.
- * As a detached card with its own border and shadow it reads as *a thing about
- * the current project*, which is what it now is: everything in it is scoped to
- * one directory, and the way to another one is an explicit switcher at the
- * bottom rather than more headers further down the same list.
+ * As a detached card with its own border and shadow it reads as a thing about
+ * your work rather than a wall of the room it happens in.
  *
  * The `<aside>` still owns the full width, including the margin. The card is a
  * child inset by the aside's padding. Keeping the outer element the full width
@@ -48,15 +48,14 @@
  * rather than dragging it somewhere its transcript does not exist (`setCwd` in
  * the store carries the argument).
  *
- * So it is stated and set in the status line, under the composer, beside the
+ * So it is stated and set by the chip directly above the composer, beside the
  * profile and model and permission mode — the bar whose whole subject is what
  * the next prompt will do. Sitting it here as well meant two controls for one
  * value in two different scopes, and the sidebar's was the one implying it
  * outranked the conversation.
  *
- * What the card still names is the *project*, in the session section's header
- * one row down. That is a fact about the list underneath it, which is what a
- * sidebar is for.
+ * The card names the *projects*, in the group headings inside the list. That is
+ * a fact about the rows underneath each one, which is what a sidebar is for.
  *
  * ## Resizing writes to the DOM, then to the store
  *
@@ -189,9 +188,10 @@ export function Sidebar(): ReactElement | null {
  *
  * Same idea, one scope up. It offered the directory as a property of the window
  * — a standing setting the next session would inherit — when it is a property
- * of the session, and the status line already states and sets it as one. See
+ * of the session, and the chip above the composer already states and sets it
+ * as one. See
  * the header. The component went with it; `WorkingDirectoryDialog` and
- * `DirectoryChooser` are still exported and still used by the status line, the
+ * `DirectoryChooser` are still exported and still used by that chip, the
  * palette and the empty state.
  */
 
@@ -200,12 +200,17 @@ export function Sidebar(): ReactElement | null {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Jump to another repository without leaving the sidebar.
+ * Move to a project without resuming anything in it.
  *
- * The session list above shows one project, so this is the only way from here
- * to the rest of the history — which makes its degraded states worth spelling
- * out rather than hiding. There are three, and each renders the button disabled
- * with its reason attached, per the app-wide rule:
+ * This is no longer the route to the rest of the history — the list above holds
+ * every project now, and clicking a row does the whole switch. What it still
+ * does that the list cannot is land you in a project *fresh*: a blank session in
+ * a directory, rather than the continuation of an old one. That is the only
+ * reachable way to start work in a project whose history you do not want, and
+ * the only way at all into one that has no history to click.
+ *
+ * Its degraded states are still worth spelling out rather than hiding. Each
+ * renders the button disabled with its reason attached, per the app-wide rule:
  *
  *   - the provider cannot list sessions at all;
  *   - it can, but only for the current directory (`sessionsScope === 'cwd'`),
@@ -217,8 +222,8 @@ export function Sidebar(): ReactElement | null {
  * A session id only resolves against the directory it ran in — see `setCwd` and
  * `resumeSession` in the store. Carrying a resume target across a directory
  * change would aim the next prompt at a session the provider cannot find, so
- * `setCwd` clears it, and this lands the user on that project's list, where
- * picking a session is one click and does the full, correct switch.
+ * `setCwd` clears it. That is the difference from clicking a row above, which
+ * carries the session *and* its directory across together.
  */
 function ProjectSwitcher(): ReactElement {
   const sessions = useApp((s) => s.sessions);
@@ -238,20 +243,22 @@ function ProjectSwitcher(): ReactElement {
   const reason = !listing.supported
     ? `${listing.reason} Without a listing there is no way to enumerate other projects.`
     : scope === 'cwd'
-      ? 'This build lists sessions for the current directory only, so other projects are never enumerated. Change the working directory in the status line to move to one.'
+      ? 'This build lists sessions for the current directory only, so other projects are never enumerated. Change the working directory above the composer to move to one.'
       : others.length === 0
-        ? 'No other project has a recorded session yet. Change the working directory in the status line to start one somewhere else.'
+        ? 'No other project has a recorded session yet. Change the working directory above the composer to start one somewhere else.'
         : undefined;
 
+  /*
+   * Not "All projects" any more. That label was accurate when the list above
+   * held one project and this was the door to the rest; with every project
+   * listed it would name what is already on screen, and the one thing this does
+   * that the list cannot is land you somewhere *without* resuming anything. The
+   * count went with it — it counted the other projects, which are now visible.
+   */
   const label = (
     <>
       <FolderTreeIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">All projects</span>
-      {reason === undefined ? (
-        <span className="ml-auto font-mono text-2xs tabular-nums text-ink-faint">
-          {others.length}
-        </span>
-      ) : null}
+      <span className="truncate">Start somewhere else</span>
     </>
   );
 

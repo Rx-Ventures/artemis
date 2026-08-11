@@ -172,4 +172,44 @@ describe('flattenGroups', () => {
     const keys = rows.map((r) => r.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  it('drops a collapsed group’s sessions but keeps its header', () => {
+    const rows = flattenGroups(
+      groupSessionsByProject([
+        session({ id: 'a', cwd: '/code/api', updatedAt: 20 }),
+        session({ id: 'b', cwd: '/code/web', updatedAt: 10 }),
+      ]),
+      new Set(['/code/api']),
+    );
+
+    // Dropped here rather than hidden in CSS: the virtualiser computes its
+    // geometry from this array, so a row that is present but invisible would
+    // still take up its height and leave a hole in the list.
+    expect(rows.map((r) => r.kind)).toEqual(['header', 'header', 'session']);
+    expect(rows[0]).toMatchObject({ cwd: '/code/api', collapsed: true });
+    expect(rows[1]).toMatchObject({ cwd: '/code/web', collapsed: false });
+  });
+
+  it('keeps a collapsed group’s full count on its header', () => {
+    const rows = flattenGroups(
+      groupSessionsByProject([
+        session({ id: 'a', cwd: '/code/api', updatedAt: 3 }),
+        session({ id: 'b', cwd: '/code/api', updatedAt: 2 }),
+        session({ id: 'c', cwd: '/code/api', updatedAt: 1 }),
+      ]),
+      new Set(['/code/api']),
+    );
+
+    // The number is a fact about the project, not about how much of it is on
+    // screen — it is the one thing worth reading while the group is shut, and
+    // counting the visible rows would render it as `·0`.
+    expect(rows[0]).toMatchObject({ count: 3, collapsed: true });
+  });
+
+  it('expands everything when nothing is collapsed', () => {
+    const groups = groupSessionsByProject([session({ id: 'a', cwd: '/code/api', updatedAt: 1 })]);
+
+    expect(flattenGroups(groups).map((r) => r.kind)).toEqual(['header', 'session']);
+    expect(flattenGroups(groups)[0]).toMatchObject({ collapsed: false });
+  });
 });

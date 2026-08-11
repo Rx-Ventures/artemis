@@ -99,9 +99,21 @@ export async function listSessionsEverywhere(
   if (!bridge) return EMPTY;
 
   if (typeof bridge.sessions.listAll === 'function') {
-    const result = await call(() =>
-      bridge.sessions.listAll({ providerId: params.providerId, limit: params.limit }),
-    );
+    /*
+     * No `providerId`, deliberately.
+     *
+     * The contract reads "omit for every provider that can list history", and
+     * that is what the sidebar wants. Passing the *active* provider scoped the
+     * whole list to it, so signing into a Codex account made every Claude
+     * session disappear from the sidebar — the same complaint as the
+     * directory scoping, one axis over, and with the same answer: history is
+     * not a view onto the current selection, it is the record of what you have
+     * done. Which account a session belongs to is already on its row.
+     *
+     * Providers that cannot enumerate history contribute nothing rather than
+     * failing the call, so asking for all of them is not a new failure mode.
+     */
+    const result = await call(() => bridge.sessions.listAll({ limit: params.limit }));
     if (result.ok) {
       return { sessions: result.value.sessions, scope: 'all', hasMore: result.value.hasMore };
     }

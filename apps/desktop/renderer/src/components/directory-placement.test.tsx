@@ -3,11 +3,17 @@
  *
  * Where the working directory is offered, and where it is not.
  *
- * The directory belongs to the session in the working column, so it is stated
- * and set in the status line — the bar whose subject is what the next prompt
- * will do. The sidebar used to carry a second control for it, one row under New
- * session, which framed it as a standing property of the window that the next
- * session would inherit. That framing is the thing being tested against.
+ * The directory belongs to the session in the working column, and it is offered
+ * in exactly one place: `WorkingDirectoryChip`, directly above the composer,
+ * where it reads as a heading for the input rather than a setting on it.
+ *
+ * Two placements have been wrong before, and both are asserted against here:
+ *
+ *  - **The sidebar**, one row under New session, which framed the directory as a
+ *    standing property of the window that the next session would inherit.
+ *  - **The status line**, at the end of the row, which is where it lived until
+ *    it moved up to the composer. A copy left behind there would mean two
+ *    triggers for one value — the exact duplication that removed the sidebar's.
  *
  * This is a placement assertion, which is unusual enough to justify. It is here
  * because the regression is silent in exactly the way `capability-gating`
@@ -24,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { Composer } from '@/components/Composer';
 import { Sidebar } from '@/components/Sidebar';
 import { StatusLine } from '@/components/StatusLine';
 import { useApp } from '@/state/store';
@@ -100,10 +107,31 @@ describe('the working directory', () => {
     expect(screen.queryByText('/w')).toBeNull();
   });
 
-  it('is still offered in the status line', () => {
-    mount(<StatusLine />);
+  it('is offered above the composer', () => {
+    mount(<Composer />);
 
     expect(screen.getByLabelText('Working directory — change it')).not.toBeNull();
+  });
+
+  it('names the folder rather than the whole path', () => {
+    useApp.setState({ cwd: '/Users/me/projects/deeply/nested/artemis', workspace: null });
+    mount(<Composer />);
+
+    const chip = screen.getByLabelText('Working directory — change it');
+    // The last segment, and *only* it. The full path is a hover away — see the
+    // note on `WorkingDirectoryChip` for why the name is the better answer to
+    // the question this control is actually asked.
+    expect(chip.textContent).toContain('artemis');
+    expect(chip.textContent).not.toContain('/Users/me');
+  });
+
+  it('is no longer duplicated in the status line', () => {
+    mount(<StatusLine />);
+
+    // It lived here until it moved above the composer. Two triggers for one
+    // value is what removed the sidebar's copy; leaving one behind here would
+    // reintroduce the same problem one row down.
+    expect(screen.queryByLabelText('Working directory — change it')).toBeNull();
   });
 
   it('leaves New session as the sidebar’s only header control besides hiding it', () => {
