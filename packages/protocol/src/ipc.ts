@@ -86,6 +86,15 @@ export const IPC = {
   /** Name a directory: its own name, and its repository's when it has one. */
   workspaceDescribe: 'artemis:workspace:describe',
 
+  /**
+   * Make a file the agent wrote renderable, and say where to render it from.
+   *
+   * One channel, and no `close` counterpart: closing a preview is the renderer
+   * dropping a frame, which needs main's permission for nothing. What main
+   * retains it retires on its own — see `preview.ts`.
+   */
+  previewOpen: 'artemis:preview:open',
+
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'artemis:sessions:messages',
 
@@ -658,6 +667,39 @@ export interface WorkspaceDescribeResponse {
   readonly repoName?: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Preview                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Show me the page at this path.
+ *
+ * The renderer cannot read a file and would not be allowed to frame one if it
+ * could: a `file:` URL in an iframe is refused by the renderer's own policy, and
+ * loosening that policy to permit it would hand every path on the machine to a
+ * page rendering model output. So it asks, and gets back a URL that serves
+ * exactly one file and nothing else.
+ */
+export interface PreviewOpenRequest {
+  /** Absolute path to an `.html`, `.htm` or `.svg` file. */
+  readonly path: string;
+}
+
+export interface PreviewOpenResponse {
+  /**
+   * What to put in the frame's `src`. Single-use in spirit — it names a
+   * snapshot main is holding, not the path — and stops resolving once enough
+   * later previews have pushed it out.
+   */
+  readonly url: string;
+  /** The file's own name, for the pane's caption. */
+  readonly title: string;
+  /** The path as asked about, echoed so the caption can say where it came from. */
+  readonly path: string;
+  /** Size of the snapshot, for the caption's detail line. */
+  readonly bytes: number;
+}
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -911,6 +953,7 @@ export type IpcRequestMap = {
   [IPC.sessionsListAll]: SessionsListAllRequest;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
+  [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
   [IPC.sessionsRename]: SessionsRenameRequest;
   [IPC.sessionsDelete]: SessionsDeleteRequest;
@@ -947,6 +990,7 @@ export type IpcResponseMap = {
   [IPC.sessionsListAll]: SessionsListAllResponse;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
+  [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
   [IPC.sessionsRename]: SessionsRenameResponse;
   [IPC.sessionsDelete]: SessionsDeleteResponse;
@@ -1127,6 +1171,18 @@ export interface ArtemisBridge {
      * it whenever the working directory changes.
      */
     describe(request: WorkspaceDescribeRequest): Promise<IpcResult<WorkspaceDescribeResponse>>;
+  };
+
+  /**
+   * Rendering a page the agent wrote.
+   *
+   * One method, because the renderer's half of a preview is a frame and a URL:
+   * ask for the URL, put it in the frame, drop the frame when done. Nothing has
+   * to be closed, and nothing here can name a file main did not agree to serve.
+   */
+  readonly preview: {
+    /** Snapshot the file at `path` and return the URL that serves it. */
+    open(request: PreviewOpenRequest): Promise<IpcResult<PreviewOpenResponse>>;
   };
 
   /**

@@ -147,6 +147,24 @@ export type RunSummary = 'always' | 'failures' | 'never';
 
 export type { PlanMeterFocus };
 
+/**
+ * A page being previewed, as the pane needs it.
+ *
+ * Everything here came back from `preview.open` — the renderer builds none of
+ * it, and in particular does not construct the URL. That is the shape of the
+ * whole feature in one type: the renderer names a path it read out of a tool
+ * call, and gets back something it is allowed to frame.
+ */
+export interface PreviewState {
+  /** What the frame loads. An `artemis-preview:` URL naming a snapshot. */
+  readonly url: string;
+  /** The file's own name, for the caption. */
+  readonly title: string;
+  /** Where the page came from, for the caption's tooltip. */
+  readonly path: string;
+  readonly bytes: number;
+}
+
 /** A dismissible message on the error surface. */
 export interface Banner {
   readonly id: string;
@@ -197,6 +215,21 @@ export interface AppState {
    * only hands the library a layout when it has one for every panel in a group.
    */
   readonly paneLayout: Readonly<Record<string, number>>;
+  /**
+   * The page the preview pane is showing, or `null` when there is no such pane.
+   *
+   * Window-owned rather than pane-owned, and that is a claim about what a
+   * preview *is*: not part of a conversation, but a thing the window is showing
+   * you — the same status as the palette or the settings dialog. One at a time,
+   * for the same reason there is one palette. Opening a second artifact
+   * replaces the first, which is also what makes the affordance safe to put on
+   * every tool card without the grid filling up with frames.
+   *
+   * Deliberately not persisted. A {@link PreviewState.url} names a snapshot the
+   * main process is holding in memory; after a restart there is nothing behind
+   * it, and restoring one would reopen the pane onto a 404.
+   */
+  readonly preview: PreviewState | null;
 
   readonly providers: readonly ProviderDescriptor[];
   readonly profiles: readonly ProfileMetadata[];
@@ -719,6 +752,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
+  preview: null,
 
   providers: [],
   profiles: [],
@@ -887,6 +921,43 @@ export function setPaneLayout(shares: Readonly<Record<string, number>>): void {
   if (!changed) return;
   useApp.setState({ paneLayout: next });
   savePrefs();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Preview                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Show a file the agent wrote, in the preview pane.
+ *
+ * `path` comes out of a tool call, which is to say out of model output, and is
+ * passed straight through: this function deliberately does not decide what may
+ * be previewed. The main process reads the file, checks what it is and answers
+ * with a URL or with a sentence, and that is the only place the rules live —
+ * a second copy of them here could only ever drift out of agreement with the
+ * one that matters.
+ *
+ * A failure lands in `pane`'s transcript rather than on the error surface. The
+ * banner list is for things that break the app; failing to preview one file is
+ * a fact about that tool call, and it belongs next to it where the reader is
+ * already looking.
+ */
+export async function openPreview(path: string, pane: Pane = focusedPane()): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const res = await call(() => bridge.preview.open({ path }));
+  if (!res.ok) {
+    pane.transcript.note('warn', 'Could not preview this file', res.error.message);
+    return;
+  }
+  useApp.setState({ preview: res.value });
+}
+
+/** Close the preview pane. Nothing to tell the main process — see `preview.ts`. */
+export function closePreview(): void {
+  if (useApp.getState().preview === null) return;
+  useApp.setState({ preview: null });
 }
 
 /**

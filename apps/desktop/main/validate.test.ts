@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ValidationError } from './errors.js';
 import {
+  validatePreviewOpen,
   validateProfilesCreate,
   validateProfilesSuggestDir,
   validateProfilesUpdate,
@@ -612,5 +613,47 @@ describe('validateWindowRequest', () => {
 
   it('treats a missing payload as empty, like every other channel', () => {
     expect(validateWindowRequest(undefined)).toEqual({});
+  });
+});
+
+/**
+ * The preview channel takes a path out of model output and hands it to a
+ * function that reads the file, so it is the closest thing in the protocol to
+ * "the renderer names a file and the main process opens it".
+ *
+ * What that makes worth pinning is narrow but important: the request is rebuilt
+ * from one field, so nothing else the renderer attaches can reach `preview.ts`.
+ * The interesting checks — what may be *rendered* — deliberately live there
+ * rather than here, so these tests assert that this layer does not duplicate
+ * them: a `.ts` path is accepted by the validator and refused by the handler,
+ * with one sentence, from one place.
+ */
+describe('validatePreviewOpen', () => {
+  it('accepts an absolute path', () => {
+    expect(validatePreviewOpen({ path: '/tmp/report.html' })).toEqual({
+      path: '/tmp/report.html',
+    });
+  });
+
+  it('rejects a relative path, which the renderer resolves before asking', () => {
+    expect(() => validatePreviewOpen({ path: 'out/report.html' })).toThrow(ValidationError);
+  });
+
+  it('rejects a missing path', () => {
+    expect(() => validatePreviewOpen({})).toThrow(ValidationError);
+    expect(() => validatePreviewOpen(undefined)).toThrow(ValidationError);
+  });
+
+  it('drops everything else, including a URL it might have preferred to serve', () => {
+    const smuggled = validatePreviewOpen({
+      path: '/tmp/report.html',
+      url: 'https://example.com',
+      mediaType: 'text/html',
+    });
+    expect(smuggled).toEqual({ path: '/tmp/report.html' });
+  });
+
+  it('leaves the extension rule to the layer that serves the bytes', () => {
+    expect(validatePreviewOpen({ path: '/tmp/notes.ts' })).toEqual({ path: '/tmp/notes.ts' });
   });
 });

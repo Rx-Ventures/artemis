@@ -86,6 +86,7 @@ import {
   type CSSProperties,
   type DragEvent,
   type ReactElement,
+  type ReactNode,
 } from 'react';
 import { XIcon } from 'lucide-react';
 
@@ -106,6 +107,7 @@ import {
 import { PaneProvider, usePane } from '../state/paneContext';
 import type { Pane, PaneRow } from '../state/pane';
 import { Composer } from './Composer';
+import { PreviewPane } from './PreviewPane';
 import { StatusLine } from './StatusLine';
 import { Transcript } from './Transcript';
 import { IconButton } from './disabled-reason';
@@ -125,6 +127,17 @@ import { cn } from '@/lib/utils';
  */
 const rowKey = (row: number): string => `row:${row}`;
 const cellKey = (row: number, column: number): string => `r${row}c${column}`;
+
+/**
+ * The two panels of the preview split.
+ *
+ * Fixed strings rather than positional keys, because there is only ever one
+ * preview and it is always to the right of everything else. They double as the
+ * panel ids and as the stored keys — `cellKey` can never produce either, so the
+ * two naming schemes cannot collide in `paneLayout`.
+ */
+const CONVERSATIONS_PANEL = 'conversations';
+const PREVIEW_PANEL = 'preview';
 
 /**
  * The layout a group should mount with, computed **once per group**.
@@ -186,6 +199,9 @@ const HANDLE = 'bg-transparent transition-colors hover:bg-lunar/30 data-[state=d
 export function WorkingArea(): ReactElement {
   const grid = useApp((s) => s.grid);
   const stored = useApp((s) => s.paneLayout);
+  // A boolean, not the preview itself: this component must re-render when a
+  // preview opens or closes and never when the page inside it changes.
+  const showPreview = useApp((s) => s.preview !== null);
 
   /*
    * Whether a session is being dragged over this area.
@@ -218,6 +234,20 @@ export function WorkingArea(): ReactElement {
 
   const alone = grid.length === 1 && (grid[0] as PaneRow).panes.length === 1;
 
+  const conversations =
+    grid.length === 1 ? (
+      <PaneRowView
+        row={grid[0] as PaneRow}
+        index={0}
+        stored={stored}
+        alone={alone}
+        dragging={dragging}
+        onSettled={endDrag}
+      />
+    ) : (
+      <RowStack grid={grid} stored={stored} dragging={dragging} onSettled={endDrag} />
+    );
+
   return (
     <div
       className="relative flex min-h-0 min-w-0 flex-1"
@@ -228,19 +258,58 @@ export function WorkingArea(): ReactElement {
       // the overlay would be left on screen with nothing to dismiss it.
       onDragEnd={endDrag}
     >
-      {grid.length === 1 ? (
-        <PaneRowView
-          row={grid[0] as PaneRow}
-          index={0}
-          stored={stored}
-          alone={alone}
-          dragging={dragging}
-          onSettled={endDrag}
-        />
-      ) : (
-        <RowStack grid={grid} stored={stored} dragging={dragging} onSettled={endDrag} />
-      )}
+      {showPreview ? <PreviewSplit>{conversations}</PreviewSplit> : conversations}
     </div>
+  );
+}
+
+/**
+ * The grid, against the preview pane.
+ *
+ * A group of its own rather than another column inside the grid's, because a
+ * preview is not a conversation — see `PreviewPane`. Keeping it outside means
+ * the grid's own geometry (which row, which column, what is stored under
+ * `r0c1`) is unchanged whether or not a preview is open, so opening one cannot
+ * disturb dividers the user has already placed.
+ *
+ * Its own component so {@link useStoredLayout} is scoped to the group's
+ * lifetime, exactly as in `RowStack`: this mounts when a preview opens and
+ * unmounts when it closes, which is the span `defaultLayout` must be constant
+ * over.
+ *
+ * The stored key is not positional like the grid's, because there is only ever
+ * one of these and it is always in the same place.
+ */
+function PreviewSplit({ children }: { readonly children: ReactNode }): ReactElement {
+  const stored = useApp((s) => s.paneLayout);
+  const defaultLayout = useStoredLayout(stored, [
+    { id: CONVERSATIONS_PANEL, key: CONVERSATIONS_PANEL },
+    { id: PREVIEW_PANEL, key: PREVIEW_PANEL },
+  ]);
+
+  return (
+    <ResizablePanelGroup
+      orientation="horizontal"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={(layout, meta) => {
+        if (!meta.isUserInteraction) return;
+        const shares: Record<string, number> = {};
+        for (const id of [CONVERSATIONS_PANEL, PREVIEW_PANEL]) {
+          const share = layout[id];
+          if (typeof share === 'number') shares[id] = share;
+        }
+        setPaneLayout(shares);
+      }}
+      className="min-h-0 min-w-0 flex-1"
+    >
+      <ResizablePanel id={CONVERSATIONS_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
+        {children}
+      </ResizablePanel>
+      <ResizableHandle withHandle aria-label="Resize the preview" className={HANDLE} />
+      <ResizablePanel id={PREVIEW_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
+        <PreviewPane />
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 

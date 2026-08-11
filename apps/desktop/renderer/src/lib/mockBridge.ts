@@ -794,6 +794,39 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     /*
+     * No file to read and no custom scheme to serve it from, so the mock frames
+     * a `data:` page instead of an `artemis-preview:` one. That substitution is
+     * only sound *here*: this bridge runs under `vite dev` with no main process,
+     * so none of the policy that makes a `data:` frame unacceptable in the real
+     * app is in force. It is enough to exercise the pane's layout, its caption
+     * and its empty and error states, which is what the mock is for.
+     */
+    preview: {
+      open: async ({ path }) => {
+        const name = path.split('/').at(-1) ?? path;
+        if (!/\.(html?|svg)$/i.test(name)) {
+          return {
+            ok: false,
+            error: {
+              code: 'invalid_request',
+              message: `Artemis can only preview HTML and SVG files, and ${name} is neither.`,
+            },
+          };
+        }
+        const body = `<!doctype html><meta charset="utf-8"><title>${name}</title>` +
+          '<style>body{font:14px system-ui;background:#0b0a09;color:#e8e4de;display:grid;' +
+          'place-items:center;height:100vh;margin:0}</style>' +
+          `<div><strong>${name}</strong><br>Mock preview — no main process.</div>`;
+        return ok({
+          url: `data:text/html;charset=utf-8,${encodeURIComponent(body)}`,
+          title: name,
+          path,
+          bytes: body.length,
+        });
+      },
+    },
+
+    /*
      * Plan usage, faked with the stale-while-revalidate shape the real bridge
      * has: `cached` answers instantly with a slightly stale reading, `refresh`
      * takes a beat and comes back with fresher numbers. That delay is the

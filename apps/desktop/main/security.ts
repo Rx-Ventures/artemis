@@ -32,6 +32,7 @@
 import { shell, type Session, type WebContents, type WebPreferences } from 'electron';
 
 import { createLogger } from './log.js';
+import { PREVIEW_SCHEME, isPreviewUrl } from './preview.js';
 
 const log = createLogger('security');
 
@@ -54,13 +55,20 @@ export interface SecurityPolicy {
  * Production CSP.
  *
  * `default-src 'none'` and then allow back exactly what the app needs. Note
- * what is *not* allowed: no remote origins at all, no `eval`, no framing, no
- * form submission, no plugins.
+ * what is *not* allowed: no remote origins at all, no `eval`, no form
+ * submission, no plugins.
  *
  * `style-src` keeps `'unsafe-inline'` because React writes inline `style`
  * attributes and Tailwind injects a style element; there is no way to run a
  * React UI without it short of a nonce-rewriting pipeline. Inline *style* is a
  * far smaller hazard than inline *script*, which stays forbidden.
+ *
+ * `frame-src` is the one opening, and it is one scheme wide. Artemis frames
+ * exactly one thing — a page the agent wrote, served by `preview.ts` — and that
+ * scheme cannot name a remote origin because nothing but this app serves it.
+ * The framed document runs under its own, much looser policy; what keeps the two
+ * apart is that it is a *separate response* with a *separate header*, so nothing
+ * an artifact is allowed to do is anything this page is allowed to do.
  */
 const PRODUCTION_CSP = [
   "default-src 'none'",
@@ -71,6 +79,7 @@ const PRODUCTION_CSP = [
   "connect-src 'self'",
   "media-src 'self' data: blob:",
   "worker-src 'self' blob:",
+  `frame-src ${PREVIEW_SCHEME}:`,
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",
@@ -97,6 +106,7 @@ function developmentCsp(origin: string): string {
     `connect-src 'self' ${origin} ${wsOrigin}`,
     "media-src 'self' data: blob:",
     "worker-src 'self' blob:",
+    `frame-src ${PREVIEW_SCHEME}:`,
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",
@@ -216,6 +226,17 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
   const csp = policy.devServerOrigin ? developmentCsp(policy.devServerOrigin) : PRODUCTION_CSP;
 
   session.webRequest.onHeadersReceived((details, callback) => {
+    // A preview response sets its own policy and must keep it. Overwriting it
+    // with the app's would put the framed page back under `script-src 'self'`,
+    // which is the exact policy the separate scheme exists to escape — and the
+    // symptom would be a blank frame with no error anywhere. `preview.ts` is
+    // the only thing this skips for, and every response it serves carries both
+    // headers this branch would otherwise have set.
+    if (isPreviewUrl(details.url)) {
+      callback({});
+      return;
+    }
+
     // Strip any CSP the response already carried before setting ours, so a dev
     // server's header cannot end up merged with (and therefore looser than)
     // Artemis's own.
@@ -245,6 +266,14 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
   // cancelled. In a packaged build this list contains no network origin at all.
   session.webRequest.onBeforeRequest((details, callback) => {
     if (isAllowedUrl(details.url, policy)) {
+      callback({ cancel: false });
+      return;
+    }
+    // The preview frame's own document. Allowed here and *not* in
+    // `isAllowedUrl`, which is deliberate: that function also decides what may
+    // become the window's top-level page and which frames may call IPC, and a
+    // page the agent wrote must never be either of those things.
+    if (isPreviewUrl(details.url)) {
       callback({ cancel: false });
       return;
     }
@@ -293,8 +322,15 @@ export function hardenWebContents(contents: WebContents, policy: SecurityPolicy)
   });
 
   // Same, for a frame that tries to navigate itself.
+  //
+  // A *sub*frame may additionally be a preview, which is how the pane's frame
+  // gets its document in the first place. The main frame may not: `isMainFrame`
+  // is what keeps a previewed page from being loaded as the window itself,
+  // where it would no longer be inside a sandboxed frame and would no longer be
+  // one of the things `isTrustedFrame` turns away.
   contents.on('will-frame-navigate', (event) => {
     if (isAllowedUrl(event.url, policy)) return;
+    if (!event.isMainFrame && isPreviewUrl(event.url)) return;
     event.preventDefault();
     log.warn('Blocked frame navigation away from the app.');
     openExternalSafely(event.url);
