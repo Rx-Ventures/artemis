@@ -166,7 +166,7 @@ function usePlanUsage(
 ): {
   readonly usage: PlanUsage | null;
   readonly refreshing: boolean;
-  readonly load: (mode: 'cached' | 'refresh') => Promise<void>;
+  readonly load: (mode: 'cached' | 'refresh') => Promise<boolean>;
 } {
   /*
     The reading is stored *with* the profile it describes, and read back only
@@ -179,18 +179,23 @@ function usePlanUsage(
   const [refreshing, setRefreshing] = useState(false);
   const usage = held !== null && held.of === profileId ? held.usage : null;
 
+  /** Resolves true when a reading actually landed, so a caller can escalate. */
   const load = useCallback(
-    async (mode: 'cached' | 'refresh') => {
-      if (profileId === null) return;
+    async (mode: 'cached' | 'refresh'): Promise<boolean> => {
+      if (profileId === null) return false;
       const { bridge } = resolveBridge();
-      if (!bridge) return;
+      if (!bridge) return false;
 
       if (mode === 'refresh') setRefreshing(true);
       const res = await call(() => bridge.usagePlan[mode]({ profileId }));
       if (mode === 'refresh') setRefreshing(false);
 
-      if (follow && follow() !== profileId) return;
-      if (res.ok && res.value.usage !== null) setHeld({ of: profileId, usage: res.value.usage });
+      if (follow && follow() !== profileId) return false;
+      if (res.ok && res.value.usage !== null) {
+        setHeld({ of: profileId, usage: res.value.usage });
+        return true;
+      }
+      return false;
     },
     // `follow` is read at call time, not closed over as a dependency: the
     // status bar passes an inline arrow, so depending on it would rebuild
@@ -321,6 +326,31 @@ export function PlanUsageMeter(): ReactElement | null {
  * the user may have opened to rename something. The refresh control on each
  * card is how a fresh reading is asked for.
  */
+/**
+ * One at a time, across every card on the profiles screen.
+ *
+ * A cache miss escalates to a real fetch, and a real fetch spawns the provider's
+ * CLI. Every card mounting at once would therefore start one subprocess per
+ * account simultaneously — on a machine with six profiles that is six CLIs
+ * racing for the CPU the moment a settings pane opens. Chaining them costs a
+ * little latency on the last card and nothing on the first.
+ *
+ * Module-level on purpose: the cards are siblings that know nothing about each
+ * other, so the queue cannot live in any one of them.
+ */
+let usageQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueUsageFetch(run: () => Promise<unknown>): Promise<void> {
+  // `catch` before chaining: one profile whose CLI is missing or wedged must
+  // not stop every card behind it in the queue from ever loading.
+  const next: Promise<void> = usageQueue.then(run, run).then(
+    () => undefined,
+    () => undefined,
+  );
+  usageQueue = next;
+  return next;
+}
+
 export function ProfilePlanUsage({
   profileId,
   supported,
@@ -333,9 +363,34 @@ export function ProfilePlanUsage({
   const { usage, refreshing, load } = usePlanUsage(profileId);
   const [now, setNow] = useState(() => Date.now());
 
+  /*
+   * Cached first, then a real fetch if that came back with nothing.
+   *
+   * The cache is only ever filled by a refresh, and the only thing refreshing
+   * on its own is the status bar — for the active profile. So a cached-only
+   * read left every *other* account's card blank, which read as "this account
+   * has no plan" rather than "nobody has asked yet". A page whose whole subject
+   * is your accounts should answer for all of them.
+   *
+   * Escalation is once per card per mount: `usage` is not in the dependency
+   * list, so a fetch that legitimately returns nothing — an API-key profile
+   * with no plan behind it — does not re-arm this effect into a loop.
+   */
   useEffect(() => {
-    void load('cached');
-  }, [load]);
+    if (!supported) return;
+    let cancelled = false;
+    void (async () => {
+      const cached = await load('cached');
+      if (cached || cancelled) return;
+      await enqueueUsageFetch(async () => {
+        if (cancelled) return;
+        await load('refresh');
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [load, supported]);
 
   if (!supported) {
     return (

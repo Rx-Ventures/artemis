@@ -1720,10 +1720,21 @@ export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
   const state = useApp.getState();
 
-  // `listSessions` gates the whole list. Cleared rather than left stale: a
-  // provider that cannot enumerate history has none to show, and the sidebar
-  // renders the capability's own reason in place of the rows.
-  if (!bridge || !activeCapabilities(state).listSessions) {
+  /*
+   * Deliberately not gated on the active provider's `listSessions`.
+   *
+   * It was, and that emptied the sidebar every time the selected account
+   * changed to one whose CLI cannot enumerate history — signing into Codex
+   * blanked every Claude session on screen. The listing spans providers, so
+   * "can the provider I happen to have selected list its own history" is the
+   * wrong question to ask of it: the backend already skips adapters that cannot
+   * answer and returns everything else, and what the user is owed is the record
+   * of what they have done rather than a view onto the current selection.
+   *
+   * The sidebar still says so, above the rows rather than in place of them —
+   * see `SessionList`.
+   */
+  if (!bridge) {
     useApp.setState({ sessions: [], sessionsError: null, sessionsLoading: false });
     return;
   }

@@ -195,6 +195,8 @@ const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
 
 export function createMockBridge(): ArtemisBridge {
+  /** Profiles a `refresh` has been run for — what fills the real cache. */
+  const refreshedProfiles = new Set<string>();
   const listeners = new Set<(event: AgentEvent) => void>();
   const runs = new Map<string, MockRun>();
   const handles = new Map<string, RunHandle>();
@@ -774,13 +776,34 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     usagePlan: {
-      cached: async ({ profileId }) => ok({ usage: planUsageFor(profileId, Date.now() - 4 * 60_000, 0) }),
+      /*
+       * Empty until that profile has actually been fetched.
+       *
+       * The real cache is a `Map` the main process fills in `refreshPlanUsage`
+       * and nowhere else, so a profile nobody has refreshed answers `null`.
+       * This mock used to answer for every profile unconditionally, which made
+       * the profiles screen look complete in dev while every card except the
+       * active account's was blank against real CLIs — the cards were reading a
+       * cache only the status bar was filling, and only for one account.
+       *
+       * Modelling the miss is what makes that visible here. Same rule as the
+       * sign-in poll counter above: a mock that always says yes deletes the
+       * state worth looking at.
+       */
+      cached: async ({ profileId }) =>
+        ok({
+          usage: refreshedProfiles.has(profileId)
+            ? planUsageFor(profileId, Date.now() - 4 * 60_000, 0)
+            : null,
+        }),
       refresh: async ({ profileId }) => {
         await new Promise((resolve) => setTimeout(resolve, 700));
+        refreshedProfiles.add(profileId);
         return ok({ usage: planUsageFor(profileId, Date.now(), 3) });
       },
     },
   };
+
 
   /**
    * Plan usage in the shape the profile's *own* provider reports it.

@@ -103,11 +103,14 @@ function session(id: string, cwd: string, profileId: string): SessionSummary {
 let nextSessions: readonly SessionSummary[] = [];
 let release: (() => void) | null = null;
 let listCalls = 0;
+/** What the last `listAll` was actually asked for. */
+let lastListAllRequest: { providerId?: string } = {};
 
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   sessions: {
-    listAll: async () => {
+    listAll: async (request: { providerId?: string }) => {
       listCalls += 1;
+      lastListAllRequest = request;
       // Captured at call time, so a test can change the answer while a read is
       // held open and see which one the store actually wrote.
       const answering = nextSessions;
@@ -143,6 +146,7 @@ beforeEach(() => {
   nextSessions = [];
   release = null;
   listCalls = 0;
+  lastListAllRequest = {};
   useApp.setState({
     providers: [CLAUDE, CODEX],
     profiles: [CLAUDE_WORK, CODEX_NEW],
@@ -258,15 +262,48 @@ describe('refreshSessions', () => {
     expect(listCalls).toBe(2);
   });
 
-  it('clears the list when the provider cannot enumerate history', async () => {
+  it('still lists everything when the selected provider cannot enumerate its own history', async () => {
+    const history = [session('s-other', '/proj', CLAUDE_WORK.id)];
+    nextSessions = history;
     useApp.setState({
-      sessions: [session('s-old', '/proj', CLAUDE_WORK.id)],
       providers: [{ ...CLAUDE, capabilities: { ...CAPABLE, listSessions: false } }, CODEX],
     });
 
     await refreshSessions();
 
-    expect(useApp.getState().sessions).toEqual([]);
-    expect(listCalls).toBe(0);
+    // This used to clear the list and skip the read entirely, so selecting an
+    // account whose CLI cannot enumerate history removed every *other*
+    // provider's sessions from the sidebar too. The listing spans providers:
+    // the selected one's capability decides what is missing from the result,
+    // not whether the result is worth having. The sidebar says as much above
+    // the rows rather than in place of them.
+    expect(listCalls).toBe(1);
+    expect(useApp.getState().sessions).toEqual(history);
+  });
+
+  it('asks for every provider rather than the selected one', async () => {
+    await refreshSessions();
+
+    // The reported bug, at its source. `listAllSessions` scopes to
+    // `query.providerId` when it is given one, so passing the active provider
+    // made the sidebar a view onto the current account: signing into Codex
+    // removed every Claude session from it. The contract says to omit the
+    // field for "every provider that can list history", which is what a
+    // history pane wants.
+    expect(lastListAllRequest.providerId).toBeUndefined();
+  });
+
+  it('keeps the same sessions across a profile switch', async () => {
+    const history = [session('s1', '/proj', CLAUDE_WORK.id)];
+    nextSessions = history;
+    await refreshSessions();
+    expect(useApp.getState().sessions).toEqual(history);
+
+    setProfile(CODEX_NEW.id);
+    await settled();
+
+    // Switching to a Codex account does not empty the list of Claude work.
+    // Which account a session belongs to is on its row; it is not a filter.
+    expect(useApp.getState().sessions).toEqual(history);
   });
 });

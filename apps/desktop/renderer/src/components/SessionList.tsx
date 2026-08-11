@@ -114,7 +114,6 @@ import {
 } from 'react';
 import {
   ChevronDownIcon,
-  FolderGit2Icon,
   FolderIcon,
   GitBranchIcon,
   InboxIcon,
@@ -221,40 +220,53 @@ export function SessionList(): ReactElement {
       )}
 
       <>
-          {/*
-           * Listing and resuming are independent capabilities and are gated
-           * independently: without `listSessions` there is nothing to show, and
-           * without `resumeSession` the rows are still worth showing but cannot
-           * be clicked. Neither ever silently disappears.
-           */}
-          {listing.supported && !resuming.supported ? (
-            <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
-              {resuming.reason} These are listed for reference; picking one would not carry the
-              conversation forward.
-            </p>
-          ) : null}
+        {/*
+         * Both capability notes sit *above* the rows rather than replacing
+         * them, and neither ever empties the list.
+         *
+         * `listSessions` used to blank it: selecting an account whose CLI
+         * cannot enumerate history removed every other provider's sessions
+         * from the screen too. That was the wrong scope. This list spans
+         * providers, so the capability of the one currently selected decides
+         * what is *missing* from it, not whether there is anything to show —
+         * and the sentence says exactly that much.
+         *
+         * `resumeSession` never emptied it; the rows are still worth reading
+         * when they cannot be clicked.
+         */}
+        {!listing.supported ? (
+          <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
+            {listing.reason} Its own sessions are not in this list; everything below belongs to the
+            other accounts.
+          </p>
+        ) : null}
 
-          {!listing.supported ? (
-            <Note tone="muted">{listing.reason} There is no history to list for it.</Note>
-          ) : error ? (
-            <Note tone="signal">
-              {/* The backend's own sentence — a paraphrase would lose the cause. */}
-              {error}
-              <button
-                type="button"
-                onClick={() => void refreshSessions()}
-                className="mt-1 block text-2xs text-lunar underline-offset-2 hover:underline"
-              >
-                Try again
-              </button>
-            </Note>
-          ) : loading && sessions.length === 0 ? (
-            <LoadingRows />
-          ) : rows.length === 0 ? (
-            <NothingHere filtered={total > 0} query={query} />
-          ) : (
-            <VirtualRows rows={rows} />
-          )}
+        {!resuming.supported ? (
+          <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
+            {resuming.reason} These are listed for reference; picking one would not carry the
+            conversation forward.
+          </p>
+        ) : null}
+
+        {error ? (
+          <Note tone="signal">
+            {/* The backend's own sentence — a paraphrase would lose the cause. */}
+            {error}
+            <button
+              type="button"
+              onClick={() => void refreshSessions()}
+              className="mt-1 block text-2xs text-lunar underline-offset-2 hover:underline"
+            >
+              Try again
+            </button>
+          </Note>
+        ) : loading && sessions.length === 0 ? (
+          <LoadingRows />
+        ) : rows.length === 0 ? (
+          <NothingHere filtered={total > 0} query={query} />
+        ) : (
+          <VirtualRows rows={rows} />
+        )}
       </>
     </div>
   );
@@ -309,8 +321,7 @@ const GroupHeading = memo(function GroupHeading({
   // falls back to the folder name. A repository name for a project you are not
   // in would need a `describe` call per project, which is a round trip per row
   // for a word.
-  const { name, isRepo } = projectLabel(cwd, workspace);
-  const Icon = isRepo ? FolderGit2Icon : FolderIcon;
+  const name = projectLabel(cwd, workspace);
 
   return (
     <div style={{ top, height: HEADER_HEIGHT }} className="absolute inset-x-0 px-1.5">
@@ -328,10 +339,22 @@ const GroupHeading = memo(function GroupHeading({
             collapsed && '-rotate-90',
           )}
         />
-        <Icon
-          aria-hidden="true"
-          className={cn('size-2.5 shrink-0', current ? 'text-lunar' : 'text-ink-faint')}
-        />
+        {/*
+          One folder, drawn the same way in every heading.
+          ------------------------------------------------------------------
+          Both the glyph and its colour used to turn on whether this was the
+          directory you were standing in, and the glyph did so invisibly: the
+          repository variant was chosen from `workspace`, which is only ever
+          resolved for the *current* project, so "is a git repo" and "is the
+          active project" were the same condition wearing different clothes.
+          A project's icon would silently change shape as you moved away from
+          it, which says something about the project that is not true.
+
+          So it is one folder at one weight throughout. The active project is
+          still marked — by the label beside this, which is a claim about
+          which project you are in rather than about what kind of thing it is.
+        */}
+        <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
         <span
           className={cn(
             'min-w-0 truncate text-2xs font-medium tracking-tight',
@@ -348,22 +371,23 @@ const GroupHeading = memo(function GroupHeading({
 });
 
 /**
- * What to call this project, and whether it is a repository.
+ * What to call this project.
  *
  * Repository name first, then the directory's, then the last segment of `cwd`
  * — the last of which is the answer for a build with no `workspace.describe`
  * and for the moment before the first reply lands. `null` means there is no
  * working directory at all, which is a different thing from an unnamed one and
  * is rendered as its own faint placeholder state.
+ *
+ * It no longer reports whether the directory *is* a repository. That fact was
+ * only ever knowable for the current project, so the icon it selected changed
+ * shape as you moved between projects — see the note on the folder glyph above.
  */
-function projectLabel(
-  cwd: string,
-  workspace: WorkspaceNames | null,
-): { readonly name: string | null; readonly isRepo: boolean } {
-  if (cwd.trim().length === 0) return { name: null, isRepo: false };
+function projectLabel(cwd: string, workspace: WorkspaceNames | null): string | null {
+  if (cwd.trim().length === 0) return null;
   const repo = workspace?.repoName;
-  if (repo !== undefined && repo.length > 0) return { name: repo, isRepo: true };
-  return { name: workspace?.name ?? lastSegment(cwd), isRepo: false };
+  if (repo !== undefined && repo.length > 0) return repo;
+  return workspace?.name ?? lastSegment(cwd);
 }
 
 /* -------------------------------------------------------------------------- */
