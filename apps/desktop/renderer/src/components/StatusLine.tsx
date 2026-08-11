@@ -580,7 +580,17 @@ function ShapeRow({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <div className="flex h-6 items-center gap-2 pr-7 pl-2">
+    /*
+     * `px-2`, matching the tick's `right-2` on the model rows above.
+     *
+     * This used to be `pr-7`, reserving a gutter the width of the model rows'
+     * radio indicator so the values would right-align with the tick. But the
+     * tick is positioned absolutely at `right-2` and so ignores that padding
+     * entirely — the gutter lined these rows up against nothing and simply
+     * stopped them a glyph short of the edge, which is what read as "these
+     * cannot go full width".
+     */
+    <div className="flex h-6 items-center gap-2 px-2">
       <span className="shrink-0 text-2xs text-ink-faint">{label}</span>
       <span className="ml-auto flex min-w-0 items-center">{children}</span>
     </div>
@@ -603,9 +613,14 @@ function ThinkingRow(): ReactElement | null {
 
   return (
     <DropdownMenuSub>
-      {/* `pr-7` matches the gutter the model rows reserve for their tick, so
-          the values in this column right-align with it rather than floating. */}
-      <DropdownMenuSubTrigger className="h-6 gap-2 py-0 pr-7 pl-2 text-2xs">
+      {/*
+        `[&>svg:last-child]:ml-0` kills the `ml-auto` shadcn puts on the
+        submenu chevron. Two `ml-auto` elements in one flex row split the free
+        space *between* them, so the value was landing halfway along the row
+        with a gap before the chevron rather than sitting against it. Only the
+        value pushes now; the chevron follows it to the trailing edge.
+      */}
+      <DropdownMenuSubTrigger className="h-6 gap-2 px-2 py-0 text-2xs [&>svg:last-child]:ml-0">
         <span className="text-ink-faint">Thinking</span>
         <span className="ml-auto text-ink">{label}</span>
       </DropdownMenuSubTrigger>

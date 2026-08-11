@@ -95,6 +95,77 @@ describe('mapPlanUsage', () => {
     expect(mapPlanUsage({}, NOW).available).toBe(false);
     expect(mapPlanUsage(null, NOW).available).toBe(false);
   });
+
+  /*
+   * `model_scoped` is an ARRAY of per-model buckets, unlike every one of its
+   * siblings. Reading it as a single `{ utilization, resets_at }` object is
+   * what produced one row labelled "Model" reporting `null` on every account
+   * with per-model limits — a limit that looked broken while hiding the real
+   * numbers inside it. These pin the array handling.
+   */
+  it('expands model_scoped into one window per model bucket', () => {
+    const usage = mapPlanUsage(
+      {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 10, resets_at: RESET_ISO },
+          model_scoped: [
+            { display_name: 'Fable', utilization: 81, resets_at: RESET_ISO },
+            { display_name: 'Opus', utilization: 30, resets_at: null },
+          ],
+        },
+      },
+      NOW,
+    );
+
+    const buckets = usage.windows.filter((w) => w.id.startsWith('model_scoped:'));
+    expect(buckets).toHaveLength(2);
+    expect(buckets[0]).toEqual({
+      id: 'model_scoped:Fable',
+      label: '7 days · Fable',
+      utilization: 81,
+      resetsAt: Date.parse(RESET_ISO),
+    });
+    expect(buckets[1]!.id).toBe('model_scoped:Opus');
+    expect(buckets[1]!.resetsAt).toBeNull();
+
+    // And it must never surface as a single window of its own.
+    expect(usage.windows.some((w) => w.id === 'model_scoped')).toBe(false);
+  });
+
+  it('drops a model bucket with no display name rather than showing an anonymous limit', () => {
+    const usage = mapPlanUsage(
+      {
+        rate_limits_available: true,
+        rate_limits: {
+          model_scoped: [
+            { utilization: 55, resets_at: RESET_ISO },
+            { display_name: '', utilization: 60, resets_at: RESET_ISO },
+            { display_name: 'Fable', utilization: 12, resets_at: RESET_ISO },
+          ],
+        },
+      },
+      NOW,
+    );
+
+    expect(usage.windows.map((w) => w.id)).toEqual(['model_scoped:Fable']);
+  });
+
+  it('does not render an unfamiliar array window as a row of nulls', () => {
+    const usage = mapPlanUsage(
+      {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 10, resets_at: RESET_ISO },
+          // A shape this file has never seen, arriving as a list.
+          some_future_buckets: [{ utilization: 5, resets_at: RESET_ISO }],
+        },
+      },
+      NOW,
+    );
+
+    expect(usage.windows.map((w) => w.id)).toEqual(['five_hour']);
+  });
 });
 
 describe('readPlanUsage', () => {
