@@ -84,9 +84,9 @@ const CODEX_CAPS: Capabilities = {
  *
  * So the spread is chosen, not incidental:
  *
- * - `default` carries no flags at all — it is the "let the provider decide"
- *   row, and Apollo cannot know what will run, so the fast-mode and ultracode
- *   toggles must come up disabled next to it.
+ * - every row is a real model. There is no "let the provider decide" entry any
+ *   more: it named nothing, so it could not tell the user what would run, and
+ *   it collected mis-clicks from the top of the list.
  * - `sonnet` supports fast mode but not ultracode, and `fable` the reverse, so
  *   the two toggles are visibly independent rather than one switch drawn twice.
  * - `haiku` declares `effortLevels: []` — no effort setting at all — which is
@@ -96,11 +96,6 @@ const CODEX_CAPS: Capabilities = {
  * state and derives selectors from it by identity.
  */
 const MOCK_LIVE_MODELS: readonly ProviderModelOption[] = [
-  {
-    id: 'default',
-    label: 'Default',
-    note: 'Whatever the installed CLI selects.',
-  },
   {
     id: 'fable',
     label: 'Fable 5',
@@ -464,7 +459,6 @@ export function createMockBridge(): ApolloBridge {
       // both lists come off the descriptor, so a provider that offers neither
       // renders them disabled-with-a-reason rather than showing this one's.
       models: [
-        { id: 'default', label: 'Default', note: 'Whatever the mock provider feels like.' },
         { id: 'opus', label: 'Opus', note: 'The most capable model. Slowest, most expensive.' },
         { id: 'sonnet', label: 'Sonnet', note: 'Balanced: strong on code, much cheaper.' },
         { id: 'haiku', label: 'Haiku', note: 'Fastest and cheapest.' },

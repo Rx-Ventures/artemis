@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
 /* -------------------------------------------------------------------------- */
@@ -112,9 +113,9 @@ export function DirectoryChooser({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="apollo-cwd" className="text-2xs tracking-wider text-ink-faint uppercase">
+        <Label htmlFor="apollo-cwd" className="text-2xs tracking-wider text-ink-faint uppercase">
           Working directory
-        </label>
+        </Label>
         <Input
           id="apollo-cwd"
           autoFocus={autoFocus}

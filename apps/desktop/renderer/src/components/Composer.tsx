@@ -129,15 +129,28 @@ export function Composer(): ReactElement {
   // from the command palette, but it is no longer visible or reversible here,
   // so a session set to fork gives no sign of it until it branches. If that
   // bites, the toggle needs its own home; don't bring the whole row back.
+  /*
+   * No panel fill and no top border.
+   *
+   * The composer used to sit in a darker bar drawn across the foot of the
+   * window, which read as a second surface the transcript ended at. It is the
+   * same document: the input is the last thing in the column, not furniture
+   * beneath it. So the input carries its own border (see `Textarea`) and floats
+   * on the window background, with the status line under it — nothing boxes
+   * either of them in.
+   *
+   * The run bar stays, but hairline-thin and only while a run is live. It is
+   * the one piece of chrome here that reports something.
+   */
   return (
-    <div className="shrink-0 border-t border-line bg-panel">
+    <div className="shrink-0">
       {live ? (
         <div className="relative h-px overflow-hidden bg-line">
           <span className="runbar absolute inset-0 block" />
         </div>
       ) : null}
 
-      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 px-3 py-2">
+      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 px-3 pt-2 pb-1">
         <WithReason
           reason={locked ? steering.reason : undefined}
           className="min-w-0 flex-1"

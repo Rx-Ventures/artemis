@@ -34,6 +34,7 @@ import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
 import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
 import { WithReason } from './disabled-reason';
+import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { cn } from '../lib/utils';
 
@@ -257,15 +258,16 @@ function PlanWindows({
         <span className="text-2xs uppercase tracking-wide text-ink-faint">
           {usage.subscriptionType ? `${usage.subscriptionType} plan` : 'Plan usage'}
         </span>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={onRefresh}
           disabled={refreshing}
-          className="flex items-center gap-1 text-2xs text-ink-faint hover:text-ink-muted disabled:opacity-50"
+          className="h-auto gap-1 px-1 py-0.5 text-2xs font-normal text-ink-faint hover:text-ink-muted"
         >
           <RefreshCwIcon className={cn('size-2.5', refreshing && 'animate-spin')} aria-hidden="true" />
           {refreshing ? 'updating' : ageHint(usage.fetchedAt, now)}
-        </button>
+        </Button>
       </div>
 
       {shown.length === 0 ? (

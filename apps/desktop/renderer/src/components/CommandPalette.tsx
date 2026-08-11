@@ -54,6 +54,7 @@
 
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import {
+  BrainIcon,
   CpuIcon,
   FolderIcon,
   GitForkIcon,
@@ -92,7 +93,10 @@ import {
   setModel,
   setPalette,
   setProvider,
-  setUltracode,
+  setThinkingLevel,
+  thinkingLevels,
+  activeThinkingLevel,
+  ULTRACODE_LEVEL,
   toggleSidebar,
   ultracodeAvailable,
   useApp,
@@ -100,7 +104,6 @@ import {
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
-import { fastModeReason, ultracodeReason } from './StatusLine';
 import { DirectoryChooser } from './WorkingDirectory';
 import {
   Command,
@@ -215,7 +218,8 @@ function RootPage({
   const models = useApp(activeModels);
   const model = useApp(selectedModelOption);
   const fastOk = useApp(fastModeAvailable);
-  const ultraOk = useApp(ultracodeAvailable);
+  const levels = useApp(thinkingLevels);
+  const thinking = useApp(activeThinkingLevel);
   const fast = useApp((s) => s.fastMode);
   const ultra = useApp((s) => s.ultracode);
 
@@ -315,7 +319,11 @@ function RootPage({
          */}
         <GatedItem
           supported={fastOk}
-          reason={fastModeReason(model, fast) ?? ''}
+          reason={
+            model
+              ? `${model.label} does not offer fast mode.`
+              : 'Choose a model that offers fast mode.'
+          }
           onSelect={() => {
             setFastMode(!fast);
             onClose();
@@ -324,17 +332,30 @@ function RootPage({
           <ZapIcon />
           {fast ? 'Turn fast mode off' : 'Turn fast mode on'}
         </GatedItem>
-        <GatedItem
-          supported={ultraOk}
-          reason={ultracodeReason(model, ultra) ?? ''}
-          onSelect={() => {
-            setUltracode(!ultra);
-            onClose();
-          }}
-        >
-          <SparklesIcon />
-          {ultra ? 'Turn ultracode off' : 'Turn ultracode on'}
-        </GatedItem>
+        {/*
+          Thinking is one ladder now, `low` up to ultracode, so the palette
+          offers the rungs rather than a separate ultracode switch. A rung the
+          selected model cannot do is listed disabled — the palette is a place
+          people search by name, and a command that vanishes is a command they
+          conclude does not exist.
+        */}
+        {levels.map((level) => (
+          <GatedItem
+            key={level.id}
+            supported={level.available}
+            reason={model ? `${model.label} does not offer ${level.label}.` : ''}
+            onSelect={() => {
+              setThinkingLevel(level.id);
+              onClose();
+            }}
+          >
+            {level.id === ULTRACODE_LEVEL ? <SparklesIcon /> : <BrainIcon />}
+            Thinking: {level.label}
+            {level.id === thinking ? (
+              <span className="ml-auto font-mono text-2xs text-ember">current</span>
+            ) : null}
+          </GatedItem>
+        ))}
         <CommandItem onSelect={() => onPage('providers')}>
           <PlugIcon />
           Switch provider…
@@ -623,22 +644,6 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
     <>
       <CommandEmpty>No model matches that.</CommandEmpty>
       <CommandGroup heading="Model">
-        <CommandItem
-          value="provider default"
-          className="flex-col items-start gap-0.5"
-          onSelect={() => {
-            setModel(null);
-            onClose();
-          }}
-        >
-          <span className="flex w-full items-center gap-2">
-            <CpuIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className="text-xs text-ink">Provider default</span>
-            {current === null ? (
-              <span className="ml-auto font-mono text-2xs text-ember">selected</span>
-            ) : null}
-          </span>
-        </CommandItem>
         {/*
           This page lists the whole catalogue, not the quick-access subset the
           status-line picker shows. The two surfaces are for different things:

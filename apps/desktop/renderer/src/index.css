@@ -129,17 +129,26 @@
      Chroma 0.10 is what makes it pastel. Past roughly 0.14 at this lightness
      it stops reading as a soft orange and starts reading as safety orange,
      which is a different instruction entirely. */
-  --ember: oklch(80% 0.1 55); /* primary action, focus ring       */
-  --ember-dim: oklch(64% 0.09 55);
-  --ember-ink: oklch(20% 0.03 55); /* text on an ember fill            */
+  --ember: oklch(79% 0.115 50); /* primary action, focus ring       */
+  --ember-dim: oklch(63% 0.1 50);
+  --ember-ink: oklch(20% 0.035 50); /* text on an ember fill           */
   --cyan: oklch(76% 0.1 245); /* tools / machine activity         */
   --sage: oklch(75% 0.05 195); /* thinking                         */
   --mint: oklch(80% 0.12 155); /* success                          */
-  /* A true yellow, and the one hue that had to move furthest. The old palette
-     sat warning at 52 to escape a gold accent at 78; with the accent now at
-     55, that same reasoning points the opposite way. Hue 100 leaves 45° to the
-     accent and 90° to `--signal`, so a badge row reads at a glance. */
-  --amber: oklch(86% 0.13 100); /* warning                          */
+  /* A muted gold, and deliberately quieter than the accent.
+
+     This started as a true yellow at hue 100, chosen purely for hue separation
+     from the accent. That was the wrong thing to optimise: warning is used more
+     often in this app than the accent is — missing credential, no working
+     directory, unsupported setting, parked permission — so a warning brighter
+     and more saturated than `--ember` (it was +6 lightness and +0.03 chroma)
+     made a half-configured app read as yellow rather than orange.
+
+     So it is now dimmer and less saturated than the accent, which is what makes
+     it recede behind it, and only then as far from it in hue as that allows:
+     40° to `--ember`, 80° to `--signal`. Warning must be *noticeable*, not
+     loud; the accent is the colour this app is supposed to look like. */
+  --amber: oklch(78% 0.085 90); /* warning                          */
   /* Rose-red rather than the orange-red an error usually gets. An orange-red
      would sit ~25° from the accent and blur against it exactly where the two
      appear together; this keeps 45° and still reads unmistakably as "stop". */
