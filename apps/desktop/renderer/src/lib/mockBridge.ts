@@ -27,6 +27,7 @@ import type {
   ProviderModelOption,
   RunEndReason,
   RunHandle,
+  UpdateState,
   RunsStartRequest,
   SessionSummary,
   Unsubscribe,
@@ -911,7 +912,28 @@ export function createMockBridge(): ArtemisBridge {
         };
       },
     },
+
+    /**
+     * The updater, permanently idle.
+     *
+     * Deliberately inert rather than scripted: the update flow's interesting
+     * states depend on a packaged bundle and a release feed, neither of which
+     * a browser tab has, and a mock that pretends to install would exercise a
+     * code path whose real counterpart replaces the app on disk. The banner's
+     * states are unit-tested directly instead — see `UpdateBanner.test.tsx`.
+     */
+    updates: {
+      state: async () => ok({ state: mockUpdateState() }),
+      install: async () => ok({ state: mockUpdateState() }),
+      restart: async () => ok({ state: mockUpdateState() }),
+      dismiss: async () => ok({ state: mockUpdateState() }),
+      onChange: (): Unsubscribe => () => undefined,
+    },
   };
+
+  function mockUpdateState(): UpdateState {
+    return { phase: 'idle', version: null, message: null, releaseUrl: null };
+  }
 
   function mockWindowState(): WindowState {
     return {

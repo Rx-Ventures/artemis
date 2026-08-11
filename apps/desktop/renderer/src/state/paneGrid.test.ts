@@ -141,15 +141,20 @@ describe('splitting', () => {
     expect(paneCount()).toBe(2);
   });
 
-  it('stops at four panes, in whatever shape', () => {
-    splitPane('right');
-    splitPane('down');
-    splitPane('right');
+  it('stops at the pane limit, in whatever shape', () => {
+    // Driven off MAX_PANES rather than a fixed run of splits, and alternating
+    // the axis so the cap is proved against a ragged grid rather than a single
+    // row — the limit bounds the window's conversations, not a row's length.
+    // Hardcoding the count would leave this asserting against a grid that never
+    // reached the ceiling the moment the ceiling moved.
+    for (let i = 1; i < MAX_PANES; i += 1) {
+      expect(splitPane(i % 2 === 0 ? 'down' : 'right')).not.toBeNull();
+    }
 
     expect(paneCount()).toBe(MAX_PANES);
     expect(canSplit()).toBe(false);
     // The controls are already disabled by then; this is the backstop for a
-    // keyboard shortcut, which must not quietly add a fifth.
+    // keyboard shortcut, which must not quietly add one more.
     expect(splitPane('right')).toBeNull();
     expect(splitPane('down')).toBeNull();
     expect(paneCount()).toBe(MAX_PANES);

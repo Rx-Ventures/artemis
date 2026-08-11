@@ -78,6 +78,10 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type UpdatesDismissRequest,
+  type UpdatesInstallRequest,
+  type UpdatesRestartRequest,
+  type UpdatesStateRequest,
   type WindowRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
@@ -1124,4 +1128,38 @@ export function validateUsagePlan(raw: unknown): UsagePlanRequest {
 export function validateWindowRequest(raw: unknown): WindowRequest {
   requireRequest(raw);
   return {};
+}
+
+/**
+ * The two parameterless update requests, held to the same standard as
+ * {@link validateWindowRequest} and shaped the same way for the same reason:
+ * a fresh empty object, so nothing a renderer attaches survives into a
+ * handler. There is one updater and it is not addressable.
+ */
+export function validateUpdatesState(raw: unknown): UpdatesStateRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateUpdatesState */
+export function validateUpdatesInstall(raw: unknown): UpdatesInstallRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateUpdatesState */
+export function validateUpdatesRestart(raw: unknown): UpdatesRestartRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * Dismissal names the version it silences — see {@link UpdatesDismissRequest}
+ * for why "whatever is showing" would race. The string is bounded but not
+ * pattern-checked: the updater compares it against the version it offered,
+ * so an arbitrary value can only ever silence nothing.
+ */
+export function validateUpdatesDismiss(raw: unknown): UpdatesDismissRequest {
+  const request = requireRequest(raw);
+  return { version: requireString(request['version'], 'version', LIMITS.label) };
 }

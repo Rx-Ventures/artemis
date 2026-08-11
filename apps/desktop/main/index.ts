@@ -27,13 +27,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
 
+import { IPC_PUSH } from '@rx-artemis/protocol';
+
 import { profilesRoot } from '@rx-artemis/core';
 
 import { APP_NAME, previousUserDataDir } from './appNames.js';
 import { EngineHost } from './engine.js';
-import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
+import { broadcast, forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
+import { createUpdater } from './updater.js';
 import {
   applySessionPolicy,
   hardenWebContents,
@@ -126,6 +129,7 @@ const devServerUrl = process.env['ELECTRON_RENDERER_URL'] ?? null;
 let ipcLayer: IpcLayer | null = null;
 let stopEventForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
+let stopUpdater: (() => void) | null = null;
 const engineHost = new EngineHost();
 
 /* -------------------------------------------------------------------------- */
@@ -262,7 +266,16 @@ async function bootstrap(): Promise<void> {
 
   await engineHost.start({ userDataDir, appVersion: app.getVersion() });
 
-  ipcLayer = registerIpcHandlers({ engine: engineHost, policy });
+  // The updater exists before the IPC layer because the layer's handlers
+  // close over it; it *starts* after the window exists so its first push has
+  // somewhere to land. In dev builds start() is a no-op — see updater.ts.
+  const updater = createUpdater({
+    userDataDir,
+    broadcast: (state) => broadcast(IPC_PUSH.updateState, state),
+  });
+  stopUpdater = () => updater.stop();
+
+  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater });
   stopEventForwarding = forwardAgentEvents(engineHost);
   // Reads every profile's plan limits on a timer, so the profile menu can say
   // which account has room. Started after IPC so its first push has somewhere
@@ -271,6 +284,7 @@ async function bootstrap(): Promise<void> {
   stopPlanUsagePolling = startPlanUsagePolling(engineHost);
 
   createWindow(policy);
+  updater.start();
 
   reportEngineProblem();
 
@@ -299,6 +313,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   stopEventForwarding?.();
   stopPlanUsagePolling?.();
+  stopUpdater?.();
   ipcLayer?.dispose();
 
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
