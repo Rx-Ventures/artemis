@@ -13,6 +13,11 @@
  *    added or removed. Adding a token does not touch it.
  *  - **one item** — each rendered item subscribes to *its own id*, so a delta
  *    notifies exactly one leaf component.
+ *  - **one tool group** — runs of consecutive tool calls are folded into a
+ *    single summarised row, because grouping is about neighbours and a
+ *    component here is never allowed to see its neighbours. See
+ *    {@link ToolGroup}, which explains why that constraint forces the work
+ *    down here and how it stays off the per-token path.
  *
  * Deltas are appended to a mutable string buffer and coalesced: a burst of
  * fifty tokens produces one snapshot and one notification on the next frame,
@@ -34,6 +39,7 @@ import type {
   ToolEndStatus,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
+import { classifyTool, type ActivityCounts, type ToolCategory } from '../lib/tools';
 
 /* -------------------------------------------------------------------------- */
 /* Items                                                                      */
@@ -131,6 +137,56 @@ export type TranscriptItem =
   | RunEndItem;
 
 /* -------------------------------------------------------------------------- */
+/* Tool groups                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A run of consecutive tool calls, summarised.
+ *
+ * The transcript draws one marker per group — "Ran 36 commands, read 6 files"
+ * — instead of one row per call, because a turn that touches forty files is
+ * forty rows of machinery between two sentences of actual answer.
+ *
+ * ## Why this is computed here and not in the component
+ *
+ * The transcript's performance contract says the list hands React ids and
+ * nothing else, so a row can never see its neighbours. Grouping is *inherently*
+ * about neighbours, so it cannot happen in a row — a component that looked
+ * left to decide whether it starts a group would have to read items during
+ * render, which is the exact thing that makes streaming O(items) per token.
+ *
+ * So the model does it, and it stays cheap because of when it runs:
+ *
+ *  - **membership** is rebuilt only on a structural change, alongside the
+ *    `ids` snapshot that is already O(items). A token never triggers it.
+ *  - **the summary** is recomputed only for groups whose members changed, and
+ *    only ever from `tool.start` / `tool.end` — one per call, not per token.
+ *
+ * Snapshots are reference-stable: an unchanged group keeps its object identity
+ * across flushes, which is what `useSyncExternalStore` requires and what stops
+ * a marker re-rendering every time a sibling streams.
+ */
+export interface ToolGroup {
+  /** `g:` + the first member's id. Distinct from every item id by prefix. */
+  readonly id: string;
+  /** Member item ids, in transcript order. Never empty. */
+  readonly ids: readonly string[];
+  /** When the burst started — the first member's timestamp. */
+  readonly ts: number;
+  /** How many calls of each kind, for the summary line. */
+  readonly counts: ActivityCounts;
+  /** Calls still running. Non-zero means the marker reads in present tense. */
+  readonly running: number;
+  /** Calls that errored or were denied. Never hidden behind a collapsed row. */
+  readonly failed: number;
+}
+
+/** True for a row id that names a {@link ToolGroup} rather than an item. */
+export function isGroupId(id: string): boolean {
+  return id.startsWith('g:');
+}
+
+/* -------------------------------------------------------------------------- */
 /* Scheduling                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -160,6 +216,19 @@ export class TranscriptModel {
   private ids: string[] = [];
   private idsSnapshot: readonly string[] = EMPTY_IDS;
   private items = new Map<string, TranscriptItem>();
+
+  /**
+   * The renderable sequence: `ids` with runs of tool calls folded into groups.
+   *
+   * Rebuilt only on a structural change — see {@link ToolGroup}. `groupOf` is
+   * the reverse index, so a changed tool can find its group in O(1) instead of
+   * a scan.
+   */
+  private rowsSnapshot: readonly string[] = EMPTY_IDS;
+  private groupMembers = new Map<string, readonly string[]>();
+  private groupOf = new Map<string, string>();
+  private groupSnapshots = new Map<string, ToolGroup>();
+  private groupListeners = new Map<string, Set<Listener>>();
 
   /** Authoritative text for streaming blocks; folded into snapshots on flush. */
   private buffers = new Map<string, string>();
@@ -196,8 +265,32 @@ export class TranscriptModel {
   /** Stable array of item ids. New identity only on structural change. */
   getListSnapshot = (): readonly string[] => this.idsSnapshot;
 
+  /**
+   * Stable array of *row* ids — the list the transcript actually renders.
+   *
+   * Same as {@link getListSnapshot} except that runs of consecutive tool calls
+   * appear as one `g:` group id. Changes identity on exactly the same beat, so
+   * it costs a subscription and no extra render.
+   */
+  getRowsSnapshot = (): readonly string[] => this.rowsSnapshot;
+
   /** Stable snapshot of one item. New identity only when that item changed. */
   getItem = (id: string): TranscriptItem | undefined => this.items.get(id);
+
+  /**
+   * Stable snapshot of one tool group.
+   *
+   * Built on first read and cached; the cache entry survives until the group's
+   * membership or one of its members changes, which is what makes the identity
+   * safe to hand `useSyncExternalStore`.
+   */
+  getGroup = (id: string): ToolGroup | undefined => {
+    const cached = this.groupSnapshots.get(id);
+    if (cached) return cached;
+    const built = this.buildGroup(id);
+    if (built) this.groupSnapshots.set(id, built);
+    return built;
+  };
 
   get length(): number {
     return this.ids.length;
@@ -229,6 +322,21 @@ export class TranscriptModel {
       if (!current) return;
       current.delete(listener);
       if (current.size === 0) this.itemListeners.delete(id);
+    };
+  };
+
+  subscribeGroup = (id: string, listener: Listener): (() => void) => {
+    let set = this.groupListeners.get(id);
+    if (!set) {
+      set = new Set();
+      this.groupListeners.set(id, set);
+    }
+    set.add(listener);
+    return () => {
+      const current = this.groupListeners.get(id);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) this.groupListeners.delete(id);
     };
   };
 
@@ -316,6 +424,10 @@ export class TranscriptModel {
   reset(): void {
     this.ids = [];
     this.items = new Map();
+    this.rowsSnapshot = EMPTY_IDS;
+    this.groupMembers = new Map();
+    this.groupOf = new Map();
+    this.groupSnapshots = new Map();
     this.buffers = new Map();
     this.messageBlocks = new Map();
     this.unconfirmedUser = [];
@@ -539,12 +651,18 @@ export class TranscriptModel {
       }
     }
 
-    if (this.structural) {
+    // Membership before summaries: a structural change can move a tool into a
+    // different group, and recomputing the old group's counts first would
+    // notify a group that is about to stop existing.
+    const restructured = this.structural;
+    if (restructured) {
       this.structural = false;
       this.idsSnapshot = this.ids.length === 0 ? EMPTY_IDS : this.ids.slice();
+      this.rebuildRows();
       for (const listener of this.listListeners) listener();
     }
 
+    this.refreshGroups(changed, restructured);
   }
 
   /* ---- internals ------------------------------------------------------ */
@@ -568,6 +686,114 @@ export class TranscriptModel {
     this.index(item);
     this.dirty.add(id);
     this.markPending();
+  }
+
+  /**
+   * Recompute the row sequence, folding runs of tool calls into groups.
+   *
+   * O(items), and called only where the `ids` snapshot is already being copied
+   * — so this rides along with work the model was doing anyway rather than
+   * adding a pass of its own. See {@link ToolGroup} for why it cannot live in
+   * the component.
+   *
+   * A group is named for its first member, which makes the id stable as the
+   * run grows: appending a tool call to an open burst extends the group rather
+   * than renaming it, so an expanded marker does not collapse itself every
+   * time the agent runs one more command.
+   */
+  private rebuildRows(): void {
+    const rows: string[] = [];
+    const members = new Map<string, readonly string[]>();
+    const groupOf = new Map<string, string>();
+
+    for (let i = 0; i < this.ids.length; ) {
+      const id = this.ids[i];
+      if (id === undefined) {
+        i += 1;
+        continue;
+      }
+      if (this.items.get(id)?.kind !== 'tool') {
+        rows.push(id);
+        i += 1;
+        continue;
+      }
+      const run: string[] = [];
+      while (i < this.ids.length) {
+        const next = this.ids[i];
+        if (next === undefined || this.items.get(next)?.kind !== 'tool') break;
+        run.push(next);
+        i += 1;
+      }
+      const groupId = `g:${id}`;
+      for (const memberId of run) groupOf.set(memberId, groupId);
+      members.set(groupId, run);
+      rows.push(groupId);
+    }
+
+    // Retire cached summaries whose group is gone or whose membership moved.
+    // Everything else keeps its object identity, which is the point.
+    for (const [groupId, snapshot] of this.groupSnapshots) {
+      const next = members.get(groupId);
+      if (next === undefined || !sameIds(next, snapshot.ids)) this.groupSnapshots.delete(groupId);
+    }
+
+    this.groupMembers = members;
+    this.groupOf = groupOf;
+    this.rowsSnapshot = rows.length === 0 ? EMPTY_IDS : rows.slice();
+  }
+
+  /**
+   * Rebuild the summaries that could have changed, and notify only those.
+   *
+   * The comparison matters more than it looks: a `tool.end` marks one item
+   * dirty, and without the equality check every marker on screen would be
+   * notified on every flush that touched any tool. Groups whose numbers did
+   * not actually move keep their snapshot and stay silent.
+   */
+  private refreshGroups(changed: ReadonlySet<string>, restructured: boolean): void {
+    const touched = new Set<string>();
+    if (restructured) for (const groupId of this.groupMembers.keys()) touched.add(groupId);
+    for (const id of changed) {
+      const groupId = this.groupOf.get(id);
+      if (groupId !== undefined) touched.add(groupId);
+    }
+    if (touched.size === 0) return;
+
+    for (const groupId of touched) {
+      const next = this.buildGroup(groupId);
+      if (!next) {
+        this.groupSnapshots.delete(groupId);
+        continue;
+      }
+      const previous = this.groupSnapshots.get(groupId);
+      if (previous && sameGroup(previous, next)) continue;
+      this.groupSnapshots.set(groupId, next);
+      const listeners = this.groupListeners.get(groupId);
+      if (listeners) for (const listener of listeners) listener();
+    }
+  }
+
+  /** Count one group's members by category. O(members), not O(items). */
+  private buildGroup(id: string): ToolGroup | undefined {
+    const ids = this.groupMembers.get(id);
+    if (ids === undefined || ids.length === 0) return undefined;
+
+    const counts: Partial<Record<ToolCategory, number>> = {};
+    let running = 0;
+    let failed = 0;
+    let ts: number | undefined;
+
+    for (const memberId of ids) {
+      const item = this.items.get(memberId);
+      if (item?.kind !== 'tool') continue;
+      ts ??= item.ts;
+      const category = classifyTool(item.name);
+      counts[category] = (counts[category] ?? 0) + 1;
+      if (item.status === 'running') running += 1;
+      else if (item.status === 'error' || item.status === 'denied') failed += 1;
+    }
+
+    return { id, ids, ts: ts ?? 0, counts, running, failed };
   }
 
   /** Keep the open-work indexes in step with an item's current state. */
@@ -682,4 +908,27 @@ export class TranscriptModel {
 
 function short(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * Whether two summaries say the same thing.
+ *
+ * Field-by-field rather than a `JSON.stringify` compare: this runs on every
+ * flush that touches a tool, and serialising both sides to decide "nothing
+ * changed" would allocate two strings per group per tool call.
+ */
+function sameGroup(a: ToolGroup, b: ToolGroup): boolean {
+  if (a.ts !== b.ts || a.running !== b.running || a.failed !== b.failed) return false;
+  if (!sameIds(a.ids, b.ids)) return false;
+  const keys = Object.keys(a.counts) as ToolCategory[];
+  if (keys.length !== Object.keys(b.counts).length) return false;
+  for (const key of keys) if (a.counts[key] !== b.counts[key]) return false;
+  return true;
 }
