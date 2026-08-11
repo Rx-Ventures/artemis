@@ -89,19 +89,6 @@ export function matchesQuery(
 export interface GroupOptions {
   readonly query?: string;
   readonly profileLabel?: ProfileLabelLookup;
-  /**
-   * A directory to sort to the front, ahead of the recency order.
-   *
-   * The sidebar passes the working directory. Listing every project means "what
-   * was I doing in *this* repo" is otherwise answered somewhere in the middle of
-   * the list — which is the specific complaint that once had this list scoped to
-   * one project and the rest behind a switcher. Pinning keeps the whole history
-   * reachable without giving up the answer to that question.
-   *
-   * Only ever moves a group that exists. A directory with no sessions yet does
-   * not get an empty heading — there would be nothing under it.
-   */
-  readonly pinned?: string;
 }
 
 /** Apply rules 1–4 above. */
@@ -126,16 +113,7 @@ export function groupSessionsByProject(
     groups.push({ cwd, sessions: bucket, updatedAt: bucket[0]?.updatedAt ?? 0 });
   }
 
-  const pinned = options.pinned;
-  groups.sort((a, b) => {
-    // Ahead of recency, not folded into it: the pinned project belongs at the
-    // top even when every other project has been touched since.
-    if (pinned !== undefined && a.cwd !== b.cwd) {
-      if (a.cwd === pinned) return -1;
-      if (b.cwd === pinned) return 1;
-    }
-    return b.updatedAt - a.updatedAt || a.cwd.localeCompare(b.cwd);
-  });
+  groups.sort((a, b) => b.updatedAt - a.updatedAt || a.cwd.localeCompare(b.cwd));
   return groups;
 }
 
@@ -162,9 +140,12 @@ export interface HeaderRow {
   readonly kind: 'header';
   readonly key: string;
   readonly cwd: string;
+  /** Sessions in the group — the full count, even when it is folded shut. */
   readonly count: number;
   /** Index into the group array — what the sticky header resolves against. */
   readonly group: number;
+  /** True when this group's sessions are folded away behind the header. */
+  readonly collapsed: boolean;
 }
 
 export interface SessionRow {
@@ -181,13 +162,32 @@ export type ListRow = HeaderRow | SessionRow;
  *
  * A virtualiser needs a single indexable sequence with a known height per
  * entry; nested arrays cannot be windowed without walking them. The `group`
- * index on every row is what lets the sticky header answer "which project am I
- * inside right now?" from a scroll offset alone.
+ * index on every row is what lets a header answer "which project am I inside
+ * right now?" from a scroll offset alone.
+ *
+ * A collapsed group contributes its header and none of its sessions. Dropping
+ * the rows here rather than hiding them in CSS is what keeps the virtualiser
+ * honest: its geometry is computed from this array, so a row that is present
+ * but invisible would still take up its height and leave a hole in the list.
+ * The header keeps the *full* count either way — the number is a fact about the
+ * project, not about how much of it is currently on screen.
  */
-export function flattenGroups(groups: readonly SessionGroup[]): readonly ListRow[] {
+export function flattenGroups(
+  groups: readonly SessionGroup[],
+  collapsed: ReadonlySet<string> = new Set(),
+): readonly ListRow[] {
   const rows: ListRow[] = [];
   groups.forEach((group, index) => {
-    rows.push({ kind: 'header', key: `h:${group.cwd}`, cwd: group.cwd, count: group.sessions.length, group: index });
+    const folded = collapsed.has(group.cwd);
+    rows.push({
+      kind: 'header',
+      key: `h:${group.cwd}`,
+      cwd: group.cwd,
+      count: group.sessions.length,
+      group: index,
+      collapsed: folded,
+    });
+    if (folded) return;
     for (const session of group.sessions) {
       // `sessionKey`, not `session.id`: ids are unique per profile, not per
       // machine (see the note at the top of this file), and two profiles

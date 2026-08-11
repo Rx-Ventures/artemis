@@ -10,10 +10,11 @@
  * which ends the current session. History you have to destroy your place to look
  * at is not history you can browse.
  *
- * The scoping was itself a fix for a real complaint, which is why these
- * assertions cover both halves rather than just the new one: every project is
- * listed, *and* the one you are in is still first. Losing the second half would
- * re-create the problem that caused the scoping.
+ * The scoping was itself a fix for a real complaint — an undifferentiated stream
+ * of every repository buried "what was I doing in *this* repo". What answers it
+ * now is recency plus a per-project fold, so the assertions below cover the
+ * order and the folding as well as the listing: the project you touched last
+ * leads, and any project can be put away without taking the others with it.
  *
  * Same caveat as the other component tests: `renderer/tsconfig.json` excludes
  * them, so `pnpm typecheck` never sees this file and the assertions are
@@ -87,7 +88,7 @@ beforeEach(() => {
     sessions: SESSIONS,
     sessionsLoading: false,
     sessionsError: null,
-    sessionsCollapsed: false,
+    collapsedProjects: [],
     resumeSessionId: null,
     permissionQueue: [],
     banners: [],
@@ -119,21 +120,45 @@ describe('the session list', () => {
     expect(screen.getByText('cli')).not.toBeNull();
   });
 
-  it('puts the current project first even when it is the stalest', () => {
+  it('orders projects by the most recent session, newest first', () => {
     mount(<SessionList />);
 
     const headings = screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent);
-    // /code/api was last touched at 10, against 90 and 50. Recency alone would
-    // bury it; the pin is what keeps "what was I doing in this repo" answerable
-    // without scrolling.
-    expect(headings[0]).toBe('api');
+    // /code/web was touched at 90, /code/cli at 50, /code/api at 10 — and
+    // /code/api is where the window is pointed, which now buys it nothing. The
+    // top of the list is wherever you were last, not wherever you are.
+    expect(headings).toEqual(['web', 'cli', 'api']);
   });
 
-  it('counts every session in the header, across all projects', () => {
+  it('folds one project without touching the others', () => {
     mount(<SessionList />);
 
-    const header = screen.getByRole('button', { expanded: true });
-    expect(within(header).getByText('·3')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /web/ }));
+
+    // `web`'s own session goes; every other project's stays. The heading
+    // remains, so the project has not disappeared — it is put away.
+    expect(screen.queryByText('Login redirect')).toBeNull();
+    expect(screen.getByText('Flag parsing')).not.toBeNull();
+    expect(screen.getByText('Adapter seam')).not.toBeNull();
+    expect(screen.getByText('web')).not.toBeNull();
+  });
+
+  it('keeps a folded project’s count on its heading', () => {
+    mount(<SessionList />);
+    fireEvent.click(screen.getByRole('button', { name: /web/ }));
+
+    const heading = screen.getByRole('button', { name: /web/ });
+    expect(heading.getAttribute('aria-expanded')).toBe('false');
+    expect(within(heading).getByText('·1')).not.toBeNull();
+  });
+
+  it('remembers which projects are folded', () => {
+    mount(<SessionList />);
+    fireEvent.click(screen.getByRole('button', { name: /web/ }));
+
+    // Stored as the shut ones, so a project nobody has touched — including one
+    // that first appears later — arrives open rather than folded away.
+    expect(useApp.getState().collapsedProjects).toEqual(['/code/web']);
   });
 
   it('carries the directory across when a row from another project is picked', () => {
