@@ -41,7 +41,9 @@ import {
   isProviderId,
   isSecretEnvKey,
   normalizeProfileColor,
+  normalizeProfilePlanId,
   profileColorProblem,
+  profilePlanIdProblem,
   type Attachment,
   type FileAttachment,
   type ImageAttachment,
@@ -56,6 +58,7 @@ import {
   type ProfilesDeleteRequest,
   type ProfilesListRequest,
   type ProfilesSuggestDirRequest,
+  type ProviderId,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
   type ProvidersModelsRequest,
@@ -520,6 +523,7 @@ function validateProfileDraft(value: unknown, field: string): ProfileDraft {
     configDir: requireConfigDir(draft['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(draft['publicEnv'], `${field}.publicEnv`),
     color: optionalColor(draft['color'], `${field}.color`),
+    planId: optionalPlanId(draft['planId'], providerId, `${field}.planId`),
   });
 }
 
@@ -541,6 +545,30 @@ function optionalColor(value: unknown, field: string): string | undefined {
   const problem = profileColorProblem(value);
   if (problem !== null) throw new ValidationError(field, problem);
   return normalizeProfileColor(value) ?? undefined;
+}
+
+/**
+ * Validate a pinned plan id against the plans Artemis knows.
+ *
+ * Rejected rather than dropped, on the same principle as the colour above: this
+ * boundary states what it accepts. The difference is what a wrong value costs —
+ * a bad colour shows the wrong swatch, whereas a plan id that quietly never
+ * matches leaves a user who *has* told Artemis their plan looking at a ranking
+ * that ignored them, with nothing on screen to explain why.
+ *
+ * The empty string is preserved rather than collapsed to `undefined`, because
+ * it is the patch vocabulary for unpinning. See {@link ProfilePatch.planId}.
+ */
+function optionalPlanId(
+  value: unknown,
+  providerId: ProviderId | undefined,
+  field: string,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string' && value.trim().length === 0) return '';
+  const problem = profilePlanIdProblem(value, providerId);
+  if (problem !== null) throw new ValidationError(field, problem);
+  return normalizeProfilePlanId(value, providerId) ?? undefined;
 }
 
 /**
@@ -573,6 +601,14 @@ function validateProfilePatch(value: unknown, field: string): ProfilePatch {
     configDir: optionalConfigDir(patch['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(patch['publicEnv'], `${field}.publicEnv`),
     color: optionalColor(patch['color'], `${field}.color`),
+    /*
+      No provider to check against here, unlike the draft: a patch names only
+      the fields it changes, and the profile it targets is the store's to
+      resolve. So this boundary checks the id is a plan Artemis knows at all,
+      and the store re-checks it against that profile's actual provider — the
+      same two-stage rule `configDir` follows.
+    */
+    planId: optionalPlanId(patch['planId'], undefined, `${field}.planId`),
   });
 }
 

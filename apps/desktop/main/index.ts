@@ -33,6 +33,7 @@ import { APP_NAME, previousUserDataDir } from './appNames.js';
 import { EngineHost } from './engine.js';
 import { forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
+import { startPlanUsagePolling } from './planUsagePoll.js';
 import {
   applySessionPolicy,
   hardenWebContents,
@@ -124,6 +125,7 @@ const devServerUrl = process.env['ELECTRON_RENDERER_URL'] ?? null;
 
 let ipcLayer: IpcLayer | null = null;
 let stopEventForwarding: (() => void) | null = null;
+let stopPlanUsagePolling: (() => void) | null = null;
 const engineHost = new EngineHost();
 
 /* -------------------------------------------------------------------------- */
@@ -262,6 +264,11 @@ async function bootstrap(): Promise<void> {
 
   ipcLayer = registerIpcHandlers({ engine: engineHost, policy });
   stopEventForwarding = forwardAgentEvents(engineHost);
+  // Reads every profile's plan limits on a timer, so the profile menu can say
+  // which account has room. Started after IPC so its first push has somewhere
+  // to land, and before the window so the schedule does not depend on how long
+  // the renderer takes to boot.
+  stopPlanUsagePolling = startPlanUsagePolling(engineHost);
 
   createWindow(policy);
 
@@ -291,6 +298,7 @@ app.on('before-quit', (event) => {
   // adapter make the app unquittable.
   event.preventDefault();
   stopEventForwarding?.();
+  stopPlanUsagePolling?.();
   ipcLayer?.dispose();
 
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));

@@ -36,6 +36,7 @@ import {
   isProviderId,
   isSecretEnvKey,
   normalizeProfileColor,
+  normalizeProfilePlanId,
 } from '@rx-artemis/protocol';
 import type {
   Profile,
@@ -273,6 +274,10 @@ export class ProfileStore {
         // nothing, so refusing to create the profile over one would fail the
         // request for the one field that does not matter.
         color: normalizeProfileColor(draft.color) ?? undefined,
+        // Same rule as the colour, for the same reason: a pin that names no
+        // known plan decides nothing except how a menu sorts, so it is dropped
+        // rather than made a reason to refuse creating the account.
+        planId: normalizeProfilePlanId(draft.planId, draft.providerId) ?? undefined,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -312,6 +317,15 @@ export class ProfileStore {
           patch.color === undefined
             ? current.color
             : (normalizeProfileColor(patch.color) ?? undefined),
+        // Omitted leaves the pin alone; the empty string unpins. Re-checked
+        // against the profile's *provider* rather than accepted as given: a
+        // patch that repoints `configDir` can move an account between
+        // providers, and a Codex plan left pinned on a Claude account would
+        // read as set in the editor while ranking nothing.
+        planId:
+          patch.planId === undefined
+            ? (normalizeProfilePlanId(current.planId, current.providerId) ?? undefined)
+            : (normalizeProfilePlanId(patch.planId, current.providerId) ?? undefined),
         updatedAt: this.#now(),
       };
 
@@ -589,6 +603,11 @@ function parseProfile(
     // written by an older build predates the field entirely. A colour that
     // does not parse simply is not one.
     color: normalizeProfileColor(raw['color']) ?? undefined,
+    // Re-checked on the way out for the same reasons as the colour, plus one
+    // of its own: the plan table changes as providers rename tiers, so a pin
+    // written by an older build can name a plan this one no longer knows. An
+    // unknown pin becomes no pin, which falls back to the reported family.
+    planId: normalizeProfilePlanId(raw['planId'], providerId) ?? undefined,
     createdAt: typeof createdAt === 'number' ? createdAt : undefined,
     updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
   };

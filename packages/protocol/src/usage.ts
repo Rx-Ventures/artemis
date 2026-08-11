@@ -7,6 +7,10 @@
  * shapes so the UI has exactly one thing to render.
  */
 
+import type { ProfileId } from './ids.js';
+import type { PlanCapacity, ResolvedPlanWeight } from './planCapacity.js';
+import type { ProviderId } from './provider.js';
+
 /**
  * Token counts for a run, a turn or a single model.
  *
@@ -106,6 +110,7 @@ export type PlanUsageWindowId =
   | 'seven_day_oauth_apps'
   | 'model_scoped'
   | 'extra_usage'
+  | 'spend'
   | (string & {});
 
 /**
@@ -191,4 +196,275 @@ export function bindingWindow(usage: PlanUsage | null | undefined): PlanUsageWin
     if (worst === null || window.utilization > (worst.utilization ?? -1)) worst = window;
   }
   return worst;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Headroom — which account has room left                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How often plan usage is re-read for every profile.
+ *
+ * Five minutes is a compromise between two real costs. A reading is only
+ * meaningful for minutes — a long turn can move the 5-hour window several
+ * points — so polling much slower would recommend an account on numbers that
+ * have moved. But each reading spawns the provider's CLI, once per profile, so
+ * polling much faster would put a steady drip of subprocesses on the machine
+ * for a figure nobody is looking at most of the time.
+ *
+ * Lives here rather than in the poller because the renderer needs it too: it is
+ * what {@link PLAN_USAGE_MAX_AGE_MS} is defined in terms of.
+ */
+export const PLAN_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * How old a reading may be and still be worth recommending on.
+ *
+ * Three missed polls. The poll is the only thing that keeps these figures
+ * current, and it can stall for reasons the renderer cannot see — the machine
+ * slept, a CLI hung, the provider stopped answering. A recommendation is a
+ * claim about *right now*, so it expires rather than quietly ageing: an account
+ * named on twenty-minute-old numbers may have been drained since by another
+ * window, another machine, or the user's own terminal.
+ *
+ * Note this governs the *recommendation* only. A stale reading is still worth
+ * showing in a meter, where it carries its own "4m ago" — the difference is
+ * that the meter reports and the recommendation advises.
+ */
+export const PLAN_USAGE_MAX_AGE_MS = 3 * PLAN_USAGE_POLL_INTERVAL_MS;
+
+/**
+ * How much of a plan is left, as a percentage of its tightest window.
+ *
+ * The complement of {@link bindingWindow}, and it uses that window rather than
+ * an average for the same reason: a plan is as free as its most-consumed limit,
+ * so an account at 5% weekly and 98% five-hourly has 2% of room, not 48%.
+ *
+ * `null` when there is nothing to answer from — no reading, no plan limits, or
+ * a plan whose windows all report `null` utilization. That is distinct from
+ * `0`, which is a plan that is genuinely full.
+ */
+export function planHeadroom(usage: PlanUsage | null | undefined): number | null {
+  const binding = bindingWindow(usage);
+  if (binding === null || binding.utilization === null) return null;
+  return 100 - binding.utilization;
+}
+
+/** One profile's latest reading, as {@link recommendProfile} takes them. */
+export interface ProfilePlanUsage {
+  readonly profileId: ProfileId;
+  readonly usage: PlanUsage | null | undefined;
+  /**
+   * Which provider the account belongs to. Required for weighting: plan weights
+   * are ratios against *that provider's* baseline plan, and are meaningless
+   * across two. See {@link PlanCapacity}.
+   */
+  readonly providerId?: ProviderId;
+  /**
+   * How large this plan is next to its provider's baseline, from
+   * {@link resolvePlanWeight}. Omitted, or `null` inside, when the plan
+   * publishes no such ratio — Team and Enterprise meter per seat or against a
+   * contract pool and are not sold as a multiple of anything.
+   */
+  readonly capacity?: ResolvedPlanWeight | null;
+}
+
+/**
+ * What the ranking was actually able to compare, weakest claim last.
+ *
+ * The section's wording turns on this, and getting it wrong is a confident lie
+ * about someone's billing:
+ *
+ * - `same-plan`  — every candidate is on one plan, so percentages describe one
+ *                  ceiling and the winner genuinely has the most room.
+ * - `weighted`   — the plans differ but every one publishes its size relative to
+ *                  its provider's baseline, so headroom is scaled by that ratio
+ *                  and the winner has the most *capacity*. See
+ *                  {@link PLAN_CAPACITIES} for what "published" is allowed to
+ *                  mean here.
+ * - `percentage` — at least one plan publishes no ratio (Team, Enterprise), or
+ *                  the candidates span two providers whose baselines have no
+ *                  published rate between them. The ranking still happens and is
+ *                  still useful; it is a ranking of shares, and the UI must say
+ *                  so rather than imply capacity.
+ */
+export type PlanRecommendationBasis = 'same-plan' | 'weighted' | 'percentage';
+
+/** Which account has the most room, and what decides it. */
+export interface PlanRecommendation {
+  readonly profileId: ProfileId;
+  /** Percentage of the tightest window still unused, 0–100. */
+  readonly headroom: number;
+  /**
+   * The window that sets that number — the limit that would stop this account
+   * first. Carried so the UI can name it: "68% free · 5 hours" says something
+   * "68% free" does not, because the two windows reset hours apart.
+   */
+  readonly binding: PlanUsageWindow;
+  /** How many accounts it was chosen from. Never less than two — see below. */
+  readonly candidates: number;
+  /** The winner's plan tier as the provider names it, when it names one. */
+  readonly subscriptionType?: string;
+  /**
+   * The winner's plan, when one could be identified. `Max 20x` rather than the
+   * provider's bare `max` — which is the whole point of pinning it.
+   */
+  readonly plan?: PlanCapacity;
+  /**
+   * True when the winner's tier was inferred from an ambiguous reported string
+   * rather than pinned on the profile.
+   *
+   * Both providers report a plan *family*: `max` covers Max 5x and Max 20x,
+   * `pro` covers both Codex Pro tiers, and the members differ fourfold. The
+   * inference takes the floor of the family, so an assumed weight understates
+   * an account and never flatters it — but a ranking resting on one is a
+   * ranking the user can improve by telling Artemis which plan it actually is.
+   */
+  readonly assumedPlan: boolean;
+  /**
+   * What the comparison was able to be. See {@link PlanRecommendationBasis} —
+   * the UI's wording turns on this and must not overstate it.
+   */
+  readonly basis: PlanRecommendationBasis;
+}
+
+/**
+ * The account with the most room left, or `null` when that is not a question.
+ *
+ * ## What is deliberately *not* a candidate
+ *
+ * **A profile with no plan limits.** An API-key, Bedrock or Vertex profile
+ * reports `available: false` because it is metered rather than capped, which
+ * reads as "infinite room" and is the single worst thing this could recommend:
+ * the answer to "my plan is full" would become "switch to the one that bills
+ * per token", silently, at whatever the next turn costs. Excluded outright.
+ *
+ * **A stale reading.** See {@link PLAN_USAGE_MAX_AGE_MS}. An account that has
+ * not been re-read in three poll cycles is not evidence about now.
+ *
+ * **A reading with no usable number.** A plan whose every window reports `null`
+ * utilization cannot be ranked against one that reports figures.
+ *
+ * ## Why two candidates are required
+ *
+ * With one rankable account there is no choice to make, and a "Recommended"
+ * heading over the only profile that has a plan is a recommendation in form
+ * only — it repeats the row below it and the meter beside it. The section earns
+ * its space the moment a second account exists, which is also the first moment
+ * switching is a thing the user can do.
+ *
+ * Ties keep the caller's order rather than being broken arbitrarily: two
+ * accounts at exactly the same headroom would otherwise swap the label between
+ * them on alternating polls, which reads as churn rather than as a tie.
+ *
+ * ## How the winner is chosen
+ *
+ * Two passes, because the *basis* has to be settled before the ranking can be:
+ * whether a plan's published size may be used depends on every other candidate
+ * having one too, and on all of them being the same provider's. Ranking by
+ * weight and then discovering the set was unweighable would leave a winner
+ * chosen on a rule the UI is about to say it did not use.
+ *
+ * With a basis of `weighted`, accounts are ordered by `headroom × weight` —
+ * percentage-points of the provider's *baseline* plan. A Max 20x at 30% free
+ * scores 600 against a Pro at 90% free scoring 90, which is the comparison the
+ * bare percentages invert. Otherwise the order is headroom alone.
+ */
+export function recommendProfile(
+  entries: readonly ProfilePlanUsage[],
+  options: { readonly now: number; readonly maxAgeMs?: number },
+): PlanRecommendation | null {
+  const maxAge = options.maxAgeMs ?? PLAN_USAGE_MAX_AGE_MS;
+
+  /** Everything that survived the exclusions, with what it needs to be ranked. */
+  const ranked: {
+    readonly entry: ProfilePlanUsage;
+    readonly usage: PlanUsage;
+    readonly binding: PlanUsageWindow;
+    readonly headroom: number;
+  }[] = [];
+
+  for (const entry of entries) {
+    const usage = entry.usage;
+    if (!usage?.available) continue;
+    // A reading from the future is a clock that disagrees with itself, not a
+    // fresh one — `now - fetchedAt` is clamped at zero rather than negative so
+    // such a reading is treated as current instead of infinitely stale.
+    if (Math.max(0, options.now - usage.fetchedAt) > maxAge) continue;
+
+    const binding = bindingWindow(usage);
+    if (binding === null || binding.utilization === null) continue;
+
+    ranked.push({ entry, usage, binding, headroom: 100 - binding.utilization });
+  }
+
+  if (ranked.length < 2) return null;
+
+  const basis = basisFor(ranked.map((r) => r.entry));
+
+  let best = ranked[0];
+  if (best === undefined) return null;
+  for (const candidate of ranked.slice(1)) {
+    // Strictly greater: the first entry at a given score keeps the title, which
+    // is what stops two tied accounts trading the label on alternating polls.
+    if (scoreOf(candidate, basis) > scoreOf(best, basis)) best = candidate;
+  }
+
+  const capacity = best.entry.capacity ?? null;
+  return {
+    profileId: best.entry.profileId,
+    headroom: best.headroom,
+    binding: best.binding,
+    candidates: ranked.length,
+    assumedPlan: capacity?.assumed ?? false,
+    basis,
+    ...(best.usage.subscriptionType === undefined
+      ? {}
+      : { subscriptionType: best.usage.subscriptionType }),
+    ...(capacity === null ? {} : { plan: capacity.plan }),
+  };
+}
+
+/** Headroom scaled by plan size, or plain headroom when that is not available. */
+function scoreOf(
+  candidate: { readonly entry: ProfilePlanUsage; readonly headroom: number },
+  basis: PlanRecommendationBasis,
+): number {
+  if (basis !== 'weighted') return candidate.headroom;
+  return candidate.headroom * (candidate.entry.capacity?.weight ?? 1);
+}
+
+/**
+ * What this set of accounts can honestly be compared on.
+ *
+ * The order of the tests is the order of the claims, strongest first. Note that
+ * `same-plan` outranks `weighted` even though both are true comparisons: two
+ * accounts on one plan need no ratio at all, so saying "most room" is both
+ * stronger and simpler than saying it after multiplying everything by the same
+ * number.
+ */
+function basisFor(entries: readonly ProfilePlanUsage[]): PlanRecommendationBasis {
+  const plans = new Set<string>();
+  const providers = new Set<string>();
+  let everyPlanWeighed = true;
+
+  for (const entry of entries) {
+    const capacity = entry.capacity ?? null;
+    // A plan nobody could identify, or one sold as a seat or a credit pool
+    // rather than as a multiple of anything. Either way there is no ratio.
+    if (capacity === null || capacity.weight === null) everyPlanWeighed = false;
+    plans.add(capacity?.plan.id ?? entry.usage?.subscriptionType?.trim().toLowerCase() ?? 'unknown');
+    providers.add(entry.providerId ?? 'unknown');
+  }
+
+  if (plans.size === 1 && !plans.has('unknown')) return 'same-plan';
+  /*
+    Weights are ratios against one provider's baseline plan, and no provider
+    publishes a rate between its baseline and another provider's. A Claude Pro
+    window and a Codex Plus window both weigh 1 and are not the same size, so a
+    mixed-provider set falls back to percentages however well each side is
+    documented.
+  */
+  if (everyPlanWeighed && providers.size === 1 && !providers.has('unknown')) return 'weighted';
+  return 'percentage';
 }

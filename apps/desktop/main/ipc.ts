@@ -50,6 +50,7 @@ import {
   type AgentEvent,
   type IpcChannel,
   type IpcHandlerResult,
+  type IpcPushChannel,
   type IpcRequest,
   type IpcResponse,
   type Unsubscribe,
@@ -637,6 +638,30 @@ function assertTrustedSender(event: IpcMainInvokeEvent, policy: SecurityPolicy):
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Deliver one payload to every open window.
+ *
+ * Deliberately dumb: it does not scan, because the two callers scan under
+ * *different* policies and which one applies is a property of the payload
+ * rather than of the delivery. Callers scan first, then hand the result here.
+ *
+ * A window closing mid-send is routine — a user quitting while a run streams —
+ * so a failed delivery is logged at debug and the remaining windows still get
+ * theirs.
+ */
+export function broadcast(channel: IpcPushChannel, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    const contents: WebContents = window.webContents;
+    if (contents.isDestroyed()) continue;
+    try {
+      contents.send(channel, payload);
+    } catch (error) {
+      log.debug(`Failed to deliver a ${channel} payload to a window`, error);
+    }
+  }
+}
+
+/**
  * Push the engine's event stream at every open window.
  *
  * Events are scanned before they are sent, with the looser
@@ -659,17 +684,7 @@ export function forwardAgentEvents(engine: EngineHost): Unsubscribe {
       return;
     }
 
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (window.isDestroyed()) continue;
-      const contents: WebContents = window.webContents;
-      if (contents.isDestroyed()) continue;
-      try {
-        contents.send(IPC_PUSH.agentEvent, event);
-      } catch (error) {
-        // A window closing mid-send is routine, not exceptional.
-        log.debug('Failed to deliver an agent event to a window', error);
-      }
-    }
+    broadcast(IPC_PUSH.agentEvent, event);
   };
 
   return engine.require().subscribe(send);

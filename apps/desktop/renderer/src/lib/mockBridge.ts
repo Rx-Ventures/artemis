@@ -850,6 +850,40 @@ export function createMockBridge(): ArtemisBridge {
         refreshedProfiles.add(profileId);
         return ok({ usage: planUsageFor(profileId, Date.now(), 3) });
       },
+
+      /*
+       * The main process's poller, minus the subprocesses.
+       *
+       * Runs far faster than the real five minutes — a dev session is not five
+       * minutes long, and the point of having it here at all is that the
+       * profile menu's Recommended section can be *seen*. It also pushes on a
+       * short delay after subscribing rather than waiting a full interval, for
+       * the same reason.
+       *
+       * Each profile's numbers drift by a different amount, which is what makes
+       * the recommendation mean something: identical readings would make every
+       * account tie and the winner would always be whichever came first in the
+       * list, hiding the ranking this section exists to show.
+       */
+      onChange: (listener): Unsubscribe => {
+        let tick = 0;
+        const push = (): void => {
+          tick += 1;
+          for (const [index, profile] of profiles.entries()) {
+            refreshedProfiles.add(profile.id);
+            // Alternating sign, so the leader changes as the mock polls and the
+            // section is seen updating rather than only appearing.
+            const drift = index * 9 * (tick % 2 === 0 ? -1 : 1);
+            listener({ profileId: profile.id, usage: planUsageFor(profile.id, Date.now(), drift) });
+          }
+        };
+        const first = setTimeout(push, 1_500);
+        const timer = setInterval(push, 20_000);
+        return () => {
+          clearTimeout(first);
+          clearInterval(timer);
+        };
+      },
     },
 
     /*
@@ -899,7 +933,25 @@ export function createMockBridge(): ArtemisBridge {
    */
   function planUsageFor(profileId: string, fetchedAt: number, drift: number): PlanUsage {
     const provider = profiles.find((p) => p.id === profileId)?.providerId;
-    return provider === 'codex' ? mockCodexPlanUsage(fetchedAt, drift) : mockPlanUsage(fetchedAt, drift);
+    if (provider === 'codex') return mockCodexPlanUsage(fetchedAt, drift);
+
+    /*
+     * The two demo accounts are on *different* plans — a personal subscription
+     * and a work one, which is the realistic shape of having two accounts at
+     * all, and the case the profile menu's recommendation has to think about.
+     *
+     * `pro` against `max` specifically, because both plans publish their size
+     * relative to Pro and so the ranking runs *weighted*: the account with the
+     * smaller share free can win, which is the one outcome that looks like a
+     * bug if the tooltip has not explained it. A pairing where either side had
+     * no published ratio — a Team seat, say — would fall back to comparing
+     * percentages and leave that arithmetic unseen in dev.
+     */
+    const reading = mockPlanUsage(fetchedAt, drift);
+    return {
+      ...reading,
+      subscriptionType: profileId === 'demo-work' ? 'pro' : 'max',
+    };
   }
 }
 
