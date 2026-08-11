@@ -35,6 +35,7 @@ import type {
   JsonObject,
   JsonValue,
   PermissionRequest,
+  QuestionAnswer,
   RunEndReason,
   StopReason,
   ToolEndStatus,
@@ -110,13 +111,30 @@ export interface ToolItem extends ItemBase {
   readonly parentToolCallId?: string;
 }
 
-/** A permission prompt, kept in the transcript so the decision is a record. */
+/**
+ * A parked request, kept in the transcript so the decision is a record.
+ *
+ * Covers both things a provider can park on: an approval, and a question (when
+ * `request.question` is set). They share an item because they share a
+ * lifecycle — one pending card that turns into one settled record — and because
+ * the transcript's job is the same either way: say what was asked and what the
+ * user answered, at the point in the conversation where it happened.
+ */
 export interface PermissionItem extends ItemBase {
   readonly kind: 'permission';
   readonly requestId: string;
   readonly request: PermissionRequest;
-  readonly state: 'pending' | 'allowed' | 'denied';
+  /** `answered` is the question counterpart of `allowed`. */
+  readonly state: 'pending' | 'allowed' | 'denied' | 'answered' | 'skipped';
   readonly note?: string;
+  /**
+   * What was chosen, for a settled question.
+   *
+   * Kept rather than flattened into {@link note} so the record can show the
+   * questions as they were asked with the choices marked — the same card,
+   * read-only — instead of a sentence that loses which options were on offer.
+   */
+  readonly answers?: readonly QuestionAnswer[];
 }
 
 /** Engine-level chatter: session start, re-attach, dropped events. */
@@ -437,8 +455,13 @@ export class TranscriptModel {
     return id;
   }
 
-  /** Record the user's answer to a permission prompt. */
-  resolvePermission(requestId: string, state: 'allowed' | 'denied', note?: string): void {
+  /** Record the user's answer to a parked request. */
+  resolvePermission(
+    requestId: string,
+    state: Exclude<PermissionItem['state'], 'pending'>,
+    note?: string,
+    answers?: readonly QuestionAnswer[],
+  ): void {
     const id = `p:${requestId}`;
     const existing = this.items.get(id);
     if (!existing || existing.kind !== 'permission') return;
@@ -446,6 +469,7 @@ export class TranscriptModel {
       ...existing,
       state,
       ...(note === undefined ? {} : { note }),
+      ...(answers === undefined ? {} : { answers }),
     });
   }
 

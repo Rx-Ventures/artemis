@@ -80,12 +80,14 @@ import type {
   AgentEvent,
   Attachment,
   Capabilities,
+  JsonObject,
   PermissionDecision,
   PermissionRequestId,
   PlanUsage,
   ProfileId,
   ProviderEffortOption,
   ProviderModelOption,
+  QuestionPrompt,
   RunEndReason,
   RunStatus,
   SessionId,
@@ -1435,6 +1437,15 @@ interface PendingPermission {
   readonly deferred: Deferred<PermissionResult>;
   readonly toolName: string;
   readonly toolUseID: string | undefined;
+  /**
+   * The arguments the call was parked on, and the questions decoded from them.
+   *
+   * Kept only so an answer can be written back into the tool's own input shape
+   * — see {@link ToPermissionResultOptions.question}. Both are undefined for
+   * every request that is an ordinary approval, which is nearly all of them.
+   */
+  readonly input: JsonObject;
+  readonly question: QuestionPrompt | undefined;
 }
 
 interface ClaudeRunDeps {
@@ -1684,6 +1695,8 @@ class ClaudeRun implements Run {
     const { result, droppedUpdates } = toPermissionResult(decision, {
       toolUseID: entry.toolUseID,
       toolName: entry.toolName,
+      question: entry.question,
+      input: entry.input,
     });
 
     if (droppedUpdates.length > 0) {
@@ -1984,10 +1997,24 @@ class ClaudeRun implements Run {
     const requestId: PermissionRequestId = `${this.runId}:perm:${String(this.#permissionCounter)}`;
     const deferred = createDeferred<PermissionResult>();
 
+    const request = buildPermissionRequest({
+      id: requestId,
+      runId: this.runId,
+      toolName,
+      input,
+      info: options,
+      requestedAt: this.#deps.now(),
+    });
+
     this.#pending.set(requestId, {
       deferred,
       toolName,
       toolUseID: options.toolUseID,
+      // The request's own coerced copy, not the raw SDK object: it is what the
+      // renderer was shown, and an answer has to be written back into the same
+      // arguments the user was answering.
+      input: request.input,
+      question: request.question,
     });
 
     // The provider can withdraw the request (the turn was interrupted, the tool
@@ -2004,14 +2031,7 @@ class ClaudeRun implements Run {
       type: 'permission.request',
       ...nextEventEnvelope(this.#state),
       requestId,
-      request: buildPermissionRequest({
-        id: requestId,
-        runId: this.runId,
-        toolName,
-        input,
-        info: options,
-        requestedAt: this.#deps.now(),
-      }),
+      request,
     });
 
     try {

@@ -99,6 +99,7 @@ import {
   CpuIcon,
   KeyRoundIcon,
   ListTreeIcon,
+  MessageCircleQuestionMarkIcon,
   ShieldAlertIcon,
   ShieldIcon,
   ZapIcon,
@@ -1037,11 +1038,22 @@ function RunSegment(): ReactElement | null {
   const live = usePane(isLive);
   const status = usePane((s) => s.run?.status ?? null);
   const pending = usePane((s) => s.permissionQueue.length);
+  // Amber is the app's alarm colour and an approval is what earns it. A parked
+  // question is not a risk decision, so a queue that holds only questions says
+  // so in cyan — otherwise "the agent asked which library to use" looks
+  // identical to "something wants to run `rm -rf`".
+  const asking = usePane((s) => s.permissionQueue.every((r) => r.question !== undefined));
 
   if (pending > 0) {
+    const Icon = asking ? MessageCircleQuestionMarkIcon : ShieldAlertIcon;
     return (
-      <span className="flex shrink-0 items-center gap-1 px-1.5 font-mono text-2xs text-amber">
-        <ShieldAlertIcon className="size-3" aria-hidden="true" />
+      <span
+        className={cn(
+          'flex shrink-0 items-center gap-1 px-1.5 font-mono text-2xs',
+          asking ? 'text-cyan' : 'text-amber',
+        )}
+      >
+        <Icon className="size-3" aria-hidden="true" />
         {pending} awaiting you
       </span>
     );

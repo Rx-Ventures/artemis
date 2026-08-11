@@ -84,7 +84,7 @@ import {
 import { isAbsolutePath } from '../lib/paths';
 import { newId } from '../lib/id';
 import { sessionKey } from '../lib/sessionGroups';
-import type { TranscriptModel } from './transcript';
+import type { PermissionItem, TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
   createPane,
@@ -3737,7 +3737,7 @@ function dropPermissionRequest(requestId: string, pane: Pane): void {
 }
 
 /**
- * Answer a permission prompt.
+ * Answer a parked request — an approval or a question.
  *
  * @returns `null` when the decision landed, or a sentence describing why it did
  *          not. The caller renders that sentence *on the prompt itself*. This
@@ -3756,6 +3756,11 @@ export async function respondToPermission(
   const run = paneState(pane).run;
   if (!bridge || !run) return null;
 
+  // Read before the await: the queue is emptied on the way out, and the record
+  // written afterwards still has to know which kind of card it is settling.
+  const isQuestion =
+    paneState(pane).permissionQueue.find((r) => r.id === requestId)?.question !== undefined;
+
   const result = await call(() =>
     bridge.runs.respondToPermission({ runId: run.runId, requestId, decision }),
   );
@@ -3773,34 +3778,66 @@ export async function respondToPermission(
     return result.error.message;
   }
 
+  const record = recordFor(decision, isQuestion);
   pane.transcript.resolvePermission(
     requestId,
-    decision.behavior === 'allow' ? 'allowed' : 'denied',
-    decision.behavior === 'deny' ? decision.message : describeScope(decision.scope),
+    record.state,
+    record.note,
+    decision.behavior === 'allow' ? decision.answers : undefined,
   );
 
   dropPermissionRequest(requestId, pane);
   return null;
 }
 
+/**
+ * How a settled request reads in the transcript.
+ *
+ * A question's outcomes are not an approval's. Both leave through `allow`, but
+ * "allowed once" is meaningless for an interview and "denied" overstates a
+ * shrug — so the record says `answered` or `skipped`, and reserves the
+ * permission vocabulary for the requests that are actually about permission.
+ */
+function recordFor(
+  decision: PermissionDecision,
+  isQuestion: boolean,
+): { state: Exclude<PermissionItem['state'], 'pending'>; note: string | undefined } {
+  if (decision.behavior === 'deny') return { state: 'denied', note: decision.message };
+  if (!isQuestion) return { state: 'allowed', note: describeScope(decision.scope) };
+  const answered = (decision.answers ?? []).some(
+    (a) => a.options.length > 0 || (a.notes?.trim().length ?? 0) > 0,
+  );
+  return answered
+    ? { state: 'answered', note: undefined }
+    : { state: 'skipped', note: 'Left unanswered. The agent was told to use its own judgement.' };
+}
+
 /** Neutral denial handed back to the model when the user gives no reason. */
 export const DEFAULT_DENIAL = 'The user denied this tool call.';
 
 /**
- * Deny the oldest outstanding prompt.
+ * Resolve the oldest outstanding prompt the safe way.
  *
- * Bound to Escape, which therefore means "deny" while anything is parked and
- * "interrupt the run" otherwise. Denying is the safe answer *and* it unblocks
- * the provider, so the reflex to press Escape resolves the run instead of
- * stranding it — the same reasoning the modal used, kept now that the prompt is
- * inline and Escape is no longer captured by an overlay.
+ * Bound to Escape, which therefore resolves a parked request while one exists
+ * and interrupts the run otherwise. Escape *has* to settle it: the provider is
+ * blocked with no deadline, so the reflex that means "get this off my screen"
+ * must unblock the run rather than strand it.
  *
- * @returns true when there was something to deny.
+ * What "safe" means depends on what is parked. For an approval it is a denial
+ * — the tool does not run. For a question there is nothing to refuse, and a
+ * denial would hand the model a rejection it never asked for; the safe answer
+ * is to skip, which tells it the questions went unanswered and lets it carry on
+ * using its own judgement.
+ *
+ * @returns true when there was something to resolve.
  */
 export async function denyPendingPermission(pane: Pane = focusedPane()): Promise<boolean> {
   const request = pendingPermission(paneState(pane));
   if (!request) return false;
-  await respondToPermission(request.id, { behavior: 'deny', message: DEFAULT_DENIAL }, pane);
+  const decision: PermissionDecision = request.question
+    ? { behavior: 'allow', answers: [] }
+    : { behavior: 'deny', message: DEFAULT_DENIAL };
+  await respondToPermission(request.id, decision, pane);
   return true;
 }
 

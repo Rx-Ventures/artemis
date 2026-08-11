@@ -354,6 +354,68 @@ export function createMockBridge(): ArtemisBridge {
       durationMs: 320,
     });
 
+    /*
+     * The other thing a provider can park on: a question.
+     *
+     * It rides the permission wire — that callback is the only place a provider
+     * can hand control back mid-turn — so without a scripted one here the
+     * question card is unreachable in dev, and the only way to see it is to run
+     * a real agent and hope it asks something.
+     */
+    const answered = await askPermission(run, {
+      id: newId('perm'),
+      runId: run.runId,
+      toolName: 'AskUserQuestion',
+      input: {},
+      toolCallId: newId('call'),
+      requestedAt: Date.now(),
+      question: {
+        questions: [
+          {
+            question: 'The failing test looks stale. How should I handle it?',
+            header: 'Approach',
+            multiSelect: false,
+            options: [
+              {
+                label: 'Fix the test',
+                description: 'Update the assertion to match the new interrupt behaviour.',
+                preview:
+                  "it('emits tool.end on interrupt', () => {\n  expect(events.at(-1)).toMatchObject({ type: 'tool.end', status: 'denied' })\n})",
+              },
+              {
+                label: 'Fix the code',
+                description: 'Treat the assertion as correct and change the adapter instead.',
+              },
+              {
+                label: 'Leave it',
+                description: 'Report the failure and move on without touching either.',
+              },
+            ],
+          },
+          {
+            question: 'Which checks should I run before I hand this back?',
+            header: 'Checks',
+            multiSelect: true,
+            options: [
+              { label: 'lint', description: 'ESLint over the changed files.' },
+              { label: 'types', description: 'A full `tsc -b` across the workspace.' },
+              { label: 'tests', description: 'The whole suite, every package.' },
+            ],
+          },
+        ],
+      },
+    });
+    if (run.cancelled) return finish(run, 'interrupted');
+
+    await typeOut(
+      run,
+      newId('msg'),
+      0,
+      (answered.behavior === 'allow' ? answered.answers ?? [] : []).length > 0
+        ? 'Thanks — taking that route.'
+        : 'No answer, so I will use my own judgement.',
+    );
+
     const bashCall = newId('call');
     const decision = await askPermission(run, {
       id: newId('perm'),
