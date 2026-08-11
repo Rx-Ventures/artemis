@@ -63,6 +63,7 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
 } from '@rx-apollo/protocol';
 
@@ -283,6 +284,7 @@ const bridge: ApolloBridge = Object.freeze({
   workspace: Object.freeze({
     pickDirectory: (request: WorkspacePickDirectoryRequest) =>
       invoke(IPC.workspacePickDirectory, request),
+    describe: (request: WorkspaceDescribeRequest) => invoke(IPC.workspaceDescribe, request),
   }),
 
   /**

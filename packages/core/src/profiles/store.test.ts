@@ -125,6 +125,23 @@ describe('ProfileStore — create', () => {
     await expect(store.create(draft({ label: '   ' }))).rejects.toBeInstanceOf(ProfileError);
   });
 
+  it('stores a colour normalised, and none at all by default', async () => {
+    const plain = await store.create(draft({ label: 'No colour' }));
+    expect(plain.color).toBeUndefined();
+
+    const coloured = await store.create(draft({ label: 'Work', color: '#ABC' }));
+    expect(coloured.color).toBe('#aabbcc');
+  });
+
+  it('drops an unusable colour instead of failing the whole create', async () => {
+    // It decides nothing about how a run behaves, so refusing to create the
+    // profile over one would fail the request for the only field that does not
+    // matter. Every field that *does* matter still rejects.
+    const profile = await store.create(draft({ color: 'rebeccapurple' }));
+    expect(profile.color).toBeUndefined();
+    expect(profile.label).toBe('Work');
+  });
+
   it('refuses an unknown provider', async () => {
     await expect(
       store.create(draft({ providerId: 'nope' as ProfileDraft['providerId'] })),
@@ -243,6 +260,24 @@ describe('ProfileStore — read', () => {
 
     await expect(new ProfileStore({ userDataDir }).list()).rejects.toBeInstanceOf(ProfileError);
   });
+
+  it('re-normalises a hand-edited colour, and drops one that is not a colour', async () => {
+    // The file is editable by hand and the value ends up in a `style`
+    // attribute, so it is checked on the way *out* as well as on the way in —
+    // and a record written before the field existed simply has no colour.
+    const created = await store.create(draft());
+    const raw: { profiles: Record<string, unknown>[] } = JSON.parse(await readDocument());
+    raw.profiles[0]!['color'] = '#ABC';
+    raw.profiles.push({ ...raw.profiles[0], id: 'id2', color: 'url(javascript:alert(1))' });
+    await writeFile(path.join(userDataDir, PROFILE_STORE_FILE), JSON.stringify(raw));
+
+    const profiles = await new ProfileStore({ userDataDir }).list();
+    expect(profiles[0]?.color).toBe('#aabbcc');
+    expect(profiles[1]?.color).toBeUndefined();
+    // The rest of the record is untouched — a bad colour is not a bad profile.
+    expect(profiles[1]?.id).toBe('id2');
+    expect(created.id).toBe('id1');
+  });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -341,6 +376,19 @@ describe('ProfileStore — update', () => {
 
   it('rejects an unknown id', async () => {
     await expect(store.update('nope', { label: 'x' })).rejects.toBeInstanceOf(ProfileError);
+  });
+
+  it('sets, keeps and clears the colour', async () => {
+    const created = await store.create(draft({ color: '#7c8cff' }));
+
+    // Omitted: unchanged, like every other field.
+    expect((await store.update(created.id, { label: 'Renamed' })).color).toBe('#7c8cff');
+
+    // Given: replaced, normalised.
+    expect((await store.update(created.id, { color: '#ABC' })).color).toBe('#aabbcc');
+
+    // Empty string: removed. A patch has no other way to say "back to absent".
+    expect((await store.update(created.id, { color: '' })).color).toBeUndefined();
   });
 });
 

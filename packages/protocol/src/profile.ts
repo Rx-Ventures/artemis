@@ -1,11 +1,14 @@
 /**
- * Profiles: a label and a config directory.
+ * Profiles: a label, a config directory, and optionally a colour.
  *
  * A profile is how Apollo switches accounts, and it holds exactly two things
- * the user chose: what to call it, and which directory the provider's CLI keeps
- * its state in. Everything else — which account, which plan, which credential —
- * is a property of that directory, established by the user running the
- * provider's own login against it.
+ * the user chose that decide *behaviour*: what to call it, and which directory
+ * the provider's CLI keeps its state in. Everything else — which account, which
+ * plan, which credential — is a property of that directory, established by the
+ * user running the provider's own login against it.
+ *
+ * The colour is the one addition that decides nothing, and that is why it is
+ * allowed to exist: see {@link Profile.color}.
  *
  * ## Why there is no credential here
  *
@@ -87,6 +90,29 @@ export interface Profile {
    */
   readonly publicEnv: Readonly<Record<string, string>>;
 
+  /**
+   * A colour the user picked for this profile, as `#rrggbb`, or absent.
+   *
+   * Purely a display hint, and deliberately so: it is the only field on a
+   * profile that changes nothing about what a run does. Which account is
+   * billed for the next prompt is the single most consequential thing a
+   * profile decides and the least visible — it is a word in a status bar and a
+   * word at the end of a sidebar row, both of which read as ordinary text
+   * among other ordinary text. A colour is pre-attentive, so "am I about to
+   * spend the work account?" is answered by a glance rather than by reading.
+   *
+   * Optional, and staying optional. A profile with no colour renders exactly
+   * as it did before this field existed — no palette is assigned by default,
+   * because a colour Apollo chose says nothing the label does not already say,
+   * and it would make the profiles that *do* carry a deliberate colour
+   * indistinguishable from the ones that never got one.
+   *
+   * Normalise with {@link normalizeProfileColor} before writing. A profile
+   * record is JSON on disk and a user can edit it, so — as with `configDir` —
+   * the check happens on the way in and again on the way out.
+   */
+  readonly color?: string;
+
   /** Creation time, ms since epoch. */
   readonly createdAt?: number;
   /** Last modification time, ms since epoch. */
@@ -110,12 +136,19 @@ export interface ProfileMetadata {
   readonly providerId: ProviderId;
   /** Absolute path. See {@link Profile.configDir}. */
   readonly configDir: string;
+  /** `#rrggbb`, or absent. See {@link Profile.color}. */
+  readonly color?: string;
 }
 
 /** Fields the renderer supplies when creating a profile. */
 export interface ProfileDraft {
   readonly label: string;
   readonly providerId: ProviderId;
+  /**
+   * Optional swatch colour. Any form {@link normalizeProfileColor} accepts;
+   * it is stored normalised. Omit for no colour.
+   */
+  readonly color?: string;
   /**
    * Absolute path to the config directory. Required — a profile with no
    * directory has no account and no history, and guessing one on the user's
@@ -140,6 +173,16 @@ export interface ProfilePatch {
    */
   readonly configDir?: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
+  /**
+   * Set, change, or remove the swatch colour.
+   *
+   * Omitted leaves it alone, as with every other field here. The **empty
+   * string removes it** — a patch has no way to say "back to absent" otherwise,
+   * and inventing a `clearColor: true` companion flag for one optional field
+   * would be a second way to express the same thing, which is how two fields
+   * end up disagreeing.
+   */
+  readonly color?: string;
 }
 
 /**
@@ -196,6 +239,64 @@ export function configDirProblem(value: unknown): string | null {
   }
 
   return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Colour                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** `#abc`, `#aabbcc`, or either without the `#`. Nothing else. */
+const HEX_COLOR = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * Canonicalise a user-supplied colour to `#rrggbb`, or `null` if it is not one.
+ *
+ * Returns the value rather than a boolean because every caller needs the
+ * normalised form: the store writes it, the IPC boundary forwards it, and the
+ * UI feeds it to an `<input type="color">`, which accepts **only** full
+ * lowercase `#rrggbb` and silently shows black for anything else. Normalising
+ * once here is what stops `#ABC` from round-tripping into a black swatch.
+ *
+ * Hex specifically, and not the whole of CSS. The value is chosen with an RGB
+ * picker and rendered as a small square, so nothing needs `hsl()`, `color()`,
+ * or a named colour — and accepting arbitrary CSS colour syntax would put a
+ * user-controlled string into a `style` attribute, which is a place where
+ * "whatever CSS accepts" is not a good rule. A blank string is not an error: it
+ * is how "no colour" is spelled, so callers check for `null` and store nothing.
+ */
+export function normalizeProfileColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || !HEX_COLOR.test(trimmed)) return null;
+
+  const hex = (trimmed.startsWith('#') ? trimmed.slice(1) : trimmed).toLowerCase();
+  // `#abc` and `#aabbcc` name the same colour; store the long form so string
+  // comparison and the colour input agree.
+  const full =
+    hex.length === 3
+      ? hex
+          .split('')
+          .map((digit) => digit + digit)
+          .join('')
+      : hex;
+  return `#${full}`;
+}
+
+/**
+ * Why this string is unusable as a profile colour, or `null` if it is fine.
+ *
+ * The companion to {@link normalizeProfileColor} for the one caller that has to
+ * explain the refusal — the profile form, under the field. An empty value is
+ * accepted here too: a profile with no colour is the default state, not a
+ * mistake.
+ */
+export function profileColorProblem(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return 'A colour must be a hex value such as #7c8cff.';
+  if (value.trim().length === 0) return null;
+  return normalizeProfileColor(value) === null
+    ? 'That is not a hex colour. Use #rgb or #rrggbb — for example #7c8cff.'
+    : null;
 }
 
 /**

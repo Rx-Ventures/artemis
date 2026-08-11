@@ -3,15 +3,13 @@
  * ============================================================================
  *
  *      ╭────────────────────────────────╮
- *      │ ▣ apollo                     [◧]│  ← the repo this window is in
- *      │                                │
- *      │ [ + New session          ⌘N ]  │  ← the thing you came here to do
- *      │ ~/code/apollo                   │  ← and where it will happen
+ *      │ [ + New session       ⌘N ] [◧] │  ← the thing you came here to do
+ *      │ ~/code/apollo                  │  ← and where it will happen
  *      ├────────────────────────────────┤
- *      │ SESSIONS · 22                  │
- *      │  Wire the adapter seam         │  ← this project only
- *      │  4m ⌥ main            ·Work    │
- *      │  …                             │
+ *      │ ▾ apollo · 22                  │  ← the repo this window is in
+ *      │    Wire the adapter seam       │  ← this project only
+ *      │    ⌥ main · ▪ Work             │
+ *      │    …                           │
  *      ├────────────────────────────────┤
  *      │ ⌂ All projects · 7          ▴  │  ← jump to another repo
  *      ╰────────────────────────────────╯
@@ -31,11 +29,15 @@
  * and it puts the drag handle in the gutter between the card and the transcript
  * instead of on top of the card's rounded edge.
  *
- * ## New Session is still the first control
+ * ## New Session is the first control, and now literally first
  *
- * Under the repo title, which is a label rather than a control and so does not
- * compete with it. It is what a person opens this app to do, so it stays the
- * first thing in the tab order after the collapse button.
+ * It used to sit under a title row. That row named the working directory's
+ * folder, and the session section below it now names the *repository* and folds
+ * the list — the same word, one line apart, with the lower one carrying more
+ * information and a control besides. So the title went and its hide button
+ * moved up here, which puts the two sidebar-level controls on one row and makes
+ * the thing a person opens this app to do the first thing in the card and in
+ * the tab order.
  *
  * ## Resizing writes to the DOM, then to the store
  *
@@ -102,7 +104,6 @@ import {
   ItemMedia,
   ItemTitle,
 } from '@/components/ui/item';
-import { cn } from '@/lib/utils';
 
 export function Sidebar(): ReactElement | null {
   const collapsed = useApp((s) => s.sidebarCollapsed);
@@ -119,16 +120,28 @@ export function Sidebar(): ReactElement | null {
       className="relative flex shrink-0 flex-col p-2 pt-0"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5">
-        <ProjectTitle />
-
-        <div className="flex flex-col gap-1.5 px-2.5 pb-2.5">
-          <Button size="sm" onClick={newSession} className="min-w-0 justify-start gap-1.5">
-            <PlusIcon />
-            <span className="truncate">New session</span>
-            <span aria-hidden="true" className="ml-auto font-mono text-2xs opacity-60">
-              {keyLabel('mod+n')}
-            </span>
-          </Button>
+        <div className="flex flex-col gap-1.5 p-2.5">
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              onClick={newSession}
+              className="min-w-0 flex-1 justify-start gap-1.5"
+            >
+              <PlusIcon />
+              <span className="truncate">New session</span>
+              <span aria-hidden="true" className="ml-auto font-mono text-2xs opacity-60">
+                {keyLabel('mod+n')}
+              </span>
+            </Button>
+            <IconButton
+              label={`Hide the sidebar (${keyLabel('mod+b')})`}
+              onClick={() => setSidebarCollapsed(true)}
+              size="icon-xs"
+              className="shrink-0 text-ink-faint"
+            >
+              <PanelLeftCloseIcon />
+            </IconButton>
+          </div>
           <WorkingDirectoryButton />
         </div>
 
@@ -141,48 +154,20 @@ export function Sidebar(): ReactElement | null {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Repo title                                                                 */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The card's title: the name of the repository this window is pointed at.
+/*
+ * REMOVED: `ProjectTitle`.
  *
- * The *basename* rather than the path, because that is what a person calls the
- * project. The full path is one hover away, and it is also spelled out in full
- * on the working-directory control directly below — so nothing is hidden, and
- * the title is not two lines of `/Users/...` boilerplate.
+ * It was the card's first row — a folder icon, the basename of the working
+ * directory, and the hide button. The name is now the session section's header
+ * one row lower (see `SessionList`), where it also folds the list and reports
+ * the *repository* rather than the directory, so keeping this row meant the
+ * same word twice inside forty pixels with only one of the two being the more
+ * accurate of the pair.
+ *
+ * The hide button moved up beside New session, which is where it should have
+ * been anyway: the two controls that act on the sidebar itself, rather than on
+ * the project it is showing, now sit together on one row.
  */
-function ProjectTitle(): ReactElement {
-  const cwd = useApp((s) => s.cwd);
-  const name = cwd.trim().length > 0 ? lastSegment(cwd) : null;
-
-  return (
-    <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-2">
-      <FolderIcon
-        className={cn('size-3.5 shrink-0', name === null ? 'text-amber' : 'text-ember')}
-        aria-hidden="true"
-      />
-      <h2
-        title={name === null ? 'No working directory set' : cwd}
-        className={cn(
-          'min-w-0 flex-1 truncate text-sm font-medium tracking-tight',
-          name === null ? 'text-amber' : 'text-ink',
-        )}
-      >
-        {name ?? 'No project'}
-      </h2>
-      <IconButton
-        label={`Hide the sidebar (${keyLabel('mod+b')})`}
-        onClick={() => setSidebarCollapsed(true)}
-        size="icon-xs"
-        className="shrink-0 text-ink-faint"
-      >
-        <PanelLeftCloseIcon />
-      </IconButton>
-    </div>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* All-projects switcher                                                      */

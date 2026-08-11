@@ -6,9 +6,16 @@
  * if (!check.ok) throw new RunError('invalid_request', check.message)
  * ```
  *
- * One module, one job: turn "is this cwd usable?" into an answer with a
- * message a person can act on, *before* a provider subprocess is spawned with
- * it. See `workdir.ts` for why that has to happen up front.
+ * Two modules, two questions about the same directory:
+ *
+ *  - `workdir.ts` — *can* it be used? Asked before a provider subprocess is
+ *    spawned with it, because `spawn`'s error for a bad cwd is indistinguishable
+ *    from its error for a missing binary.
+ *  - `repo.ts` — what is it *called*? Asked by the sidebar, which heads a
+ *    session list with the name of the repository rather than of the directory.
+ *
+ * Both answer rather than throw, and neither needs `git` on the PATH.
  */
 
 export * from './workdir.js';
+export * from './repo.js';

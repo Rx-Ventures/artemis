@@ -80,6 +80,8 @@ export const IPC = {
 
   /** Ask the OS for a directory, via a native picker. */
   workspacePickDirectory: 'apollo:workspace:pick-directory',
+  /** Name a directory: its own name, and its repository's when it has one. */
+  workspaceDescribe: 'apollo:workspace:describe',
 
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'apollo:sessions:messages',
@@ -459,6 +461,50 @@ export interface WorkspacePickDirectoryResponse {
   readonly path: string | null;
 }
 
+/**
+ * What is this directory, in the terms a person names it by?
+ *
+ * The sidebar heads its session list with the name of the thing being worked
+ * on, and for anyone who works in repositories that name is the repository's,
+ * not the directory's: sitting in `~/code/apollo/apps/desktop` you are working
+ * on *apollo*, and a header reading "desktop" answers a question nobody asked.
+ * The renderer cannot work this out — it has no `fs` and no way to look upward
+ * from a path — so it asks.
+ *
+ * Cheap by construction: it walks parent directories looking for `.git` and
+ * stops. No subprocess, no `git` on the PATH required, no repository parsing.
+ */
+export interface WorkspaceDescribeRequest {
+  /** Absolute path to describe. */
+  readonly path: string;
+}
+
+export interface WorkspaceDescribeResponse {
+  /** The path as asked about, echoed so a late reply can be matched to it. */
+  readonly path: string;
+  /**
+   * The directory's own name — its last segment. Always present, and the
+   * fallback the UI uses when there is no repository.
+   */
+  readonly name: string;
+  /**
+   * Absolute path to the root of the repository containing {@link path}, when
+   * there is one. Equal to `path` when it is itself the root.
+   */
+  readonly repoRoot?: string;
+  /**
+   * What to call that repository: the last segment of {@link repoRoot}.
+   *
+   * The directory name rather than a remote's — an `origin` URL is a fact about
+   * where the code is *pushed*, which is neither what the user calls the
+   * project nor reliably present, and a fork would make every sibling checkout
+   * read as the upstream. A linked worktree therefore reports its own name,
+   * which is the useful answer: two checkouts of one repository are two
+   * different things to be working in, and the sidebar is naming a place.
+   */
+  readonly repoName?: string;
+}
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -567,6 +613,7 @@ export type IpcRequestMap = {
   [IPC.sessionsList]: SessionsListRequest;
   [IPC.sessionsListAll]: SessionsListAllRequest;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
+  [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
   [IPC.usagePlanCached]: UsagePlanRequest;
   [IPC.usagePlanRefresh]: UsagePlanRequest;
@@ -592,6 +639,7 @@ export type IpcResponseMap = {
   [IPC.sessionsList]: SessionsListResponse;
   [IPC.sessionsListAll]: SessionsListAllResponse;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
+  [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
   [IPC.usagePlanCached]: UsagePlanResponse;
   [IPC.usagePlanRefresh]: UsagePlanResponse;
@@ -737,6 +785,14 @@ export interface ApolloBridge {
     pickDirectory(
       request: WorkspacePickDirectoryRequest,
     ): Promise<IpcResult<WorkspacePickDirectoryResponse>>;
+
+    /**
+     * Name a directory — its own name, and its repository's when it is in one.
+     *
+     * A read with no side effects and no subprocess, so the renderer may call
+     * it whenever the working directory changes.
+     */
+    describe(request: WorkspaceDescribeRequest): Promise<IpcResult<WorkspaceDescribeResponse>>;
   };
 
   /**

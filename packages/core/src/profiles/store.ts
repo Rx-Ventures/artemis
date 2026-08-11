@@ -31,7 +31,12 @@ import { mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { isCredentialRoutingEnvKey, isProviderId, isSecretEnvKey } from '@rx-apollo/protocol';
+import {
+  isCredentialRoutingEnvKey,
+  isProviderId,
+  isSecretEnvKey,
+  normalizeProfileColor,
+} from '@rx-apollo/protocol';
 import type {
   Profile,
   ProfileDraft,
@@ -264,6 +269,10 @@ export class ProfileStore {
         providerId: draft.providerId,
         configDir,
         publicEnv,
+        // An unusable colour is dropped rather than rejected. It decides
+        // nothing, so refusing to create the profile over one would fail the
+        // request for the one field that does not matter.
+        color: normalizeProfileColor(draft.color) ?? undefined,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -296,6 +305,13 @@ export class ProfileStore {
           patch.publicEnv === undefined
             ? current.publicEnv
             : sanitizePublicEnv(patch.publicEnv, this.#managedEnvKeys),
+        // Omitted leaves the colour alone; anything that does not normalise —
+        // the empty string being the one a caller sends on purpose — removes
+        // it. See `ProfilePatch.color`.
+        color:
+          patch.color === undefined
+            ? current.color
+            : (normalizeProfileColor(patch.color) ?? undefined),
         updatedAt: this.#now(),
       };
 
@@ -568,6 +584,11 @@ function parseProfile(
     providerId,
     configDir,
     publicEnv,
+    // Re-normalised on the way out, not trusted from disk: this file is
+    // hand-editable, the value ends up in a `style` attribute, and a record
+    // written by an older build predates the field entirely. A colour that
+    // does not parse simply is not one.
+    color: normalizeProfileColor(raw['color']) ?? undefined,
     createdAt: typeof createdAt === 'number' ? createdAt : undefined,
     updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
   };

@@ -616,10 +616,36 @@ const END_TONE: Record<RunEndItem['reason'], Tone> = {
   error: 'signal',
 };
 
-function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement {
+/**
+ * The run-end block, trimmed to the user's `runSummary` setting.
+ *
+ * Two rules hold across all three settings, and they are why this is not a
+ * plain boolean:
+ *
+ *  - **A failure is never hidden.** `'never'` still renders an errored run —
+ *    just the reason and the message, with the accounting dropped. This row is
+ *    the only place a run's error text and code ever appear, so hiding it would
+ *    turn a failed run into one that simply stopped.
+ *  - **Anything the user has to act on stays.** `'failures'` keeps interrupted,
+ *    `max_turns` and `budget_exceeded` too: each means the answer on screen is
+ *    cut short, which is not something to infer from the absence of a row.
+ *
+ * The cost of hiding a clean run's block is that consecutive runs lose their
+ * visual boundary — the `end` gutter label was doing that work. Prompts are
+ * bubbles, so the seam is still legible; if that stops being true, the fix is a
+ * rule between runs, not putting the accounting back.
+ */
+function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null {
+  const setting = useApp((s) => s.runSummary);
   const tone = END_TONE[item.reason];
   const usage = item.usage;
   const failed = item.reason === 'error';
+
+  if (setting === 'never' ? !failed : setting === 'failures' && item.reason === 'completed') {
+    return null;
+  }
+  const accounting = setting !== 'never';
+
   return (
     <Line label="end" tone={tone} ts={item.ts} className="mb-4">
       <div
@@ -639,11 +665,13 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement {
               {item.reason.replace(/_/g, ' ')}
             </span>
           </span>
-          {item.durationMs === undefined ? null : (
+          {accounting && item.durationMs !== undefined ? (
             <Stat label="took" value={formatDuration(item.durationMs)} />
-          )}
-          {item.numTurns === undefined ? null : <Stat label="turns" value={String(item.numTurns)} />}
-          {usage ? (
+          ) : null}
+          {accounting && item.numTurns !== undefined ? (
+            <Stat label="turns" value={String(item.numTurns)} />
+          ) : null}
+          {accounting && usage ? (
             <>
               <Stat label="in" value={formatTokens(usage.tokens.inputTokens)} />
               <Stat label="out" value={formatTokens(usage.tokens.outputTokens)} />

@@ -2,11 +2,11 @@
  * This project's session history.
  * ============================================================================
  *
- *     SESSIONS · 22            [ filter… ]
- *       Wire the adapter seam
- *       4m ago  ⌥ main            ·Work
- *       Profile store encryption
- *       52m ago                   ·Home
+ *     ▾ apollo · 22            [ filter… ]
+ *         Wire the adapter seam
+ *         ⌥ main · ▪ Work
+ *         Profile store encryption
+ *         ▪ Home
  *
  * One project, flat. The sidebar is scoped to the working directory now, and
  * other projects are reached through the switcher at the foot of the card
@@ -14,6 +14,25 @@
  * this list used to interleave every repository under sticky per-project
  * headers, which meant the answer to "what was I doing in *this* repo" was
  * somewhere in the middle of a thousand rows.
+ *
+ * ## 0. The header names the project, and folds it away
+ *
+ * It used to read `SESSIONS`, which is a caption for a list whose contents are
+ * already obviously sessions — it named the *shape* of what was below it and
+ * not the *subject*. It now names the repository, which is the fact a person
+ * actually wants confirmed before they click a row, and it is the card's only
+ * title: the separate project-title row above it said the same word one line
+ * higher and has gone.
+ *
+ * Repository, not directory. Working in `~/code/apollo/apps/desktop` you are
+ * working on *apollo*; a header reading "desktop" is technically true and
+ * useless. The renderer cannot tell the difference on its own — it has no `fs`
+ * — so the main process is asked once per directory change and the answer is
+ * cached in the store. Until it lands, and in a build that cannot answer, the
+ * directory's own name is shown, which is exactly what was there before.
+ *
+ * The fold is persisted. A section the user closed and found reopened on the
+ * next launch is the same discourtesy as a sidebar width that resets.
  *
  * ## 1. It is still virtualised, and now trivially so
  *
@@ -34,7 +53,10 @@
  * A row is two lines: a 12px title on an 18px leading and an 11px meta line on
  * a 16px leading, 2px apart — 36px of text. Add the button's 12px of vertical
  * padding and the 4px gap between rows and you get 52; 54 leaves two pixels of
- * slack. Getting this wrong is not cosmetic: a row that is *slightly* too short
+ * slack. The meta line lost its timestamp and its terminal glyph and gained a
+ * colour swatch, none of which changes its height — the line box is set by the
+ * 11px type, and the swatch is 8px. Getting this wrong is not cosmetic: a row
+ * that is *slightly* too short
  * squeezes the flex children, and because the title also carries `truncate`
  * (`overflow: hidden`) the glyphs are then clipped horizontally through the
  * middle. That was a real, shipped bug — the title line was being compressed
@@ -67,14 +89,24 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { GitBranchIcon, InboxIcon, SearchIcon, SquareTerminalIcon } from 'lucide-react';
+import {
+  ChevronDownIcon,
+  FolderGit2Icon,
+  FolderIcon,
+  GitBranchIcon,
+  InboxIcon,
+  SearchIcon,
+} from 'lucide-react';
 import type { ProfileId, SessionSummary } from '@rx-apollo/protocol';
 
 import { useCapability } from '../hooks/useCapability';
-import { formatRelative, oneLine } from '../lib/format';
+import type { WorkspaceNames } from '../lib/extensions';
+import { condenseTitle, formatRelative } from '../lib/format';
+import { lastSegment } from '../lib/paths';
 import { groupSessionsByProject, sessionKey } from '../lib/sessionGroups';
-import { refreshSessions, resumeSession, useApp } from '../state/store';
+import { refreshSessions, resumeSession, toggleSessionsCollapsed, useApp } from '../state/store';
 import { CapabilityButton } from './capability-button';
+import { ProfileSwatch } from './primitives';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -101,6 +133,7 @@ export function SessionList(): ReactElement {
   const error = useApp((s) => s.sessionsError);
   const profiles = useApp((s) => s.profiles);
   const cwd = useApp((s) => s.cwd);
+  const collapsed = useApp((s) => s.sessionsCollapsed);
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
 
@@ -130,12 +163,13 @@ export function SessionList(): ReactElement {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-t border-line">
-      <div className="flex items-center gap-2 px-2.5 pt-2 pb-1.5">
-        <span className="shrink-0 text-2xs tracking-wider text-ink-faint uppercase">Sessions</span>
-        {total > 0 ? (
-          <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{total}</span>
-        ) : null}
-        {total > FILTER_THRESHOLD ? (
+      <div className="flex items-center gap-1.5 px-1.5 pt-2 pb-1.5">
+        <ProjectHeader count={total} />
+        {/*
+         * The filter goes with the rows, so it goes away with them. Leaving a
+         * field over a folded list would offer to search nothing.
+         */}
+        {!collapsed && total > FILTER_THRESHOLD ? (
           <div className="relative ml-auto min-w-0 flex-1">
             <SearchIcon
               className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-ink-faint"
@@ -153,42 +187,130 @@ export function SessionList(): ReactElement {
         ) : null}
       </div>
 
-      {/*
-       * Listing and resuming are independent capabilities and are gated
-       * independently: without `listSessions` there is nothing to show, and
-       * without `resumeSession` the rows are still worth showing but cannot be
-       * clicked. Neither ever silently disappears.
-       */}
-      {listing.supported && !resuming.supported ? (
-        <p className="border-y border-line bg-amber/5 px-2.5 py-1.5 text-2xs leading-snug text-amber">
-          {resuming.reason} These are listed for reference; picking one would not carry the
-          conversation forward.
-        </p>
-      ) : null}
+      {collapsed ? null : (
+        <>
+          {/*
+           * Listing and resuming are independent capabilities and are gated
+           * independently: without `listSessions` there is nothing to show, and
+           * without `resumeSession` the rows are still worth showing but cannot
+           * be clicked. Neither ever silently disappears.
+           */}
+          {listing.supported && !resuming.supported ? (
+            <p className="border-y border-line bg-amber/5 px-2.5 py-1.5 text-2xs leading-snug text-amber">
+              {resuming.reason} These are listed for reference; picking one would not carry the
+              conversation forward.
+            </p>
+          ) : null}
 
-      {!listing.supported ? (
-        <Note tone="amber">{listing.reason} There is no history to list for it.</Note>
-      ) : error ? (
-        <Note tone="signal">
-          {/* The backend's own sentence — a paraphrase would lose the cause. */}
-          {error}
-          <button
-            type="button"
-            onClick={() => void refreshSessions()}
-            className="mt-1 block text-2xs text-ember underline-offset-2 hover:underline"
-          >
-            Try again
-          </button>
-        </Note>
-      ) : loading && sessions.length === 0 ? (
-        <LoadingRows />
-      ) : rows.length === 0 ? (
-        <NothingHere filtered={total > 0} query={query} />
-      ) : (
-        <VirtualRows rows={rows} />
+          {!listing.supported ? (
+            <Note tone="amber">{listing.reason} There is no history to list for it.</Note>
+          ) : error ? (
+            <Note tone="signal">
+              {/* The backend's own sentence — a paraphrase would lose the cause. */}
+              {error}
+              <button
+                type="button"
+                onClick={() => void refreshSessions()}
+                className="mt-1 block text-2xs text-ember underline-offset-2 hover:underline"
+              >
+                Try again
+              </button>
+            </Note>
+          ) : loading && sessions.length === 0 ? (
+            <LoadingRows />
+          ) : rows.length === 0 ? (
+            <NothingHere filtered={total > 0} query={query} />
+          ) : (
+            <VirtualRows rows={rows} />
+          )}
+        </>
       )}
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Header                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The card's title and its fold control, in one button.
+ *
+ * The whole row is the control rather than a chevron beside a label, because a
+ * 12px target next to a word that looks clickable and is not is the kind of
+ * thing people click three times before reading. The chevron stays as the
+ * *affordance*; `aria-expanded` is what says the same thing to a screen reader.
+ *
+ * The count is unfiltered on purpose — it says how much history this project
+ * has, which is a stable fact about the project, and a number that counted down
+ * while someone typed in the filter would be answering a question nobody asked
+ * of a header.
+ */
+function ProjectHeader({ count }: { readonly count: number }): ReactElement {
+  const cwd = useApp((s) => s.cwd);
+  const workspace = useApp((s) => s.workspace);
+  const collapsed = useApp((s) => s.sessionsCollapsed);
+
+  const { name, isRepo } = projectLabel(cwd, workspace);
+  const Icon = isRepo ? FolderGit2Icon : FolderIcon;
+
+  return (
+    <button
+      type="button"
+      onClick={toggleSessionsCollapsed}
+      aria-expanded={!collapsed}
+      title={
+        cwd.trim().length === 0
+          ? 'No working directory set'
+          : isRepo && workspace?.repoRoot !== undefined && workspace.repoRoot !== cwd
+            ? `${workspace.repoRoot} — working in ${cwd}`
+            : cwd
+      }
+      className="flex min-w-0 shrink items-center gap-1 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-raised/70"
+    >
+      <ChevronDownIcon
+        aria-hidden="true"
+        className={cn(
+          'size-3 shrink-0 text-ink-faint transition-transform',
+          collapsed && '-rotate-90',
+        )}
+      />
+      <Icon
+        aria-hidden="true"
+        className={cn('size-3 shrink-0', name === null ? 'text-amber' : 'text-ember')}
+      />
+      <span
+        className={cn(
+          'min-w-0 truncate text-xs font-medium tracking-tight',
+          name === null ? 'text-amber' : 'text-ink',
+        )}
+      >
+        {name ?? 'No project'}
+      </span>
+      {count > 0 ? (
+        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * What to call this project, and whether it is a repository.
+ *
+ * Repository name first, then the directory's, then the last segment of `cwd`
+ * — the last of which is the answer for a build with no `workspace.describe`
+ * and for the moment before the first reply lands. `null` means there is no
+ * working directory at all, which is a different thing from an unnamed one and
+ * is rendered as its own amber state.
+ */
+function projectLabel(
+  cwd: string,
+  workspace: WorkspaceNames | null,
+): { readonly name: string | null; readonly isRepo: boolean } {
+  if (cwd.trim().length === 0) return { name: null, isRepo: false };
+  const repo = workspace?.repoName;
+  if (repo !== undefined && repo.length > 0) return { name: repo, isRepo: true };
+  return { name: workspace?.name ?? lastSegment(cwd), isRepo: false };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -280,7 +402,14 @@ const Row = memo(function Row({
             ? 'The profile that created this session no longer exists, so its transcript cannot be reached.'
             : undefined
         }
-        tooltip={`Resume — ${session.cwd}${profile ? ` — ${profile.label}` : ''}`}
+        /*
+         * The timestamp lives here now rather than on the row. It was the
+         * first thing on the meta line and the least useful thing on it — the
+         * list is already in recency order, so "4m ago" mostly restated the
+         * row's position — and evicting it is what gave the profile the room
+         * it was being truncated for.
+         */
+        tooltip={`Resume — ${session.cwd}${profile ? ` — ${profile.label}` : ''} — ${formatRelative(session.updatedAt)}`}
         tooltipSide="right"
         onClick={() => resumeSession(session)}
         className={cn(
@@ -292,34 +421,60 @@ const Row = memo(function Row({
             a row one pixel too short compresses the line box and `truncate`
             clips the glyphs through the middle. */}
         <span
+          title={session.title}
           className={cn(
             'w-full shrink-0 truncate text-xs',
             active ? 'text-ink' : 'text-ink-muted',
           )}
         >
-          {session.title}
+          {condenseTitle(session.title)}
         </span>
-        <span className="flex w-full shrink-0 items-center gap-1.5 font-mono text-2xs text-ink-faint">
-          <SquareTerminalIcon className="size-2.5 shrink-0" aria-hidden="true" />
-          <span className="shrink-0">{formatRelative(session.updatedAt)}</span>
+        <span className="flex w-full shrink-0 items-center gap-1 font-mono text-2xs text-ink-faint">
+          {/*
+           * The branch yields first. It is the field with a long tail — release
+           * branches carry ticket numbers and slashes — and it is the one whose
+           * head still identifies it after a clip, which is not true of a
+           * profile called "Personal (billing)".
+           */}
+          {/*
+            `min-w-0` without `flex-1`: it must be *able* to shrink, but must
+            not grow. Growing would push the separator and the profile out to
+            the right edge on every row wide enough to fit them, which is the
+            pinned-right layout this replaced, arrived at by accident.
+          */}
           {session.gitBranch ? (
             <span className="flex min-w-0 items-center gap-0.5">
               <GitBranchIcon className="size-2.5 shrink-0" aria-hidden="true" />
               <span className="truncate">{session.gitBranch}</span>
             </span>
           ) : null}
+          {session.gitBranch ? (
+            <span aria-hidden="true" className="shrink-0">
+              ·
+            </span>
+          ) : null}
           {/*
            * The profile marker, per row rather than per project: two profiles
            * can hold sessions in the same directory, and which account a resume
            * will bill is not something to leave to inference.
+           *
+           * It used to be pinned right with `ml-auto` and clipped at twelve
+           * characters, which is how "Personal" and "Personal (billing)" became
+           * the same word on screen — the exact pair the marker exists to tell
+           * apart. It now sits directly after the branch and is given the room:
+           * the branch takes the slack and truncates, this does not.
            */}
           <span
             title={
               profile ? `Profile: ${profile.label}` : `Profile ${session.profileId} no longer exists`
             }
-            className={cn('ml-auto max-w-[7rem] shrink-0 truncate', orphaned && 'text-amber')}
+            className={cn(
+              'flex min-w-0 max-w-[11rem] shrink-0 items-center gap-1',
+              orphaned && 'text-amber',
+            )}
           >
-            ·{profile ? oneLine(profile.label, 12) : 'missing'}
+            <ProfileSwatch color={profile?.color} />
+            <span className="truncate">{profile ? profile.label : 'profile missing'}</span>
           </span>
         </span>
       </CapabilityButton>
