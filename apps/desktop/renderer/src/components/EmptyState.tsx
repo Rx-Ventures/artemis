@@ -6,10 +6,11 @@
  * whatever is missing — no profile, no working directory — instead of letting
  * the user discover it by typing a prompt and getting an error back.
  *
- * Both blockers are fixable from here. The sidebar also carries a directory
- * control, and that duplication is deliberate: this is where the eye already
- * is when the app has nothing to show, and "you cannot run yet" is not a
- * message to pair with "go and find the control yourself".
+ * Both blockers are fixable from here, which matters more than it used to. The
+ * directory now has exactly one other control — the status line's, because the
+ * directory belongs to the session rather than to the window — and "you cannot
+ * run yet" is not a message to pair with "go and find the control yourself".
+ * So this offers the same dialog rather than pointing at a bar.
  *
  * ## Why it is built on `Empty` rather than a bare centred div
  *
@@ -91,11 +92,23 @@ export function EmptyState(): ReactElement {
        * instead of two.
        */}
       <EmptyContent className="max-w-md gap-4">
+        {/*
+         * A neutral card with a warning *icon*, not a warning-coloured card.
+         *
+         * Not the old argument, which `index.css` has since retired: amber is a
+         * legitimate warning colour again now that the accent has left the warm
+         * end and warning sits 128° away rather than 5°. The reason is simpler
+         * and survives that change. A filled amber card is a large warm surface
+         * wrapped around the two lunar links that are the only things in it
+         * worth clicking, and at that area the fill wins. The triangle says
+         * "warning" in one glyph; the box does not need to repeat it at forty
+         * times the size, in a hue that now fights the thing to click.
+         */}
         {missingProfile || missingCwd ? (
-          <Alert className="w-full border-amber/35 bg-amber/5 text-left text-amber">
-            <TriangleAlertIcon />
+          <Alert className="w-full border-line bg-raised text-left text-ink">
+            <TriangleAlertIcon className="text-amber" />
             <AlertTitle className="text-2xs">Not ready to run</AlertTitle>
-            <AlertDescription className="text-2xs text-amber/85">
+            <AlertDescription className="text-2xs text-ink-muted">
               {missingProfile ? (
                 <p className="flex items-center gap-1.5">
                   No profile — a run needs credentials.
