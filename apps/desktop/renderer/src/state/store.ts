@@ -15,6 +15,7 @@
 import { create } from 'zustand';
 import { NO_CAPABILITIES } from '@rx-apollo/protocol';
 import type {
+  AuthStatusInfo,
   AgentError,
   AgentEvent,
   Capabilities,
@@ -123,6 +124,19 @@ export interface AppState {
   readonly profiles: readonly ProfileMetadata[];
   readonly activeProviderId: ProviderId;
   readonly activeProfileId: ProfileId | null;
+
+  /**
+   * Last-known login state per profile, keyed by id.
+   *
+   * Cached here rather than fetched per component because reading it costs a
+   * subprocess: the profile screen polls while a user signs in, and the status
+   * line wants the same answer to decide whether to show a "needs setup"
+   * marker. One writer, several readers.
+   *
+   * A missing entry means "not looked up yet", which is distinct from a looked
+   * -up `{ loggedIn: false }` and must not be rendered as signed out.
+   */
+  readonly authByProfile: Readonly<Record<ProfileId, AuthStatusInfo>>;
 
   readonly cwd: string;
   readonly permissionMode: PermissionMode;
@@ -422,6 +436,7 @@ export const useApp = create<AppState>(() => ({
   profiles: [],
   activeProviderId: prefs.activeProviderId ?? 'claude',
   activeProfileId: prefs.activeProfileId ?? null,
+  authByProfile: {},
 
   cwd: prefs.cwd ?? '',
   permissionMode: prefs.permissionMode ?? 'default',
@@ -1890,9 +1905,8 @@ function describeScope(scope: PermissionScope | undefined): string {
 /**
  * Create a profile.
  *
- * `draft.apiKey` is the single place a plaintext secret crosses IPC, and it
- * only ever travels renderer → main. Callers must read the key straight out of
- * an uncontrolled input at submit time and never park it in React state; see
+ * The profile is created signed out — that is the normal first state. The
+ * caller is expected to send the user to the sign-in step next; see
  * `ProfilesScreen`.
  */
 export async function createProfile(draft: ProfileDraft): Promise<boolean> {
@@ -1933,10 +1947,72 @@ export async function deleteProfile(id: ProfileId, deleteConfigDir: boolean): Pr
     reportFailure('Could not delete the profile', result.error);
     return false;
   }
-  if (result.value.configDirDeleted) {
+  // `configDirDeleted` can be false even when it was asked for: the main
+  // process refuses to delete a directory Apollo did not create. Reporting
+  // what actually happened matters more here than usual — the user may have
+  // expected their `~/.claude` to be gone, and it is not.
+  if (deleteConfigDir && !result.value.configDirDeleted) {
+    pushBanner('info', 'Profile deleted. Its config directory was left alone — Apollo only deletes directories it created.');
+  } else if (result.value.configDirDeleted) {
     pushBanner('info', 'Profile and its session history were deleted');
   }
   await refreshProfiles();
+  return true;
+}
+
+/**
+ * A config-directory path to prefill the create form with.
+ *
+ * Returns `null` when the main process cannot answer, which the form treats as
+ * "leave the field empty" rather than as an error worth a banner — the user can
+ * still choose a directory, which is the point of the field.
+ */
+export async function suggestConfigDir(label: string): Promise<string | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.profiles.suggestDir({ label }));
+  return result.ok ? result.value.configDir : null;
+}
+
+/**
+ * Read a profile's login state, plus the command that would change it.
+ *
+ * Deliberately silent on failure: this is polled while the user signs in, and a
+ * banner per poll would bury the screen. The status itself carries an `error`
+ * field for the cases worth showing, and the screen renders that inline.
+ */
+export async function readAuthStatus(
+  profileId: ProfileId,
+): Promise<{ readonly status: AuthStatusInfo; readonly signInCommand: string } | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.auth.status({ profileId }));
+  if (!result.ok) return null;
+  useApp.setState((s) => ({
+    authByProfile: { ...s.authByProfile, [profileId]: result.value.status },
+  }));
+  return result.value;
+}
+
+/**
+ * Clear the credential in a profile's config directory.
+ *
+ * Writes the resulting status into the cache, because nothing else will: the
+ * cards poll on mount and while a sign-in is in progress, so a sign-out whose
+ * result was dropped would leave every reader showing "signed in" until
+ * something unrelated happened to re-read it.
+ */
+export async function signOutProfile(profileId: ProfileId): Promise<boolean> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return false;
+  const result = await call(() => bridge.auth.signOut({ profileId }));
+  if (!result.ok) {
+    reportFailure('Could not sign the profile out', result.error);
+    return false;
+  }
+  useApp.setState((s) => ({
+    authByProfile: { ...s.authByProfile, [profileId]: result.value.status },
+  }));
   return true;
 }
 

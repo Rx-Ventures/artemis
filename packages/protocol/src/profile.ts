@@ -1,164 +1,89 @@
 /**
- * Profiles: named environment-variable bundles.
+ * Profiles: a label and a config directory.
  *
- * A profile is how Apollo switches accounts. It bundles a credential, a backend
- * selection, and an isolated config directory. Providers that key their session
- * store on that directory — Claude keys it on `$CLAUDE_CONFIG_DIR` — give each
- * profile isolated credentials *and* isolated history in one move.
+ * A profile is how Apollo switches accounts, and it holds exactly two things
+ * the user chose: what to call it, and which directory the provider's CLI keeps
+ * its state in. Everything else — which account, which plan, which credential —
+ * is a property of that directory, established by the user running the
+ * provider's own login against it.
  *
- * This file describes the *shape* of a profile and nothing about how any
- * particular provider consumes it. Variable names, backend lists and the
- * credential-to-environment mapping live with the adapter that owns them; a
- * provider-neutral package that hard-codes one vendor's vocabulary makes every
- * other provider a special case.
+ * ## Why there is no credential here
  *
- * Two rules govern this file, and they are not negotiable:
+ * There used to be one. A profile carried a `secretRef` into encrypted OS
+ * storage, an `authMode` deciding which environment variable the secret was
+ * emitted as, and a `backend` deciding where it was sent. That design had a
+ * defect it could not be rid of: `ANTHROPIC_API_KEY` silently outranks a
+ * subscription login, so a profile that said "bill my plan" could bill metered
+ * API usage instead, and no amount of care in the editor could fix it while
+ * Apollo was the thing holding the credential.
  *
- *  1. **Apollo never performs an interactive login.** A profile holds a
- *     credential the *user* obtained and pasted in. There is no OAuth flow
- *     here, no browser handoff, no token refresh, and no code that could grow
- *     into one. Which kinds of credential a provider accepts is the provider's
- *     business — see {@link ProviderAuthMode} — but every one of them arrives
- *     the same way: the user brings it.
- *  2. **Secrets never travel to the renderer.** {@link Profile} lives in the
- *     main process. The renderer sees {@link ProfileMetadata}, which carries a
- *     masked hint and nothing more. The secret itself is referenced by
- *     {@link Profile.secretRef} — a handle into encrypted OS storage, never the
- *     value.
+ * So Apollo stopped holding one. `claude auth login` run with
+ * `CLAUDE_CONFIG_DIR` pointed at a profile's directory writes a credential that
+ * belongs to that directory alone — verified: two directories, two accounts,
+ * same machine. Apollo sets the variable and reads a boolean back. There is no
+ * token to paste, store, encrypt, mask, redact or leak, and the billing trap is
+ * gone because Apollo emits neither variable and strips both.
  *
- * Secrets *may* travel renderer → main, once, when the user types a key into
- * the profile editor. That direction is unavoidable and safe; the reverse is
- * never allowed.
+ * What survives from the old design is its one good rule, inverted: secrets
+ * never travel over IPC *because there are none*.
+ *
+ * ## Why the config directory is a full path
+ *
+ * It used to be a bare name resolved under Apollo's user-data directory, which
+ * made a profile record incapable of pointing anywhere dangerous. It is now an
+ * absolute path the user picks, because the most useful thing a new user can do
+ * is point a profile at the `~/.claude` they are already signed in to, and a
+ * bare name cannot express that.
+ *
+ * The safety that the bare name bought is not discarded, only moved. It lived
+ * in one place — "delete this profile's directory" — and that is where it now
+ * lives explicitly: see `ProfilesDeleteResponse.configDirDeleted`, which is
+ * false, rather than destructive, for any directory Apollo did not create.
  */
 
 import type { ProfileId } from './ids.js';
 import type { ProviderId } from './provider.js';
 
 /**
- * Which hosting backend a profile's credential is for.
- *
- * **Deliberately opaque.** This used to be the union
- * `'anthropic' | 'bedrock' | 'vertex' | 'foundry'` — which is Claude's list,
- * not a universal one. Sitting in the provider-neutral protocol package it
- * applied to every provider, so a Codex or OpenCode profile had to declare an
- * Anthropic hosting backend or leave the field undefined, and the type system
- * actively rejected the correct value at the IPC boundary. That contradicts
- * this package's own rule that the seam cannot be Claude-shaped.
- *
- * The set of valid backends is a property of the *provider*, so each adapter
- * declares its own and publishes them on
- * `ProviderDescriptor.backends`. The UI builds its picker from that list, the
- * same way it already builds the permission-mode picker from
- * {@link Capabilities.permissionModes}. Semantic validation ("does this
- * provider have a backend called `bedrock`?") belongs wherever the adapter is
- * reachable; {@link isProviderBackend} only checks the shape.
- */
-export type ProviderBackend = string;
-
-/** A backend id: lower-case, short, and safe to use as an object key. */
-const BACKEND_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
-
-/**
- * Shape check for a {@link ProviderBackend}.
- *
- * Answers "could this be a backend id?", not "does this provider have one by
- * that name?" — the second question needs the adapter, which this package
- * cannot see. The authoritative check happens when the credential environment
- * is resolved against the provider's declared backend list.
- */
-export function isProviderBackend(value: unknown): value is ProviderBackend {
-  return typeof value === 'string' && BACKEND_ID_PATTERN.test(value);
-}
-
-/**
- * How a profile's credential authenticates — and therefore what gets billed.
- *
- * **Deliberately opaque, for the same reason {@link ProviderBackend} is.** The
- * modes Apollo ships today are Claude's (`api-key` and `subscription`), and
- * naming them in this package would make them universal facts about every
- * provider rather than one adapter's vocabulary. Each adapter declares its own
- * list and publishes it as `ProviderDescriptor.authModes`; the UI builds its
- * picker from that.
- *
- * The axis exists because the choice is not cosmetic. For Claude, an API key
- * bills metered API usage, while a subscription token bills a Pro/Max/Team plan
- * — and the two credentials travel in *different environment variables*, one of
- * which silently overrides the other when both are present. A profile therefore
- * has to say which one it means, and the resolver has to make sure the other
- * cannot arrive from the ambient environment behind the user's back.
- *
- * Absent on a profile means "the provider's first declared mode".
- */
-export type ProviderAuthMode = string;
-
-/** An auth-mode id: lower-case, short, and safe to use as an object key. */
-const AUTH_MODE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
-
-/**
- * Shape check for a {@link ProviderAuthMode}.
- *
- * Answers "could this be an auth-mode id?", not "does this provider have one by
- * that name?" — the second question needs the adapter, which this package
- * cannot see. The authoritative check, including whether the mode is valid on
- * the profile's backend, happens when the credential environment is resolved.
- */
-export function isProviderAuthMode(value: unknown): value is ProviderAuthMode {
-  return typeof value === 'string' && AUTH_MODE_ID_PATTERN.test(value);
-}
-
-/**
  * A stored profile. **Main process only.**
  *
- * This type must never be sent over IPC. If you find yourself wanting to, you
- * want {@link ProfileMetadata}.
+ * Unlike its predecessor this holds nothing secret, so the main-process-only
+ * rule is now about `publicEnv` — an env bundle the renderer has no use for —
+ * rather than about a credential handle. {@link ProfileMetadata} is still what
+ * crosses IPC.
  */
 export interface Profile {
   readonly id: ProfileId;
-  /** User-chosen display name, e.g. "Work — Bedrock". */
+  /** User-chosen display name, e.g. "Work". */
   readonly label: string;
   readonly providerId: ProviderId;
-  /**
-   * One of the backends {@link providerId}'s adapter declares. Absent means
-   * that provider's default backend.
-   */
-  readonly backend?: ProviderBackend;
 
   /**
-   * One of the auth modes {@link providerId}'s adapter declares. Absent means
-   * that provider's default mode.
+   * Absolute path to the provider config directory this profile runs against.
    *
-   * This decides which variable {@link secretRef}'s value is emitted as, and
-   * therefore which account is billed. It is a property of the *profile* on
-   * purpose: billing must never be decided by whatever happens to be exported
-   * in the shell that launched Apollo.
-   */
-  readonly authMode?: ProviderAuthMode;
-
-  /**
-   * Directory name (not a full path) for this profile's isolated provider
-   * config directory. Resolved against Apollo's user-data directory. Keeping it
-   * a bare name means a profile record can never point at an arbitrary
-   * location on disk.
+   * This is the whole isolation mechanism. The provider keys both its
+   * credential *and* its session history on this directory, so one profile, one
+   * directory, one account, one history — and pointing two profiles at the same
+   * directory makes them the same account, which is a thing a user may
+   * legitimately want.
    *
-   * Which *variable* points the provider at it is the adapter's business —
-   * `CLAUDE_CONFIG_DIR` for Claude, something else for the next provider.
+   * Which *variable* carries it is the adapter's business: `CLAUDE_CONFIG_DIR`
+   * for Claude, something else for the next provider.
+   *
+   * Validate with {@link configDirProblem} before writing. A profile record is
+   * JSON on disk and a user can edit it, so the check happens on every use
+   * rather than only on the way in.
    */
-  readonly configDirName: string;
-
-  /**
-   * Handle into encrypted OS storage — **never the secret itself**. Reading it
-   * is a main-process operation guarded by the secret store.
-   */
-  readonly secretRef: string;
+  readonly configDir: string;
 
   /**
    * Non-sensitive environment variables merged into the agent's environment,
-   * e.g. `ANTHROPIC_MODEL`, `AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`.
+   * e.g. `ANTHROPIC_MODEL`.
    *
    * Validate with {@link isSecretEnvKey} *and*
    * {@link isCredentialRoutingEnvKey} before writing: anything that looks like
-   * a credential belongs in the secret store, and anything that decides where
-   * the credential is *sent* belongs to Apollo rather than to the profile.
+   * a credential does not belong in a plain file, and anything that decides
+   * where a credential is *sent* belongs to Apollo rather than to the profile.
    */
   readonly publicEnv: Readonly<Record<string, string>>;
 
@@ -171,189 +96,103 @@ export interface Profile {
 /**
  * The renderer-safe projection of a {@link Profile}.
  *
- * This is the *only* profile shape allowed across the IPC boundary into the
- * renderer. It deliberately omits `secretRef`, `configDirName` and `publicEnv`:
- * the renderer has no use for a storage handle, a filesystem location, or an
- * env bundle, and each of those is a leak waiting to happen.
+ * Omits only `publicEnv`, which is a main-process concern.
+ *
+ * `configDir` **is** carried across, reversing the old rule that a filesystem
+ * location had no business in the renderer. That rule protected a secret this
+ * shape no longer has, and the directory is now the one fact the sign-in screen
+ * cannot work without: it is what the user chose, what the login command has to
+ * name, and what "is this profile signed in yet?" is asked about.
  */
 export interface ProfileMetadata {
   readonly id: ProfileId;
   readonly label: string;
   readonly providerId: ProviderId;
-  /** Absent means the provider's default backend. */
-  readonly backend?: ProviderBackend;
-  /**
-   * Which auth mode — and therefore which billing arrangement — this profile
-   * uses. Absent means the provider's default mode.
-   *
-   * Carried into the renderer deliberately: "am I about to spend API credit or
-   * my subscription allowance?" is a question the user must be able to answer
-   * by looking at the profile, and the id is not a secret.
-   */
-  readonly authMode?: ProviderAuthMode;
-  /**
-   * Masked credential hint for display, e.g. `"sk-ant-...4f2a"`.
-   *
-   * `null` when the profile has no credential stored yet — the UI should show
-   * it as needing setup. Produced by {@link maskApiKey}; never assembled by
-   * hand, and never anything from which a key could be reconstructed.
-   */
-  readonly keyHint: string | null;
+  /** Absolute path. See {@link Profile.configDir}. */
+  readonly configDir: string;
 }
 
-/**
- * Fields the renderer supplies when creating a profile.
- *
- * {@link apiKey} is the one place a secret legitimately crosses IPC, and only
- * renderer → main. The main process writes it straight into encrypted storage
- * and returns {@link ProfileMetadata}; the plaintext never comes back.
- */
+/** Fields the renderer supplies when creating a profile. */
 export interface ProfileDraft {
   readonly label: string;
   readonly providerId: ProviderId;
-  readonly backend?: ProviderBackend;
   /**
-   * Which auth mode the credential below is for. Omit for the provider's
-   * default mode.
-   */
-  readonly authMode?: ProviderAuthMode;
-  /**
-   * Plaintext credential for the selected {@link authMode}. Required whenever
-   * the chosen backend and mode both say a secret is needed; omitted for
-   * backends that authenticate from an ambient credential chain.
+   * Absolute path to the config directory. Required — a profile with no
+   * directory has no account and no history, and guessing one on the user's
+   * behalf is what the old bare-name scheme did.
    *
-   * Named `apiKey` for continuity, but it is whatever the mode expects — an API
-   * key, or a subscription token the user minted themselves. Apollo does not
-   * mint it either way.
+   * The main process offers a suggestion (`profiles:suggestDir`) so the field
+   * arrives prefilled rather than empty.
    */
-  readonly apiKey?: string;
+  readonly configDir: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
-  /**
-   * Override the generated config directory name. Must be a bare directory
-   * name — no separators, no `..`. Normally omitted.
-   */
-  readonly configDirName?: string;
 }
 
-/**
- * Fields the renderer may change on an existing profile.
- *
- * `apiKey` is tri-state: omit to leave the stored credential alone, pass a
- * string to replace it, pass `null` to delete it.
- */
+/** Fields the renderer may change on an existing profile. */
 export interface ProfilePatch {
   readonly label?: string;
-  readonly backend?: ProviderBackend;
   /**
-   * Switch the profile's auth mode. Omit to leave it alone.
+   * Repoint the profile at a different directory. Omit to leave it alone.
    *
-   * Changing this changes what gets billed, and the stored credential is *not*
-   * migrated: a key is not a subscription token. Send `apiKey` alongside it.
+   * Changing this changes which account and which history the profile has. The
+   * old directory is left on disk untouched — it may be another profile's, or
+   * the user's own `~/.claude`.
    */
-  readonly authMode?: ProviderAuthMode;
-  readonly apiKey?: string | null;
+  readonly configDir?: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
 }
 
 /**
- * Mask a credential for display.
+ * Why this string is unusable as a config directory, or `null` if it is fine.
  *
- * Keeps a recognisable prefix and the last four characters, so a user can tell
- * two keys apart without the masked form being useful to anyone else.
+ * Returns a message rather than a boolean because every caller has to explain
+ * the refusal to someone: the editor renders it under the field, the IPC
+ * boundary returns it as an error. A bare `false` would make each of them
+ * invent their own wording for a rule defined here.
  *
- * ```ts
- * maskApiKey('sk-ant-api03-Zx9...q4f2a') // → 'sk-ant-...4f2a'
- * ```
+ * The rules are deliberately few. This is a path the user typed or picked in a
+ * native dialog, and Apollo's job is to reject what cannot possibly work, not
+ * to have opinions about where someone keeps their files:
  *
- * Short or empty inputs collapse to a fixed placeholder rather than leaking a
- * high proportion of their characters.
+ *  - **Absolute**, because it is resolved by a child process whose working
+ *    directory is not the user's.
+ *  - **No `..` segments**, because a stored record is re-read later and a path
+ *    that walks upward is a path that means something different depending on
+ *    what has been renamed since.
+ *  - **Not a filesystem root**, which is never what anyone meant and is the one
+ *    value that would make a recursive delete catastrophic.
  *
- * @param key      the plaintext credential
- * @param visible  how many trailing characters to keep (default 4)
+ * Note what is *not* checked: existence. The directory is created on first use,
+ * and demanding it exist would stop a user naming a fresh one.
  */
-export function maskApiKey(key: string | null | undefined, visible = 4): string | null {
-  if (key === null || key === undefined) return null;
-  const trimmed = key.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.length <= visible * 2) return '••••';
+export function configDirProblem(value: unknown): string | null {
+  if (typeof value !== 'string') return 'A config directory is required.';
 
-  const tail = trimmed.slice(-visible);
-  // Preserve a leading vendor prefix like `sk-ant-` when there is one, because
-  // it tells the user which kind of credential they are looking at.
-  const prefixMatch = /^([A-Za-z]{2,8}-[A-Za-z]{2,8}-)/.exec(trimmed);
-  const prefix = prefixMatch?.[1] ?? trimmed.slice(0, 3);
-  return `${prefix}...${tail}`;
-}
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return 'A config directory is required.';
 
-/**
- * Does this credential look like what the chosen auth mode expects?
- *
- * A malformed credential is otherwise invisible until a run fails, and the
- * failure it produces is opaque: the provider answers `401 invalid bearer
- * token`, which says nothing about *why*. Catching the obvious cases at entry
- * turns a mid-run mystery into a message next to the field the user just typed
- * into.
- *
- * This is deliberately a **warning, not a rejection**. Vendor prefixes are a
- * convention, not a contract — they have changed before and will again, and a
- * hard block would lock a user out of a credential that works perfectly well.
- * Callers should surface the message and still let the save proceed.
- *
- * Returns `null` when nothing looks wrong, or when there is nothing to judge.
- */
-export function credentialShapeWarning(
-  secret: string | null | undefined,
-  authMode: ProviderAuthMode | undefined,
-): string | null {
-  if (secret === null || secret === undefined) return null;
-  const trimmed = secret.trim();
-  if (trimmed.length === 0) return null;
-
-  // Whitespace inside a credential is nearly always a broken copy-paste — a
-  // wrapped terminal line, or a selection that swallowed a trailing newline.
-  if (/\s/.test(trimmed)) {
-    return 'That looks like it contains a space or line break. Credentials are a single unbroken string — check the copy.';
+  // Both separators are checked regardless of host platform: a profiles file
+  // written on Windows can be read on macOS, and vice versa.
+  const segments = trimmed.split(/[\\/]/);
+  if (segments.includes('..')) {
+    return 'The path cannot contain “..”. Give the directory’s full location.';
   }
 
-  // The single most likely mistake, and the one that motivated this check.
-  //
-  // `claude setup-token` opens a browser. When the browser cannot reach the
-  // CLI's local callback server — common over SSH, in WSL2 and in containers —
-  // it displays a LOGIN CODE instead of redirecting. That code is an OAuth
-  // authorization code and its state parameter joined by "#", and it belongs in
-  // the terminal, at the CLI's "Paste code here if prompted" prompt. The token
-  // is what the terminal prints *afterwards*.
-  //
-  // Pasted here instead, it is sent as a bearer token and comes back as a bare
-  // `401 invalid bearer token`, which points at nothing.
-  if (trimmed.includes('#') && !trimmed.startsWith('sk-ant-')) {
-    return 'That looks like the login code from the browser, not the token. Paste it back into the terminal at the “Paste code here if prompted” prompt — `claude setup-token` prints the actual token after that.';
+  const isPosixAbsolute = trimmed.startsWith('/');
+  // `C:\…` or `\\server\share`.
+  const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed);
+  if (!isPosixAbsolute && !isWindowsAbsolute) {
+    // `~` is not expanded anywhere in Apollo — a child process receives it
+    // literally and creates a directory called `~`, which is a mess to explain
+    // afterwards. Rejecting it up front is kinder than accepting it.
+    return trimmed.startsWith('~')
+      ? 'Apollo cannot expand “~”. Give the full path, starting with “/”.'
+      : 'The path must be absolute — it has to start with “/”.';
   }
 
-  // Anthropic credentials are `sk-ant-…`. Anything else is worth flagging
-  // before it becomes a 401 twenty seconds into a run.
-  if (!trimmed.startsWith('sk-ant-')) {
-    return authMode === 'subscription'
-      ? 'That does not look like a token from `claude setup-token`. Check you pasted the token the terminal printed, rather than a code from the browser page.'
-      : 'That does not look like an Anthropic API key, which starts with "sk-ant-". Check you pasted the right value.';
-  }
-
-  // Right vendor, wrong kind. An API key in subscription mode would be sent as
-  // a bearer token and rejected; a subscription token in api-key mode would be
-  // sent as `x-api-key` and rejected. Both fail identically and confusingly.
-  const looksLikeOAuthToken = trimmed.startsWith('sk-ant-oat');
-  const looksLikeApiKey = trimmed.startsWith('sk-ant-api');
-
-  // Only judge the pairing when a mode was actually chosen. A provider that
-  // declares no auth modes leaves `authMode` undefined, and there is no
-  // mismatch to report against a choice the user never made.
-  if (authMode === undefined) return null;
-
-  if (authMode === 'subscription' && looksLikeApiKey) {
-    return 'That looks like an API key, but this profile is set to subscription billing. Either switch this profile to API key, or paste the token from `claude setup-token`.';
-  }
-  if (authMode !== 'subscription' && looksLikeOAuthToken) {
-    return 'That looks like a subscription token from `claude setup-token`, but this profile is set to API key billing. Either switch this profile to subscription, or paste an API key.';
+  // Everything remaining is a separator, i.e. the path names a root.
+  if (segments.filter((segment) => segment.length > 0).length === (isWindowsAbsolute ? 1 : 0)) {
+    return 'That is the root of the filesystem. Choose a directory inside it.';
   }
 
   return null;
@@ -380,20 +219,22 @@ export function isSecretEnvKey(name: string): boolean {
  * {@link isSecretEnvKey} asks "does this hold a secret?". That is the wrong
  * question for a variable like `ANTHROPIC_BASE_URL`: it holds no secret, passes
  * the name heuristic cleanly, and yet points the provider — and therefore the
- * decrypted API key — at a host of the caller's choosing. A renderer that could
- * write one into `publicEnv` would exfiltrate the key without any secret ever
- * crossing IPC, defeating the masked `keyHint`, the leak scanner and
- * {@link ProfileMetadata} all at once.
+ * credential the CLI just logged in with — at a host of the caller's choosing.
  *
- * Four families, all of which redirect or expose traffic that carries the key:
+ * Apollo no longer stores a credential, which removes one exfiltration route
+ * and not this one: the CLI still sends a real token to whatever endpoint it is
+ * aimed at, and a renderer able to write one of these into `publicEnv` would
+ * aim it.
+ *
+ * Four families, all of which redirect or expose traffic that carries a token:
  *
  *  - **endpoint overrides** — send the request somewhere else outright.
  *  - **proxies** — route it through a host that can observe or alter it.
  *  - **TLS trust** — make interception by such a host undetectable.
  *  - **runtime injection** — `NODE_OPTIONS` can `--require` arbitrary code into
- *    the provider process, which holds the plaintext key in memory.
+ *    the provider process, which holds the credential in memory.
  *
- * A profile legitimately needs none of these: region and model selection go in
+ * A profile legitimately needs none of these: model selection goes in
  * `publicEnv`, but *routing* is Apollo's to decide. Enforced at the IPC boundary
  * and again in the profile store, so a hand-edited `profiles.json` is covered
  * too.
@@ -424,7 +265,7 @@ const CREDENTIAL_ROUTING_ENV_KEYS: readonly string[] = [
   'SSL_CERT_DIR',
   'REQUESTS_CA_BUNDLE',
   'CURL_CA_BUNDLE',
-  // runtime injection into the process holding the key
+  // runtime injection into the process holding the credential
   'NODE_OPTIONS',
 ];
 

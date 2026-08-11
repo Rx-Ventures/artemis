@@ -10,10 +10,11 @@
  * Two independent checks run over every payload on its way out:
  *
  *  1. **Structural.** Certain *key names* must never appear in anything the
- *     renderer receives. `secretRef`, `publicEnv` and `configDirName` are
- *     exactly the fields that distinguish `Profile` from `ProfileMetadata`, so
- *     their presence means someone returned the wrong shape. `apiKey` and
- *     friends mean someone returned a credential outright. This check is cheap
+ *     renderer receives. `publicEnv` is what distinguishes `Profile` from
+ *     `ProfileMetadata`, so its presence means someone returned the wrong
+ *     shape. `secretRef`, `apiKey` and friends mean someone returned a
+ *     credential outright — Apollo has none to return any more, which makes
+ *     their appearance a regression rather than a mistake. This check is cheap
  *     and it catches the realistic bug.
  *
  *  2. **Value shape.** Every string is matched against a set of credential
@@ -138,8 +139,19 @@ export interface ScanPolicy {
  *
  * Seeing any of these in a renderer-bound payload means the wrong type was
  * returned. That is the exact bug this module exists to prevent.
+ *
+ * `publicEnv` is what now distinguishes the two shapes, and `secretRef` /
+ * `apiKey` are kept as tripwires for a credential field returning — they no
+ * longer exist anywhere in Apollo, so any reappearance is a regression worth
+ * failing closed on.
+ *
+ * **`configDir` is deliberately absent from this list.** It used to be here as
+ * `configDirName`, back when a filesystem location had no business in the
+ * renderer. It is now a field of `ProfileMetadata`: the user chose the path,
+ * the sign-in command has to name it, and the profile screen cannot work
+ * without it. Adding it back would reject `profiles:list` at boot.
  */
-const PROFILE_LEAK_KEYS = ['secretref', 'apikey', 'api_key', 'publicenv', 'configdirname'];
+const PROFILE_LEAK_KEYS = ['secretref', 'apikey', 'api_key', 'publicenv'];
 
 /** Scan policy for `ipcMain.handle` responses. Strict: Apollo authors these. */
 export const RESPONSE_SCAN_POLICY: ScanPolicy = {

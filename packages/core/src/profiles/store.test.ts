@@ -1,3 +1,17 @@
+/**
+ * Tests for profile persistence.
+ *
+ * Two things here are worth more than the rest put together, and both are about
+ * destruction rather than storage:
+ *
+ *  - **The v1 migration.** A profile's config directory holds a real login and
+ *    real transcripts. A schema change that made those unreachable would look,
+ *    to the user, exactly like Apollo having deleted them.
+ *  - **The delete gate.** `configDir` is a path the *user* chose, and the most
+ *    useful thing to put there is their own `~/.claude`. `rm -r` against that
+ *    because a switch was left on is the worst thing this file could do.
+ */
+
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,23 +23,18 @@ import type { ProfileDraft } from '@rx-apollo/protocol';
 import { CLAUDE_CREDENTIALS } from '../adapters/claude.js';
 import { managedEnvKeys } from '../adapters/types.js';
 import { ProfileError } from './errors.js';
-import { InMemorySecretStore } from './secrets.js';
+import { profilesRoot } from './env.js';
 import { PROFILE_STORE_FILE, ProfileStore } from './store.js';
 
-const API_KEY = 'sk-ant-api03-000111222333444555666777888999aabb4f2a';
-
 let userDataDir: string;
-let secrets: InMemorySecretStore;
 let store: ProfileStore;
 let counter: number;
 
 beforeEach(async () => {
   userDataDir = await mkdtemp(path.join(tmpdir(), 'apollo-store-'));
-  secrets = new InMemorySecretStore();
   counter = 0;
   store = new ProfileStore({
     userDataDir,
-    secrets,
     // The store is provider-agnostic and takes this list rather than owning
     // one; the app builds it by unioning every registered adapter's spec.
     managedEnvKeys: managedEnvKeys(CLAUDE_CREDENTIALS),
@@ -38,14 +47,13 @@ afterEach(async () => {
   await rm(userDataDir, { recursive: true, force: true });
 });
 
+/** A directory inside Apollo's own root — the kind it created and may delete. */
+const owned = (name: string): string => path.join(profilesRoot(userDataDir), name);
+
 const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({
-  label: 'Work — Anthropic',
+  label: 'Work',
   providerId: 'claude',
-  // Stated explicitly: the store no longer invents `'anthropic'` when a draft
-  // omits the backend, because that is Claude's vocabulary and the store serves
-  // every provider. Absent now means "the provider's own default".
-  backend: 'anthropic',
-  apiKey: API_KEY,
+  configDir: owned('work'),
   ...overrides,
 });
 
@@ -53,66 +61,62 @@ async function readDocument(): Promise<string> {
   return readFile(path.join(userDataDir, PROFILE_STORE_FILE), 'utf8');
 }
 
+/* -------------------------------------------------------------------------- */
+/* Create                                                                     */
+/* -------------------------------------------------------------------------- */
+
 describe('ProfileStore — create', () => {
-  it('stores a record and puts the credential in the secret store', async () => {
+  it('stores a record', async () => {
     const profile = await store.create(draft());
 
     expect(profile).toMatchObject({
       id: 'id1',
-      label: 'Work — Anthropic',
+      label: 'Work',
       providerId: 'claude',
-      backend: 'anthropic',
-      secretRef: 'profile-id1',
+      configDir: owned('work'),
       publicEnv: {},
-      createdAt: 1_700_000_000_000,
-      updatedAt: 1_700_000_000_000,
     });
-    expect(profile.configDirName).toMatch(/^work-anthropic-id1$/);
-    expect(await secrets.get('profile-id1')).toBe(API_KEY);
   });
 
-  it('never writes the credential to disk', async () => {
+  it('has no credential to write anywhere', async () => {
     await store.create(draft());
-    const document = await readDocument();
+    const raw = await readDocument();
 
-    expect(document).not.toContain(API_KEY);
-    expect(document).not.toContain(API_KEY.slice(-8));
-    expect(document).toContain('profile-id1');
+    // Not a masked hint, not a `secretRef`, not a key. There is no secret in
+    // this model, so there is nothing in this file worth stealing.
+    expect(raw).not.toContain('secretRef');
+    expect(raw).not.toContain('keyHint');
+    expect(raw).not.toContain('sk-ant-');
   });
 
   it('writes the document with owner-only permissions', async () => {
     await store.create(draft());
-    const info = await stat(path.join(userDataDir, PROFILE_STORE_FILE));
+    const stats = await stat(path.join(userDataDir, PROFILE_STORE_FILE));
 
-    // Skipped on Windows, where mode bits are not meaningful.
-    if (process.platform !== 'win32') {
-      expect(info.mode & 0o077).toBe(0);
-    }
+    expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  it('allows a profile with no credential — the "needs setup" state', async () => {
-    const profile = await store.create(draft({ apiKey: undefined }));
-
-    expect(secrets.has(profile.secretRef)).toBe(false);
-    expect((await store.describe(profile)).keyHint).toBeNull();
+  it('creates the profile signed out, which is the ordinary first state', async () => {
+    // Signing in happens afterwards, in the user's own terminal. The store has
+    // no opinion about it and nothing to refuse.
+    await expect(store.create(draft())).resolves.toBeDefined();
   });
 
-  it('gives each profile its own config directory name', async () => {
-    const a = await store.create(draft({ label: 'Work' }));
-    const b = await store.create(draft({ label: 'Work' }));
-
-    expect(a.configDirName).not.toBe(b.configDirName);
+  it('lets two profiles share a config directory, which makes them one account', async () => {
+    // Occasionally what someone means. `suggestConfigDir` is what stops it
+    // happening by accident; the store does not forbid it on purpose.
+    await store.create(draft({ label: 'A' }));
+    await expect(store.create(draft({ label: 'B' }))).resolves.toBeDefined();
   });
 
-  it('accepts an explicit config directory name and rejects a duplicate', async () => {
-    await store.create(draft({ configDirName: 'chosen-name' }));
-    await expect(store.create(draft({ configDirName: 'chosen-name' }))).rejects.toBeInstanceOf(
+  it('refuses a relative config directory', async () => {
+    await expect(store.create(draft({ configDir: 'profiles/work' }))).rejects.toBeInstanceOf(
       ProfileError,
     );
   });
 
-  it('refuses a traversing config directory name', async () => {
-    await expect(store.create(draft({ configDirName: '../escape' }))).rejects.toBeInstanceOf(
+  it('refuses a traversing config directory', async () => {
+    await expect(store.create(draft({ configDir: '/tmp/../../etc' }))).rejects.toBeInstanceOf(
       ProfileError,
     );
   });
@@ -123,107 +127,72 @@ describe('ProfileStore — create', () => {
 
   it('refuses an unknown provider', async () => {
     await expect(
-      store.create(draft({ providerId: 'gemini' as ProfileDraft['providerId'] })),
+      store.create(draft({ providerId: 'nope' as ProfileDraft['providerId'] })),
     ).rejects.toBeInstanceOf(ProfileError);
   });
 
   it('refuses credential-shaped publicEnv', async () => {
-    for (const key of ['ANTHROPIC_API_KEY', 'MY_TOKEN', 'SOME_SECRET', 'DB_PASSWORD']) {
+    // Written to a plaintext file, so this is a hard error rather than a
+    // warning — and a credential set here would override the login anyway.
+    await expect(
+      store.create(draft({ publicEnv: { ANTHROPIC_AUTH_TOKEN: 'x' } })),
+    ).rejects.toBeInstanceOf(ProfileError);
+  });
+
+  it('refuses publicEnv that would redirect the credential', async () => {
+    // Holds no secret, passes the name heuristic, and yet aims the credential
+    // the CLI holds at a host of the writer's choosing.
+    for (const key of ['ANTHROPIC_BASE_URL', 'HTTPS_PROXY', 'NODE_OPTIONS', 'https_proxy']) {
       await expect(store.create(draft({ publicEnv: { [key]: 'x' } }))).rejects.toBeInstanceOf(
         ProfileError,
       );
     }
   });
 
-  it('refuses publicEnv that would redirect the credential', async () => {
-    // These hold no secret and sail past the credential-name heuristic, but
-    // `resolveEnv` puts the decrypted key into the same bundle — so accepting
-    // one is an exfiltration primitive for anything that can write a profile.
-    for (const key of [
-      'ANTHROPIC_BASE_URL',
-      'ANTHROPIC_CUSTOM_HEADERS',
-      'HTTPS_PROXY',
-      'https_proxy',
-      'NODE_EXTRA_CA_CERTS',
-      'NODE_OPTIONS',
-    ]) {
-      await expect(
-        store.create(draft({ publicEnv: { [key]: 'https://attacker.example' } })),
-      ).rejects.toBeInstanceOf(ProfileError);
-      await expect(
-        store.create(draft({ publicEnv: { [key]: 'https://attacker.example' } })),
-      ).rejects.toThrow(/where the profile's credential is sent/);
-    }
-  });
-
   it('still allows model and region settings in publicEnv', async () => {
-    const created = await store.create(
-      draft({ publicEnv: { ANTHROPIC_MODEL: 'claude-opus-4', AWS_REGION: 'us-west-2' } }),
+    const profile = await store.create(
+      draft({ publicEnv: { ANTHROPIC_MODEL: 'claude-sonnet-5', AWS_REGION: 'us-east-1' } }),
     );
-    expect(created.publicEnv).toEqual({
-      ANTHROPIC_MODEL: 'claude-opus-4',
-      AWS_REGION: 'us-west-2',
+
+    expect(profile.publicEnv).toEqual({
+      ANTHROPIC_MODEL: 'claude-sonnet-5',
+      AWS_REGION: 'us-east-1',
     });
   });
 
   it('refuses env Apollo manages itself', async () => {
-    for (const key of ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK']) {
-      await expect(store.create(draft({ publicEnv: { [key]: '1' } }))).rejects.toBeInstanceOf(
-        ProfileError,
-      );
-    }
+    await expect(
+      store.create(draft({ publicEnv: { CLAUDE_CONFIG_DIR: '/elsewhere' } })),
+    ).rejects.toBeInstanceOf(ProfileError);
   });
 
   it('refuses a malformed env name', async () => {
-    await expect(store.create(draft({ publicEnv: { 'not-a-var': 'x' } }))).rejects.toBeInstanceOf(
-      ProfileError,
-    );
-  });
-
-  it('stores the auth mode, and leaves it absent when the draft omits one', async () => {
-    const subscription = await store.create(draft({ authMode: 'subscription' }));
-    expect(subscription.authMode).toBe('subscription');
-
-    // No default invented here, for the same reason as `backend`: which mode is
-    // the usual one is the provider's answer, resolved when the env is built.
-    const unspecified = await store.create(draft({ label: 'Second' }));
-    expect(unspecified.authMode).toBeUndefined();
-  });
-
-  it('refuses a malformed auth mode id', async () => {
-    for (const bad of ['Subscription', 'sub scription', '1mode', 'a'.repeat(40)]) {
-      await expect(store.create(draft({ authMode: bad }))).rejects.toBeInstanceOf(ProfileError);
-    }
-  });
-
-  it('never writes a subscription token to disk either', async () => {
-    const token = 'sk-ant-oat01-0123456789abcdefdead';
-    await store.create(draft({ authMode: 'subscription', apiKey: token }));
-    const document = await readDocument();
-
-    // The mode is a record; the token is a secret. Only one of them is here.
-    expect(document).toContain('subscription');
-    expect(document).not.toContain(token);
-    expect(document).not.toContain(token.slice(-8));
+    await expect(
+      store.create(draft({ publicEnv: { 'not a name': 'x' } })),
+    ).rejects.toBeInstanceOf(ProfileError);
   });
 
   it('serialises concurrent creates without losing records', async () => {
-    await Promise.all(
-      Array.from({ length: 8 }, (_, i) => store.create(draft({ label: `Account ${i}` }))),
-    );
+    await Promise.all([
+      store.create(draft({ label: 'A', configDir: owned('a') })),
+      store.create(draft({ label: 'B', configDir: owned('b') })),
+      store.create(draft({ label: 'C', configDir: owned('c') })),
+    ]);
 
-    expect(await store.list()).toHaveLength(8);
-    const reopened = new ProfileStore({ userDataDir, secrets });
-    expect(await reopened.list()).toHaveLength(8);
+    expect(await store.list()).toHaveLength(3);
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* Read                                                                       */
+/* -------------------------------------------------------------------------- */
+
 describe('ProfileStore — read', () => {
   it('round-trips through the filesystem', async () => {
-    const created = await store.create(draft({ publicEnv: { AWS_REGION: 'us-east-1' } }));
+    await store.create(draft());
+    const fresh = new ProfileStore({ userDataDir });
 
-    const reopened = new ProfileStore({ userDataDir, secrets });
-    expect(await reopened.get(created.id)).toEqual(created);
+    expect(await fresh.list()).toHaveLength(1);
   });
 
   it('starts empty when there is no document yet', async () => {
@@ -232,40 +201,56 @@ describe('ProfileStore — read', () => {
 
   it('filters by provider', async () => {
     await store.create(draft());
+    expect(await store.list('codex')).toEqual([]);
     expect(await store.list('claude')).toHaveLength(1);
-    expect(await store.list('codex')).toHaveLength(0);
   });
 
   it('throws a typed error for a missing profile', async () => {
     await expect(store.require('nope')).rejects.toBeInstanceOf(ProfileError);
-    expect(await store.get('nope')).toBeUndefined();
   });
 
-  it('projects metadata with a masked hint and nothing else', async () => {
-    await store.create(draft());
-    const [metadata] = await store.listMetadata();
+  it('projects metadata with the config directory and nothing else', async () => {
+    const profile = await store.create(draft({ publicEnv: { AWS_REGION: 'us-east-1' } }));
+    const metadata = await store.describe(profile.id);
 
     expect(metadata).toEqual({
       id: 'id1',
-      label: 'Work — Anthropic',
+      label: 'Work',
       providerId: 'claude',
-      backend: 'anthropic',
-      keyHint: 'sk-ant-...4f2a',
+      configDir: owned('work'),
     });
+  });
+
+  it('suggests a directory no existing profile uses', async () => {
+    await store.create(draft({ label: 'Work' }));
+
+    expect(await store.suggestConfigDir('Work')).toBe(owned('work-2'));
   });
 
   it('refuses to parse a corrupt document', async () => {
     await mkdir(userDataDir, { recursive: true });
     await writeFile(path.join(userDataDir, PROFILE_STORE_FILE), '{ not json');
 
-    await expect(new ProfileStore({ userDataDir, secrets }).list()).rejects.toBeInstanceOf(
-      ProfileError,
-    );
+    await expect(new ProfileStore({ userDataDir }).list()).rejects.toBeInstanceOf(ProfileError);
   });
 
-  it('loads a profile written before the auth-mode axis existed', async () => {
-    // Absent means "the provider's default mode", so an old document keeps
-    // billing exactly the way it did before this feature landed.
+  it('refuses a document from a future schema version', async () => {
+    await mkdir(userDataDir, { recursive: true });
+    await writeFile(
+      path.join(userDataDir, PROFILE_STORE_FILE),
+      JSON.stringify({ version: 99, profiles: [] }),
+    );
+
+    await expect(new ProfileStore({ userDataDir }).list()).rejects.toBeInstanceOf(ProfileError);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* v1 migration                                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('ProfileStore — reading a version 1 document', () => {
+  async function writeLegacy(): Promise<void> {
     await mkdir(userDataDir, { recursive: true });
     await writeFile(
       path.join(userDataDir, PROFILE_STORE_FILE),
@@ -277,120 +262,79 @@ describe('ProfileStore — read', () => {
             label: 'Legacy',
             providerId: 'claude',
             backend: 'anthropic',
+            authMode: 'subscription',
             configDirName: 'legacy-old1',
             secretRef: 'profile-old1',
-            publicEnv: {},
+            publicEnv: { AWS_REGION: 'us-east-1' },
           },
         ],
       }),
     );
+  }
 
-    const [profile] = await new ProfileStore({ userDataDir, secrets }).list();
-    expect(profile?.authMode).toBeUndefined();
+  it('resolves the old bare name against the same root version 1 used', async () => {
+    await writeLegacy();
+    const [profile] = await new ProfileStore({ userDataDir }).list();
+
+    // The directory this points at already exists and holds the user's login
+    // and transcripts. Getting this join wrong would present as Apollo having
+    // lost their account.
+    expect(profile?.configDir).toBe(owned('legacy-old1'));
   });
 
-  it('refuses a document with a malformed authMode', async () => {
-    await mkdir(userDataDir, { recursive: true });
-    await writeFile(
-      path.join(userDataDir, PROFILE_STORE_FILE),
-      JSON.stringify({
-        version: 1,
-        profiles: [
-          {
-            id: 'bad1',
-            label: 'Hand edited',
-            providerId: 'claude',
-            authMode: 'NOT A MODE',
-            configDirName: 'bad-bad1',
-            secretRef: 'profile-bad1',
-            publicEnv: {},
-          },
-        ],
-      }),
-    );
+  it('keeps the label and publicEnv, and drops the fields that no longer mean anything', async () => {
+    await writeLegacy();
+    const [profile] = await new ProfileStore({ userDataDir }).list();
 
-    await expect(new ProfileStore({ userDataDir, secrets }).list()).rejects.toBeInstanceOf(
-      ProfileError,
-    );
+    expect(profile).toMatchObject({ id: 'old1', label: 'Legacy', providerId: 'claude' });
+    expect(profile?.publicEnv).toEqual({ AWS_REGION: 'us-east-1' });
+    expect(profile).not.toHaveProperty('secretRef');
+    expect(profile).not.toHaveProperty('authMode');
+    expect(profile).not.toHaveProperty('backend');
   });
 
-  it('refuses a document from a future schema version', async () => {
-    await mkdir(userDataDir, { recursive: true });
-    await writeFile(
-      path.join(userDataDir, PROFILE_STORE_FILE),
-      JSON.stringify({ version: 99, profiles: [] }),
-    );
+  it('rewrites the document at the current version once it is touched', async () => {
+    await writeLegacy();
+    const migrated = new ProfileStore({ userDataDir, now: () => 1, newId: () => 'id9' });
+    await migrated.update('old1', { label: 'Renamed' });
 
-    await expect(new ProfileStore({ userDataDir, secrets }).list()).rejects.toBeInstanceOf(
-      ProfileError,
-    );
+    const raw = JSON.parse(await readDocument()) as { version: number };
+    expect(raw.version).toBe(2);
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* Update                                                                     */
+/* -------------------------------------------------------------------------- */
+
 describe('ProfileStore — update', () => {
-  it('changes label, backend and publicEnv', async () => {
+  it('changes label, config directory and publicEnv', async () => {
     const created = await store.create(draft());
     const updated = await store.update(created.id, {
       label: 'Renamed',
-      backend: 'bedrock',
+      configDir: owned('renamed'),
       publicEnv: { AWS_REGION: 'eu-west-1' },
     });
 
     expect(updated).toMatchObject({
-      id: created.id,
       label: 'Renamed',
-      backend: 'bedrock',
+      configDir: owned('renamed'),
       publicEnv: { AWS_REGION: 'eu-west-1' },
-      configDirName: created.configDirName,
-      secretRef: created.secretRef,
     });
   });
 
-  it('leaves the credential alone when apiKey is omitted', async () => {
-    const created = await store.create(draft());
-    await store.update(created.id, { label: 'Renamed' });
+  it('leaves fields the patch omits alone', async () => {
+    const created = await store.create(draft({ publicEnv: { AWS_REGION: 'us-east-1' } }));
+    const updated = await store.update(created.id, { label: 'Renamed' });
 
-    expect(await secrets.get(created.secretRef)).toBe(API_KEY);
+    expect(updated.configDir).toBe(owned('work'));
+    expect(updated.publicEnv).toEqual({ AWS_REGION: 'us-east-1' });
   });
 
-  it('replaces the credential when apiKey is a string', async () => {
+  it('refuses a malformed config directory on update', async () => {
     const created = await store.create(draft());
-    await store.update(created.id, { apiKey: 'sk-ant-api03-replacement-value-9999' });
 
-    expect(await secrets.get(created.secretRef)).toBe('sk-ant-api03-replacement-value-9999');
-    expect(await readDocument()).not.toContain('replacement');
-  });
-
-  it('removes the credential when apiKey is null', async () => {
-    const created = await store.create(draft());
-    await store.update(created.id, { apiKey: null });
-
-    expect(await secrets.get(created.secretRef)).toBeNull();
-    expect((await store.describe(created.id)).keyHint).toBeNull();
-  });
-
-  it('rejects an empty apiKey rather than silently deleting it', async () => {
-    const created = await store.create(draft());
-    await expect(store.update(created.id, { apiKey: '   ' })).rejects.toBeInstanceOf(ProfileError);
-    expect(await secrets.get(created.secretRef)).toBe(API_KEY);
-  });
-
-  it('switches the auth mode and leaves it alone when the patch omits it', async () => {
-    const created = await store.create(draft({ authMode: 'api-key' }));
-
-    const switched = await store.update(created.id, {
-      authMode: 'subscription',
-      apiKey: 'sk-ant-oat01-0123456789abcdefdead',
-    });
-    expect(switched.authMode).toBe('subscription');
-
-    const renamed = await store.update(created.id, { label: 'Renamed' });
-    expect(renamed.authMode).toBe('subscription');
-  });
-
-  it('rejects a malformed auth mode on update', async () => {
-    const created = await store.create(draft());
-    await expect(store.update(created.id, { authMode: 'NOT A MODE' })).rejects.toBeInstanceOf(
+    await expect(store.update(created.id, { configDir: 'relative' })).rejects.toBeInstanceOf(
       ProfileError,
     );
   });
@@ -400,60 +344,72 @@ describe('ProfileStore — update', () => {
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* Delete                                                                     */
+/* -------------------------------------------------------------------------- */
+
 describe('ProfileStore — delete', () => {
-  it('removes the record and the credential, keeping history by default', async () => {
+  it('removes the record and keeps history by default', async () => {
     const created = await store.create(draft());
-    const configDir = store.configDirFor(created);
-    await mkdir(configDir, { recursive: true });
+    await mkdir(created.configDir, { recursive: true });
 
     const result = await store.delete(created.id);
 
     expect(result).toEqual({ id: created.id, configDirDeleted: false });
     expect(await store.list()).toEqual([]);
-    expect(await secrets.get(created.secretRef)).toBeNull();
-    expect((await stat(configDir)).isDirectory()).toBe(true);
+    await expect(stat(created.configDir)).resolves.toBeDefined();
   });
 
-  it('removes the config directory on request', async () => {
+  it('removes a directory Apollo created, on request', async () => {
     const created = await store.create(draft());
-    const configDir = store.configDirFor(created);
-    await mkdir(path.join(configDir, 'projects'), { recursive: true });
+    await mkdir(created.configDir, { recursive: true });
 
     const result = await store.delete(created.id, { deleteConfigDir: true });
 
     expect(result.configDirDeleted).toBe(true);
-    await expect(stat(configDir)).rejects.toThrow();
+    await expect(stat(created.configDir)).rejects.toThrow();
+  });
+
+  it('REFUSES to delete a directory the user chose, however it is asked', async () => {
+    // The one that matters. A profile pointed at `~/.claude` names the user's
+    // real Claude installation — their login, every project transcript, and the
+    // credential every other profile pointing there depends on. A switch in a
+    // dialog is not authority to `rm -r` it.
+    const outside = path.join(userDataDir, 'not-apollos', '.claude');
+    await mkdir(outside, { recursive: true });
+    const created = await store.create(draft({ configDir: outside }));
+
+    const result = await store.delete(created.id, { deleteConfigDir: true });
+
+    // The profile goes; the directory stays; the caller is told which happened
+    // rather than left to assume the deletion took.
+    expect(result.configDirDeleted).toBe(false);
+    expect(await store.list()).toEqual([]);
+    await expect(stat(outside)).resolves.toBeDefined();
+  });
+
+  it('refuses to delete the profiles root itself', async () => {
+    // Equality with the root counts as outside: deleting it would take every
+    // profile's history at once.
+    const created = await store.create(draft({ configDir: profilesRoot(userDataDir) }));
+    await mkdir(created.configDir, { recursive: true });
+
+    const result = await store.delete(created.id, { deleteConfigDir: true });
+
+    expect(result.configDirDeleted).toBe(false);
+    await expect(stat(profilesRoot(userDataDir))).resolves.toBeDefined();
   });
 
   it('reports configDirDeleted false when there was no directory', async () => {
     const created = await store.create(draft());
-    const result = await store.delete(created.id, { deleteConfigDir: true });
 
-    expect(result.configDirDeleted).toBe(false);
+    expect(await store.delete(created.id, { deleteConfigDir: true })).toEqual({
+      id: created.id,
+      configDirDeleted: false,
+    });
   });
 
   it('rejects an unknown id', async () => {
     await expect(store.delete('nope')).rejects.toBeInstanceOf(ProfileError);
-  });
-
-  it('refuses to delete outside the profiles root', async () => {
-    const created = await store.create(draft());
-    const outside = path.join(userDataDir, 'sibling');
-    await mkdir(outside, { recursive: true });
-
-    // Simulate a hand-edited record pointing at an escape path.
-    const doc = JSON.parse(await readDocument()) as {
-      version: number;
-      profiles: Array<Record<string, unknown>>;
-    };
-    const first = doc.profiles[0];
-    if (first) first['configDirName'] = '../sibling';
-    await writeFile(path.join(userDataDir, PROFILE_STORE_FILE), JSON.stringify(doc));
-
-    const reopened = new ProfileStore({ userDataDir, secrets });
-    await expect(
-      reopened.delete(created.id, { deleteConfigDir: true }),
-    ).rejects.toBeInstanceOf(ProfileError);
-    expect((await stat(outside)).isDirectory()).toBe(true);
   });
 });

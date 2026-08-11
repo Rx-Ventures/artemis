@@ -99,8 +99,6 @@ function descriptor(
     id: 'claude',
     label: 'Test Provider',
     capabilities,
-    backends: [],
-    authModes: [],
     models: MODELS,
     effortLevels: EFFORTS,
     available: true,
@@ -128,7 +126,7 @@ function useProvider(capabilities: Capabilities, extra?: Partial<ProviderDescrip
   useApp.setState({
     providers: [descriptor(capabilities, extra)],
     activeProviderId: 'claude',
-    profiles: [{ id: 'p1', label: 'P', providerId: 'claude', keyHint: null }],
+    profiles: [{ id: 'p1', label: 'P', providerId: 'claude', configDir: '/Users/me/.claude' }],
     activeProfileId: 'p1',
     cwd: '/w',
     run: null,

@@ -13,9 +13,9 @@
  *
  * That last item was for a long time the exception that made the claim untrue:
  * credential resolution wrote Anthropic's variable names for every provider.
- * It now comes from `ProviderAdapter.credentials`, which is also what this file
- * publishes as `ProviderDescriptor.backends` so the profile editor can build
- * its backend picker from the selected provider instead of a hard-coded list.
+ * It now comes from `ProviderAdapter.credentials`, which is also where this
+ * file reads `signInHowTo` from, so the profile screen explains a sign-in in
+ * the words of the adapter whose command it is about to generate.
  *
  * ## Why unregistered providers still appear
  *
@@ -33,7 +33,7 @@ import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-apollo/protocol';
 
 import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';
-import { adapterError, authModeOptions, backendOptions } from './types.js';
+import { adapterError } from './types.js';
 import type { AdapterAvailability, ProviderAdapter, ProviderRegistry } from './types.js';
 
 /** Display names for every known provider, including ones not yet implemented. */
@@ -107,10 +107,9 @@ export function createProviderRegistry(
             id,
             label: PROVIDER_LABELS[id],
             capabilities: NO_CAPABILITIES,
-            // No adapter, so no backends or auth modes to offer. The profile
-            // editor renders empty pickers rather than someone else's lists.
-            backends: [],
-            authModes: [],
+            // No adapter, so no sign-in instructions to give. The profile
+            // editor says the provider is unavailable rather than handing out
+            // someone else's command.
             models: [],
             effortLevels: [],
             available: false,
@@ -124,14 +123,11 @@ export function createProviderRegistry(
           id,
           label: adapter.label,
           capabilities: adapter.capabilities,
-          // Published so the profile editor builds its backend picker from the
-          // selected provider, the way it already builds the permission-mode
-          // picker from `capabilities.permissionModes`.
-          backends: backendOptions(adapter.credentials),
-          // Same pattern for the auth-mode picker: which credentials a provider
-          // accepts, and which of them are legal on which backend, is the
-          // adapter's declaration rather than the UI's assumption.
-          authModes: authModeOptions(adapter.credentials),
+          // Published so the profile screen can explain the sign-in it is about
+          // to generate a command for, in the words of the adapter that owns
+          // that command — the same pattern as the permission-mode picker
+          // reading `capabilities.permissionModes`.
+          signInHowTo: adapter.credentials.signIn.howTo,
           // And the same again for the model and effort pickers. An adapter
           // that declares neither publishes empty lists rather than absent
           // ones, so the renderer can tell "no choice offered" from "this

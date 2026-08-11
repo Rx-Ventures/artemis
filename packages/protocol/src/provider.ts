@@ -155,82 +155,9 @@ export const NO_CAPABILITIES: Capabilities = {
 };
 
 /**
- * One hosting backend a provider can authenticate against.
- *
- * Backends are **provider-scoped**. Claude offers the first-party Anthropic API
- * plus Bedrock, Vertex and Foundry; another provider will offer a different set
- * or none at all. Publishing them here is what lets the profile editor build
- * its backend picker from the selected provider instead of from a hard-coded
- * list — the same pattern as {@link Capabilities.permissionModes}.
- */
-export interface ProviderBackendOption {
-  /** Stored in `Profile.backend`. See `ProviderBackend`. */
-  readonly id: string;
-  /** Human-readable name for the picker, e.g. "AWS Bedrock". */
-  readonly label: string;
-  /** One sentence on how this backend authenticates, shown under the picker. */
-  readonly note: string;
-  /**
-   * Whether a profile on this backend must carry an API key. False for
-   * backends that authenticate from an ambient credential chain, which is what
-   * lets the editor stop demanding a key it will never use.
-   */
-  readonly requiresApiKey: boolean;
-}
-
-/**
- * One way of authenticating with a provider, as the renderer sees it.
- *
- * Distinct from {@link ProviderBackendOption}: a backend says *where the models
- * are hosted*, an auth mode says *what the credential is and how the work is
- * billed*. Claude has both axes — the first-party API can be paid for with a
- * metered API key or against a subscription plan — and they are independent
- * enough that collapsing them into one picker would produce a list of
- * combinations rather than a list of choices.
- *
- * Like backends, auth modes are **provider-scoped**. Nothing in this package
- * names a mode: the adapter declares its own list, publishes it on
- * {@link ProviderDescriptor.authModes}, and the profile editor builds its
- * picker from that, the same way it builds the backend picker.
- */
-export interface ProviderAuthModeOption {
-  /** Stored in `Profile.authMode`. See `ProviderAuthMode`. */
-  readonly id: string;
-  /** Human-readable name for the picker, e.g. "API key". */
-  readonly label: string;
-  /** One sentence on what this mode authenticates as and how it bills. */
-  readonly note: string;
-  /**
-   * Whether a profile in this mode must carry a stored credential. A mode that
-   * authenticates from an ambient credential chain sets this false, which is
-   * what lets the editor stop demanding a secret it will never use.
-   */
-  readonly requiresSecret: boolean;
-  /**
-   * Backend ids this mode is valid on. Omit for "every backend this provider
-   * offers".
-   *
-   * Real constraint, not decoration: Claude's subscription billing exists only
-   * on the first-party Anthropic API, so a subscription profile pointed at
-   * Bedrock is a contradiction the editor should not let a user express and the
-   * credential resolver refuses outright.
-   */
-  readonly backends?: readonly string[];
-  /**
-   * How the user obtains the credential for this mode, in one or two sentences.
-   * Shown next to the secret field. Absent when the mode needs no secret.
-   *
-   * Apollo never runs an interactive login of its own, so for anything other
-   * than a pasted API key this is the *only* instruction the user gets.
-   */
-  readonly secretHowTo?: string;
-}
-
-/**
  * One model a provider can be pointed at, as the renderer sees it.
  *
- * The third list on this descriptor built to the same rule as
- * {@link ProviderBackendOption} and {@link ProviderAuthModeOption}, and for the
+ * Built to the same rule as {@link Capabilities.permissionModes}, and for the
  * same reason: model identifiers are a provider's vocabulary, not a universal
  * one. `claude-sonnet-5` means nothing to Codex. Nothing in this package names
  * a model; the adapter declares its own list and the model picker is built from
@@ -335,28 +262,24 @@ export interface ProviderDescriptor {
   readonly label: string;
   readonly capabilities: Capabilities;
   /**
-   * Hosting backends this provider offers, in display order. The first entry is
-   * the default. Empty for a provider with no backend concept — and for one
-   * that is not registered in this build.
-   */
-  readonly backends: readonly ProviderBackendOption[];
-  /**
-   * Authentication modes this provider offers, in display order. The first
-   * entry is the default.
+   * How the user signs a profile in, in one or two sentences.
    *
-   * Optional so that a descriptor assembled before this axis existed still
-   * satisfies the contract; the registry populates it for every registered
-   * provider. Absent or empty both mean "this provider has one implicit way of
-   * authenticating", and the editor renders no picker.
+   * The provider's login is the user's to run — Apollo sets the config
+   * directory and reads the result back — so this is the only instruction they
+   * get, and it is the adapter's to write because the command is its own. Shown
+   * beside the generated command on the profile screen.
+   *
+   * Absent for a provider that needs no sign-in, or one not registered in this
+   * build.
    */
-  readonly authModes?: readonly ProviderAuthModeOption[];
+  readonly signInHowTo?: string;
   /**
    * Models this provider offers, in display order. The first entry is the
    * default — what a run gets when {@link RunInput.model} is omitted.
    *
-   * Optional for the same reason {@link authModes} is: a descriptor assembled
-   * before this axis existed still satisfies the contract. Absent or empty both
-   * mean "no model choice", and the picker says so rather than vanishing.
+   * Optional so a descriptor assembled before this axis existed still satisfies
+   * the contract. Absent or empty both mean "no model choice", and the picker
+   * says so rather than vanishing.
    */
   readonly models?: readonly ProviderModelOption[];
   /**

@@ -2,71 +2,73 @@
  * Profile management.
  * ============================================================================
  *
- * A profile is a named environment bundle: a credential, a hosting backend, an
- * authentication mode, and an isolated config directory. Four rules shape this
- * screen and none of them is negotiable:
+ * A profile is a name and a config directory. That is the whole model, and it
+ * is a deliberate collapse of what used to be here.
  *
- *  1. **A credential travels one way.** The plaintext goes renderer → main
- *     exactly once, on submit, and what comes back is a masked hint. The secret
- *     input below is *uncontrolled*: the value is read from the DOM at submit
- *     time, passed straight to the bridge, and the field is cleared in the same
- *     tick. It is never in React state, never in a store, never in a re-render.
+ * ## What this screen used to ask for, and why it no longer does
  *
- *  2. **Apollo never performs a login.** There is no OAuth flow here, no browser
- *     handoff, no token refresh. Every credential — API key or subscription
- *     token — is one the *user* obtained in their own terminal and pasted in.
- *     The subscription mode's instructions say so in as many words, because
- *     that is the one place a user might reasonably expect a "Sign in" button.
+ * It asked for a provider, a hosting backend, an authentication mode, and a
+ * pasted credential. Four decisions, of which the user could realistically make
+ * one — and the instructions for the credential were, by then, impossible to
+ * follow: they told the user to paste a token that the adapter had already
+ * stopped emitting. The screen described a mechanism the app no longer had.
  *
- *  3. **Every picker is built from the provider descriptor.** Backends, auth
- *     modes, and which modes are legal on which backend all come off
- *     `providers:list`. Hard-coding any of them would show Anthropic's options
- *     under a provider that has never heard of them — which is precisely the
- *     bug that moved these lists behind the seam in the first place.
+ * What it actually has is simpler and better. `claude auth login`, run with
+ * `CLAUDE_CONFIG_DIR` pointed at a directory, writes a credential belonging to
+ * that directory alone. So a profile needs to know one thing — which directory
+ * — and the account follows from it. There is no credential to paste, no
+ * billing mode to choose (a plan is what Apollo supports), and no backend
+ * (Bedrock, Vertex and Foundry went with the credential they authenticated).
  *
- *  4. **The billing difference is stated, not implied.** An API key bills
- *     metered API usage; a subscription token bills a plan. The two travel in
- *     different environment variables and one silently overrides the other, so
- *     the profile must say which it means and the user must be able to see
- *     which they chose without guessing.
+ * ## Three steps, in the order the user experiences them
  *
- * ---------------------------------------------------------------------------
- * THIS IS A SECTION, NOT A SCREEN
- * ---------------------------------------------------------------------------
+ *  1. **Name it and point it at a directory.** Apollo suggests one inside its
+ *     own data directory; the user may replace it with any absolute path,
+ *     which is how you attach a profile to the `~/.claude` you are already
+ *     signed in to.
+ *  2. **Run one command.** Apollo generates it, the user runs it in their own
+ *     terminal. Apollo does not spawn it — see `signIn.ts` for why that was
+ *     worse.
+ *  3. **Apollo notices.** The screen polls the config directory and moves on by
+ *     itself when the login lands.
  *
- * It used to own the window: `absolute inset-0`, its own header, its own close
- * button, its own scroll container. It is now one pane inside the settings
- * dialog (`components/settings/`), which supplies all four. What is left here
- * is the body — and only the body, because a pane that drew its own scroller
- * inside the dialog's would trap the wheel at a boundary the user cannot see.
+ * Step 3 is what makes step 2 tolerable: nobody has to come back and press a
+ * button to tell the app what it can see for itself.
  *
- * The file kept its name and its path deliberately. Everything above this
- * paragraph is credential-handling code that is right for reasons that are not
- * obvious, and moving 600 lines of it into a new directory to gain a tidier
- * filename would have turned a reviewable diff into a re-read.
+ * ## Two rules that outlived the credential
+ *
+ *  - **Apollo performs no login.** Unchanged, and now structural rather than a
+ *    policy — there is no code here that could grow into one.
+ *  - **The directory is the account boundary.** Two profiles pointed at one
+ *    directory are one account. That is allowed, because it is occasionally
+ *    what someone means.
  */
 
-import { useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { PlusIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
-import { credentialShapeWarning, isCredentialRoutingEnvKey, isSecretEnvKey } from '@rx-apollo/protocol';
-import type {
-  ProfileMetadata,
-  ProviderAuthModeOption,
-  ProviderBackend,
-  ProviderId,
-} from '@rx-apollo/protocol';
-
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import {
-  authModeSupportsBackend,
-  authModesOf,
-  describeCredential,
-  needsSecret,
-  resolveAuthMode,
-  resolveBackend,
-} from '../lib/authModes';
-import { createProfile, deleteProfile, updateProfile, useApp } from '../state/store';
-import { IconButton, WithReason } from './disabled-reason';
-import { ToneBadge } from './primitives';
+  CheckIcon,
+  CopyIcon,
+  FolderSearchIcon,
+  PlusIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+} from 'lucide-react';
+import { configDirProblem } from '@rx-apollo/protocol';
+import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-apollo/protocol';
+
+import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
+import { shortenPath } from '../lib/paths';
+import {
+  createProfile,
+  deleteProfile,
+  readAuthStatus,
+  signOutProfile,
+  suggestConfigDir,
+  updateProfile,
+  useApp,
+} from '../state/store';
+import { IconButton, ReasonButton } from './disabled-reason';
+import { CodeBlock, ToneBadge } from './primitives';
 import { SettingsPane } from './settings/pane';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -82,24 +84,23 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+
+/**
+ * How often the sign-in step re-reads the config directory.
+ *
+ * Each poll spawns a short-lived `claude auth status` subprocess, so this is a
+ * trade between "the screen feels dead" and "the machine is busy". Two seconds
+ * is comfortably under the time it takes to complete a browser login, and the
+ * poll only runs while the sign-in step is actually on screen.
+ */
+const POLL_INTERVAL_MS = 2_000;
 
 export function ProfilesSection(): ReactElement {
   const profiles = useApp((s) => s.profiles);
@@ -117,7 +118,7 @@ export function ProfilesSection(): ReactElement {
   return (
     <SettingsPane
       title="Profiles"
-      description="Each profile is its own credential and its own isolated history. Switching is manual — Apollo never pools accounts or rotates them for you."
+      description="Each profile is a Claude account and its own history, kept in its own config directory. Switching is manual — Apollo never pools accounts or rotates them for you."
       actions={
         creating ? null : (
           <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
@@ -150,18 +151,71 @@ export function ProfilesSection(): ReactElement {
           ),
         )}
 
-        {creating ? (
-          <ProfileForm onDone={() => setCreating(false)} onCancel={() => setCreating(false)} />
-        ) : null}
+        {creating ? <CreateProfileFlow onDone={() => setCreating(false)} /> : null}
 
         <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
-          Credentials are stored by the main process in the operating system’s encrypted credential
-          store. The interface you are looking at only ever receives a masked hint — it has no way
-          to read one back, and nothing on this screen can be reversed into one.
+          Apollo stores no credential of any kind. Signing in runs Claude’s own CLI against the
+          profile’s config directory, and the credential it writes stays there — Apollo sets one
+          environment variable and reads back whether it worked.
         </p>
       </div>
     </SettingsPane>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Login state                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Read one profile's login state, and keep it fresh while `poll` is true.
+ *
+ * Polling is opt-in per caller rather than always-on: the card list wants one
+ * reading on mount, while the sign-in step wants to watch. An always-polling
+ * hook would spawn a subprocess per profile per interval for a screen that is
+ * usually just sitting there.
+ */
+function useAuthStatus(
+  profileId: string | undefined,
+  poll: boolean,
+): { readonly status: AuthStatusInfo | undefined; readonly command: string; readonly checking: boolean } {
+  const cached = useApp((s) => (profileId === undefined ? undefined : s.authByProfile[profileId]));
+  const [command, setCommand] = useState('');
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    if (profileId === undefined) return;
+    let cancelled = false;
+
+    const read = async (): Promise<void> => {
+      setChecking(true);
+      const result = await readAuthStatus(profileId);
+      if (cancelled) return;
+      setChecking(false);
+      if (result) setCommand(result.signInCommand);
+    };
+
+    void read();
+    if (!poll) return () => {
+      cancelled = true;
+    };
+
+    const timer = setInterval(() => void read(), POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [profileId, poll]);
+
+  return { status: cached, command, checking };
+}
+
+/** One line describing who a directory is signed in as. */
+function describeAccount(status: AuthStatusInfo | undefined): string {
+  if (!status) return 'checking…';
+  if (!status.loggedIn) return status.error ?? 'not signed in';
+  const plan = status.subscriptionType ?? status.authMethod;
+  return [status.email ?? status.orgName ?? 'signed in', plan].filter(Boolean).join(' · ');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -179,13 +233,20 @@ function ProfileCard({
 }): ReactElement {
   const [confirming, setConfirming] = useState(false);
   const [alsoHistory, setAlsoHistory] = useState(false);
-  const provider = useApp((s) => s.providers.find((p) => p.id === profile.providerId));
+  const [signingIn, setSigningIn] = useState(false);
+  const platform = useApp((s) => s.platform);
+  const { status } = useAuthStatus(profile.id, signingIn);
 
-  // An absent backend or mode means "this provider's default", so both are
-  // named from the provider's own lists rather than assumed.
-  const backend = resolveBackend(provider, profile.backend);
-  const authMode = resolveAuthMode(provider, profile.backend, profile.authMode);
-  const credential = describeCredential(backend, authMode);
+  // Undefined means "not read yet", which must not render as signed out — the
+  // difference between "we do not know" and "you are not signed in" is the
+  // difference between a quiet dash and an amber warning.
+  const known = status !== undefined;
+  const signedIn = status?.loggedIn === true;
+
+  // Stop watching once the login lands. The step below collapses on its own.
+  useEffect(() => {
+    if (signedIn) setSigningIn(false);
+  }, [signedIn]);
 
   return (
     <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-ember/50' : 'ring-line')}>
@@ -193,11 +254,9 @@ function ProfileCard({
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-ink">{profile.label}</span>
           {active ? <ToneBadge tone="ember">active</ToneBadge> : null}
-          <ToneBadge>{profile.providerId}</ToneBadge>
-          {backend ? <ToneBadge tone="cyan">{backend.label}</ToneBadge> : null}
-          {credential ? (
-            <ToneBadge tone={credential.usesStoredSecret ? 'sage' : 'neutral'}>
-              {credential.label}
+          {known ? (
+            <ToneBadge tone={signedIn ? 'sage' : 'amber'}>
+              {signedIn ? 'signed in' : 'signed out'}
             </ToneBadge>
           ) : null}
           <span className="ml-auto flex items-center gap-1">
@@ -223,33 +282,44 @@ function ProfileCard({
         </div>
 
         <div className="flex items-center gap-2 font-mono text-2xs">
-          <span className="text-ink-faint">credential</span>
-          <span
-            className={cn(
-              // Amber only when a credential is *missing and needed*. A profile
-              // on an ambient-chain backend legitimately has none.
-              profile.keyHint
-                ? 'text-ink-muted'
-                : credential?.usesStoredSecret
-                  ? 'text-amber'
-                  : 'text-ink-faint',
-            )}
-          >
-            {profile.keyHint ?? 'none stored'}
+          <span className="text-ink-faint">account</span>
+          <span className={known && !signedIn ? 'text-amber' : 'text-ink-muted'}>
+            {describeAccount(status)}
           </span>
         </div>
 
-        {credential ? (
-          <p className="text-2xs leading-snug text-ink-faint">{credential.note}</p>
+        <div className="flex items-center gap-2 font-mono text-2xs">
+          <span className="text-ink-faint">config</span>
+          <span className="min-w-0 truncate text-ink-muted" title={profile.configDir}>
+            {shortenPath(profile.configDir, { platform, max: 48 })}
+          </span>
+        </div>
+
+        {/*
+          The sign-in affordance lives on the card, not only in the create
+          flow. A credential expires, a user signs out elsewhere, an account
+          gets switched — and every one of those leaves an existing profile
+          needing exactly the step the create flow ends with.
+        */}
+        {known && !signedIn && !signingIn ? (
+          <div className="mt-1">
+            <Button size="xs" variant="outline" onClick={() => setSigningIn(true)}>
+              Sign in
+            </Button>
+          </div>
+        ) : null}
+
+        {signingIn ? (
+          <div className="mt-1">
+            <SignInStep profileId={profile.id} onDone={() => setSigningIn(false)} />
+          </div>
         ) : null}
 
         {/*
-          A modal rather than the inline `Alert` this used to be. Deleting a
-          profile destroys a credential the user cannot get back from Apollo, and
-          an inline panel inside a scrolling list can be confirmed with a stray
-          click on a row that has since moved. `AlertDialog` takes the focus,
-          traps it, and makes Escape mean cancel — which is the behaviour an
-          irreversible action is owed.
+          A modal rather than an inline panel. Deleting a profile is
+          irreversible, and an inline confirm inside a scrolling list can be
+          triggered by a stray click on a row that has since moved.
+          `AlertDialog` takes the focus, traps it, and makes Escape mean cancel.
 
           `alsoHistory` is reset on close, not only on confirm: leaving it on
           would carry a much larger deletion over to whichever profile the user
@@ -271,8 +341,8 @@ function ProfileCard({
                 Delete “{profile.label}”?
               </AlertDialogTitle>
               <AlertDialogDescription className="text-2xs leading-relaxed">
-                The stored credential is destroyed immediately and cannot be recovered. You would
-                have to obtain a new one and paste it in again.
+                The profile record is removed from Apollo. The config directory it points at —
+                including the login inside it — is left alone unless you ask below.
               </AlertDialogDescription>
             </AlertDialogHeader>
 
@@ -288,7 +358,9 @@ function ProfileCard({
                 htmlFor={`delete-history-${profile.id}`}
                 className="text-2xs leading-relaxed font-normal text-ink-muted"
               >
-                Also delete this profile’s isolated config directory and its session history.
+                Also delete the config directory and its session history. Apollo only does this for
+                directories it created itself — one you chose, such as your own{' '}
+                <code className="font-mono">~/.claude</code>, is never deleted.
               </Label>
             </div>
 
@@ -310,74 +382,196 @@ function ProfileCard({
 }
 
 /* -------------------------------------------------------------------------- */
+/* Create                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Create, then sign in — one card, two steps.
+ *
+ * The profile is written to disk between them. That ordering is not incidental:
+ * the sign-in command names the config directory, and until the profile exists
+ * there is nothing to name or to poll. It also means an interrupted sign-in
+ * leaves a real profile that the card list can offer to finish, rather than
+ * losing the user's work because they closed a dialog.
+ */
+function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactElement {
+  const [createdId, setCreatedId] = useState<string | null>(null);
+
+  if (createdId === null) {
+    return <ProfileForm onDone={setCreatedId} onCancel={onDone} />;
+  }
+
+  return (
+    <Card size="sm" className="bg-panel ring-1 ring-ember/35">
+      <CardContent className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-ink">Sign in</h2>
+        <SignInStep profileId={createdId} onDone={onDone} />
+      </CardContent>
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sign-in step                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The command, and the wait.
+ *
+ * Apollo generates the line, the user runs it, and this polls until the config
+ * directory says a credential arrived. Nothing here spawns the login — see
+ * `@rx-apollo/core`'s `signIn.ts` for the three specific ways that went wrong
+ * when it did.
+ */
+function SignInStep({
+  profileId,
+  onDone,
+}: {
+  readonly profileId: string;
+  readonly onDone: () => void;
+}): ReactElement {
+  const { status, command, checking } = useAuthStatus(profileId, true);
+  const provider = useApp((s) => s.providers.find((p) => p.id === s.activeProviderId));
+  const [copied, setCopied] = useState(false);
+  const signedIn = status?.loggedIn === true;
+
+  const copy = useCallback(async (): Promise<void> => {
+    if (command.length === 0) return;
+    await navigator.clipboard.writeText(command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1_500);
+  }, [command]);
+
+  if (signedIn) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Alert className="border-sage/40 bg-sage/5">
+          <CheckIcon />
+          <AlertTitle className="text-2xs text-sage">Signed in</AlertTitle>
+          <AlertDescription className="font-mono text-2xs text-ink-muted">
+            {describeAccount(status)}
+          </AlertDescription>
+        </Alert>
+        <div>
+          <Button size="sm" onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-2xs leading-relaxed text-ink-muted">
+        {provider?.signInHowTo ??
+          'Run this in a terminal to sign this profile in. Apollo watches its config directory and continues on its own.'}
+      </p>
+
+      <div className="flex items-start gap-2">
+        <CodeBlock text={command || 'preparing…'} className="min-w-0 flex-1" />
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => void copy()}
+          disabled={command.length === 0}
+          aria-label="Copy the sign-in command"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+
+      {/*
+        A read that *failed* is not the same as a directory that is signed out,
+        and the two need different reactions from the user: one means "finish
+        the login", the other means "your CLI is not where Apollo can run it".
+        Only the second is worth interrupting for.
+      */}
+      {status?.error ? (
+        <Alert variant="destructive" className="border-signal/40 bg-signal/5">
+          <TriangleAlertIcon />
+          <AlertDescription className="font-mono text-2xs text-signal">
+            {status.error}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="flex items-center gap-2 text-2xs text-ink-faint">
+        {checking ? <Spinner className="size-3" /> : null}
+        <span>Waiting for the login to complete — this updates by itself.</span>
+        <Button size="xs" variant="ghost" className="ml-auto" onClick={onDone}>
+          Finish later
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Form                                                                       */
 /* -------------------------------------------------------------------------- */
 
 interface FormProps {
-  readonly profile?: ProfileMetadata;
-  readonly onDone: () => void;
+  /** Receives the profile id, so the caller can move on to signing it in. */
+  readonly onDone: (profileId: string) => void;
   readonly onCancel: () => void;
+  readonly profile?: ProfileMetadata;
 }
 
 function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
-  const providers = useApp((s) => s.providers);
   const fallbackProvider = useApp((s) => s.activeProviderId);
+  const platform = useApp((s) => s.platform);
 
   const [label, setLabel] = useState(profile?.label ?? '');
-  const [providerId, setProviderId] = useState<ProviderId>(profile?.providerId ?? fallbackProvider);
-  const [backendId, setBackendId] = useState<ProviderBackend | ''>(profile?.backend ?? '');
-  const [authModeId, setAuthModeId] = useState<string>(profile?.authMode ?? '');
+  const [configDir, setConfigDir] = useState(profile?.configDir ?? '');
   const [envText, setEnvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /**
-   * A soft warning about the pasted credential's shape.
-   *
-   * Advisory only — see `credentialShapeWarning`. Without it a malformed
-   * credential saves silently and fails later as `401 invalid bearer token`,
-   * which gives the user nothing to act on.
-   */
-  const [shapeWarning, setShapeWarning] = useState<string | null>(null);
-
-  const provider = providers.find((p) => p.id === providerId);
-  const backends = provider?.backends ?? [];
-  const modes = authModesOf(provider);
-
-  const selectedBackend = resolveBackend(provider, backendId === '' ? undefined : backendId);
-  /**
-   * The mode that will actually be used.
-   *
-   * Not simply "whatever is in `authModeId`": a mode may be legal on one
-   * backend and meaningless on another, so switching the backend can invalidate
-   * the current choice. Rather than silently submitting an impossible pair —
-   * which the credential resolver would refuse — the fallback is computed here
-   * and the substitution is announced below the picker.
-   */
-  const selectedMode = resolveAuthMode(
-    provider,
-    selectedBackend?.id,
-    authModeId === '' ? undefined : authModeId,
-  );
-  const modeWasSubstituted =
-    authModeId !== '' && selectedMode !== undefined && selectedMode.id !== authModeId;
-
-  /**
-   * The credential input is uncontrolled on purpose — see the file header.
-   * React never sees the value; it is read once, sent, and wiped.
-   */
-  const keyRef = useRef<HTMLInputElement>(null);
 
   const editing = profile !== undefined;
-  const secretRequired = needsSecret(selectedBackend, selectedMode);
-  const secretLabel = selectedMode?.label ?? 'API key';
+  const providerId: ProviderId = profile?.providerId ?? fallbackProvider;
+  const native = hasNativeDirectoryPicker();
+
   /**
-   * Worth warning about only when a stored credential is actually in play.
-   * On a backend with an ambient credential chain the mode is still recorded
-   * but nothing Apollo holds is read, so "your credential will not be migrated"
-   * would be a warning about an event that cannot happen.
+   * Whether the user has taken ownership of the path.
+   *
+   * Until they do, the suggestion tracks the label they are typing, so
+   * "Work" becomes `…/profiles/work` without anyone having to ask for it. The
+   * moment they edit or browse, the suggestion stops moving underneath them —
+   * a field that rewrites itself while you are looking at it is worse than one
+   * that starts out blank.
    */
-  const changingMode =
-    editing && secretRequired && selectedMode !== undefined && profile.authMode !== selectedMode.id;
+  const touched = useRef(editing);
+
+  useEffect(() => {
+    if (touched.current) return;
+    let cancelled = false;
+    void suggestConfigDir(label).then((suggestion) => {
+      if (!cancelled && !touched.current && suggestion) setConfigDir(suggestion);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [label]);
+
+  // The same rule the IPC boundary and the profile store apply, applied while
+  // the user is still typing, so a path is never accepted here and refused
+  // three layers down.
+  const pathProblem = configDir.trim().length === 0 ? null : configDirProblem(configDir);
+
+  const browse = async (): Promise<void> => {
+    const choice = await pickDirectory(configDir);
+    if (choice.status === 'chosen') {
+      touched.current = true;
+      setConfigDir(choice.path);
+      setError(null);
+      return;
+    }
+    // Cancelling is a decision, not a failure. Say nothing.
+    if (choice.status === 'cancelled') return;
+    setError(choice.message);
+  };
 
   function parseEnv(): Record<string, string> | string {
     const env: Record<string, string> = {};
@@ -386,19 +580,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       if (trimmed.length === 0 || trimmed.startsWith('#')) continue;
       const eq = trimmed.indexOf('=');
       if (eq <= 0) return `Cannot parse “${trimmed}”. Use NAME=value, one per line.`;
-      const name = trimmed.slice(0, eq).trim();
-      // The store refuses credential-shaped names, and so does this form: a
-      // credential pasted here would land in an unencrypted file.
-      if (isSecretEnvKey(name)) {
-        return `${name} looks like a credential. Put secrets in the credential field, not here.`;
-      }
-      // Likewise for names that decide where the credential is *sent*. The main
-      // process rejects these regardless — this only turns a round-trip error
-      // into an immediate one.
-      if (isCredentialRoutingEnvKey(name)) {
-        return `${name} controls where your credential is sent, which Apollo decides. Remove it.`;
-      }
-      env[name] = trimmed.slice(eq + 1).trim();
+      env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
     }
     return env;
   }
@@ -409,7 +591,13 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
     setError(null);
 
     if (label.trim().length === 0) {
-      setError('Give the profile a label.');
+      setError('Give the profile a name.');
+      return;
+    }
+
+    const problem = configDirProblem(configDir);
+    if (problem !== null) {
+      setError(problem);
       return;
     }
 
@@ -419,42 +607,31 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       return;
     }
 
-    // Read the credential out of the DOM and clear the field in the same
-    // statement block. From here it lives only in this local, for the duration
-    // of one await, and is never handed to React.
-    const input = keyRef.current;
-    const secret = input?.value ?? '';
-    if (input) input.value = '';
-
-    if (!editing && secretRequired && secret.trim().length === 0) {
-      setError(`The ${secretLabel} mode on ${selectedBackend?.label ?? 'this backend'} needs a credential.`);
+    setBusy(true);
+    if (profile) {
+      const ok = await updateProfile(profile.id, {
+        label: label.trim(),
+        configDir: configDir.trim(),
+        ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
+      });
+      setBusy(false);
+      if (ok) onDone(profile.id);
       return;
     }
 
-    // Omitted rather than guessed: an absent backend or mode means "this
-    // provider's default", which the provider itself resolves.
-    const chosenBackend = selectedBackend?.id;
-    const chosenMode = selectedMode?.id;
-
-    setBusy(true);
-    const okResult = profile
-      ? await updateProfile(profile.id, {
-          label: label.trim(),
-          ...(chosenBackend === undefined ? {} : { backend: chosenBackend }),
-          ...(chosenMode === undefined ? {} : { authMode: chosenMode }),
-          ...(secret.trim().length > 0 ? { apiKey: secret.trim() } : {}),
-          ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
-        })
-      : await createProfile({
-          label: label.trim(),
-          providerId,
-          ...(chosenBackend === undefined ? {} : { backend: chosenBackend }),
-          ...(chosenMode === undefined ? {} : { authMode: chosenMode }),
-          ...(secret.trim().length > 0 ? { apiKey: secret.trim() } : {}),
-          ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
-        });
+    const created = await createProfile({
+      label: label.trim(),
+      providerId,
+      configDir: configDir.trim(),
+      ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
+    });
     setBusy(false);
-    if (okResult) onDone();
+    // `createProfile` makes the new profile active, which is how the sign-in
+    // step below learns which id to poll.
+    if (created) {
+      const id = useApp.getState().activeProfileId;
+      if (id) onDone(id);
+    }
   }
 
   return (
@@ -469,171 +646,90 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
               {profile ? <ToneBadge>{profile.id.slice(0, 8)}</ToneBadge> : null}
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Field>
-                <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">
-                  Label
-                </FieldLabel>
-                <Input
-                  id="profile-label"
-                  value={label}
-                  placeholder="Work — Bedrock"
-                  autoComplete="off"
-                  onChange={(event) => setLabel(event.target.value)}
-                  className="font-mono text-xs md:text-xs"
-                />
-              </Field>
-
-              <Field>
-                <FieldLabel htmlFor="profile-provider" className="text-2xs text-ink-faint uppercase">
-                  Provider
-                </FieldLabel>
-                {/* Locked while editing: the provider decides the shape of
-                    everything below it, and a profile that changed providers
-                    would keep a credential minted for a different service. */}
-                <WithReason
-                  reason={editing ? 'A profile cannot change provider. Create a new one.' : undefined}
-                  className="w-full"
-                >
-                  <Select
-                    value={providerId}
-                    disabled={editing}
-                    onValueChange={(value) => {
-                      setProviderId(value as ProviderId);
-                      setBackendId('');
-                      setAuthModeId('');
-                    }}
-                  >
-                    <SelectTrigger id="profile-provider" className="w-full text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(providers.length > 0
-                        ? providers.map((p) => ({ id: p.id, label: p.label }))
-                        : [{ id: providerId, label: providerId }]
-                      ).map((option) => (
-                        <SelectItem key={option.id} value={option.id} className="text-xs">
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </WithReason>
-              </Field>
-
-              <Field>
-                <FieldLabel htmlFor="profile-backend" className="text-2xs text-ink-faint uppercase">
-                  Backend
-                </FieldLabel>
-                <WithReason
-                  reason={
-                    backends.length === 0
-                      ? 'This provider does not offer a backend choice.'
-                      : undefined
-                  }
-                  className="w-full"
-                >
-                  <Select
-                    value={selectedBackend?.id ?? ''}
-                    disabled={backends.length === 0}
-                    onValueChange={setBackendId}
-                  >
-                    <SelectTrigger id="profile-backend" className="w-full text-xs">
-                      <SelectValue placeholder="—" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {backends.map((option) => (
-                        <SelectItem key={option.id} value={option.id} className="text-xs">
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </WithReason>
-                <FieldDescription className="text-2xs">
-                  {selectedBackend?.note ?? 'Where the models are hosted.'}
-                </FieldDescription>
-              </Field>
-            </div>
-
-            {modes.length > 0 ? (
-              <AuthModeField
-                modes={modes}
-                selected={selectedMode}
-                backendId={selectedBackend?.id}
-                backendLabel={selectedBackend?.label}
-                substituted={modeWasSubstituted}
-                secretRequired={secretRequired}
-                onChange={setAuthModeId}
-              />
-            ) : null}
-
             <Field>
-              <FieldLabel htmlFor="profile-key" className="text-2xs text-ink-faint uppercase">
-                {editing ? `Replace ${secretLabel.toLowerCase()}` : secretLabel}
+              <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">
+                Name
               </FieldLabel>
               <Input
-                id="profile-key"
-                ref={keyRef}
-                type="password"
+                id="profile-label"
+                value={label}
+                placeholder="Work"
                 autoComplete="off"
-                spellCheck={false}
-                placeholder={secretRequired ? 'paste it here' : 'not required for this backend'}
-                defaultValue=""
-                className="font-mono text-xs md:text-xs"
-                onChange={(e) => setShapeWarning(credentialShapeWarning(e.target.value, selectedMode?.id))}
+                autoFocus={!editing}
+                onChange={(event) => setLabel(event.target.value)}
+                className="text-xs md:text-xs"
               />
-              <FieldDescription className="text-2xs">
-                {editing
-                  ? 'Leave blank to keep the stored credential. Anything typed here replaces it.'
-                  : 'Sent straight to encrypted storage. Apollo shows you a masked hint afterwards and cannot read it back.'}
-              </FieldDescription>
-              {selectedMode?.secretHowTo ? (
-                <FieldDescription className="text-2xs text-ink-muted">
-                  {selectedMode.secretHowTo}
-                </FieldDescription>
-              ) : null}
-              {/*
-                Advisory, not blocking: the save button stays enabled. Vendor
-                prefixes are a convention rather than a contract, so this warns
-                and gets out of the way.
-              */}
-              {shapeWarning ? (
-                <FieldDescription className="text-2xs text-amber">{shapeWarning}</FieldDescription>
-              ) : null}
             </Field>
-
-            {changingMode ? (
-              <Alert className="border-amber/40 bg-amber/5 text-amber">
-                <TriangleAlertIcon />
-                <AlertTitle className="text-2xs">
-                  Switching to “{selectedMode?.label}” changes what is billed
-                </AlertTitle>
-                <AlertDescription className="text-2xs text-amber/85">
-                  The stored credential is not migrated — a key is not a subscription token. Enter
-                  the credential for the new mode above, or this profile will have none.
-                </AlertDescription>
-              </Alert>
-            ) : null}
 
             <Field>
-              <FieldLabel htmlFor="profile-env" className="text-2xs text-ink-faint uppercase">
-                Extra environment (optional)
+              <FieldLabel htmlFor="profile-config-dir" className="text-2xs text-ink-faint uppercase">
+                Config directory
               </FieldLabel>
-              <Textarea
-                id="profile-env"
-                rows={2}
-                value={envText}
-                spellCheck={false}
-                placeholder="AWS_REGION=us-east-1"
-                onChange={(event) => setEnvText(event.target.value)}
-                className="min-h-14 font-mono text-xs md:text-xs"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  id="profile-config-dir"
+                  value={configDir}
+                  spellCheck={false}
+                  autoComplete="off"
+                  aria-invalid={pathProblem !== null}
+                  placeholder={platform === 'win32' ? 'C:\\Users\\you\\.claude' : '/Users/you/.claude'}
+                  onChange={(event) => {
+                    touched.current = true;
+                    setConfigDir(event.target.value);
+                    setError(null);
+                  }}
+                  className="min-w-0 flex-1 font-mono text-xs md:text-xs"
+                />
+                <ReasonButton
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void browse()}
+                  disabled={!native}
+                  disabledReason={native ? undefined : NO_PICKER_REASON}
+                  tooltip="Open your system's folder chooser."
+                >
+                  <FolderSearchIcon />
+                  Choose…
+                </ReasonButton>
+              </div>
               <FieldDescription className="text-2xs">
-                NAME=value per line. Credential-shaped names, and anything that decides where a
-                credential is sent, are rejected here.
+                Claude keeps this profile’s login and its session history here. Apollo suggests a
+                fresh directory; point it at an existing one — your own{' '}
+                <code className="font-mono">~/.claude</code>, say — to reuse an account you are
+                already signed in to.
               </FieldDescription>
+              {pathProblem ? (
+                <FieldDescription className="text-2xs text-amber">{pathProblem}</FieldDescription>
+              ) : null}
             </Field>
+
+            {/*
+              Edit only. Creating a profile is meant to be two fields and a
+              button; an "extra environment" box on that path is a question
+              nobody creating their first profile can answer, and it is
+              reachable a click later for the people who do want it.
+            */}
+            {editing ? (
+              <Field>
+                <FieldLabel htmlFor="profile-env" className="text-2xs text-ink-faint uppercase">
+                  Extra environment (optional)
+                </FieldLabel>
+                <Textarea
+                  id="profile-env"
+                  rows={2}
+                  value={envText}
+                  spellCheck={false}
+                  placeholder="ANTHROPIC_MODEL=claude-sonnet-5"
+                  onChange={(event) => setEnvText(event.target.value)}
+                  className="min-h-14 font-mono text-xs md:text-xs"
+                />
+                <FieldDescription className="text-2xs">
+                  NAME=value per line. Credential-shaped names, and anything that decides where a
+                  credential is sent, are rejected.
+                </FieldDescription>
+              </Field>
+            ) : null}
 
             {error ? (
               <Alert variant="destructive" className="border-signal/40 bg-signal/5">
@@ -646,122 +742,26 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
 
             <div className="flex items-center gap-2">
               <Button type="submit" disabled={busy}>
-                {editing ? 'Save changes' : 'Create profile'}
+                {editing ? 'Save changes' : 'Create and sign in'}
               </Button>
               <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
                 Cancel
               </Button>
+              {editing ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="ml-auto text-signal"
+                  disabled={busy}
+                  onClick={() => void signOutProfile(profile.id)}
+                >
+                  Sign out
+                </Button>
+              ) : null}
             </div>
           </FieldGroup>
         </form>
       </CardContent>
     </Card>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Auth mode                                                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The auth-mode picker.
- *
- * Modes that are illegal on the selected backend are rendered **disabled with
- * the reason inline**, never removed. A user hunting for "Claude subscription"
- * under Bedrock has to be able to see that it exists and learn that it belongs
- * to the Anthropic API — a list that silently shortens teaches nothing.
- */
-function AuthModeField({
-  modes,
-  selected,
-  backendId,
-  backendLabel,
-  substituted,
-  secretRequired,
-  onChange,
-}: {
-  readonly modes: readonly ProviderAuthModeOption[];
-  readonly selected: ProviderAuthModeOption | undefined;
-  readonly backendId: string | undefined;
-  readonly backendLabel: string | undefined;
-  readonly substituted: boolean;
-  readonly secretRequired: boolean;
-  readonly onChange: (id: string) => void;
-}): ReactElement {
-  return (
-    <Field>
-      <FieldLabel htmlFor="profile-auth-mode" className="text-2xs text-ink-faint uppercase">
-        Authentication &amp; billing
-      </FieldLabel>
-      <Select value={selected?.id ?? ''} onValueChange={onChange}>
-        <SelectTrigger id="profile-auth-mode" className="w-full text-xs sm:w-80">
-          <SelectValue placeholder="provider default" />
-        </SelectTrigger>
-        <SelectContent>
-          {modes.map((mode) => {
-            const allowed = authModeSupportsBackend(mode, backendId);
-            return (
-              <SelectItem
-                key={mode.id}
-                value={mode.id}
-                disabled={!allowed}
-                className="text-xs"
-              >
-                <span className="flex items-center gap-1.5">
-                  {mode.label}
-                  {allowed ? null : (
-                    <span className="font-mono text-2xs text-amber">
-                      {mode.backends?.join(', ')} only
-                    </span>
-                  )}
-                </span>
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
-
-      {/* On an ambient-chain backend the mode is still recorded, but nothing
-          Apollo stores is read and the mode's billing note would describe an
-          account that is not being charged. Say which it is. */}
-      {!secretRequired ? (
-        <FieldDescription className="text-2xs text-ink-muted">
-          {backendLabel ?? 'This backend'} authenticates from its own credential chain, so this
-          choice does not decide what is billed.
-        </FieldDescription>
-      ) : selected ? (
-        <FieldDescription className="text-2xs text-ink-muted">{selected.note}</FieldDescription>
-      ) : null}
-
-      {substituted ? (
-        <FieldDescription className="text-2xs text-amber">
-          The mode you had chosen is not available on {backendLabel ?? 'this backend'}, so
-          “{selected?.label}” will be used instead.
-        </FieldDescription>
-      ) : null}
-
-      {/*
-        The one place a user might reasonably expect a "Sign in with Claude"
-        button. There is not one today: Apollo holds credentials the user
-        brought, and performs no interactive login of any kind.
-
-        This is contingent, not architectural. Anthropic's Agent SDK terms do
-        not permit a third-party product to offer claude.ai login or
-        subscription rate limits "unless previously approved" — so the bar is
-        approval, not feasibility. If Apollo obtains that approval, an in-app
-        login becomes legitimate and this decision should be revisited.
-
-        Two things would change with it, and both are the reason paste-a-token
-        is the better default until then: Apollo would have to run the OAuth
-        handshake, and it would have to store and refresh a refresh token
-        rather than holding one long-lived credential in the keychain.
-      */}
-      {secretRequired ? (
-        <FieldDescription className="text-2xs">
-          Apollo does not sign you in. Obtain the credential yourself and paste it below — nothing on
-          this screen opens a browser or talks to an account.
-        </FieldDescription>
-      ) : null}
-    </Field>
   );
 }

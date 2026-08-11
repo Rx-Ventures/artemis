@@ -24,8 +24,8 @@ import { CheckIcon, XIcon } from 'lucide-react';
 import type { Capabilities } from '@rx-apollo/protocol';
 
 import { CAPABILITY_LABELS, type CapabilityKey } from '../hooks/useCapability';
-import { describeCredential, resolveAuthMode, resolveBackend } from '../lib/authModes';
 import { contextRatio, formatDuration, formatTokens, formatUsd } from '../lib/format';
+import { shortenPath } from '../lib/paths';
 import {
   activeCapabilities,
   activeEffort,
@@ -205,35 +205,42 @@ function ElapsedRow({ startedAt }: { readonly startedAt: number }): ReactElement
   return <Row label="elapsed">{formatDuration(Math.max(0, Date.now() - startedAt))}</Row>;
 }
 
+/**
+ * Which account this run is billed to.
+ *
+ * The config directory *is* the answer — it holds the credential — so the path
+ * is what gets shown, alongside whoever the last status read said was signed in
+ * there. A stale reading is possible and harmless: this is a diagnostic panel,
+ * and the profile screen is where the authoritative check lives.
+ */
 function AccountBlock(): ReactElement {
   const profile = useApp(activeProfile);
-  const provider = useApp(activeProvider);
+  const platform = useApp((s) => s.platform);
+  const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
 
   if (!profile) return <p className="py-1 text-2xs text-ink-faint">No profile selected.</p>;
-
-  const backend = resolveBackend(provider, profile.backend);
-  const mode = resolveAuthMode(provider, profile.backend, profile.authMode);
-  const credential = describeCredential(backend, mode);
 
   return (
     <>
       <Row label="profile" mono={false}>
         {profile.label}
       </Row>
-      <Row label="backend">{backend?.label ?? profile.backend ?? '—'}</Row>
-      <Row label="credential">
-        <span className={!profile.keyHint && credential?.usesStoredSecret ? 'text-amber' : undefined}>
-          {profile.keyHint ?? 'none stored'}
+      <Row label="account">
+        <span className={status !== undefined && !status.loggedIn ? 'text-amber' : undefined}>
+          {status === undefined
+            ? '—'
+            : status.loggedIn
+              ? [status.email ?? status.orgName ?? 'signed in', status.subscriptionType]
+                  .filter(Boolean)
+                  .join(' · ')
+              : 'not signed in'}
         </span>
       </Row>
-      {credential ? (
-        <>
-          <Row label="billing" mono={false}>
-            {credential.label}
-          </Row>
-          <p className="mt-1 text-2xs leading-snug text-ink-faint">{credential.note}</p>
-        </>
-      ) : null}
+      <Row label="config">
+        <span title={profile.configDir}>
+          {shortenPath(profile.configDir, { platform, max: 36 })}
+        </span>
+      </Row>
     </>
   );
 }

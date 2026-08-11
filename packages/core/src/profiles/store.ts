@@ -4,20 +4,24 @@
  * Profiles live in a single JSON document under Apollo's user-data directory:
  *
  * ```
- * <userDataDir>/profiles.json          the records  (no secrets, ever)
- * <userDataDir>/profiles/<dirName>/    one isolated CLAUDE_CONFIG_DIR each
+ * <userDataDir>/profiles.json          the records
+ * <userDataDir>/profiles/<name>/       config dirs Apollo suggested
  * ```
  *
- * The document contains labels, backends, config-directory *names* and
- * `secretRef` handles. It never contains a credential — the value behind a ref
- * lives in whatever {@link SecretStore} the host injected, which in the
- * desktop app is Electron `safeStorage`. That split is the whole point: this
- * file is readable plaintext by design, and there is nothing in it worth
- * stealing.
+ * The document contains labels and config-directory paths. It contains no
+ * credential and no handle to one — there is no secret store behind this file
+ * any more, because the provider's own CLI owns the credential and keeps it
+ * inside the config directory. This file is readable plaintext by design and
+ * there is nothing in it worth stealing.
+ *
+ * The second path above is only where Apollo's *suggestions* land. A profile's
+ * `configDir` is an absolute path the user chose and may point anywhere —
+ * commonly at the `~/.claude` they are already signed in to. Nothing here
+ * assumes otherwise, and {@link ProfileStore.delete} is careful about it.
  *
  * `@rx-apollo/core` must not import `electron`, so the store takes its user-data
- * directory and its secret storage as constructor arguments rather than
- * reaching for `app.getPath('userData')`.
+ * directory as a constructor argument rather than reaching for
+ * `app.getPath('userData')`.
  *
  * Every mutation is serialised through an internal lock and committed with a
  * write-to-temp-then-rename, so an interrupted write cannot truncate the file.
@@ -27,33 +31,43 @@ import { mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import {
-  isCredentialRoutingEnvKey,
-  isProviderAuthMode,
-  isProviderBackend,
-  isProviderId,
-  isSecretEnvKey,
-} from '@rx-apollo/protocol';
+import { isCredentialRoutingEnvKey, isProviderId, isSecretEnvKey } from '@rx-apollo/protocol';
 import type {
   Profile,
   ProfileDraft,
   ProfileId,
   ProfileMetadata,
   ProfilePatch,
-  ProviderAuthMode,
-  ProviderBackend,
   ProviderId,
 } from '@rx-apollo/protocol';
 
 import { ProfileError } from './errors.js';
-import { assertBareDirName, profileConfigDir, profilesRoot, readMetadata } from './env.js';
-import type { SecretStore } from './secrets.js';
+import {
+  assertConfigDir,
+  isApolloOwnedConfigDir,
+  profileConfigDir,
+  profilesRoot,
+  suggestConfigDir,
+  toMetadata,
+} from './env.js';
 
 /** File name of the profile document inside the user-data directory. */
 export const PROFILE_STORE_FILE = 'profiles.json';
 
 /** Schema version written into the document. */
-export const PROFILE_STORE_VERSION = 1;
+export const PROFILE_STORE_VERSION = 2;
+
+/**
+ * The previous schema, still readable.
+ *
+ * Version 1 stored `configDirName` — a bare directory name resolved under
+ * `<userDataDir>/profiles` — plus `secretRef`, `backend` and `authMode`. It is
+ * migrated on read rather than rejected: the directories those names point at
+ * hold real logins and real transcripts, and a user whose profiles vanished
+ * because Apollo changed its own file format would have no way to tell that
+ * their accounts were still there.
+ */
+const PROFILE_STORE_VERSION_LEGACY = 1;
 
 /** Valid POSIX environment variable name. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -68,14 +82,12 @@ interface PersistedDocument {
 export interface ProfileStoreOptions {
   /** Apollo's user-data directory. Injected — core cannot ask Electron for it. */
   readonly userDataDir: string;
-  /** Encrypted credential storage supplied by the host process. */
-  readonly secrets: SecretStore;
   /**
    * Variable names Apollo sets itself, across every registered provider —
    * normally the union of `managedEnvKeys(adapter.credentials)`.
    *
    * Used to reject `publicEnv` entries that would override Apollo's own
-   * credential and isolation choices. It is a *denylist*, so the union is the
+   * isolation choices. It is a *denylist*, so the union is the
    * right shape: over-rejecting a name one provider manages costs a user
    * nothing, while under-rejecting one silently breaks account isolation.
    *
@@ -95,9 +107,12 @@ export interface ProfileStoreOptions {
 /** Options for {@link ProfileStore.delete}. */
 export interface DeleteProfileOptions {
   /**
-   * Also remove the profile's isolated config directory, discarding its
-   * session history. Defaults to false: deleting an account should not
-   * silently destroy transcripts.
+   * Also remove the profile's config directory, discarding its session history.
+   * Defaults to false: deleting an account should not silently destroy
+   * transcripts.
+   *
+   * A *request*, not an instruction — see {@link ProfileStore.delete}, which
+   * honours it only for a directory Apollo created.
    */
   readonly deleteConfigDir?: boolean;
 }
@@ -105,7 +120,7 @@ export interface DeleteProfileOptions {
 /** Result of {@link ProfileStore.delete}. */
 export interface DeleteProfileResult {
   readonly id: ProfileId;
-  /** True when a config directory existed and was removed. */
+  /** True when a config directory existed, was Apollo's, and was removed. */
   readonly configDirDeleted: boolean;
 }
 
@@ -118,7 +133,6 @@ export interface DeleteProfileResult {
 export class ProfileStore {
   readonly #userDataDir: string;
   readonly #file: string;
-  readonly #secrets: SecretStore;
   readonly #managedEnvKeys: readonly string[];
   readonly #now: () => number;
   readonly #newId: () => ProfileId;
@@ -137,7 +151,6 @@ export class ProfileStore {
     }
     this.#userDataDir = path.resolve(options.userDataDir);
     this.#file = path.join(this.#userDataDir, options.fileName ?? PROFILE_STORE_FILE);
-    this.#secrets = options.secrets;
     this.#managedEnvKeys = options.managedEnvKeys ?? [];
     this.#now = options.now ?? (() => Date.now());
     this.#newId = options.newId ?? (() => randomUUID());
@@ -153,14 +166,24 @@ export class ProfileStore {
     return this.#file;
   }
 
-  /** Absolute path of `<userDataDir>/profiles`. */
+  /** Absolute path of `<userDataDir>/profiles`, where suggestions land. */
   get profilesRoot(): string {
     return profilesRoot(this.#userDataDir);
   }
 
-  /** Absolute path of one profile's isolated `CLAUDE_CONFIG_DIR`. */
+  /** Absolute path of one profile's config directory, re-validated. */
   configDirFor(profile: Profile | string): string {
-    return profileConfigDir(this.#userDataDir, profile);
+    return profileConfigDir(profile);
+  }
+
+  /**
+   * A config-directory path to offer for a profile that does not exist yet.
+   *
+   * Answers the `profiles:suggest-dir` IPC call. Nothing is created and nothing
+   * is reserved; the user may replace it with any directory they like.
+   */
+  async suggestConfigDir(label: string): Promise<string> {
+    return suggestConfigDir(this.#userDataDir, label, await this.#read());
   }
 
   /** Drop the in-memory cache so the next read hits disk. */
@@ -194,28 +217,15 @@ export class ProfileStore {
     return profile;
   }
 
-  /** The plaintext credential behind a profile, or `null`. Main process only. */
-  async readSecret(profile: Profile | ProfileId): Promise<string | null> {
-    const resolved = typeof profile === 'string' ? await this.require(profile) : profile;
-    return this.#secrets.get(resolved.secretRef);
-  }
-
-  /** Renderer-safe projection of one profile, with a masked key hint. */
+  /** Renderer-safe projection of one profile. */
   async describe(profile: Profile | ProfileId): Promise<ProfileMetadata> {
     const resolved = typeof profile === 'string' ? await this.require(profile) : profile;
-    return readMetadata(resolved, this.#secrets);
+    return toMetadata(resolved);
   }
 
-  /**
-   * Renderer-safe projections of every profile.
-   *
-   * This is what the `profiles:list` IPC handler returns. Reading each secret
-   * to compute its hint keeps the mask out of the plaintext document; the
-   * decryption happens in the main process and the key never leaves it.
-   */
+  /** Renderer-safe projections of every profile. What `profiles:list` returns. */
   async listMetadata(providerId?: ProviderId): Promise<readonly ProfileMetadata[]> {
-    const profiles = await this.list(providerId);
-    return Promise.all(profiles.map((profile) => readMetadata(profile, this.#secrets)));
+    return (await this.list(providerId)).map(toMetadata);
   }
 
   /* ---------------------------------------------------------------------- */
@@ -225,13 +235,14 @@ export class ProfileStore {
   /**
    * Create a profile.
    *
-   * `draft.apiKey` is the one place a plaintext secret legitimately enters
-   * core. It goes straight into the {@link SecretStore} and is not retained.
+   * The profile is created signed *out*. That is the ordinary first state, not
+   * an error: signing in happens afterwards, in the user's own terminal,
+   * against the directory this record names. `authStatus` is what reports it.
    *
-   * A draft with no key is allowed and produces a profile with
-   * `keyHint: null` — the "needs setup" state the protocol models explicitly.
-   * The credential is enforced where it matters, in `resolveEnv`, which
-   * refuses to start a run for an `anthropic` profile with no key.
+   * Two profiles may legitimately share a `configDir` — that makes them the
+   * same account, which is a reasonable thing to want on purpose — so no
+   * uniqueness check is imposed here. `suggestConfigDir` avoids the collision
+   * for anyone who did not intend one.
    */
   async create(draft: ProfileDraft): Promise<Profile> {
     return this.#withLock(async () => {
@@ -242,50 +253,22 @@ export class ProfileStore {
           `Unknown providerId ${JSON.stringify(draft.providerId)}`,
         );
       }
-      // No default. Which backend is "the usual one" is the provider's answer,
-      // not this file's — defaulting to `'anthropic'` here is what stamped an
-      // Anthropic hosting backend onto profiles for every other provider.
-      // Absent means "the provider's first declared backend", resolved when the
-      // environment is built.
-      const backend = draft.backend === undefined ? undefined : requireBackend(draft.backend);
-      // Same reasoning as `backend`: shape only, no default. Which mode is "the
-      // usual one" is the provider's answer, and whether the mode is legal on
-      // the chosen backend is checked where an adapter is reachable.
-      const authMode = draft.authMode === undefined ? undefined : requireAuthMode(draft.authMode);
+      const configDir = assertConfigDir(draft.configDir);
       const publicEnv = sanitizePublicEnv(draft.publicEnv ?? {}, this.#managedEnvKeys);
 
       const existing = await this.#read();
-      const id = this.#newId();
-      const configDirName =
-        draft.configDirName === undefined
-          ? uniqueConfigDirName(label, id, existing)
-          : assertUnusedDirName(draft.configDirName, existing);
-
-      const secretRef = `profile-${id}`;
-      const apiKey = draft.apiKey?.trim();
-      if (apiKey) await this.#secrets.set(secretRef, apiKey);
-
       const timestamp = this.#now();
       const profile: Profile = {
-        id,
+        id: this.#newId(),
         label,
         providerId: draft.providerId,
-        backend,
-        authMode,
-        configDirName,
-        secretRef,
+        configDir,
         publicEnv,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
 
-      try {
-        await this.#write([...existing, profile]);
-      } catch (error) {
-        // Do not leave an orphaned credential behind a ref nothing points at.
-        if (apiKey) await this.#secrets.delete(secretRef).catch(() => undefined);
-        throw error;
-      }
+      await this.#write([...existing, profile]);
       return profile;
     });
   }
@@ -293,9 +276,9 @@ export class ProfileStore {
   /**
    * Update a profile.
    *
-   * `patch.apiKey` is tri-state, as the protocol specifies: omit to leave the
-   * stored credential alone, pass a string to replace it, pass `null` to
-   * delete it.
+   * Repointing `configDir` changes which account and which history the profile
+   * has. The directory it previously named is left entirely alone — it may be
+   * another profile's, or the user's own `~/.claude`.
    */
   async update(id: ProfileId, patch: ProfilePatch): Promise<Profile> {
     return this.#withLock(async () => {
@@ -307,28 +290,14 @@ export class ProfileStore {
       const next: Profile = {
         ...current,
         label: patch.label === undefined ? current.label : requireLabel(patch.label),
-        backend: patch.backend === undefined ? current.backend : requireBackend(patch.backend),
-        authMode:
-          patch.authMode === undefined ? current.authMode : requireAuthMode(patch.authMode),
+        configDir:
+          patch.configDir === undefined ? current.configDir : assertConfigDir(patch.configDir),
         publicEnv:
           patch.publicEnv === undefined
             ? current.publicEnv
             : sanitizePublicEnv(patch.publicEnv, this.#managedEnvKeys),
         updatedAt: this.#now(),
       };
-
-      if (patch.apiKey === null) {
-        await this.#secrets.delete(current.secretRef);
-      } else if (patch.apiKey !== undefined) {
-        const key = patch.apiKey.trim();
-        if (!key) {
-          throw new ProfileError(
-            'invalid_request',
-            'apiKey must not be empty — pass null to remove the stored credential',
-          );
-        }
-        await this.#secrets.set(current.secretRef, key);
-      }
 
       profiles[index] = next;
       await this.#write(profiles);
@@ -337,10 +306,20 @@ export class ProfileStore {
   }
 
   /**
-   * Delete a profile and its stored credential.
+   * Delete a profile.
    *
-   * The config directory — and therefore the session history — survives unless
-   * `deleteConfigDir` is set.
+   * The config directory — and therefore the credential and the session
+   * history — survives unless `deleteConfigDir` is set **and** the directory is
+   * one Apollo created.
+   *
+   * That second condition is not a formality. `configDir` is an absolute path
+   * the user chose, and the most useful thing they can put there is the
+   * `~/.claude` their own CLI already uses. Honouring a recursive delete
+   * against it because a switch in a profile dialog was left on would destroy
+   * the user's real Claude installation, every project transcript in it, and
+   * the login for whatever other profiles point at the same place. So Apollo
+   * deletes only what Apollo made, and {@link DeleteProfileResult.configDirDeleted}
+   * reports honestly when it declined.
    */
   async delete(id: ProfileId, options: DeleteProfileOptions = {}): Promise<DeleteProfileResult> {
     return this.#withLock(async () => {
@@ -349,20 +328,15 @@ export class ProfileStore {
       const profile = index < 0 ? undefined : profiles[index];
       if (!profile) throw new ProfileError('invalid_request', `No profile with id "${id}"`);
 
-      // Resolve and validate the directory *before* mutating anything, so a
-      // record with a bad `configDirName` fails the whole call rather than
-      // half of it. `configDirName` is user-editable JSON and this is an
-      // `rm -r`, so it is re-validated here rather than trusted.
+      // Resolve and check the directory *before* mutating anything, so a record
+      // with a malformed `configDir` fails the whole call rather than half of
+      // it. This is an `rm -r` against a path from a user-editable JSON file,
+      // so it is re-validated here rather than trusted.
       let configDir: string | undefined;
-      if (options.deleteConfigDir) {
-        configDir = this.configDirFor(profile);
-        assertInside(this.profilesRoot, configDir);
+      if (options.deleteConfigDir === true) {
+        const resolved = this.configDirFor(profile);
+        if (isApolloOwnedConfigDir(this.#userDataDir, resolved)) configDir = resolved;
       }
-
-      // Remove the credential first. If that fails the record is still there,
-      // which is recoverable; the reverse would strand an encrypted secret
-      // with nothing pointing at it.
-      await this.#secrets.delete(profile.secretRef);
 
       profiles.splice(index, 1);
       await this.#write(profiles);
@@ -418,7 +392,7 @@ export class ProfileStore {
       );
     }
 
-    this.#cache = parseDocument(parsed, this.#file);
+    this.#cache = parseDocument(parsed, this.#file, this.#userDataDir);
     return this.#cache;
   }
 
@@ -456,40 +430,6 @@ export function requireLabel(label: string): string {
 }
 
 /**
- * Shape-check a backend id.
- *
- * Only the shape: whether the selected *provider* offers a backend by this name
- * is checked where an adapter is reachable — `resolveEnv`, against the
- * provider's declared list. The store deliberately has no adapter access, which
- * is what keeps a profile record from being one vendor's shape.
- */
-function requireBackend(backend: ProviderBackend): ProviderBackend {
-  if (!isProviderBackend(backend)) {
-    throw new ProfileError('invalid_request', `Malformed backend ${JSON.stringify(backend)}`);
-  }
-  return backend;
-}
-
-/**
- * Shape-check an auth-mode id.
- *
- * Only the shape, for the same reason as {@link requireBackend}: whether the
- * provider offers a mode by this name — and whether it offers it on the
- * profile's backend, which is the constraint that actually matters for
- * subscription billing — is checked in `resolveEnv`, where the adapter's
- * declared list is reachable.
- */
-function requireAuthMode(authMode: ProviderAuthMode): ProviderAuthMode {
-  if (!isProviderAuthMode(authMode)) {
-    throw new ProfileError(
-      'invalid_request',
-      `Malformed authentication mode ${JSON.stringify(authMode)}`,
-    );
-  }
-  return authMode;
-}
-
-/**
  * Validate the non-sensitive environment bundle.
  *
  * Rejects three classes of name, in order of how obvious they are:
@@ -498,11 +438,12 @@ function requireAuthMode(authMode: ProviderAuthMode): ProviderAuthMode {
  *     plaintext file, so this has to be a hard error rather than a warning.
  *  2. **Anything that decides where a credential is sent.** `ANTHROPIC_BASE_URL`
  *     holds no secret and passes the name heuristic, but it points the provider
- *     at a host of the writer's choosing — and `resolveEnv` puts the decrypted
- *     key into the very same bundle. Accepting one would let anything that can
- *     write a profile redirect the key off-box without a secret ever crossing
- *     IPC. See {@link isCredentialRoutingEnvKey}.
- *  3. **Anything Apollo manages itself**, which the profile's backend decides.
+ *     at a host of the writer's choosing — and the provider CLI will send the
+ *     credential from its config directory there. Accepting one would let
+ *     anything that can write a profile redirect a real token off-box. See
+ *     {@link isCredentialRoutingEnvKey}.
+ *  3. **Anything Apollo manages itself** — the config-directory variable, and
+ *     every credential variable that would outrank it.
  */
 export function sanitizePublicEnv(
   env: Readonly<Record<string, string>>,
@@ -519,7 +460,7 @@ export function sanitizePublicEnv(
     if (isSecretEnvKey(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} looks like a credential. Store it as the profile's API key — publicEnv is written to disk in plaintext.`,
+        `${key} looks like a credential. Sign the profile in instead — publicEnv is written to disk in plaintext, and a credential set here would override the login anyway.`,
       );
     }
     if (isCredentialRoutingEnvKey(key)) {
@@ -531,7 +472,7 @@ export function sanitizePublicEnv(
     if (managedEnvKeys.includes(key)) {
       throw new ProfileError(
         'invalid_request',
-        `${key} is set by Apollo from the profile's backend and cannot be overridden in publicEnv`,
+        `${key} is set by Apollo from the profile's config directory and cannot be overridden in publicEnv`,
       );
     }
     if (typeof value !== 'string') {
@@ -542,55 +483,18 @@ export function sanitizePublicEnv(
   return out;
 }
 
-/** `Work — Bedrock` → `work-bedrock`. */
-function slugify(label: string): string {
-  const slug = label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32)
-    .replace(/-+$/g, '');
-  return slug || 'profile';
-}
-
-/**
- * Derive a config-directory name that is readable *and* unique.
- *
- * The id suffix is what guarantees uniqueness; the slug is there so a user
- * browsing `<userData>/profiles` can tell which directory belongs to which
- * account.
- */
-function uniqueConfigDirName(label: string, id: string, existing: readonly Profile[]): string {
-  const suffix = id.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || randomUUID().slice(0, 8);
-  const taken = new Set(existing.map((p) => p.configDirName));
-  let candidate = `${slugify(label)}-${suffix}`;
-  let counter = 2;
-  while (taken.has(candidate)) candidate = `${slugify(label)}-${suffix}-${counter++}`;
-  return assertBareDirName(candidate);
-}
-
-function assertUnusedDirName(name: string, existing: readonly Profile[]): string {
-  const validated = assertBareDirName(name);
-  if (existing.some((p) => p.configDirName === validated)) {
-    throw new ProfileError(
-      'invalid_request',
-      `Config directory "${validated}" is already used by another profile`,
-    );
-  }
-  return validated;
-}
-
 /* -------------------------------------------------------------------------- */
 /* Parsing                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function parseDocument(value: unknown, file: string): readonly Profile[] {
+function parseDocument(value: unknown, file: string, userDataDir: string): readonly Profile[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new ProfileError('unknown', `${file} is not a Apollo profile document`);
   }
   const document = value as { version?: unknown; profiles?: unknown };
 
-  if (document.version !== PROFILE_STORE_VERSION) {
+  const legacy = document.version === PROFILE_STORE_VERSION_LEGACY;
+  if (document.version !== PROFILE_STORE_VERSION && !legacy) {
     throw new ProfileError(
       'unknown',
       `${file} has schema version ${String(document.version)}; this build understands version ${PROFILE_STORE_VERSION}`,
@@ -600,10 +504,16 @@ function parseDocument(value: unknown, file: string): readonly Profile[] {
     throw new ProfileError('unknown', `${file} has no profiles array`);
   }
 
-  return document.profiles.map((entry, index) => parseProfile(entry, file, index));
+  return document.profiles.map((entry, index) => parseProfile(entry, file, index, userDataDir, legacy));
 }
 
-function parseProfile(value: unknown, file: string, index: number): Profile {
+function parseProfile(
+  value: unknown,
+  file: string,
+  index: number,
+  userDataDir: string,
+  legacy: boolean,
+): Profile {
   if (typeof value !== 'object' || value === null) {
     throw new ProfileError('unknown', `${file}: profile #${index} is not an object`);
   }
@@ -616,29 +526,24 @@ function parseProfile(value: unknown, file: string, index: number): Profile {
   if (!isProviderId(providerId)) {
     throw new ProfileError('unknown', `${at} has an unknown providerId`);
   }
-  const configDirName = requireString(raw['configDirName'], `${at} is missing a configDirName`);
-  const secretRef = requireString(raw['secretRef'], `${at} is missing a secretRef`);
 
-  const backendRaw: unknown = raw['backend'];
-  let backend: ProviderBackend | undefined;
-  if (backendRaw !== undefined) {
-    if (!isProviderBackend(backendRaw)) {
-      throw new ProfileError('unknown', `${at} has an unknown backend`);
-    }
-    backend = backendRaw;
-  }
+  /*
+    A version-1 record names its directory rather than locating it, so the
+    migration is a join against the same root version 1 resolved against. The
+    result points at the directory that already exists, which is the whole
+    object of the exercise: the user's login and transcripts are in it.
 
-  // Absent on every profile written before the auth-mode axis existed, which is
-  // exactly what "the provider's default mode" means — so old documents load
-  // unchanged and keep billing the way they always did.
-  const authModeRaw: unknown = raw['authMode'];
-  let authMode: ProviderAuthMode | undefined;
-  if (authModeRaw !== undefined) {
-    if (!isProviderAuthMode(authModeRaw)) {
-      throw new ProfileError('unknown', `${at} has an unknown authMode`);
-    }
-    authMode = authModeRaw;
-  }
+    `secretRef`, `backend` and `authMode` are dropped on the floor. Any secret
+    behind that ref stays in the OS credential store, orphaned — deleting it
+    from here would mean reaching for a `SecretStore` this class no longer has,
+    to destroy a credential the user may still want in their own tooling.
+  */
+  const configDir = legacy
+    ? path.join(
+        profilesRoot(userDataDir),
+        requireString(raw['configDirName'], `${at} is missing a configDirName`),
+      )
+    : requireString(raw['configDir'], `${at} is missing a configDir`);
 
   const publicEnvRaw = raw['publicEnv'];
   const publicEnv: Record<string, string> = {};
@@ -661,10 +566,7 @@ function parseProfile(value: unknown, file: string, index: number): Profile {
     id,
     label,
     providerId,
-    backend,
-    authMode,
-    configDirName,
-    secretRef,
+    configDir,
     publicEnv,
     createdAt: typeof createdAt === 'number' ? createdAt : undefined,
     updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
@@ -682,23 +584,6 @@ function requireString(value: unknown, message: string): string {
 /* -------------------------------------------------------------------------- */
 /* Filesystem helpers                                                         */
 /* -------------------------------------------------------------------------- */
-
-/**
- * Refuse to touch anything outside `root`.
- *
- * Guards the `rm -r` in {@link ProfileStore.delete}. Equality with `root`
- * counts as outside: deleting the profiles root would take every profile's
- * history with it.
- */
-export function assertInside(root: string, candidate: string): void {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new ProfileError(
-      'invalid_request',
-      `Refusing to operate on ${candidate}: it is not inside ${root}`,
-    );
-  }
-}
 
 async function pathExists(target: string): Promise<boolean> {
   try {
