@@ -16,7 +16,10 @@
  *     appearing) does not re-render the rows that did not change.
  *  3. **Streaming text is never markdown.** Markdown is parsed once, when the
  *     block completes. Re-parsing a long answer on every frame is the single
- *     most expensive thing this UI could do.
+ *     most expensive thing this UI could do. What a streaming block renders
+ *     instead is `StreamingText`, which fades in each new word and holds the
+ *     same rule one level down: the cost is per word *arriving*, never per word
+ *     on screen.
  *  4. **Nothing here reads streaming text into `useApp`.** The transcript model
  *     lives outside React on purpose; see `state/transcript.ts`.
  *
@@ -188,12 +191,20 @@ import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
 import { ProviderLogo } from './provider-mark';
+import { StreamingText } from './StreamingText';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /** Markdown parsing is skipped above this size; the cost is not worth it. */
 const MARKDOWN_LIMIT = 80_000;
+
+/**
+ * How an answer reads before it is markdown — while it streams, and for the
+ * rare block too large to parse. Shared so those two never drift apart and the
+ * markdown swap at the end of a turn is not also a change of typeface.
+ */
+const STREAMING_TEXT = 'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink';
 
 /**
  * How wide the conversation column is allowed to get.
@@ -546,15 +557,10 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
           wide the tables and code blocks below it are allowed to be. */}
       <Bubble variant="ghost">
         <BubbleContent className="w-full">
-          {item.streaming || item.text.length > MARKDOWN_LIMIT ? (
-            <div
-              className={cn(
-                'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink',
-                item.streaming && 'caret',
-              )}
-            >
-              {item.text}
-            </div>
+          {item.streaming ? (
+            <StreamingText text={item.text} className={STREAMING_TEXT} />
+          ) : item.text.length > MARKDOWN_LIMIT ? (
+            <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
               <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
