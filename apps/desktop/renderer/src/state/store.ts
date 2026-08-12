@@ -592,6 +592,35 @@ export interface AppState {
    */
   readonly archivedExpanded: boolean;
   /**
+   * Sessions the user has kept up front — lifted out of their project into the
+   * sidebar's Pinned section, above every project heading.
+   *
+   * The mirror image of {@link archivedSessions} and stored the same way, as
+   * `sessionKey` values (`profileId:id`) rather than bare ids, for the same
+   * reason: an id is only unique inside the profile that owns it, so pinning by
+   * id would let one profile's session pin another profile's.
+   *
+   * Artemis's own bookkeeping too — nothing on disk changes, and the provider
+   * has never heard of it. That is what makes it work against every provider,
+   * including one whose CLI cannot list its own history.
+   *
+   * **A session cannot be pinned and archived at once.** The two say opposite
+   * things about the same row, so each toggle clears the other rather than
+   * leaving a row that is both kept in front of the user and put away. See
+   * {@link toggleSessionPinned}.
+   */
+  readonly pinnedSessions: readonly string[];
+  /**
+   * Whether the sidebar's Pinned section is folded shut.
+   *
+   * Stored collapsed-side-out like {@link collapsedProjects}, and the opposite
+   * way round from {@link archivedExpanded} — the polarity is the default.
+   * Pinning a session is a deliberate request to keep it in view, so the section
+   * it creates opens; the archive is where things go to stop being in view, so it
+   * stays shut. Both defaults fall out of "absent from the preferences file".
+   */
+  readonly pinnedCollapsed: boolean;
+  /**
    * Directories worked in, capped at {@link RECENT_FOLDERS_LIMIT}.
    *
    * The folder control above the composer is a list of these rather than a
@@ -886,6 +915,8 @@ interface Prefs {
   collapsedProjects?: readonly string[];
   archivedSessions?: readonly string[];
   archivedExpanded?: boolean;
+  pinnedSessions?: readonly string[];
+  pinnedCollapsed?: boolean;
   settingsSection?: SettingsSection;
   quickModelIds?: readonly string[];
   fastMode?: boolean;
@@ -1000,6 +1031,9 @@ function loadPrefs(): Prefs {
     // quietly archive nothing.
     archivedSessions: stringList(raw['archivedSessions']),
     archivedExpanded: boolOrUndefined(raw['archivedExpanded']),
+    // And again for the pinned set, which is matched against the same keys.
+    pinnedSessions: stringList(raw['pinnedSessions']),
+    pinnedCollapsed: boolOrUndefined(raw['pinnedCollapsed']),
     // Same treatment again, and here the entry is rendered rather than matched:
     // a non-string surviving into the menu would reach `lastSegment` and throw
     // on a control the user opens to get *out* of a bad directory.
@@ -1055,6 +1089,8 @@ function savePrefs(): void {
     collapsedProjects: s.collapsedProjects,
     archivedSessions: s.archivedSessions,
     archivedExpanded: s.archivedExpanded,
+    pinnedSessions: s.pinnedSessions,
+    pinnedCollapsed: s.pinnedCollapsed,
     settingsSection: s.settingsSection,
     quickModelIds: s.quickModelIds,
     conversationWidth: s.conversationWidth,
@@ -1211,6 +1247,8 @@ export const useApp = create<AppState>(() => ({
   collapsedProjects: prefs.collapsedProjects ?? [],
   archivedSessions: prefs.archivedSessions ?? [],
   archivedExpanded: prefs.archivedExpanded ?? false,
+  pinnedSessions: prefs.pinnedSessions ?? [],
+  pinnedCollapsed: prefs.pinnedCollapsed ?? false,
   recentFolders: initialRecentFolders(prefs),
 }));
 
@@ -3754,6 +3792,18 @@ export function toggleArchivedExpanded(): void {
   savePrefs();
 }
 
+/**
+ * Fold the sidebar's Pinned section shut, or open it.
+ *
+ * Note the polarity, which is the archive's inverted: see
+ * {@link AppState.pinnedCollapsed} for why pinned opens by default and archived
+ * does not.
+ */
+export function togglePinnedCollapsed(): void {
+  useApp.setState((s) => ({ pinnedCollapsed: !s.pinnedCollapsed }));
+  savePrefs();
+}
+
 export function setPermissionMode(mode: PermissionMode, pane: Pane = focusedPane()): void {
   setPaneState(pane, { permissionMode: mode });
   savePrefs();
@@ -4164,6 +4214,11 @@ export async function renameSession(session: SessionSummary, title: string): Pro
  * Purely local — see {@link AppState.archivedSessions}. No IPC, nothing on
  * disk changes, and the session stays resumable the whole time; the row simply
  * moves from its project into the Archived section.
+ *
+ * Archiving unpins, always. The two are opposite claims about one row, and a
+ * session that was both would have to be drawn in two places or arbitrarily in
+ * one; clearing the other set at the point of the write means that state cannot
+ * be reached at all rather than being tidied up wherever it is noticed.
  */
 export function toggleSessionArchived(session: SessionSummary): void {
   const key = sessionKey(session);
@@ -4171,6 +4226,26 @@ export function toggleSessionArchived(session: SessionSummary): void {
     archivedSessions: s.archivedSessions.includes(key)
       ? s.archivedSessions.filter((entry) => entry !== key)
       : [...s.archivedSessions, key],
+    pinnedSessions: s.pinnedSessions.filter((entry) => entry !== key),
+  }));
+  savePrefs();
+}
+
+/**
+ * Keep a session in front of the user, or stop.
+ *
+ * The mirror of {@link toggleSessionArchived} in every respect: local only, no
+ * IPC, and the row moves out of its project — up into the Pinned section rather
+ * than down into Archived. Pinning unarchives for the same reason archiving
+ * unpins; see there.
+ */
+export function toggleSessionPinned(session: SessionSummary): void {
+  const key = sessionKey(session);
+  useApp.setState((s) => ({
+    pinnedSessions: s.pinnedSessions.includes(key)
+      ? s.pinnedSessions.filter((entry) => entry !== key)
+      : [...s.pinnedSessions, key],
+    archivedSessions: s.archivedSessions.filter((entry) => entry !== key),
   }));
   savePrefs();
 }
@@ -4210,6 +4285,10 @@ export async function deleteSession(session: SessionSummary): Promise<boolean> {
     // exists is inert, but it would accumulate in the persisted preferences
     // forever, and a session id that came round again would arrive pre-hidden.
     archivedSessions: s.archivedSessions.filter((entry) => entry !== key),
+    // Same for the pin, where the stale entry is louder: a recycled id would
+    // arrive at the very top of the sidebar under a heading the user did not
+    // put it in.
+    pinnedSessions: s.pinnedSessions.filter((entry) => entry !== key),
   }));
   // A deleted session cannot be resumed, and leaving it selected would aim the
   // next prompt at a transcript that is gone.

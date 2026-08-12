@@ -13,10 +13,13 @@ import {
   flattenGroups,
   groupSessionsByProject,
   matchesQuery,
-  orderArchived,
-  partitionArchived,
+  orderSessions,
+  partitionSessions,
   sessionKey,
 } from './sessionGroups';
+
+/** `partitionSessions` with the set the case under test is not about. */
+const NOTHING: ReadonlySet<string> = new Set();
 
 /** A SessionSummary with only the fields these rules actually read. */
 function session(over: Partial<SessionSummary> & Pick<SessionSummary, 'id' | 'cwd' | 'updatedAt'>): SessionSummary {
@@ -213,7 +216,7 @@ describe('groupSessionsByProject with a held order', () => {
   });
 
   it('leaves the archive on the same rule', () => {
-    const ordered = orderArchived(
+    const ordered = orderSessions(
       [
         session({ id: 'running', cwd: '/code/api', updatedAt: 1 }),
         session({ id: 'idle', cwd: '/code/api', updatedAt: 50 }),
@@ -352,18 +355,49 @@ describe('flattenGroups', () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Archiving                                                                  */
+/* Pinning and archiving                                                      */
 /* -------------------------------------------------------------------------- */
 
-describe('partitionArchived', () => {
+describe('partitionSessions', () => {
   it('lifts archived sessions out of the listing', () => {
     const kept = session({ id: 'a', cwd: '/code/api', updatedAt: 2 });
     const put = session({ id: 'b', cwd: '/code/api', updatedAt: 1 });
 
-    const split = partitionArchived([kept, put], new Set([sessionKey(put)]));
+    const split = partitionSessions([kept, put], {
+      pinned: NOTHING,
+      archived: new Set([sessionKey(put)]),
+    });
 
     expect(split.active.map((s) => s.id)).toEqual(['a']);
     expect(split.archived.map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('lifts pinned sessions out of the listing too', () => {
+    const kept = session({ id: 'a', cwd: '/code/api', updatedAt: 2 });
+    const up = session({ id: 'b', cwd: '/code/api', updatedAt: 1 });
+
+    const split = partitionSessions([kept, up], {
+      pinned: new Set([sessionKey(up)]),
+      archived: NOTHING,
+    });
+
+    expect(split.active.map((s) => s.id)).toEqual(['a']);
+    expect(split.pinned.map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('shows rather than hides a session that is somehow in both sets', () => {
+    // The store makes this unreachable — pinning unarchives and archiving
+    // unpins — so this is about what a hand-edited preferences file does. Of
+    // the two answers, the one the user can act on wins: the row is somewhere
+    // they can see it and un-pin it, rather than filed in a drawer they would
+    // have to think to open.
+    const both = session({ id: 'a', cwd: '/code/api', updatedAt: 1 });
+    const key = new Set([sessionKey(both)]);
+
+    const split = partitionSessions([both], { pinned: key, archived: key });
+
+    expect(split.pinned.map((s) => s.id)).toEqual(['a']);
+    expect(split.archived).toEqual([]);
   });
 
   it('keys on profile+id, so archiving does not hide another profile’s session', () => {
@@ -382,18 +416,22 @@ describe('partitionArchived', () => {
       profileId: 'prof_personal' as ProfileId,
     });
 
-    const split = partitionArchived([mine, theirs], new Set([sessionKey(mine)]));
+    const split = partitionSessions([mine, theirs], {
+      pinned: NOTHING,
+      archived: new Set([sessionKey(mine)]),
+    });
 
     expect(split.archived.map((s) => s.profileId)).toEqual(['prof_work']);
     expect(split.active.map((s) => s.profileId)).toEqual(['prof_personal']);
   });
 
-  it('returns the input untouched when nothing is archived', () => {
+  it('returns the input untouched when neither set holds anything', () => {
     const sessions = [session({ id: 'a', cwd: '/code/api', updatedAt: 1 })];
-    const split = partitionArchived(sessions, new Set());
+    const split = partitionSessions(sessions, { pinned: NOTHING, archived: NOTHING });
 
     expect(split.active).toBe(sessions);
     expect(split.archived).toEqual([]);
+    expect(split.pinned).toEqual([]);
   });
 
   it('removes a project from the list entirely once its last session is archived', () => {
@@ -403,18 +441,33 @@ describe('partitionArchived', () => {
     const only = session({ id: 'a', cwd: '/code/old', updatedAt: 1 });
     const other = session({ id: 'b', cwd: '/code/api', updatedAt: 2 });
 
-    const split = partitionArchived([only, other], new Set([sessionKey(only)]));
+    const split = partitionSessions([only, other], {
+      pinned: NOTHING,
+      archived: new Set([sessionKey(only)]),
+    });
     const groups = groupSessionsByProject(split.active);
 
     expect(groups.map((g) => g.project)).toEqual(['/code/api']);
   });
+
+  it('empties a project by pinning its last session, same as archiving does', () => {
+    const only = session({ id: 'a', cwd: '/code/old', updatedAt: 1 });
+    const other = session({ id: 'b', cwd: '/code/api', updatedAt: 2 });
+
+    const split = partitionSessions([only, other], {
+      pinned: new Set([sessionKey(only)]),
+      archived: NOTHING,
+    });
+
+    expect(groupSessionsByProject(split.active).map((g) => g.project)).toEqual(['/code/api']);
+  });
 });
 
-describe('orderArchived', () => {
+describe('orderSessions', () => {
   it('orders newest first, across projects', () => {
     // Not regrouped by directory — the section is one flat list, because
     // rebuilding the project structure inside it defeats putting things away.
-    const ordered = orderArchived([
+    const ordered = orderSessions([
       session({ id: 'old', cwd: '/code/api', updatedAt: 1 }),
       session({ id: 'new', cwd: '/code/web', updatedAt: 99 }),
       session({ id: 'mid', cwd: '/code/api', updatedAt: 50 }),
@@ -424,7 +477,7 @@ describe('orderArchived', () => {
   });
 
   it('applies the query, so searching still finds what you archived', () => {
-    const ordered = orderArchived(
+    const ordered = orderSessions(
       [
         session({ id: 'a', cwd: '/code/api', updatedAt: 2, title: 'fix auth' }),
         session({ id: 'b', cwd: '/code/api', updatedAt: 1, title: 'restyle nav' }),
@@ -442,7 +495,9 @@ describe('flattenGroups with an archive', () => {
   const archived = [session({ id: 'put', cwd: '/code/web', updatedAt: 10 })];
 
   it('pins the archive last, after every project', () => {
-    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: false });
+    const rows = flattenGroups(groups(), new Set(), {
+      archived: { sessions: archived, collapsed: false },
+    });
 
     expect(rows.map((r) => r.kind)).toEqual([
       'header',
@@ -454,28 +509,110 @@ describe('flattenGroups with an archive', () => {
 
   it('emits no archive header at all when nothing is archived', () => {
     // A permanent "Archived · 0" is a control for a state the user is not in.
-    const rows = flattenGroups(groups(), new Set(), { sessions: [], collapsed: false });
+    const rows = flattenGroups(groups(), new Set(), {
+      archived: { sessions: [], collapsed: false },
+    });
 
     expect(rows.some((r) => r.kind === 'archive-header')).toBe(false);
   });
 
   it('drops the archived rows when the section is shut but keeps the count', () => {
-    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: true });
+    const rows = flattenGroups(groups(), new Set(), {
+      archived: { sessions: archived, collapsed: true },
+    });
 
     expect(rows.map((r) => r.kind)).toEqual(['header', 'session', 'archive-header']);
     expect(rows.at(-1)).toMatchObject({ kind: 'archive-header', count: 1, collapsed: true });
   });
 
   it('tags archived rows, so the menu can offer Unarchive rather than Archive', () => {
-    const rows = flattenGroups(groups(), new Set(), { sessions: archived, collapsed: false });
+    const rows = flattenGroups(groups(), new Set(), {
+      archived: { sessions: archived, collapsed: false },
+    });
 
     const sessions = rows.filter((r) => r.kind === 'session');
     expect(sessions.map((r) => r.archived ?? false)).toEqual([false, true]);
   });
 
-  it('leaves the row list unchanged when no archive is passed at all', () => {
+  it('leaves the row list unchanged when no section is passed at all', () => {
     // The two-argument call is what every existing caller used; it must keep
-    // meaning "no archive section".
+    // meaning "no flat sections".
     expect(flattenGroups(groups(), new Set())).toEqual(flattenGroups(groups()));
+  });
+});
+
+describe('flattenGroups with pinned sessions', () => {
+  const groups = () =>
+    groupSessionsByProject([session({ id: 'live', cwd: '/code/api', updatedAt: 20 })]);
+  const pinned = [session({ id: 'kept', cwd: '/code/web', updatedAt: 10 })];
+  const archived = [session({ id: 'put', cwd: '/code/web', updatedAt: 5 })];
+
+  it('puts the pinned section above every project', () => {
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: pinned, collapsed: false },
+    });
+
+    expect(rows.map((r) => r.kind)).toEqual(['pinned-header', 'session', 'header', 'session']);
+  });
+
+  it('emits no pinned header at all when nothing is pinned', () => {
+    // The requirement, in one assertion: the folder appears only once there is
+    // something in it. A permanent empty section is furniture that teaches
+    // nothing and costs a row on every sidebar in the product.
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: [], collapsed: false },
+    });
+
+    expect(rows.some((r) => r.kind === 'pinned-header')).toBe(false);
+  });
+
+  it('brackets the projects when both sections are present', () => {
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: pinned, collapsed: false },
+      archived: { sessions: archived, collapsed: false },
+    });
+
+    expect(rows.map((r) => r.kind)).toEqual([
+      'pinned-header',
+      'session',
+      'header',
+      'session',
+      'archive-header',
+      'session',
+    ]);
+  });
+
+  it('drops the pinned rows when the section is shut but keeps the count', () => {
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: pinned, collapsed: true },
+    });
+
+    expect(rows.map((r) => r.kind)).toEqual(['pinned-header', 'header', 'session']);
+    expect(rows[0]).toMatchObject({ kind: 'pinned-header', count: 1, collapsed: true });
+  });
+
+  it('tags pinned rows, so the menu can offer Unpin rather than Pin', () => {
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: pinned, collapsed: false },
+    });
+
+    const sessions = rows.filter((r) => r.kind === 'session');
+    expect(sessions.map((r) => r.pinned ?? false)).toEqual([true, false]);
+  });
+
+  it('keeps every project’s group index equal to its position, sections aside', () => {
+    // The flat sections are numbered past the end of the group array even
+    // though pinned rows come first: the index identifies a section rather
+    // than describing where it sits, and shifting the projects to make room
+    // would break the one thing the field is read for.
+    const rows = flattenGroups(groups(), new Set(), {
+      pinned: { sessions: pinned, collapsed: false },
+      archived: { sessions: archived, collapsed: false },
+    });
+
+    expect(rows[0]).toMatchObject({ kind: 'pinned-header' });
+    expect(rows[1]).toMatchObject({ group: 1, pinned: true });
+    expect(rows[3]).toMatchObject({ group: 0 });
+    expect(rows[5]).toMatchObject({ group: 2, archived: true });
   });
 });

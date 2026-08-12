@@ -61,6 +61,26 @@
  * resets. See `collapsedProjects` in the store for why the stored list is of
  * the *shut* projects rather than the open ones.
  *
+ * ## 0b. Pinned sits above the projects, and only when it holds something
+ *
+ * A pinned session leaves its project for a section at the very top of the list,
+ * the mirror of what archiving does at the bottom. Marking the row in place
+ * instead would have been cheaper and useless: the point of pinning the session
+ * you keep coming back to is not to decorate it, it is to stop hunting for it,
+ * and a marked row is still wherever its project happened to sort to.
+ *
+ * The section is absent — not empty — until something is in it, so a sidebar
+ * nobody has pinned anything in looks exactly as it always did. It is open by
+ * default, where the archive is shut, because pinning is a request to keep
+ * something in view. See `pinnedSessions` and `pinnedCollapsed` in the store.
+ *
+ * ## 0c. The row's menu answers to four letters
+ *
+ * `R`ename, `P`in, `A`rchive, `D`elete, each drawn as a key cap on the right of
+ * its item, live while the menu is open. The whole of that feature is
+ * `pressHotkey` plus a `data-hotkey` per item: the letter finds the item and
+ * clicks it, so it cannot drift from what the mouse does. See `MenuAction`.
+ *
  * ## 1. It is virtualised, over two row heights
  *
  * History runs to hundreds of rows, and mounting all of them costs a visible
@@ -114,6 +134,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type ReactElement,
   type ReactNode,
 } from 'react';
@@ -125,6 +146,8 @@ import {
   GitBranchIcon,
   InboxIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   SearchIcon,
   Trash2Icon,
 } from 'lucide-react';
@@ -136,8 +159,8 @@ import { lastSegment } from '../lib/paths';
 import {
   flattenGroups,
   groupSessionsByProject,
-  orderArchived,
-  partitionArchived,
+  orderSessions,
+  partitionSessions,
   sessionKey,
   type ListRow,
 } from '../lib/sessionGroups';
@@ -148,8 +171,10 @@ import {
   resumeSession,
   sessionOrderKey,
   toggleArchivedExpanded,
+  togglePinnedCollapsed,
   toggleProjectCollapsed,
   toggleSessionArchived,
+  toggleSessionPinned,
   useApp,
 } from '../state/store';
 import { usePane } from '../state/paneContext';
@@ -165,6 +190,7 @@ import {
 } from '@/components/ui/context-menu';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
+import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
@@ -199,6 +225,8 @@ export function SessionList(): ReactElement {
   const collapsedProjects = useApp((s) => s.collapsedProjects);
   const archivedSessions = useApp((s) => s.archivedSessions);
   const archivedExpanded = useApp((s) => s.archivedExpanded);
+  const pinnedSessions = useApp((s) => s.pinnedSessions);
+  const pinnedCollapsed = useApp((s) => s.pinnedCollapsed);
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
 
@@ -218,6 +246,7 @@ export function SessionList(): ReactElement {
    */
   const collapsed = useMemo(() => new Set(collapsedProjects), [collapsedProjects]);
   const archivedKeys = useMemo(() => new Set(archivedSessions), [archivedSessions]);
+  const pinnedKeys = useMemo(() => new Set(pinnedSessions), [pinnedSessions]);
 
   /*
    * A worktree's sessions belong to the repository it was split off from.
@@ -245,20 +274,29 @@ export function SessionList(): ReactElement {
   );
 
   /*
-   * Archived sessions are lifted out *before* grouping, so they leave their
-   * project rather than hiding inside it — a project whose every session is
-   * archived disappears from the list entirely, which is the point of putting
-   * them away. The archive is then filtered by the same query, so searching
-   * still finds what you put in it.
+   * Pinned and archived sessions are both lifted out *before* grouping, so they
+   * leave their project rather than changing colour inside it — a project whose
+   * every session has been archived disappears from the list entirely, which is
+   * the point of putting them away, and a pinned session is at the top of the
+   * sidebar rather than wherever its project happens to have sorted to.
+   *
+   * Both sections are filtered by the same query as everything else, so a search
+   * still finds what you pinned and what you put away.
    */
   const rows = useMemo(() => {
-    const split = partitionArchived(sessions, archivedKeys);
+    const split = partitionSessions(sessions, { pinned: pinnedKeys, archived: archivedKeys });
     return flattenGroups(
       groupSessionsByProject(split.active, { query, profileLabel, orderKey, projectOf }),
       collapsed,
       {
-        sessions: orderArchived(split.archived, { query, profileLabel, orderKey }),
-        collapsed: !archivedExpanded,
+        pinned: {
+          sessions: orderSessions(split.pinned, { query, profileLabel, orderKey }),
+          collapsed: pinnedCollapsed,
+        },
+        archived: {
+          sessions: orderSessions(split.archived, { query, profileLabel, orderKey }),
+          collapsed: !archivedExpanded,
+        },
       },
     );
   }, [
@@ -270,6 +308,8 @@ export function SessionList(): ReactElement {
     collapsed,
     archivedKeys,
     archivedExpanded,
+    pinnedKeys,
+    pinnedCollapsed,
   ]);
 
   /** Unfiltered, so the count does not jump around while typing. */
@@ -462,6 +502,61 @@ const GroupHeading = memo(function GroupHeading({
 });
 
 /**
+ * The Pinned section's heading, above every project.
+ *
+ * Same shape as {@link GroupHeading} and {@link ArchiveHeading} — it is a fold
+ * with a word on it — and, like the archive's, deliberately not the same
+ * component: it names no directory and marks no current project, because it
+ * spans all of them.
+ *
+ * It exists only while something is pinned. `flattenGroups` emits no row for an
+ * empty section, so an untouched sidebar looks exactly as it did before pinning
+ * was added rather than growing a permanent "Pinned · 0" — a heading for a
+ * folder you have put nothing in is furniture that teaches nothing.
+ *
+ * The pin is `text-lunar`, the accent this list already uses to mark the active
+ * project, rather than the archive's `text-ink-faint`. The two sections are
+ * opposite claims and should not be the same weight: one is the shelf you put
+ * things on to keep seeing them, and drawing it in the colour of what has been
+ * put away would say the reverse.
+ */
+const PinnedHeading = memo(function PinnedHeading({
+  count,
+  collapsed,
+  top,
+}: {
+  readonly count: number;
+  readonly collapsed: boolean;
+  readonly top: number;
+}): ReactElement {
+  return (
+    <div style={{ top, height: HEADER_HEIGHT }} className="absolute inset-x-0 px-1.5">
+      <button
+        type="button"
+        onClick={() => togglePinnedCollapsed()}
+        aria-expanded={!collapsed}
+        title="Sessions you have kept in front of you, from every project."
+        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+      >
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn(
+            'size-2.5 shrink-0 text-ink-faint transition-transform',
+            collapsed && '-rotate-90',
+          )}
+        />
+        <PinIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
+        <span className="min-w-0 truncate text-2xs font-medium tracking-tight text-ink-muted">
+          Pinned
+        </span>
+        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
+        <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+      </button>
+    </div>
+  );
+});
+
+/**
  * The Archived section's heading.
  *
  * Built to the same shape as {@link GroupHeading} so the two read as one list
@@ -576,7 +671,7 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
     for (let i = 0; i < rows.length; i += 1) {
       starts[i] = y;
       const kind = rows[i]?.kind;
-      y += kind === 'header' || kind === 'archive-header' ? HEADER_HEIGHT : ROW_HEIGHT;
+      y += kind === 'session' ? ROW_HEIGHT : HEADER_HEIGHT;
     }
     starts[rows.length] = y;
     return starts;
@@ -605,6 +700,12 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
       );
       continue;
     }
+    if (row.kind === 'pinned-header') {
+      visible.push(
+        <PinnedHeading key={row.key} count={row.count} collapsed={row.collapsed} top={top} />,
+      );
+      continue;
+    }
     if (row.kind === 'archive-header') {
       visible.push(
         <ArchiveHeading key={row.key} count={row.count} collapsed={row.collapsed} top={top} />,
@@ -615,7 +716,13 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
     // it, not globally, and two profiles surfacing the same id would collide
     // into one React key and silently drop a row.
     visible.push(
-      <Row key={row.key} top={top} session={row.session} archived={row.archived ?? false} />,
+      <Row
+        key={row.key}
+        top={top}
+        session={row.session}
+        pinned={row.pinned ?? false}
+        archived={row.archived ?? false}
+      />,
     );
   }
 
@@ -659,10 +766,12 @@ function indexAt(offsets: readonly number[], y: number): number {
 const Row = memo(function Row({
   session,
   top,
+  pinned,
   archived,
 }: {
   readonly session: SessionSummary;
   readonly top: number;
+  readonly pinned: boolean;
   readonly archived: boolean;
 }): ReactElement {
   /*
@@ -860,24 +969,40 @@ const Row = memo(function Row({
           </div>
         </ContextMenuTrigger>
 
-        <ContextMenuContent className="w-44">
+        <ContextMenuContent className="w-48" onKeyDown={pressHotkey}>
           {/*
-           * Rename and Delete are capability-gated; Archive is not, and that
-           * asymmetry is the design. The first two write to the provider's own
-           * store, so a provider that cannot do them must not offer them.
-           * Archiving is Artemis's own bookkeeping and works against every
-           * provider, including one whose CLI cannot even list its history.
+           * Rename and Delete are capability-gated; Pin and Archive are not, and
+           * that asymmetry is the design. The first two write to the provider's
+           * own store, so a provider that cannot do them must not offer them.
+           * Pinning and archiving are Artemis's own bookkeeping and work against
+           * every provider, including one whose CLI cannot even list its
+           * history.
            */}
-          <ContextMenuItem
+          <MenuAction
+            hotkey="r"
             disabled={!renaming.supported}
             title={renaming.supported ? undefined : renaming.reason}
             onSelect={() => setEditing(true)}
           >
             <PencilIcon aria-hidden="true" />
             Rename
-          </ContextMenuItem>
+          </MenuAction>
 
-          <ContextMenuItem onSelect={() => toggleSessionArchived(session)}>
+          <MenuAction hotkey="p" onSelect={() => toggleSessionPinned(session)}>
+            {pinned ? (
+              <>
+                <PinOffIcon aria-hidden="true" />
+                Unpin
+              </>
+            ) : (
+              <>
+                <PinIcon aria-hidden="true" />
+                Pin
+              </>
+            )}
+          </MenuAction>
+
+          <MenuAction hotkey="a" onSelect={() => toggleSessionArchived(session)}>
             {archived ? (
               <>
                 <ArchiveRestoreIcon aria-hidden="true" />
@@ -889,11 +1014,12 @@ const Row = memo(function Row({
                 Archive
               </>
             )}
-          </ContextMenuItem>
+          </MenuAction>
 
           <ContextMenuSeparator />
 
-          <ContextMenuItem
+          <MenuAction
+            hotkey="d"
             variant="destructive"
             disabled={!deleting.supported}
             title={deleting.supported ? undefined : deleting.reason}
@@ -910,7 +1036,7 @@ const Row = memo(function Row({
           >
             <Trash2Icon aria-hidden="true" />
             Delete…
-          </ContextMenuItem>
+          </MenuAction>
         </ContextMenuContent>
       </ContextMenu>
 
@@ -926,6 +1052,103 @@ const Row = memo(function Row({
     </div>
   );
 });
+
+/* -------------------------------------------------------------------------- */
+/* The row's menu, and its letters                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The letters the row's menu answers to: Rename, Pin, Archive, Delete.
+ *
+ * They are the initials of the actions, which is the only mapping worth having
+ * — a hotkey nobody can derive from the word next to it is a hotkey nobody uses
+ * — and they are unambiguous here because the menu has four items and no two
+ * begin with the same letter. Un-pinning and un-archiving keep the letter of the
+ * thing they undo: `P` is "the pin", not "pin", so the same key toggles it in
+ * both directions rather than moving when the row's state changes.
+ *
+ * A set rather than a bare `length === 1` check because the key is interpolated
+ * into an attribute selector below, and `"` or `]` arriving from a keyboard
+ * layout nobody tested would be a syntax error thrown at a right-click.
+ */
+type Hotkey = 'r' | 'p' | 'a' | 'd';
+const HOTKEYS: ReadonlySet<string> = new Set<Hotkey>(['r', 'p', 'a', 'd']);
+
+/**
+ * Turn a letter into the click it stands for.
+ *
+ * The key finds the item in the DOM and clicks it, rather than calling the
+ * action directly. That is deliberate: clicking is the path Radix already
+ * defines, so the letter inherits every behaviour the mouse has — the menu
+ * closes, `onSelect` fires exactly once, and a *disabled* item stays inert,
+ * because Radix's own handler is what checks. Wiring the actions a second time
+ * behind the keys would be the same four calls with a separate set of bugs, and
+ * the first one to drift would be the gating on a provider that cannot delete.
+ *
+ * `preventDefault` is not decoration. Radix composes this handler ahead of its
+ * own and skips that one when the default is prevented, which is what stops a
+ * letter from *also* being fed to the menu's built-in typeahead and moving the
+ * focus ring somewhere the user did not ask for.
+ *
+ * Modified presses are left alone. ⌘R is the window reloading and ⌘D is the
+ * platform's, and a menu that swallowed them because it happened to be open
+ * would be taking keys that were never aimed at it.
+ */
+function pressHotkey(event: KeyboardEvent<HTMLDivElement>): void {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (!HOTKEYS.has(key)) return;
+
+  const item = event.currentTarget.querySelector<HTMLElement>(`[data-hotkey="${key}"]`);
+  if (!item) return;
+  event.preventDefault();
+  item.click();
+}
+
+/**
+ * One menu item, with its letter on the right.
+ *
+ * The letter is in three places — the cap the eye reads, the `data-hotkey` the
+ * keyboard resolves against, and the `aria-keyshortcuts` a screen reader
+ * announces — and they must agree, so one argument writes all three. Three
+ * hand-kept copies per item is how a menu ends up showing `A` for an item that
+ * answers to `R`.
+ *
+ * The cap itself is `aria-hidden`: `aria-keyshortcuts` is the accessible way to
+ * say this, and leaving the glyph in the accessibility tree would rename the
+ * item to "Rename R".
+ */
+function MenuAction({
+  hotkey,
+  disabled,
+  title,
+  variant,
+  onSelect,
+  children,
+}: {
+  readonly hotkey: Hotkey;
+  readonly disabled?: boolean;
+  readonly title?: string | undefined;
+  readonly variant?: 'default' | 'destructive';
+  readonly onSelect: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <ContextMenuItem
+      data-hotkey={hotkey}
+      aria-keyshortcuts={hotkey.toUpperCase()}
+      disabled={disabled}
+      title={title}
+      variant={variant}
+      onSelect={onSelect}
+    >
+      {children}
+      <Kbd aria-hidden="true" className="ml-auto">
+        {hotkey.toUpperCase()}
+      </Kbd>
+    </ContextMenuItem>
+  );
+}
 
 /**
  * The rename field, in place of the row.
