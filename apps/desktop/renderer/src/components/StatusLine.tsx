@@ -5,13 +5,13 @@
  * One always-visible row across the bottom of the window carrying everything
  * that decides what the *next* prompt will do, and nothing that does not:
  *
- *     [profile ▾] [model ▾] [mode ▾]                    ◔ 61%  ~/proj  main
+ *     [profile ▾] [model ▾] [mode ▾]         5hr ⬤  Week ⬤  Fable ⬤
  *
- * Everything left of the gauge changes a setting in place; everything right of
- * it is read-only text. That split is the whole design: a setting you can
- * change is a control, a fact about the run is text, and nothing here is both.
+ * Everything left of the rings changes a setting in place; everything right of
+ * them is read-only. That split is the whole design: a setting you can change
+ * is a control, a fact about the run is text, and nothing here is both.
  *
- * The gauge opens the usage popover, which carries the context window and the
+ * The rings open the usage popover, which carries the context window and the
  * plan's rate-limit windows together — both answer "how much room is left",
  * and they used to be split across two controls.
  *

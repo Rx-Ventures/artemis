@@ -147,10 +147,14 @@ export interface PlanUsage {
  * about to be cut off.
  */
 /**
- * Which window a single-number readout should show.
+ * A window a compact readout can ask for by name.
+ *
+ * The three the status bar draws a ring for. It was a *setting* once — one bar
+ * counted down one of these — and is now simply the vocabulary for asking, since
+ * all three are on screen at the same time.
  *
  * `model` is a family rather than one id: the per-model buckets a plan meters
- * separately vary by account (`model_scoped:Fable` and friends), so the choice
+ * separately vary by account (`model_scoped:Fable` and friends), so the request
  * has to name the family and let {@link focusedWindow} pick within it.
  */
 export type PlanMeterFocus = 'five_hour' | 'seven_day' | 'model';

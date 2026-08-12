@@ -326,8 +326,10 @@ describe('status line / usageReporting', () => {
     useProvider({ ...ALL, usageReporting: false });
     mount(<StatusLine />);
     expect(screen.queryByLabelText('Context usage')).toBeNull();
-    // The gauge that replaced it is present and is the way in.
-    expect(screen.queryByLabelText('Plan usage')).not.toBeNull();
+    // The rings that replaced it are present and are the way in. Matched on a
+    // prefix because the label now spells out every ring's reading — see
+    // `plan-usage-rings.test.tsx`.
+    expect(screen.queryByLabelText(/^Plan usage/)).not.toBeNull();
   });
 });
 
