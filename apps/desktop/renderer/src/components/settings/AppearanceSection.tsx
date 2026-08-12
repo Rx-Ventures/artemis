@@ -2,12 +2,19 @@
  * Appearance.
  * ============================================================================
  *
- * The smallest pane, on purpose. Artemis is a dark-only app with one palette and
- * one type scale — those are architecture, not preferences, and a settings pane
- * that offered to change them would be promising something the design system
- * does not support.
+ * A small pane, on purpose. Artemis is a dark-only app with one palette, and
+ * that is architecture rather than preference — a settings pane offering to
+ * change it would be promising something the design system does not support.
  *
- * What is left is genuinely a matter of taste and genuinely wired: how wide the
+ * Text size is the one that looks like the same kind of claim and is not, so it
+ * is worth being precise about what became settable. The type *scale* is still
+ * architecture: 11 / 12 / 13 / 14 / 16 / 20 and the ratios between them are
+ * fixed, and nothing here can put the transcript at 13 while the chrome labels
+ * stay at 11. What the user moves is a single multiplier over the whole scale —
+ * the design system's proportions, rendered larger or smaller. That is why it
+ * can be offered honestly, and why it is one number rather than a font panel.
+ *
+ * The rest is genuinely a matter of taste and genuinely wired: how wide the
  * transcript column may grow, how much of the block at the end of a run it
  * keeps, whether the sidebar is showing, and which folders the menu above the
  * composer offers. All are persisted and all take effect the moment they are
@@ -34,15 +41,19 @@
  */
 
 import { useMemo, useState, type ReactElement } from 'react';
-import { XIcon } from 'lucide-react';
+import { MinusIcon, PlusIcon, XIcon } from 'lucide-react';
 
 import { ReasonButton } from '../disabled-reason';
 import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
 import {
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
   RECENT_FOLDERS_LIMIT,
   SIDEBAR_DEFAULT_WIDTH,
   forgetFolders,
   setConversationWidth,
+  setFontSize,
   setPlanMeterFocus,
   setRunSummary,
   setSidebarCollapsed,
@@ -145,6 +156,81 @@ const METERS: readonly Choice<PlanMeterFocus>[] = [
     note: 'The weekly window for the model closest to full — Fable and Opus are metered separately from the plan total on some accounts. Shows a dash if your plan has no per-model limits.',
   },
 ];
+
+/**
+ * The text-size row.
+ *
+ * A stepper rather than a `ChoiceList`, which is the one place this pane breaks
+ * its own habit. The other three settings are a short list of named modes whose
+ * notes are the entire point — nobody knows what "wide" costs without the
+ * sentence. Text size is a scalar with ten positions and no prose to attach:
+ * rendering it as ten radio rows would be ten near-identical cards inventing
+ * differences between 15px and 16px that do not exist.
+ *
+ * There is no preview swatch because the pane *is* the preview — the dialog is
+ * laid out in the same rem the setting scales, so it resizes under the pointer
+ * as the value changes. A sample line showing "the quick brown fox" at the new
+ * size would be a smaller, worse copy of what the user is already looking at.
+ *
+ * Both buttons stay mounted at the bounds and explain themselves through
+ * `ReasonButton`, per the rule in `disabled-reason.tsx`: a `+` that silently
+ * stopped working at 20px reads as a bug, not as a limit.
+ */
+function TextSize(): ReactElement {
+  const fontSize = useApp((s) => s.fontSize);
+
+  return (
+    <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+      <ItemContent>
+        <ItemTitle className="text-xs text-ink">
+          Base text size
+          <span className="font-mono text-2xs text-ink-muted">{fontSize}px</span>
+        </ItemTitle>
+        <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+          Scales the whole window, not just the letters — row heights, padding and the sidebar move
+          with it, so the transcript stays as dense as it looks now and only gets larger. Persisted,
+          and applied before the first paint, so the app opens at the size you left it.
+        </ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <ReasonButton
+          size="xs"
+          variant="outline"
+          aria-label="Smaller text"
+          disabled={fontSize <= FONT_SIZE_MIN}
+          disabledReason={`${FONT_SIZE_MIN}px is as small as the 11px chrome labels stay readable.`}
+          onClick={() => setFontSize(fontSize - 1)}
+        >
+          <MinusIcon />
+        </ReasonButton>
+        <ReasonButton
+          size="xs"
+          variant="outline"
+          aria-label="Larger text"
+          disabled={fontSize >= FONT_SIZE_MAX}
+          disabledReason={`${FONT_SIZE_MAX}px is as large as the status line fits on a laptop display.`}
+          onClick={() => setFontSize(fontSize + 1)}
+        >
+          <PlusIcon />
+        </ReasonButton>
+        {/* Named, not just "Reset": the sidebar row below has a reset of its
+            own, and two buttons announcing themselves identically in one pane
+            is exactly the ambiguity a screen-reader user cannot resolve. The
+            visible label stays short; only the accessible name is qualified. */}
+        <ReasonButton
+          size="xs"
+          variant="outline"
+          aria-label="Reset text size"
+          disabled={fontSize === FONT_SIZE_DEFAULT}
+          disabledReason="Already at the default size."
+          onClick={() => setFontSize(FONT_SIZE_DEFAULT)}
+        >
+          Reset
+        </ReasonButton>
+      </ItemActions>
+    </Item>
+  );
+}
 
 /**
  * The folder menu's list, editable.
@@ -300,8 +386,14 @@ export function AppearanceSection(): ReactElement {
   return (
     <SettingsPane
       title="Appearance"
-      description="How much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, and which folders the composer offers."
     >
+      <SettingsGroup label="Text size">
+        <ItemGroup className="gap-2">
+          <TextSize />
+        </ItemGroup>
+      </SettingsGroup>
+
       <SettingsGroup label="Conversation width">
         <ChoiceList
           label="Conversation width"
@@ -399,6 +491,7 @@ export function AppearanceSection(): ReactElement {
               <ReasonButton
                 size="xs"
                 variant="outline"
+                aria-label="Reset sidebar width"
                 disabled={sidebarWidth === SIDEBAR_DEFAULT_WIDTH}
                 disabledReason="Already at the default width."
                 onClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
@@ -412,9 +505,10 @@ export function AppearanceSection(): ReactElement {
 
       <p className="text-2xs leading-relaxed text-ink-faint">
         Theme and density are not settings. Artemis is dark-only by design, and the transcript uses
-        one spacing scale so that message boundaries stay readable at a glance. There is no global
-        motion switch either — the only animations in the app are the ones that show something
-        arriving, and the one that runs continuously is the switch above.
+        one spacing scale so that message boundaries stay readable at a glance — text size moves
+        that whole scale at once rather than loosening it. There is no global motion switch either
+        — the only animations in the app are the ones that show something arriving, and the one
+        that runs continuously is the switch above.
       </p>
     </SettingsPane>
   );

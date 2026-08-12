@@ -336,6 +336,8 @@ export interface AppState {
   readonly runSummary: RunSummary;
   /** Which plan-limit window the status-bar meter reports. */
   readonly planMeterFocus: PlanMeterFocus;
+  /** Base text size in px — what `text-base` renders at. @see clampFontSize */
+  readonly fontSize: number;
   /**
    * Whether streaming text fades in a word at a time.
    *
@@ -498,6 +500,56 @@ export const SIDEBAR_DEFAULT_WIDTH = 272;
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+/**
+ * Text size, in px, measured as the size `text-base` comes out at.
+ *
+ * The stored number is the one the user is shown, and it is a real px figure
+ * rather than a percentage or a t-shirt size because this is the rare setting
+ * where the number is the thing being chosen — "14px" is actionable in a way
+ * that "Medium" is not. It is deliberately unlike `conversationWidth`, which is
+ * named after reading modes precisely because its pixel figure is not.
+ *
+ * `FONT_SIZE_DEFAULT` must stay equal to `--text-base` in `index.css` (0.875rem
+ * against a 16px root). It is the divisor in {@link fontScale}, so the two
+ * drifting apart would not break the app — it would silently redefine what
+ * "14px" on the dial means.
+ *
+ * The bounds are where the layout still holds rather than where the text is
+ * still legible. Below 11 the 2xs chrome labels stop being readable; above 20
+ * the status line runs out of room on a laptop display before anything else
+ * does.
+ */
+export const FONT_SIZE_MIN = 11;
+export const FONT_SIZE_MAX = 20;
+export const FONT_SIZE_DEFAULT = 14;
+
+/** Keep a text size inside the bounds, and reject anything that is not a number. */
+export function clampFontSize(size: number): number {
+  if (!Number.isFinite(size)) return FONT_SIZE_DEFAULT;
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(size)));
+}
+
+/** The multiplier `--font-scale` carries: 1 at the default, so unset means unchanged. */
+export function fontScale(size: number): number {
+  return clampFontSize(size) / FONT_SIZE_DEFAULT;
+}
+
+/**
+ * Push the text size onto `<html>`, where `index.css` reads it.
+ *
+ * Called once at module load and again from {@link setFontSize}, rather than
+ * from an effect in `App`. The load-time call is the point: a `useEffect` would
+ * paint one frame at the default size and then resize the whole window, which
+ * on a large setting is a visible lurch on every launch. Writing the variable
+ * while the store is still initialising means the first paint is already right.
+ *
+ * Guarded the same way `localStorage` is a few lines down — the store is
+ * imported by Node-environment tests that have no `document`.
+ */
+function applyFontScale(size: number): void {
+  globalThis.document?.documentElement.style.setProperty('--font-scale', String(fontScale(size)));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -700,6 +752,7 @@ interface Prefs {
   conversationWidth?: ConversationWidth;
   runSummary?: RunSummary;
   planMeterFocus?: PlanMeterFocus;
+  fontSize?: number;
   streamingWordFade?: boolean;
   /**
    * Context windows learned from completed runs, keyed by model.
@@ -868,6 +921,7 @@ function savePrefs(): void {
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     planMeterFocus: s.planMeterFocus,
+    fontSize: s.fontSize,
     streamingWordFade: s.streamingWordFade,
     contextWindows: s.contextWindows,
   };
@@ -879,6 +933,17 @@ function savePrefs(): void {
 }
 
 const prefs = loadPrefs();
+
+/*
+ * Resolved once, and applied before the store exists.
+ *
+ * One constant feeds both the CSS variable and the store's seed below, so the
+ * size the window is painted at and the size the settings pane reports cannot
+ * disagree — and the clamp runs on the way in, so a hand-edited preferences
+ * file cannot open the app at 400px text.
+ */
+const initialFontSize = clampFontSize(prefs.fontSize ?? FONT_SIZE_DEFAULT);
+applyFontScale(initialFontSize);
 
 /**
  * The state a brand-new column starts from.
@@ -978,6 +1043,7 @@ export const useApp = create<AppState>(() => ({
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
+  fontSize: initialFontSize,
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
@@ -3103,6 +3169,22 @@ export function setRunSummary(summary: RunSummary): void {
 
 export function setPlanMeterFocus(focus: PlanMeterFocus): void {
   useApp.setState({ planMeterFocus: focus });
+  savePrefs();
+}
+
+/**
+ * Set the base text size, in px.
+ *
+ * The clamp is here rather than only in the controls because this is reachable
+ * from more than the pair of buttons that currently call it — and a setting
+ * that writes `--font-scale` straight onto the document is one where an
+ * out-of-range value is not a rendering glitch but a window the user may not be
+ * able to read well enough to fix.
+ */
+export function setFontSize(size: number): void {
+  const next = clampFontSize(size);
+  useApp.setState({ fontSize: next });
+  applyFontScale(next);
   savePrefs();
 }
 
