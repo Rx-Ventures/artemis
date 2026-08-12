@@ -107,6 +107,7 @@ import {
   focusedPane,
   installEventBridge,
   installPlanUsageFeed,
+  installTerminalFeed,
   startSessionFeed,
   interruptRun,
   isLive,
@@ -117,6 +118,7 @@ import {
   splitPane,
   toggleSidebar,
   togglePalette,
+  toggleTerminal,
   useApp,
 } from './state/store';
 
@@ -142,6 +144,11 @@ export function App(): ReactElement {
     // Plan usage arrives unasked, from main's poller, for every account rather
     // than the active one — which is what lets the profile menu recommend.
     const stopUsageFeed = installPlanUsageFeed();
+    // Before `bootstrap`, for the same reason `installEventBridge` is: bootstrap
+    // adopts the shells main is still holding, and the first output from one of
+    // them arrives on this channel. Subscribing afterwards would drop whatever a
+    // busy terminal printed during the adoption.
+    const stopTerminalFeed = installTerminalFeed();
     if (!started.current) {
       started.current = true;
       void bootstrap();
@@ -150,6 +157,7 @@ export function App(): ReactElement {
       unsubscribe();
       stopFeed();
       stopUsageFeed();
+      stopTerminalFeed();
     };
   }, []);
 
@@ -202,6 +210,21 @@ export function App(): ReactElement {
     },
     'mod+n': () => newSession(focusedPane()),
     'mod+b': toggleSidebar,
+    /*
+     * `!` — fires from inside a text field, and here that is not a nicety.
+     *
+     * xterm receives keys through a hidden `<textarea>`, which is exactly what
+     * `isTextEntry` looks for, so a plain `mod+j` binding would work everywhere
+     * in the app *except* while a terminal has focus — that is, except while
+     * you are looking at the thing the shortcut toggles. It would fail
+     * silently, which is the same trap the `mod+shift+\` comment below
+     * describes from the other direction.
+     *
+     * Nothing is given up by claiming it: ⌘J is not a key any shell binds, and
+     * every terminal key that matters — ⌃C, ⌃D, ⌃Z, Escape — is unbound here
+     * and reaches the shell untouched.
+     */
+    '!mod+j': () => toggleTerminal(focusedPane()),
     /*
      * `⌘\` splits to the right, `⌘⇧\` splits downwards.
      *

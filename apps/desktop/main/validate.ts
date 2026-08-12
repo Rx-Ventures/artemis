@@ -85,6 +85,12 @@ import {
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
   type PreviewOpenRequest,
+  type TerminalCloseRequest,
+  type TerminalListRequest,
+  type TerminalReplayRequest,
+  type TerminalResizeRequest,
+  type TerminalStartRequest,
+  type TerminalWriteRequest,
   type WindowRequest,
   type WorkspaceDescribeRequest,
   type WorkspacePickDirectoryRequest,
@@ -171,6 +177,24 @@ const LIMITS = {
    * to the storage cap would turn that paste into a failure.
    */
   sessionTitle: 4_000,
+  /**
+   * Bound on one write into a terminal.
+   *
+   * Sized for a paste rather than for a keystroke — people paste log files into
+   * `grep` — and small enough that a renderer looping on `write` fills a
+   * megabyte at a time instead of the heap.
+   */
+  terminalData: 1_000_000,
+  /**
+   * Bound on a terminal's width and height, in cells.
+   *
+   * A 6K display at a 6px font is nowhere near a thousand columns, so anything
+   * past this is a caller that has measured something other than a pane —
+   * usually a detached element reporting zero, then a garbage number. The floor
+   * of 1 matters as much as the ceiling: a PTY sized `0` makes `ioctl` fail and
+   * some shells hang on it.
+   */
+  terminalDimension: 1_000,
 } as const;
 
 /**
@@ -240,6 +264,12 @@ function optionalInteger(value: unknown, field: string, min: number, max: number
   }
   if (value < min || value > max) throw new ValidationError(field, `must be between ${min} and ${max}`);
   return value;
+}
+
+function requireInteger(value: unknown, field: string, min: number, max: number): number {
+  const parsed = optionalInteger(value, field, min, max);
+  if (parsed === undefined) throw new ValidationError(field, 'is required');
+  return parsed;
 }
 
 function optionalFiniteNumber(value: unknown, field: string, min: number, max: number): number | undefined {
@@ -1143,6 +1173,90 @@ export function validateWorkspaceDescribe(raw: unknown): WorkspaceDescribeReques
 export function validatePreviewOpen(raw: unknown): PreviewOpenRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Terminals                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bytes on their way into a shell.
+ *
+ * Deliberately **not** {@link requireString}, and the two differences are both
+ * the point:
+ *
+ *  - **NUL is legal here.** `requireString` rejects ` ` because everywhere
+ *    else in this file a NUL is a truncation attack on something that will
+ *    become a path or a record. In a terminal it is `Ctrl-@`, a key people
+ *    genuinely press — it is how you set the mark in Emacs and readline — and
+ *    refusing it would break a keyboard shortcut to defend a string that is
+ *    never parsed as anything.
+ *  - **Empty is legal here.** A write with nothing in it is a no-op, not a
+ *    malformed request, and failing it would only mean the renderer having to
+ *    know not to send one.
+ *
+ * What is left is a length bound, which is the only thing this can usefully
+ * check: every byte after it goes to a shell's stdin, and a shell's stdin
+ * accepts anything.
+ */
+function requireTerminalData(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw new ValidationError(field, 'must be a string');
+  if (value.length > LIMITS.terminalData) {
+    throw new ValidationError(field, `must be at most ${LIMITS.terminalData} characters`);
+  }
+  return value;
+}
+
+/**
+ * Open a shell.
+ *
+ * The only terminal request that names a *place*, and so the only one that
+ * needs a path checked. Every other one names a terminal by an id the main
+ * process issued — see `main/terminal.ts` — which is why they are three lines
+ * each.
+ *
+ * `cwd` is checked for shape here and for existence in the handler, by the same
+ * `checkWorkingDirectory` a run start uses. Splitting it that way is not
+ * ceremony: this layer is synchronous and pure, and "is there a directory
+ * there" is neither.
+ */
+export function validateTerminalStart(raw: unknown): TerminalStartRequest {
+  const request = requireRequest(raw);
+  return {
+    cwd: requireAbsolutePath(request['cwd'], 'cwd'),
+    cols: requireInteger(request['cols'], 'cols', 1, LIMITS.terminalDimension),
+    rows: requireInteger(request['rows'], 'rows', 1, LIMITS.terminalDimension),
+  };
+}
+
+export function validateTerminalWrite(raw: unknown): TerminalWriteRequest {
+  const request = requireRequest(raw);
+  return {
+    id: requireId(request['id'], 'id'),
+    data: requireTerminalData(request['data'], 'data'),
+  };
+}
+
+export function validateTerminalResize(raw: unknown): TerminalResizeRequest {
+  const request = requireRequest(raw);
+  return {
+    id: requireId(request['id'], 'id'),
+    cols: requireInteger(request['cols'], 'cols', 1, LIMITS.terminalDimension),
+    rows: requireInteger(request['rows'], 'rows', 1, LIMITS.terminalDimension),
+  };
+}
+
+export function validateTerminalClose(raw: unknown): TerminalCloseRequest {
+  return { id: requireId(requireRequest(raw)['id'], 'id') };
+}
+
+export function validateTerminalList(raw: unknown): TerminalListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+export function validateTerminalReplay(raw: unknown): TerminalReplayRequest {
+  return { id: requireId(requireRequest(raw)['id'], 'id') };
 }
 
 /** Opening a stored session: which profile, which session, which run to stamp. */

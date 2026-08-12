@@ -4,11 +4,19 @@ packages:
 
 # pnpm blocks dependency lifecycle scripts by default. These need theirs:
 # esbuild fetches its platform binary, electron fetches the Electron runtime,
-# electron-winstaller builds Windows installer bits.
+# electron-winstaller builds Windows installer bits, and node-pty resolves its
+# native binding — a prebuild where one exists for the platform, a `node-gyp`
+# compile where one does not (which is every Linux, including CI's).
+#
+# Note what this does *not* buy: node-pty's `post-install.js` never marks the
+# prebuilt `spawn-helper` executable, so the bit arrives unset and the first
+# spawn fails with `posix_spawnp failed`. That is repaired at runtime instead —
+# see `ensureHelperExecutable` in `apps/desktop/main/terminal.ts`.
 allowBuilds:
   electron: true
   esbuild: true
   electron-winstaller: true
+  node-pty: true
 
 minimumReleaseAgeExclude:
   - tsx@4.23.12

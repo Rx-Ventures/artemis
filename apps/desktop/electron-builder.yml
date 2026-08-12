@@ -16,8 +16,13 @@ files:
   - out/**/*
   - package.json
 
+# Neither of these can be read out of the archive. The Agent SDK spawns its own
+# binaries; node-pty has to `dlopen` a `.node` binding and, on macOS and Linux,
+# `exec` the `spawn-helper` beside it — and there is no path into an asar that
+# either call can use.
 asarUnpack:
   - '**/node_modules/@anthropic-ai/claude-agent-sdk/**'
+  - '**/node_modules/node-pty/**'
 
 mac:
   category: public.app-category.developer-tools

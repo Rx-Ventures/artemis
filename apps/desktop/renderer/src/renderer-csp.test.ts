@@ -79,4 +79,27 @@ describe("the renderer's meta CSP", () => {
     expect(metaCsp).not.toContain('allow-same-origin');
     expect(directive(metaCsp, 'script-src')).not.toContain('unsafe-eval');
   });
+
+  /**
+   * The terminal needed no opening, and this records that it was checked.
+   *
+   * xterm.js is the one dependency added since this file was written that draws
+   * outside React's control, so the obvious worry is that it would need a
+   * relaxation — and it does not. It writes inline `style` attributes, which
+   * `style-src 'unsafe-inline'` already permits for React's sake; it paints into
+   * a `<canvas>`, which no directive governs; it loads no worker, evaluates no
+   * string, and fetches nothing. Its stylesheet is bundled by Vite and served
+   * same-origin, like the fonts.
+   *
+   * The assertion is deliberately about what is *absent*: if a future xterm
+   * addon (the WebGL renderer is the likely one) ever needs `worker-src blob:`
+   * widened or `unsafe-eval` granted, this is the test that should be argued
+   * with rather than quietly edited.
+   */
+  it('needs no relaxation for the terminal emulator', () => {
+    expect(directive(metaCsp, 'script-src')).not.toContain('unsafe-eval');
+    // Inline style is the one thing xterm relies on, and it was already granted
+    // for React — so the terminal added no new permission at all.
+    expect(directive(metaCsp, 'style-src')).toContain("'unsafe-inline'");
+  });
 });

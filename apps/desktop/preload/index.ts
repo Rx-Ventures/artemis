@@ -37,6 +37,7 @@ import {
   IPC_PUSH,
   ipcFail,
   AGENT_EVENT_TYPES,
+  TERMINAL_EVENT_TYPES,
   type AgentEvent,
   type IpcChannel,
   type IpcPushChannel,
@@ -74,6 +75,13 @@ import {
   type UpdatesStateRequest,
   type UsagePlanRequest,
   type PreviewOpenRequest,
+  type TerminalCloseRequest,
+  type TerminalEvent,
+  type TerminalListRequest,
+  type TerminalReplayRequest,
+  type TerminalResizeRequest,
+  type TerminalStartRequest,
+  type TerminalWriteRequest,
   type WindowRequest,
   type WindowState,
   type WorkspaceDescribeRequest,
@@ -147,6 +155,27 @@ function isAgentEvent(value: unknown): value is AgentEvent {
     typeof candidate.runId === 'string' &&
     typeof candidate.seq === 'number'
   );
+}
+
+const TERMINAL_EVENT_TYPE_SET = new Set<string>(TERMINAL_EVENT_TYPES);
+
+/**
+ * Minimal shape check on a pushed terminal event. Same standard as
+ * {@link isAgentEvent}.
+ *
+ * `data` is checked for being a string and nothing else — not for length, not
+ * for content. It is a byte stream on its way to a terminal emulator, and the
+ * one thing that could go wrong at this layer is a `switch (event.type)` in the
+ * renderer meeting a type it has no branch for.
+ */
+function isTerminalEvent(value: unknown): value is TerminalEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { type?: unknown; id?: unknown; data?: unknown };
+  if (typeof candidate.type !== 'string' || !TERMINAL_EVENT_TYPE_SET.has(candidate.type)) {
+    return false;
+  }
+  if (typeof candidate.id !== 'string' || candidate.id === '') return false;
+  return candidate.type !== 'data' || typeof candidate.data === 'string';
 }
 
 /**
@@ -301,6 +330,12 @@ const agentEvents = createPushChannel<AgentEvent>({
   isValid: isAgentEvent,
 });
 
+const terminalEvents = createPushChannel<TerminalEvent>({
+  channel: IPC_PUSH.terminalEvent,
+  label: 'artemis.terminal.onEvent',
+  isValid: isTerminalEvent,
+});
+
 const windowStates = createPushChannel<WindowState>({
   channel: IPC_PUSH.windowState,
   label: 'artemis.window.onStateChange',
@@ -324,6 +359,7 @@ const updateStates = createPushChannel<UpdateState>({
 // rather than fanning events out to callbacks in a dead world.
 window.addEventListener('beforeunload', () => {
   agentEvents.reset();
+  terminalEvents.reset();
   windowStates.reset();
   planUsages.reset();
   updateStates.reset();
@@ -419,6 +455,24 @@ const bridge: ArtemisBridge = Object.freeze({
 
   preview: Object.freeze({
     open: (request: PreviewOpenRequest) => invoke(IPC.previewOpen, request),
+  }),
+
+  /**
+   * The user's own shell.
+   *
+   * Six literal channels and one subscription, and — like every other namespace
+   * here — nothing that lets the caller name a program. `start` says where and
+   * how big; main decides what to run. The five methods after it echo an id main
+   * issued, which main resolves against its own registry before acting.
+   */
+  terminal: Object.freeze({
+    start: (request: TerminalStartRequest) => invoke(IPC.terminalStart, request),
+    write: (request: TerminalWriteRequest) => invoke(IPC.terminalWrite, request),
+    resize: (request: TerminalResizeRequest) => invoke(IPC.terminalResize, request),
+    close: (request: TerminalCloseRequest) => invoke(IPC.terminalClose, request),
+    list: (request: TerminalListRequest) => invoke(IPC.terminalList, request),
+    replay: (request: TerminalReplayRequest) => invoke(IPC.terminalReplay, request),
+    onEvent: terminalEvents.subscribe,
   }),
 
   /**

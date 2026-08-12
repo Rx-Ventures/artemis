@@ -202,6 +202,38 @@ export const EVENT_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
+ * Scan policy for pushed {@link import('@rx-artemis/protocol').TerminalEvent}s.
+ *
+ * The loosest of the three on values and identical to the others on structure,
+ * and the asymmetry is the whole point of having a third policy rather than
+ * reusing {@link EVENT_SCAN_POLICY}.
+ *
+ * **Why `data` is exempt from the value patterns.** This module exists to stop
+ * *Artemis's own* stored credentials — a profile's key, a token it holds — from
+ * reaching the renderer through a handler that returned the wrong type. A
+ * terminal's output is not Artemis's data at all: it is the user's own screen,
+ * on the way to being drawn for the user who typed the command that produced
+ * it. Running the credential patterns over it would mean `cat .env`, `env`,
+ * `git remote -v` and `aws configure list` silently printing `[redacted]` in
+ * the user's own shell — the app corrupting the output of a program it did not
+ * run, to protect a secret from the person who owns it.
+ *
+ * It is also the one payload in the app where the scan would be measurable:
+ * this runs on every batch of output, sixty times a second per terminal.
+ *
+ * **What stays strict.** `forbiddenKeys` is unchanged, so no profile field may
+ * appear anywhere on a terminal event at any depth. The exemption is for one
+ * named string, not for the envelope carrying it.
+ */
+export const TERMINAL_SCAN_POLICY: ScanPolicy = {
+  forbiddenKeys: new Set(PROFILE_LEAK_KEYS),
+  contentKeys: new Set(['data']),
+  opaqueKeys: new Set(),
+  maxDepth: 4,
+  maxNodes: 64,
+};
+
+/**
  * Throw if `value` looks like it carries a credential.
  *
  * @param value   the payload about to cross into the renderer

@@ -33,12 +33,19 @@ import { profilesRoot } from '@rx-artemis/core';
 
 import { APP_NAME, previousUserDataDir } from './appNames.js';
 import { EngineHost } from './engine.js';
-import { broadcast, forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
+import {
+  broadcast,
+  forwardAgentEvents,
+  forwardTerminalEvents,
+  registerIpcHandlers,
+  type IpcLayer,
+} from './ipc.js';
 import { createLogger } from './log.js';
 import { installApplicationMenu } from './menu.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
 import { registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
+import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
 import {
   applySessionPolicy,
@@ -138,8 +145,10 @@ const devServerUrl = process.env['ELECTRON_RENDERER_URL'] ?? null;
 
 let ipcLayer: IpcLayer | null = null;
 let stopEventForwarding: (() => void) | null = null;
+let stopTerminalForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
 let stopUpdater: (() => void) | null = null;
+let terminals: TerminalHost | null = null;
 const engineHost = new EngineHost();
 
 /* -------------------------------------------------------------------------- */
@@ -305,8 +314,14 @@ async function bootstrap(): Promise<void> {
   // default menu wholesale — see menu.ts for what that costs.
   installApplicationMenu({ updater });
 
-  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater });
+  // After `adoptLoginShellPath`, which has by now corrected `process.env.PATH` —
+  // a shell inherits that env, so a terminal opened from a Finder launch finds
+  // the same tools a terminal launch would.
+  terminals = createTerminalHost();
+
+  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater, terminals });
   stopEventForwarding = forwardAgentEvents(engineHost);
+  stopTerminalForwarding = forwardTerminalEvents(terminals);
   // Reads every profile's plan limits on a timer, so the profile menu can say
   // which account has room. Started after IPC so its first push has somewhere
   // to land, and before the window so the schedule does not depend on how long
@@ -377,9 +392,16 @@ app.on('before-quit', (event) => {
   // adapter make the app unquittable.
   event.preventDefault();
   stopEventForwarding?.();
+  stopTerminalForwarding?.();
   stopPlanUsagePolling?.();
   stopUpdater?.();
   ipcLayer?.dispose();
+  // Synchronous, and before the race below: a shell is a child of *this*
+  // process, so anything still alive when `app.exit` fires is reparented to
+  // init and keeps running with nothing to attach to it. Unlike the engine's
+  // adapters there is nothing to shut down gracefully — the tab is already
+  // gone — so this does not need a place in the timeout.
+  terminals?.disposeAll();
 
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
   void Promise.race([engineHost.stop(), timeout]).finally(() => {

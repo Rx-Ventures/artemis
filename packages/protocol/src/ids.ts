@@ -48,3 +48,13 @@ export type PermissionRequestId = string;
  * spawned it.
  */
 export type AgentId = string;
+
+/**
+ * Identifies one pseudo-terminal and the shell running in it.
+ *
+ * Minted by the main process and only ever echoed back by the renderer — every
+ * request naming one is resolved against main's own registry before anything
+ * happens, so this is an unguessable handle rather than an address. See
+ * `./terminal.js`.
+ */
+export type TerminalId = string;

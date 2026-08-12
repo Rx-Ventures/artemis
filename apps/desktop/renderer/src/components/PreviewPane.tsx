@@ -1,12 +1,12 @@
 /**
- * The preview pane: a page the agent wrote, rendered.
+ * The preview: a page the agent wrote, rendered.
  * ============================================================================
  *
  *     ╭───────────────────────╮╭─────────────────────────╮
- *     │ artemis › Make a chart││ ◱ sales.html   12 KB  ✕ │
+ *     │ artemis › Make a chart││ ◱ sales.html ✕  ▸ zsh ✕ │  ← DockPane's strip
  *     ├───────────────────────┤├─────────────────────────┤
  *     │  TRANSCRIPT           ┊│                         │
- *     │   ▸ Wrote sales.html  ┊│      THE PAGE, AS       │
+ *     │   ▸ Wrote sales.html  ┊│      THE PAGE, AS       │  ← this file
  *     │       [ Preview ]     ┊│      A BROWSER SEES IT  │
  *     │  COMPOSER · STATUS    ┊│                         │
  *     ╰───────────────────────╯╰─────────────────────────╯
@@ -25,6 +25,15 @@
  * the one that is open. What the reader gets is what they asked for — the
  * artifact beside the conversation, resizable against it — and the grid keeps
  * its invariant that every cell is a conversation.
+ *
+ * ## This file draws the body and nothing else
+ *
+ * It used to own the caption above it too — the filename, the byte count, the
+ * close button. That row is now `DockPane`'s tab strip, because a preview is no
+ * longer the only thing that can be in this rail: it shares it with the user's
+ * terminals, and two surfaces each drawing their own chrome would have produced
+ * two headers stacked on one another. Ownership and lifetime moved with it, to
+ * `state/dock.ts`.
  *
  * ## Two kinds, two treatments
  *
@@ -70,49 +79,15 @@
 import { type ReactElement } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FileTextIcon, PanelRightCloseIcon, SquareArrowOutUpRightIcon } from 'lucide-react';
 
-import { formatBytes } from '../lib/attachments';
-import { closePreview, useApp } from '../state/store';
-import { IconButton } from './disabled-reason';
+import { useApp } from '../state/store';
 
 export function PreviewPane(): ReactElement | null {
   const preview = useApp((s) => s.preview);
   if (!preview) return null;
 
   return (
-    <section
-      aria-label="Preview"
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel/40"
-    >
-      {/* The caption matches a pane's exactly — same height, same border, same
-          type scale — because it sits on the same row as one and a preview that
-          drew its own chrome would read as a different application stapled to
-          the side. */}
-      <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-line px-2.5">
-        {/* The glyph says which of the two this is — a page, or a document —
-            which is also the difference between what will and will not run. */}
-        {preview.kind === 'frame' ? (
-          <SquareArrowOutUpRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
-        ) : (
-          <FileTextIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
-        )}
-        <span title={preview.path} className="min-w-0 flex-1 truncate text-2xs font-medium text-ink">
-          {preview.title}
-        </span>
-        <span className="shrink-0 font-mono text-2xs text-ink-faint">
-          {formatBytes(preview.bytes)}
-        </span>
-        <IconButton
-          label="Close the preview"
-          size="icon-xs"
-          onClick={closePreview}
-          className="shrink-0 text-ink-faint"
-        >
-          <PanelRightCloseIcon />
-        </IconButton>
-      </div>
-
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {preview.kind === 'frame' ? (
         /*
           White, not `--panel`. A page written to be looked at in a browser
@@ -148,6 +123,6 @@ export function PreviewPane(): ReactElement | null {
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }

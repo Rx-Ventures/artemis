@@ -83,6 +83,7 @@ import {
   fastModeAvailable,
   newSession,
   openSettings,
+  openTerminal,
   refreshProviders,
   refreshSessions,
   providerOffersFastMode,
@@ -242,6 +243,24 @@ function RootPage({
           <MessageSquarePlusIcon />
           New session
           <CommandShortcut>{keyLabel('mod+n')}</CommandShortcut>
+        </CommandItem>
+
+        {/*
+         * Filed under Session rather than under a surface of its own, because
+         * that is what it is scoped to: the shell opens on *this* conversation's
+         * working directory and disappears with it. `openTerminal` rather than
+         * `toggleTerminal` — a palette entry that sometimes closed the thing its
+         * label says it opens would be a trap, and the ✕ is right there.
+         */}
+        <CommandItem
+          onSelect={() => {
+            void openTerminal();
+            onClose();
+          }}
+        >
+          <SquareTerminalIcon />
+          Open a terminal here
+          <CommandShortcut>{keyLabel('mod+j')}</CommandShortcut>
         </CommandItem>
 
         {/*

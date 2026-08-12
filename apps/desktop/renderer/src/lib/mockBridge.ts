@@ -30,6 +30,8 @@ import type {
   UpdateState,
   RunsStartRequest,
   SessionSummary,
+  TerminalEvent,
+  TerminalInfo,
   Unsubscribe,
   WindowState,
 } from '@rx-artemis/protocol';
@@ -1003,6 +1005,116 @@ export function createMockBridge(): ArtemisBridge {
      * app is in force. It is enough to exercise the pane's layout, its caption
      * and its empty and error states, which is what the mock is for.
      */
+    /*
+     * A shell that is not a shell.
+     *
+     * There is no process to attach to here — that is the whole premise of this
+     * file — so the mock is a line editor with three built-ins. It echoes what
+     * is typed (a real PTY echoes; xterm does not do it locally), handles
+     * backspace and Enter, and answers `pwd`, `ls` and `echo`. Anything else
+     * gets a `command not found`, which is the honest answer and also the one
+     * that proves the write path reached something.
+     *
+     * That is enough to exercise everything the renderer owns: the tab strip,
+     * the dock's ownership rules, attach and detach across a session switch,
+     * fit-on-resize, and the close button. What it cannot exercise is node-pty,
+     * which is precisely the part that has no renderer half.
+     */
+    terminal: (() => {
+      const listeners = new Set<(event: TerminalEvent) => void>();
+      const shells = new Map<string, { info: TerminalInfo; buffer: string; line: string }>();
+      let counter = 0;
+
+      const emit = (event: TerminalEvent): void => {
+        for (const listener of [...listeners]) listener(event);
+      };
+
+      const write = (id: string, text: string): void => {
+        const shell = shells.get(id);
+        if (!shell) return;
+        shell.buffer += text;
+        emit({ type: 'data', id, data: text });
+      };
+
+      const prompt = (id: string): void => {
+        const shell = shells.get(id);
+        if (!shell) return;
+        write(id, `\r\n[38;5;147m${shell.info.cwd}[0m [38;5;114m❯[0m `);
+      };
+
+      const run = (id: string, command: string): void => {
+        const shell = shells.get(id) as { info: TerminalInfo };
+        const [name, ...rest] = command.trim().split(/\s+/);
+        if (name === undefined || name === '') return;
+        if (name === 'pwd') write(id, `\r\n${shell.info.cwd}`);
+        else if (name === 'ls') write(id, '\r\nREADME.md  package.json  src');
+        else if (name === 'echo') write(id, `\r\n${rest.join(' ')}`);
+        else write(id, `\r\n[38;5;209mmock:[0m ${name}: command not found`);
+      };
+
+      return {
+        start: async ({ cwd }) => {
+          counter += 1;
+          const info: TerminalInfo = {
+            id: `mock-term-${String(counter)}`,
+            shell: '/bin/zsh',
+            cwd,
+            startedAt: Date.now(),
+            exited: false,
+          };
+          shells.set(info.id, { info, buffer: '', line: '' });
+          // After the caller has had a chance to subscribe — a real terminal's
+          // first bytes arrive from a process, not from inside the call that
+          // started it, and a mock that emitted synchronously would let a
+          // missing subscription pass unnoticed.
+          setTimeout(() => {
+            write(info.id, 'Mock shell — no main process. Try pwd, ls, echo.\r\n');
+            prompt(info.id);
+          }, 30);
+          return ok({ terminal: info });
+        },
+
+        write: async ({ id, data }) => {
+          const shell = shells.get(id);
+          if (!shell) return { ok: false, error: { code: 'invalid_request', message: `There is no terminal ${id}.` } };
+          for (const char of data) {
+            if (char === '\r' || char === '\n') {
+              const command = shell.line;
+              shell.line = '';
+              run(id, command);
+              prompt(id);
+            } else if (char === '' || char === '\b') {
+              if (shell.line.length === 0) continue;
+              shell.line = shell.line.slice(0, -1);
+              // Back up, overwrite with a space, back up again — what a real
+              // terminal does, and what makes the cursor land in the right place.
+              write(id, '\b \b');
+            } else if (char >= ' ') {
+              shell.line += char;
+              write(id, char);
+            }
+          }
+          return ok({ id });
+        },
+
+        resize: async ({ id }) => ok({ id }),
+
+        close: async ({ id }) => {
+          shells.delete(id);
+          return ok({ id });
+        },
+
+        list: async () => ok({ terminals: [...shells.values()].map((shell) => shell.info) }),
+
+        replay: async ({ id }) => ok({ id, data: shells.get(id)?.buffer ?? '', truncated: false }),
+
+        onEvent: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+    })(),
+
     preview: {
       open: async ({ path }) => {
         const name = path.split('/').at(-1) ?? path;
