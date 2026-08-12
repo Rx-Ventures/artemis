@@ -6,7 +6,8 @@
  * the single source of truth for the whole app's look. It has four parts, in
  * this order, and the order matters:
  *
- *   1. `@import`s          — Tailwind, tw-animate-css, shadcn's utility layer.
+ *   1. `@import`s          — Tailwind, tw-animate-css, shadcn's utility layer,
+ *                            and the two self-hosted Geist families.
  *   2. `:root`             — every raw design token, as a plain CSS variable.
  *   3. `@theme` / `@theme inline` — what turns those tokens into utility
  *                            classes (`--color-panel` → `bg-panel`).
@@ -103,6 +104,35 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
+
+/*
+ * Geist and Geist Mono, self-hosted.
+ *
+ * These come from `@fontsource-variable/*` rather than a CDN, and that is the
+ * only shape that can work here: the renderer's CSP allows `font-src 'self'
+ * data:` and nothing else, so a Google Fonts `@import` would be blocked at
+ * runtime and the app would fall through to the system stack without saying so.
+ * A packaged app is also expected to render correctly with no network at all.
+ * Vite resolves these through `node_modules`, emits the `.woff2` files into
+ * `out/renderer/assets/` and rewrites the URLs relative to the stylesheet, so
+ * they are same-origin under `file:` in a build and under the dev server in
+ * `dev` — `'self'` in both cases.
+ *
+ * Four imports, not two. Each package splits `index.css` (upright) from
+ * `wght-italic.css`, and the app does render italics — `<em>` inside transcript
+ * markdown, and a few faint UI labels. Without the italic face the browser
+ * synthesises an oblique by shearing the upright, which is visibly wrong on a
+ * monospace face because the shear breaks the advance width.
+ *
+ * Both are variable fonts spanning weight 100–900 in a single file per subset,
+ * so `font-weight: 500`, `600` and `700` all resolve without a second download.
+ * Every family is subset by `unicode-range`, so a build pulls only the latin
+ * files unless something on screen actually needs Cyrillic or Vietnamese.
+ */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist/wght-italic.css';
+@import '@fontsource-variable/geist-mono';
+@import '@fontsource-variable/geist-mono/wght-italic.css';
 
 /*
  * `dark:` resolves off the `.dark` class on <html>, not the OS media query.
@@ -336,18 +366,31 @@
 /*
  * Type. A plain `@theme` block: these are literal values, not references.
  *
- * No webfonts, and not only for taste — the renderer's CSP sets
- * `font-src 'self' data:`, so a Google Fonts or CDN `@import` would be blocked
- * at runtime and the app would silently fall back anyway. System stacks it is.
+ * Geist for chrome, Geist Mono for content — one family in two voices, which is
+ * what the app was already asking for informally. `font-mono` is not a code
+ * accent here: the transcript, user bubbles and every 11px status label are set
+ * in it, so the two faces sit side by side constantly and being drawn on shared
+ * proportions is doing real work. Both are loaded at the top of this file.
+ *
+ * The system stacks are still here, and still ordered, because a webfont is a
+ * per-glyph fallback rather than a per-element one: anything outside Geist's
+ * subsets — CJK in a file path, an emoji in a commit message — silently falls
+ * to the next family in the list, so what follows still has to be a stack
+ * someone chose.
  *
  * The scale is compact and tops out low: `text-base` is 14px because this is a
  * tool, not a blog, and `text-2xs` (11px) is the workhorse for chrome labels.
+ * Geist is a large-x-height face and reads a touch bigger than the system sans
+ * it replaces at the same nominal size, which is worth knowing before anyone
+ * "fixes" a label that now looks a half-step heavier than it used to.
  */
 @theme {
   --font-sans:
-    ui-sans-serif, -apple-system, 'Inter', 'Segoe UI', system-ui, 'Helvetica Neue', sans-serif;
+    'Geist Variable', ui-sans-serif, -apple-system, 'Inter', 'Segoe UI', system-ui,
+    'Helvetica Neue', sans-serif;
   --font-mono:
-    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+    'Geist Mono Variable', ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Menlo',
+    'Consolas', monospace;
 
   --text-2xs: 0.6875rem; /* 11 */
   --text-2xs--line-height: 1rem;
