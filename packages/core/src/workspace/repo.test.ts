@@ -6,6 +6,12 @@
  * shapes of `.git` — a directory in a clone, a file in a linked worktree — are
  * both built here rather than asserted about, because "we also accept the file"
  * is exactly the sort of statement that is true in a comment and false in code.
+ *
+ * Every fixture below sits under `tmpdir()`, so every description of one also
+ * carries `temporary: true`. That is not incidental to the assertions — it is
+ * the proof that the two facts are independent: a repository can perfectly well
+ * be a repository *and* be somewhere that will not last. See `temp.test.ts` for
+ * the flag's own tests.
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -23,6 +29,12 @@ let clone: string;
 let nested: string;
 /** A linked worktree: `.git` is a file holding a `gitdir:` pointer. */
 let worktree: string;
+/** A directory inside that worktree. */
+let insideWorktree: string;
+/** A submodule: the same `.git` file shape, pointing somewhere else entirely. */
+let submodule: string;
+/** A `.git` file that is not a `gitdir:` pointer at all. */
+let malformed: string;
 /** An ordinary directory, in no repository at all. */
 let plain: string;
 
@@ -38,8 +50,18 @@ beforeAll(async () => {
   await mkdir(nested, { recursive: true });
 
   worktree = join(root, 'artemis-fix-thing');
-  await mkdir(worktree);
+  insideWorktree = join(worktree, 'apps');
+  await mkdir(insideWorktree, { recursive: true });
   await writeFile(join(worktree, '.git'), `gitdir: ${join(clone, '.git', 'worktrees', 'fix')}\n`);
+
+  // Git points a submodule at `.git/modules/<path>`, never at `worktrees/`.
+  submodule = join(root, 'vendor-lib');
+  await mkdir(submodule);
+  await writeFile(join(submodule, '.git'), `gitdir: ${join(clone, '.git', 'modules', 'vendor')}\n`);
+
+  malformed = join(root, 'artemis-broken');
+  await mkdir(malformed);
+  await writeFile(join(malformed, '.git'), 'this is not a gitdir pointer\n');
 
   plain = join(root, 'notes');
   await mkdir(plain);
@@ -57,6 +79,8 @@ describe('describeWorkspace', () => {
       name: 'artemis',
       repoRoot: clone,
       repoName: 'artemis',
+      // Because the fixture lives under `tmpdir()`. See the module note.
+      temporary: true,
     });
   });
 
@@ -77,9 +101,42 @@ describe('describeWorkspace', () => {
     expect(result.repoName).toBe('artemis-fix-thing');
   });
 
+  it('reports a linked worktree as one, so the folder menu can decline it', async () => {
+    expect((await describeWorkspace(worktree)).worktree).toBe(true);
+  });
+
+  it('reports a directory inside a worktree as one too', async () => {
+    // The cwd is routinely below the checkout root, and everything under a
+    // worktree goes away when the worktree does.
+    const result = await describeWorkspace(insideWorktree);
+    expect(result.repoRoot).toBe(worktree);
+    expect(result.worktree).toBe(true);
+  });
+
+  it('does not call a submodule a worktree, though it has the same `.git` file', async () => {
+    // The distinction the pointer is read for: a submodule is a permanent place
+    // to be working, and a menu that forgot it would be losing a real project.
+    const result = await describeWorkspace(submodule);
+    expect(result.repoRoot).toBe(submodule);
+    expect(result.worktree).toBeUndefined();
+  });
+
+  it('does not call a plain clone a worktree', async () => {
+    expect((await describeWorkspace(clone)).worktree).toBeUndefined();
+  });
+
+  it('treats an unreadable `.git` pointer as an ordinary checkout', async () => {
+    // "Cannot tell" has to mean "record it". Dropping a directory from the menu
+    // on the strength of a file this could not parse would lose real projects
+    // to a malformed line.
+    const result = await describeWorkspace(malformed);
+    expect(result.repoRoot).toBe(malformed);
+    expect(result.worktree).toBeUndefined();
+  });
+
   it('reports no repository for an ordinary directory', async () => {
     const result = await describeWorkspace(plain);
-    expect(result).toEqual({ path: plain, name: 'notes' });
+    expect(result).toEqual({ path: plain, name: 'notes', temporary: true });
     expect(result.repoName).toBeUndefined();
   });
 
@@ -94,7 +151,7 @@ describe('describeWorkspace', () => {
     // a label, and "the last segment" is the right one.
     const missing = join(root, 'gone', 'missing');
     const result = await describeWorkspace(missing);
-    expect(result).toEqual({ path: missing, name: 'missing' });
+    expect(result).toEqual({ path: missing, name: 'missing', temporary: true });
   });
 
   it('describes a relative path by name only', async () => {

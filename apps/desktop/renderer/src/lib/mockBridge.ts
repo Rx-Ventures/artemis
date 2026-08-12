@@ -870,23 +870,46 @@ export function createMockBridge(): ArtemisBridge {
 
       /*
        * No filesystem to walk either, so the repository is faked from the path
-       * — but all three shapes the header has to render are reachable in dev,
+       * — but all five shapes the callers have to handle are reachable in dev,
        * which a mock that always answered "this directory is the repo" would
        * not give you:
        *
        *  - `~/scratch/…`  no repository at all, so the folder name is the label.
        *  - `…/monorepo/…` a repository several levels *above* the cwd, which is
        *                   the case the whole channel exists for.
+       *  - `…/worktrees/…` a linked worktree, which the header names like any
+       *                   other repository and the recent-folders menu declines
+       *                   to record. Keyed off the same segment git uses.
+       *  - `/tmp/…`       a temporary directory, declined for the same reason.
+       *                   The real check knows this machine's `tmpdir()`, which
+       *                   on macOS is under `/var/folders`; `/tmp` is the one
+       *                   spelling that is recognisable on sight.
        *  - everything else — the ordinary clone, cwd at the root.
        */
       describe: async ({ path }) => {
         const segments = path.split('/').filter(Boolean);
         const name = segments.at(-1) ?? path;
-        if (path.includes('/scratch/')) return ok({ path, name });
+        const temporary = segments[0] === 'tmp' ? { temporary: true } : {};
+        if (path.includes('/scratch/')) return ok({ path, name, ...temporary });
+
+        const linked = segments.indexOf('worktrees');
+        if (linked >= 0) {
+          // The worktree's root is the directory *below* `worktrees/`, so a cwd
+          // deeper inside one still reports the checkout it belongs to.
+          const repoRoot = `/${segments.slice(0, linked + 2).join('/')}`;
+          const repoName = repoRoot.split('/').at(-1) ?? name;
+          return ok({ path, name, repoRoot, repoName, worktree: true, ...temporary });
+        }
 
         const depth = segments.indexOf('monorepo');
         const repoRoot = depth < 0 ? path : `/${segments.slice(0, depth + 1).join('/')}`;
-        return ok({ path, name, repoRoot, repoName: repoRoot.split('/').at(-1) ?? name });
+        return ok({
+          path,
+          name,
+          repoRoot,
+          repoName: repoRoot.split('/').at(-1) ?? name,
+          ...temporary,
+        });
       },
     },
 

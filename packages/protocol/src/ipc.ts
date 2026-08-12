@@ -702,6 +702,32 @@ export interface WorkspaceDescribeResponse {
    * different things to be working in, and the sidebar is naming a place.
    */
   readonly repoName?: string;
+  /**
+   * Is {@link repoRoot} a linked worktree rather than an ordinary checkout?
+   *
+   * Absent unless it is one. Nothing about naming turns on this — a worktree is
+   * named after itself either way — but the recent-folders menu declines to
+   * record one, because a worktree is made for a branch and deleted when that
+   * branch lands, and a list of "where have I been lately" full of directories
+   * that no longer exist is worse than one that never mentions them.
+   *
+   * Submodules also have a `.git` file and are deliberately *not* this: they
+   * are a permanent place to be working.
+   */
+  readonly worktree?: boolean;
+  /**
+   * Is {@link path} inside the machine's temporary directory?
+   *
+   * Absent unless it is. The same reader and the same reason as
+   * {@link worktree}, and reported separately because the two are independent:
+   * a scratch checkout is often both, and most temporary directories are no
+   * repository at all.
+   *
+   * Only the main process can answer it — `tmpdir()` is a fact about the
+   * machine, and on macOS it names a per-user directory under `/var/folders`
+   * rather than anything the renderer could recognise by sight.
+   */
+  readonly temporary?: boolean;
 }
 
 /* -------------------------------------------------------------------------- */

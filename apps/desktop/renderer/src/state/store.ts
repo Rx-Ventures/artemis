@@ -3033,7 +3033,16 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
 /* -------------------------------------------------------------------------- */
 
 /**
- * Record that a directory was worked in.
+ * The recording in progress, so the next one waits behind it.
+ *
+ * Module-level because the order being protected is the *list's*, and there is
+ * one list per window. Nothing awaits it: a caller that blocked on this would
+ * be blocking a directory change on a menu's bookkeeping.
+ */
+let recording: Promise<void> = Promise.resolve();
+
+/**
+ * Record that a directory was worked in — unless it is not going to last.
  *
  * Not exported, and that is the design: the list means "directories this window
  * actually adopted", so the only things allowed to write it are the two places
@@ -3044,15 +3053,83 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
  * Called *after* the write, never before: `setCwd` refuses while a run is live,
  * and a folder the user was told they could not move to has no business at the
  * top of the list of folders they have been in.
+ *
+ * ## What is declined, and why
+ *
+ * Two kinds of directory, for one reason: this menu is an offer to take
+ * somebody back somewhere later, and neither of them will be there.
+ *
+ *  - **A linked worktree** is a checkout made for one branch and deleted when
+ *    that branch lands. Submodules are deliberately *not* included — same
+ *    `.git` file, permanent place to be working.
+ *  - **A temporary directory** is deleted by the OS, and usually sooner by
+ *    whatever made it.
+ *
+ * Working in either is completely ordinary and stays that way: moving there is
+ * not refused, the header still names it, and its sessions still list. Only the
+ * remembering is declined, because a menu of ten "where have I been lately"
+ * rows silts up with directories that no longer exist and each one evicts a
+ * real project that does.
+ *
+ * Resuming an agent session is how most of them arrive, since a session started
+ * in a scratch checkout keeps that path forever and continuing it a week later
+ * is exactly the trip this menu exists to save. See `describeWorkspace` and
+ * `isTemporaryPath` in core for how each is recognised.
+ *
+ * ## Why the entry lands late, and what that costs
+ *
+ * Neither answer is available here: one needs the filesystem and the other
+ * needs `tmpdir()`, and the renderer has neither. So both come over the bridge
+ * in one call and the entry lands a tick after the directory does. The
+ * alternative was to record first and retract on the answer, which would put a
+ * folder in the menu and take it out again; a list nobody edits by hand should
+ * not visibly change its mind.
+ *
+ * Returns void rather than the promise, because there is nothing a caller could
+ * usefully do with it — moving to a directory does not wait on the menu's
+ * bookkeeping, and it cannot fail in a way worth reporting.
+ *
+ * That tick is also why {@link recordFolder} saves for itself. Both callers run
+ * `savePrefs` immediately after calling this, which now happens *before* the
+ * write does — so without that second save the folder would be in the menu and
+ * absent from the next launch.
  */
 function rememberFolder(path: string): void {
+  // Queued rather than fired, so the list keeps the order the directories were
+  // adopted in. Without this the *reply* order decides, and the replies are
+  // independent filesystem walks that can overtake each other — which would
+  // make the eviction order wrong for exactly the user who moves fast enough to
+  // care about it. See {@link recording}.
+  recording = recording.then(() => recordFolder(path));
+}
+
+/** One queued recording. See {@link rememberFolder} for why it is queued. */
+async function recordFolder(path: string): Promise<void> {
+  const next = path.trim();
+  // Both are no-ops that would otherwise pay for a trip through the bridge:
+  // "" is not a folder anyone can go back to, and a folder already at the front
+  // is what `promoteFolder` would hand straight back. The second is the common
+  // case for `resumeSession` on a session in the directory already open.
+  if (next.length === 0) return;
+  if (useApp.getState().recentFolders[0] === next) return;
+
+  const names = await describeWorkspace(next);
+  // `null` when the bridge has no `describe` channel, and `undefined` on a
+  // preload older than these fields. Both mean "cannot tell", and the answer
+  // that changes no behaviour is the one that records.
+  if (names?.worktree === true || names?.temporary === true) return;
+
+  let recorded = false;
   useApp.setState((s) => {
-    const recentFolders = promoteFolder(s.recentFolders, path);
+    const recentFolders = promoteFolder(s.recentFolders, next);
     // `promoteFolder` hands back the same array when nothing moved, and this
     // runs on every directory adoption — returning a fresh object each time
     // would re-render every menu subscriber for a no-op.
-    return recentFolders === s.recentFolders ? {} : { recentFolders };
+    if (recentFolders === s.recentFolders) return {};
+    recorded = true;
+    return { recentFolders };
   });
+  if (recorded) savePrefs();
 }
 
 /**
@@ -3928,7 +4005,9 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // Recorded here for the same reason `refreshWorkspace` is: this function
   // writes `cwd` without going through `setCwd`, so everything hanging off a
   // directory change has to be done by hand. Continuing yesterday's session in
-  // another project is exactly the trip the folder menu exists to save.
+  // another project is exactly the trip the folder menu exists to save — and
+  // the one that most often names a scratch checkout, which `rememberFolder`
+  // declines.
   rememberFolder(session.cwd);
   savePrefs();
 
