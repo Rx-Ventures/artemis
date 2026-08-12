@@ -425,6 +425,29 @@
     height: 100%;
   }
 
+  /*
+   * The one knob behind the Appearance pane's text size.
+   *
+   * `100%` is the browser's own default — 16px — so an unset `--font-scale`
+   * leaves the app exactly where it was before this was settable. The store
+   * writes the variable on `<html>`; nothing else should set `font-size` here.
+   *
+   * Scaling the *root* rather than the `--text-*` tokens is deliberate, and it
+   * is what makes this safe in a UI this dense. Every size in the type scale is
+   * in `rem`, but so is Tailwind's spacing scale, `--radius`, and every fixed
+   * height in the app (`h-5` on a status chip, `h-8` on a toolbar button) — so
+   * one root multiplier moves text and the boxes around it together. Scaling
+   * only the type tokens would grow an 11px label inside a 20px chip that did
+   * not grow with it, and the first thing to break would be the status line.
+   *
+   * What deliberately does *not* scale: hairlines. Borders, outlines and the
+   * scrollbar are in `px` throughout this file, and a 1px rule is 1px at every
+   * text size — scaling it would just make the chrome look heavier.
+   */
+  html {
+    font-size: calc(var(--font-scale, 1) * 100%);
+  }
+
   body {
     margin: 0;
     background: var(--background);
