@@ -90,6 +90,74 @@ describe('groupSessionsByProject', () => {
   });
 });
 
+/*
+ * The sort key the sidebar substitutes while an agent is working.
+ *
+ * `updatedAt` is the transcript file's mtime, so several running sessions
+ * reorder themselves every time the feed re-reads — see `sessionOrderHold` in
+ * the store, which is where the held values come from. This module only has to
+ * sort by whatever key it is handed, in rows and in groups alike.
+ */
+describe('groupSessionsByProject with a held order', () => {
+  /** `a` pinned high, everything else on its own mtime. */
+  const held = (pinned: Readonly<Record<string, number>>) => (s: SessionSummary) =>
+    pinned[s.id] ?? s.updatedAt;
+
+  it('orders rows by the key rather than by updatedAt', () => {
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'running', cwd: '/code/api', updatedAt: 1 }),
+        session({ id: 'idle', cwd: '/code/api', updatedAt: 50 }),
+      ],
+      { orderKey: held({ running: 99 }) },
+    );
+
+    expect(groups[0]!.sessions.map((s) => s.id)).toEqual(['running', 'idle']);
+  });
+
+  it('orders groups by the key too, so a project does not jump the queue on an mtime', () => {
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'running', cwd: '/code/api', updatedAt: 1 }),
+        // Written more recently than the pinned row, but not pinned itself: the
+        // whole point is that a poll moving this number moves nothing on screen.
+        session({ id: 'busy', cwd: '/code/web', updatedAt: 90 }),
+      ],
+      { orderKey: held({ running: 99 }) },
+    );
+
+    expect(groups.map((g) => g.cwd)).toEqual(['/code/api', '/code/web']);
+  });
+
+  it('still reports the real newest updatedAt on the group', () => {
+    // The switcher renders this as "4m ago", which is a claim about when the
+    // work happened — not about where the row sits.
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'running', cwd: '/code/api', updatedAt: 10 }),
+        session({ id: 'idle', cwd: '/code/api', updatedAt: 70 }),
+      ],
+      { orderKey: held({ running: 99 }) },
+    );
+
+    expect(groups[0]!.sessions[0]!.id).toBe('running');
+    expect(groups[0]!.updatedAt).toBe(70);
+    expect(groups[0]!.order).toBe(99);
+  });
+
+  it('leaves the archive on the same rule', () => {
+    const ordered = orderArchived(
+      [
+        session({ id: 'running', cwd: '/code/api', updatedAt: 1 }),
+        session({ id: 'idle', cwd: '/code/api', updatedAt: 50 }),
+      ],
+      { orderKey: held({ running: 99 }) },
+    );
+
+    expect(ordered.map((s) => s.id)).toEqual(['running', 'idle']);
+  });
+});
+
 describe('matchesQuery', () => {
   const s = session({
     id: 'sesn_1',

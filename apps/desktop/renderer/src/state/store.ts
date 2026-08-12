@@ -245,6 +245,38 @@ export interface AppState {
    */
   readonly runningSessions: readonly SessionId[];
   /**
+   * Sort keys held still for the sessions being written right now.
+   *
+   * The sidebar orders by `updatedAt`, which is the transcript file's mtime, and
+   * a working agent rewrites that file every few seconds. With one session
+   * running nobody notices — it is already at the top. With several, every poll
+   * re-answered "who wrote most recently" with a different name, so rows swapped
+   * places and whole project groups jumped the queue while the user was reading
+   * them, roughly every four seconds. Rows are positioned by index, so they
+   * teleport; a list that reshuffles under the pointer is also a list that opens
+   * the wrong session.
+   *
+   * So a session's position is pinned when it starts running and released when
+   * it stops: `updatedAt` stays truthful and this is consulted *instead of* it
+   * while an entry exists — see {@link sessionOrderKey}. The held value is the
+   * moment the run was first seen, so starting one still lifts its row to the
+   * top; what changes is that it then stays there instead of trading places with
+   * every other agent that happens to flush a line. Releasing the hold hands the
+   * row back to its real mtime, which by then is a few seconds old, so a run
+   * ending moves nothing.
+   *
+   * The list is therefore ordered by "most recently started or written", and it
+   * only ever moves on something the user did.
+   *
+   * Keyed by bare {@link SessionId}, like {@link runningSessions} beside it and
+   * the row marker that reads it.
+   *
+   * Never persisted. It describes runs in flight in this window, and a stale
+   * hold restored from disk would pin a row for a conversation that ended
+   * yesterday.
+   */
+  readonly sessionOrderHold: Readonly<Record<SessionId, number>>;
+  /**
    * Which pane the window-level surfaces act on.
    *
    * The palette, the run inspector, the settings dialog and every hotkey are
@@ -1030,6 +1062,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  sessionOrderHold: {},
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
   preview: null,
@@ -1184,19 +1217,40 @@ export function anyPaneLive(state: AppState = useApp.getState()): boolean {
 }
 
 /**
- * The backgrounded conversation for a session, if one is still running.
+ * The conversation already holding a session, wherever it is.
  *
  * How {@link resumeSession} tells "open this from history" from "go back to the
- * thing that is still working". Matched on the run's own `sessionId` rather than
+ * thing you already have open". Matched on the run's own `sessionId` as well as
  * the pane's `resumeSessionId`: the latter is the session the *next* prompt will
  * continue, and for a brand-new conversation it is null until the run ends —
  * precisely the window in which a user is most likely to switch away.
+ *
+ * ## Every conversation, not just the backgrounded ones
+ *
+ * This searched `background` alone once, which made a run in a column that is
+ * *on screen* invisible to it — so clicking the sidebar row of a session working
+ * in the focused pane fell through to the resume path, shoved that run into the
+ * background, and replayed the provider's half-written file into a fresh column.
+ * The conversation carried on working somewhere the user could not see it while
+ * the pane in front of them sat there looking finished, and clicking the row a
+ * second time — which *did* find it in the background — brought it back. In a
+ * split it was worse: both columns ended up pointed at one session id, so the
+ * next prompt from the dead one would start a second run appending to a
+ * transcript file another run already owned.
+ *
+ * `allLivePanes` lists the visible panes first, so a session open both on screen
+ * and in the background — which forking can produce — resolves to the one the
+ * user can see.
+ *
+ * The marker on the row has always spanned both (see {@link syncRunningSessions}),
+ * and the two must agree: a row that says "running now" and then opens as
+ * history is the same disagreement seen from the other end.
  */
-function backgroundPaneForSession(
+function paneForSession(
   sessionId: SessionId,
   state: AppState = useApp.getState(),
 ): Pane | undefined {
-  return state.background.find((pane) => {
+  return allLivePanes(state).find((pane) => {
     const s = paneState(pane);
     return s.run?.sessionId === sessionId || s.resumeSessionId === sessionId;
   });
@@ -1231,9 +1285,9 @@ function syncRunningSessions(): void {
      * the run's id is new and the row the user clicked still carries the old
      * one. Marking only one of them leaves the conversation running behind a row
      * that looks idle, which is the whole failure this marker exists to prevent.
-     * `backgroundPaneForSession` matches on either for the same reason, and the
-     * two must agree: a row that cannot be marked but can be opened, or the
-     * reverse, is worse than neither.
+     * {@link paneForSession} matches on either for the same reason, and the two
+     * must agree: a row that cannot be marked but can be opened, or the reverse,
+     * is worse than neither.
      */
     if (state.run?.sessionId !== undefined) ids.push(state.run.sessionId);
     if (state.resumeSessionId !== null && state.resumeSessionId !== state.run?.sessionId) {
@@ -1243,7 +1297,54 @@ function syncRunningSessions(): void {
 
   const current = useApp.getState().runningSessions;
   if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
-  useApp.setState({ runningSessions: ids });
+  useApp.setState({ runningSessions: ids, sessionOrderHold: holdOrder(ids) });
+}
+
+/**
+ * The next {@link AppState.sessionOrderHold}, for a given set of running ids.
+ *
+ * Mint on the way in, drop on the way out, and never move an entry that is
+ * already there — that last part is the whole point, since a hold that were
+ * re-stamped would churn exactly like the mtime it replaces.
+ *
+ * Returns the existing object when nothing changed, so this can sit in the same
+ * `setState` as `runningSessions` without putting a fresh record into the store
+ * on every keystroke. `Date.now()` rather than the session's own `updatedAt`
+ * because a session that has just been resumed still carries the mtime it had
+ * when it was last worked on: holding *that* would leave the row the user is
+ * typing into wherever it was yesterday. A run starting should lift its row and
+ * then hold it, which is what "now" means here.
+ */
+function holdOrder(
+  running: readonly SessionId[],
+  previous: Readonly<Record<SessionId, number>> = useApp.getState().sessionOrderHold,
+): Readonly<Record<SessionId, number>> {
+  const now = Date.now();
+  const next: Record<SessionId, number> = {};
+  let changed = false;
+  for (const id of running) {
+    const held = previous[id];
+    if (held === undefined) changed = true;
+    next[id] = held ?? now;
+  }
+  // Every id in `previous` that is not in `running` has been dropped, and a
+  // shorter record is the only way that shows up in the count.
+  if (!changed && Object.keys(previous).length === Object.keys(next).length) return previous;
+  return next;
+}
+
+/**
+ * Where a session sits in the sidebar's order.
+ *
+ * Its held position while it is being written, and its real mtime otherwise.
+ * Exported so the palette and the sidebar sort by the same rule — two lists of
+ * the same sessions in two different orders is its own small bug.
+ */
+export function sessionOrderKey(
+  session: SessionSummary,
+  hold: Readonly<Record<SessionId, number>>,
+): number {
+  return hold[session.id] ?? session.updatedAt;
 }
 
 /**
@@ -3745,15 +3846,15 @@ export function newSession(
  * failure is reported. Resuming into a different profile's config directory
  * would not find the session anyway.
  *
- * ## Returning to something that never stopped
+ * ## Returning to something that is already open
  *
- * A session the user walked away from mid-run is still running — see
- * {@link AppState.background} — and for that one there is nothing to resume.
- * The conversation is handed back to the column exactly as it was: same run,
- * same transcript, same parked permission prompt. No history is read, because
- * reading it would replay from the provider's file a conversation that is
- * already in memory *and still being appended to*, and the two copies would
- * interleave.
+ * A session this window already holds is not resumed at all — see
+ * {@link paneForSession}. A conversation the user walked away from mid-run is
+ * handed back to the column exactly as it was: same run, same transcript, same
+ * parked permission prompt. One that never left the screen is simply focused.
+ * Neither reads history, because reading it would replay from the provider's
+ * file a conversation that is already in memory — and, while a run is going,
+ * still being appended to — so the two copies would interleave.
  */
 export function resumeSession(session: SessionSummary, pane: Pane = focusedPane()): void {
   const state = paneState(pane);
@@ -3768,11 +3869,24 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     return;
   }
 
-  // Still working in the background? Then this is a return, not a resume.
-  const running = backgroundPaneForSession(session.id);
-  if (running !== undefined && running.id !== pane.id) {
-    handOver(pane, running);
-    useApp.setState({ paletteOpen: false, focusedPaneId: running.id });
+  /*
+   * Open somewhere already? Then this is a return, not a resume.
+   *
+   * A backgrounded conversation comes home to this column. One that is already
+   * in a column is revealed rather than opened again: a second copy would leave
+   * two panes carrying the same `resumeSessionId`, and a prompt sent from either
+   * would start a run appending to a transcript file the other one owns. That is
+   * the rule {@link openSessionBeside} has always applied to a dragged row, and
+   * an ordinary click is not a different question.
+   *
+   * Includes the pane the user is already looking at, which is how clicking the
+   * row of the conversation in front of them became a no-op rather than a way to
+   * background their own live run.
+   */
+  const open = paneForSession(session.id);
+  if (open !== undefined) {
+    if (useApp.getState().background.some((p) => p.id === open.id)) handOver(pane, open);
+    useApp.setState({ paletteOpen: false, focusedPaneId: open.id });
     savePrefs();
     return;
   }
@@ -3869,8 +3983,11 @@ export function openSessionBeside(
   direction: SplitDirection = 'right',
   from: Pane = focusedPane(),
 ): Pane | null {
-  const existing = allPanes().find((p) => paneState(p).resumeSessionId === session.id);
-  if (existing) {
+  // Only a conversation that already has a column is a reveal. One that is
+  // running in the background has nowhere to be revealed *to*, so it takes the
+  // new column — `resumeSession` hands it over into the pane split below.
+  const existing = paneForSession(session.id);
+  if (existing !== undefined && allPanes().some((p) => p.id === existing.id)) {
     focusPane(existing.id);
     return existing;
   }
@@ -3878,7 +3995,11 @@ export function openSessionBeside(
   const pane = splitPane(direction, from);
   if (!pane) return null;
   resumeSession(session, pane);
-  return pane;
+  // Not `pane`: a conversation that was running in the background comes home
+  // *into* the new column, which replaces the pane split above with the one that
+  // was already holding the run. `resumeSession` focuses whichever it landed in,
+  // so this is the column the caller was asking for either way.
+  return focusedPane();
 }
 
 /**

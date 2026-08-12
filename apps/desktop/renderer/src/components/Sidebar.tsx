@@ -98,6 +98,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   newSession,
+  sessionOrderKey,
   setCwd,
   setSidebarCollapsed,
   setSidebarWidth,
@@ -237,7 +238,15 @@ function ProjectSwitcher(): ReactElement {
   const scope = useApp((s) => s.sessionsScope);
   const listing = useCapability('listSessions');
 
-  const groups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
+  // Same order as the list above it, held still for the projects that are
+  // working — see `AppState.sessionOrderHold`. A menu whose entries reorder
+  // between opening it and reading it is worse here than in the list, because
+  // this one is read top to bottom in one pass.
+  const hold = useApp((s) => s.sessionOrderHold);
+  const groups = useMemo(
+    () => groupSessionsByProject(sessions, { orderKey: (s) => sessionOrderKey(s, hold) }),
+    [sessions, hold],
+  );
   const home = useMemo(
     () => inferHomeDirectory([...sessions.map((s) => s.cwd), cwd], platform),
     [sessions, cwd, platform],

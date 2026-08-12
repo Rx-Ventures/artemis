@@ -14,6 +14,11 @@
  *  2. Groups are ordered by their most recent session, newest first — so the
  *     project you were last in is at the top, which is where a person looks.
  *  3. Sessions inside a group are ordered newest first.
+ *     "Newest" is {@link GroupOptions.orderKey}, which defaults to `updatedAt`
+ *     and is overridden by the sidebar to hold a running session still. See
+ *     `AppState.sessionOrderHold`: `updatedAt` is the transcript file's mtime,
+ *     so ordering several working agents by it reshuffles the list every few
+ *     seconds. Nothing here knows about runs — it takes a key and sorts by it.
  *  4. A session belongs to a **profile as well as a directory**, and two
  *     profiles can have sessions in the same directory. Grouping is therefore
  *     by directory only, and the profile is carried per row. Grouping by
@@ -38,8 +43,16 @@ export interface SessionGroup {
   readonly cwd: string;
   /** Newest first. */
   readonly sessions: readonly SessionSummary[];
-  /** `updatedAt` of the newest session in the group — the group's sort key. */
+  /**
+   * The most recent `updatedAt` in the group — what the project switcher shows.
+   *
+   * Deliberately the real mtime rather than the group's sort key: a held key
+   * says where a row sits, and a person reading "4m ago" is asking when the
+   * work happened.
+   */
   readonly updatedAt: number;
+  /** The group's sort key: the highest {@link GroupOptions.orderKey} in it. */
+  readonly order: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -103,7 +116,7 @@ export function orderArchived(
   const kept = query
     ? sessions.filter((s) => matchesQuery(s, query, lookup?.(s.profileId)))
     : [...sessions];
-  return kept.sort(byRecency);
+  return kept.sort(byRecency(options.orderKey ?? byUpdatedAt));
 }
 
 /** Resolves a profile id to its display label, for search and for the row badge. */
@@ -150,9 +163,16 @@ export function matchesQuery(
   return terms.every((term) => text.includes(term));
 }
 
+/** Where a session sorts. Higher is newer. See rule 3 in the file header. */
+export type SessionOrderKey = (session: SessionSummary) => number;
+
+/** The plain answer, and the one every caller that has no runs to hold wants. */
+const byUpdatedAt: SessionOrderKey = (session) => session.updatedAt;
+
 export interface GroupOptions {
   readonly query?: string;
   readonly profileLabel?: ProfileLabelLookup;
+  readonly orderKey?: SessionOrderKey;
 }
 
 /** Apply rules 1–4 above. */
@@ -171,18 +191,28 @@ export function groupSessionsByProject(
     else byCwd.set(session.cwd, [session]);
   }
 
+  const orderKey = options.orderKey ?? byUpdatedAt;
   const groups: SessionGroup[] = [];
   for (const [cwd, bucket] of byCwd) {
-    bucket.sort(byRecency);
-    groups.push({ cwd, sessions: bucket, updatedAt: bucket[0]?.updatedAt ?? 0 });
+    bucket.sort(byRecency(orderKey));
+    groups.push({
+      cwd,
+      sessions: bucket,
+      // Not `bucket[0]`: the first row is the one that sorts highest, which
+      // under a held key is not necessarily the one written most recently.
+      updatedAt: bucket.reduce((newest, s) => Math.max(newest, s.updatedAt), 0),
+      order: bucket.reduce((highest, s) => Math.max(highest, orderKey(s)), 0),
+    });
   }
 
-  groups.sort((a, b) => b.updatedAt - a.updatedAt || a.cwd.localeCompare(b.cwd));
+  groups.sort((a, b) => b.order - a.order || a.cwd.localeCompare(b.cwd));
   return groups;
 }
 
-function byRecency(a: SessionSummary, b: SessionSummary): number {
-  return b.updatedAt - a.updatedAt || sessionKey(a).localeCompare(sessionKey(b));
+/** Newest first, by whichever key the caller sorts on, ties broken by identity. */
+function byRecency(orderKey: SessionOrderKey) {
+  return (a: SessionSummary, b: SessionSummary): number =>
+    orderKey(b) - orderKey(a) || sessionKey(a).localeCompare(sessionKey(b));
 }
 
 /**

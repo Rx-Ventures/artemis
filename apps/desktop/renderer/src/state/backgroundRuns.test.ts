@@ -30,10 +30,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Capabilities, SessionSummary } from '@rx-artemis/protocol';
 
 import {
+  allPanes,
   bootstrap,
   closePane,
   focusedPane,
   newSession,
+  openSessionBeside,
   resumeSession,
   splitPane,
   useApp,
@@ -303,6 +305,111 @@ describe('coming back to a session that never stopped', () => {
     await settled();
 
     expect(readHistoryFor('sess-old')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The same rule for a conversation that never left the screen.
+ *
+ * "Is this still running?" used to be asked of `background` alone, so a run in a
+ * column the user was looking at was invisible to it and clicking its row fell
+ * through to the resume path: the run was pushed into the background, a blank
+ * column took its place, and the provider's half-written file was replayed into
+ * it. The pane in front of the user then sat there looking finished while the
+ * agent carried on working somewhere they could not see — and clicking the row
+ * again, which *did* find it in the background by then, brought it back. That
+ * click-to-kill / click-again-to-restore pair is what these pin shut.
+ */
+describe('a session running in a column that is already on screen', () => {
+  it('is not disturbed by clicking its own row', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a'), resumeSessionId: 'sess-a' });
+    working.transcript.note('info', 'half a refactor');
+
+    resumeSession(summary('sess-a'));
+    await settled();
+
+    // Same column, same run, same transcript — and nothing in the background.
+    expect(focusedPane().id).toBe(working.id);
+    expect(state().run?.runId).toBe('run-a');
+    expect(background()).toHaveLength(0);
+    expect(rows(working).length).toBeGreaterThan(0);
+    // The file is still being appended to, so replaying it would have shown a
+    // partial copy of a conversation already in memory.
+    expect(readHistoryFor('sess-a')).toBe(false);
+  });
+
+  it('is revealed rather than opened again in the other column', async () => {
+    const left = pane();
+    const right = splitPane('right', left);
+    if (!right) throw new Error('expected a second column');
+    setPaneState(right, { run: liveRun('run-b', 'sess-b'), resumeSessionId: 'sess-b' });
+    useApp.setState({ focusedPaneId: left.id });
+
+    resumeSession(summary('sess-b'), left);
+    await settled();
+
+    // The focus moves to the column already holding it; this one is untouched.
+    expect(focusedPane().id).toBe(right.id);
+    expect(paneState(left).resumeSessionId).toBeNull();
+    expect(paneState(left).run).toBeNull();
+    expect(paneState(right).run?.runId).toBe('run-b');
+    expect(readHistoryFor('sess-b')).toBe(false);
+    // One pane pointed at the session, not two: a prompt sent from a second one
+    // would start a run appending to a transcript file this run already owns.
+    expect(allPanes().filter((p) => paneState(p).resumeSessionId === 'sess-b')).toHaveLength(1);
+  });
+
+  it('is found by the run’s own id before the session has been selected', async () => {
+    // A brand-new conversation: `resumeSessionId` is null until the run ends, and
+    // it is the window in which a user is most likely to click away and back.
+    const left = pane();
+    const right = splitPane('right', left);
+    if (!right) throw new Error('expected a second column');
+    setPaneState(right, { run: liveRun('run-b', 'sess-b'), resumeSessionId: null });
+    useApp.setState({ focusedPaneId: left.id });
+
+    resumeSession(summary('sess-b'), left);
+    await settled();
+
+    expect(focusedPane().id).toBe(right.id);
+    expect(paneState(left).resumeSessionId).toBeNull();
+    expect(readHistoryFor('sess-b')).toBe(false);
+  });
+
+  it('is revealed by “open beside” instead of splitting a second copy off', async () => {
+    const left = pane();
+    const right = splitPane('right', left);
+    if (!right) throw new Error('expected a second column');
+    setPaneState(right, { run: liveRun('run-b', 'sess-b'), resumeSessionId: null });
+    useApp.setState({ focusedPaneId: left.id });
+
+    const landed = openSessionBeside(summary('sess-b'), 'right', left);
+    await settled();
+
+    expect(landed?.id).toBe(right.id);
+    expect(allPanes()).toHaveLength(2);
+  });
+
+  it('comes home into the new column when “open beside” finds it backgrounded', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a') });
+    newSession();
+    await settled();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+
+    const landed = openSessionBeside(summary('sess-a'), 'right', focusedPane());
+    await settled();
+
+    // The split column is where it lands, and the returned pane is the one that
+    // ended up holding it rather than the blank that was minted for the split.
+    expect(landed?.id).toBe(working.id);
+    expect(paneState(working).run?.runId).toBe('run-a');
+    expect(background()).toHaveLength(0);
+    expect(allPanes()).toHaveLength(2);
+    expect(readHistoryFor('sess-a')).toBe(false);
   });
 });
 

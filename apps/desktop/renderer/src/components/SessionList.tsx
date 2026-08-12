@@ -143,6 +143,7 @@ import {
   refreshSessions,
   renameSession,
   resumeSession,
+  sessionOrderKey,
   toggleArchivedExpanded,
   toggleProjectCollapsed,
   toggleSessionArchived,
@@ -217,6 +218,20 @@ export function SessionList(): ReactElement {
   const archivedKeys = useMemo(() => new Set(archivedSessions), [archivedSessions]);
 
   /*
+   * Rows hold their place while their agent is working.
+   *
+   * `updatedAt` is the transcript file's mtime, and the feed re-reads it every
+   * four seconds while anything is live, so ordering several working sessions by
+   * it made the list trade places under the pointer. `sessionOrderHold` pins each
+   * one where it was when its run started; see the field for the whole story.
+   */
+  const hold = useApp((s) => s.sessionOrderHold);
+  const orderKey = useCallback(
+    (session: SessionSummary) => sessionOrderKey(session, hold),
+    [hold],
+  );
+
+  /*
    * Archived sessions are lifted out *before* grouping, so they leave their
    * project rather than hiding inside it — a project whose every session is
    * archived disappears from the list entirely, which is the point of putting
@@ -226,14 +241,14 @@ export function SessionList(): ReactElement {
   const rows = useMemo(() => {
     const split = partitionArchived(sessions, archivedKeys);
     return flattenGroups(
-      groupSessionsByProject(split.active, { query, profileLabel }),
+      groupSessionsByProject(split.active, { query, profileLabel, orderKey }),
       collapsed,
       {
-        sessions: orderArchived(split.archived, { query, profileLabel }),
+        sessions: orderArchived(split.archived, { query, profileLabel, orderKey }),
         collapsed: !archivedExpanded,
       },
     );
-  }, [sessions, query, profileLabel, collapsed, archivedKeys, archivedExpanded]);
+  }, [sessions, query, profileLabel, orderKey, collapsed, archivedKeys, archivedExpanded]);
 
   /** Unfiltered, so the count does not jump around while typing. */
   const total = sessions.length;

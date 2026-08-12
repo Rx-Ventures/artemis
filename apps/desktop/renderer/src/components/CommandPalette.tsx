@@ -88,6 +88,7 @@ import {
   providerOffersFastMode,
   resumeSession,
   selectedModelOption,
+  sessionOrderKey,
   setFastMode,
   setForkOnResume,
   setInfo,
@@ -493,6 +494,7 @@ function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactEleme
   const loading = useApp((s) => s.sessionsLoading);
   const error = useApp((s) => s.sessionsError);
   const scope = useApp((s) => s.sessionsScope);
+  const hold = useApp((s) => s.sessionOrderHold);
 
   if (!listing.supported) return <Note title="Not supported" body={listing.reason} />;
   if (error) return <Note title="Could not read history" body={error} tone="error" />;
@@ -509,7 +511,12 @@ function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactEleme
     );
   }
 
-  const ordered = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  // The sidebar's order, not a second opinion on it — and held still for the
+  // sessions that are running, so the list does not reshuffle while it is open
+  // and the arrow keys are moving through it. See `AppState.sessionOrderHold`.
+  const ordered = [...sessions].sort(
+    (a, b) => sessionOrderKey(b, hold) - sessionOrderKey(a, hold),
+  );
 
   return (
     <>
