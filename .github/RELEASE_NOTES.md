@@ -1,32 +1,42 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.6.1
+## What's new in 0.6.2
 
-- A bug can be reported from inside the app. The foot of the sidebar has a
-  permanent row now — one line, always there, because the moment you want
-  it is a moment you did not plan for and will not go menu-hunting during.
-  It opens a short form: a summary, what happened, steps if you have them,
-  and a checkbox that includes the two facts anyone triaging asks for first
-  — your version and your platform, and nothing else. The button says
-  *Continue on GitHub* because it does not file anything: it opens GitHub's
-  own new-issue form with all of it filled in, so the last read of what is
-  about to be public is yours, and the issue comes from an account that can
-  be replied to.
-- Updating no longer needs a GitHub account. This repository is public, so
-  the updater now reaches releases over plain HTTPS with no credential and
-  no tooling; your own `gh` stays as a second route for machines where the
-  direct one is blocked or proxied. The release archive is streamed to disk
-  as it arrives instead of being held whole in memory first — about 200MB
-  the app no longer asks of your machine while an update lands. And when a
-  check does fail, the app says what is actually likely wrong now: the
-  network, rather than a missing GitHub login.
+- The terminal works in an installed copy. ⌘J has been in the app since
+  0.6.0 and has never once opened a shell in one: every terminal in an
+  install failed with `posix_spawnp failed`, because the single file needed
+  to spawn a shell shipped without its execute bit. A development checkout
+  has no archive to unpack and so no bit to lose — which is precisely why
+  the tests went on passing while every download was broken. The bit is now
+  set at package time, repaired at startup if an install somehow arrives
+  without it, and checked before a release can publish. Booting never
+  revealed this, since nothing touches that file until somebody asks for a
+  shell, so the check had to be made against the shipped file itself.
+- A worktree's sessions stay with the project they came from. Splitting work
+  into a linked worktree used to take those sessions out of the project they
+  belonged to: the sidebar filed them under a repository named after the
+  branch — one you had never worked in, sitting above the one you had,
+  holding the work that had just left it. Groups are keyed on the project
+  the work was on now, not the directory it ran in. Sessions started in a
+  subdirectory join it the same way, so work in `apps/desktop` files under
+  the repository rather than under a heading reading "desktop". What names
+  the place you are in is unchanged — the header, the directory chip above
+  the composer, and the working directory on the row itself — and a
+  worktree's sessions are still told apart by their branch. Expect one
+  thing once: a group you had collapsed against a worktree path arrives
+  open.
 
-Carried over from 0.6.0, in case you are coming from 0.5.x:
+Carried over from 0.6.1 and 0.6.0, in case you are coming from 0.5.x:
 
-- There is a terminal in the app. ⌘J opens a shell on the focused session's
-  working directory, and the right-hand rail became a dock of tabs — the
-  artifact the agent wrote and the terminals you asked for, side by side.
+- A bug can be reported from inside the app. A permanent row at the foot of
+  the sidebar opens a short form and hands it to GitHub's own new-issue
+  page with all of it filled in — the last read of what is about to be
+  public is yours.
+- Updating needs no GitHub account. This repository is public, so the
+  updater reaches releases over plain HTTPS with no credential and no
+  tooling, and streams the archive to disk rather than holding about 200MB
+  in memory while it lands.
 - A plan arrives as a plan, laid out to be read and approved rather than
   shown as a wall of prompt text.
 - Updating cleans up after itself. Every update before 0.6.0 left about
