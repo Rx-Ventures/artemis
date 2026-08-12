@@ -13,6 +13,15 @@
  * renders even when plan limits are unavailable, which is why it sits above
  * the early returns rather than inside the windows list.
  *
+ * ## The trigger is three rings
+ *
+ *     5hr ⬤  Week ⬤  Fable ⬤
+ *
+ * The three limits worth watching without opening anything, each named in front
+ * of the ring reporting it. See the comment on the trigger for why three rather
+ * than one, and {@link meterSlots} for what happens on a plan that does not have
+ * these particular windows.
+ *
  * ## Stale-while-revalidate
  *
  * A refresh spawns a provider subprocess and takes a second or two, which is
@@ -38,7 +47,7 @@ import {
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
-import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
+import { activeCapabilities, activeProviderLabel } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { paneState } from '../state/pane';
 import { WithReason } from './disabled-reason';
@@ -65,6 +74,223 @@ function barToneFor(utilization: number | null): string {
   if (utilization >= 90) return 'bg-signal';
   if (utilization >= 75) return 'bg-amber';
   return 'bg-mint';
+}
+
+/* -------------------------------------------------------------------------- */
+/* The rings                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One ring's three surfaces: the arc that fills, the disc it encircles, and the
+ * number sitting on that disc.
+ *
+ * The disc is tinted with the same hue as the arc rather than left a neutral
+ * surface, and that is the part doing the peripheral-vision work. An arc is two
+ * pixels of colour at this size — enough to read when you look at it, not
+ * enough to *catch* you — whereas a whole circle going amber is noticeable
+ * without being looked at, which is the entire reason a status line carries a
+ * meter instead of a menu item.
+ */
+interface RingTone {
+  readonly arc: string;
+  readonly disc: string;
+  readonly text: string;
+}
+
+/** Same thresholds as {@link toneFor}, and deliberately so — see its header. */
+function ringToneFor(utilization: number | null): RingTone {
+  if (utilization === null) {
+    return { arc: 'stroke-line', disc: 'fill-line/25', text: 'text-ink-faint' };
+  }
+  if (utilization >= 90) {
+    return { arc: 'stroke-signal', disc: 'fill-signal/15', text: 'text-signal' };
+  }
+  if (utilization >= 75) {
+    return { arc: 'stroke-amber', disc: 'fill-amber/15', text: 'text-amber' };
+  }
+  return { arc: 'stroke-mint', disc: 'fill-mint/12', text: 'text-ink-muted' };
+}
+
+/*
+ * Geometry, in the 36-unit box the SVG below is drawn in.
+ *
+ * The disc's radius is the ring's *inner* edge rather than something smaller:
+ * at the 24px this renders at, a one-unit gap between the two would come out
+ * under a pixel — invisible, and paid for by a smaller face for the number. So
+ * the circle is solid to the ring and the ring sits directly on it.
+ *
+ * 24px is the smallest size at which `100` still clears the ring on both sides
+ * at a legible face. It was 22px, where it did not: the digits touched the arc
+ * at the one reading you most need to be able to read.
+ */
+const RING_RADIUS = 15;
+const RING_STROKE = 4;
+const DISC_RADIUS = RING_RADIUS - RING_STROKE / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * One window, as a filled ring with its percentage inside it.
+ *
+ * Nothing here is announced: the drawing is `aria-hidden`, and the number is
+ * inside a button whose `aria-label` overrides its children. That is the right
+ * outcome rather than an oversight — the label spells out every ring as "5hr
+ * 61%", and a bare "61" read out with no window attached is worse than silence.
+ *
+ * The arc is not rendered at all at zero. A round line cap on a zero-length
+ * dash paints a dot, and a dot at the twelve o'clock position reads as a sliver
+ * of usage on a window that has none.
+ */
+function UsageRing({ utilization }: { readonly utilization: number | null }): ReactElement {
+  const tone = ringToneFor(utilization);
+  const filled = utilization === null ? 0 : Math.max(0, Math.min(100, utilization));
+  const text = utilization === null ? '—' : String(Math.round(utilization));
+
+  return (
+    <span className="relative inline-flex size-6 shrink-0 items-center justify-center">
+      {/*
+        `-rotate-90` starts the arc at twelve o'clock. It is on the whole SVG
+        rather than on the two circles because the box is square and centred, so
+        rotating it moves nothing but the arc's origin.
+      */}
+      <svg viewBox="0 0 36 36" className="absolute inset-0 size-full -rotate-90" aria-hidden="true">
+        <circle cx="18" cy="18" r={DISC_RADIUS} className={tone.disc} />
+        <circle
+          cx="18"
+          cy="18"
+          r={RING_RADIUS}
+          fill="none"
+          strokeWidth={RING_STROKE}
+          className="stroke-line/60"
+        />
+        {filled > 0 ? (
+          <circle
+            cx="18"
+            cy="18"
+            r={RING_RADIUS}
+            fill="none"
+            strokeWidth={RING_STROKE}
+            strokeLinecap="round"
+            /*
+              The gap is a whole circumference rather than the remainder, so
+              there is no arithmetic that can round into a second dash appearing
+              at the top of the circle.
+            */
+            strokeDasharray={`${(RING_CIRCUMFERENCE * filled) / 100} ${RING_CIRCUMFERENCE}`}
+            className={cn('transition-[stroke-dasharray] duration-300', tone.arc)}
+          />
+        ) : null}
+      </svg>
+
+      {/*
+        A step smaller at three digits. Only 100 is three digits, and it is the
+        reading that most needs to be legible rather than clipped by the ring it
+        sits inside.
+      */}
+      <span
+        className={cn(
+          'relative font-mono leading-none tabular-nums',
+          text.length > 2 ? 'text-[8px]' : 'text-[9px]',
+          tone.text,
+        )}
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * One ring on the bar: which window it reports and what to call it.
+ *
+ * `window` is nullable because the trigger has to occupy space before the first
+ * reading lands — see {@link PLACEHOLDER_SLOTS}.
+ */
+interface MeterSlot {
+  readonly key: string;
+  readonly label: string;
+  readonly window: PlanUsageWindow | null;
+}
+
+/**
+ * What the bar looks like before it knows anything.
+ *
+ * Three dashed rings rather than nothing at all: the trigger is a control the
+ * user clicks to open the popover, and one that appears a second after launch —
+ * shoving the rest of the row sideways as it does — is worse than one that
+ * starts empty and fills in. The names are the ones a Claude plan will have.
+ */
+const PLACEHOLDER_SLOTS: readonly MeterSlot[] = [
+  { key: 'five_hour', label: '5hr', window: null },
+  { key: 'seven_day', label: 'Week', window: null },
+  { key: 'model_scoped', label: 'Fable', window: null },
+];
+
+const MODEL_SCOPED_PREFIX = 'model_scoped:';
+
+/**
+ * Fable's own weekly bucket, when the plan meters one.
+ *
+ * By name, and *only* by name. Fable earns a permanent ring because it is the
+ * expensive model, it is metered separately from the plan total, and on an
+ * account that leans on it it is the limit that goes first. None of that is
+ * true of the per-model family in general, so a plan that meters something else
+ * gets two rings rather than a third one standing in — a ring is a thing you
+ * learn the position of, and one whose subject changes with the account is a
+ * number you have to read the label to trust.
+ *
+ * Case-insensitive because the name is the provider's `display_name` verbatim
+ * — presentation, not an identifier, and not ours to depend on the casing of.
+ */
+function fableWindow(usage: PlanUsage | null): PlanUsageWindow | null {
+  if (!usage?.available) return null;
+  return (
+    usage.windows.find(
+      (w) =>
+        isModelScoped(w.id) && w.id.slice(MODEL_SCOPED_PREFIX.length).toLowerCase() === 'fable',
+    ) ?? null
+  );
+}
+
+/**
+ * The rings to draw, in order.
+ *
+ * A window the plan does not report is *skipped* rather than drawn empty: an
+ * unfilled ring is indistinguishable from a ring at 0%, and "this plan has no
+ * weekly limit" must not read as "you have used none of it". That is the same
+ * rule the unsupported-provider branch follows with its gauge glyph. So this is
+ * up to three rings, not always three — an account with no Fable bucket shows
+ * two, and the bar is shorter.
+ *
+ * Which leaves the case where none of the three exist — a Codex account meters
+ * `primary` and `secondary`, and matches nothing here. Falling back to the
+ * window closest to full, under the provider's own name for it, is what this
+ * meter did before any of this and it keeps a provider with its own vocabulary
+ * showing a real number instead of three dashes.
+ */
+function meterSlots(usage: PlanUsage | null): readonly MeterSlot[] {
+  const slots: MeterSlot[] = [];
+
+  const fiveHour = focusedWindow(usage, 'five_hour');
+  if (fiveHour !== null) slots.push({ key: fiveHour.id, label: '5hr', window: fiveHour });
+
+  const week = focusedWindow(usage, 'seven_day');
+  if (week !== null) slots.push({ key: week.id, label: 'Week', window: week });
+
+  const fable = fableWindow(usage);
+  if (fable !== null) slots.push({ key: fable.id, label: 'Fable', window: fable });
+
+  if (slots.length > 0) return slots;
+
+  const binding = bindingWindow(usage);
+  if (binding !== null) return [{ key: binding.id, label: binding.label, window: binding }];
+
+  return PLACEHOLDER_SLOTS;
+}
+
+/** One ring's contribution to the trigger's label: "5hr 61%". */
+function describeSlot(slot: MeterSlot): string {
+  const pct = slot.window?.utilization ?? null;
+  return `${slot.label} ${pct === null ? 'unknown' : `${String(Math.round(pct))}%`}`;
 }
 
 /**
@@ -232,13 +458,12 @@ export function PlanUsageMeter(): ReactElement | null {
   const profileId = usePane((s) => s.activeProfileId);
   const supported = usePane((s) => activeCapabilities(s).planUsageReporting);
   const providerLabel = usePane(activeProviderLabel);
-  const focus = useApp((s) => s.planMeterFocus);
 
   const [open, setOpen] = useState(false);
   const { usage, refreshing, load } = usePlanUsage(profileId, () => paneState(pane).activeProfileId);
 
-  // Paint from cache as soon as the trigger exists, so the icon can already
-  // carry a colour before it is ever clicked.
+  // Paint from cache as soon as the trigger exists, so the rings can already
+  // carry a colour before they are ever clicked.
   useEffect(() => {
     void load('cached');
   }, [load]);
@@ -253,8 +478,8 @@ export function PlanUsageMeter(): ReactElement | null {
   if (!supported) {
     return (
       /*
-        Still the gauge glyph here, deliberately, now that the live meter is a
-        bar: an empty bar is indistinguishable from a bar at 0%, and "this
+        Still the gauge glyph here, deliberately, rather than three empty rings:
+        an unfilled ring is indistinguishable from a ring at 0%, and "this
         provider cannot report limits" must not read as "you have used none of
         them". A different shape is the point.
       */
@@ -266,61 +491,42 @@ export function PlanUsageMeter(): ReactElement | null {
     );
   }
 
-  /*
-   * The chosen window, or the binding one when this plan has no such window.
-   *
-   * `planMeterFocus` names Claude's windows — five-hourly, weekly, per-model —
-   * because those are the ones worth choosing between. A provider that meters
-   * differently matches none of them, and the strict answer (`null`) rendered as
-   * a permanent "—" next to an empty bar on an account whose usage had been read
-   * successfully. Falling back to the window closest to full is the same answer
-   * this meter gave before the focus setting existed, and it stays honest
-   * because the bar is unlabelled: `aria-label` and the popover both name the
-   * window actually being reported.
-   */
-  const shown = focusedWindow(usage, focus) ?? bindingWindow(usage);
-  const pct = shown?.utilization ?? null;
+  const slots = meterSlots(usage);
   const now = Date.now();
 
   /*
-    A bar rather than a gauge glyph.
+    Three rings, not one bar.
 
-    The icon was a picture of a meter next to a number, which is a label for a
-    reading rather than the reading itself — nothing about it moved as usage
-    climbed, so the only signal was the digits and their colour. A bar is read
-    at a glance and in peripheral vision, which is the whole job of a status
-    line: you notice it filling without having to look at it.
+    The bar reported a single window chosen in settings, and that setting was
+    the tell: picking between the 5-hour, the weekly and the per-model limit
+    only *is* a choice because a bar the width of this one can carry one of
+    them. But the three answer different questions on different clocks — the
+    5-hour is what stops you mid-task, the weekly is what you budget across
+    days, the per-model one is what runs out first if you lean on the expensive
+    model — and none of them substitutes for the others. Choosing meant being
+    blind to two.
 
-    It reports one window, chosen in settings — see `planMeterFocus`. That is a
-    deliberate narrowing: this used to show whichever window was closest to
-    full, which never understated the pressure but also never answered "how
-    long until my 5-hour resets", because the number could be any window at
-    any moment. The cost is that a comfortable focused window says nothing
-    about the others, so `aria-label` names the window and the popover still
-    lists them all.
+    A ring is what makes three fit. It carries its fill and its number in the
+    same 22px, where a bar needs its length to be readable at all, so the row
+    costs about as much width as the labelled bar did and says three times as
+    much. Each is named in front of it, because a percentage whose window you
+    have to remember by position is a percentage you will misread.
+
+    The popover underneath is unchanged and still lists every window the plan
+    reports, including the ones with no ring here.
   */
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        aria-label={
-          shown === null
-            ? 'Plan usage'
-            : `Plan usage — ${shown.label}${pct === null ? '' : ` at ${String(Math.round(pct))}%`}`
-        }
-        className={cn(
-          'flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-line/40',
-          toneFor(pct),
-        )}
+        aria-label={`Plan usage — ${slots.map(describeSlot).join(', ')}`}
+        className="flex items-center gap-2 rounded px-1 hover:bg-line/40"
       >
-        <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-line/60">
-          <span
-            className={cn('block h-full rounded-full transition-[width]', barToneFor(pct))}
-            style={{ width: `${pct ?? 0}%` }}
-          />
-        </span>
-        <span className="font-mono text-2xs tabular-nums">
-          {pct === null ? '—' : `${Math.round(pct)}%`}
-        </span>
+        {slots.map((slot) => (
+          <span key={slot.key} className="flex shrink-0 items-center gap-1">
+            <span className="font-mono text-2xs text-ink-faint">{slot.label}</span>
+            <UsageRing utilization={slot.window?.utilization ?? null} />
+          </span>
+        ))}
       </PopoverTrigger>
 
       <PopoverContent align="start" side="top" className="w-72 p-3">

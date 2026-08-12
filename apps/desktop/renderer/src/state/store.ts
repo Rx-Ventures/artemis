@@ -51,7 +51,6 @@ import type {
   PermissionMode,
   PermissionRequest,
   PermissionScope,
-  PlanMeterFocus,
   PlanRecommendation,
   PlanUsage,
   PreviewOpenResponse,
@@ -170,8 +169,6 @@ export type ConversationWidth = 'comfortable' | 'wide' | 'full';
  * saying it failed is a bug report we would never receive.
  */
 export type RunSummary = 'always' | 'failures' | 'never';
-
-export type { PlanMeterFocus };
 
 // Re-exported so a component reaches for the dock's vocabulary through the same
 // module it reaches for the state — `state/dock.ts` is the model, not a second
@@ -462,8 +459,6 @@ export interface AppState {
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
   readonly runSummary: RunSummary;
-  /** Which plan-limit window the status-bar meter reports. */
-  readonly planMeterFocus: PlanMeterFocus;
   /** Base text size in px — what `text-base` renders at. @see clampFontSize */
   readonly fontSize: number;
   /**
@@ -837,16 +832,14 @@ export const DEFAULT_RUN_SUMMARY: RunSummary = 'always';
 
 const RUN_SUMMARIES: readonly RunSummary[] = ['always', 'failures', 'never'];
 
-/**
- * The 5-hour window, because it is the one that actually interrupts work.
+/*
+ * REMOVED: `planMeterFocus`, and the default and guard that went with it.
  *
- * A weekly limit is a budgeting fact you act on over days; the 5-hour window is
- * the one that stops you mid-task, so it is what a permanently-visible meter
- * should be counting down.
+ * It named which single plan-limit window the status bar counted down. The bar
+ * is three rings now — 5-hour, weekly, per-model — so there is nothing left to
+ * choose between. A value left in the persisted blob by an older build falls
+ * through `...(raw as Prefs)` unread and is dropped on the next save.
  */
-export const DEFAULT_PLAN_METER_FOCUS: PlanMeterFocus = 'five_hour';
-
-const PLAN_METER_FOCUSES: readonly PlanMeterFocus[] = ['five_hour', 'seven_day', 'model'];
 
 /**
  * What is persisted, and whose it is.
@@ -899,7 +892,6 @@ interface Prefs {
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
   runSummary?: RunSummary;
-  planMeterFocus?: PlanMeterFocus;
   fontSize?: number;
   streamingWordFade?: boolean;
   /**
@@ -993,7 +985,6 @@ function loadPrefs(): Prefs {
     ultracode,
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
-    planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     contextWindows: numberMap(raw['contextWindows']),
     // Same treatment as `contextWindows`, and for the same reason: these reach
@@ -1068,7 +1059,6 @@ function savePrefs(): void {
     quickModelIds: s.quickModelIds,
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
-    planMeterFocus: s.planMeterFocus,
     fontSize: s.fontSize,
     streamingWordFade: s.streamingWordFade,
     contextWindows: s.contextWindows,
@@ -1197,7 +1187,6 @@ export const useApp = create<AppState>(() => ({
   quickModelIds: prefs.quickModelIds ?? [],
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
-  planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
   fontSize: initialFontSize,
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
@@ -3899,11 +3888,6 @@ export function setConversationWidth(width: ConversationWidth): void {
 
 export function setRunSummary(summary: RunSummary): void {
   useApp.setState({ runSummary: summary });
-  savePrefs();
-}
-
-export function setPlanMeterFocus(focus: PlanMeterFocus): void {
-  useApp.setState({ planMeterFocus: focus });
   savePrefs();
 }
 
