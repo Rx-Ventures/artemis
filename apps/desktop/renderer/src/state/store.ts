@@ -81,6 +81,8 @@ import {
   type SessionScope,
   type WorkspaceNames,
 } from '../lib/extensions';
+import { detectArtifact, type Artifact } from '../lib/artifact';
+import { detectFileEdit } from '../lib/diff';
 import { isAbsolutePath } from '../lib/paths';
 import { newId } from '../lib/id';
 import { sessionKey } from '../lib/sessionGroups';
@@ -149,15 +151,38 @@ export type RunSummary = 'always' | 'failures' | 'never';
 export type { PlanMeterFocus };
 
 /**
+ * Which conversation a preview belongs to.
+ *
+ * A preview is not a window-level object even though it is drawn at window
+ * level: it is a file *this* conversation wrote, and it makes no sense beside a
+ * different one. Recorded at open time and checked by {@link reconcilePreview},
+ * which closes the pane once the conversation it came from is no longer in a
+ * column.
+ *
+ * Both a session id and a run id, because neither alone covers the life of a
+ * conversation. A run has no `sessionId` until `session.started` arrives — which
+ * is precisely the window in which the first artifact of a fresh conversation is
+ * usually written — so the run id is what identifies it until the session id
+ * exists, at which point {@link reconcilePreview} adopts the id and the
+ * ownership survives the run ending.
+ */
+export interface PreviewOwner {
+  readonly paneId: PaneId;
+  readonly runId?: RunId;
+  readonly sessionId?: SessionId;
+}
+
+/**
  * What is being previewed, as the pane needs it.
  *
- * The protocol's own type, re-exported rather than restated. Everything in it
- * came back from `preview.open` — the renderer builds none of it, and in
- * particular does not construct the URL. That is the shape of the whole feature
- * in one type: the renderer names a path it read out of a tool call, and gets
- * back either something it is allowed to frame or text it can render itself.
+ * The protocol's answer, plus the one thing the renderer knows and the main
+ * process cannot: whose it is. Everything else came back from `preview.open` —
+ * the renderer builds none of it, and in particular does not construct the URL.
+ * That is the shape of the whole feature in one type: the renderer names a path
+ * it read out of a tool call, and gets back either something it is allowed to
+ * frame or text it can render itself.
  */
-export type PreviewState = PreviewOpenResponse;
+export type PreviewState = PreviewOpenResponse & { readonly owner: PreviewOwner };
 
 /** A dismissible message on the error surface. */
 export interface Banner {
@@ -313,6 +338,16 @@ export interface AppState {
   readonly planMeterFocus: PlanMeterFocus;
   /** Base text size in px — what `text-base` renders at. @see clampFontSize */
   readonly fontSize: number;
+  /**
+   * Whether streaming text fades in a word at a time.
+   *
+   * On by default, and off is a real answer rather than an accessibility
+   * fallback: the fade is there because a delta landing as a block reads as a
+   * stutter, and someone who reads faster than the fade resolves is entitled to
+   * find that the stutter was the lesser problem. Off is plain text arriving
+   * exactly as the model sends it — no pacing, no per-word elements.
+   */
+  readonly streamingWordFade: boolean;
 
   /**
    * Every session the listing returned, ungrouped and unsorted.
@@ -413,6 +448,41 @@ export interface AppState {
    * as another entry in `collapsedProjects` would have given it the wrong one.
    */
   readonly archivedExpanded: boolean;
+  /**
+   * Directories worked in, capped at {@link RECENT_FOLDERS_LIMIT}.
+   *
+   * The folder control above the composer is a list of these rather than a
+   * chooser, because moving between a handful of projects is the common case and
+   * re-navigating a native file dialog to a directory the app already knows
+   * about is the tax that made it uncommon. The dialog is still there behind
+   * "Add folder…" — this is a shortcut past it, never a replacement.
+   *
+   * ## Held most-recent-first, shown alphabetically
+   *
+   * The order here is the *eviction* order and nothing else: recency is what
+   * decides which folder falls off the end when an eleventh is opened, because
+   * "the one I have not touched in the longest" is the only defensible answer to
+   * that. It is deliberately not the order the menu draws.
+   *
+   * A list sorted by recency rearranges itself under the user — the folder that
+   * was second is first the moment you use it, so the row you are aiming at is
+   * never where it was last time and the menu has to be read every single time
+   * it is opened. Alphabetical is stable: a folder's position is a property of
+   * its name, so it can be found by muscle memory. Both surfaces that render
+   * this sort it with `sortFoldersByName`.
+   *
+   * Window-scoped, not per column. Where the user has *been* is a fact about the
+   * user; a split does not give them two histories, and a folder opened in the
+   * right column is just as worth offering in the left.
+   *
+   * Entries are absolute paths exactly as adopted — the same strings `cwd`
+   * holds, so membership and "is this the current one" are both plain equality.
+   * Nothing here is verified to still exist: the renderer cannot stat a path,
+   * and a folder that has since been moved fails loudly at the point of use
+   * (`main/validate.ts`) rather than being silently dropped from a list the user
+   * curates by hand. That curation is {@link forgetFolders}, in Appearance.
+   */
+  readonly recentFolders: readonly string[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -480,6 +550,44 @@ export function fontScale(size: number): number {
  */
 function applyFontScale(size: number): void {
   globalThis.document?.documentElement.style.setProperty('--font-scale', String(fontScale(size)));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Recent folders                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many directories the folder menu remembers.
+ *
+ * Ten, because the menu is scanned rather than searched: it opens over the
+ * composer and the whole point of it is that the folder you want is visible
+ * without reading. Past a dozen rows that stops being true and the list starts
+ * competing with the sidebar's project groups, which are already the answer to
+ * "everywhere I have worked" — this is only the answer to "where have I been
+ * lately".
+ */
+export const RECENT_FOLDERS_LIMIT = 10;
+
+/**
+ * Put one directory at the front of the list, keeping it deduped and capped.
+ *
+ * Front, because the stored order is what decides *which folder is dropped* when
+ * an eleventh arrives — see {@link AppState.recentFolders}. Re-opening the
+ * fourth folder down promotes it rather than leaving it to age out, so the
+ * folders in rotation stay in the list and the one that falls off is the one
+ * nobody has opened in ten projects' time. Neither menu draws them in this
+ * order.
+ *
+ * Blank paths are dropped: an unconfigured window has `cwd === ''`, and "" is
+ * not a folder anyone can go back to.
+ */
+function promoteFolder(folders: readonly string[], path: string): readonly string[] {
+  const next = path.trim();
+  if (next.length === 0) return folders;
+  // Already at the front — return the same array so subscribers do not re-render
+  // for a write that changed nothing. Ordinary: every `setCwd` records.
+  if (folders[0] === next) return folders;
+  return [next, ...folders.filter((folder) => folder !== next)].slice(0, RECENT_FOLDERS_LIMIT);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -616,6 +724,16 @@ interface Prefs {
    * this" than remembering where the user was.
    */
   cwd?: string;
+  /**
+   * The directories offered by the folder menu, most recent first.
+   *
+   * Persisted for the same reason `cwd` is, only more so: a list of "where I
+   * work" that emptied on every launch would be a shortcut that is never there
+   * when it is wanted. Seeded from `cwd` on the first launch after this landed —
+   * see {@link initialRecentFolders} — so the menu is never introduced empty to
+   * a user who has been using the app for weeks.
+   */
+  recentFolders?: readonly string[];
   paneLayout?: Record<string, number>;
   activeProfileId?: string | null;
   activeProviderId?: ProviderId;
@@ -635,6 +753,7 @@ interface Prefs {
   runSummary?: RunSummary;
   planMeterFocus?: PlanMeterFocus;
   fontSize?: number;
+  streamingWordFade?: boolean;
   /**
    * Context windows learned from completed runs, keyed by model.
    *
@@ -727,6 +846,7 @@ function loadPrefs(): Prefs {
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
+    streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     contextWindows: numberMap(raw['contextWindows']),
     // Same treatment as `contextWindows`, and for the same reason: these reach
     // a layout engine as percentages, so a string or a negative that survived
@@ -741,7 +861,34 @@ function loadPrefs(): Prefs {
     // quietly archive nothing.
     archivedSessions: stringList(raw['archivedSessions']),
     archivedExpanded: boolOrUndefined(raw['archivedExpanded']),
+    // Same treatment again, and here the entry is rendered rather than matched:
+    // a non-string surviving into the menu would reach `lastSegment` and throw
+    // on a control the user opens to get *out* of a bad directory.
+    recentFolders: stringList(raw['recentFolders']),
   };
+}
+
+/**
+ * The folder list a launch starts from.
+ *
+ * Normalised rather than trusted: the stored list can carry blanks, duplicates
+ * and more than the cap after a hand edit or a build that wrote it differently,
+ * and every one of those shows up in the menu as a row that either does nothing
+ * or repeats the row above it.
+ *
+ * The `cwd` fallback is a migration, and a one-line one on purpose. A user
+ * upgrading into this feature has a directory they have been working in for
+ * weeks and no list; opening the new menu to find it empty would read as the app
+ * having forgotten, so the directory it *did* remember becomes the first entry.
+ */
+function initialRecentFolders(stored: Prefs): readonly string[] {
+  let folders: readonly string[] = [];
+  // Reversed, so the stored order survives: `promoteFolder` prepends, so
+  // replaying oldest-first leaves the most recent back at the front.
+  for (const folder of [...(stored.recentFolders ?? [])].reverse()) {
+    folders = promoteFolder(folders, folder);
+  }
+  return folders.length > 0 ? folders : promoteFolder([], stored.cwd ?? '');
 }
 
 /**
@@ -755,6 +902,7 @@ function savePrefs(): void {
   const pane = paneState(focusedPane(s));
   const prefs: Prefs = {
     cwd: pane.cwd,
+    recentFolders: s.recentFolders,
     activeProfileId: pane.activeProfileId,
     activeProviderId: pane.activeProviderId,
     permissionMode: pane.permissionMode,
@@ -774,6 +922,7 @@ function savePrefs(): void {
     runSummary: s.runSummary,
     planMeterFocus: s.planMeterFocus,
     fontSize: s.fontSize,
+    streamingWordFade: s.streamingWordFade,
     contextWindows: s.contextWindows,
   };
   try {
@@ -849,10 +998,24 @@ function unwatchPane(paneId: PaneId): void {
   paneWatchers.delete(paneId);
 }
 
+/**
+ * What the window recomputes when any conversation changes under it.
+ *
+ * Two projections rather than one subscription each, because they are triggered
+ * by exactly the same events — a run starting, ending, or a session being
+ * resumed into a column — and splitting them would only mean walking the panes
+ * twice. Both are written to be cheap and to write nothing when nothing moved;
+ * this runs on every keystroke in a composer, which shares the pane's store.
+ */
+function syncFromPanes(): void {
+  syncRunningSessions();
+  reconcilePreview();
+}
+
 /** Mint a conversation the window is already watching. The only way panes are made. */
 function openPane(initial: SessionState): Pane {
   const pane = createPane(initial);
-  paneWatchers.set(pane.id, pane.store.subscribe(syncRunningSessions));
+  paneWatchers.set(pane.id, pane.store.subscribe(syncFromPanes));
   return pane;
 }
 
@@ -881,6 +1044,9 @@ export const useApp = create<AppState>(() => ({
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
   fontSize: initialFontSize,
+  // `??`, not `||`: a persisted `false` is the whole point of the setting and
+  // must survive a reload.
+  streamingWordFade: prefs.streamingWordFade ?? true,
 
   sessions: [],
   sessionsScope: 'all',
@@ -900,6 +1066,7 @@ export const useApp = create<AppState>(() => ({
   collapsedProjects: prefs.collapsedProjects ?? [],
   archivedSessions: prefs.archivedSessions ?? [],
   archivedExpanded: prefs.archivedExpanded ?? false,
+  recentFolders: initialRecentFolders(prefs),
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -1110,7 +1277,7 @@ function mirrorToPanes(state: AppState): void {
 useApp.subscribe(mirrorToPanes);
 
 /*
- * The other half of `syncRunningSessions`'s trigger.
+ * The other half of `syncFromPanes`'s trigger.
  *
  * The per-pane subscription catches a run *changing*; this catches the set of
  * panes changing — a conversation moving to the background, coming home, or
@@ -1118,10 +1285,13 @@ useApp.subscribe(mirrorToPanes);
  * backgrounding a pane writes only the window store, and a run ending writes
  * only a pane's.
  *
+ * It is also the half that closes an orphaned preview, and closing a column is
+ * exactly the case only this half sees.
+ *
  * Safe to re-enter. The write inside notifies this subscriber again, and the
  * second pass finds nothing changed and returns.
  */
-useApp.subscribe(syncRunningSessions);
+useApp.subscribe(syncFromPanes);
 
 /** Point the window-level surfaces at a pane. */
 export function focusPane(paneId: PaneId): void {
@@ -1182,13 +1352,155 @@ export async function openPreview(path: string, pane: Pane = focusedPane()): Pro
     pane.transcript.note('warn', 'Could not preview this file', res.error.message);
     return;
   }
-  useApp.setState({ preview: res.value });
+
+  /*
+   * Ownership is read *after* the await, not before. The read is deliberate:
+   * between naming the path and getting the bytes back the user may have
+   * resumed a different session into this column, and stamping the preview with
+   * the conversation that was there when the click happened would hand it an
+   * owner that is already gone — `reconcilePreview` would then close it
+   * immediately, which looks like the button not working.
+   */
+  const state = paneState(pane);
+  const sessionId = sessionShownBy(state);
+  useApp.setState({
+    preview: {
+      ...res.value,
+      owner: {
+        paneId: pane.id,
+        ...(state.run === null ? {} : { runId: state.run.runId }),
+        ...(sessionId === null ? {} : { sessionId }),
+      },
+    },
+  });
 }
 
 /** Close the preview pane. Nothing to tell the main process — see `preview.ts`. */
 export function closePreview(): void {
   if (useApp.getState().preview === null) return;
   useApp.setState({ preview: null });
+}
+
+/**
+ * Which session a column is showing, or `null` before it has one.
+ *
+ * The run's own id first, the pane's `resumeSessionId` second, and both for the
+ * reason `syncRunningSessions` sets out at length: the two diverge before
+ * `session.started` and after a fork, and a check that consults only one of them
+ * is wrong in whichever of those cases it ignores.
+ */
+function sessionShownBy(state: SessionState): SessionId | null {
+  return state.run?.sessionId ?? state.resumeSessionId;
+}
+
+/**
+ * Close the preview once the conversation that produced it has left the screen.
+ *
+ * An artifact is a thing *a conversation* made. Leaving it framed beside a
+ * different conversation — or beside none, after its column was closed — is the
+ * app asserting a relationship that no longer exists: the pane still says
+ * `report.html`, and nothing on screen connects it to work the user can still
+ * see. So it is not a persistent window object; it lives exactly as long as its
+ * conversation has a column.
+ *
+ * **Visible panes only, and not `allLivePanes`.** A backgrounded run is one the
+ * user navigated away from; keeping its artifact on screen while its transcript
+ * is not is the same orphaning by another route. Backgrounding a conversation
+ * closes its preview, and coming back to that conversation does not reopen it —
+ * the tile in the transcript is the way back in, which is the whole reason the
+ * tile exists.
+ *
+ * Runs on every pane write and every window write, which is often; it is written
+ * to do nothing at all in the overwhelmingly common case where there is no
+ * preview open.
+ */
+function reconcilePreview(): void {
+  const preview = useApp.getState().preview;
+  if (preview === null) return;
+
+  const { owner } = preview;
+  const panes = allPanes();
+
+  /*
+   * Adopt a session id the owning run has learned since. A conversation
+   * previewed before `session.started` is owned by its run; once it has a
+   * session id, that is the durable identity — it is what survives the run
+   * ending, and what a later resume of the same conversation will match on.
+   */
+  if (owner.sessionId === undefined && owner.runId !== undefined) {
+    const home = panes.find((pane) => pane.id === owner.paneId);
+    const learned = home === undefined ? null : sessionShownBy(paneState(home));
+    if (home !== undefined && learned !== null && paneState(home).run?.runId === owner.runId) {
+      useApp.setState({ preview: { ...preview, owner: { ...owner, sessionId: learned } } });
+      return;
+    }
+  }
+
+  const stillShown = panes.some((pane) => {
+    const state = paneState(pane);
+    if (owner.sessionId !== undefined) return sessionShownBy(state) === owner.sessionId;
+    // No session id yet: identity is the run, in the column it started in. A
+    // pane whose run has been replaced is showing a different conversation even
+    // though the column is the same one.
+    return pane.id === owner.paneId && state.run?.runId === owner.runId;
+  });
+
+  if (!stillShown) useApp.setState({ preview: null });
+}
+
+/**
+ * Artifacts already opened by themselves, by conversation.
+ *
+ * Auto-open fires **once per conversation**, and this is the memory that makes
+ * "once" true across the events that would otherwise reset it. Keyed by session
+ * id where there is one and by run id before there is, mirroring
+ * {@link PreviewOwner} for the same reasons.
+ *
+ * Deliberately not cleared when a preview is closed. Closing the pane is the
+ * user saying they are done looking; reopening it on the next write would be
+ * the app overruling them, and the tile is right there. A conversation gets one
+ * uninvited pane, ever.
+ */
+const autoOpened = new Set<string>();
+
+/**
+ * Open the pane for an artifact the agent just wrote, if this is the moment for
+ * it.
+ *
+ * Four conditions, and each one is a way this would otherwise be rude:
+ *
+ *  1. **Only a fresh artifact**, never an edit — unless the edit is to the page
+ *     already on screen, which is a refresh rather than an interruption. This is
+ *     what stops a session of "make it blue, now bigger" from flapping.
+ *  2. **Only the focused column.** A background column's write must not take the
+ *     window; the user is reading something else.
+ *  3. **Only once per conversation.** See {@link autoOpened}.
+ *  4. **Never over an open preview** the user is already reading, unless it is
+ *     the same file.
+ */
+function maybeAutoOpen(pane: Pane, artifact: Artifact): void {
+  const state = useApp.getState();
+  const showing = state.preview;
+  const sameFile = showing !== null && showing.path === artifact.path;
+
+  // A revision of what is already framed refreshes it, whatever else is true:
+  // the user is looking at this exact file and it just changed underneath them.
+  if (sameFile) {
+    void openPreview(artifact.path, pane);
+    return;
+  }
+
+  if (!artifact.fresh) return;
+  if (pane.id !== state.focusedPaneId) return;
+  if (showing !== null) return;
+
+  const paneNow = paneState(pane);
+  const key = sessionShownBy(paneNow) ?? paneNow.run?.runId;
+  if (key === undefined) return;
+  if (autoOpened.has(key)) return;
+  autoOpened.add(key);
+
+  void openPreview(artifact.path, pane);
 }
 
 /**
@@ -2562,6 +2874,7 @@ export function setCwd(cwd: string, pane: Pane = focusedPane()): void {
   if (leaving) newSession(pane, { adoptRecommendedProfile: false });
 
   setPaneState(pane, { cwd: next });
+  rememberFolder(next);
   savePrefs();
   invalidateSessions();
   void refreshSessions();
@@ -2611,6 +2924,66 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
   const choice = await pickDirectory(paneState(pane).cwd);
   if (choice.status === 'chosen') setCwd(choice.path, pane);
   return choice;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Recent folders                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Record that a directory was worked in.
+ *
+ * Not exported, and that is the design: the list means "directories this window
+ * actually adopted", so the only things allowed to write it are the two places
+ * that adopt one — {@link setCwd} and {@link resumeSession}, which writes `cwd`
+ * itself for reasons of its own. A surface that could add an entry without
+ * moving there would let the menu offer folders the app has never been in.
+ *
+ * Called *after* the write, never before: `setCwd` refuses while a run is live,
+ * and a folder the user was told they could not move to has no business at the
+ * top of the list of folders they have been in.
+ */
+function rememberFolder(path: string): void {
+  useApp.setState((s) => {
+    const recentFolders = promoteFolder(s.recentFolders, path);
+    // `promoteFolder` hands back the same array when nothing moved, and this
+    // runs on every directory adoption — returning a fresh object each time
+    // would re-render every menu subscriber for a no-op.
+    return recentFolders === s.recentFolders ? {} : { recentFolders };
+  });
+}
+
+/**
+ * Drop directories from the folder menu. One, or a selection of them.
+ *
+ * Takes a list rather than a single path because both shapes of the same
+ * request exist in Appearance — the × on a row, and "Remove selected" over a
+ * set of checkboxes — and a loop of single removes would write and persist the
+ * preferences once per folder, so a half-finished multi-remove would be a real
+ * state someone could quit inside of.
+ *
+ * Forgetting a folder is bookkeeping and nothing else. It does not touch the
+ * working directory (the current one can be forgotten, and the session carries
+ * on where it is), it does not touch that directory's sessions in the sidebar,
+ * and it certainly does not touch the directory. The next time the folder is
+ * opened it returns to the top of the list, which is what makes this a low-cost
+ * edit rather than a decision — there is no undo and none is needed.
+ */
+export function forgetFolders(paths: readonly string[]): void {
+  const drop = new Set(paths);
+  if (drop.size === 0) return;
+  useApp.setState((s) => {
+    const recentFolders = s.recentFolders.filter((folder) => !drop.has(folder));
+    return recentFolders.length === s.recentFolders.length ? {} : { recentFolders };
+  });
+  savePrefs();
+}
+
+/** Forget every remembered folder. The menu falls back to "Add folder…". */
+export function clearRecentFolders(): void {
+  if (useApp.getState().recentFolders.length === 0) return;
+  useApp.setState({ recentFolders: [] });
+  savePrefs();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2812,6 +3185,18 @@ export function setFontSize(size: number): void {
   const next = clampFontSize(size);
   useApp.setState({ fontSize: next });
   applyFontScale(next);
+  savePrefs();
+}
+
+/**
+ * Turn the per-word fade on streaming text on or off.
+ *
+ * Takes effect on the next word, not the next run: `StreamingText` reads this
+ * live, and a block mid-stream when it is switched off simply stops pacing and
+ * shows what arrives.
+ */
+export function setStreamingWordFade(on: boolean): void {
+  useApp.setState({ streamingWordFade: on });
   savePrefs();
 }
 
@@ -3425,6 +3810,11 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // the focus — which is what makes ⌘K, the run inspector and settings point
   // at what the user just opened rather than at whatever they last clicked.
   useApp.setState({ paletteOpen: false, focusedPaneId: target.id });
+  // Recorded here for the same reason `refreshWorkspace` is: this function
+  // writes `cwd` without going through `setCwd`, so everything hanging off a
+  // directory change has to be done by hand. Continuing yesterday's session in
+  // another project is exactly the trip the folder menu exists to save.
+  rememberFolder(session.cwd);
   savePrefs();
 
   const moved = [
@@ -4187,6 +4577,32 @@ function applyAgentEvent(event: AgentEvent): void {
   pane.transcript.apply(event);
 
   switch (event.type) {
+    /*
+     * An artifact arriving. Read from `tool.end` rather than `tool.start`
+     * because a write that was denied, cancelled or failed left no file — or
+     * left half of one — and opening a pane onto it would answer the user's
+     * first sight of the artifact with a failure a moment later. The same
+     * reasoning the Preview button on the row already follows.
+     */
+    case 'tool.end': {
+      if (event.status !== 'ok') break;
+      /*
+       * The arguments come from the transcript item, not from the event: a
+       * `tool.end` carries the result and not the input. `apply` above has
+       * already merged this event onto the item `tool.start` created, so the
+       * item is the one place both halves of the call exist.
+       */
+      const item = pane.transcript.getItem(`t:${event.toolCallId}`);
+      if (item?.kind !== 'tool') break;
+      const artifact = detectArtifact(
+        detectFileEdit(item.name, item.input),
+        paneState(pane).cwd,
+        useApp.getState().platform,
+      );
+      if (artifact !== null) maybeAutoOpen(pane, artifact);
+      break;
+    }
+
     case 'session.started':
       setPaneState(pane, {
         run: {

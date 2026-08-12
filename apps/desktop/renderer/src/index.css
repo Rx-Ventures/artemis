@@ -636,6 +636,29 @@
     border-top: 1px solid var(--line);
   }
 
+  /*
+   * A word of streaming text arriving. Paced by `StreamingText.tsx`, which
+   * decides *which* words start together and has to know when one is finished
+   * so it can fold it back into the settled text — so the duration is a
+   * variable that component sets, and the literal here is only the fallback for
+   * a `.word-in` rendered outside it.
+   *
+   * Opacity and `filter`, deliberately, with no transform: `transform` does not
+   * apply to a non-replaced inline element, and making the span an
+   * inline-block to get it back would put the word's trailing space inside a
+   * box that cannot break, so a paragraph would stop wrapping. The blur is what
+   * turns the fade into something arriving rather than something dimming, and
+   * 1.5px is the most it can be without the word looking mis-rendered on the
+   * frames before it lands.
+   *
+   * `both` holds the finished state, so a word whose animation is interrupted —
+   * by the markdown swap when the block completes, or by the row unmounting —
+   * is never left half-faded.
+   */
+  .word-in {
+    animation: artemis-word-in var(--word-ms, 150ms) ease-out both;
+  }
+
   /* The caret that trails streaming text. */
   .caret::after {
     content: '';
@@ -696,6 +719,17 @@
   }
 }
 
+@keyframes artemis-word-in {
+  from {
+    opacity: 0;
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
 @keyframes artemis-sweep {
   from {
     transform: translateX(-100%);
@@ -727,7 +761,8 @@
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
   .runbar::after,
-  .turn-in {
+  .turn-in,
+  .word-in {
     animation: none;
   }
 }

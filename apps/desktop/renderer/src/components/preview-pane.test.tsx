@@ -61,7 +61,7 @@ Object.defineProperty(globalThis, 'artemis', {
 
 const { Transcript } = await import('@/components/Transcript');
 const { PreviewPane } = await import('@/components/PreviewPane');
-const { useApp } = await import('@/state/store');
+const { focusedPane, useApp } = await import('@/state/store');
 const { appTranscript, seedApp } = await import('@/state/testkit');
 
 const CAPABILITIES = {
@@ -228,6 +228,19 @@ describe('the Preview affordance', () => {
   });
 });
 
+/**
+ * Stamp a preview with the conversation that owns it.
+ *
+ * The tests below write `preview` straight into the store rather than going
+ * through `openPreview`, which is what makes them tests of the *pane* and not of
+ * the IPC round trip. They still have to name an owner, because a preview
+ * belonging to no conversation is one the store is entitled to close — that is
+ * the whole of `reconcilePreview`, and it runs on every store write.
+ */
+function owned<T extends object>(preview: T): T & { readonly owner: { readonly paneId: string } } {
+  return { ...preview, owner: { paneId: focusedPane().id } };
+}
+
 describe('the preview pane', () => {
   it('renders nothing at all until something is being previewed', () => {
     const { container } = renderPane();
@@ -236,13 +249,13 @@ describe('the preview pane', () => {
 
   it('frames the URL the main process returned, and never a path', () => {
     useApp.setState({
-      preview: {
+      preview: owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      },
+      }),
     });
     renderPane();
 
@@ -258,13 +271,13 @@ describe('the preview pane', () => {
    */
   it('sandboxes the frame with scripts but never with same-origin', () => {
     useApp.setState({
-      preview: {
+      preview: owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      },
+      }),
     });
     renderPane();
 
@@ -281,13 +294,13 @@ describe('the preview pane', () => {
    */
   it('renders markdown in place rather than framing it', () => {
     useApp.setState({
-      preview: {
+      preview: owned({
         kind: 'markdown',
         text: '# Release notes\n\nShipped **today**.',
         title: 'NOTES.md',
         path: '/Users/me/project/NOTES.md',
         bytes: 36,
-      },
+      }),
     });
     renderPane();
 
@@ -299,13 +312,13 @@ describe('the preview pane', () => {
 
   it('shows HTML written into markdown as text, never as markup', () => {
     useApp.setState({
-      preview: {
+      preview: owned({
         kind: 'markdown',
         text: 'before\n\n<script>window.stolen = 1;</script>\n\nafter',
         title: 'NOTES.md',
         path: '/Users/me/project/NOTES.md',
         bytes: 48,
-      },
+      }),
     });
     const { container } = renderPane();
 
@@ -315,13 +328,13 @@ describe('the preview pane', () => {
 
   it('closes on request, which is all the renderer has to do', () => {
     useApp.setState({
-      preview: {
+      preview: owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      },
+      }),
     });
     renderPane();
 

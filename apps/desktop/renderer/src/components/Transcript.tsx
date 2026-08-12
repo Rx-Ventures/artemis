@@ -16,7 +16,10 @@
  *     appearing) does not re-render the rows that did not change.
  *  3. **Streaming text is never markdown.** Markdown is parsed once, when the
  *     block completes. Re-parsing a long answer on every frame is the single
- *     most expensive thing this UI could do.
+ *     most expensive thing this UI could do. What a streaming block renders
+ *     instead is `StreamingText`, which fades in each new word and holds the
+ *     same rule one level down: the cost is per word *arriving*, never per word
+ *     on screen.
  *  4. **Nothing here reads streaming text into `useApp`.** The transcript model
  *     lives outside React on purpose; see `state/transcript.ts`.
  *
@@ -127,9 +130,11 @@ import {
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  AppWindowIcon,
   ArrowDownIcon,
   BotIcon,
   BrainIcon,
+  ChevronRightIcon,
   FilePenLineIcon,
   FileTextIcon,
   GlobeIcon,
@@ -150,6 +155,7 @@ import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { formatBytes } from '../lib/attachments';
+import { detectArtifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
 import { previewablePath } from '../lib/preview';
 import { activeCapabilities, openPreview, useApp, type ConversationWidth } from '../state/store';
@@ -185,12 +191,20 @@ import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
 import { ProviderLogo } from './provider-mark';
+import { StreamingText } from './StreamingText';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /** Markdown parsing is skipped above this size; the cost is not worth it. */
 const MARKDOWN_LIMIT = 80_000;
+
+/**
+ * How an answer reads before it is markdown — while it streams, and for the
+ * rare block too large to parse. Shared so those two never drift apart and the
+ * markdown swap at the end of a turn is not also a change of typeface.
+ */
+const STREAMING_TEXT = 'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink';
 
 /**
  * How wide the conversation column is allowed to get.
@@ -543,15 +557,10 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
           wide the tables and code blocks below it are allowed to be. */}
       <Bubble variant="ghost">
         <BubbleContent className="w-full">
-          {item.streaming || item.text.length > MARKDOWN_LIMIT ? (
-            <div
-              className={cn(
-                'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink',
-                item.streaming && 'caret',
-              )}
-            >
-              {item.text}
-            </div>
+          {item.streaming ? (
+            <StreamingText text={item.text} className={STREAMING_TEXT} />
+          ) : item.text.length > MARKDOWN_LIMIT ? (
+            <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
               <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
@@ -701,20 +710,92 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
     [edit, cwd, platform],
   );
 
+  /*
+   * The stronger question, asked of the same parse — see `lib/artifact.ts`. A
+   * hit replaces the tool row with a tile, so it is deliberately much harder to
+   * satisfy than `previewable` above: this one hides a diff, and that is only
+   * the right trade for a file whose *rendering* is the point.
+   *
+   * Never for a call that failed, for the reason the Preview button gives
+   * below — there is no file behind a tile whose write was denied.
+   */
+  const artifact = useMemo(
+    () => (item.status === 'ok' ? detectArtifact(edit, cwd, platform) : null),
+    [edit, cwd, platform, item.status],
+  );
+
   return (
     <div
       className={cn(
         'rounded-lg border bg-panel/60',
         failed ? 'border-signal/35' : 'border-line',
         open && 'border-line-strong',
+        artifact && 'border-line-strong bg-raised/40',
       )}
     >
+      {/*
+        An artifact takes the row rather than adding to it.
+
+        The tool call is still there — the disclosure below opens to the same
+        diff and the same raw arguments any other write has — but what the row
+        *says* changes: a page the agent made is named by its title and its
+        kind, not by the tool that happened to produce it. `Write` and
+        `/tmp/a1b2/report.html` are facts about the mechanism, and the mechanism
+        is not what the reader is looking for once the thing itself exists.
+      */}
+      {artifact ? (
+        <div className="flex w-full min-w-0 items-center gap-2 px-2.5 py-2">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            aria-label={open ? 'Hide the diff' : 'Show the diff'}
+            className="shrink-0 rounded p-0.5 text-ink-faint outline-none hover:bg-raised/60 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <ChevronRightIcon
+              className={cn('size-3 transition-transform', open && 'rotate-90')}
+              aria-hidden="true"
+            />
+          </button>
+
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-panel">
+            {artifact.kind === 'page' ? (
+              <AppWindowIcon className="size-3.5 text-cyan" aria-hidden="true" />
+            ) : (
+              <FileTextIcon className="size-3.5 text-sage" aria-hidden="true" />
+            )}
+          </span>
+
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span title={artifact.path} className="truncate text-xs font-semibold text-ink">
+              {artifact.title}
+            </span>
+            <span className="truncate font-mono text-2xs text-ink-faint">
+              {artifact.kind === 'page' ? 'page' : 'markdown'}
+              {artifact.bytes === undefined ? '' : ` · ${formatBytes(artifact.bytes)}`}
+              {artifact.fresh ? '' : ' · edited'}
+            </span>
+          </span>
+
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void openPreview(artifact.path, pane)}
+            className="shrink-0"
+          >
+            <SquareArrowOutUpRightIcon />
+            Open
+          </Button>
+        </div>
+      ) : null}
+
       {/*
         A row rather than a single button, because the preview action cannot
         live inside the disclosure control: a button nested in a button is
         invalid markup, and the browsers that tolerate it fire both handlers, so
         opening a preview would also toggle the card underneath it.
       */}
+      {artifact ? null : (
       <div className="flex w-full min-w-0 items-center">
         <button
           type="button"
@@ -771,6 +852,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
           </Button>
         ) : null}
       </div>
+      )}
 
       {open ? (
         <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">

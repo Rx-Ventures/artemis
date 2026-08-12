@@ -16,8 +16,13 @@
  *
  * The rest is genuinely a matter of taste and genuinely wired: how wide the
  * transcript column may grow, how much of the block at the end of a run it
- * keeps, and whether the sidebar is showing. All are persisted and all take
- * effect the moment they are set.
+ * keeps, whether the sidebar is showing, and which folders the menu above the
+ * composer offers. All are persisted and all take effect the moment they are
+ * set.
+ *
+ * The folder list is the one entry here that is not a preference but a *record*
+ * — the app writes it as you work — which is exactly why it needs a pane: it is
+ * the only place a folder can be taken back out. See `RecentFolders` below.
  *
  * That last part is the rule this file is written to. Every control below
  * writes to a store action that something actually reads. A "reduced motion" or
@@ -26,10 +31,17 @@
  * difference, and stops trusting the rest of the pane. When those become real
  * settings they belong here; until then the note at the foot says plainly that
  * they are not settings rather than leaving a suspicious gap.
+ *
+ * The word-fade switch is the first of those to graduate. It is deliberately
+ * *not* a general "reduce motion" — it governs one animation, the only one in
+ * the app that runs continuously while you are reading, and says so. A switch
+ * that promised to quiet everything would be back to promising more than it
+ * delivers. (Genuine `prefers-reduced-motion` is honoured by the stylesheet and
+ * is not a preference this pane owns.)
  */
 
-import type { ReactElement } from 'react';
-import { MinusIcon, PlusIcon } from 'lucide-react';
+import { useMemo, useState, type ReactElement } from 'react';
+import { MinusIcon, PlusIcon, XIcon } from 'lucide-react';
 
 import { ReasonButton } from '../disabled-reason';
 import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
@@ -37,18 +49,24 @@ import {
   FONT_SIZE_DEFAULT,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
+  RECENT_FOLDERS_LIMIT,
   SIDEBAR_DEFAULT_WIDTH,
+  forgetFolders,
   setConversationWidth,
   setFontSize,
   setPlanMeterFocus,
   setRunSummary,
   setSidebarCollapsed,
   setSidebarWidth,
+  setStreamingWordFade,
   useApp,
   type ConversationWidth,
   type PlanMeterFocus,
   type RunSummary,
 } from '../../state/store';
+import { inferHomeDirectory, lastSegment, shortenPath, sortFoldersByName } from '../../lib/paths';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Item,
   ItemActions,
@@ -214,17 +232,161 @@ function TextSize(): ReactElement {
   );
 }
 
+/**
+ * The folder menu's list, editable.
+ * ============================================================================
+ *
+ * The list above the composer fills itself — every directory worked in goes into
+ * it — which is what makes it useful and also what makes it need this pane. A
+ * folder opened once by mistake, a client's repository that is no longer
+ * anyone's business, a throwaway checkout: all of them sit in a menu the user
+ * opens twenty times a day, and none of them can be got rid of from that menu.
+ *
+ * ## Why removal is offered twice
+ *
+ * The × on a row and the tick-boxes are the same operation and are both here on
+ * purpose. Tidying up after a week of experiments means removing five folders at
+ * once, and doing that through five separate row buttons — each one reflowing
+ * the list under the cursor as it goes — is the interaction people misclick.
+ * Wanting *one* gone, on the other hand, is the common case, and making that
+ * cost a tick, a scroll to a button and a click would be worse than the problem.
+ *
+ * So: the × is the shortcut, the boxes are the batch, and both call
+ * `forgetFolders`, which writes and persists once regardless of how many folders
+ * it is given.
+ *
+ * ## No confirmation, deliberately
+ *
+ * Forgetting a folder destroys nothing — not the directory, not its sessions,
+ * not the transcript. The folder comes back the next time it is opened. A
+ * confirmation step here would teach the user that this dialog's buttons are
+ * dangerous, which is a lesson worth saving for the ones that are.
+ */
+function RecentFolders(): ReactElement {
+  const platform = useApp((s) => s.platform);
+  const recentFolders = useApp((s) => s.recentFolders);
+  /*
+   * Selection is by path and is *derived* against the live list rather than
+   * stored as truth. Folders leave this list while the pane is open — the ×
+   * removes one, and the window itself keeps recording as sessions move — and a
+   * tick left behind for a path that is gone would put a stale count on the
+   * remove button.
+   */
+  const [ticked, setTicked] = useState<readonly string[]>([]);
+
+  const folders = useMemo(() => sortFoldersByName(recentFolders), [recentFolders]);
+  const home = useMemo(() => inferHomeDirectory(folders, platform), [folders, platform]);
+  const selected = useMemo(() => folders.filter((f) => ticked.includes(f)), [folders, ticked]);
+
+  const toggle = (path: string, on: boolean): void => {
+    setTicked((current) =>
+      on ? [...current.filter((f) => f !== path), path] : current.filter((f) => f !== path),
+    );
+  };
+
+  const remove = (paths: readonly string[]): void => {
+    forgetFolders(paths);
+    setTicked((current) => current.filter((f) => !paths.includes(f)));
+  };
+
+  if (folders.length === 0) {
+    return (
+      <p className="text-2xs leading-relaxed text-ink-faint">
+        No folders remembered yet. Every directory you work in is added here, up to{' '}
+        {RECENT_FOLDERS_LIMIT} — after that the one you have not opened in the longest makes way.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <ItemGroup className="gap-2">
+        {folders.map((folder) => {
+          const name = lastSegment(folder);
+          const checked = ticked.includes(folder);
+          return (
+            <Item
+              key={folder}
+              variant="outline"
+              size="sm"
+              className="items-center border-line bg-panel"
+            >
+              <Checkbox
+                checked={checked}
+                onCheckedChange={(next) => toggle(folder, next === true)}
+                // The whole path, not the name. A column of unlabelled boxes is
+                // unusable by ear, and two checkouts of one repository — the
+                // case that put the path on the row in the first place — would
+                // otherwise be two boxes announced identically.
+                aria-label={`Select ${folder}`}
+                className="shrink-0"
+              />
+              <ItemContent>
+                <ItemTitle className="text-xs text-ink">{name}</ItemTitle>
+                <ItemDescription
+                  className="line-clamp-none font-mono text-2xs text-ink-faint"
+                  title={folder}
+                >
+                  {shortenPath(folder, { home, platform, max: 44 })}
+                </ItemDescription>
+              </ItemContent>
+              <ItemActions>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  // Same rule as the checkbox beside it: the path is what makes
+                  // one row's remove button distinguishable from another's.
+                  aria-label={`Forget ${folder}`}
+                  title={`Forget ${name}`}
+                  onClick={() => remove([folder])}
+                >
+                  <XIcon />
+                </Button>
+              </ItemActions>
+            </Item>
+          );
+        })}
+      </ItemGroup>
+
+      <div className="mt-1 flex items-center gap-2">
+        <ReasonButton
+          size="xs"
+          variant="outline"
+          disabled={selected.length === 0}
+          disabledReason="Tick the folders you want removed first."
+          onClick={() => remove(selected)}
+        >
+          {selected.length > 1 ? `Remove ${selected.length} folders` : 'Remove selected'}
+        </ReasonButton>
+        <ReasonButton
+          size="xs"
+          variant="ghost"
+          disabled={selected.length === folders.length}
+          disabledReason="Every folder is already ticked."
+          onClick={() => setTicked(folders)}
+        >
+          Select all
+        </ReasonButton>
+        <span className="text-2xs text-ink-faint">
+          Forgetting a folder leaves it, and its sessions, exactly where they are.
+        </span>
+      </div>
+    </>
+  );
+}
+
 export function AppearanceSection(): ReactElement {
   const width = useApp((s) => s.conversationWidth);
   const runSummary = useApp((s) => s.runSummary);
   const planMeterFocus = useApp((s) => s.planMeterFocus);
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
+  const wordFade = useApp((s) => s.streamingWordFade);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, and whether the sidebar is in the way."
+      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -250,6 +412,30 @@ export function AppearanceSection(): ReactElement {
         />
       </SettingsGroup>
 
+      <SettingsGroup label="Streaming text">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Fade in each word</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                An answer arrives in whatever chunk the provider sent in the last frame, which lands
+                as a block. This fades those in a word at a time instead. It never paces behind the
+                model — whatever is waiting is on screen within a tenth of a second — but if you
+                read faster than it resolves, turn it off and text appears exactly as it arrives.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-streaming-word-fade"
+                aria-label="Fade in each word"
+                checked={wordFade}
+                onCheckedChange={setStreamingWordFade}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
       <SettingsGroup label="Plan meter">
         <ChoiceList
           label="Plan meter"
@@ -261,6 +447,10 @@ export function AppearanceSection(): ReactElement {
           The meter reports this one window. Being comfortable here does not mean the others are —
           click it for every limit your plan reports.
         </p>
+      </SettingsGroup>
+
+      <SettingsGroup label="Recent folders">
+        <RecentFolders />
       </SettingsGroup>
 
       <SettingsGroup label="Sidebar">
@@ -314,10 +504,11 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
-        Theme, density and motion are not settings. Artemis is dark-only by design, the transcript
-        uses one spacing scale so that message boundaries stay readable at a glance — text size
-        moves that whole scale at once rather than loosening it — and the only animations in the app
-        are the ones that show something arriving.
+        Theme and density are not settings. Artemis is dark-only by design, and the transcript uses
+        one spacing scale so that message boundaries stay readable at a glance — text size moves
+        that whole scale at once rather than loosening it. There is no global motion switch either
+        — the only animations in the app are the ones that show something arriving, and the one
+        that runs continuously is the switch above.
       </p>
     </SettingsPane>
   );
