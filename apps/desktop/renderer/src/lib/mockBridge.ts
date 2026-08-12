@@ -49,6 +49,19 @@ const MOCK_CONFIG_DIRS: Record<string, string> = {
   'demo-work': '/Users/demo/Library/Application Support/Artemis/profiles/demo-work',
 };
 
+/**
+ * Update phases `?update=` is allowed to name; anything else, including nothing,
+ * is `idle`. See the `updates` namespace below for why the mock can be parked in
+ * a phase but never walked through one.
+ */
+const MOCK_UPDATE_PHASES: readonly UpdateState['phase'][] = [
+  'available',
+  'working',
+  'ready',
+  'restarting',
+  'error',
+];
+
 /** An event minus the envelope fields the transport stamps on. */
 type EventDraft = AgentEvent extends infer E
   ? E extends AgentEvent
@@ -1044,13 +1057,21 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     /**
-     * The updater, permanently idle.
+     * The updater, idle unless the URL parks it somewhere.
      *
-     * Deliberately inert rather than scripted: the update flow's interesting
-     * states depend on a packaged bundle and a release feed, neither of which
-     * a browser tab has, and a mock that pretends to install would exercise a
-     * code path whose real counterpart replaces the app on disk. The banner's
-     * states are unit-tested directly instead — see `UpdateBanner.test.tsx`.
+     * Still inert, and for the original reason: the update flow's interesting
+     * transitions depend on a packaged bundle and a release feed, neither of
+     * which a browser tab has, and a mock that pretended to *install* would
+     * exercise a path whose real counterpart replaces the app on disk. So the
+     * commands here change nothing and answer with the same state they were
+     * given, exactly as before.
+     *
+     * What is new is a way to look at the surface. `?update=available` — or
+     * `working`, `ready`, `restarting`, `error` — opens the window with the
+     * phase already set, because since the notice became a card at the foot of
+     * the sidebar it has a *layout* to get wrong as well as wording, and no
+     * unit test catches a card that is the wrong width. Behaviour stays where it
+     * was tested: see `UpdateCard.test.tsx`.
      */
     updates: {
       state: async () => ok({ state: mockUpdateState() }),
@@ -1062,7 +1083,18 @@ export function createMockBridge(): ArtemisBridge {
   };
 
   function mockUpdateState(): UpdateState {
-    return { phase: 'idle', version: null, message: null, releaseUrl: null };
+    const asked =
+      typeof globalThis.location === 'undefined'
+        ? null
+        : new URLSearchParams(globalThis.location.search).get('update');
+    const phase = MOCK_UPDATE_PHASES.find((candidate) => candidate === asked);
+    if (phase === undefined) return { phase: 'idle', version: null, message: null, releaseUrl: null };
+    return {
+      phase,
+      version: '0.4.0',
+      message: phase === 'error' ? 'The download could not be verified.' : null,
+      releaseUrl: phase === 'error' ? 'https://github.com/seth-torrence/artemis/releases' : null,
+    };
   }
 
   function mockWindowState(): WindowState {
