@@ -1,24 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.5.1
+## What's new in 0.6.0
 
+- There is a terminal in the app now. ⌘J opens a shell on the focused
+  session's working directory, so running what the agent just wrote no
+  longer means leaving Artemis and finding the directory again. The
+  right-hand rail became a dock of tabs — the artifact the agent wrote and
+  the terminals you asked for, side by side, each closing with its own ✕.
+  Also reachable from the header button, the command palette, or the `+` on
+  the tab strip.
+- A plan arrives as a plan. When the agent finishes planning, its plan is
+  laid out to be read and approved rather than shown as a wall of prompt
+  text.
+- Answering a prompt survives a reload. ⌘R used to replay every permission
+  and plan prompt the run had ever raised, and the second answer could not
+  land — the question was already settled. Reloading now leaves answered
+  prompts answered.
+- A thinking block either shows its text or does not appear. Nearly half of
+  them were arriving with the text withheld and drew an empty fold you
+  could open onto nothing; a burst of real work read as a stack of them.
+- The sidebar marks the session each column is showing, so you can tell
+  which conversation is in front of you when several are open.
+- The recent-folders menu keeps only directories that will still be there.
+  Worktrees and temporary checkouts were taking slots in a ten-row menu and
+  never giving them back, pushing out real projects with rows pointing at
+  places that had been deleted days earlier.
 - Updating cleans up after itself. Every update so far has left about 6.5MB
   of the version it replaced sitting in your Applications folder, and
   another copy in a temporary directory — the cleanup ran, deleted almost
   everything, and silently failed on the one file it could not remove.
   Installing this version sweeps away what earlier ones left behind, so
   expect a little disk space back on first launch.
-
-Carried over from 0.5.0, in case you are coming from 0.4.x:
-
-- The Artemis menu can check for updates. `Check for Updates…` sits under
-  About Artemis and answers either way, including "nothing newer" and
-  "could not reach the releases" — asking also un-dismisses a version you
-  declined by accident.
-- The app grew a real menu bar: Edit, View and Window with the standard
-  items. The shortcuts they carry (⌘C, ⌘V, ⌘Z, ⌘W, ⌘Q) worked before and
-  still do.
 
 ## Install
 
