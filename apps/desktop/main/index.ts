@@ -35,6 +35,7 @@ import { APP_NAME, previousUserDataDir } from './appNames.js';
 import { EngineHost } from './engine.js';
 import { broadcast, forwardAgentEvents, registerIpcHandlers, type IpcLayer } from './ipc.js';
 import { createLogger } from './log.js';
+import { installApplicationMenu } from './menu.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
 import { registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
@@ -298,6 +299,11 @@ async function bootstrap(): Promise<void> {
     broadcast: (state) => broadcast(IPC_PUSH.updateState, state),
   });
   stopUpdater = () => updater.stop();
+
+  // Before the window, like everything else that must never be half-installed
+  // while something can already be clicked. macOS only, and it replaces the
+  // default menu wholesale — see menu.ts for what that costs.
+  installApplicationMenu({ updater });
 
   ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater });
   stopEventForwarding = forwardAgentEvents(engineHost);
