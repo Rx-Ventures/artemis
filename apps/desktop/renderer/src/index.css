@@ -366,11 +366,24 @@
 /*
  * Type. A plain `@theme` block: these are literal values, not references.
  *
- * Geist for chrome, Geist Mono for content — one family in two voices, which is
- * what the app was already asking for informally. `font-mono` is not a code
- * accent here: the transcript, user bubbles and every 11px status label are set
- * in it, so the two faces sit side by side constantly and being drawn on shared
- * proportions is doing real work. Both are loaded at the top of this file.
+ * Geist for language, Geist Mono for machine text — one family in two voices,
+ * drawn on shared proportions so the two sit side by side without a seam. Both
+ * are loaded at the top of this file.
+ *
+ * The split is by *what the text is*, not by which pane it landed in. Anything
+ * a person or a model wrote as sentences is sans: the composer, the user's
+ * bubble, the agent's answer, its thinking. Mono is for text whose characters
+ * are the content — code and fenced blocks, diffs, file paths, shell fragments,
+ * tool names and arguments, counts and durations — plus the 11px chrome labels,
+ * which are mono as a texture: it is what separates the app's own voice from
+ * the conversation's.
+ *
+ * Setting whole paragraphs of prose in mono was the earlier reading of this and
+ * it was wrong. It costs roughly a tenth more width per line, throws away the
+ * kerning the sans face was cut with, and — the part that actually matters —
+ * makes the agent read as terminal output rather than as an answer.
+ * `body` is sans, so sans is what you get by default and mono is the thing a
+ * rule has to ask for, which is the right way round.
  *
  * The system stacks are still here, and still ordered, because a webfont is a
  * per-glyph fallback rather than a per-element one: anything outside Geist's
@@ -533,10 +546,18 @@
   /*
    * Markdown inside a finished assistant block.
    *
-   * Monospace, deliberately: transcript content is code-adjacent and column
-   * alignment carries meaning. Chrome stays sans. Hand-written rather than
-   * `@tailwindcss/typography`, whose defaults are tuned for prose pages at
-   * 16px, not a 13px transcript pane.
+   * Sans, inherited from `body`, because an answer is prose and is read as
+   * prose. Mono is pushed down onto `code` and `pre` below — the places where
+   * the characters really are the content and column alignment carries
+   * meaning. Setting the whole block in it made every paragraph of explanation
+   * look like a log line.
+   *
+   * Tables stay sans on purpose. These are real `<table>` elements, so the
+   * columns are aligned by layout rather than by advance width, and mono would
+   * buy nothing but a wider table.
+   *
+   * Hand-written rather than `@tailwindcss/typography`, whose defaults are
+   * tuned for prose pages at 16px, not a 13px transcript pane.
    *
    * Nothing here is bubble-aware, and that is a decision rather than an
    * oversight. The agent's turn is a `ghost` bubble, which zeroes the fill, the
@@ -547,7 +568,6 @@
    * are the things to fix.
    */
   .md {
-    font-family: var(--font-mono);
     font-size: var(--text-sm);
     line-height: 1.6;
     overflow-wrap: anywhere;
@@ -559,7 +579,9 @@
   .md h2,
   .md h3,
   .md h4 {
-    font-family: var(--font-sans);
+    /* No `font-family` here any more: the body is already sans, so a heading
+       that named it would just be restating the inherited value. Weight and
+       colour are what separate a heading from the paragraph under it. */
     font-weight: 600;
     line-height: 1.3;
     color: var(--ink);
@@ -592,7 +614,18 @@
   .md li + li {
     margin-top: 0.25em;
   }
+  /*
+   * The two places mono survives, and they name it rather than inheriting it.
+   *
+   * Tailwind's preflight already sets a mono family on bare `code` and `pre`,
+   * so these rules look redundant — but that is a default sitting in `@layer
+   * base`, and the whole point of the change that made `.md` sans is that this
+   * distinction is now load-bearing. Written out, a reader can see which half
+   * of the split each rule belongs to without going and checking what preflight
+   * happens to emit this version.
+   */
   .md code {
+    font-family: var(--font-mono);
     background: var(--inset);
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
@@ -600,6 +633,7 @@
     font-size: 0.94em;
   }
   .md pre {
+    font-family: var(--font-mono);
     background: var(--inset);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);

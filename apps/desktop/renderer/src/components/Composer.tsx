@@ -509,7 +509,13 @@ export function Composer(): ReactElement {
                 // inset each side, 2px between them, and 8px of gap before the
                 // text. Without it a long single-line prompt runs under the
                 // glyphs and its last word is unreadable.
-                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-18 pl-2.5 font-mono text-sm leading-relaxed md:text-sm',
+                //
+                // No `font-mono`. What gets typed here is a sentence, and it is
+                // the one surface where the app is being spoken to rather than
+                // read, so it takes the same face as the bubble it becomes and
+                // as the answer that comes back. The two have to move together:
+                // see the note on the user bubble in `Transcript.tsx`.
+                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-18 pl-2.5 text-sm leading-relaxed md:text-sm',
                 locked && 'cursor-not-allowed',
               )}
             />

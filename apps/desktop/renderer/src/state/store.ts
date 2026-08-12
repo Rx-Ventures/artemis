@@ -92,6 +92,7 @@ import {
   createPane,
   createRow,
   paneState,
+  setHostPlatform,
   setPaneState,
   type MirroredState,
   type Pane,
@@ -2427,11 +2428,11 @@ async function seedPlanUsage(profiles: readonly ProfileMetadata[]): Promise<void
 
 export async function bootstrap(): Promise<void> {
   const { mode, bridge } = resolveBridge();
-  useApp.setState({
-    bridgeMode: mode,
-    version: bridge?.version ?? '',
-    platform: bridge?.platform ?? 'darwin',
-  });
+  const platform = bridge?.platform ?? 'darwin';
+  useApp.setState({ bridgeMode: mode, version: bridge?.version ?? '', platform });
+  // Before anything can arrive in a transcript, so the first artifact is judged
+  // against the real platform rather than the default. See `pane.ts`.
+  setHostPlatform(platform);
 
   if (!bridge) {
     useApp.setState({ booted: true });

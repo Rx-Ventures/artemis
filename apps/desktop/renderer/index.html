@@ -13,10 +13,32 @@
       Content-Security-Policy for the renderer. No remote code, no eval, no
       remote fonts. Vite's dev server injects its own client over the same
       origin, which `'self'` covers.
+
+      This is a *second* policy, not the only one: `applySessionPolicy` sets a
+      stricter CSP header on every response, and this meta tag is the fallback
+      that survives a failure of that pass. Both are enforced, and — this is the
+      part that is easy to get wrong — they are enforced **independently**. A
+      request must satisfy every policy that applies to the document, so the
+      effective permission is the *intersection* of the two. A directive the
+      header grants is still blocked if this tag does not also grant it, and the
+      only evidence is a `ERR_BLOCKED_BY_CSP` in a console nobody has open.
+
+      `frame-src` is exactly that trap, and it is the reason the preview pane
+      once rendered every HTML and SVG artifact as a blank white rectangle.
+      `frame-src` was absent here, so it fell back to `default-src 'self'`, and a
+      `artemis-preview:` frame is not `'self'` — the frame was refused before
+      `preview.ts`'s handler was ever asked for the bytes. Markdown was
+      unaffected and looked fine, because markdown is rendered in place by
+      `PreviewPane` and never goes near a frame; that asymmetry is what made it
+      look like a problem with HTML rather than with this line.
+
+      So: the scheme is spelled out below, and it must stay in step with
+      `PREVIEW_SCHEME` in `main/preview.ts`. An HTML file cannot import the
+      constant, which is the whole reason these two can drift.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*; frame-src artemis-preview:"
     />
     <title>Artemis</title>
   </head>

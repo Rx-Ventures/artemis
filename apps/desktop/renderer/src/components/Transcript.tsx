@@ -203,8 +203,13 @@ const MARKDOWN_LIMIT = 80_000;
  * How an answer reads before it is markdown — while it streams, and for the
  * rare block too large to parse. Shared so those two never drift apart and the
  * markdown swap at the end of a turn is not also a change of typeface.
+ *
+ * No `font-mono`: this has to match `.md`, which is sans. An answer arriving a
+ * word at a time in one face and reflowing into another the instant it finished
+ * was the most visible symptom of mono-by-default, because the swap happens in
+ * front of the reader.
  */
-const STREAMING_TEXT = 'font-mono text-sm leading-relaxed break-words whitespace-pre-wrap text-ink';
+const STREAMING_TEXT = 'text-sm leading-relaxed break-words whitespace-pre-wrap text-ink';
 
 /**
  * How wide the conversation column is allowed to get.
@@ -362,13 +367,7 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
     case 'thinking':
       return <ThinkingRow item={item} />;
     case 'tool':
-      // Reached only if a tool ever escapes grouping; the model folds every
-      // one it knows about. Rendering the bare card is the honest fallback.
-      return (
-        <Line label="tool" tone="cyan" ts={item.ts}>
-          <ToolCard item={item} />
-        </Line>
-      );
+      return <ToolRow item={item} />;
     case 'permission':
       return <PermissionRow item={item} />;
     case 'notice':
@@ -488,12 +487,22 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
       >
-        {/* Monospace, matching the composer the text was typed into: a prompt
-            that contains a path or a shell fragment should look the same after
-            it is sent as it did before. `rounded-br-sm` is the tail — the one
-            square corner points back at the author, which is what makes an
-            aligned bubble read as *from* someone rather than merely offset. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 font-mono text-sm whitespace-pre-wrap">
+        {/* Sans, matching the composer the text was typed into: a prompt should
+            look the same after it is sent as it did while it was being written.
+            That symmetry is why this moved off mono with the composer and not
+            separately — a path or a shell fragment inside a prompt is a fragment
+            of a sentence, and backticks around it get a mono `code` span from
+            `.md` on the agent's side anyway.
+
+            `whitespace-pre-wrap` stays, and is now the only thing preserving the
+            shape of a pasted block here: line breaks and runs of spaces survive,
+            columns no longer line up. A prompt that is really a wall of code
+            belongs in backticks or a file, not in the bubble's own typeface.
+
+            `rounded-br-sm` is the tail — the one square corner points back at
+            the author, which is what makes an aligned bubble read as *from*
+            someone rather than merely offset. */}
+        <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -583,10 +592,18 @@ function thinkingPreview(item: ThinkingItem): string {
   return oneLine(item.text, 64) || 'thinking…';
 }
 
-/** The block itself, in the same sage well wherever it is opened from. */
+/**
+ * The block itself, in the same sage well wherever it is opened from.
+ *
+ * Sans, like the answer it precedes. Thinking is the model talking to itself in
+ * sentences — not a log, despite arriving in a well — so it follows the same
+ * rule as every other stretch of prose in the pane. The sage well and the 11px
+ * size are what mark it as private and secondary; the typeface was never
+ * carrying that and only made it harder to skim.
+ */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
   return (
-    <div className="rounded-md border border-sage/25 bg-inset px-3 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
+    <div className="rounded-md border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
       {item.redacted ? 'This thinking block was encrypted or withheld by the provider.' : item.text}
     </div>
   );
@@ -612,7 +629,9 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
         summary={
           <span className="flex min-w-0 items-center gap-1.5 text-sage/80">
             <BrainIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className="truncate font-mono text-2xs">{thinkingPreview(item)}</span>
+            {/* An excerpt of the prose below, so it is set in the prose face —
+                unlike a tool row's preview, which is a real command. */}
+            <span className="truncate text-2xs">{thinkingPreview(item)}</span>
             {item.streaming ? <StatusDot tone="sage" pulse /> : null}
           </span>
         }
@@ -643,8 +662,10 @@ function ThinkingCard({ item }: { readonly item: ThinkingItem }): ReactElement {
         className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <BrainIcon className="size-3 shrink-0 text-sage/80" aria-hidden="true" />
+        {/* The label is chrome and stays mono; the preview beside it is an
+            excerpt of the model's prose and does not. */}
         <span className="shrink-0 font-mono text-xs font-semibold text-sage">thinking</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
+        <span className="min-w-0 flex-1 truncate text-2xs text-ink-faint">
           {thinkingPreview(item)}
         </span>
         {item.streaming ? <StatusDot tone="sage" pulse /> : null}
@@ -656,6 +677,50 @@ function ThinkingCard({ item }: { readonly item: ThinkingItem }): ReactElement {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A tool call that is a row of its own rather than a member of a burst.
+ *
+ * Two things arrive here, and the gutter label is the whole reason this is not
+ * one line inside `ItemRow`:
+ *
+ *  - **An artifact.** The model deliberately keeps these out of the fold, so
+ *    that a page the agent made is visible and openable without first opening a
+ *    dropdown labelled "edited 5 files" — see `ActivityGroup` in
+ *    `state/transcript.ts`. It gets its own label, because `tool` in the gutter
+ *    beside a tile that says `report.html` describes the mechanism at exactly
+ *    the moment the reader has stopped caring about it.
+ *  - **An escapee.** A call that ended up ungrouped for any other reason. The
+ *    bare card under a `tool` label is the honest fallback it always was.
+ *
+ * The artifact test is repeated here rather than threaded down from the model,
+ * which is a real duplicate parse — but only of the rows that reach top level,
+ * and after the hoist that is the artifacts and almost nothing else. Paying it
+ * on a handful of rows per session is the cheaper half of the trade against
+ * putting `cwd` into `ToolCard`'s props and out of its own memo.
+ */
+function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
+  const cwd = usePane((s) => s.cwd);
+  const platform = useApp((s) => s.platform);
+  const artifact = useMemo(
+    () =>
+      item.status === 'ok'
+        ? detectArtifact(detectFileEdit(item.name, item.input), cwd, platform)
+        : null,
+    [item.name, item.input, item.status, cwd, platform],
+  );
+
+  return (
+    <Line
+      label={artifact ? 'artifact' : 'tool'}
+      tone={artifact ? 'sage' : 'cyan'}
+      ts={item.ts}
+      className={artifact ? 'my-1' : undefined}
+    >
+      <ToolCard item={item} />
+    </Line>
   );
 }
 

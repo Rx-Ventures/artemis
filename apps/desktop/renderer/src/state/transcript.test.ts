@@ -318,3 +318,116 @@ describe('TranscriptModel activity groups', () => {
     expect(model.getGroup('g:t:c1')).toBeUndefined();
   });
 });
+
+/*
+ * Artifacts leave the fold — and the fold survives them leaving.
+ *
+ * The model is asked the question through an injected test, so these drive it
+ * with a stand-in rather than the real `detectArtifact`: what is being pinned
+ * here is the row arithmetic, and `artifact-tile.test.tsx` is where the real
+ * predicate and the tile it produces are covered.
+ */
+describe('TranscriptModel artifacts', () => {
+  function call(id: string, name: string, input: Record<string, unknown> = {}) {
+    return [
+      { type: 'tool.start', toolCallId: id, name, input },
+      { type: 'tool.end', toolCallId: id, status: 'ok' },
+    ] as Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>;
+  }
+
+  function thought(messageId: string, blockIndex: number, text: string) {
+    return { type: 'thinking.delta', messageId, blockIndex, text } as Omit<
+      AgentEvent,
+      'runId' | 'seq' | 'ts'
+    >;
+  }
+
+  /** Every finished `Write` is an artifact. Enough to exercise the split. */
+  function withArtifacts(): TranscriptModel {
+    const model = build();
+    model.setArtifactTest((item: ToolItem) => item.name === 'Write' && item.status === 'ok');
+    return model;
+  }
+
+  it('lifts them out without breaking the burst in two', () => {
+    const model = withArtifacts();
+    for (const event of stream(
+      ...call('c1', 'Bash'),
+      ...call('c2', 'Write', { file_path: '/tmp/report.html' }),
+      ...call('c3', 'Bash'),
+    )) {
+      model.apply(event);
+    }
+
+    // One marker for both commands, then the tile. Not marker/tile/marker.
+    expect(model.getRowsSnapshot()).toEqual(['g:t:c1', 't:c2']);
+    const group = model.getGroup('g:t:c1');
+    expect(group?.ids).toEqual(['t:c1', 't:c3']);
+    // The lifted call is not a member, so the summary does not claim it too.
+    expect(group?.counts).toEqual({ command: 2 });
+  });
+
+  it('keeps every artifact of a long burst, in order', () => {
+    const model = withArtifacts();
+    for (const event of stream(
+      ...call('c1', 'Bash'),
+      thought('m1', 0, 'now the html'),
+      ...call('c2', 'Write', { file_path: '/tmp/a.html' }),
+      thought('m1', 1, 'now the svg'),
+      ...call('c3', 'Write', { file_path: '/tmp/b.svg' }),
+      thought('m1', 2, 'now the md'),
+      ...call('c4', 'Write', { file_path: '/tmp/c.md' }),
+    )) {
+      model.apply(event);
+    }
+
+    expect(model.getRowsSnapshot()).toEqual(['g:t:c1', 't:c2', 't:c3', 't:c4']);
+  });
+
+  it('produces no marker when the burst was nothing but artifacts', () => {
+    const model = withArtifacts();
+    for (const event of stream(
+      ...call('c1', 'Write', { file_path: '/tmp/a.html' }),
+      ...call('c2', 'Write', { file_path: '/tmp/b.html' }),
+    )) {
+      model.apply(event);
+    }
+
+    // Nothing is left hidden, so there is nothing to summarise.
+    expect(model.getRowsSnapshot()).toEqual(['t:c1', 't:c2']);
+  });
+
+  it('surfaces the tile the moment the write finishes', () => {
+    const model = withArtifacts();
+    for (const event of stream(
+      ...call('c1', 'Bash'),
+      { type: 'tool.start', toolCallId: 'c2', name: 'Write', input: { file_path: '/tmp/a.html' } },
+    )) {
+      model.apply(event);
+    }
+
+    // Still running, so still ordinary work, so still folded.
+    expect(model.getRowsSnapshot()).toEqual(['g:t:c1']);
+
+    // Seq 3 continues the stream above — a gap would be a dropped event, and
+    // the model would correctly add a notice row that has nothing to do with
+    // what this is testing.
+    model.apply({ type: 'tool.end', runId: RUN, seq: 3, ts: 1003, toolCallId: 'c2', status: 'ok' });
+    model.flush();
+
+    // `tool.end` is the verdict, and it has to restructure the rows to show it.
+    expect(model.getRowsSnapshot()).toEqual(['g:t:c1', 't:c2']);
+  });
+
+  it('folds exactly as before when no test is installed', () => {
+    const model = build();
+    for (const event of stream(
+      ...call('c1', 'Bash'),
+      ...call('c2', 'Write', { file_path: '/tmp/report.html' }),
+    )) {
+      model.apply(event);
+    }
+
+    expect(model.getRowsSnapshot()).toEqual(['g:t:c1']);
+  });
+});

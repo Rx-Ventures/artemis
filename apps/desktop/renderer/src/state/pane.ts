@@ -67,6 +67,9 @@ import type {
   UsageSnapshot,
 } from '@rx-artemis/protocol';
 import type { WorkspaceNames } from '../lib/extensions';
+import { detectArtifact } from '../lib/artifact';
+import { detectFileEdit } from '../lib/diff';
+import type { Platform } from '../lib/paths';
 import { TranscriptModel } from './transcript';
 
 /** Identifies a pane for the lifetime of the window. Not persisted. */
@@ -232,14 +235,49 @@ export interface PaneRow {
 let nextPaneId = 0;
 let nextRowId = 0;
 
+/**
+ * The host platform, for the path arithmetic in {@link detectArtifact}.
+ *
+ * Held here rather than read from the app store because that store imports
+ * *this* module, and a pane reaching back into it for one scalar would close the
+ * cycle. `bootstrap` pushes the real value in as soon as the bridge reports it;
+ * until then this is the same `darwin` the store itself defaults to, and the
+ * only thing it could get wrong is a path separator in an empty transcript.
+ */
+let hostPlatform: Platform = 'darwin';
+
+/** Tell the pane layer what it is running on. Called once, from `bootstrap`. */
+export function setHostPlatform(platform: Platform): void {
+  hostPlatform = platform;
+}
+
+/**
+ * Teach a pane's transcript which of its tool calls made artifacts.
+ *
+ * A fresh closure every time, deliberately: `setArtifactTest` compares by
+ * identity, so handing it a new function is what tells the model its cached
+ * verdicts were taken against a working directory that has since moved.
+ */
+function installArtifactTest(pane: Pane): void {
+  const cwd = pane.store.getState().cwd;
+  const platform = hostPlatform;
+  pane.transcript.setArtifactTest(
+    (item) =>
+      item.status === 'ok' &&
+      detectArtifact(detectFileEdit(item.name, item.input), cwd, platform) !== null,
+  );
+}
+
 /** Mint a pane around a starting state. The caller owns everything after this. */
 export function createPane(initial: SessionState): Pane {
   nextPaneId += 1;
-  return {
+  const pane: Pane = {
     id: `pane${nextPaneId}`,
     store: createStore<SessionState>(() => initial),
     transcript: new TranscriptModel(),
   };
+  installArtifactTest(pane);
+  return pane;
 }
 
 /** Mint a row around the panes it starts with. */
@@ -258,5 +296,11 @@ export function setPaneState(
   pane: Pane,
   patch: Partial<SessionState> | ((state: SessionState) => Partial<SessionState>),
 ): void {
+  const before = pane.store.getState().cwd;
   pane.store.setState(patch as never);
+  // Whether a written file is an artifact is asked *relative to* `cwd`, so a
+  // pane that moves has to ask again. This is the one funnel every write to a
+  // live pane goes through, which is why the re-arm hangs here rather than on
+  // each of the several callers that can move a directory.
+  if (pane.store.getState().cwd !== before) installArtifactTest(pane);
 }

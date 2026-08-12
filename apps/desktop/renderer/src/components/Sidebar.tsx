@@ -11,8 +11,10 @@
  *      │    ⌥ main · ▪ Work             │
  *      │   api ·9 ──────────────────────│  ← and every other project
  *      │    …                           │
- *      ├────────────────────────────────┤
- *      │ ⌂ Start somewhere else      ▴  │  ← a project with no history yet
+ *      ╰────────────────────────────────╯
+ *      ╭────────────────────────────────╮
+ *      │ ↓ Artemis 0.4.0 is available ✕ │  ← only when there is an update
+ *      │ [ Update now ]                 │
  *      ╰────────────────────────────────╯
  *
  * ## It is a card sitting on the window, not a column bolted to its edge
@@ -57,6 +59,13 @@
  * The card names the *projects*, in the group headings inside the list. That is
  * a fact about the rows underneath each one, which is what a sidebar is for.
  *
+ * ## The foot of the card is empty until something needs it
+ *
+ * It used to be a permanent `Start somewhere else` row. What sits there now is
+ * nothing, most of the time, and a second floating card when the updater has
+ * something to say — see `UpdateCard`, which owns both the reasoning and the
+ * chrome that makes it read as a sibling of this card rather than a panel in it.
+ *
  * ## Resizing writes to the DOM, then to the store
  *
  * A drag that called `setState` per `pointermove` would re-render the session
@@ -80,49 +89,28 @@
 
 import {
   useCallback,
-  useMemo,
   useRef,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type RefObject,
 } from 'react';
-import { FolderIcon, FolderTreeIcon, PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
+import { PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
-import { useCapability } from '../hooks/useCapability';
-import { formatRelative } from '../lib/format';
-import { inferHomeDirectory, lastSegment, shortenPath } from '../lib/paths';
-import { groupSessionsByProject } from '../lib/sessionGroups';
 import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   newSession,
-  sessionOrderKey,
-  setCwd,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
 } from '../state/store';
-import { usePane, usePaneRef } from '../state/paneContext';
+import { usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
-import { IconButton, ReasonButton } from './disabled-reason';
+import { UpdateCard } from './UpdateCard';
+import { IconButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from '@/components/ui/item';
 
 export function Sidebar(): ReactElement | null {
   const collapsed = useApp((s) => s.sidebarCollapsed);
@@ -167,8 +155,13 @@ export function Sidebar(): ReactElement | null {
         </div>
 
         <SessionList />
-        <ProjectSwitcher />
       </div>
+
+      {/*
+        A sibling of the card, not a row inside it, and absent entirely until
+        the updater has something to say. See `UpdateCard`.
+      */}
+      <UpdateCard />
 
       <ResizeHandle target={asideRef} />
     </aside>
@@ -198,147 +191,27 @@ export function Sidebar(): ReactElement | null {
  * the header. The component went with it; `WorkingDirectoryDialog` and
  * `DirectoryChooser` are still exported and still used by that chip, the
  * palette and the empty state.
+ *
+ * REMOVED: `ProjectSwitcher`, the `Start somewhere else` row at the foot of the
+ * card.
+ *
+ * It moved to a project without resuming anything in it — a blank session in
+ * another directory — which was the one thing the session list could not do, back
+ * when the list held one project and this was the door to the rest.
+ *
+ * Two changes ate it. The list holds *every* project now and a row click does the
+ * whole switch, so reaching history is not this control's job; and the chip above
+ * the composer grew recent folders beside its `Browse…`, so starting fresh
+ * somewhere — including somewhere with no history at all, which was the last
+ * thing only this row could reach — is a click on the control whose subject is
+ * the working directory. What was left here was a third route to a value this
+ * card deliberately does not own (see above), holding the most permanent slot in
+ * it, hiding its own reason for existing in a tooltip whenever the provider could
+ * not enumerate projects.
+ *
+ * `groupSessionsByProject` still has callers in `SessionList`; nothing else went
+ * with the row.
  */
-
-/* -------------------------------------------------------------------------- */
-/* All-projects switcher                                                      */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Move to a project without resuming anything in it.
- *
- * This is no longer the route to the rest of the history — the list above holds
- * every project now, and clicking a row does the whole switch. What it still
- * does that the list cannot is land you in a project *fresh*: a blank session in
- * a directory, rather than the continuation of an old one. That is the only
- * reachable way to start work in a project whose history you do not want, and
- * the only way at all into one that has no history to click.
- *
- * Its degraded states are still worth spelling out rather than hiding. Each
- * renders the button disabled with its reason attached, per the app-wide rule:
- *
- *   - the provider cannot list sessions at all;
- *   - it can, but only for the current directory (`sessionsScope === 'cwd'`),
- *     so no other project is even enumerated;
- *   - it listed everything and there genuinely is only one project.
- *
- * ## Choosing a project starts a fresh session in it
- *
- * A session id only resolves against the directory it ran in — see `setCwd` and
- * `resumeSession` in the store. Carrying a resume target across a directory
- * change would aim the next prompt at a session the provider cannot find, so
- * `setCwd` clears it. That is the difference from clicking a row above, which
- * carries the session *and* its directory across together.
- */
-function ProjectSwitcher(): ReactElement {
-  const sessions = useApp((s) => s.sessions);
-  const pane = usePaneRef();
-  const cwd = usePane((s) => s.cwd);
-  const platform = useApp((s) => s.platform);
-  const scope = useApp((s) => s.sessionsScope);
-  const listing = useCapability('listSessions');
-
-  // Same order as the list above it, held still for the projects that are
-  // working — see `AppState.sessionOrderHold`. A menu whose entries reorder
-  // between opening it and reading it is worse here than in the list, because
-  // this one is read top to bottom in one pass.
-  const hold = useApp((s) => s.sessionOrderHold);
-  const groups = useMemo(
-    () => groupSessionsByProject(sessions, { orderKey: (s) => sessionOrderKey(s, hold) }),
-    [sessions, hold],
-  );
-  const home = useMemo(
-    () => inferHomeDirectory([...sessions.map((s) => s.cwd), cwd], platform),
-    [sessions, cwd, platform],
-  );
-
-  const others = groups.filter((group) => group.cwd !== cwd);
-
-  const reason = !listing.supported
-    ? `${listing.reason} Without a listing there is no way to enumerate other projects.`
-    : scope === 'cwd'
-      ? 'This build lists sessions for the current directory only, so other projects are never enumerated. Change the working directory above the composer to move to one.'
-      : others.length === 0
-        ? 'No other project has a recorded session yet. Change the working directory above the composer to start one somewhere else.'
-        : undefined;
-
-  /*
-   * Not "All projects" any more. That label was accurate when the list above
-   * held one project and this was the door to the rest; with every project
-   * listed it would name what is already on screen, and the one thing this does
-   * that the list cannot is land you somewhere *without* resuming anything. The
-   * count went with it — it counted the other projects, which are now visible.
-   */
-  const label = (
-    <>
-      <FolderTreeIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">Start somewhere else</span>
-    </>
-  );
-
-  const className =
-    'h-7 w-full justify-start gap-1.5 rounded-none border-t border-line px-2.5 text-2xs font-normal text-ink-muted';
-
-  if (reason !== undefined) {
-    return (
-      <ReasonButton
-        variant="ghost"
-        size="sm"
-        disabled
-        disabledReason={reason}
-        tooltipSide="top"
-        className={className}
-      >
-        {label}
-      </ReasonButton>
-    );
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className={className}>
-          {label}
-        </Button>
-      </DropdownMenuTrigger>
-
-      <DropdownMenuContent align="start" side="top" className="w-80 max-w-[min(20rem,90vw)]">
-        <DropdownMenuLabel className="text-2xs text-ink-faint">
-          Switch project — newest activity first
-        </DropdownMenuLabel>
-        {others.map((group) => (
-          <DropdownMenuItem
-            key={group.cwd}
-            // Just the directory. `setCwd` clears the resume target itself now,
-            // in the right order, for every caller — this used to be the one
-            // place that remembered to.
-            onSelect={() => setCwd(group.cwd, pane)}
-          >
-            <Item size="xs" className="w-full">
-              <ItemMedia variant="icon">
-                <FolderIcon className="size-3.5 text-ink-faint" aria-hidden="true" />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle className="text-xs text-ink">{lastSegment(group.cwd)}</ItemTitle>
-                {/* Full path on hover; the label elides its middle. */}
-                <ItemDescription
-                  title={group.cwd}
-                  className="font-mono text-2xs text-ink-faint"
-                >
-                  {shortenPath(group.cwd, { home, platform, max: 34 })}
-                </ItemDescription>
-              </ItemContent>
-              <ItemActions className="gap-1.5 font-mono text-2xs text-ink-faint">
-                <span>{formatRelative(group.updatedAt)}</span>
-                <span className="tabular-nums">{group.sessions.length}</span>
-              </ItemActions>
-            </Item>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Resize                                                                     */
