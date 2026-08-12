@@ -193,6 +193,29 @@ export type TranscriptItem =
  * sage row, and burying it behind a marker would cost a click to reach the only
  * thing in there.
  *
+ * ## An artifact is never folded
+ *
+ * One kind of call leaves the burst rather than joining it: one that produced an
+ * artifact ({@link ArtifactTest}). The marker exists to hide *machinery*, and a
+ * page the agent made is not machinery — it is the deliverable. Folded away it
+ * reads as "edited 5 files", which is a description of the work rather than of
+ * the thing the work produced, and reaching it costs a click into a dropdown
+ * whose label gives no hint that anything is in there worth opening.
+ *
+ * So an artifact is a boundary, exactly like the agent speaking is: the run ends
+ * before it, the artifact is its own row, and a new run starts after. A turn
+ * that writes a report mid-burst therefore reads
+ *
+ *     ▸ work · Ran a command, edited 2 files
+ *     ▤ report.html                              [ Open ]
+ *     ▸ work · Ran 3 commands
+ *
+ * which is the shape someone scrolling for what was *made* actually wants. The
+ * cost is real and accepted: one burst can become two markers, and a turn that
+ * writes six artifacts will not fold to a single line. That is the right trade —
+ * the fold's whole justification is that what it hides is not worth a row, and
+ * these are.
+ *
  * ## Why this is computed here and not in the component
  *
  * The transcript's performance contract says the list hands React ids and
@@ -245,6 +268,19 @@ export interface ActivityGroup {
 export function isGroupId(id: string): boolean {
   return id.startsWith('g:');
 }
+
+/**
+ * Did this finished call produce something the reader is meant to *look at*?
+ *
+ * Injected rather than imported because the answer depends on the pane's
+ * working directory and the host platform — see `lib/artifact.ts` — and neither
+ * belongs in a model whose job is the shape of the transcript. `pane.ts` closes
+ * over both and hands the closure down.
+ *
+ * The model's use for it is narrow and structural: an artifact does not get
+ * folded. See {@link ActivityGroup} for why that is worth a rule of its own.
+ */
+export type ArtifactTest = (item: ToolItem) => boolean;
 
 /* -------------------------------------------------------------------------- */
 /* Scheduling                                                                 */
@@ -310,6 +346,21 @@ export class TranscriptModel {
   private structural = false;
   private pending = false;
 
+  /**
+   * How to tell an artifact from ordinary work, and what it last answered.
+   *
+   * The verdicts are memoised because {@link rebuildRows} asks per item per
+   * rebuild, and the test is not cheap — it re-parses the call's input into a
+   * diff. Memoising turns that into once per *call*, which is what the row
+   * rendering the card already pays.
+   *
+   * An entry is dropped in {@link replace}, because the answer genuinely changes
+   * there: a call is only ever an artifact once it has finished, so the verdict
+   * that matters is the one taken after `tool.end` merges the result in.
+   */
+  private artifactTest: ArtifactTest | null = null;
+  private artifactVerdicts = new Map<string, boolean>();
+
   private listListeners = new Set<Listener>();
   private itemListeners = new Map<string, Set<Listener>>();
 
@@ -318,6 +369,23 @@ export class TranscriptModel {
 
   constructor(schedule: Scheduler = frameScheduler) {
     this.schedule = schedule;
+  }
+
+  /**
+   * Teach the model which calls produced artifacts, so it can keep them out of
+   * the fold. See {@link ArtifactTest}.
+   *
+   * Installing a test — or replacing one, which is how a pane reacts to its
+   * working directory moving — throws away every cached verdict and rebuilds the
+   * rows, since the same call can stop being an artifact when `cwd` changes
+   * underneath it. Both are O(items) and both happen approximately never.
+   */
+  setArtifactTest(test: ArtifactTest | null): void {
+    if (test === this.artifactTest) return;
+    this.artifactTest = test;
+    this.artifactVerdicts.clear();
+    this.structural = true;
+    this.markPending();
   }
 
   /* ---- reads ---------------------------------------------------------- */
@@ -508,6 +576,9 @@ export class TranscriptModel {
     this.streaming.clear();
     this.openTools.clear();
     this.dirty.clear();
+    // The test itself survives a reset — it belongs to the pane, not to the
+    // conversation in it — but every verdict was about items that are now gone.
+    this.artifactVerdicts.clear();
     this.lastSeq = null;
     this.counter = 0;
     this.structural = true;
@@ -756,7 +827,17 @@ export class TranscriptModel {
   }
 
   private replace(id: string, item: TranscriptItem): void {
+    // A tool call's artifact verdict is taken again here, because this is where
+    // `tool.end` lands and a call that is still running is never an artifact.
+    // A verdict that *changed* is a structural change — the row has to leave the
+    // burst it was folded into — and `replace` does not otherwise set that flag,
+    // so without this the tile would not surface until the next unrelated insert.
+    const wasArtifact = this.isArtifact(id);
+    if (item.kind === 'tool') this.artifactVerdicts.delete(id);
+
     this.items.set(id, item);
+    if (item.kind === 'tool' && this.isArtifact(id) !== wasArtifact) this.structural = true;
+
     this.index(item);
     this.dirty.add(id);
     this.markPending();
@@ -792,7 +873,9 @@ export class TranscriptModel {
         i += 1;
         continue;
       }
-      if (!this.isMachinery(id)) {
+      // An artifact is machinery by kind and a deliverable by intent, and the
+      // second is what decides: it stays its own row. See {@link ActivityGroup}.
+      if (!this.isMachinery(id) || this.isArtifact(id)) {
         rows.push(id);
         i += 1;
         continue;
@@ -801,7 +884,7 @@ export class TranscriptModel {
       let tools = 0;
       while (i < this.ids.length) {
         const next = this.ids[i];
-        if (next === undefined || !this.isMachinery(next)) break;
+        if (next === undefined || !this.isMachinery(next) || this.isArtifact(next)) break;
         if (this.items.get(next)?.kind === 'tool') tools += 1;
         run.push(next);
         i += 1;
@@ -899,6 +982,26 @@ export class TranscriptModel {
   private isMachinery(id: string): boolean {
     const kind = this.items.get(id)?.kind;
     return kind === 'tool' || kind === 'thinking';
+  }
+
+  /**
+   * Whether this row is an artifact, and therefore not foldable.
+   *
+   * `false` whenever no test is installed, which is the state a bare
+   * `new TranscriptModel()` is in — the model folds exactly as it always did
+   * until a pane teaches it otherwise, so nothing here depends on the wiring
+   * being present.
+   */
+  private isArtifact(id: string): boolean {
+    const cached = this.artifactVerdicts.get(id);
+    if (cached !== undefined) return cached;
+    const test = this.artifactTest;
+    if (test === null) return false;
+    const item = this.items.get(id);
+    if (item?.kind !== 'tool') return false;
+    const verdict = test(item);
+    this.artifactVerdicts.set(id, verdict);
+    return verdict;
   }
 
   /** Keep the open-work indexes in step with an item's current state. */

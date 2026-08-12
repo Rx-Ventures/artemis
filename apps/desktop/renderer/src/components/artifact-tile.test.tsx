@@ -150,9 +150,40 @@ async function wrote(runId: string, path: string, content = PAGE, status = 'ok')
   });
 }
 
-/** Open the activity marker, which is what the individual cards live behind. */
+/**
+ * Open the activity marker, which is what ordinary tool cards live behind.
+ *
+ * Not for an artifact: the model keeps those out of the fold entirely, so a
+ * test that clicked here to reach a tile would be asserting the opposite of
+ * what the app does. See `an artifact is never behind the marker` below.
+ */
 function openTheMarker(): void {
   fireEvent.click(screen.getByText(/^(Edited|Wrote|Read|Ran)/i));
+}
+
+/** A tool call that is not an artifact, to bury a tile in if one folded. */
+async function ranACommand(runId: string): Promise<void> {
+  const id = `c${(seq += 1)}`;
+  await act(async () => {
+    handleAgentEvent({
+      type: 'tool.start',
+      runId,
+      seq: seq * 2,
+      ts: seq,
+      toolCallId: id,
+      name: 'Bash',
+      input: { command: 'ls' },
+    } as AgentEvent);
+    handleAgentEvent({
+      type: 'tool.end',
+      runId,
+      seq: seq * 2 + 1,
+      ts: seq,
+      toolCallId: id,
+      status: 'ok',
+    } as never);
+    focusedPane().transcript.flush();
+  });
 }
 
 function mount(): void {
@@ -207,7 +238,6 @@ describe('the artifact tile', () => {
   it('replaces the tool row for a page written outside the project', async () => {
     await wrote(RUN, '/tmp/report.html');
     mount();
-    openTheMarker();
 
     // Named by what it is, not by the tool that made it.
     expect(screen.getByText('report.html')).not.toBeNull();
@@ -218,12 +248,46 @@ describe('the artifact tile', () => {
   it('keeps the diff one click away underneath', async () => {
     await wrote(RUN, '/tmp/report.html');
     mount();
-    openTheMarker();
 
     // The tile is not a replacement for the record — the write is still a tool
     // call, and its arguments are still there.
     fireEvent.click(screen.getByRole('button', { name: /show the diff/i }));
     expect(screen.getByText(/raw arguments|input/i)).not.toBeNull();
+  });
+
+  /*
+   * The reason the two tests above no longer open anything first.
+   *
+   * An artifact surrounded on both sides by ordinary work still has to be on
+   * screen and still has to be openable, because the marker it would otherwise
+   * fold into says "Ran a command, edited 1 file" — a description of the work
+   * that gives no hint the thing the work produced is in there.
+   */
+  it('an artifact is never behind the marker', async () => {
+    await ranACommand(RUN);
+    await wrote(RUN, '/tmp/report.html');
+    await ranACommand(RUN);
+    mount();
+
+    // Visible with nothing expanded, and usable from there.
+    expect(screen.getByText('report.html')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /open/i })).not.toBeNull();
+
+    // The work around it still folds — the artifact split the burst rather than
+    // dissolving it.
+    expect(screen.getAllByText(/^Ran a command/i).length).toBeGreaterThan(0);
+  });
+
+  it('still folds a burst that made nothing worth looking at', async () => {
+    await ranACommand(RUN);
+    await ranACommand(RUN);
+    mount();
+
+    // No tile, and the cards are behind the marker exactly as before.
+    expect(screen.queryByRole('button', { name: /open/i })).toBeNull();
+    expect(screen.queryByText('Bash')).toBeNull();
+    openTheMarker();
+    expect(screen.getAllByText('Bash').length).toBe(2);
   });
 
   it('leaves an ordinary tool row for a page written into the project', async () => {
