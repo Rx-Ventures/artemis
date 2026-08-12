@@ -194,6 +194,47 @@ function isAllowedUrl(url: string, policy: SecurityPolicy): boolean {
 }
 
 /**
+ * The one permission Artemis grants, and the two ways it is kept small.
+ *
+ * `navigator.clipboard.writeText` is permission-gated in Chromium, and denying
+ * every check is why each copy button in the app went through its motions and
+ * left the clipboard holding whatever it held before: the command a new profile
+ * asks you to run in a terminal, and the full text of a bug report too long for
+ * a URL to carry. Neither said anything, because the call rejects and a click
+ * handler that drops the promise has nothing to report. Both are exactly the
+ * case where a user has asked, in as many words, for a string to be copied.
+ *
+ * Writing only, never reading. Putting a string the user just pointed at onto
+ * the clipboard is not the capability of reading back what they last copied out
+ * of a password manager, and Artemis has never wanted the second — so
+ * `clipboard-read` stays denied along with everything else.
+ *
+ * And Artemis's own document only. The preview scheme serves a page the agent
+ * wrote, and it reaches the clipboard exactly as far as it reaches the network,
+ * which is not at all — its origin is neither `file:` nor the dev server, so it
+ * falls through to the same `false` as a camera request.
+ */
+function isPermittedPermission(permission: string, requestingUrl: string, policy: SecurityPolicy): boolean {
+  if (permission !== 'clipboard-sanitized-write') return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(requestingUrl);
+  } catch {
+    return false;
+  }
+
+  // The packaged renderer. Unlike `isAllowedUrl` this does not narrow to the
+  // bundle's own directory, and does not need to: a permission check arrives as
+  // an *origin*, which `file:` serializes without a path, and the one document
+  // Artemis does not author is served over a scheme of its own rather than off
+  // disk.
+  if (parsed.protocol === 'file:') return true;
+
+  return policy.devServerOrigin !== null && parsed.origin === policy.devServerOrigin;
+}
+
+/**
  * Open a URL in the user's own browser, if it is the kind of URL a browser
  * should be asked to open.
  *
@@ -253,12 +294,24 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
 
   // Chromium may ask for camera, microphone, geolocation, notifications and so
   // on. Artemis needs none of them, and a UI that renders untrusted content
-  // should never be in a position to ask.
-  session.setPermissionRequestHandler((_contents, permission, callback) => {
+  // should never be in a position to ask. The single exception is writing the
+  // clipboard from Artemis's own document — see `isPermittedPermission`.
+  //
+  // Both handlers, because a web API that is refused a permission *check* goes
+  // on to make a permission *request*, and one of the two answering `false` is
+  // enough to fail the call. Denying in only one place is a fix that works
+  // until Chromium changes which question it asks first.
+  session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    if (isPermittedPermission(permission, details.requestingUrl, policy)) {
+      callback(true);
+      return;
+    }
     log.warn(`Denied a "${permission}" permission request from the renderer.`);
     callback(false);
   });
-  session.setPermissionCheckHandler(() => false);
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    isPermittedPermission(permission, requestingOrigin, policy),
+  );
   session.setDevicePermissionHandler(() => false);
 
   // Network lockdown. `file:`, `devtools:` and `blob:` are the renderer's own

@@ -55,6 +55,7 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   configDirProblem,
   normalizeProfileColor,
@@ -526,7 +527,19 @@ function SignInStep({
 
   const copy = useCallback(async (): Promise<void> => {
     if (command.length === 0) return;
-    await navigator.clipboard.writeText(command);
+    // The tick is set only once the write has resolved, and a failure says so.
+    // Reporting success before the clipboard confirmed it is what hid a denied
+    // permission here: the button gave its tick, the paste that followed was
+    // whatever the user had copied last, and the two were far enough apart that
+    // the button was never the suspect.
+    try {
+      await navigator.clipboard.writeText(command);
+    } catch {
+      toast('Could not copy the command', {
+        description: 'Select the line above and copy it by hand.',
+      });
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1_500);
   }, [command]);
