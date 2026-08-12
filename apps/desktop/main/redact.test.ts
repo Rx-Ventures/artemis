@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertNoSecrets,
+  assertResponseSafe,
   EVENT_SCAN_POLICY,
   looksLikeSecretValue,
   RESPONSE_SCAN_POLICY,
@@ -134,5 +135,99 @@ describe('assertNoSecrets — event policy', () => {
   it('still refuses a profile field on an event', () => {
     const event = { type: 'session.started', runId: 'r1', seq: 0, ts: 0, secretRef: 'profile-abc' };
     expect(() => assertNoSecrets(event, 'push', EVENT_SCAN_POLICY)).toThrow(SecretLeakError);
+  });
+});
+
+/**
+ * A replayed event is the same event. These are the regression tests for #68,
+ * where reopening a session scanned its whole history as though Artemis had
+ * written it — so a transcript that merely *mentioned* a key came back as
+ * "Artemis blocked a response that failed its credential-safety check" and the
+ * conversation appeared to be gone.
+ */
+describe('assertResponseSafe — replayed transcripts', () => {
+  const textEvent = {
+    type: 'text.delta',
+    runId: 'r1',
+    seq: 1,
+    ts: 0,
+    messageId: 'm1',
+    blockIndex: 0,
+    text: `export ANTHROPIC_API_KEY=${FAKE_KEY}`,
+  };
+
+  it('replays model output the live path already allows', () => {
+    // The same event, both directions. If these two ever disagree, reopening a
+    // session shows something different from watching it happen.
+    expect(() => assertNoSecrets(textEvent, 'push', EVENT_SCAN_POLICY)).not.toThrow();
+    expect(() => assertResponseSafe({ events: [textEvent], hasMore: false }, 'artemis:sessions:messages')).not.toThrow();
+    expect(() => assertResponseSafe({ runId: 'r1', events: [textEvent] }, 'artemis:runs:events')).not.toThrow();
+  });
+
+  it('replays a tool call whose input names an environment', () => {
+    // `env` is a forbidden *field name* on a payload Artemis assembles. Inside
+    // a tool's input it is the agent describing a command it ran.
+    const event = {
+      type: 'tool.start',
+      runId: 'r1',
+      seq: 2,
+      ts: 0,
+      toolCallId: 't1',
+      name: 'Bash',
+      input: { command: 'npm test', env: { CI: '1' } },
+    };
+    expect(() => assertResponseSafe({ events: [event], hasMore: false }, 'artemis:sessions:messages')).not.toThrow();
+  });
+
+  it('does not charge one session against a budget sized for one event', () => {
+    // Long enough to blow a single shared node budget several times over. The
+    // ten-thousandth event is not more suspicious than the first.
+    const events = Array.from({ length: 20_000 }, (_, i) => ({ ...textEvent, seq: i }));
+    expect(() => assertResponseSafe({ events, hasMore: false }, 'artemis:sessions:messages')).not.toThrow();
+  });
+
+  it('still refuses a profile field smuggled onto a replayed event', () => {
+    const event = { type: 'session.started', runId: 'r1', seq: 0, ts: 0, publicEnv: { ANTHROPIC_API_KEY: FAKE_KEY } };
+    expect(() => assertResponseSafe({ events: [event], hasMore: false }, 'artemis:sessions:messages')).toThrow(
+      SecretLeakError,
+    );
+  });
+
+  it('still scans the envelope around the events strictly', () => {
+    expect(() => assertResponseSafe({ events: [], hasMore: false, credentials: {} }, 'artemis:sessions:messages')).toThrow(
+      SecretLeakError,
+    );
+  });
+
+  it('falls back to the strict policy when `events` is not a list of events', () => {
+    // The exemption is for the shape the protocol declares. Anything else goes
+    // back through the front door.
+    expect(() => assertResponseSafe({ events: { stdout: FAKE_KEY }, hasMore: false }, 'artemis:sessions:messages')).toThrow(
+      SecretLeakError,
+    );
+  });
+});
+
+describe('assertResponseSafe — other content channels', () => {
+  it('replays a terminal buffer without redacting the user their own screen', () => {
+    // `cat .env` in the user's own shell, surviving a window reload.
+    expect(() =>
+      assertResponseSafe({ id: 't1', data: `ANTHROPIC_API_KEY=${FAKE_KEY}\r\n`, truncated: false }, 'artemis:terminal:replay'),
+    ).not.toThrow();
+  });
+
+  it('opens a markdown file that documents a key', () => {
+    expect(() =>
+      assertResponseSafe(
+        { kind: 'markdown', title: 'README.md', path: '/repo/README.md', bytes: 42, text: `Set \`${FAKE_KEY}\`` },
+        'artemis:preview:open',
+      ),
+    ).not.toThrow();
+  });
+
+  it('leaves every other channel on the strict policy', () => {
+    expect(() => assertResponseSafe({ run: { runId: 'r1', cwd: `/tmp/${FAKE_KEY}` } }, 'artemis:runs:start')).toThrow(
+      SecretLeakError,
+    );
   });
 });

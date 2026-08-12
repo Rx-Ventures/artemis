@@ -24,10 +24,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createDefaultProviderRegistry, toMetadata } from '@rx-artemis/core';
-import type { Profile } from '@rx-artemis/protocol';
+import type { Profile, SessionsMessagesResponse } from '@rx-artemis/protocol';
 
 import {
   assertNoSecrets,
+  assertResponseSafe,
   looksLikeSecretValue,
   RESPONSE_SCAN_POLICY,
   SecretLeakError,
@@ -103,5 +104,80 @@ describe('the leak tripwire against real core output', () => {
         RESPONSE_SCAN_POLICY,
       ),
     ).toThrow(SecretLeakError);
+  });
+});
+
+/**
+ * The same no-false-positive argument as (2) above, for the channel that
+ * reopens a conversation.
+ *
+ * These fixtures are typed as `AgentEvent` and `SessionsMessagesResponse` on
+ * purpose. The exemptions in `redact.ts` name fields — `text`, `input`,
+ * `result` — and a rename on the protocol side would silently strand them,
+ * turning a scanner into a session-shredder again. Typing the fixture makes
+ * that a compile error instead.
+ */
+describe('the leak tripwire against a real transcript', () => {
+  const transcript: SessionsMessagesResponse = {
+    hasMore: false,
+    events: [
+      {
+        type: 'session.started',
+        runId: 'history:s1',
+        seq: 0,
+        ts: 0,
+        sessionId: 's1',
+        providerId: 'claude',
+        cwd: '/repo',
+      },
+      {
+        type: 'text.complete',
+        runId: 'history:s1',
+        seq: 1,
+        ts: 0,
+        messageId: 'm1',
+        text: 'Set ANTHROPIC_API_KEY=sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyz0123 to authenticate.',
+      },
+      {
+        type: 'tool.start',
+        runId: 'history:s1',
+        seq: 2,
+        ts: 0,
+        toolCallId: 't1',
+        name: 'Bash',
+        input: { command: 'printenv', env: { CI: '1' } },
+        title: 'printenv',
+      },
+      {
+        type: 'tool.end',
+        runId: 'history:s1',
+        seq: 3,
+        ts: 0,
+        toolCallId: 't1',
+        status: 'ok',
+        result: { stdout: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' },
+        resultText: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      },
+    ],
+  };
+
+  it('reopens a session whose transcript talks about credentials', () => {
+    // Every one of these events would trip the strict policy, and every one of
+    // them is ordinary output from an agent doing ordinary work. This is the
+    // regression test for #68: the whole conversation used to vanish behind
+    // "Artemis blocked a response that failed its credential-safety check".
+    expect(() => assertResponseSafe(transcript, 'artemis:sessions:messages')).not.toThrow();
+  });
+
+  it('scans each event exactly as the live push path would', () => {
+    // Not an implementation detail — it is the reason history renders the same
+    // as the run that produced it.
+    for (const event of transcript.events) {
+      expect(() => assertResponseSafe({ runId: event.runId, events: [event] }, 'artemis:runs:events')).not.toThrow();
+    }
+  });
+
+  it('still rejects a Profile smuggled in beside the events', () => {
+    expect(() => assertResponseSafe({ ...transcript, profile }, 'artemis:sessions:messages')).toThrow(SecretLeakError);
   });
 });

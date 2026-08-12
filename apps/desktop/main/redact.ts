@@ -37,7 +37,18 @@
  *
  * The distinction is what makes the check usable: everything Artemis itself
  * assembles is scanned strictly, and only provider/user content is exempt.
+ *
+ * ### Which policy a payload gets
+ *
+ * The exemptions above are worth nothing if the payload is handed the wrong
+ * policy, and *which* policy is a property of the channel, not of the
+ * direction. A pushed `AgentEvent` and a replayed one are the same bytes; so
+ * are a terminal's live output and its replay buffer. {@link assertResponseSafe}
+ * is where that mapping lives, so every `ipcMain.handle` response goes through
+ * one decision rather than one default.
  */
+
+import { IPC, type IpcChannel } from '@rx-artemis/protocol';
 
 /** Thrown when a payload bound for the renderer fails a leak check. */
 export class SecretLeakError extends Error {
@@ -232,6 +243,104 @@ export const TERMINAL_SCAN_POLICY: ScanPolicy = {
   maxDepth: 4,
   maxNodes: 64,
 };
+
+/**
+ * Scan policy for the *envelope* around a page of replayed events.
+ *
+ * `events` is opaque here and scanned separately, one event at a time, under
+ * {@link EVENT_SCAN_POLICY} — see {@link assertNoSecretsInTranscript}. What is
+ * left is the handful of fields Artemis authors around them (`runId`,
+ * `hasMore`), which stay under the strict response rules.
+ */
+const TRANSCRIPT_ENVELOPE_POLICY: ScanPolicy = {
+  ...RESPONSE_SCAN_POLICY,
+  opaqueKeys: new Set([...RESPONSE_SCAN_POLICY.opaqueKeys, 'events']),
+};
+
+/**
+ * Scan policy for {@link import('@rx-artemis/protocol').PreviewMarkdown}.
+ *
+ * `text` is a file off the user's own disk, read because the user clicked it.
+ * Under the strict policy a README documenting `sk-ant-…`, or a checked-in
+ * test fixture holding a PEM header, would refuse to open — Artemis declining
+ * to show a person a file they already have.
+ */
+const PREVIEW_SCAN_POLICY: ScanPolicy = {
+  ...RESPONSE_SCAN_POLICY,
+  contentKeys: new Set([...RESPONSE_SCAN_POLICY.contentKeys, 'text']),
+};
+
+/**
+ * Scan a payload carrying replayed {@link import('@rx-artemis/protocol').AgentEvent}s.
+ *
+ * Each event is scanned exactly as the live push path scans it: same policy,
+ * and its **own** node budget. Both halves of that matter.
+ *
+ * The policy, because a replayed event is the same event — model output, tool
+ * inputs, tool results. Scanning it as though Artemis wrote it means a
+ * transcript in which the agent so much as *discussed* an API key cannot be
+ * reopened.
+ *
+ * The per-event budget, because the alternative charges one session's whole
+ * history against a limit sized for one event. A budget that a long
+ * conversation grows into is not a security boundary, it is a length limit
+ * wearing one: nothing about the ten-thousandth event is more suspicious than
+ * the first, and the failure lands on the heaviest users.
+ */
+export function assertNoSecretsInTranscript(value: unknown, context: string): void {
+  assertNoSecrets(value, context, TRANSCRIPT_ENVELOPE_POLICY);
+
+  const events = typeof value === 'object' && value !== null ? (value as { events?: unknown }).events : undefined;
+  if (events === undefined) return;
+
+  // The exemption above is for a *list of events*, and only because the next
+  // line scans each one. Anything else in that field is a shape nobody
+  // designed, so it goes back to the strict policy rather than through a hole
+  // opened for a type it does not have.
+  if (!Array.isArray(events)) {
+    assertNoSecrets(events, `${context}.events`, RESPONSE_SCAN_POLICY);
+    return;
+  }
+
+  for (let i = 0; i < events.length; i += 1) {
+    assertNoSecrets(events[i], `${context}.events[${i}]`, EVENT_SCAN_POLICY);
+  }
+}
+
+/**
+ * The tripwire for `ipcMain.handle` responses.
+ *
+ * Most channels return something Artemis assembled itself and get
+ * {@link RESPONSE_SCAN_POLICY}. The exceptions are the channels that hand back
+ * content Artemis did not author, and they are exceptions only in the sense
+ * that a *response* is carrying what a *push* usually does — the same events,
+ * the same terminal bytes. They are scanned the same way their pushed twin is,
+ * which is the point: one payload shape, one rule, whichever direction it
+ * travels.
+ *
+ * Structure stays strict on every one of them. No profile field may appear on
+ * any response, at any depth, under any policy here.
+ */
+export function assertResponseSafe(value: unknown, channel: IpcChannel): void {
+  switch (channel) {
+    // A page of replayed events, in both cases — the live feed's own shape.
+    case IPC.runsEvents:
+    case IPC.sessionsMessages:
+      return assertNoSecretsInTranscript(value, channel);
+
+    // The tail of a terminal's output, which is the user's screen and not
+    // Artemis's data. See TERMINAL_SCAN_POLICY for why `data` is exempt.
+    case IPC.terminalReplay:
+      return assertNoSecrets(value, channel, TERMINAL_SCAN_POLICY);
+
+    // A file the user asked to see.
+    case IPC.previewOpen:
+      return assertNoSecrets(value, channel, PREVIEW_SCAN_POLICY);
+
+    default:
+      return assertNoSecrets(value, channel, RESPONSE_SCAN_POLICY);
+  }
+}
 
 /**
  * Throw if `value` looks like it carries a credential.

@@ -69,8 +69,8 @@ import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
 import {
   assertNoSecrets,
+  assertResponseSafe,
   EVENT_SCAN_POLICY,
-  RESPONSE_SCAN_POLICY,
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
@@ -651,8 +651,10 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       });
 
       // The tripwire. Everything above this line is "we believe the response is
-      // renderer-safe"; this line is what makes it true.
-      assertNoSecrets(value, channel, RESPONSE_SCAN_POLICY);
+      // renderer-safe"; this line is what makes it true. Strict by default, and
+      // by the channel's own policy where the response carries provider or user
+      // content — see `assertResponseSafe`.
+      assertResponseSafe(value, channel);
 
       return ipcOk(toCloneable(value, channel));
     } catch (error) {
