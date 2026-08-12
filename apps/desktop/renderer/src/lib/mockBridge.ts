@@ -570,6 +570,10 @@ export function createMockBridge(): ArtemisBridge {
 
   const PROJECTS: readonly (readonly [string, number])[] = [
     ['/Users/dev/code/artemis', 22],
+    // A worktree of the line above, where an agent puts one. It is a directory
+    // of its own and groups under `artemis` all the same, which is only visible
+    // in dev if the seed contains one.
+    ['/Users/dev/code/artemis/.claude/worktrees/adapter-seam', 3],
     ['/Users/dev/code/api-gateway', 9],
     ['/Users/dev/scratch/spike-rope', 3],
     ['/Users/dev/work/very/deeply/nested/monorepo/packages/renderer', 4],
@@ -962,8 +966,9 @@ export function createMockBridge(): ArtemisBridge {
        *  - `…/monorepo/…` a repository several levels *above* the cwd, which is
        *                   the case the whole channel exists for.
        *  - `…/worktrees/…` a linked worktree, which the header names like any
-       *                   other repository and the recent-folders menu declines
-       *                   to record. Keyed off the same segment git uses.
+       *                   other repository, the recent-folders menu declines to
+       *                   record, and the sidebar files under the project it was
+       *                   split off from. Keyed off the same segment git uses.
        *  - `/tmp/…`       a temporary directory, declined for the same reason.
        *                   The real check knows this machine's `tmpdir()`, which
        *                   on macOS is under `/var/folders`; `/tmp` is the one
@@ -982,7 +987,18 @@ export function createMockBridge(): ArtemisBridge {
           // deeper inside one still reports the checkout it belongs to.
           const repoRoot = `/${segments.slice(0, linked + 2).join('/')}`;
           const repoName = repoRoot.split('/').at(-1) ?? name;
-          return ok({ path, name, repoRoot, repoName, worktree: true, ...temporary });
+          /*
+           * And the project is whatever the worktree was split off from — the
+           * real thing reads that out of the `gitdir:` pointer, which the mock
+           * has no file to read. Everything above `worktrees/`, with a `.claude`
+           * container dropped, is the layout an agent's worktree actually has
+           * (`<repo>/.claude/worktrees/<branch>`) and is enough to exercise the
+           * sidebar grouping a worktree under its repository.
+           */
+          const above = segments.slice(0, linked);
+          if (above.at(-1) === '.claude') above.pop();
+          const projectRoot = above.length > 0 ? `/${above.join('/')}` : repoRoot;
+          return ok({ path, name, repoRoot, repoName, projectRoot, worktree: true, ...temporary });
         }
 
         const depth = segments.indexOf('monorepo');
@@ -992,6 +1008,8 @@ export function createMockBridge(): ArtemisBridge {
           name,
           repoRoot,
           repoName: repoRoot.split('/').at(-1) ?? name,
+          // Not a worktree, so the project is the repository itself.
+          projectRoot: repoRoot,
           ...temporary,
         });
       },

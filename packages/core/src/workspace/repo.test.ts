@@ -31,6 +31,12 @@ let nested: string;
 let worktree: string;
 /** A directory inside that worktree. */
 let insideWorktree: string;
+/** A worktree whose pointer is written relative to its own directory. */
+let relativeWorktree: string;
+/** A worktree of a bare repository, which has no main checkout to name. */
+let bareWorktree: string;
+/** A worktree whose pointer is in no layout this can read past. */
+let strangeWorktree: string;
 /** A submodule: the same `.git` file shape, pointing somewhere else entirely. */
 let submodule: string;
 /** A `.git` file that is not a `gitdir:` pointer at all. */
@@ -53,6 +59,28 @@ beforeAll(async () => {
   insideWorktree = join(worktree, 'apps');
   await mkdir(insideWorktree, { recursive: true });
   await writeFile(join(worktree, '.git'), `gitdir: ${join(clone, '.git', 'worktrees', 'fix')}\n`);
+
+  // Git writes an absolute pointer by default and a relative one on request
+  // (`worktree.useRelativePaths`), so both spellings are real and both name the
+  // same checkout.
+  relativeWorktree = join(root, 'artemis-relative');
+  await mkdir(relativeWorktree);
+  await writeFile(join(relativeWorktree, '.git'), 'gitdir: ../artemis/.git/worktrees/rel\n');
+
+  // A bare repository has no working tree of its own, so `<common>` is the
+  // repository directory rather than a `.git` inside a checkout.
+  bareWorktree = join(root, 'mirror-fix');
+  await mkdir(bareWorktree);
+  await writeFile(
+    join(bareWorktree, '.git'),
+    `gitdir: ${join(root, 'mirror.git', 'worktrees', 'fix')}\n`,
+  );
+
+  // Contains the segment, so it is a worktree — but not `<common>/worktrees/<id>`,
+  // so there is nothing to derive a checkout from.
+  strangeWorktree = join(root, 'artemis-odd');
+  await mkdir(strangeWorktree);
+  await writeFile(join(strangeWorktree, '.git'), `gitdir: ${join(clone, '.git', 'worktrees')}\n`);
 
   // Git points a submodule at `.git/modules/<path>`, never at `worktrees/`.
   submodule = join(root, 'vendor-lib');
@@ -79,6 +107,8 @@ describe('describeWorkspace', () => {
       name: 'artemis',
       repoRoot: clone,
       repoName: 'artemis',
+      // The same directory: an ordinary checkout is the project it is part of.
+      projectRoot: clone,
       // Because the fixture lives under `tmpdir()`. See the module note.
       temporary: true,
     });
@@ -111,6 +141,51 @@ describe('describeWorkspace', () => {
     const result = await describeWorkspace(insideWorktree);
     expect(result.repoRoot).toBe(worktree);
     expect(result.worktree).toBe(true);
+  });
+
+  it('points a linked worktree at the checkout it was split off from', async () => {
+    // The place is the worktree; the *project* is the repository it belongs to.
+    // A session run in a worktree of Artemis is still a session on Artemis, and
+    // the sidebar groups by the second of those two facts.
+    const result = await describeWorkspace(worktree);
+    expect(result.repoRoot).toBe(worktree);
+    expect(result.projectRoot).toBe(clone);
+  });
+
+  it('points a directory inside a worktree at the same checkout', async () => {
+    expect((await describeWorkspace(insideWorktree)).projectRoot).toBe(clone);
+  });
+
+  it('resolves a relative `gitdir:` pointer against the worktree', async () => {
+    const result = await describeWorkspace(relativeWorktree);
+    expect(result.worktree).toBe(true);
+    expect(result.projectRoot).toBe(clone);
+  });
+
+  it('names the bare repository when a worktree has no main checkout', async () => {
+    // Nothing is checked out at `mirror.git`, so there is no working tree to
+    // name — but every worktree of it is still one project, which is the
+    // question this field answers.
+    expect((await describeWorkspace(bareWorktree)).projectRoot).toBe(join(root, 'mirror.git'));
+  });
+
+  it('leaves a worktree standing alone when the layout says nothing', async () => {
+    // Still a worktree, so the folder menu still declines it; simply no checkout
+    // to attribute it to, which reads as the worktree being its own project
+    // rather than as a guess.
+    const result = await describeWorkspace(strangeWorktree);
+    expect(result.worktree).toBe(true);
+    expect(result.projectRoot).toBe(strangeWorktree);
+  });
+
+  it('makes a submodule its own project, as it is its own root', async () => {
+    expect((await describeWorkspace(submodule)).projectRoot).toBe(submodule);
+  });
+
+  it('names the repository as the project from inside a subdirectory', async () => {
+    // Same answer as `repoRoot` here, and the one the sidebar groups on: work in
+    // `apps/desktop` is work on artemis.
+    expect((await describeWorkspace(nested)).projectRoot).toBe(clone);
   });
 
   it('does not call a submodule a worktree, though it has the same `.git` file', async () => {

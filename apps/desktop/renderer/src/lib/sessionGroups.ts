@@ -10,7 +10,8 @@
  *
  * The rules, in the order the UI depends on them:
  *
- *  1. One group per `cwd`.
+ *  1. One group per **project**, which is the session's `cwd` resolved through
+ *     {@link GroupOptions.projectOf} — see below.
  *  2. Groups are ordered by their most recent session, newest first — so the
  *     project you were last in is at the top, which is where a person looks.
  *  3. Sessions inside a group are ordered newest first.
@@ -28,6 +29,24 @@
  * Ties are broken by session id everywhere, so the order is total and a render
  * never reshuffles rows that compare equal.
  *
+ * ## A project is not a directory
+ *
+ * Grouping by `cwd` alone files a session under the folder it ran in, which is
+ * the same thing as the project only when the two happen to coincide. They stop
+ * coinciding the moment work is split into a **linked worktree**: `.claude/
+ * worktrees/some-branch` is a different directory, so an afternoon's work on
+ * Artemis appeared in the sidebar as a repository called `some-branch` and left
+ * the Artemis group it belonged to. Sessions in a subdirectory of a repository
+ * split the same way, for the same reason.
+ *
+ * So the key is whatever {@link GroupOptions.projectOf} says a directory belongs
+ * to — the main checkout for a worktree, the repository root for a directory
+ * inside one — and the `cwd` only when it says nothing. Resolving that needs the
+ * filesystem, which the renderer does not have, so the answer arrives from the
+ * main process a moment after the rows do (see `projectRoots` in the store).
+ * Until it does, every session groups by its own directory, which is where this
+ * module started and remains a correct-looking list rather than an empty one.
+ *
  * ## Row keys are `profileId + id`, not `id`
  *
  * `SessionsListAllResponse` says so explicitly: a session id is unique inside
@@ -39,8 +58,14 @@
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
 export interface SessionGroup {
-  /** The project directory. The group's identity and its `key`. */
-  readonly cwd: string;
+  /**
+   * The project's root directory. The group's identity and its `key`.
+   *
+   * Not necessarily any session's `cwd`: a group holding one session from a
+   * worktree and one from the checkout is keyed on the checkout, which is the
+   * project both of them were working on.
+   */
+  readonly project: string;
   /** Newest first. */
   readonly sessions: readonly SessionSummary[];
   /**
@@ -169,10 +194,19 @@ export type SessionOrderKey = (session: SessionSummary) => number;
 /** The plain answer, and the one every caller that has no runs to hold wants. */
 const byUpdatedAt: SessionOrderKey = (session) => session.updatedAt;
 
+/**
+ * Which project a directory belongs to.
+ *
+ * `undefined` for a directory nothing is known about yet, which groups it by
+ * itself — see the note on projects in the file header.
+ */
+export type ProjectLookup = (cwd: string) => string | undefined;
+
 export interface GroupOptions {
   readonly query?: string;
   readonly profileLabel?: ProfileLabelLookup;
   readonly orderKey?: SessionOrderKey;
+  readonly projectOf?: ProjectLookup;
 }
 
 /** Apply rules 1–4 above. */
@@ -182,21 +216,23 @@ export function groupSessionsByProject(
 ): readonly SessionGroup[] {
   const query = options.query ?? '';
   const lookup = options.profileLabel;
+  const projectOf = options.projectOf;
 
-  const byCwd = new Map<string, SessionSummary[]>();
+  const byProject = new Map<string, SessionSummary[]>();
   for (const session of sessions) {
     if (query && !matchesQuery(session, query, lookup?.(session.profileId))) continue;
-    const bucket = byCwd.get(session.cwd);
+    const project = projectOf?.(session.cwd) ?? session.cwd;
+    const bucket = byProject.get(project);
     if (bucket) bucket.push(session);
-    else byCwd.set(session.cwd, [session]);
+    else byProject.set(project, [session]);
   }
 
   const orderKey = options.orderKey ?? byUpdatedAt;
   const groups: SessionGroup[] = [];
-  for (const [cwd, bucket] of byCwd) {
+  for (const [project, bucket] of byProject) {
     bucket.sort(byRecency(orderKey));
     groups.push({
-      cwd,
+      project,
       sessions: bucket,
       // Not `bucket[0]`: the first row is the one that sorts highest, which
       // under a held key is not necessarily the one written most recently.
@@ -205,7 +241,7 @@ export function groupSessionsByProject(
     });
   }
 
-  groups.sort((a, b) => b.order - a.order || a.cwd.localeCompare(b.cwd));
+  groups.sort((a, b) => b.order - a.order || a.project.localeCompare(b.project));
   return groups;
 }
 
@@ -233,7 +269,8 @@ export function sessionKey(session: SessionSummary): string {
 export interface HeaderRow {
   readonly kind: 'header';
   readonly key: string;
-  readonly cwd: string;
+  /** The project's root directory — {@link SessionGroup.project}. */
+  readonly project: string;
   /** Sessions in the group — the full count, even when it is folded shut. */
   readonly count: number;
   /** Index into the group array — what the sticky header resolves against. */
@@ -298,11 +335,11 @@ export function flattenGroups(
 ): readonly ListRow[] {
   const rows: ListRow[] = [];
   groups.forEach((group, index) => {
-    const folded = collapsed.has(group.cwd);
+    const folded = collapsed.has(group.project);
     rows.push({
       kind: 'header',
-      key: `h:${group.cwd}`,
-      cwd: group.cwd,
+      key: `h:${group.project}`,
+      project: group.project,
       count: group.sessions.length,
       group: index,
       collapsed: folded,

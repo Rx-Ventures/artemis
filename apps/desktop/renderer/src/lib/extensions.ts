@@ -207,6 +207,20 @@ export interface WorkspaceNames {
   /** Absolute path to that repository's root. */
   readonly repoRoot?: string;
   /**
+   * Absolute path to the project the directory belongs to.
+   *
+   * The same as {@link repoRoot} everywhere except a linked worktree, where it
+   * is the checkout that worktree was split off from — a worktree of Artemis is
+   * still Artemis. The sidebar groups sessions by this and names the working
+   * directory by the other; see `sessionGroups` for the grouping and
+   * `WorkspaceDescribeResponse.projectRoot` for the full reasoning.
+   *
+   * Absent when the directory is in no repository, and absent from a preload
+   * older than the field — both mean "no project but this directory", which is
+   * what the caller falls back to.
+   */
+  readonly projectRoot?: string;
+  /**
    * Is that root a linked worktree rather than an ordinary checkout?
    *
    * Absent unless it is one — including when the answer cannot be had, which is
@@ -229,10 +243,11 @@ export interface WorkspaceNames {
  * Ask what a directory is called.
  *
  * Returns `null` for every unhappy path — an empty cwd, a build with no
- * `describe` channel, a rejected call — because there is exactly one caller and
- * it has a good answer for "unknown": the last segment of the path, which is
- * what the sidebar showed before this channel existed. A repository name is an
- * improvement on that, never a prerequisite for rendering.
+ * `describe` channel, a rejected call — because both callers have a good answer
+ * for "unknown": the header names the directory by its last segment, which is
+ * what it showed before this channel existed, and the session list groups a
+ * session under its own directory. A repository name and the project behind it
+ * are improvements on those, never prerequisites for rendering.
  *
  * Deliberately the third `lib/extensions` entry rather than a store action:
  * like the other two, it is feature-detected because a packaged build's preload
@@ -248,6 +263,6 @@ export async function describeWorkspace(path: string): Promise<WorkspaceNames | 
   const result = await call(() => bridge.workspace.describe({ path: trimmed }));
   if (!result.ok) return null;
 
-  const { name, repoName, repoRoot, worktree, temporary } = result.value;
-  return { name, repoName, repoRoot, worktree, temporary };
+  const { name, repoName, repoRoot, projectRoot, worktree, temporary } = result.value;
+  return { name, repoName, repoRoot, projectRoot, worktree, temporary };
 }

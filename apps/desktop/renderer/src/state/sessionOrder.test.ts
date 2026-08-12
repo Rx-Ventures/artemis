@@ -116,7 +116,7 @@ describe('holding a running session’s place', () => {
 
     const listing = [summary('sess-a', 1_000, '/api'), summary('sess-b', 2_000, '/web')];
     const groups = (of: readonly SessionSummary[]) =>
-      groupSessionsByProject(of, { orderKey: (s) => sessionOrderKey(s, hold()) }).map((g) => g.cwd);
+      groupSessionsByProject(of, { orderKey: (s) => sessionOrderKey(s, hold()) }).map((g) => g.project);
 
     expect(groups(listing)).toEqual(['/api', '/web']);
     // `/web` was written more recently, and still does not displace the project

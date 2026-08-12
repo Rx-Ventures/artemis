@@ -758,6 +758,23 @@ export interface WorkspaceDescribeResponse {
    */
   readonly repoName?: string;
   /**
+   * The project {@link path} belongs to, which is not always the place it is.
+   *
+   * {@link repoRoot} for an ordinary checkout and for a submodule. For a linked
+   * worktree it is the checkout that worktree was split off from: a worktree of
+   * Artemis is still Artemis, and the sidebar groups a session by the project it
+   * was working on rather than by the directory the work happened in — otherwise
+   * splitting a branch off for an afternoon files those sessions under a
+   * repository the user has never heard of, and takes them out of the one they
+   * belong to.
+   *
+   * Both answers are wanted at once, by different readers: the header names the
+   * *place* (see {@link repoName} on why a worktree is named after itself) and
+   * the session list groups by the *project*. Absent only when there is no
+   * repository, where the directory itself is already the right answer.
+   */
+  readonly projectRoot?: string;
+  /**
    * Is {@link repoRoot} a linked worktree rather than an ordinary checkout?
    *
    * Absent unless it is one. Nothing about naming turns on this — a worktree is

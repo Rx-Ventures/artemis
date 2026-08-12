@@ -36,7 +36,7 @@ describe('groupSessionsByProject', () => {
       session({ id: 'c', cwd: '/code/api', updatedAt: 30 }),
     ]);
 
-    expect(groups.map((g) => g.cwd)).toEqual(['/code/api', '/code/web']);
+    expect(groups.map((g) => g.project)).toEqual(['/code/api', '/code/web']);
     expect(groups[0]!.sessions).toHaveLength(2);
     expect(groups[1]!.sessions).toHaveLength(1);
   });
@@ -50,7 +50,7 @@ describe('groupSessionsByProject', () => {
       session({ id: 'c', cwd: '/code/web', updatedAt: 20 }),
     ]);
 
-    expect(groups.map((g) => g.cwd)).toEqual(['/code/web', '/code/api']);
+    expect(groups.map((g) => g.project)).toEqual(['/code/web', '/code/api']);
     expect(groups[0]!.updatedAt).toBe(20);
   });
 
@@ -91,6 +91,73 @@ describe('groupSessionsByProject', () => {
 });
 
 /*
+ * A worktree is a place; the repository it came from is the project.
+ *
+ * Reported directly: splitting work into `.claude/worktrees/<branch>` moved
+ * those sessions out of the project they belonged to and into a heading named
+ * after the branch — a repository the user had never worked in, sitting next to
+ * the one they had. The directory is still where the session runs and still what
+ * a resume needs; it is only the *grouping* that was answering the wrong
+ * question.
+ */
+describe('groupSessionsByProject across worktrees', () => {
+  const WORKTREE = '/code/api/.claude/worktrees/adapter-seam';
+  /** What the store's `projectRoots` holds: only the directories that move. */
+  const projectOf = (cwd: string): string | undefined =>
+    cwd === WORKTREE ? '/code/api' : undefined;
+
+  it('files a worktree’s sessions under the repository they were split off from', () => {
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'main', cwd: '/code/api', updatedAt: 10 }),
+        session({ id: 'split', cwd: WORKTREE, updatedAt: 20 }),
+      ],
+      { projectOf },
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.project).toBe('/code/api');
+    expect(groups[0]!.sessions.map((s) => s.id)).toEqual(['split', 'main']);
+  });
+
+  it('keeps each session’s own directory, which is what a resume needs', () => {
+    const groups = groupSessionsByProject([session({ id: 'split', cwd: WORKTREE, updatedAt: 1 })], {
+      projectOf,
+    });
+
+    expect(groups[0]!.project).toBe('/code/api');
+    expect(groups[0]!.sessions[0]!.cwd).toBe(WORKTREE);
+  });
+
+  it('groups by directory until the project is known', () => {
+    // The answer needs the filesystem, so it lands a moment after the rows do.
+    // Before it, this is the list the sidebar has always shown.
+    const groups = groupSessionsByProject([
+      session({ id: 'main', cwd: '/code/api', updatedAt: 10 }),
+      session({ id: 'split', cwd: WORKTREE, updatedAt: 20 }),
+    ]);
+
+    expect(groups.map((g) => g.project)).toEqual([WORKTREE, '/code/api']);
+  });
+
+  it('carries a group’s recency across the directories inside it', () => {
+    // The worktree holds the newest work, so the project it belongs to leads —
+    // which it could not do while the two were separate groups.
+    const groups = groupSessionsByProject(
+      [
+        session({ id: 'other', cwd: '/code/web', updatedAt: 50 }),
+        session({ id: 'main', cwd: '/code/api', updatedAt: 10 }),
+        session({ id: 'split', cwd: WORKTREE, updatedAt: 90 }),
+      ],
+      { projectOf },
+    );
+
+    expect(groups.map((g) => g.project)).toEqual(['/code/api', '/code/web']);
+    expect(groups[0]!.updatedAt).toBe(90);
+  });
+});
+
+/*
  * The sort key the sidebar substitutes while an agent is working.
  *
  * `updatedAt` is the transcript file's mtime, so several running sessions
@@ -126,7 +193,7 @@ describe('groupSessionsByProject with a held order', () => {
       { orderKey: held({ running: 99 }) },
     );
 
-    expect(groups.map((g) => g.cwd)).toEqual(['/code/api', '/code/web']);
+    expect(groups.map((g) => g.project)).toEqual(['/code/api', '/code/web']);
   });
 
   it('still reports the real newest updatedAt on the group', () => {
@@ -199,7 +266,7 @@ describe('matchesQuery', () => {
       { query: 'auth' },
     );
 
-    expect(groups.map((g) => g.cwd)).toEqual(['/code/api']);
+    expect(groups.map((g) => g.project)).toEqual(['/code/api']);
   });
 });
 
@@ -223,8 +290,8 @@ describe('flattenGroups', () => {
     );
 
     expect(rows.map((r) => r.kind)).toEqual(['header', 'session', 'header', 'session']);
-    expect(rows[0]).toMatchObject({ kind: 'header', cwd: '/code/api', count: 1, group: 0 });
-    expect(rows[2]).toMatchObject({ kind: 'header', cwd: '/code/web', count: 1, group: 1 });
+    expect(rows[0]).toMatchObject({ kind: 'header', project: '/code/api', count: 1, group: 0 });
+    expect(rows[2]).toMatchObject({ kind: 'header', project: '/code/web', count: 1, group: 1 });
     expect(rows[3]).toMatchObject({ group: 1 });
   });
 
@@ -256,8 +323,8 @@ describe('flattenGroups', () => {
     // geometry from this array, so a row that is present but invisible would
     // still take up its height and leave a hole in the list.
     expect(rows.map((r) => r.kind)).toEqual(['header', 'header', 'session']);
-    expect(rows[0]).toMatchObject({ cwd: '/code/api', collapsed: true });
-    expect(rows[1]).toMatchObject({ cwd: '/code/web', collapsed: false });
+    expect(rows[0]).toMatchObject({ project: '/code/api', collapsed: true });
+    expect(rows[1]).toMatchObject({ project: '/code/web', collapsed: false });
   });
 
   it('keeps a collapsed group’s full count on its header', () => {
@@ -339,7 +406,7 @@ describe('partitionArchived', () => {
     const split = partitionArchived([only, other], new Set([sessionKey(only)]));
     const groups = groupSessionsByProject(split.active);
 
-    expect(groups.map((g) => g.cwd)).toEqual(['/code/api']);
+    expect(groups.map((g) => g.project)).toEqual(['/code/api']);
   });
 });
 
