@@ -20,6 +20,7 @@
  * ├── workspace ─────────────────────────────────────────────────────────┤
  * │ checkWorkingDirectory  is this cwd real, a directory, and readable?  │
  * │ describeWorkspace      what is it called — repository, or folder?    │
+ * │ isTemporaryPath        will it still be there tomorrow?              │
  * └──────────────────────────────────────────────────────────────────────┘
  * ```
  *
