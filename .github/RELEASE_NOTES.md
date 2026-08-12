@@ -1,33 +1,35 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.6.2
+## What's new in 0.6.3
 
-- The terminal works in an installed copy. ⌘J has been in the app since
-  0.6.0 and has never once opened a shell in one: every terminal in an
-  install failed with `posix_spawnp failed`, because the single file needed
-  to spawn a shell shipped without its execute bit. A development checkout
-  has no archive to unpack and so no bit to lose — which is precisely why
-  the tests went on passing while every download was broken. The bit is now
-  set at package time, repaired at startup if an install somehow arrives
-  without it, and checked before a release can publish. Booting never
-  revealed this, since nothing touches that file until somebody asks for a
-  shell, so the check had to be made against the shipped file itself.
-- A worktree's sessions stay with the project they came from. Splitting work
-  into a linked worktree used to take those sessions out of the project they
-  belonged to: the sidebar filed them under a repository named after the
-  branch — one you had never worked in, sitting above the one you had,
-  holding the work that had just left it. Groups are keyed on the project
-  the work was on now, not the directory it ran in. Sessions started in a
-  subdirectory join it the same way, so work in `apps/desktop` files under
-  the repository rather than under a heading reading "desktop". What names
-  the place you are in is unchanged — the header, the directory chip above
-  the composer, and the working directory on the row itself — and a
-  worktree's sessions are still told apart by their branch. Expect one
-  thing once: a group you had collapsed against a worktree path arrives
-  open.
+- The button that copies a new profile's sign-in command copies it. It never
+  has. Chromium gates the clipboard behind a permission, Artemis refused every
+  permission it could be asked for, and the button gave its tick regardless —
+  so the paste that followed produced whatever you had copied beforehand, far
+  enough from the click that the button was never the obvious suspect. The
+  same call is what a bug report too long for a URL falls back to, and it
+  failed there too, in the one place where the alternative is retyping several
+  paragraphs. Writing the clipboard is now allowed to Artemis's own window and
+  to nothing else: reading it stays refused along with the camera and the
+  microphone, and a page the agent wrote still cannot reach it. A copy that
+  does fail now says so rather than claiming it worked.
 
-Carried over from 0.6.1 and 0.6.0, in case you are coming from 0.5.x:
+Carried over from 0.6.2, which was published twenty minutes earlier:
+
+- The terminal works in an installed copy. ⌘J has been in the app since 0.6.0
+  and had never once opened a shell in one — every terminal in an install
+  failed with `posix_spawnp failed`, because the single file needed to spawn a
+  shell shipped without its execute bit. A development checkout has no archive
+  to unpack and so no bit to lose, which is why the tests went on passing
+  while every download was broken.
+- A worktree's sessions stay with the project they came from, instead of
+  appearing under a repository named after the branch — one you had never
+  worked in, holding the work that had just left the one you had. Sessions
+  started in a subdirectory group with the project too. Expect one thing
+  once: a group you had collapsed against a worktree path arrives open.
+
+And from 0.6.1 and 0.6.0, if you are coming from 0.5.x:
 
 - A bug can be reported from inside the app. A permanent row at the foot of
   the sidebar opens a short form and hands it to GitHub's own new-issue
