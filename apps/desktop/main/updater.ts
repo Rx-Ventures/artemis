@@ -83,9 +83,41 @@ const EXTRA_BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '
 
 const IDLE: UpdateState = { phase: 'idle', version: null, message: null, releaseUrl: null };
 
+/**
+ * What one check found — the answer to a question somebody asked out loud.
+ *
+ * The periodic check does not need this: finding nothing is the overwhelmingly
+ * common case and the right response to it is silence, which is why `check`
+ * used to return `void`. A person who chooses *Check for Updates…* has asked a
+ * question, and every one of these outcomes is an answer they are owed,
+ * including the three that leave the screen exactly as it was.
+ */
+export type CheckOutcome =
+  /** Something newer exists; the state is now `available` and the card is up. */
+  | { readonly kind: 'offered'; readonly version: string }
+  /** The feed was read and this build is not behind it. */
+  | { readonly kind: 'current' }
+  /** No `gh`, no network, no access. Indistinguishable from here, and the same advice. */
+  | { readonly kind: 'unreachable' }
+  /** An offer, install or restart is already under way; the card is already saying so. */
+  | { readonly kind: 'busy' }
+  /** Nothing a check could act on: a dev build, or a platform the swap is not written for. */
+  | { readonly kind: 'unsupported' };
+
 export interface Updater {
   /** The state right now, for the pull channel. */
   state(): UpdateState;
+  /**
+   * Check now, because someone asked, and say what was found.
+   *
+   * Differs from the periodic check in three ways, all of them following from
+   * the question having been asked deliberately: a version the user dismissed
+   * is offered again (choosing to ask is the opposite of having declined), a
+   * failed check is a state worth leaving so `error` is a valid phase to check
+   * from, and the outcome comes back to the caller instead of only ever
+   * reaching the screen when it is good news.
+   */
+  checkNow(): Promise<CheckOutcome>;
   /** Begin download → verify → swap, parking at `ready`. Resolves once underway. */
   install(): UpdateState;
   /** Relaunch into an installed update. A read unless the phase is `ready`. */
@@ -112,6 +144,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
   /** The feed behind an `available` offer; cleared whenever the offer is. */
   let offered: UpdateFeed | null = null;
   let installing = false;
+  /** A check is in flight. Serialises the timer's against the menu's. */
+  let checking = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
@@ -199,35 +233,64 @@ export function createUpdater(options: UpdaterOptions): Updater {
   /* The periodic check                                                      */
   /* ----------------------------------------------------------------------- */
 
-  async function check(): Promise<void> {
+  /**
+   * Is there anything a check could lead to?
+   *
+   * The same two conditions `start()` refuses to run under, named once so the
+   * menu's answer and the timer's silence cannot drift apart. A check that
+   * cannot end in an install is not worth performing: it would read the feed,
+   * find a newer version, offer it, and fail at the swap.
+   */
+  function supported(): boolean {
+    return process.platform === 'darwin' && app.isPackaged;
+  }
+
+  async function check(options: { readonly manual: boolean }): Promise<CheckOutcome> {
     // Never check over an active offer or install: an offer mid-download must
-    // not be replaced under the banner's feet.
-    if (current.phase !== 'idle') return;
-    let feed: UpdateFeed | null = null;
+    // not be replaced under the banner's feet. A manual check may leave an
+    // `error` behind, though — retrying is the whole reason to ask again.
+    if (checking || installing) return { kind: 'busy' };
+    if (current.phase !== 'idle' && !(options.manual && current.phase === 'error')) {
+      return current.phase === 'available' && current.version !== null
+        ? { kind: 'offered', version: current.version }
+        : { kind: 'busy' };
+    }
+    if (!supported()) return { kind: 'unsupported' };
+
+    checking = true;
     try {
-      const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
+      let feed: UpdateFeed | null = null;
       try {
-        feed = parseUpdateFeed(await readFile(await fetchAsset(FEED_NAME, '', dir), 'utf8'));
-      } finally {
-        await rm(dir, { recursive: true, force: true });
+        const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
+        try {
+          feed = parseUpdateFeed(await readFile(await fetchAsset(FEED_NAME, '', dir), 'utf8'));
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      } catch (error) {
+        // No gh, no network, no access: all mean "no banner today", not an error
+        // surface. The manual path (the releases page) always remains.
+        log.debug('Update check did not reach the feed.', error);
+        return { kind: 'unreachable' };
       }
-    } catch (error) {
-      // No gh, no network, no access: all mean "no banner today", not an error
-      // surface. The manual path (the releases page) always remains.
-      log.debug('Update check did not reach the feed.', error);
-      return;
+      if (feed === null) {
+        log.warn('The update feed did not parse; staying quiet.');
+        return { kind: 'unreachable' };
+      }
+      // A dismissal silences the timer, not the person asking: choosing to
+      // check is the opposite of having declined, and re-offering is the only
+      // way back to a version dismissed by accident.
+      const dismissed = options.manual ? null : await readDismissed();
+      if (!shouldOffer({ feedVersion: feed.version, currentVersion: app.getVersion(), dismissedVersion: dismissed })) {
+        return { kind: 'current' };
+      }
+      offered = feed;
+      log.info(`Update available: ${feed.version} (running ${app.getVersion()}).`);
+      setState({ phase: 'available', version: feed.version, message: null, releaseUrl: null });
+      return { kind: 'offered', version: feed.version };
+    } finally {
+      checking = false;
     }
-    if (feed === null) {
-      log.warn('The update feed did not parse; staying quiet.');
-      return;
-    }
-    const dismissed = await readDismissed();
-    if (!shouldOffer({ feedVersion: feed.version, currentVersion: app.getVersion(), dismissedVersion: dismissed })) {
-      return;
-    }
-    offered = feed;
-    log.info(`Update available: ${feed.version} (running ${app.getVersion()}).`);
-    setState({ phase: 'available', version: feed.version, message: null, releaseUrl: null });
   }
 
   /* ----------------------------------------------------------------------- */
@@ -327,6 +390,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
   return {
     state: () => current,
 
+    checkNow: () => check({ manual: true }),
+
     install(): UpdateState {
       if (current.phase !== 'available' || offered === null || installing) return current;
       const feed = offered;
@@ -385,17 +450,18 @@ export function createUpdater(options: UpdaterOptions): Updater {
 
     start(): void {
       if (timer !== null) return;
+      // Both refusals are `supported()`; they are spelled out separately here
+      // only because the log line is the one place the two are worth telling
+      // apart. Windows builds exist, but the swap is written in macOS terms —
+      // an .app bundle, two renames, `ditto` — and a running .exe cannot be
+      // renamed over, so Windows updates are manual and no card ever appears.
+      // In dev the "installed app" is the repo checkout: nothing to update,
+      // and a check could only ever offer a downgrade to a release.
       if (process.platform !== 'darwin') {
-        // Windows builds exist, but the swap below is written in macOS terms —
-        // an .app bundle, two renames, `ditto`. A Windows updater is a
-        // different mechanism (a running .exe cannot be renamed over), so for
-        // now Windows updates are manual and the banner simply never appears.
         log.debug('Updater disabled: macOS only for now.');
         return;
       }
       if (!app.isPackaged) {
-        // In dev the "installed app" is the repo checkout; there is nothing to
-        // update and a check would only ever offer a downgrade to a release.
         log.debug('Updater disabled: not a packaged build.');
         return;
       }
@@ -404,7 +470,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
       const schedule = (delay: number): void => {
         if (stopped) return;
         timer = setTimeout(() => {
-          void check().finally(() => schedule(CHECK_EVERY_MS));
+          void check({ manual: false }).finally(() => schedule(CHECK_EVERY_MS));
         }, delay);
         timer.unref?.();
       };
