@@ -127,9 +127,11 @@ import {
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  AppWindowIcon,
   ArrowDownIcon,
   BotIcon,
   BrainIcon,
+  ChevronRightIcon,
   FilePenLineIcon,
   FileTextIcon,
   GlobeIcon,
@@ -150,6 +152,7 @@ import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { formatBytes } from '../lib/attachments';
+import { detectArtifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
 import { previewablePath } from '../lib/preview';
 import { activeCapabilities, openPreview, useApp, type ConversationWidth } from '../state/store';
@@ -701,20 +704,92 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
     [edit, cwd, platform],
   );
 
+  /*
+   * The stronger question, asked of the same parse — see `lib/artifact.ts`. A
+   * hit replaces the tool row with a tile, so it is deliberately much harder to
+   * satisfy than `previewable` above: this one hides a diff, and that is only
+   * the right trade for a file whose *rendering* is the point.
+   *
+   * Never for a call that failed, for the reason the Preview button gives
+   * below — there is no file behind a tile whose write was denied.
+   */
+  const artifact = useMemo(
+    () => (item.status === 'ok' ? detectArtifact(edit, cwd, platform) : null),
+    [edit, cwd, platform, item.status],
+  );
+
   return (
     <div
       className={cn(
         'rounded-lg border bg-panel/60',
         failed ? 'border-signal/35' : 'border-line',
         open && 'border-line-strong',
+        artifact && 'border-line-strong bg-raised/40',
       )}
     >
+      {/*
+        An artifact takes the row rather than adding to it.
+
+        The tool call is still there — the disclosure below opens to the same
+        diff and the same raw arguments any other write has — but what the row
+        *says* changes: a page the agent made is named by its title and its
+        kind, not by the tool that happened to produce it. `Write` and
+        `/tmp/a1b2/report.html` are facts about the mechanism, and the mechanism
+        is not what the reader is looking for once the thing itself exists.
+      */}
+      {artifact ? (
+        <div className="flex w-full min-w-0 items-center gap-2 px-2.5 py-2">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            aria-label={open ? 'Hide the diff' : 'Show the diff'}
+            className="shrink-0 rounded p-0.5 text-ink-faint outline-none hover:bg-raised/60 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <ChevronRightIcon
+              className={cn('size-3 transition-transform', open && 'rotate-90')}
+              aria-hidden="true"
+            />
+          </button>
+
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-panel">
+            {artifact.kind === 'page' ? (
+              <AppWindowIcon className="size-3.5 text-cyan" aria-hidden="true" />
+            ) : (
+              <FileTextIcon className="size-3.5 text-sage" aria-hidden="true" />
+            )}
+          </span>
+
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span title={artifact.path} className="truncate text-xs font-semibold text-ink">
+              {artifact.title}
+            </span>
+            <span className="truncate font-mono text-2xs text-ink-faint">
+              {artifact.kind === 'page' ? 'page' : 'markdown'}
+              {artifact.bytes === undefined ? '' : ` · ${formatBytes(artifact.bytes)}`}
+              {artifact.fresh ? '' : ' · edited'}
+            </span>
+          </span>
+
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void openPreview(artifact.path, pane)}
+            className="shrink-0"
+          >
+            <SquareArrowOutUpRightIcon />
+            Open
+          </Button>
+        </div>
+      ) : null}
+
       {/*
         A row rather than a single button, because the preview action cannot
         live inside the disclosure control: a button nested in a button is
         invalid markup, and the browsers that tolerate it fire both handlers, so
         opening a preview would also toggle the card underneath it.
       */}
+      {artifact ? null : (
       <div className="flex w-full min-w-0 items-center">
         <button
           type="button"
@@ -771,6 +846,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
           </Button>
         ) : null}
       </div>
+      )}
 
       {open ? (
         <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">
