@@ -44,12 +44,17 @@
  * So the title is gone and each group heading folds its own project. The filter
  * has the row to itself.
  *
- * Repository name where it is known, directory name otherwise. Working in
- * `~/code/artemis/apps/desktop` you are working on *artemis*; a heading reading
- * "desktop" is technically true and useless. The renderer has no `fs`, so the
- * main process is asked once per directory change — which means only the
- * *current* project can be named that way, and the others fall back to their
- * folder name rather than paying a round trip per heading.
+ * A group is a *project*, not a directory. Working in
+ * `~/code/artemis/apps/desktop` you are working on *artemis*, and a session
+ * split off into `~/code/artemis/.claude/worktrees/some-branch` is still work on
+ * artemis — a heading reading "desktop", or a repository called "some-branch"
+ * that the sidebar has never mentioned before and that takes those sessions out
+ * of the project they belong to, is technically true and useless.
+ *
+ * The renderer has no `fs`, so the main process is asked once per directory —
+ * see `projectRoots` in the store, which holds the answers and is what the
+ * grouping keys on. Until an answer lands a session groups by its own directory,
+ * which is what this list did before projects existed.
  *
  * The folds are persisted, per directory. A section the user closed and found
  * reopened on the next launch is the same discourtesy as a sidebar width that
@@ -126,7 +131,6 @@ import {
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
-import type { WorkspaceNames } from '../lib/extensions';
 import { condenseTitle, formatRelative } from '../lib/format';
 import { lastSegment } from '../lib/paths';
 import {
@@ -216,6 +220,17 @@ export function SessionList(): ReactElement {
   const archivedKeys = useMemo(() => new Set(archivedSessions), [archivedSessions]);
 
   /*
+   * A worktree's sessions belong to the repository it was split off from.
+   *
+   * `projectRoots` holds only the directories that group somewhere else — a
+   * worktree, a subdirectory of a checkout — so this is the identity function
+   * for everything else and for every directory whose answer has not landed
+   * yet. See the field in the store for why the map is that shape.
+   */
+  const projectRoots = useApp((s) => s.projectRoots);
+  const projectOf = useCallback((cwd: string) => projectRoots[cwd], [projectRoots]);
+
+  /*
    * Rows hold their place while their agent is working.
    *
    * `updatedAt` is the transcript file's mtime, and the feed re-reads it every
@@ -239,14 +254,23 @@ export function SessionList(): ReactElement {
   const rows = useMemo(() => {
     const split = partitionArchived(sessions, archivedKeys);
     return flattenGroups(
-      groupSessionsByProject(split.active, { query, profileLabel, orderKey }),
+      groupSessionsByProject(split.active, { query, profileLabel, orderKey, projectOf }),
       collapsed,
       {
         sessions: orderArchived(split.archived, { query, profileLabel, orderKey }),
         collapsed: !archivedExpanded,
       },
     );
-  }, [sessions, query, profileLabel, orderKey, collapsed, archivedKeys, archivedExpanded]);
+  }, [
+    sessions,
+    query,
+    profileLabel,
+    orderKey,
+    projectOf,
+    collapsed,
+    archivedKeys,
+    archivedExpanded,
+  ]);
 
   /** Unfiltered, so the count does not jump around while typing. */
   const total = sessions.length;
@@ -366,35 +390,37 @@ export function SessionList(): ReactElement {
  * know which one it is. That was in this file once and is not worth its weight.
  */
 const GroupHeading = memo(function GroupHeading({
-  cwd,
+  project,
   count,
   collapsed,
   top,
 }: {
-  readonly cwd: string;
+  readonly project: string;
   readonly count: number;
   readonly collapsed: boolean;
   readonly top: number;
 }): ReactElement {
-  // The focused column's directory. `usePane` outside a column resolves to it,
-  // so the heading marks the project the header is naming — the two agree by
-  // construction rather than by both reading the same field.
-  const current = usePane((s) => s.cwd === cwd);
-  const workspace = usePane((s) => (s.cwd === cwd ? s.workspace : null));
+  /*
+   * Is the focused column inside this project? `usePane` outside a column
+   * resolves to the focused one, so the heading marks the project the header is
+   * naming.
+   *
+   * Through `projectRoots`, not by comparing directories: a column working in a
+   * worktree of this repository is in this project, and that is the whole point
+   * of grouping them together. See the field in the store.
+   */
+  const cwd = usePane((s) => s.cwd);
+  const current = useApp((s) => (s.projectRoots[cwd] ?? cwd) === project);
 
-  // `workspace` only describes the *current* directory, so every other group
-  // falls back to the folder name. A repository name for a project you are not
-  // in would need a `describe` call per project, which is a round trip per row
-  // for a word.
-  const name = projectLabel(cwd, workspace);
+  const name = projectLabel(project);
 
   return (
     <div style={{ top, height: HEADER_HEIGHT }} className="absolute inset-x-0 px-1.5">
       <button
         type="button"
-        onClick={() => toggleProjectCollapsed(cwd)}
+        onClick={() => toggleProjectCollapsed(project)}
         aria-expanded={!collapsed}
-        title={cwd}
+        title={project}
         className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
       >
         <ChevronDownIcon
@@ -409,9 +435,9 @@ const GroupHeading = memo(function GroupHeading({
           ------------------------------------------------------------------
           Both the glyph and its colour used to turn on whether this was the
           directory you were standing in, and the glyph did so invisibly: the
-          repository variant was chosen from `workspace`, which is only ever
-          resolved for the *current* project, so "is a git repo" and "is the
-          active project" were the same condition wearing different clothes.
+          repository variant was chosen from `workspace`, which described only
+          the directory the column was standing in, so "is a git repo" and "is
+          the active project" were the same condition wearing different clothes.
           A project's icon would silently change shape as you moved away from
           it, which says something about the project that is not true.
 
@@ -483,21 +509,26 @@ const ArchiveHeading = memo(function ArchiveHeading({
 /**
  * What to call this project.
  *
- * Repository name first, then the directory's, then the last segment of `cwd`
- * — the last of which is the answer for a build with no `workspace.describe`
- * and for the moment before the first reply lands. `null` means there is no
- * working directory at all, which is a different thing from an unnamed one and
- * is rendered as its own faint placeholder state.
+ * The last segment of its root, which *is* the repository's name: a group is
+ * keyed on the checkout the sessions belong to, so `~/code/artemis` and every
+ * worktree of it arrive here as `~/code/artemis` and read as "artemis". Before
+ * the project resolves — a build with no `workspace.describe`, or the moment
+ * before the first reply lands — the key is the session's own directory and
+ * this names that instead, which is what the heading always used to show.
  *
- * It no longer reports whether the directory *is* a repository. That fact was
- * only ever knowable for the current project, so the icon it selected changed
- * shape as you moved between projects — see the note on the folder glyph above.
+ * `null` means there is no working directory at all, which is a different thing
+ * from an unnamed one and is rendered as its own faint placeholder state.
+ *
+ * It no longer takes the pane's `WorkspaceNames`, and both of the fields it used
+ * to prefer were wrong here once worktrees group under their repository: that
+ * description is of the *place* the column is standing in, so a column inside a
+ * worktree would have retitled this heading after the worktree — the exact
+ * split the grouping exists to undo. It also only ever described the current
+ * directory, which is why every other heading fell back to this line anyway.
  */
-function projectLabel(cwd: string, workspace: WorkspaceNames | null): string | null {
-  if (cwd.trim().length === 0) return null;
-  const repo = workspace?.repoName;
-  if (repo !== undefined && repo.length > 0) return repo;
-  return workspace?.name ?? lastSegment(cwd);
+function projectLabel(project: string): string | null {
+  if (project.trim().length === 0) return null;
+  return lastSegment(project);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -566,7 +597,7 @@ function VirtualRows({ rows }: { readonly rows: readonly ListRow[] }): ReactElem
       visible.push(
         <GroupHeading
           key={row.key}
-          cwd={row.cwd}
+          project={row.project}
           count={row.count}
           collapsed={row.collapsed}
           top={top}

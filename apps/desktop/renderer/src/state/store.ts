@@ -491,6 +491,26 @@ export interface AppState {
   readonly sessionsError: string | null;
 
   /**
+   * Which project a working directory belongs to. Directory → project root.
+   *
+   * The sidebar groups history by project, and a directory is not one: work
+   * split into a linked worktree runs in `…/worktrees/some-branch`, which used
+   * to appear as a repository of its own and take those sessions out of the one
+   * they belong to. The answer needs the filesystem — a `.git` file, and the
+   * pointer inside it — so it comes from the main process one directory at a
+   * time and is kept here rather than re-asked per render. See `learnProjects`.
+   *
+   * **Only the directories that group somewhere else are in it.** A repository
+   * root maps to itself, which is what the lookup falls back to, so storing it
+   * would be a map of the whole history for no answer. That also keeps this
+   * object's identity still while a poll re-reads directories it already knows.
+   *
+   * Not persisted. It is derived from disk and cheap to rebuild, and a stale
+   * entry would outlive the worktree it describes.
+   */
+  readonly projectRoots: Readonly<Record<string, string>>;
+
+  /**
    * Context window size per model, learned as runs finish.
    *
    * The provider only reveals a model's window in the `final` usage snapshot at
@@ -1187,6 +1207,7 @@ export const useApp = create<AppState>(() => ({
   sessionsScope: 'all',
   sessionsLoading: false,
   sessionsError: null,
+  projectRoots: {},
 
   contextWindows: prefs.contextWindows ?? {},
   banners: [],
@@ -3469,8 +3490,84 @@ export async function refreshWorkspace(pane: Pane = focusedPane()): Promise<void
   setPaneState(pane, { workspace: null });
 
   const names = await describeWorkspace(cwd);
+  // Before the staleness check, deliberately. Which project a directory belongs
+  // to is true whether or not the pane is still pointed at it, and a directory
+  // the user moved through in the meantime is one the sidebar is about to group.
+  rememberProject(cwd, names?.projectRoot);
   if (paneState(pane).cwd !== cwd) return;
   setPaneState(pane, { workspace: names });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Projects                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Directories already asked about, so each is asked once.
+ *
+ * Kept beside the map rather than derived from it, because the interesting
+ * answer is the *absent* one: a repository root maps to itself and is therefore
+ * not stored (see {@link AppState.projectRoots}), and without this the listing
+ * poll would re-ask about every such directory every few seconds for an answer
+ * it already has.
+ *
+ * Never cleared. A directory's project changes when somebody runs `git init` in
+ * it or deletes a worktree out from under a session, and re-reading the whole
+ * history on the chance of that is a worse trade than a label that is right
+ * again on the next launch.
+ */
+const askedAboutProject = new Set<string>();
+
+/** Record one directory's project, when it is somewhere else. */
+function rememberProject(cwd: string, projectRoot: string | undefined): void {
+  const path = cwd.trim();
+  askedAboutProject.add(path);
+  if (projectRoot === undefined || projectRoot.length === 0 || projectRoot === path) return;
+  useApp.setState((s) =>
+    s.projectRoots[path] === projectRoot
+      ? {}
+      : { projectRoots: { ...s.projectRoots, [path]: projectRoot } },
+  );
+}
+
+/**
+ * Find out which project each of these directories belongs to.
+ *
+ * Called with every directory in a listing, and cheap to call that way: the ones
+ * already answered are dropped here, so a poll that returns the same two hundred
+ * sessions costs a set lookup each and no IPC at all.
+ *
+ * The unknown ones go out together and land in one write, because they arrive as
+ * independent replies and a `setState` per reply would regroup the sidebar once
+ * per directory — a list visibly reassembling itself on first paint. Nothing
+ * awaits this: the rows are already on screen, grouped by their own directories,
+ * and the answers move some of them under the project they were split off from.
+ */
+async function learnProjects(cwds: Iterable<string>): Promise<void> {
+  const unknown: string[] = [];
+  for (const cwd of cwds) {
+    const path = cwd.trim();
+    if (path.length === 0 || askedAboutProject.has(path)) continue;
+    // Added on the way out rather than on the way back, so two listings in
+    // flight at once do not both ask about the same directory.
+    askedAboutProject.add(path);
+    unknown.push(path);
+  }
+  if (unknown.length === 0) return;
+
+  const found = await Promise.all(
+    unknown.map(async (cwd) => [cwd, (await describeWorkspace(cwd))?.projectRoot] as const),
+  );
+
+  const learned: Record<string, string> = {};
+  for (const [cwd, projectRoot] of found) {
+    // Only the ones that group elsewhere. See `AppState.projectRoots`.
+    if (projectRoot !== undefined && projectRoot.length > 0 && projectRoot !== cwd) {
+      learned[cwd] = projectRoot;
+    }
+  }
+  if (Object.keys(learned).length === 0) return;
+  useApp.setState((s) => ({ projectRoots: { ...s.projectRoots, ...learned } }));
 }
 
 /**
@@ -3995,6 +4092,11 @@ export async function refreshSessions(): Promise<void> {
       sessionsScope: listing.scope,
       sessionsError: listing.error ?? null,
     }));
+
+    // After the write, and not awaited: the sidebar groups by directory until
+    // these land and by project afterwards, and a listing should not wait on a
+    // walk of the filesystem to put rows on screen. See `learnProjects`.
+    void learnProjects(listing.sessions.map((session) => session.cwd));
   } finally {
     sessionsInFlight = false;
     /*

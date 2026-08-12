@@ -31,7 +31,9 @@
  *    the sidebar is naming a place; collapsing them to a shared repository name
  *    would make the two indistinguishable in the one view whose job is telling
  *    you where you are. It is also reported *as* a worktree — see
- *    {@link WorkspaceDescription.worktree} for the one caller that cares.
+ *    {@link WorkspaceDescription.worktree} for the one caller that cares, and
+ *    {@link WorkspaceDescription.projectRoot} for the checkout it was split
+ *    off from, which is a different question with a different answer.
  *  - **Submodules** likewise have a `.git` file, and likewise are their own
  *    thing to be working in — and are deliberately not worktrees, which is why
  *    the pointer inside that file gets read rather than assumed.
@@ -49,7 +51,7 @@
  */
 
 import { readFile, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
 
 import { isTemporaryPath } from './temp.js';
 
@@ -63,6 +65,29 @@ export interface WorkspaceDescription {
   readonly repoRoot?: string;
   /** Last segment of {@link repoRoot}. */
   readonly repoName?: string;
+  /**
+   * The *project* `path` belongs to — which is not always the place it is.
+   *
+   * Equal to {@link repoRoot} for every ordinary checkout, and for a submodule,
+   * which is its own project by the same reasoning that makes it its own root.
+   * For a **linked worktree** it is the main checkout the worktree was split
+   * off from: a worktree of Artemis is still Artemis, and the sidebar groups a
+   * session by the project it was working on rather than by the directory that
+   * work happened in.
+   *
+   * That is the one distinction {@link repoRoot} cannot carry, because the two
+   * answers are wanted at once and by different readers. The header names the
+   * *place* — see the module docs on why a worktree is named after itself — and
+   * the session list groups by the *project*, so a branch split off for an
+   * afternoon does not read as a repository the user has never heard of.
+   *
+   * Absent only when there is no repository at all, where the caller's fallback
+   * — the directory itself — is already the right answer. A worktree whose main
+   * checkout cannot be derived falls back to {@link repoRoot}, which stands the
+   * worktree on its own exactly as it did before this field existed; see
+   * {@link readWorktreePointer} for the layouts that lands on.
+   */
+  readonly projectRoot?: string;
   /**
    * Is {@link repoRoot} a linked worktree rather than an ordinary checkout?
    *
@@ -119,12 +144,15 @@ export async function describeWorkspace(path: unknown): Promise<WorkspaceDescrip
   const found = await findRepositoryRoot(value);
   if (found === undefined) return { path: value, name, ...temporary };
 
-  const { repoRoot, worktree } = found;
+  const { repoRoot, worktree, projectRoot } = found;
   return {
     path: value,
     name,
     repoRoot,
     repoName: lastSegment(repoRoot),
+    // `repoRoot` for everything that is not a worktree, which is the whole of
+    // what "the project this is part of" means for an ordinary checkout.
+    projectRoot: projectRoot ?? repoRoot,
     // Only when true, so an ordinary checkout keeps the shape it had before
     // these fields existed.
     ...(worktree ? { worktree: true } : {}),
@@ -136,6 +164,11 @@ export async function describeWorkspace(path: unknown): Promise<WorkspaceDescrip
 interface RepositoryRoot {
   readonly repoRoot: string;
   readonly worktree: boolean;
+  /**
+   * The main checkout, when `repoRoot` is a linked worktree and it could be
+   * derived. Absent for every other root, where `repoRoot` is the answer.
+   */
+  readonly projectRoot?: string;
 }
 
 /**
@@ -155,7 +188,17 @@ async function findRepositoryRoot(from: string): Promise<RepositoryRoot | undefi
     const marker = join(current, '.git');
     const kind = await entryKind(marker);
     if (kind === 'dir') return { repoRoot: current, worktree: false };
-    if (kind === 'file') return { repoRoot: current, worktree: await pointsIntoWorktrees(marker) };
+    if (kind === 'file') {
+      const linked = await readWorktreePointer(marker);
+      // A submodule, or a `.git` file that could not be read: same root, and
+      // deliberately not a worktree. See `readWorktreePointer`.
+      if (linked === undefined) return { repoRoot: current, worktree: false };
+      return {
+        repoRoot: current,
+        worktree: true,
+        ...(linked.mainRoot === undefined ? {} : { projectRoot: linked.mainRoot }),
+      };
+    }
     if (current === root) return undefined;
 
     const parent = dirname(current);
@@ -174,8 +217,15 @@ async function entryKind(path: string): Promise<'dir' | 'file' | 'none'> {
   }
 }
 
+/** What a linked worktree's `.git` file says about where it came from. */
+interface WorktreePointer {
+  /** The checkout this worktree belongs to, when the layout reveals one. */
+  readonly mainRoot?: string;
+}
+
 /**
- * Is this `.git` file a linked worktree's, rather than a submodule's?
+ * Is this `.git` file a linked worktree's, rather than a submodule's — and if
+ * so, which checkout was it split off from?
  *
  * Both are a file holding a `gitdir:` pointer, and telling them apart is the
  * whole reason this reads the file rather than stopping at "not a directory".
@@ -188,19 +238,52 @@ async function entryKind(path: string): Promise<'dir' | 'file' | 'none'> {
  * A segment match, not a substring one: `~/code/worktrees-notes/…` is somebody's
  * ordinary project and contains the word.
  *
- * Any failure reads as "not a worktree", which is the answer that changes no
- * behaviour — an unreadable `.git` file is a repository this cannot describe,
- * not a reason to start dropping it from a menu.
+ * `undefined` means "not a worktree", and every failure reads that way — an
+ * unreadable `.git` file is a repository this cannot describe, not a reason to
+ * start dropping it from a menu.
+ *
+ * ## The main checkout, from the same pointer
+ *
+ * The layout above says where it is: `<repo>/.git/worktrees/<id>` names a git
+ * directory two levels below `<repo>/.git`, so the checkout is that path's
+ * grandparent with the `.git` taken off. Deriving it from the pointer costs
+ * nothing beyond the read already being done, and it is the only route to the
+ * answer — the worktree's own directory holds no other trace of where it came
+ * from.
+ *
+ * Resolved against the worktree's directory, because the pointer is *usually*
+ * absolute but not always: git can be asked for relative ones
+ * (`worktree.useRelativePaths`), and `resolve` hands an absolute path straight
+ * back, so this is correct for both without asking which it got.
+ *
+ * `mainRoot` is absent, rather than guessed at, in two cases:
+ *
+ *  - The pointer does not end in `worktrees/<id>` — some layout this does not
+ *    recognise, where every answer would be invention.
+ *  - The common git directory is not called `.git`, which is a worktree of a
+ *    **bare** repository. There is no main checkout to name at all then, and
+ *    the bare directory is reported instead: worktrees of one bare repo are
+ *    still one project, which is the question this field answers.
  */
-async function pointsIntoWorktrees(marker: string): Promise<boolean> {
+async function readWorktreePointer(marker: string): Promise<WorktreePointer | undefined> {
+  let pointer: string | undefined;
   try {
     const contents = await readFile(marker, 'utf8');
-    const pointer = /^\s*gitdir:\s*(.+?)\s*$/mu.exec(contents)?.[1];
-    if (pointer === undefined) return false;
-    return pointer.split(/[\\/]/).includes('worktrees');
+    pointer = /^\s*gitdir:\s*(.+?)\s*$/mu.exec(contents)?.[1];
   } catch {
-    return false;
+    return undefined;
   }
+  if (pointer === undefined) return undefined;
+  if (!pointer.split(/[\\/]/).includes('worktrees')) return undefined;
+
+  const gitDir = resolve(dirname(marker), pointer);
+  // `<common>/worktrees/<id>` — anything else is a layout this cannot read, and
+  // it is still a worktree; only the checkout it belongs to is unknown.
+  const worktrees = dirname(gitDir);
+  if (lastSegment(worktrees) !== 'worktrees') return {};
+
+  const common = dirname(worktrees);
+  return { mainRoot: lastSegment(common) === '.git' ? dirname(common) : common };
 }
 
 /**

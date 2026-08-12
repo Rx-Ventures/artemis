@@ -319,10 +319,11 @@ export function WorkingDirectoryChip(): ReactElement {
    * process; `lastSegment` covers the moment before that reply lands and any
    * build without the `describe` channel.
    *
-   * Deliberately not `repoName`, which the sidebar's own label does prefer. The
-   * question here is which folder the agent will run in, and inside a monorepo
-   * the repository's name answers a different one — it would read `libra` while
-   * the agent worked in `packages/core`.
+   * Deliberately not the repository, which is what the sidebar's group headings
+   * name. The question here is which folder the agent will run in, and the
+   * repository answers a different one — it would read `libra` while the agent
+   * worked in `packages/core`, and `libra` again for a worktree split off from
+   * it, which is precisely the pair this chip exists to tell apart.
    */
   const name = unset ? null : (workspace?.name ?? lastSegment(cwd));
 
