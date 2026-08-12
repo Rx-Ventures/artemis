@@ -18,6 +18,11 @@
  *  3. **Archive not touching the provider's store.** Archive and delete are one
  *     click apart in the same menu; the test that they route to different
  *     places is the one that catches a wiring mistake between them.
+ *  4. **A letter doing something other than what its item says.** The hotkeys
+ *     resolve through the DOM, so a key that found the wrong item — or found a
+ *     disabled one and fired it anyway — would look exactly like a key that
+ *     worked. `D` is the one that matters: it must reach the confirmation and
+ *     never the delete itself.
  *
  * Radix menus and dialogs need a handful of browser APIs jsdom lacks; the stubs
  * at the top are the standard set this repo already uses for floating layers.
@@ -69,6 +74,16 @@ const SESSION: SessionSummary = {
   cwd: '/w',
   title: 'An earlier session',
   updatedAt: Date.now(),
+};
+
+/** A second row, so a project heading survives lifting the first one out. */
+const OTHER: SessionSummary = {
+  id: 'sess-3333-4444',
+  providerId: 'claude',
+  profileId: 'p1',
+  cwd: '/w',
+  title: 'Some other session',
+  updatedAt: Date.now() - 1_000,
 };
 
 function descriptor(capabilities: Capabilities): ProviderDescriptor {
@@ -143,6 +158,8 @@ function seedStore(sessions: readonly SessionSummary[] = [SESSION]): void {
     collapsedProjects: [],
     archivedSessions: [],
     archivedExpanded: false,
+    pinnedSessions: [],
+    pinnedCollapsed: false,
     banners: [],
   });
 }
@@ -152,10 +169,21 @@ function mount(ui: React.ReactNode): void {
 }
 
 /** Right-click the session row and wait for the menu. */
-async function openMenu(): Promise<void> {
+async function openMenu(): Promise<HTMLElement> {
   const row = screen.getByText('An earlier session');
   fireEvent.contextMenu(row);
-  await screen.findByRole('menu');
+  return screen.findByRole('menu');
+}
+
+/**
+ * Press a letter at the open menu.
+ *
+ * On the menu itself rather than on an item, because that is where the handler
+ * lives and where a real press lands: Radix focuses the content, not an item,
+ * until the user arrows into one.
+ */
+function press(menu: HTMLElement, key: string, modifier?: 'metaKey' | 'ctrlKey' | 'altKey'): void {
+  fireEvent.keyDown(menu, { key, ...(modifier ? { [modifier]: true } : {}) });
 }
 
 beforeEach(() => {
@@ -172,13 +200,33 @@ afterEach(cleanup);
 /* -------------------------------------------------------------------------- */
 
 describe('session context menu', () => {
-  it('offers rename, archive and delete on right-click', async () => {
+  it('offers rename, pin, archive and delete on right-click', async () => {
     mount(<SessionList />);
     await openMenu();
 
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Pin' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Delete…' })).toBeTruthy();
+  });
+
+  it('shows each item’s letter without putting it in the item’s name', async () => {
+    // The cap is `aria-hidden` and the shortcut is announced through
+    // `aria-keyshortcuts` instead, so the item is still called "Rename" rather
+    // than "Rename R" — which is both how a screen reader should hear it and
+    // what every query in this file depends on.
+    mount(<SessionList />);
+    const menu = await openMenu();
+
+    expect(menu.textContent).toContain('R');
+    for (const [name, key] of [
+      ['Rename', 'R'],
+      ['Pin', 'P'],
+      ['Archive', 'A'],
+      ['Delete…', 'D'],
+    ] as const) {
+      expect(screen.getByRole('menuitem', { name }).getAttribute('aria-keyshortcuts')).toBe(key);
+    }
   });
 
   it('disables rename and delete when the provider cannot do them, and says why', async () => {
@@ -207,6 +255,192 @@ describe('session context menu', () => {
     expect(
       screen.getByRole('menuitem', { name: 'Archive' }).getAttribute('data-disabled'),
     ).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Hotkeys                                                                    */
+/* -------------------------------------------------------------------------- */
+
+describe('menu hotkeys', () => {
+  it('archives on A', async () => {
+    mount(<SessionList />);
+    press(await openMenu(), 'a');
+
+    await waitFor(() => {
+      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+  });
+
+  it('pins on P', async () => {
+    mount(<SessionList />);
+    press(await openMenu(), 'p');
+
+    await waitFor(() => {
+      expect(useApp.getState().pinnedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+  });
+
+  it('opens the rename field on R', async () => {
+    mount(<SessionList />);
+    press(await openMenu(), 'r');
+
+    expect(await screen.findByLabelText(`Rename session: ${SESSION.title}`)).toBeTruthy();
+  });
+
+  it('asks before deleting on D, rather than deleting', async () => {
+    // The letter must land on the same confirmation the click does. A hotkey
+    // that reached `deleteSession` directly would destroy a transcript on one
+    // keystroke, which is the one thing this menu is built not to do.
+    mount(<SessionList />);
+    press(await openMenu(), 'd');
+
+    expect(await screen.findByText('Delete this session?')).toBeTruthy();
+    expect(calls.deleted).toEqual([]);
+  });
+
+  it('takes the letter in either case', async () => {
+    mount(<SessionList />);
+    press(await openMenu(), 'A');
+
+    await waitFor(() => {
+      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+  });
+
+  it('ignores a letter whose item is disabled', async () => {
+    // Gating lives on the item, and the key goes through the item's own click
+    // path precisely so it inherits that. A provider that cannot delete must
+    // not be made to by a keystroke.
+    useApp.setState({ providers: [descriptor({ ...ALL, deleteSession: false })] });
+    mount(<SessionList />);
+    const menu = await openMenu();
+
+    press(menu, 'd');
+
+    // Still open, nothing asked, no dialog.
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeTruthy());
+    expect(screen.queryByText('Delete this session?')).toBeNull();
+    expect(calls.deleted).toEqual([]);
+  });
+
+  it('leaves modified presses alone', async () => {
+    // ⌘R is the window reloading. A menu that swallowed it because it happened
+    // to be open would be taking a key that was never aimed at it.
+    mount(<SessionList />);
+    const menu = await openMenu();
+
+    press(menu, 'r', 'metaKey');
+    press(menu, 'a', 'ctrlKey');
+
+    expect(screen.queryByLabelText(`Rename session: ${SESSION.title}`)).toBeNull();
+    expect(useApp.getState().archivedSessions).toEqual([]);
+  });
+
+  it('toggles back on the same letter, from a row that is already pinned', async () => {
+    // `P` is "the pin", not "pin" — the key does not move when the item's word
+    // changes to Unpin, so it is still one key for one idea.
+    useApp.setState({ pinnedSessions: [`p1:${SESSION.id}`] });
+    mount(<SessionList />);
+
+    expect(await screen.findByText('An earlier session')).toBeTruthy();
+    press(await openMenu(), 'p');
+
+    await waitFor(() => expect(useApp.getState().pinnedSessions).toEqual([]));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Pinning                                                                    */
+/* -------------------------------------------------------------------------- */
+
+describe('pin', () => {
+  it('lifts the row into a Pinned section above every project', async () => {
+    useApp.setState({ sessions: [SESSION, OTHER], pinnedSessions: [`p1:${SESSION.id}`] });
+    mount(<SessionList />);
+
+    const headings = (await screen.findAllByRole('button')).filter((b) =>
+      b.hasAttribute('aria-expanded'),
+    );
+
+    expect(headings.map((h) => h.textContent)).toEqual(['Pinned·1', 'w·1']);
+    // Above the projects, and open — a pin is a request to keep something in
+    // view, so the section it makes is not folded shut on arrival.
+    expect(headings[0]?.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('An earlier session')).toBeTruthy();
+  });
+
+  it('shows no Pinned section at all when nothing is pinned', async () => {
+    // The requirement from the issue: the folder exists only once there is
+    // something in it.
+    mount(<SessionList />);
+
+    await screen.findByText('An earlier session');
+    expect(screen.queryByRole('button', { name: /Pinned/ })).toBeNull();
+  });
+
+  it('offers Unpin for a row that is already pinned', async () => {
+    useApp.setState({ pinnedSessions: [`p1:${SESSION.id}`] });
+    mount(<SessionList />);
+
+    await screen.findByText('An earlier session');
+    await openMenu();
+
+    expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Pin' })).toBeNull();
+  });
+
+  it('changes nothing on disk, like archiving', async () => {
+    mount(<SessionList />);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }));
+
+    await waitFor(() => {
+      expect(useApp.getState().pinnedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+    expect(calls.deleted).toEqual([]);
+    expect(calls.renamed).toEqual([]);
+    expect(useApp.getState().sessions).toHaveLength(1);
+  });
+
+  it('folds the section away without unpinning anything', async () => {
+    useApp.setState({ sessions: [SESSION, OTHER], pinnedSessions: [`p1:${SESSION.id}`] });
+    mount(<SessionList />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Pinned/ }));
+
+    await waitFor(() => expect(screen.queryByText('An earlier session')).toBeNull());
+    // The count survives the fold: it is the one thing worth reading while the
+    // section is shut.
+    expect(screen.getByRole('button', { name: /Pinned/ }).textContent).toBe('Pinned·1');
+    expect(useApp.getState().pinnedSessions).toEqual([`p1:${SESSION.id}`]);
+  });
+
+  it('archiving a pinned session unpins it, so it is never in both places', async () => {
+    useApp.setState({ pinnedSessions: [`p1:${SESSION.id}`] });
+    mount(<SessionList />);
+
+    await screen.findByText('An earlier session');
+    press(await openMenu(), 'a');
+
+    await waitFor(() => {
+      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+    expect(useApp.getState().pinnedSessions).toEqual([]);
+  });
+
+  it('pinning an archived session takes it back out of the archive', async () => {
+    useApp.setState({ archivedSessions: [`p1:${SESSION.id}`], archivedExpanded: true });
+    mount(<SessionList />);
+
+    await screen.findByText('An earlier session');
+    press(await openMenu(), 'p');
+
+    await waitFor(() => {
+      expect(useApp.getState().pinnedSessions).toEqual([`p1:${SESSION.id}`]);
+    });
+    expect(useApp.getState().archivedSessions).toEqual([]);
   });
 });
 
