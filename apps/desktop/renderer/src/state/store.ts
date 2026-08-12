@@ -411,6 +411,41 @@ export interface AppState {
    * as another entry in `collapsedProjects` would have given it the wrong one.
    */
   readonly archivedExpanded: boolean;
+  /**
+   * Directories worked in, capped at {@link RECENT_FOLDERS_LIMIT}.
+   *
+   * The folder control above the composer is a list of these rather than a
+   * chooser, because moving between a handful of projects is the common case and
+   * re-navigating a native file dialog to a directory the app already knows
+   * about is the tax that made it uncommon. The dialog is still there behind
+   * "Add folder…" — this is a shortcut past it, never a replacement.
+   *
+   * ## Held most-recent-first, shown alphabetically
+   *
+   * The order here is the *eviction* order and nothing else: recency is what
+   * decides which folder falls off the end when an eleventh is opened, because
+   * "the one I have not touched in the longest" is the only defensible answer to
+   * that. It is deliberately not the order the menu draws.
+   *
+   * A list sorted by recency rearranges itself under the user — the folder that
+   * was second is first the moment you use it, so the row you are aiming at is
+   * never where it was last time and the menu has to be read every single time
+   * it is opened. Alphabetical is stable: a folder's position is a property of
+   * its name, so it can be found by muscle memory. Both surfaces that render
+   * this sort it with `sortFoldersByName`.
+   *
+   * Window-scoped, not per column. Where the user has *been* is a fact about the
+   * user; a split does not give them two histories, and a folder opened in the
+   * right column is just as worth offering in the left.
+   *
+   * Entries are absolute paths exactly as adopted — the same strings `cwd`
+   * holds, so membership and "is this the current one" are both plain equality.
+   * Nothing here is verified to still exist: the renderer cannot stat a path,
+   * and a folder that has since been moved fails loudly at the point of use
+   * (`main/validate.ts`) rather than being silently dropped from a list the user
+   * curates by hand. That curation is {@link forgetFolders}, in Appearance.
+   */
+  readonly recentFolders: readonly string[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -428,6 +463,44 @@ export const SIDEBAR_DEFAULT_WIDTH = 272;
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Recent folders                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many directories the folder menu remembers.
+ *
+ * Ten, because the menu is scanned rather than searched: it opens over the
+ * composer and the whole point of it is that the folder you want is visible
+ * without reading. Past a dozen rows that stops being true and the list starts
+ * competing with the sidebar's project groups, which are already the answer to
+ * "everywhere I have worked" — this is only the answer to "where have I been
+ * lately".
+ */
+export const RECENT_FOLDERS_LIMIT = 10;
+
+/**
+ * Put one directory at the front of the list, keeping it deduped and capped.
+ *
+ * Front, because the stored order is what decides *which folder is dropped* when
+ * an eleventh arrives — see {@link AppState.recentFolders}. Re-opening the
+ * fourth folder down promotes it rather than leaving it to age out, so the
+ * folders in rotation stay in the list and the one that falls off is the one
+ * nobody has opened in ten projects' time. Neither menu draws them in this
+ * order.
+ *
+ * Blank paths are dropped: an unconfigured window has `cwd === ''`, and "" is
+ * not a folder anyone can go back to.
+ */
+function promoteFolder(folders: readonly string[], path: string): readonly string[] {
+  const next = path.trim();
+  if (next.length === 0) return folders;
+  // Already at the front — return the same array so subscribers do not re-render
+  // for a write that changed nothing. Ordinary: every `setCwd` records.
+  if (folders[0] === next) return folders;
+  return [next, ...folders.filter((folder) => folder !== next)].slice(0, RECENT_FOLDERS_LIMIT);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -564,6 +637,16 @@ interface Prefs {
    * this" than remembering where the user was.
    */
   cwd?: string;
+  /**
+   * The directories offered by the folder menu, most recent first.
+   *
+   * Persisted for the same reason `cwd` is, only more so: a list of "where I
+   * work" that emptied on every launch would be a shortcut that is never there
+   * when it is wanted. Seeded from `cwd` on the first launch after this landed —
+   * see {@link initialRecentFolders} — so the menu is never introduced empty to
+   * a user who has been using the app for weeks.
+   */
+  recentFolders?: readonly string[];
   paneLayout?: Record<string, number>;
   activeProfileId?: string | null;
   activeProviderId?: ProviderId;
@@ -688,7 +771,34 @@ function loadPrefs(): Prefs {
     // quietly archive nothing.
     archivedSessions: stringList(raw['archivedSessions']),
     archivedExpanded: boolOrUndefined(raw['archivedExpanded']),
+    // Same treatment again, and here the entry is rendered rather than matched:
+    // a non-string surviving into the menu would reach `lastSegment` and throw
+    // on a control the user opens to get *out* of a bad directory.
+    recentFolders: stringList(raw['recentFolders']),
   };
+}
+
+/**
+ * The folder list a launch starts from.
+ *
+ * Normalised rather than trusted: the stored list can carry blanks, duplicates
+ * and more than the cap after a hand edit or a build that wrote it differently,
+ * and every one of those shows up in the menu as a row that either does nothing
+ * or repeats the row above it.
+ *
+ * The `cwd` fallback is a migration, and a one-line one on purpose. A user
+ * upgrading into this feature has a directory they have been working in for
+ * weeks and no list; opening the new menu to find it empty would read as the app
+ * having forgotten, so the directory it *did* remember becomes the first entry.
+ */
+function initialRecentFolders(stored: Prefs): readonly string[] {
+  let folders: readonly string[] = [];
+  // Reversed, so the stored order survives: `promoteFolder` prepends, so
+  // replaying oldest-first leaves the most recent back at the front.
+  for (const folder of [...(stored.recentFolders ?? [])].reverse()) {
+    folders = promoteFolder(folders, folder);
+  }
+  return folders.length > 0 ? folders : promoteFolder([], stored.cwd ?? '');
 }
 
 /**
@@ -702,6 +812,7 @@ function savePrefs(): void {
   const pane = paneState(focusedPane(s));
   const prefs: Prefs = {
     cwd: pane.cwd,
+    recentFolders: s.recentFolders,
     activeProfileId: pane.activeProfileId,
     activeProviderId: pane.activeProviderId,
     permissionMode: pane.permissionMode,
@@ -834,6 +945,7 @@ export const useApp = create<AppState>(() => ({
   collapsedProjects: prefs.collapsedProjects ?? [],
   archivedSessions: prefs.archivedSessions ?? [],
   archivedExpanded: prefs.archivedExpanded ?? false,
+  recentFolders: initialRecentFolders(prefs),
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -2496,6 +2608,7 @@ export function setCwd(cwd: string, pane: Pane = focusedPane()): void {
   if (leaving) newSession(pane, { adoptRecommendedProfile: false });
 
   setPaneState(pane, { cwd: next });
+  rememberFolder(next);
   savePrefs();
   invalidateSessions();
   void refreshSessions();
@@ -2545,6 +2658,66 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
   const choice = await pickDirectory(paneState(pane).cwd);
   if (choice.status === 'chosen') setCwd(choice.path, pane);
   return choice;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Recent folders                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Record that a directory was worked in.
+ *
+ * Not exported, and that is the design: the list means "directories this window
+ * actually adopted", so the only things allowed to write it are the two places
+ * that adopt one — {@link setCwd} and {@link resumeSession}, which writes `cwd`
+ * itself for reasons of its own. A surface that could add an entry without
+ * moving there would let the menu offer folders the app has never been in.
+ *
+ * Called *after* the write, never before: `setCwd` refuses while a run is live,
+ * and a folder the user was told they could not move to has no business at the
+ * top of the list of folders they have been in.
+ */
+function rememberFolder(path: string): void {
+  useApp.setState((s) => {
+    const recentFolders = promoteFolder(s.recentFolders, path);
+    // `promoteFolder` hands back the same array when nothing moved, and this
+    // runs on every directory adoption — returning a fresh object each time
+    // would re-render every menu subscriber for a no-op.
+    return recentFolders === s.recentFolders ? {} : { recentFolders };
+  });
+}
+
+/**
+ * Drop directories from the folder menu. One, or a selection of them.
+ *
+ * Takes a list rather than a single path because both shapes of the same
+ * request exist in Appearance — the × on a row, and "Remove selected" over a
+ * set of checkboxes — and a loop of single removes would write and persist the
+ * preferences once per folder, so a half-finished multi-remove would be a real
+ * state someone could quit inside of.
+ *
+ * Forgetting a folder is bookkeeping and nothing else. It does not touch the
+ * working directory (the current one can be forgotten, and the session carries
+ * on where it is), it does not touch that directory's sessions in the sidebar,
+ * and it certainly does not touch the directory. The next time the folder is
+ * opened it returns to the top of the list, which is what makes this a low-cost
+ * edit rather than a decision — there is no undo and none is needed.
+ */
+export function forgetFolders(paths: readonly string[]): void {
+  const drop = new Set(paths);
+  if (drop.size === 0) return;
+  useApp.setState((s) => {
+    const recentFolders = s.recentFolders.filter((folder) => !drop.has(folder));
+    return recentFolders.length === s.recentFolders.length ? {} : { recentFolders };
+  });
+  savePrefs();
+}
+
+/** Forget every remembered folder. The menu falls back to "Add folder…". */
+export function clearRecentFolders(): void {
+  if (useApp.getState().recentFolders.length === 0) return;
+  useApp.setState({ recentFolders: [] });
+  savePrefs();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3343,6 +3516,11 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // the focus — which is what makes ⌘K, the run inspector and settings point
   // at what the user just opened rather than at whatever they last clicked.
   useApp.setState({ paletteOpen: false, focusedPaneId: target.id });
+  // Recorded here for the same reason `refreshWorkspace` is: this function
+  // writes `cwd` without going through `setCwd`, so everything hanging off a
+  // directory change has to be done by hand. Continuing yesterday's session in
+  // another project is exactly the trip the folder menu exists to save.
+  rememberFolder(session.cwd);
   savePrefs();
 
   const moved = [
