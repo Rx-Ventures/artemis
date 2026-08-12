@@ -272,10 +272,38 @@ describe('the artifact tile', () => {
     // Visible with nothing expanded, and usable from there.
     expect(screen.getByText('report.html')).not.toBeNull();
     expect(screen.getByRole('button', { name: /open/i })).not.toBeNull();
+  });
 
-    // The work around it still folds — the artifact split the burst rather than
-    // dissolving it.
-    expect(screen.getAllByText(/^Ran a command/i).length).toBeGreaterThan(0);
+  /*
+   * Lifted out, not split apart.
+   *
+   * The commands on either side of the artifact are one burst and have to stay
+   * one burst: ending the run at each artifact would mean the more the agent
+   * made, the more machinery the reader scrolls past to reach it.
+   */
+  it('leaves the work around it as a single folded line', async () => {
+    await ranACommand(RUN);
+    await wrote(RUN, '/tmp/report.html');
+    await ranACommand(RUN);
+    mount();
+
+    // One marker for two commands, not one marker per side of the tile — and it
+    // does not claim the file, which is sitting right there as a tile.
+    const markers = screen.getAllByText(/^Ran \d+ commands?/i);
+    expect(markers.length).toBe(1);
+    expect(markers[0]?.textContent).toMatch(/^Ran 2 commands$/i);
+    expect(markers[0]?.textContent).not.toMatch(/file/i);
+  });
+
+  it('folds to nothing when every call was an artifact', async () => {
+    await wrote(RUN, '/tmp/one.html');
+    await wrote(RUN, '/tmp/two.svg', '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    mount();
+
+    // Both tiles, and no marker: with them lifted there is no work left to hide.
+    expect(screen.getByText('one.html')).not.toBeNull();
+    expect(screen.getByText('two.svg')).not.toBeNull();
+    expect(screen.queryByText(/^(Edited|Wrote|Read|Ran)/i)).toBeNull();
   });
 
   it('still folds a burst that made nothing worth looking at', async () => {

@@ -195,26 +195,33 @@ export type TranscriptItem =
  *
  * ## An artifact is never folded
  *
- * One kind of call leaves the burst rather than joining it: one that produced an
- * artifact ({@link ArtifactTest}). The marker exists to hide *machinery*, and a
- * page the agent made is not machinery — it is the deliverable. Folded away it
- * reads as "edited 5 files", which is a description of the work rather than of
- * the thing the work produced, and reaching it costs a click into a dropdown
- * whose label gives no hint that anything is in there worth opening.
+ * One kind of call is lifted out of the burst rather than hidden inside it: one
+ * that produced an artifact ({@link ArtifactTest}). The marker exists to hide
+ * *machinery*, and a page the agent made is not machinery — it is the
+ * deliverable. Folded away it reads as "edited 5 files", a description of the
+ * work rather than of the thing the work produced, and reaching it costs a click
+ * into a dropdown whose label gives no hint anything is in there worth opening.
  *
- * So an artifact is a boundary, exactly like the agent speaking is: the run ends
- * before it, the artifact is its own row, and a new run starts after. A turn
- * that writes a report mid-burst therefore reads
+ * Lifted, **not** treated as a boundary. An artifact does not end the run and
+ * does not start a new one — the burst is walked to its natural end and only
+ * then split into what stays folded and what comes out. So a turn that writes
+ * three artifacts among its work reads
  *
- *     ▸ work · Ran a command, edited 2 files
+ *     ▸ work · Ran 4 commands, edited 2 files
  *     ▤ report.html                              [ Open ]
- *     ▸ work · Ran 3 commands
+ *     ▤ chart.svg                                [ Open ]
+ *     ▤ notes.md                                 [ Open ]
  *
- * which is the shape someone scrolling for what was *made* actually wants. The
- * cost is real and accepted: one burst can become two markers, and a turn that
- * writes six artifacts will not fold to a single line. That is the right trade —
- * the fold's whole justification is that what it hides is not worth a row, and
- * these are.
+ * — one folded line, with the things worth opening beside it. Ending the run at
+ * each artifact instead would be the obvious implementation and the wrong one:
+ * it turns a single burst into a marker per gap, so the more the agent made, the
+ * more machinery rows the reader has to scroll past to see it.
+ *
+ * A lifted call is not a member of the group, so the summary does not count it
+ * either. "Edited 5 files" beside five tiles that *are* those files would be the
+ * same work reported twice, and the marker's job is to describe what is still
+ * hidden. A burst whose only calls were artifacts therefore has nothing left to
+ * summarise and produces no marker at all.
  *
  * ## Why this is computed here and not in the component
  *
@@ -873,32 +880,55 @@ export class TranscriptModel {
         i += 1;
         continue;
       }
-      // An artifact is machinery by kind and a deliverable by intent, and the
-      // second is what decides: it stays its own row. See {@link ActivityGroup}.
-      if (!this.isMachinery(id) || this.isArtifact(id)) {
+      if (!this.isMachinery(id)) {
         rows.push(id);
         i += 1;
         continue;
       }
+      /*
+       * The run is walked to its natural end — an artifact does *not* end it —
+       * and then split in two: what stays folded, and what is lifted out of the
+       * fold to stand beside the marker. See {@link ActivityGroup}.
+       *
+       * Walking first and splitting after is the whole difference between one
+       * marker with tiles under it and a marker per gap between artifacts. The
+       * burst is still one burst; only what it is willing to hide has changed.
+       */
       const run: string[] = [];
+      const lifted: string[] = [];
       let tools = 0;
       while (i < this.ids.length) {
         const next = this.ids[i];
-        if (next === undefined || !this.isMachinery(next) || this.isArtifact(next)) break;
+        if (next === undefined || !this.isMachinery(next)) break;
+        i += 1;
+        if (this.isArtifact(next)) {
+          lifted.push(next);
+          continue;
+        }
         if (this.items.get(next)?.kind === 'tool') tools += 1;
         run.push(next);
-        i += 1;
       }
-      // Nothing was *done* here, so there is nothing to summarise: a stretch of
-      // thinking on its own stays the rows it already was.
-      if (tools === 0) {
+
+      // Nothing was *done* here — or nothing that is still hidden — so there is
+      // nothing to summarise: a stretch of thinking on its own stays the rows it
+      // already was. A burst whose only calls were artifacts lands here too, and
+      // correctly: with the tiles lifted out there is no work left to fold.
+      const first = run[0];
+      if (tools === 0 || first === undefined) {
         for (const memberId of run) rows.push(memberId);
-        continue;
+      } else {
+        // Named for the first *folded* member rather than the run's first item,
+        // so a burst that opens with an artifact still gets a stable id.
+        const groupId = `g:${first}`;
+        for (const memberId of run) groupOf.set(memberId, groupId);
+        members.set(groupId, run);
+        rows.push(groupId);
       }
-      const groupId = `g:${id}`;
-      for (const memberId of run) groupOf.set(memberId, groupId);
-      members.set(groupId, run);
-      rows.push(groupId);
+
+      // After the marker, in the order they were made. The tiles are the reason
+      // anyone is looking at this stretch of the transcript, so they come out
+      // below the one line that describes the work rather than above it.
+      for (const artifactId of lifted) rows.push(artifactId);
     }
 
     // Retire cached summaries whose group is gone or whose membership moved.
