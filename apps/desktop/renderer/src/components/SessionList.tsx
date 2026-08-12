@@ -139,7 +139,6 @@ import {
 } from '../lib/sessionGroups';
 import { writeSessionDrag } from '../lib/sessionDrag';
 import {
-  allPanes,
   refreshSessions,
   renameSession,
   resumeSession,
@@ -149,7 +148,6 @@ import {
   toggleSessionArchived,
   useApp,
 } from '../state/store';
-import { paneState } from '../state/pane';
 import { usePane } from '../state/paneContext';
 import { CapabilityButton } from './capability-button';
 import { ProfileSwatch, StatusDot } from './primitives';
@@ -644,8 +642,17 @@ const Row = memo(function Row({
    * user clicked into the other one — the row would stop marking a session that
    * is plainly on screen. So this asks the question the user is actually
    * asking: is this open anywhere?
+   *
+   * Read off `openSessions` rather than computed from the panes, for the same
+   * reason `running` below reads `runningSessions`: which session a column is
+   * showing is a fact about a *pane's* store, and this component subscribes to
+   * the window's. This line used to reach across the two — `allPanes(s).some(p
+   * => paneState(p).resumeSessionId === session.id)` — which React had no way
+   * to invalidate, so the mark appeared only when an unrelated window write
+   * forced a repaint, and the id it compared was the wrong one for a session
+   * that had not finished its first turn. See `syncOpenSessions`.
    */
-  const active = useApp((s) => allPanes(s).some((p) => paneState(p).resumeSessionId === session.id));
+  const active = useApp((s) => s.openSessions.includes(session.id));
   /*
    * Working, whether or not it is on screen.
    *
