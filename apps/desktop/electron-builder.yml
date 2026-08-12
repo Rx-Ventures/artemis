@@ -24,6 +24,14 @@ asarUnpack:
   - '**/node_modules/@anthropic-ai/claude-agent-sdk/**'
   - '**/node_modules/node-pty/**'
 
+# Unpacking preserves the mode the file had in the archive, and node-pty
+# publishes `spawn-helper` as 0644 — so without this every install arrives
+# unable to exec the helper, and every terminal fails with `posix_spawnp
+# failed`. The hook sets the bit while the bundle is still writable, which is
+# the only time it can be set for an install the user does not own. See
+# `build/after-pack.cjs`.
+afterPack: ./build/after-pack.cjs
+
 mac:
   category: public.app-category.developer-tools
   # The arch is part of every name, x64 included — electron-builder's default
