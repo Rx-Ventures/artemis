@@ -1,17 +1,24 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.5.0
+## What's new in 0.5.1
+
+- Updating cleans up after itself. Every update so far has left about 6.5MB
+  of the version it replaced sitting in your Applications folder, and
+  another copy in a temporary directory — the cleanup ran, deleted almost
+  everything, and silently failed on the one file it could not remove.
+  Installing this version sweeps away what earlier ones left behind, so
+  expect a little disk space back on first launch.
+
+Carried over from 0.5.0, in case you are coming from 0.4.x:
 
 - The Artemis menu can check for updates. `Check for Updates…` sits under
-  About Artemis and answers either way: an update appears as the usual card
-  at the foot of the sidebar, and "nothing newer", "could not reach the
-  releases" and "already installing" each say so rather than leaving you
-  wondering whether the click landed. Asking also un-dismisses — a version
-  you declined by accident can be reached again.
-- The app grew a real menu bar in the process: Edit, View and Window with
-  the standard items. The shortcuts they carry (⌘C, ⌘V, ⌘Z, ⌘W, ⌘Q) worked
-  before and still do.
+  About Artemis and answers either way, including "nothing newer" and
+  "could not reach the releases" — asking also un-dismisses a version you
+  declined by accident.
+- The app grew a real menu bar: Edit, View and Window with the standard
+  items. The shortcuts they carry (⌘C, ⌘V, ⌘Z, ⌘W, ⌘Q) worked before and
+  still do.
 
 ## Install
 
