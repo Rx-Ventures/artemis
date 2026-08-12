@@ -1,24 +1,31 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-- A page the agent makes shows itself. An HTML artifact takes its own
-  transcript row instead of a diff, opens the preview pane on the first one
-  of a conversation, and closes when that conversation leaves the screen.
-- A user row is what a person said. Prompts the harness injects — the body
-  of a skill a tool call just loaded, a continuation, a system reminder —
-  no longer arrive looking like something you typed.
-- The folder chip lists where you have been. Ten directories, alphabetical,
-  with "Add folder…" still there for one the app has never seen; Appearance
-  prunes the list.
-- An answer arrives a word at a time, each fading in as it lands, and never
-  pacing slower than the model actually answered. Appearance carries a
-  switch to turn it off.
-- The app is set in Geist and Geist Mono, packaged with it — correct on
-  first launch with no network.
-- Text size is the reader's to choose: 11px to 20px in Appearance, scaling
-  the boxes along with the text.
+- A page the agent wrote opens instead of being blocked. The preview frame
+  was refused by the renderer's own content policy, so an HTML artifact
+  showed nothing; it renders now. The tile also sits in its own transcript
+  row rather than folded inside "edited 5 files", so the deliverable is not
+  hidden behind the machinery that produced it.
+- Clicking a session that is already on screen goes to it. It used to push
+  that run into the background and replay a half-written transcript into a
+  blank column, while the agent carried on working out of sight.
+- Rows hold still while agents work. The list stopped reshuffling under the
+  pointer every few seconds as running sessions took turns being the most
+  recently written, which is what made you open the wrong one.
+- An update waits at the foot of the sidebar as its own small card, instead
+  of a full-window strip pushing the header, both transcripts and every
+  composer down. The strip remains for when the sidebar is collapsed.
+- The conversation is set in Geist, not Geist Mono. 0.3.0 split the faces by
+  pane, which put answers, prompts and the composer in monospace and made a
+  conversation read as terminal output. Mono is now for text whose
+  characters are the content — code, diffs, paths, tool arguments — and the
+  app's own 11px labels.
+- `Start somewhere else` is gone from the sidebar. Every project is in the
+  list above it, a row click does the whole switch, and the folder chip
+  above the composer starts a fresh session anywhere — including somewhere
+  with no history at all.
 
 ## Install
 
@@ -48,7 +55,8 @@ Runs are billed to the Claude account each profile is signed into.
 ## Updates
 
 Artemis checks this repository for newer releases (using your own `gh` CLI
-login) and shows a banner when one exists. Installing parks at "restart when
-you're ready" — nothing restarts on its own.
+login) and puts a card at the foot of the sidebar when one exists — or a
+strip under the header, if the sidebar is hidden. Installing parks at
+"restart when you're ready" — nothing restarts on its own.
 
 Feedback: open an issue in this repo.
