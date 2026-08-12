@@ -36,7 +36,7 @@ import type {
 } from './ids.js';
 import type { AgentError } from './errors.js';
 import type { JsonObject, JsonValue } from './json.js';
-import type { PermissionMode, PermissionRequest } from './permissions.js';
+import type { PermissionMode, PermissionRequest, QuestionAnswer } from './permissions.js';
 import type { ProviderId } from './provider.js';
 import type { UsageSnapshot } from './usage.js';
 
@@ -49,6 +49,7 @@ export type AgentEventType =
   | 'tool.start'
   | 'tool.end'
   | 'permission.request'
+  | 'permission.resolved'
   | 'usage'
   | 'run.end';
 
@@ -61,6 +62,7 @@ export const AGENT_EVENT_TYPES = [
   'tool.start',
   'tool.end',
   'permission.request',
+  'permission.resolved',
   'usage',
   'run.end',
 ] as const satisfies readonly AgentEventType[];
@@ -277,6 +279,75 @@ export interface PermissionRequestEvent extends AgentEventBase {
 }
 
 /* -------------------------------------------------------------------------- */
+/* permission.resolved                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A parked request is no longer parked.
+ *
+ * ## Why the stream has to say so
+ *
+ * Answering a prompt is an IPC *call*, and a call is invisible to anyone who was
+ * not the caller. The event stream is the only account of a run that survives
+ * the caller — it is what a second window reads, and what a reloaded renderer
+ * replays. Without this event that account is missing its second half: every
+ * `permission.request` in the history reads as still open, forever.
+ *
+ * That is not hypothetical. `⌘R` reloads the renderer without touching the main
+ * process, and the re-attach path replays the retained events through the
+ * ordinary handlers. A request whose answer was never written down came back
+ * *pending* — so the user was asked to approve something they had already
+ * approved, and answering the ghost failed, because the registry had long since
+ * settled it. Emitting the resolution is what makes the replay agree with the
+ * run.
+ *
+ * ## Emitted for every way a request can end
+ *
+ * The user answering is only one of them. The provider can withdraw a request
+ * (the turn was interrupted, the tool became moot) and adapters settle
+ * everything outstanding on dispose. Those paths never reach
+ * `respondToPermission`, so a consumer that inferred resolution from its own
+ * calls would keep waiting on them — which is the bug one level up from the one
+ * above. Adapters emit this for all three.
+ *
+ * Always follows the matching `permission.request`, and never appears without
+ * one. Consumers key on {@link requestId} and must tolerate an id they do not
+ * know: the retained history is bounded, so a long run can drop the request and
+ * keep the resolution.
+ */
+export interface PermissionResolvedEvent extends AgentEventBase {
+  readonly type: 'permission.resolved';
+  /** The {@link PermissionRequestEvent.requestId} this settles. */
+  readonly requestId: PermissionRequestId;
+  /**
+   * How it ended.
+   *
+   * - `allowed`   — the user approved it; the tool ran.
+   * - `denied`    — the user refused it.
+   * - `withdrawn` — nobody answered: the provider took the request back, or the
+   *                 run was disposed with it still open. Rendered as "the choice
+   *                 was taken away" rather than as a decision the user made,
+   *                 because they did not make one.
+   */
+  readonly outcome: 'allowed' | 'denied' | 'withdrawn';
+  /**
+   * One sentence for the transcript's record of it — the denial message the
+   * user typed, or why the request was withdrawn.
+   */
+  readonly note?: string;
+  /**
+   * The answers, when the request carried a `QuestionPrompt`.
+   *
+   * Carried so a replayed interview can be shown as it was answered — the
+   * questions with the chosen options marked — rather than collapsing to
+   * "allowed", which is not even the right word for answering a question. The
+   * consumer that sent the decision already has these; this is for every
+   * consumer that did not.
+   */
+  readonly answers?: readonly QuestionAnswer[];
+}
+
+/* -------------------------------------------------------------------------- */
 /* usage                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -356,6 +427,7 @@ export type AgentEvent =
   | ToolStartEvent
   | ToolEndEvent
   | PermissionRequestEvent
+  | PermissionResolvedEvent
   | UsageEvent
   | RunEndEvent;
 

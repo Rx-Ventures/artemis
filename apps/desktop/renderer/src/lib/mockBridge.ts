@@ -193,6 +193,42 @@ const FINAL_USAGE = {
   contextWindow: 200_000,
 } as const;
 
+/**
+ * A plan for the scripted `ExitPlanMode` park, in the shape real ones arrive in.
+ *
+ * Every construct the card has to render: headings at two levels, prose, a GFM
+ * table, an ordered list, inline code and a fenced block. A one-paragraph
+ * placeholder would look fine while proving nothing.
+ */
+const MOCK_PLAN = `# Replace the polling loop with a watcher
+
+## Context
+
+\`refreshSessions\` runs on a 2s timer whether or not anything changed, which is
+most of the app's idle CPU. The session directory already emits filesystem
+events; nothing is listening to them.
+
+| Approach | Idle cost | Risk |
+| --- | --- | --- |
+| Keep polling | ~4% CPU | none |
+| \`fs.watch\` | ~0% | misses on some network mounts |
+| Watch + slow poll | ~0.2% | none |
+
+## Steps
+
+1. Add a watcher on the sessions directory, debounced to one frame.
+2. Drop the interval to 30s as a backstop for mounts \`fs.watch\` cannot see.
+3. Tear the watcher down with the profile that owns it.
+
+\`\`\`ts
+const watcher = watch(dir, { persistent: false }, () => refreshSoon());
+\`\`\`
+
+## Not doing
+
+Reworking how sessions are read. This changes *when* the read happens, not what
+it does — worth keeping the diff to one question.`;
+
 const SIGNED_OUT: AuthStatusInfo = { loggedIn: false, authMethod: 'none' };
 const SIGNED_IN: AuthStatusInfo = {
   loggedIn: true,
@@ -428,6 +464,35 @@ export function createMockBridge(): ArtemisBridge {
         ? 'Thanks — taking that route.'
         : 'No answer, so I will use my own judgement.',
     );
+
+    /*
+     * The third thing a provider can park on: a plan awaiting sign-off.
+     *
+     * Scripted here for the same reason the question above is — without it the
+     * plan card is unreachable in dev, and the only way to see one is to start a
+     * real run in plan mode and wait for the agent to finish thinking. The
+     * markdown is deliberately varied (headings, a table, a list, a fenced
+     * block) because rendering *that* correctly is the entire point of the card.
+     */
+    const planned = await askPermission(run, {
+      id: newId('perm'),
+      runId: run.runId,
+      toolName: 'ExitPlanMode',
+      input: { plan: MOCK_PLAN, planFilePath: '/Users/demo/.claude/plans/mock-plan.md' },
+      toolCallId: newId('call'),
+      title: 'Artemis has a plan',
+      displayName: 'Approve plan',
+      suggestions: [{ type: 'setMode', mode: 'acceptEdits', scope: 'session' }],
+      requestedAt: Date.now(),
+      plan: { plan: MOCK_PLAN, planPath: '/Users/demo/.claude/plans/mock-plan.md' },
+    });
+    if (run.cancelled) return finish(run, 'interrupted');
+
+    if (planned.behavior === 'deny') {
+      await typeOut(run, newId('msg'), 0, 'Right — back to the drawing board.');
+      return finish(run, planned.interrupt === true ? 'permission_denied' : 'completed');
+    }
+    await typeOut(run, newId('msg'), 0, 'Approved. Starting on it now.');
 
     const bashCall = newId('call');
     const decision = await askPermission(run, {
@@ -750,8 +815,25 @@ export function createMockBridge(): ArtemisBridge {
       },
       respondToPermission: async ({ runId, requestId, decision }) => {
         const run = runs.get(runId);
-        run?.permissions.get(requestId)?.(decision);
-        run?.permissions.delete(requestId);
+        if (!run) return ok({ requestId });
+        run.permissions.get(requestId)?.(decision);
+        run.permissions.delete(requestId);
+        // A real adapter says on the stream that the request has settled, so the
+        // fake does too. Nothing in the mock needs it — the caller already knows
+        // what it decided — but a harness that skipped it would leave the
+        // renderer's `permission.resolved` handler unreachable in dev, which is
+        // precisely the kind of gap this harness exists to close.
+        emit(run, {
+          type: 'permission.resolved',
+          requestId,
+          outcome: decision.behavior === 'allow' ? 'allowed' : 'denied',
+          ...(decision.behavior === 'deny' && decision.message !== undefined
+            ? { note: decision.message }
+            : {}),
+          ...(decision.behavior === 'allow' && decision.answers !== undefined
+            ? { answers: decision.answers }
+            : {}),
+        });
         return ok({ requestId });
       },
       dispose: async ({ runId }) => {

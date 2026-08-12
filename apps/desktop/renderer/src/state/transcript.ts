@@ -759,6 +759,32 @@ export class TranscriptModel {
         break;
       }
 
+      /*
+       * The other half of the pair, and the reason a reload no longer re-asks.
+       *
+       * `resolvePermission` above is called by whoever *sent* the decision; this
+       * is for everyone who did not — a second window, and this window after
+       * ⌘R, replaying the run's retained events into an empty transcript.
+       *
+       * It settles a *pending* card only. The local caller knows strictly more
+       * than the event does — it holds the scope the user picked and can tell
+       * `answered` from `skipped` — so when both fire, the local record already
+       * on the card wins and this is a no-op. An unknown id is also a no-op:
+       * the retained history is bounded, so a long run can drop the request and
+       * keep the resolution.
+       */
+      case 'permission.resolved': {
+        const existing = this.items.get(`p:${event.requestId}`);
+        if (!existing || existing.kind !== 'permission' || existing.state !== 'pending') break;
+        this.resolvePermission(
+          event.requestId,
+          settledState(event.outcome, existing.request.question !== undefined, event.answers),
+          event.note,
+          event.answers,
+        );
+        break;
+      }
+
       case 'usage':
         // Usage is a run-level readout, not a transcript entry; the app store
         // keeps it and the detail panel renders it live.
@@ -1156,6 +1182,32 @@ export class TranscriptModel {
 
 function short(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+/**
+ * How a `permission.resolved` outcome reads on the card.
+ *
+ * The wire says what happened to the *request*; the card says what happened in
+ * the *conversation*, and for a question those are different words. Answering
+ * is not "allowing", and an interview nobody filled in was not "denied" — the
+ * same distinction the store draws when it settles a card locally, kept in step
+ * here so a replayed record does not read differently from a live one.
+ *
+ * `withdrawn` lands on `denied` because the tool did not run and there is no
+ * fifth state worth adding for it. What separates the two is the note, which
+ * says the provider took the choice away rather than the user making one.
+ */
+function settledState(
+  outcome: 'allowed' | 'denied' | 'withdrawn',
+  isQuestion: boolean,
+  answers: readonly QuestionAnswer[] | undefined,
+): Exclude<PermissionItem['state'], 'pending'> {
+  if (outcome !== 'allowed') return 'denied';
+  if (!isQuestion) return 'allowed';
+  const answered = (answers ?? []).some(
+    (a) => a.options.length > 0 || (a.notes?.trim().length ?? 0) > 0,
+  );
+  return answered ? 'answered' : 'skipped';
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {

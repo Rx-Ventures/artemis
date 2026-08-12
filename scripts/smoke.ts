@@ -91,6 +91,8 @@ function describeEvent(event: AgentEvent): string {
       // Nothing here answers permission requests, so this line is also the
       // explanation for the run that is about to stall.
       return `${event.request.toolName} needs approval (nothing is listening — the run will be interrupted)`;
+    case 'permission.resolved':
+      return `${event.requestId} ${event.outcome}${event.note === undefined ? '' : ` — ${event.note}`}`;
     case 'usage':
       return `${event.usage.scope} in=${event.usage.tokens.inputTokens} out=${event.usage.tokens.outputTokens}${
         event.usage.costUsd === undefined ? '' : ` cost=$${event.usage.costUsd.toFixed(4)}`
