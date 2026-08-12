@@ -42,7 +42,9 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+// No `rm`: removing a tree that can hold an app bundle goes through
+// `removeTree` below, for a reason documented there.
+import { mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -134,6 +136,37 @@ export interface UpdaterOptions {
   readonly userDataDir: string;
   /** Push one state at every open window. Wired to the IPC broadcast. */
   readonly broadcast: (state: UpdateState) => void;
+}
+
+/**
+ * Delete a directory tree, through `/bin/rm` rather than `fs.rm`.
+ *
+ * ## Not `fs.rm`, and not as a matter of taste
+ *
+ * Electron patches `fs` so that an `.asar` archive is transparently a
+ * *directory*. Every tree this module removes can contain one — a parked app
+ * bundle and the staging directory both hold `Contents/Resources/app.asar` —
+ * so a recursive `fs.rm` descends *into* the archive rather than unlinking it,
+ * cannot empty the directory it believes it is looking at, and fails with
+ * `ENOTEMPTY`. `force: true` does not cover that: it swallows `ENOENT` only.
+ *
+ * What shipped, from the updater's first release through 0.5.0, was therefore a
+ * husk of exactly one file — `Contents/Resources/app.asar`, around 6.5MB — left
+ * in /Applications by every self-update, and another in the temp directory.
+ *
+ * `process.noAsar = true` fixes it too, and is worse here: it is a
+ * process-global flag, so holding it across an `await` disables asar resolution
+ * for everything else in the main process, including a window loading its
+ * renderer entry from inside `app.asar`. `/bin/rm` holds no opinion about asar,
+ * is the idiom `ditto` and `gh` above already establish for this module, and
+ * exists on the only platform the updater runs on.
+ *
+ * Used for every tree here, including the one that holds nothing but a feed
+ * file. "Which of these can contain an .asar?" is the question that produced
+ * the bug, and it is better not to leave it standing.
+ */
+async function removeTree(path: string): Promise<void> {
+  await execFileAsync('/bin/rm', ['-rf', path], { timeout: 5 * 60 * 1000 });
 }
 
 export function createUpdater(options: UpdaterOptions): Updater {
@@ -265,7 +298,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
         try {
           feed = parseUpdateFeed(await readFile(await fetchAsset(FEED_NAME, '', dir), 'utf8'));
         } finally {
-          await rm(dir, { recursive: true, force: true });
+          await removeTree(dir);
         }
       } catch (error) {
         // No gh, no network, no access: all mean "no banner today", not an error
@@ -362,7 +395,12 @@ export function createUpdater(options: UpdaterOptions): Updater {
       setState({ phase: 'ready', version: feed.version, message: null, releaseUrl: null });
       log.info(`Updated to ${feed.version} on disk; waiting for the user to restart.`);
     } finally {
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      // The staging tree holds the extracted bundle, asar and all — see
+      // `removeTree`. Left as a `.catch`: the install itself has either
+      // succeeded or reported, and neither outcome changes over a temp file.
+      await removeTree(staging).catch((error: unknown) => {
+        log.warn('Could not clear the update staging directory.', error);
+      });
     }
   }
 
@@ -374,12 +412,15 @@ export function createUpdater(options: UpdaterOptions): Updater {
     try {
       for (const entry of await readdir(parent)) {
         if (/\.app\.old-\d+$/.test(entry)) {
-          await rm(join(parent, entry), { recursive: true, force: true });
+          await removeTree(join(parent, entry));
           log.info(`Removed a parked previous version: ${entry}`);
         }
       }
-    } catch {
-      // A sweep that cannot run costs disk space, nothing else.
+    } catch (error) {
+      // Still costs disk space and nothing else. It is reported now because
+      // saying nothing is what let this fail on every launch from the updater's
+      // first release to 0.5.0 without anyone learning it was failing.
+      log.warn('Could not remove a parked previous version.', error);
     }
   }
 
