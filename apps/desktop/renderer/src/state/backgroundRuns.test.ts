@@ -498,4 +498,67 @@ describe('after ⌘R reloads the window', () => {
     expect(state().run).toBeNull();
     expect(background()).toHaveLength(0);
   });
+
+  /*
+   * The reported bug, end to end.
+   *
+   * The retained history holds the *asking*, and for a long time it held nothing
+   * else — answering a prompt was an IPC call, and a call leaves no trace on the
+   * stream. So a reload replayed every prompt the run had ever raised as though
+   * it were still open: the user approved a plan, pressed ⌘R, and was asked to
+   * approve the same plan again. Worse, the ghost could not be answered, because
+   * the registry had settled it a minute earlier and rejects an id it no longer
+   * holds.
+   *
+   * `permission.resolved` is the other half of the pair, and these two tests are
+   * the difference between "still parked" and "already dealt with" surviving the
+   * page.
+   */
+  const planRequest = {
+    id: 'perm-1',
+    runId: 'run-a',
+    toolName: 'ExitPlanMode',
+    input: { plan: '# Do the thing' },
+    plan: { plan: '# Do the thing' },
+    requestedAt: 1,
+  };
+
+  it('does not re-ask a prompt that was already answered', async () => {
+    mainProcessRuns = [liveRun('run-a', 'sess-a')];
+    retainedEvents = {
+      'run-a': [
+        { type: 'permission.request', runId: 'run-a', seq: 0, ts: 1, requestId: 'perm-1', request: planRequest },
+        { type: 'permission.resolved', runId: 'run-a', seq: 1, ts: 2, requestId: 'perm-1', outcome: 'allowed' },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    // Nothing is parked, so no card demands an answer and the composer is free.
+    expect(state().permissionQueue).toHaveLength(0);
+    expect(state().run?.status).not.toBe('awaiting_permission');
+    // The decision is still on the record, which is what the transcript is for.
+    const card = rows(pane())
+      .map((id) => pane().transcript.getItem(id))
+      .find((item) => item?.kind === 'permission');
+    expect(card).toMatchObject({ state: 'allowed' });
+  });
+
+  it('brings back a prompt that really is still open', async () => {
+    mainProcessRuns = [liveRun('run-a', 'sess-a')];
+    retainedEvents = {
+      'run-a': [
+        { type: 'permission.request', runId: 'run-a', seq: 0, ts: 1, requestId: 'perm-1', request: planRequest },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    // The run is genuinely parked on this one. Re-attaching has to hand it back
+    // answerable, or the reload strands an agent that is waiting on a person.
+    expect(state().permissionQueue.map((r) => r.id)).toEqual(['perm-1']);
+    expect(state().run?.status).toBe('awaiting_permission');
+  });
 });

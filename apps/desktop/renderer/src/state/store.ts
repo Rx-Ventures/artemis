@@ -43,6 +43,7 @@ import type {
   AuthStatusInfo,
   AgentError,
   AgentEvent,
+  AllowPermissionDecision,
   Attachment,
   Capabilities,
   IpcError,
@@ -268,6 +269,34 @@ export interface AppState {
    * element-wise compare and the value is stable between real changes.
    */
   readonly runningSessions: readonly SessionId[];
+  /**
+   * Sessions a column is showing right now — what the sidebar marks as open.
+   *
+   * The same projection {@link runningSessions} is, maintained by the same
+   * subscription ({@link syncOpenSessions}), and it exists for the same reason:
+   * the row lives in the window store and the answer lives in each pane's, so a
+   * selector that reached across the two would only be re-evaluated when the
+   * *window* happened to change. That is precisely how this broke — the marker
+   * read `resumeSessionId` out of the panes from inside a `useApp` selector, so
+   * resuming a session lit its row only when some unrelated window write came
+   * along to force the repaint.
+   *
+   * Two differences from `runningSessions`, and both are the point:
+   *
+   *  - **Visible columns only.** A backgrounded conversation has no column, so
+   *    it is not open; it is already marked as *working* by the running dot,
+   *    which is the true thing to say about it. Marking it open as well would
+   *    claim a column the user cannot find.
+   *  - **One id per pane, not both.** {@link sessionShownBy} answers "which
+   *    session is this column showing", and a column shows one. `runningSessions`
+   *    lists both ids because either may name work in flight; "open" is a
+   *    question about a column, and a fork is showing the new session, not the
+   *    history it came out of.
+   *
+   * Never persisted: it describes this window's columns, and a stale copy would
+   * mark rows that nothing is showing.
+   */
+  readonly openSessions: readonly SessionId[];
   /**
    * Sort keys held still for the sessions being written right now.
    *
@@ -1100,14 +1129,16 @@ function unwatchPane(paneId: PaneId): void {
 /**
  * What the window recomputes when any conversation changes under it.
  *
- * Two projections rather than one subscription each, because they are triggered
- * by exactly the same events — a run starting, ending, or a session being
- * resumed into a column — and splitting them would only mean walking the panes
- * twice. Both are written to be cheap and to write nothing when nothing moved;
- * this runs on every keystroke in a composer, which shares the pane's store.
+ * Three projections rather than one subscription each, because they are
+ * triggered by exactly the same events — a run starting, ending, or a session
+ * being resumed into a column — and splitting them would only mean walking the
+ * panes three times. All are written to be cheap and to write nothing when
+ * nothing moved; this runs on every keystroke in a composer, which shares the
+ * pane's store.
  */
 function syncFromPanes(): void {
   syncRunningSessions();
+  syncOpenSessions();
   reconcileDock();
 }
 
@@ -1129,6 +1160,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  openSessions: [],
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
@@ -1368,6 +1400,46 @@ function syncRunningSessions(): void {
   const current = useApp.getState().runningSessions;
   if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
   useApp.setState({ runningSessions: ids, sessionOrderHold: holdOrder(ids) });
+}
+
+/**
+ * Recompute {@link AppState.openSessions} — which sessions have a column.
+ *
+ * The sibling of {@link syncRunningSessions}, and it exists because the sidebar
+ * marker used to ask this question the wrong way round: it read the panes from
+ * inside a `useApp` selector, which subscribes to the *window*. Nothing about a
+ * pane can notify that selector, so the marker repainted only when some
+ * unrelated window write happened to come along — and the two cases where the
+ * user most wants the mark are exactly the two where none does.
+ *
+ * `allPanes`, not `allLivePanes`: this is the question "is this on screen
+ * somewhere", which a backgrounded conversation answers no. It is already
+ * marked as working by {@link AppState.runningSessions}, which is the true
+ * thing to say about a run with no column.
+ *
+ * {@link sessionShownBy} rather than either field alone. A column showing a
+ * brand-new conversation has a run id and no `resumeSessionId` until the turn
+ * ends; a forked one has both, and the new run is what is on screen. Reading
+ * `resumeSessionId` by itself was wrong in both — it left the session the user
+ * was watching unmarked, and after a fork it marked the history instead.
+ *
+ * Same shape and same guard as its sibling: an array so the compare is cheap
+ * and the value is stable, and no write at all when nothing moved — this runs
+ * on every keystroke in a composer.
+ */
+function syncOpenSessions(): void {
+  const ids: SessionId[] = [];
+  for (const pane of allPanes()) {
+    const id = sessionShownBy(paneState(pane));
+    // Two columns can show one session — `paneForSession` reveals rather than
+    // opens a second copy, but a fork passes through the state briefly — and a
+    // duplicate would make the compare below report a change that is not one.
+    if (id !== null && !ids.includes(id)) ids.push(id);
+  }
+
+  const current = useApp.getState().openSessions;
+  if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
+  useApp.setState({ openSessions: ids });
 }
 
 /**
@@ -3420,7 +3492,16 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
 /* -------------------------------------------------------------------------- */
 
 /**
- * Record that a directory was worked in.
+ * The recording in progress, so the next one waits behind it.
+ *
+ * Module-level because the order being protected is the *list's*, and there is
+ * one list per window. Nothing awaits it: a caller that blocked on this would
+ * be blocking a directory change on a menu's bookkeeping.
+ */
+let recording: Promise<void> = Promise.resolve();
+
+/**
+ * Record that a directory was worked in — unless it is not going to last.
  *
  * Not exported, and that is the design: the list means "directories this window
  * actually adopted", so the only things allowed to write it are the two places
@@ -3431,15 +3512,83 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
  * Called *after* the write, never before: `setCwd` refuses while a run is live,
  * and a folder the user was told they could not move to has no business at the
  * top of the list of folders they have been in.
+ *
+ * ## What is declined, and why
+ *
+ * Two kinds of directory, for one reason: this menu is an offer to take
+ * somebody back somewhere later, and neither of them will be there.
+ *
+ *  - **A linked worktree** is a checkout made for one branch and deleted when
+ *    that branch lands. Submodules are deliberately *not* included — same
+ *    `.git` file, permanent place to be working.
+ *  - **A temporary directory** is deleted by the OS, and usually sooner by
+ *    whatever made it.
+ *
+ * Working in either is completely ordinary and stays that way: moving there is
+ * not refused, the header still names it, and its sessions still list. Only the
+ * remembering is declined, because a menu of ten "where have I been lately"
+ * rows silts up with directories that no longer exist and each one evicts a
+ * real project that does.
+ *
+ * Resuming an agent session is how most of them arrive, since a session started
+ * in a scratch checkout keeps that path forever and continuing it a week later
+ * is exactly the trip this menu exists to save. See `describeWorkspace` and
+ * `isTemporaryPath` in core for how each is recognised.
+ *
+ * ## Why the entry lands late, and what that costs
+ *
+ * Neither answer is available here: one needs the filesystem and the other
+ * needs `tmpdir()`, and the renderer has neither. So both come over the bridge
+ * in one call and the entry lands a tick after the directory does. The
+ * alternative was to record first and retract on the answer, which would put a
+ * folder in the menu and take it out again; a list nobody edits by hand should
+ * not visibly change its mind.
+ *
+ * Returns void rather than the promise, because there is nothing a caller could
+ * usefully do with it — moving to a directory does not wait on the menu's
+ * bookkeeping, and it cannot fail in a way worth reporting.
+ *
+ * That tick is also why {@link recordFolder} saves for itself. Both callers run
+ * `savePrefs` immediately after calling this, which now happens *before* the
+ * write does — so without that second save the folder would be in the menu and
+ * absent from the next launch.
  */
 function rememberFolder(path: string): void {
+  // Queued rather than fired, so the list keeps the order the directories were
+  // adopted in. Without this the *reply* order decides, and the replies are
+  // independent filesystem walks that can overtake each other — which would
+  // make the eviction order wrong for exactly the user who moves fast enough to
+  // care about it. See {@link recording}.
+  recording = recording.then(() => recordFolder(path));
+}
+
+/** One queued recording. See {@link rememberFolder} for why it is queued. */
+async function recordFolder(path: string): Promise<void> {
+  const next = path.trim();
+  // Both are no-ops that would otherwise pay for a trip through the bridge:
+  // "" is not a folder anyone can go back to, and a folder already at the front
+  // is what `promoteFolder` would hand straight back. The second is the common
+  // case for `resumeSession` on a session in the directory already open.
+  if (next.length === 0) return;
+  if (useApp.getState().recentFolders[0] === next) return;
+
+  const names = await describeWorkspace(next);
+  // `null` when the bridge has no `describe` channel, and `undefined` on a
+  // preload older than these fields. Both mean "cannot tell", and the answer
+  // that changes no behaviour is the one that records.
+  if (names?.worktree === true || names?.temporary === true) return;
+
+  let recorded = false;
   useApp.setState((s) => {
-    const recentFolders = promoteFolder(s.recentFolders, path);
+    const recentFolders = promoteFolder(s.recentFolders, next);
     // `promoteFolder` hands back the same array when nothing moved, and this
     // runs on every directory adoption — returning a fresh object each time
     // would re-render every menu subscriber for a no-op.
-    return recentFolders === s.recentFolders ? {} : { recentFolders };
+    if (recentFolders === s.recentFolders) return {};
+    recorded = true;
+    return { recentFolders };
   });
+  if (recorded) savePrefs();
 }
 
 /**
@@ -4315,7 +4464,9 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // Recorded here for the same reason `refreshWorkspace` is: this function
   // writes `cwd` without going through `setCwd`, so everything hanging off a
   // directory change has to be done by hand. Continuing yesterday's session in
-  // another project is exactly the trip the folder menu exists to save.
+  // another project is exactly the trip the folder menu exists to save — and
+  // the one that most often names a scratch checkout, which `rememberFolder`
+  // declines.
   rememberFolder(session.cwd);
   savePrefs();
 
@@ -4741,6 +4892,8 @@ export async function respondToPermission(
   // written afterwards still has to know which kind of card it is settling.
   const isQuestion =
     paneState(pane).permissionQueue.find((r) => r.id === requestId)?.question !== undefined;
+  const isPlan =
+    paneState(pane).permissionQueue.find((r) => r.id === requestId)?.plan !== undefined;
 
   const result = await call(() =>
     bridge.runs.respondToPermission({ runId: run.runId, requestId, decision }),
@@ -4759,7 +4912,7 @@ export async function respondToPermission(
     return result.error.message;
   }
 
-  const record = recordFor(decision, isQuestion);
+  const record = recordFor(decision, isQuestion, isPlan);
   pane.transcript.resolvePermission(
     requestId,
     record.state,
@@ -4767,8 +4920,33 @@ export async function respondToPermission(
     decision.behavior === 'allow' ? decision.answers : undefined,
   );
 
+  if (isPlan && decision.behavior === 'allow') leavePlanMode(decision, pane);
+
   dropPermissionRequest(requestId, pane);
   return null;
+}
+
+/**
+ * Stop the column claiming it is still planning.
+ *
+ * An approved plan means the agent is about to start work, and the provider
+ * ends plan mode by running the tool at all. The picker in the status line is a
+ * separate thing — a stored preference this column sends at the *start* of a
+ * run — so nothing has told it any of that happened. Left alone it goes on
+ * reading `plan`, and the next prompt would be sent in plan mode: the user
+ * approves a plan, asks the agent to get on with it, and watches it refuse to
+ * edit anything.
+ *
+ * Which mode to move to is the provider's call, not this app's, and the
+ * provider states it in the `setMode` update attached to the request — echoed
+ * back by the plan card and read here. `default` is the fallback for a provider
+ * that offered nothing: it is the mode that asks, which is the safe direction to
+ * guess in, and the picker is one click away for a user who wants otherwise.
+ */
+function leavePlanMode(decision: AllowPermissionDecision, pane: Pane): void {
+  if (paneState(pane).permissionMode !== 'plan') return;
+  const setMode = (decision.updatedPermissions ?? []).find((update) => update.type === 'setMode');
+  setPermissionMode(setMode?.mode ?? 'default', pane);
 }
 
 /**
@@ -4778,12 +4956,18 @@ export async function respondToPermission(
  * "allowed once" is meaningless for an interview and "denied" overstates a
  * shrug — so the record says `answered` or `skipped`, and reserves the
  * permission vocabulary for the requests that are actually about permission.
+ *
+ * A plan is the third case, and it only needs the scope note dropped. "Allowed
+ * once" is true of an approved plan and says nothing: a plan is proposed once
+ * and answered once, so there was never a second scope it could have had.
  */
 function recordFor(
   decision: PermissionDecision,
   isQuestion: boolean,
+  isPlan = false,
 ): { state: Exclude<PermissionItem['state'], 'pending'>; note: string | undefined } {
   if (decision.behavior === 'deny') return { state: 'denied', note: decision.message };
+  if (isPlan) return { state: 'allowed', note: undefined };
   if (!isQuestion) return { state: 'allowed', note: describeScope(decision.scope) };
   const answered = (decision.answers ?? []).some(
     (a) => a.options.length > 0 || (a.notes?.trim().length ?? 0) > 0,
@@ -5136,6 +5320,20 @@ function applyAgentEvent(event: AgentEvent): void {
         permissionQueue: [...s.permissionQueue, event.request],
         run: s.run ? { ...s.run, status: 'awaiting_permission' } : s.run,
       }));
+      break;
+
+    /*
+     * Take it back off the queue, wherever the answer came from.
+     *
+     * For the window that sent the decision this is redundant — `respondToPermission`
+     * already dropped it — and idempotent, because `dropPermissionRequest`
+     * filters by id. It earns its place on every other path: a second window,
+     * a request the provider withdrew, and above all a reload, where the queue
+     * is rebuilt from the replayed history and would otherwise come back
+     * holding every prompt the run ever raised.
+     */
+    case 'permission.resolved':
+      dropPermissionRequest(event.requestId, pane);
       break;
 
     case 'usage': {

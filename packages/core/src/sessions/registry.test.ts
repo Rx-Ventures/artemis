@@ -256,6 +256,20 @@ const permissionRequest = (runId: string, seq: number, requestId: string): Agent
   },
 });
 
+const permissionResolved = (
+  runId: string,
+  seq: number,
+  requestId: string,
+  outcome: 'allowed' | 'denied' | 'withdrawn' = 'withdrawn',
+): AgentEvent => ({
+  type: 'permission.resolved',
+  runId,
+  seq,
+  ts: 1,
+  requestId,
+  outcome,
+});
+
 const runEnd = (runId: string, seq: number): AgentEvent => ({
   type: 'run.end',
   runId,
@@ -646,6 +660,50 @@ describe('RunRegistry — handle state', () => {
     expect(registry.get(runId)?.status).toBe('ended');
     expect(registry.list()).toEqual([]);
     expect(registry.isActive(runId)).toBe(false);
+  });
+
+  /**
+   * The path nobody calls.
+   *
+   * A provider can take a request back — the turn was interrupted, the tool
+   * became moot — and when it does, no `respondToPermission` ever runs. Before
+   * the adapter said so on the stream, the id sat in `pending` forever: the run
+   * read as `awaiting_permission` with nothing to answer, and every attempt to
+   * answer took the adapter's "no such request" branch and failed identically.
+   */
+  it('clears a withdrawn request without anyone answering it', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    const run = firstRun(runs);
+    const { runId } = handle;
+
+    run.emit(permissionRequest(runId, 0, 'perm-1'));
+    await flush();
+    expect(registry.get(runId)?.status).toBe('awaiting_permission');
+
+    run.emit(permissionResolved(runId, 1, 'perm-1'));
+    await flush();
+    expect(registry.get(runId)?.status).toBe('running');
+    // Nothing was sent to the adapter: the provider settled this one itself.
+    expect(run.answered).toEqual([]);
+  });
+
+  it('stays parked while any other request is still open', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    const run = firstRun(runs);
+    const { runId } = handle;
+
+    run.emit(permissionRequest(runId, 0, 'perm-1'));
+    run.emit(permissionRequest(runId, 1, 'perm-2'));
+    run.emit(permissionResolved(runId, 2, 'perm-1', 'allowed'));
+    await flush();
+
+    expect(registry.get(runId)?.status).toBe('awaiting_permission');
+
+    run.emit(permissionResolved(runId, 3, 'perm-2', 'denied'));
+    await flush();
+    expect(registry.get(runId)?.status).toBe('running');
   });
 
   it('narrows list() by cwd', async () => {

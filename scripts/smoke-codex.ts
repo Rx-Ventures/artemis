@@ -74,6 +74,8 @@ function label(event: AgentEvent): string {
       return `${event.name ?? '?'} → ${event.status}${event.durationMs === undefined ? '' : ` (${String(event.durationMs)}ms)`}`;
     case 'permission.request':
       return `${event.request.toolName}: ${event.request.title ?? ''}`;
+    case 'permission.resolved':
+      return `${event.requestId} ${event.outcome}`;
     case 'usage':
       return `${event.usage.scope} in=${String(event.usage.tokens.inputTokens)} out=${String(event.usage.tokens.outputTokens)}`;
     case 'run.end':

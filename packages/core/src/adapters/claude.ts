@@ -83,10 +83,12 @@ import type {
   JsonObject,
   PermissionDecision,
   PermissionRequestId,
+  PermissionResolvedEvent,
   PlanUsage,
   ProfileId,
   ProviderEffortOption,
   ProviderModelOption,
+  QuestionAnswer,
   QuestionPrompt,
   RunEndReason,
   RunStatus,
@@ -116,6 +118,7 @@ import { CLAUDE_ENV_SCRUB_KEYS, composeProviderEnv, readEnv } from './env.js';
 import {
   CLAUDE_PROVIDER_ID,
   DISPOSED_DENY_MESSAGE,
+  WITHDRAWN_DENY_MESSAGE,
   buildPermissionRequest,
   createClaudeMapperState,
   finalizeRun,
@@ -1708,6 +1711,12 @@ class ClaudeRun implements Run {
     }
 
     entry.deferred.resolve(result);
+    this.#emitResolved(
+      requestId,
+      decision.behavior === 'allow' ? 'allowed' : 'denied',
+      decision.behavior === 'deny' ? decision.message : undefined,
+      decision.behavior === 'allow' ? decision.answers : undefined,
+    );
   }
 
   dispose(): Promise<void> {
@@ -2022,8 +2031,13 @@ class ClaudeRun implements Run {
     const onAbort = (): void => {
       this.#pending.delete(requestId);
       deferred.resolve(
-        this.#denyResult('The provider withdrew this tool call.', options.toolUseID),
+        this.#denyResult(WITHDRAWN_DENY_MESSAGE, options.toolUseID),
       );
+      // Nobody answered this one, and nobody will. Without saying so on the
+      // stream the request stays open everywhere downstream — the registry goes
+      // on advertising a prompt that can never be answered, and the card stays
+      // on screen over a decision that has already been made elsewhere.
+      this.#emitResolved(requestId, 'withdrawn', WITHDRAWN_DENY_MESSAGE);
     };
     options.signal.addEventListener('abort', onAbort, { once: true });
 
@@ -2051,11 +2065,42 @@ class ClaudeRun implements Run {
     };
   }
 
+  /**
+   * Say on the stream that a parked request is no longer parked.
+   *
+   * Every path that settles one goes through here, because the alternative —
+   * remembering to emit at each of the three — is the bug this event exists to
+   * fix, one level down. See `PermissionResolvedEvent`.
+   *
+   * Emitting after `run.end` is a no-op: `#emit` drops onto a closed queue. That
+   * is the right answer for the second `#denyAllPending` in `#teardown`, which
+   * runs after the stream has already terminated and has nobody left to tell.
+   */
+  #emitResolved(
+    requestId: PermissionRequestId,
+    outcome: PermissionResolvedEvent['outcome'],
+    note?: string,
+    answers?: readonly QuestionAnswer[],
+  ): void {
+    this.#emit({
+      type: 'permission.resolved',
+      ...nextEventEnvelope(this.#state),
+      requestId,
+      outcome,
+      ...(note === undefined ? {} : { note }),
+      ...(answers === undefined ? {} : { answers }),
+    });
+  }
+
   #denyAllPending(message: string): void {
     if (this.#pending.size === 0) return;
     for (const [requestId, entry] of [...this.#pending]) {
       this.#pending.delete(requestId);
       entry.deferred.resolve(this.#denyResult(message, entry.toolUseID));
+      // `withdrawn`, not `denied`: the user was never given the choice, and a
+      // transcript that recorded this as their refusal would be lying about who
+      // decided.
+      this.#emitResolved(requestId, 'withdrawn', message);
     }
   }
 

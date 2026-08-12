@@ -216,6 +216,50 @@ export interface QuestionAnswer {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Plans                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A plan the agent wants signed off before it starts work.
+ *
+ * The third thing that rides the permission wire, for the same reason the
+ * second one does (see {@link QuestionOption}): parking is the only way a
+ * provider hands control back mid-turn. Claude's `ExitPlanMode` is the one
+ * implemented today — a tool whose entire body of work is already finished by
+ * the time it is called, and whose "arguments" are a document.
+ *
+ * Rendering that as an approval gets everything wrong at once. The plan is
+ * markdown — headings, tables, code — and the verbatim-arguments card shows it
+ * JSON-escaped in a four-line scroller, which is unreadable exactly when
+ * reading it is the entire point. The buttons are wrong too: nobody is
+ * authorising a risk here, they are saying "yes, do that" or "no, think again",
+ * and "allow for this session" means nothing at all about a document.
+ *
+ * So the plan is decoded here and the UI branches on it, the same way it
+ * branches on {@link Question}. Adapters decode; nothing downstream re-parses
+ * provider input.
+ */
+export interface PlanProposal {
+  /**
+   * The plan as written, in markdown.
+   *
+   * **Model-authored text with no trust attached**, like every other stretch of
+   * agent prose. It is rendered as markdown because that is what it is and what
+   * the reader needs, on the same terms as an agent's answer in the transcript:
+   * markdown only, no embedded HTML.
+   */
+  readonly plan: string;
+  /**
+   * Where the provider saved it, when it says.
+   *
+   * Shown, not read: the file is the provider's copy, and Artemis renders the
+   * plan it was handed. Its value is that the user can open the plan after the
+   * run, in an editor, without going hunting.
+   */
+  readonly planPath?: string;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Requests                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -264,6 +308,19 @@ export interface PermissionRequest {
    * card built from input that did not parse.
    */
   readonly question?: QuestionPrompt;
+
+  /**
+   * Set when this park is a plan awaiting sign-off — see {@link PlanProposal}.
+   *
+   * Present only when the adapter could decode the tool's arguments into a
+   * plan, on the same terms as {@link question}: arguments that do not parse
+   * leave this undefined and the request degrades to the verbatim-arguments
+   * card, which is ugly but answerable.
+   *
+   * Mutually exclusive with {@link question} in practice — one tool call is one
+   * kind of ask — but the UI should still pick a branch rather than assume it.
+   */
+  readonly plan?: PlanProposal;
 
   /**
    * Rule changes the provider suggests, for rendering an "always allow"

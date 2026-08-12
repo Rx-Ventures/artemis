@@ -6,7 +6,7 @@
  * path — or fails to record the right one — produces a menu that is quietly
  * wrong and that nobody can correct except by hand in Appearance.
  *
- * Four rules are asserted, and each has a failure that looks like nothing:
+ * Five rules are asserted, and each has a failure that looks like nothing:
  *
  *  1. **Only directories actually adopted are recorded.** A refused move (a live
  *     run) offering its folder in the menu afterwards would advertise a place
@@ -18,6 +18,15 @@
  *     until the eleventh project.
  *  4. **Forgetting is bookkeeping.** It must not touch the working directory,
  *     which is the one thing in this area that ends a session.
+ *  5. **Directories that will not last are not recorded.** A worktree is made
+ *     for one branch and deleted when that branch lands; a temporary directory
+ *     is deleted by the OS. Ten of either evict every real project from a list
+ *     of ten. Moving there still works — only the remembering is declined.
+ *
+ * Recording is asynchronous, because only the filesystem knows what a worktree
+ * is and the renderer has none. Every assertion here therefore goes through
+ * {@link settled}, and one that forgets would pass against an empty list rather
+ * than fail — which is why the negative cases below assert *after* settling too.
  *
  * Display order is *not* here: the menu and the settings pane both sort
  * alphabetically at render (`sortFoldersByName`), and this list is deliberately
@@ -43,6 +52,34 @@ const pane = () => focusedPane();
 const session = () => paneState(pane());
 const folders = () => useApp.getState().recentFolders;
 
+/**
+ * Let the pending "is this a worktree?" answers come back.
+ *
+ * A macrotask is enough, and deliberately so: the check is one bridge call deep
+ * and the dev bridge answering it is timer-free, so anything still outstanding
+ * after this is a bug in the chain rather than a slow reply worth polling for.
+ */
+const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * A directory the bridge answers `worktree: true` for.
+ *
+ * The dev bridge keys off the path because it has no filesystem to read; the
+ * real check reads the `gitdir:` pointer out of the worktree's `.git` file and
+ * is tested against actual directories in core's `repo.test.ts`. What is being
+ * asserted here is what the store does with the answer, not how it is reached.
+ */
+const WORKTREE = '/work/worktrees/fix-login';
+
+/**
+ * A directory the bridge answers `temporary: true` for.
+ *
+ * `/tmp` because it is the one spelling recognisable without a filesystem; the
+ * real check knows this machine's `tmpdir()`, which on macOS is an opaque path
+ * under `/var/folders`. Tested for itself in core's `temp.test.ts`.
+ */
+const TEMP = '/tmp/agent-run-3f2a/checkout';
+
 const LIVE_RUN = {
   runId: 'r1',
   status: 'running',
@@ -65,22 +102,28 @@ const LIVE_RUN = {
   startedAt: 1_000,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Settle *before* clearing, not after: a recording still queued from the
+  // previous test would otherwise land in this one's list and fail it somewhere
+  // unrelated.
+  await settled();
   useApp.setState({ banners: [], recentFolders: [] });
   setPaneState(pane(), { cwd: '', resumeSessionId: null, run: null });
   pane().transcript.reset();
 });
 
 describe('recording', () => {
-  it('remembers each directory worked in', () => {
+  it('remembers each directory worked in', async () => {
     setCwd('/work/api');
     setCwd('/work/web');
+    await settled();
 
     expect([...folders()].sort()).toEqual(['/work/api', '/work/web']);
   });
 
-  it('records the trimmed path, so the menu matches the working directory', () => {
+  it('records the trimmed path, so the menu matches the working directory', async () => {
     setCwd('  /work/api  ');
+    await settled();
 
     // `setCwd` stores the trimmed form; an untrimmed twin in this list would
     // render as a second row that never shows as the current one.
@@ -88,36 +131,40 @@ describe('recording', () => {
     expect(folders()).toEqual(['/work/api']);
   });
 
-  it('never records an empty directory', () => {
+  it('never records an empty directory', async () => {
     setCwd('   ');
+    await settled();
 
     // An unconfigured window has `cwd === ''`. There is no folder to go back to.
     expect(folders()).toEqual([]);
   });
 
-  it('records a folder once, however many times it is opened', () => {
+  it('records a folder once, however many times it is opened', async () => {
     setCwd('/work/api');
     setCwd('/work/web');
     setCwd('/work/api');
+    await settled();
 
     expect(folders()).toHaveLength(2);
   });
 
-  it('promotes a re-opened folder, because the order decides what is dropped', () => {
+  it('promotes a re-opened folder, because the order decides what is dropped', async () => {
     setCwd('/work/api');
     setCwd('/work/web');
     setCwd('/work/api');
+    await settled();
 
     // Front is "most recently worked in". A folder in daily rotation must not
     // age out just because it was first seen a long time ago.
     expect(folders()[0]).toBe('/work/api');
   });
 
-  it('does not record a move that was refused', () => {
+  it('does not record a move that was refused', async () => {
     setCwd('/work/api');
     setPaneState(pane(), { run: LIVE_RUN });
 
     setCwd('/work/web');
+    await settled();
 
     // The run is live, so `setCwd` refused and said so. Offering `/work/web` in
     // the menu afterwards would list a folder the app never went to.
@@ -127,9 +174,64 @@ describe('recording', () => {
   });
 });
 
+describe('directories that will not last', () => {
+  it.each([
+    ['a worktree', WORKTREE],
+    ['a temporary directory', TEMP],
+  ])('moves to %s without recording it', async (_label, path) => {
+    setCwd(path);
+    await settled();
+
+    // Both halves matter. Working in one is ordinary and must not be
+    // obstructed; remembering it is the promise the directory will not keep.
+    expect(session().cwd).toBe(path);
+    expect(folders()).toEqual([]);
+  });
+
+  it('records the ordinary checkouts either side of one', async () => {
+    setCwd('/work/api');
+    setCwd(WORKTREE);
+    setCwd(TEMP);
+    setCwd('/work/web');
+    await settled();
+
+    // Skipped rather than the list being suspended: a trip through scratch
+    // space must not cost the projects on either side of it.
+    expect([...folders()].sort()).toEqual(['/work/api', '/work/web']);
+  });
+
+  it('spends none of the cap on them', async () => {
+    for (let i = 0; i < RECENT_FOLDERS_LIMIT; i += 1) setCwd(`/work/worktrees/branch-${i}`);
+    for (let i = 0; i < RECENT_FOLDERS_LIMIT; i += 1) setCwd(`/tmp/agent-run-${i}`);
+    setCwd('/work/api');
+    await settled();
+
+    // The failure this exists to catch: twenty scratch directories evicting
+    // every real project from a list of ten, which is what the whole change is
+    // for.
+    expect(folders()).toEqual(['/work/api']);
+  });
+
+  it('keeps one already in the list until it is forgotten', async () => {
+    // Stored preferences predate this rule, so a list restored from disk can
+    // hold them. They are left alone rather than pruned on sight: this decides
+    // what gets *added*, and silently editing a restored list would be a
+    // second, unasked-for behaviour on top of that.
+    useApp.setState({ recentFolders: [WORKTREE, TEMP] });
+    setCwd('/work/api');
+    await settled();
+
+    expect(folders()).toEqual(['/work/api', WORKTREE, TEMP]);
+
+    forgetFolders([WORKTREE, TEMP]);
+    expect(folders()).toEqual(['/work/api']);
+  });
+});
+
 describe('the cap', () => {
-  it(`keeps at most ${RECENT_FOLDERS_LIMIT}, dropping the one untouched longest`, () => {
+  it(`keeps at most ${RECENT_FOLDERS_LIMIT}, dropping the one untouched longest`, async () => {
     for (let i = 0; i <= RECENT_FOLDERS_LIMIT; i += 1) setCwd(`/work/p${i}`);
+    await settled();
 
     expect(folders()).toHaveLength(RECENT_FOLDERS_LIMIT);
     // `p0` was the first opened and never re-opened, so it is the one that made
@@ -138,10 +240,11 @@ describe('the cap', () => {
     expect(folders()).toContain('/work/p10');
   });
 
-  it('spares a folder that was re-opened, however early it was first seen', () => {
+  it('spares a folder that was re-opened, however early it was first seen', async () => {
     for (let i = 0; i < RECENT_FOLDERS_LIMIT; i += 1) setCwd(`/work/p${i}`);
     setCwd('/work/p0');
     setCwd('/work/new');
+    await settled();
 
     // `p0` was oldest by first-seen and newest by last-used. The list is about
     // last-used, so `p1` is what makes way.
@@ -151,10 +254,12 @@ describe('the cap', () => {
 });
 
 describe('forgetting', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setCwd('/work/api');
     setCwd('/work/web');
     setCwd('/work/docs');
+    // The list has to be real before anything can be removed from it.
+    await settled();
   });
 
   it('removes one', () => {
@@ -187,9 +292,10 @@ describe('forgetting', () => {
     expect(folders()).not.toContain('/work/docs');
   });
 
-  it('takes the folder back the next time it is opened', () => {
+  it('takes the folder back the next time it is opened', async () => {
     forgetFolders(['/work/api']);
     setCwd('/work/api');
+    await settled();
 
     // Which is why removal needs no confirmation and no undo.
     expect(folders()).toContain('/work/api');

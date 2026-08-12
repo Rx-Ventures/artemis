@@ -51,6 +51,7 @@ import type {
   PermissionRequestId,
   PermissionRuleUpdate,
   PermissionScope,
+  PlanProposal,
   ProfileId,
   Question,
   QuestionAnswer,
@@ -100,6 +101,12 @@ export const DEFAULT_DENY_MESSAGE = 'The user declined this tool call.';
 /** Sent when a run is torn down with a permission prompt still unanswered. */
 export const DISPOSED_DENY_MESSAGE =
   'The run was closed before this tool call could be approved.';
+
+/**
+ * Sent when the provider takes a prompt back — the turn was interrupted, or the
+ * tool became moot before anyone answered.
+ */
+export const WITHDRAWN_DENY_MESSAGE = 'The provider withdrew this tool call.';
 
 /* -------------------------------------------------------------------------- */
 /* JSON coercion                                                              */
@@ -626,7 +633,14 @@ function mapAssistantMessage(
         // There is no `thinking.complete` in the union — thinking is
         // presentational. When it was streamed, the deltas already carry it;
         // when it was not, one delta carries the whole block.
-        if (!wasStreamed(state, messageId, blockIndex)) {
+        //
+        // Unless the block has no plaintext to carry. The provider returns
+        // `thinking: ''` beside a full signature whenever it kept the block but
+        // withheld its content, and there is nothing to stream for one of
+        // those — the deltas never came, so this path is exactly where they
+        // land. Emitting one anyway put an empty fold in the transcript for
+        // every such block.
+        if (block.thinking !== '' && !wasStreamed(state, messageId, blockIndex)) {
           events.push({
             type: 'thinking.delta',
             ...stamp(state),
@@ -955,6 +969,12 @@ function mapStreamEvent(
       }
 
       if (delta.type === 'thinking_delta') {
+        // An empty chunk is not a delivery, so it does not mark the block
+        // streamed: marking it would tell the completed-message path that this
+        // block's text had already gone out, and a block whose only chunk was
+        // empty would lose whatever text the completed message did carry. Any
+        // chunk with text still marks it, so nothing arrives twice.
+        if (delta.thinking === '') return [];
         markStreamed(state, messageId, event.index);
         return [
           {
@@ -1472,6 +1492,53 @@ export function withQuestionAnswers(
   };
 }
 
+/* ---------------------------------- plans --------------------------------- */
+
+/**
+ * The tool Claude uses to put a finished plan in front of the user.
+ *
+ * Like `AskUserQuestion`, the permission callback is not a gate on it but its
+ * whole interface: the work — writing the plan — is already done by the time it
+ * is called, and allowing the call is the user saying "yes, go and do that".
+ */
+export const EXIT_PLAN_MODE_TOOL = 'ExitPlanMode';
+
+/**
+ * Decode `ExitPlanMode` arguments into a plan, or `undefined`.
+ *
+ * Strict and silent for the same reasons as {@link readQuestionPrompt}: this
+ * runs on model-authored input inside the adapter, where there is no user to
+ * show a parse error to, and the caller has a safe fallback — the verbatim
+ * arguments card, which is ugly but answerable.
+ *
+ * `plan` is the only field that matters, because it is the only one the user is
+ * being asked about. `planFilePath` is taken when it is there and shrugged off
+ * when it is not; the provider has changed its mind about this field before, and
+ * a plan is still perfectly readable without knowing where a copy of it landed.
+ *
+ * `allowedPrompts` is deliberately not read. The SDK's own types mark it
+ * *"Deprecated: no longer used"*, and rendering a list of pre-authorised Bash
+ * commands that the provider has stopped acting on would be the worst kind of
+ * wrong: a security-shaped claim that is not true.
+ */
+export function readPlanProposal(
+  toolName: string,
+  input: Record<string, unknown>,
+): PlanProposal | undefined {
+  if (toolName !== EXIT_PLAN_MODE_TOOL) return undefined;
+
+  const plan = input['plan'];
+  // An empty plan is not a plan. Falling through to the arguments card is the
+  // honest rendering of "the agent asked for sign-off on nothing".
+  if (typeof plan !== 'string' || plan.trim().length === 0) return undefined;
+
+  const planPath = input['planFilePath'];
+  return {
+    plan,
+    ...(typeof planPath === 'string' && planPath.length > 0 ? { planPath } : {}),
+  };
+}
+
 /* ------------------------------- permissions ------------------------------ */
 
 /**
@@ -1533,6 +1600,7 @@ export function buildPermissionRequest(params: BuildPermissionRequestParams): Pe
     reason: info?.decisionReason,
     blockedPath: info?.blockedPath,
     question: readQuestionPrompt(params.toolName, params.input),
+    plan: readPlanProposal(params.toolName, params.input),
     suggestions: suggestions.length > 0 ? suggestions : undefined,
     requestedAt: params.requestedAt,
   };

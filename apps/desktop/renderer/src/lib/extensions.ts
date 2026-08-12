@@ -206,6 +206,23 @@ export interface WorkspaceNames {
   readonly repoName?: string;
   /** Absolute path to that repository's root. */
   readonly repoRoot?: string;
+  /**
+   * Is that root a linked worktree rather than an ordinary checkout?
+   *
+   * Absent unless it is one — including when the answer cannot be had, which is
+   * the case an older preload produces: a build whose `describe` channel
+   * predates this field answers without it, and "not a worktree" is the reading
+   * that leaves such a build behaving exactly as it did before.
+   */
+  readonly worktree?: boolean;
+  /**
+   * Is the directory inside the machine's temporary directory?
+   *
+   * Absent unless it is, and absent for the same "cannot tell" reasons as
+   * {@link worktree}. The renderer cannot work this out for itself: `tmpdir()`
+   * is a fact about the machine.
+   */
+  readonly temporary?: boolean;
 }
 
 /**
@@ -231,6 +248,6 @@ export async function describeWorkspace(path: string): Promise<WorkspaceNames | 
   const result = await call(() => bridge.workspace.describe({ path: trimmed }));
   if (!result.ok) return null;
 
-  const { name, repoName, repoRoot } = result.value;
-  return { name, repoName, repoRoot };
+  const { name, repoName, repoRoot, worktree, temporary } = result.value;
+  return { name, repoName, repoRoot, worktree, temporary };
 }
