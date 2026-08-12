@@ -2,7 +2,12 @@
  * Choosing the directory the agent works in.
  * ============================================================================
  *
- * Two ways in, and both are always present:
+ * The control above the composer is a **menu of folders already worked in**,
+ * because that is the choice being made nearly every time — see
+ * `WorkingDirectoryChip`. What follows is the dialog behind its last row, for
+ * the case the list cannot answer: a folder the app has never been in.
+ *
+ * Two ways in from there, and both are always present:
  *
  *  - **Browse…** opens the host's own folder chooser over IPC. That channel is
  *    feature-detected (`lib/extensions.ts`) because it is being added by the
@@ -30,15 +35,33 @@
  * sidebar used to be a fourth; see the note at the foot of this file.
  */
 
-import { useState, type ReactElement } from 'react';
+import { useMemo, useRef, useState, type ReactElement } from 'react';
 import { FolderIcon, FolderSearchIcon, GitBranchIcon, TriangleAlertIcon } from 'lucide-react';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON } from '../lib/extensions';
-import { absolutePathHint, isAbsolutePath, lastSegment } from '../lib/paths';
+import {
+  absolutePathHint,
+  inferHomeDirectory,
+  isAbsolutePath,
+  lastSegment,
+  shortenPath,
+  sortFoldersByName,
+  type Platform,
+} from '../lib/paths';
 import { chooseWorkingDirectory, lastKnownBranch, setCwd, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
@@ -212,6 +235,30 @@ export function WorkingDirectoryDialog({
 /**
  * The directory control, as a chip above the composer.
  *
+ * ## It opens a list of folders, not a file dialog
+ *
+ * Clicking it drops a menu of the folders this window has worked in — see
+ * `AppState.recentFolders` — with the current one ticked. Moving between two or
+ * three projects is the thing this control is actually asked to do all day, and
+ * the version that went straight to the host's file dialog made the app's own
+ * memory unreachable: the OS chooser has no idea which folders Artemis has been
+ * in, so every hop was a navigation through a tree the app could have simply
+ * listed.
+ *
+ * The dialog is one row further down, under **Add folder…**, and it is the same
+ * dialog it always was — Browse plus a path field. Nothing was replaced; a
+ * shortcut was put in front of it for the case that is common.
+ *
+ * Rows are alphabetical, which is a different order from the one the list is
+ * stored in. That note lives on `AppState.recentFolders`; the short version is
+ * that a menu which reorders itself around what you last did cannot be learned.
+ *
+ * Choosing a row is a `setCwd`, so it inherits that action's rules whole: moving
+ * ends the selected session, and a live run refuses with a banner rather than
+ * throwing the run away. The menu does not restate either — this is the same
+ * commitment the dialog behind it has always made, and it is made in the same
+ * place.
+ *
  * ## It names the folder rather than locating it
  *
  * The label is the *last segment* only — `libra`, not `~/dev/work/libra`. A
@@ -236,10 +283,35 @@ export function WorkingDirectoryDialog({
  * and the dialog says so before the click.
  */
 export function WorkingDirectoryChip(): ReactElement {
+  const pane = usePaneRef();
   const cwd = usePane((s) => s.cwd);
   const workspace = usePane((s) => s.workspace);
   const branch = usePane(lastKnownBranch);
+  const platform = useApp((s) => s.platform);
+  const recentFolders = useApp((s) => s.recentFolders);
   const [open, setOpen] = useState(false);
+
+  const folders = useMemo(() => sortFoldersByName(recentFolders), [recentFolders]);
+  /*
+   * Home is inferred from the folders themselves, which is exactly what
+   * `inferHomeDirectory` is for — the renderer has no `$HOME`. The current
+   * directory joins the sample even when it has been forgotten from the list,
+   * because a one-entry menu still wants its `~`.
+   */
+  const home = useMemo(
+    () => inferHomeDirectory([...folders, cwd], platform),
+    [folders, cwd, platform],
+  );
+
+  /*
+   * Set while a menu item is opening the dialog.
+   *
+   * Radix returns focus to the trigger when a menu closes, which lands *after*
+   * the dialog has mounted and taken focus — so without this the chip would
+   * steal focus back and the path field would open unfocused. Read and cleared
+   * by `onCloseAutoFocus` below.
+   */
+  const toDialog = useRef(false);
 
   const unset = cwd.trim().length === 0;
   /*
@@ -256,59 +328,133 @@ export function WorkingDirectoryChip(): ReactElement {
 
   return (
     <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => setOpen(true)}
-            aria-label="Working directory — change it"
-            // Faint either way. "No directory" is the same absent-value
-            // placeholder the header and the sidebar show, and colouring one of
-            // the three left this control disagreeing with them about how
-            // alarming an unconfigured app is.
-            className="h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal text-ink-faint"
-          >
-            <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className={cn('truncate', !unset && 'text-ink-muted')}>
-              {name ?? 'no directory'}
-            </span>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-label="Working directory — change it"
+                // Faint either way. "No directory" is the same absent-value
+                // placeholder the header and the sidebar show, and colouring one
+                // of the three left this control disagreeing with them about how
+                // alarming an unconfigured app is.
+                className="h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal text-ink-faint"
+              >
+                <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
+                <span className={cn('truncate', !unset && 'text-ink-muted')}>
+                  {name ?? 'no directory'}
+                </span>
+                {branch ? (
+                  <span className="flex min-w-0 items-center gap-1">
+                    <GitBranchIcon className="size-3 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{branch}</span>
+                  </span>
+                ) : null}
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          {/*
+            `flex-col items-start`, because `TooltipContent` is a flex *row* with
+            centred items — two children in it become two columns, which is how
+            this tooltip spent a while rendering the path and the branch note side
+            by side, each half the width and neither reading as a sentence.
+
+            The full path lives here now that the chip shows only the folder name.
+            That makes the hover load-bearing rather than merely convenient, which
+            is the trade this chip accepts.
+          */}
+          <TooltipContent side="top" align="start" className="max-w-sm flex-col items-start gap-1">
+            {unset ? (
+              <span>
+                No working directory set — the agent needs an absolute path to work in. Click to
+                choose one.
+              </span>
+            ) : (
+              <span className="font-mono break-all">{cwd}</span>
+            )}
             {branch ? (
-              <span className="flex min-w-0 items-center gap-1">
-                <GitBranchIcon className="size-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{branch}</span>
+              <span className="text-ink-faint">
+                Branch “{branch}” is the last one recorded here, so it may be stale.
               </span>
             ) : null}
-          </Button>
-        </TooltipTrigger>
-        {/*
-          `flex-col items-start`, because `TooltipContent` is a flex *row* with
-          centred items — two children in it become two columns, which is how
-          this tooltip spent a while rendering the path and the branch note side
-          by side, each half the width and neither reading as a sentence.
+          </TooltipContent>
+        </Tooltip>
 
-          The full path lives here now that the chip shows only the folder name.
-          That makes the hover load-bearing rather than merely convenient, which
-          is the trade this chip accepts.
+        {/*
+          Wider than the trigger, which is a chip. The default content width is
+          the trigger's, and paths do not fit in it.
         */}
-        <TooltipContent side="top" align="start" className="max-w-sm flex-col items-start gap-1">
-          {unset ? (
-            <span>
-              No working directory set — the agent needs an absolute path to work in. Click to
-              choose one.
-            </span>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          className="w-72 max-w-[min(18rem,90vw)]"
+          onCloseAutoFocus={(event) => {
+            if (!toDialog.current) return;
+            toDialog.current = false;
+            event.preventDefault();
+          }}
+        >
+          <DropdownMenuLabel className="text-2xs text-ink-faint">Recent folders</DropdownMenuLabel>
+
+          {folders.length === 0 ? (
+            <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+              No folders remembered yet. The one you work in next appears here.
+            </p>
           ) : (
-            <span className="font-mono break-all">{cwd}</span>
+            <DropdownMenuRadioGroup value={cwd} onValueChange={(next) => setCwd(next, pane)}>
+              {folders.map((folder) => (
+                <FolderItem key={folder} path={folder} home={home} platform={platform} />
+              ))}
+            </DropdownMenuRadioGroup>
           )}
-          {branch ? (
-            <span className="text-ink-faint">
-              Branch “{branch}” is the last one recorded here, so it may be stale.
-            </span>
-          ) : null}
-        </TooltipContent>
-      </Tooltip>
+
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-2xs"
+            onSelect={() => {
+              toDialog.current = true;
+              setOpen(true);
+            }}
+          >
+            <FolderSearchIcon className="size-3" />
+            Add folder…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <WorkingDirectoryDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+/**
+ * One folder in the menu: its name, and the path under it.
+ *
+ * Both, unlike the chip — the chip answers "am I in the right place" about a
+ * directory you are already in, whereas this is a *choice between* directories,
+ * and two checkouts of the same repository are the case where the name alone
+ * cannot be chosen between. The path is shortened for width and carried whole in
+ * the `title`, which is the rule every shortened path in the app follows.
+ */
+function FolderItem({
+  path,
+  home,
+  platform,
+}: {
+  readonly path: string;
+  readonly home: string | undefined;
+  readonly platform: Platform;
+}): ReactElement {
+  return (
+    <DropdownMenuRadioItem value={path} className="text-xs" title={path}>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-ink">{lastSegment(path)}</span>
+        <span className="truncate font-mono text-2xs text-ink-faint">
+          {shortenPath(path, { home, platform, max: 34 })}
+        </span>
+      </span>
+    </DropdownMenuRadioItem>
   );
 }
 

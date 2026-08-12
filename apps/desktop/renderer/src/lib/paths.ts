@@ -162,3 +162,29 @@ export function lastSegment(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.length > 0 ? (parts[parts.length - 1] as string) : path;
 }
+
+/**
+ * Order a set of directories the way a person looks for one: by folder name.
+ *
+ * By *name*, not by path, because the name is what the row is labelled with and
+ * what the user is scanning for. Sorting on the full path would group by
+ * whatever tree a project happens to live in — every `~/dev/...` before every
+ * `~/work/...` — which is an order the user cannot predict from the labels they
+ * can see. The path breaks ties, so two `desktop` folders in different trees sit
+ * together and in a stable order rather than swapping places between renders.
+ *
+ * `localeCompare` with `sensitivity: 'base'` and `numeric`, so `Artemis` sorts
+ * next to `artemis` rather than in a separate uppercase block, and `run-2` comes
+ * before `run-10`.
+ *
+ * Returns a new array; the input is left alone. Callers hold these lists in a
+ * store where identity decides re-renders, so sorting in place would be a
+ * mutation of state nobody asked for.
+ */
+export function sortFoldersByName(paths: readonly string[]): readonly string[] {
+  const collate = (a: string, b: string): number =>
+    a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+  return [...paths].sort(
+    (a, b) => collate(lastSegment(a), lastSegment(b)) || collate(a, b),
+  );
+}
