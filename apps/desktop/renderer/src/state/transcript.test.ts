@@ -119,6 +119,160 @@ describe('TranscriptModel', () => {
   });
 });
 
+/**
+ * Replaying a run that had prompts in it.
+ *
+ * ⌘R reloads the renderer without touching the main process, so the transcript
+ * is rebuilt by replaying the run's retained events into an empty model. Before
+ * `permission.resolved` existed, the history held only the *asking* — so every
+ * prompt the user had already answered came back pending, and the user was
+ * asked to approve a plan they had approved a minute earlier.
+ */
+describe('TranscriptModel permission replay', () => {
+  const REQUEST = {
+    id: 'perm-1',
+    runId: RUN,
+    toolName: 'Bash',
+    input: { command: 'ls' },
+    requestedAt: 1,
+  };
+
+  function replay(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): TranscriptModel {
+    const model = build();
+    for (const event of stream(...drafts)) model.apply(event);
+    return model;
+  }
+
+  function card(model: TranscriptModel) {
+    return model
+      .getListSnapshot()
+      .map((id) => model.getItem(id))
+      .find((item) => item?.kind === 'permission');
+  }
+
+  it('settles a replayed prompt instead of asking again', () => {
+    const model = replay(
+      { type: 'permission.request', requestId: 'perm-1', request: REQUEST },
+      { type: 'permission.resolved', requestId: 'perm-1', outcome: 'allowed' },
+    );
+    expect(card(model)).toMatchObject({ state: 'allowed' });
+  });
+
+  it('keeps a prompt that was still open when the window went away', () => {
+    const model = replay({ type: 'permission.request', requestId: 'perm-1', request: REQUEST });
+    // The run really is still parked on this one, so it has to come back as a
+    // live card — the whole point of re-attaching is that the user can answer it.
+    expect(card(model)).toMatchObject({ state: 'pending' });
+  });
+
+  it('records a denial with the reason that was given', () => {
+    const model = replay(
+      { type: 'permission.request', requestId: 'perm-1', request: REQUEST },
+      { type: 'permission.resolved', requestId: 'perm-1', outcome: 'denied', note: 'not that one' },
+    );
+    expect(card(model)).toMatchObject({ state: 'denied', note: 'not that one' });
+  });
+
+  /**
+   * A question is answered, not "allowed" — and a replayed record has to show
+   * which options were picked, or the transcript loses what the conversation
+   * actually decided.
+   */
+  it('replays an answered question as answered, with the answers', () => {
+    const question = {
+      questions: [
+        {
+          question: 'Which library?',
+          header: 'Library',
+          multiSelect: false,
+          options: [
+            { label: 'date-fns', description: 'one' },
+            { label: 'Luxon', description: 'two' },
+          ],
+        },
+      ],
+    };
+    const model = replay(
+      {
+        type: 'permission.request',
+        requestId: 'perm-1',
+        request: { ...REQUEST, toolName: 'AskUserQuestion', question },
+      },
+      {
+        type: 'permission.resolved',
+        requestId: 'perm-1',
+        outcome: 'allowed',
+        answers: [{ question: 'Which library?', options: ['Luxon'] }],
+      },
+    );
+    expect(card(model)).toMatchObject({
+      state: 'answered',
+      answers: [{ question: 'Which library?', options: ['Luxon'] }],
+    });
+  });
+
+  it('replays an unanswered question as skipped', () => {
+    const question = {
+      questions: [
+        {
+          question: 'Which library?',
+          header: 'Library',
+          multiSelect: false,
+          options: [
+            { label: 'date-fns', description: 'one' },
+            { label: 'Luxon', description: 'two' },
+          ],
+        },
+      ],
+    };
+    const model = replay(
+      {
+        type: 'permission.request',
+        requestId: 'perm-1',
+        request: { ...REQUEST, toolName: 'AskUserQuestion', question },
+      },
+      { type: 'permission.resolved', requestId: 'perm-1', outcome: 'allowed', answers: [] },
+    );
+    expect(card(model)).toMatchObject({ state: 'skipped' });
+  });
+
+  /**
+   * The local record wins. Whoever sent the decision knows things the event
+   * does not — the scope the user picked, for one — so a resolution arriving
+   * after the card has already settled must not overwrite it.
+   */
+  it('does not overwrite a card that was already settled locally', () => {
+    const model = build();
+    for (const event of stream({
+      type: 'permission.request',
+      requestId: 'perm-1',
+      request: REQUEST,
+    })) {
+      model.apply(event);
+    }
+    model.resolvePermission('perm-1', 'allowed', 'allowed for this session');
+    model.apply({
+      type: 'permission.resolved',
+      runId: RUN,
+      seq: 1,
+      ts: 2,
+      requestId: 'perm-1',
+      outcome: 'allowed',
+    });
+    expect(card(model)).toMatchObject({ state: 'allowed', note: 'allowed for this session' });
+  });
+
+  /**
+   * The retained history is bounded, so a long run can drop the request and
+   * keep the resolution. There is no card to settle, and inventing one would
+   * put a decision in the transcript with no ask above it.
+   */
+  it('ignores a resolution for a request it never saw', () => {
+    const model = replay({ type: 'permission.resolved', requestId: 'perm-9', outcome: 'allowed' });
+    expect(card(model)).toBeUndefined();
+  });
+});
+
 describe('TranscriptModel activity groups', () => {
   /** `tool.start` + `tool.end` for one call, as a pair of event drafts. */
   function call(id: string, name: string, status: ToolEndStatus = 'ok') {

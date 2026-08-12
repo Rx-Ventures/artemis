@@ -750,6 +750,19 @@ export class RunRegistry {
         entry.pending.add(event.requestId);
         entry.handle = { ...handle, status: 'awaiting_permission' };
         break;
+      case 'permission.resolved': {
+        // The same bookkeeping {@link respondToPermission} does on its way out,
+        // now also reached when *nobody called it* — the provider withdrew the
+        // request, or the run was torn down with it still open. Those paths used
+        // to leave the id here forever, so the registry went on advertising a
+        // prompt no answer could ever land on: every attempt took the adapter's
+        // "no such request" branch and failed identically.
+        entry.pending.delete(event.requestId);
+        if (entry.pending.size === 0 && handle.status === 'awaiting_permission') {
+          entry.handle = { ...handle, status: 'running' };
+        }
+        break;
+      }
       case 'run.end':
         entry.ended = true;
         entry.pending.clear();

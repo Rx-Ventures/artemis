@@ -43,6 +43,7 @@ import type {
   AuthStatusInfo,
   AgentError,
   AgentEvent,
+  AllowPermissionDecision,
   Attachment,
   Capabilities,
   IpcError,
@@ -4354,6 +4355,8 @@ export async function respondToPermission(
   // written afterwards still has to know which kind of card it is settling.
   const isQuestion =
     paneState(pane).permissionQueue.find((r) => r.id === requestId)?.question !== undefined;
+  const isPlan =
+    paneState(pane).permissionQueue.find((r) => r.id === requestId)?.plan !== undefined;
 
   const result = await call(() =>
     bridge.runs.respondToPermission({ runId: run.runId, requestId, decision }),
@@ -4372,7 +4375,7 @@ export async function respondToPermission(
     return result.error.message;
   }
 
-  const record = recordFor(decision, isQuestion);
+  const record = recordFor(decision, isQuestion, isPlan);
   pane.transcript.resolvePermission(
     requestId,
     record.state,
@@ -4380,8 +4383,33 @@ export async function respondToPermission(
     decision.behavior === 'allow' ? decision.answers : undefined,
   );
 
+  if (isPlan && decision.behavior === 'allow') leavePlanMode(decision, pane);
+
   dropPermissionRequest(requestId, pane);
   return null;
+}
+
+/**
+ * Stop the column claiming it is still planning.
+ *
+ * An approved plan means the agent is about to start work, and the provider
+ * ends plan mode by running the tool at all. The picker in the status line is a
+ * separate thing — a stored preference this column sends at the *start* of a
+ * run — so nothing has told it any of that happened. Left alone it goes on
+ * reading `plan`, and the next prompt would be sent in plan mode: the user
+ * approves a plan, asks the agent to get on with it, and watches it refuse to
+ * edit anything.
+ *
+ * Which mode to move to is the provider's call, not this app's, and the
+ * provider states it in the `setMode` update attached to the request — echoed
+ * back by the plan card and read here. `default` is the fallback for a provider
+ * that offered nothing: it is the mode that asks, which is the safe direction to
+ * guess in, and the picker is one click away for a user who wants otherwise.
+ */
+function leavePlanMode(decision: AllowPermissionDecision, pane: Pane): void {
+  if (paneState(pane).permissionMode !== 'plan') return;
+  const setMode = (decision.updatedPermissions ?? []).find((update) => update.type === 'setMode');
+  setPermissionMode(setMode?.mode ?? 'default', pane);
 }
 
 /**
@@ -4391,12 +4419,18 @@ export async function respondToPermission(
  * "allowed once" is meaningless for an interview and "denied" overstates a
  * shrug — so the record says `answered` or `skipped`, and reserves the
  * permission vocabulary for the requests that are actually about permission.
+ *
+ * A plan is the third case, and it only needs the scope note dropped. "Allowed
+ * once" is true of an approved plan and says nothing: a plan is proposed once
+ * and answered once, so there was never a second scope it could have had.
  */
 function recordFor(
   decision: PermissionDecision,
   isQuestion: boolean,
+  isPlan = false,
 ): { state: Exclude<PermissionItem['state'], 'pending'>; note: string | undefined } {
   if (decision.behavior === 'deny') return { state: 'denied', note: decision.message };
+  if (isPlan) return { state: 'allowed', note: undefined };
   if (!isQuestion) return { state: 'allowed', note: describeScope(decision.scope) };
   const answered = (decision.answers ?? []).some(
     (a) => a.options.length > 0 || (a.notes?.trim().length ?? 0) > 0,
@@ -4749,6 +4783,20 @@ function applyAgentEvent(event: AgentEvent): void {
         permissionQueue: [...s.permissionQueue, event.request],
         run: s.run ? { ...s.run, status: 'awaiting_permission' } : s.run,
       }));
+      break;
+
+    /*
+     * Take it back off the queue, wherever the answer came from.
+     *
+     * For the window that sent the decision this is redundant — `respondToPermission`
+     * already dropped it — and idempotent, because `dropPermissionRequest`
+     * filters by id. It earns its place on every other path: a second window,
+     * a request the provider withdrew, and above all a reload, where the queue
+     * is rebuilt from the replayed history and would otherwise come back
+     * holding every prompt the run ever raised.
+     */
+    case 'permission.resolved':
+      dropPermissionRequest(event.requestId, pane);
       break;
 
     case 'usage': {
