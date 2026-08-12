@@ -108,8 +108,13 @@ describe('checkOutcomeNotice', () => {
     expect(notice?.detail).toContain('0.4.0');
   });
 
-  it('points at gh when the feed could not be reached', () => {
-    expect(checkOutcomeNotice({ kind: 'unreachable' }, '0.4.0')?.detail).toContain('gh');
+  it('points at the network when the feed could not be reached', () => {
+    // It used to point at `gh`, which was the only route to a private
+    // repository's releases. Public releases need no account, so the advice that
+    // can actually help is about reaching github.com at all.
+    const detail = checkOutcomeNotice({ kind: 'unreachable' }, '0.4.0')?.detail ?? '';
+    expect(detail).toContain('github.com');
+    expect(detail).toContain('releases page');
   });
 
   it('answers every outcome that leaves the screen unchanged', () => {

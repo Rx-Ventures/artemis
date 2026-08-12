@@ -1310,7 +1310,7 @@ export function createMockBridge(): ArtemisBridge {
       phase,
       version: '0.4.0',
       message: phase === 'error' ? 'The download could not be verified.' : null,
-      releaseUrl: phase === 'error' ? 'https://github.com/seth-torrence/artemis/releases' : null,
+      releaseUrl: phase === 'error' ? 'https://github.com/Rx-Ventures/artemis/releases' : null,
     };
   }
 
