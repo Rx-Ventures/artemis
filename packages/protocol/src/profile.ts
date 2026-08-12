@@ -2,13 +2,23 @@
  * Profiles: a label, a config directory, and optionally a colour.
  *
  * A profile is how Artemis switches accounts, and it holds exactly two things
- * the user chose that decide *behaviour*: what to call it, and which directory
- * the provider's CLI keeps its state in. Everything else — which account, which
- * plan, which credential — is a property of that directory, established by the
- * user running the provider's own login against it.
+ * the user chose that decide *what a run does*: what to call it, and which
+ * directory the provider's CLI keeps its state in. Everything else — which
+ * account, which plan, which credential — is a property of that directory,
+ * established by the user running the provider's own login against it.
  *
- * The colour is the one addition that decides nothing, and that is why it is
- * allowed to exist: see {@link Profile.color}.
+ * The colour is the one addition that decides nothing at all, and that is why
+ * it is allowed to exist: see {@link Profile.color}.
+ *
+ * ## The three fields that decide something smaller
+ *
+ * {@link Profile.planId}, {@link Profile.autoSelect} and
+ * {@link Profile.disabled} sit between those two categories, and the boundary
+ * they respect is worth stating once: none of them can change what a run *does*
+ * — which account is billed, which history is reachable, what the CLI is
+ * handed. They decide which profile is *offered*, and how loudly. Getting one
+ * wrong misranks a menu or hides a row; it never bills the wrong account, which
+ * is the failure this file is otherwise organised around.
  *
  * ## Why there is no credential here
  *
@@ -135,6 +145,56 @@ export interface Profile {
    */
   readonly planId?: string;
 
+  /**
+   * Whether Artemis may choose this account on the user's behalf. Absent means
+   * yes.
+   *
+   * There are two ways a profile gets used: someone picks it, or Artemis picks
+   * it — the Recommended row in the profile menu, and the account a fresh
+   * session starts on. The second is the whole point of the plan poll, and it is
+   * also the one an account can be a bad candidate for while remaining a
+   * perfectly good account to work in: a client's, a colleague's, one whose
+   * quota is being saved for a nightly job. Nothing in a usage reading can know
+   * that, because it is a fact about the user's arrangements rather than about
+   * the plan.
+   *
+   * So it is asked rather than inferred, and it removes the profile from the
+   * *pool* without removing it from the *menu*. That distinction is the reason
+   * this is a separate field from {@link disabled} rather than a second point on
+   * one scale: "never pick this for me" and "pretend this is not here" are
+   * different requests, and the first is much the commoner one.
+   *
+   * Stored only when `false`, which is why absent means yes: an opt-out is the
+   * exception, and a `profiles.json` where every record carries
+   * `"autoSelect": true` says nothing except that the field exists.
+   */
+  readonly autoSelect?: boolean;
+
+  /**
+   * Whether this account is hidden from the profile picker outright. Absent
+   * means no.
+   *
+   * The blunt one, for an account that is not in use: an old employer, a trial
+   * that ended, a second machine's login. It is the alternative to deleting the
+   * profile, and it exists because deleting is the wrong tool for "not right
+   * now" — a profile record is also a config directory, a login and a session
+   * history, and the delete dialog spends most of its words explaining exactly
+   * that.
+   *
+   * What it does **not** do is unbind anything. A past session still names this
+   * profile and still resumes into it, because a transcript only resolves
+   * against the directory it was written in ({@link Profile.configDir}) — a
+   * disabled profile that refused to resume its own history would be a way of
+   * losing work, not a way of tidying a menu. It is a rule about what can be
+   * newly *chosen*.
+   *
+   * Implies {@link autoSelect} being off: something that cannot be picked by
+   * hand is certainly not going to be picked for you. Callers should ask
+   * {@link isProfileAutoSelectable} rather than reading the two fields, so that
+   * implication lives in one place.
+   */
+  readonly disabled?: boolean;
+
   /** Creation time, ms since epoch. */
   readonly createdAt?: number;
   /** Last modification time, ms since epoch. */
@@ -162,6 +222,19 @@ export interface ProfileMetadata {
   readonly color?: string;
   /** Pinned plan id, or absent. See {@link Profile.planId}. */
   readonly planId?: string;
+  /**
+   * False to keep this account out of the automatic pool. Absent means yes.
+   * See {@link Profile.autoSelect}.
+   *
+   * Carried across because the renderer is where both consumers live: the
+   * Recommended row is rendered here and the new-session hop is decided here.
+   */
+  readonly autoSelect?: boolean;
+  /**
+   * True to hide this account from the picker. Absent means no. See
+   * {@link Profile.disabled}.
+   */
+  readonly disabled?: boolean;
 }
 
 /** Fields the renderer supplies when creating a profile. */
@@ -185,6 +258,22 @@ export interface ProfileDraft {
   readonly publicEnv?: Readonly<Record<string, string>>;
   /** Pinned plan id. Omit to let the provider's reported family stand. */
   readonly planId?: string;
+  /**
+   * `false` to create the profile already out of the automatic pool. Omit for
+   * the ordinary state. See {@link Profile.autoSelect}.
+   */
+  readonly autoSelect?: boolean;
+  /**
+   * `true` to create the profile already hidden. Omit for the ordinary state.
+   *
+   * Carried even though the create form does not ask — creating a profile is
+   * the moment before signing in to it, which is the worst moment to be asked
+   * whether it should be hidden. The field exists because the *shape* should not
+   * depend on which form is on screen, and a caller that genuinely means it (a
+   * restore, an import, a test) should not have to create the profile and then
+   * immediately patch it.
+   */
+  readonly disabled?: boolean;
 }
 
 /** Fields the renderer may change on an existing profile. */
@@ -214,6 +303,17 @@ export interface ProfilePatch {
    * clears {@link color} and for the same reason.
    */
   readonly planId?: string;
+  /**
+   * Take this account out of the automatic pool, or put it back.
+   *
+   * Omitted leaves it alone, as everywhere else here — and unlike {@link color}
+   * and {@link planId} there is no clearing vocabulary to invent, because the
+   * field is a boolean with a default rather than a value with an absent state.
+   * `true` is how "back to normal" is spelled; the store writes nothing for it.
+   */
+  readonly autoSelect?: boolean;
+  /** Hide this account from the picker, or show it again. */
+  readonly disabled?: boolean;
 }
 
 /**
@@ -381,6 +481,57 @@ export function profilePlanIdProblem(value: unknown, providerId?: ProviderId): s
   return normalizeProfilePlanId(value, providerId) === null
     ? 'That is not a plan Artemis knows about for this provider.'
     : null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Availability                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The subset of a profile the availability rules read.
+ *
+ * A structural parameter rather than `Profile | ProfileMetadata`, because both
+ * shapes carry these two fields and both sides of the IPC boundary ask the
+ * question. Taking the shape actually needed is what stops the main process
+ * importing a renderer type, or either of them re-deriving the defaults.
+ *
+ * There is no normaliser beside these, unlike the colour and the plan above.
+ * Those exist because `#ABC` and `claude:max-20x` are values that have to be
+ * *parsed*, and a hand-edited file can hold a near-miss worth repairing. A
+ * boolean has no near-miss: anything that is not the opt-out is the default, so
+ * the check is a strict equality at each boundary and the knowledge worth
+ * centralising is which value that is — which is what these two answer.
+ */
+export interface ProfileAvailability {
+  readonly autoSelect?: boolean;
+  readonly disabled?: boolean;
+}
+
+/**
+ * Whether this account may be picked at all.
+ *
+ * The one rule the profile picker filters on. Note what it is *not* asked
+ * about: a run that is already bound to a profile, or a past session being
+ * resumed into one. Disabling hides an account from the list of things that can
+ * be chosen next; it does not retire the account, which is why
+ * {@link Profile.disabled} says at length that history still resolves.
+ */
+export function isProfileEnabled(profile: ProfileAvailability): boolean {
+  return profile.disabled !== true;
+}
+
+/**
+ * Whether Artemis may choose this account without being asked.
+ *
+ * Both flags, in one place, because `disabled` implies the opt-out and a caller
+ * that checked only `autoSelect` would recommend an account it had just hidden
+ * from the menu it was recommending into. Everything that picks a profile *for*
+ * the user — the Recommended row, the account a fresh session starts on, the
+ * fallback when the selected one disappears — asks this rather than reading the
+ * fields.
+ */
+export function isProfileAutoSelectable(profile: ProfileAvailability): boolean {
+  return isProfileEnabled(profile) && profile.autoSelect !== false;
 }
 
 /**

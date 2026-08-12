@@ -714,6 +714,11 @@ export function createMockBridge(): ArtemisBridge {
           // accepts the long lowercase form, and a mock that skipped this
           // would show a black swatch the real app does not.
           color: normalizeProfileColor(draft.color) ?? undefined,
+          // Collapsed to absent when it is the default, as the real store does:
+          // the flags are read back by `isProfileEnabled` and its neighbour,
+          // which treat absence as the ordinary state.
+          ...(draft.autoSelect === false ? { autoSelect: false } : {}),
+          ...(draft.disabled === true ? { disabled: true } : {}),
         };
         profiles = [...profiles, profile];
         // A newly created profile is signed out, and the mock has to say so or
@@ -737,6 +742,18 @@ export function createMockBridge(): ArtemisBridge {
           ...(patch.color === undefined
             ? {}
             : { color: normalizeProfileColor(patch.color) ?? undefined }),
+          // Both values matter, unlike the colour above: a boolean with a
+          // default has no "unset" to send, so `false` here is a real answer
+          // rather than an absent one. The default overwrites with `undefined`
+          // rather than being dropped, because `...existing` would otherwise
+          // carry an old opt-out through the patch that turned it off — and
+          // absent is what the flag's readers treat as the ordinary state.
+          ...(patch.autoSelect === undefined
+            ? {}
+            : { autoSelect: patch.autoSelect === false ? false : undefined }),
+          ...(patch.disabled === undefined
+            ? {}
+            : { disabled: patch.disabled === true ? true : undefined }),
         };
         profiles = profiles.map((p) => (p.id === id ? updated : p));
         return ok({ profile: updated });

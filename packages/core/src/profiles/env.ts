@@ -168,6 +168,11 @@ export function toMetadata(profile: Profile): ProfileMetadata {
     configDir: profile.configDir,
     color: profile.color,
     planId: profile.planId,
+    // Both carried: the renderer owns every surface these decide — the picker
+    // that hides a disabled account, and the Recommended row that skips one
+    // outside the pool.
+    autoSelect: profile.autoSelect,
+    disabled: profile.disabled,
   };
 }
 

@@ -11,7 +11,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { normalizeProfileColor, profileColorProblem } from './profile.js';
+import {
+  isProfileAutoSelectable,
+  isProfileEnabled,
+  normalizeProfileColor,
+  profileColorProblem,
+} from './profile.js';
 
 describe('normalizeProfileColor', () => {
   it('passes a full lowercase hex through unchanged', () => {
@@ -67,5 +72,46 @@ describe('profileColorProblem', () => {
     const problem = profileColorProblem('purple');
     expect(problem).not.toBeNull();
     expect(problem).toContain('#rrggbb');
+  });
+});
+
+/**
+ * The availability rules.
+ *
+ * Two optional booleans whose defaults are the entire contract: a profile
+ * written before either field existed has to keep behaving exactly as it did,
+ * and the implication between them has to hold in one place rather than at each
+ * of the four callers that pick an account for the user.
+ */
+describe('isProfileEnabled', () => {
+  it('treats absence as enabled, which is what every existing record says', () => {
+    expect(isProfileEnabled({})).toBe(true);
+    expect(isProfileEnabled({ disabled: false })).toBe(true);
+  });
+
+  it('is false only for an explicit opt-out', () => {
+    expect(isProfileEnabled({ disabled: true })).toBe(false);
+  });
+
+  it('ignores the auto-select flag — a hand pick is still a pick', () => {
+    expect(isProfileEnabled({ autoSelect: false })).toBe(true);
+  });
+});
+
+describe('isProfileAutoSelectable', () => {
+  it('treats absence as eligible', () => {
+    expect(isProfileAutoSelectable({})).toBe(true);
+  });
+
+  it('is false once the account opts out of the pool', () => {
+    expect(isProfileAutoSelectable({ autoSelect: false })).toBe(false);
+  });
+
+  it('is false for a disabled account even with auto-select left on', () => {
+    // The implication that makes this function worth having: recommending an
+    // account that has been hidden from the menu doing the recommending is the
+    // bug a caller reading `autoSelect` alone would ship.
+    expect(isProfileAutoSelectable({ disabled: true })).toBe(false);
+    expect(isProfileAutoSelectable({ disabled: true, autoSelect: true })).toBe(false);
   });
 });

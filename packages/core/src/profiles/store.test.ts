@@ -400,6 +400,41 @@ describe('ProfileStore — update', () => {
     expect((await store.update(created.id, { planId: '' })).planId).toBeUndefined();
   });
 
+  it('sets and clears the two availability flags, storing only the opt-out', async () => {
+    const created = await store.create(draft());
+    // Absent on a plain create: the default is what every record written before
+    // these fields existed says, and writing it out would say nothing.
+    expect(created.autoSelect).toBeUndefined();
+    expect(created.disabled).toBeUndefined();
+
+    const off = await store.update(created.id, { autoSelect: false, disabled: true });
+    expect(off.autoSelect).toBe(false);
+    expect(off.disabled).toBe(true);
+
+    // Omitted: unchanged, like every other field on a patch.
+    expect((await store.update(created.id, { label: 'Renamed' })).disabled).toBe(true);
+
+    // `true`/`false` is how "back to normal" is spelled, and it collapses to
+    // absent so one state never has two spellings on disk.
+    const on = await store.update(created.id, { autoSelect: true, disabled: false });
+    expect(on.autoSelect).toBeUndefined();
+    expect(on.disabled).toBeUndefined();
+    expect(await readDocument()).not.toContain('autoSelect');
+  });
+
+  it('reads a hand-edited flag strictly, so a non-boolean cannot hide an account', async () => {
+    const created = await store.create(draft());
+    const raw: { profiles: Record<string, unknown>[] } = JSON.parse(await readDocument());
+    raw.profiles[0]!['disabled'] = 'yes';
+    raw.profiles[0]!['autoSelect'] = 0;
+    await writeFile(path.join(userDataDir, PROFILE_STORE_FILE), JSON.stringify(raw));
+
+    const profiles = await new ProfileStore({ userDataDir }).list();
+    expect(profiles[0]?.disabled).toBeUndefined();
+    expect(profiles[0]?.autoSelect).toBeUndefined();
+    expect(created.id).toBe('id1');
+  });
+
   it('drops a pin belonging to another provider', async () => {
     /*
       Reachable by repointing a profile at a different provider's directory, and

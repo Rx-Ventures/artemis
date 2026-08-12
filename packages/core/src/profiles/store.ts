@@ -278,6 +278,12 @@ export class ProfileStore {
         // known plan decides nothing except how a menu sorts, so it is dropped
         // rather than made a reason to refuse creating the account.
         planId: normalizeProfilePlanId(draft.planId, draft.providerId) ?? undefined,
+        // Only the opt-out is written. Both fields default to the ordinary
+        // state when absent, so storing the default would fill every record
+        // with a line that says nothing — and would make a profile written by
+        // this build look different from one written by the last.
+        autoSelect: draft.autoSelect === false ? false : undefined,
+        disabled: draft.disabled === true ? true : undefined,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -326,6 +332,19 @@ export class ProfileStore {
           patch.planId === undefined
             ? (normalizeProfilePlanId(current.planId, current.providerId) ?? undefined)
             : (normalizeProfilePlanId(patch.planId, current.providerId) ?? undefined),
+        // Omitted leaves the flag alone. There is no third value to spell —
+        // unlike the colour and the plan, "back to the default" *is* one of the
+        // two booleans — so the only work here is collapsing the default to
+        // absent, which is what keeps one state from having two spellings on
+        // disk. See `ProfilePatch.autoSelect`.
+        autoSelect:
+          (patch.autoSelect === undefined ? current.autoSelect : patch.autoSelect) === false
+            ? false
+            : undefined,
+        disabled:
+          (patch.disabled === undefined ? current.disabled : patch.disabled) === true
+            ? true
+            : undefined,
         updatedAt: this.#now(),
       };
 
@@ -608,6 +627,14 @@ function parseProfile(
     // written by an older build can name a plan this one no longer knows. An
     // unknown pin becomes no pin, which falls back to the reported family.
     planId: normalizeProfilePlanId(raw['planId'], providerId) ?? undefined,
+    // Read as a strict equality rather than for truthiness, which is the whole
+    // of the parsing this pair needs: a hand-edited `"disabled": "yes"` is not
+    // a disabled profile, and quietly hiding an account because someone typed a
+    // string where a boolean goes is the one failure mode worth ruling out.
+    // Anything that is not the opt-out is the default, including absence, which
+    // is what every record written before these fields existed says.
+    autoSelect: raw['autoSelect'] === false ? false : undefined,
+    disabled: raw['disabled'] === true ? true : undefined,
     createdAt: typeof createdAt === 'number' ? createdAt : undefined,
     updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
   };

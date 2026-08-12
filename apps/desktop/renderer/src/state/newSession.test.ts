@@ -76,6 +76,45 @@ describe('newSession', () => {
     expect(session().activeProfileId).toBe('p1');
   });
 
+  it('does not hop onto an account that opted out of the pool', () => {
+    // Work has the room and would win on the numbers. It is out of the pool,
+    // which is a fact about the user's arrangements that no reading can know —
+    // and this is the exact moment `autoSelect: false` exists to prevent.
+    useApp.setState({ planUsageByProfile: { p1: reading(80), p2: reading(20) } });
+    useApp.setState({
+      profiles: [
+        { id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.personal' },
+        {
+          id: 'p2',
+          label: 'Work',
+          providerId: 'claude',
+          configDir: '/u/.work',
+          autoSelect: false,
+        },
+      ],
+    });
+
+    newSession();
+
+    expect(session().activeProfileId).toBe('p1');
+  });
+
+  it('does not hop onto a disabled account either', () => {
+    useApp.setState({ planUsageByProfile: { p1: reading(80), p2: reading(20) } });
+    useApp.setState({
+      profiles: [
+        { id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.personal' },
+        { id: 'p2', label: 'Work', providerId: 'claude', configDir: '/u/.work', disabled: true },
+      ],
+    });
+
+    newSession();
+
+    // Starting a session on an account the picker does not list would leave the
+    // user billing an account they cannot see selected.
+    expect(session().activeProfileId).toBe('p1');
+  });
+
   it('does not hop accounts when a directory change resets the session', () => {
     useApp.setState({ planUsageByProfile: { p1: reading(80), p2: reading(20) } });
     setPaneState(pane(), { cwd: '/a', resumeSessionId: 'sess-1111', run: null });

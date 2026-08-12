@@ -627,6 +627,8 @@ function validateProfileDraft(value: unknown, field: string): ProfileDraft {
     publicEnv: optionalPublicEnv(draft['publicEnv'], `${field}.publicEnv`),
     color: optionalColor(draft['color'], `${field}.color`),
     planId: optionalPlanId(draft['planId'], providerId, `${field}.planId`),
+    autoSelect: optionalBoolean(draft['autoSelect'], `${field}.autoSelect`),
+    disabled: optionalBoolean(draft['disabled'], `${field}.disabled`),
   });
 }
 
@@ -712,6 +714,15 @@ function validateProfilePatch(value: unknown, field: string): ProfilePatch {
       same two-stage rule `configDir` follows.
     */
     planId: optionalPlanId(patch['planId'], undefined, `${field}.planId`),
+    /*
+      Booleans with no clearing vocabulary, unlike the two fields above: absent
+      means "leave it alone" and each of the two values is a state the caller
+      can ask for outright. `optionalBoolean` rejects anything else rather than
+      coercing it, so a `"disabled": "true"` from a confused caller cannot hide
+      an account.
+    */
+    autoSelect: optionalBoolean(patch['autoSelect'], `${field}.autoSelect`),
+    disabled: optionalBoolean(patch['disabled'], `${field}.disabled`),
   });
 }
 

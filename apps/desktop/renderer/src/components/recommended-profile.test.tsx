@@ -66,7 +66,10 @@ function reading(utilization: number, subscriptionType?: string): PlanUsage {
   };
 }
 
-function seed(planUsageByProfile: Record<string, PlanUsage>): void {
+function seed(
+  planUsageByProfile: Record<string, PlanUsage>,
+  profiles: readonly Record<string, unknown>[] = PROFILES,
+): void {
   seedApp({
     providers: [
       {
@@ -79,7 +82,7 @@ function seed(planUsageByProfile: Record<string, PlanUsage>): void {
       },
     ],
     activeProviderId: 'claude',
-    profiles: PROFILES,
+    profiles,
     activeProfileId: 'p1',
     cwd: '/code/api',
     workspace: null,
@@ -171,6 +174,53 @@ describe('the Recommended section', () => {
 
   it('says nothing before any reading has arrived', () => {
     openProfileMenu();
+    expect(screen.queryByText('Recommended')).toBeNull();
+  });
+
+  it('says nothing once the only other account has opted out of the pool', () => {
+    // The reading is fine and the account is one click away in the list below.
+    // It is simply not one Artemis may reach for, which leaves one candidate —
+    // and a "Recommended" heading over the account you are already in repeats
+    // the trigger above it.
+    seed({ p1: reading(80, 'max'), p2: reading(20, 'max') }, [
+      PROFILES[0]!,
+      { ...PROFILES[1]!, autoSelect: false },
+    ]);
+    openProfileMenu();
+
+    expect(screen.queryByText('Recommended')).toBeNull();
+    // Still listed, though: opting out of the pool is not being hidden.
+    expect(screen.getAllByText('Work').length).toBe(1);
+  });
+
+  it('passes over an opted-out account to name the next best one', () => {
+    // Work has the most room and is out of the pool; Spare is second and is
+    // not. The winner is Spare rather than nothing — this is a filter on the
+    // candidates, not a veto on the section.
+    seed({ p1: reading(80, 'max'), p2: reading(10, 'max'), p3: reading(40, 'max') }, [
+      PROFILES[0]!,
+      { ...PROFILES[1]!, autoSelect: false },
+      { id: 'p3', label: 'Spare', providerId: 'claude', configDir: '/home/u/.spare' },
+    ]);
+    openProfileMenu();
+
+    expect(screen.getByText('Recommended')).not.toBeNull();
+    expect(screen.getAllByText('Spare').length).toBe(2);
+    // Two candidates were compared, not three: an account that could never win
+    // is not one the winner beat.
+    const row = screen.getAllByText('Spare')[0]!.closest('[role="menuitem"]');
+    expect(row?.getAttribute('title')).toMatch(/across 2 accounts/);
+  });
+
+  it('never recommends a disabled account, whatever its own flag says', () => {
+    seed({ p1: reading(80, 'max'), p2: reading(20, 'max') }, [
+      PROFILES[0]!,
+      { ...PROFILES[1]!, disabled: true, autoSelect: true },
+    ]);
+    openProfileMenu();
+
+    // Recommending an account that has been hidden from the menu doing the
+    // recommending is the one combination the two flags must not produce.
     expect(screen.queryByText('Recommended')).toBeNull();
   });
 

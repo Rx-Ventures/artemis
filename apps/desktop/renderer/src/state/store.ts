@@ -34,6 +34,8 @@
 
 import { create } from 'zustand';
 import {
+  isProfileAutoSelectable,
+  isProfileEnabled,
   isSameModel,
   NO_CAPABILITIES,
   recommendProfile,
@@ -2339,6 +2341,14 @@ export function activeProfile(state: SessionState): ProfileMetadata | undefined 
  *
  * Profiles are passed in list order, which is what breaks ties: see
  * `recommendProfile`.
+ *
+ * Accounts the user has taken out of the pool are dropped *before* the ranking
+ * rather than filtered out of its answer, and the difference is `candidates`:
+ * ranking six accounts and then discarding the winner would leave the runner-up
+ * described as the best of six when it was the best of the two that were
+ * eligible. It also means the two-candidate rule counts the right accounts — a
+ * "Recommended" heading over the only account in the pool repeats the row below
+ * it, which is the case `recommendProfile` refuses.
  */
 export function planRecommendation(
   profiles: readonly ProfileMetadata[],
@@ -2346,7 +2356,7 @@ export function planRecommendation(
   now: number,
 ): PlanRecommendation | null {
   return recommendProfile(
-    profiles.map((profile) => {
+    profiles.filter(isProfileAutoSelectable).map((profile) => {
       const usage = usageByProfile[profile.id];
       /*
         Two sources for the plan, and the order matters. The profile's pin wins
@@ -3005,6 +3015,13 @@ export async function refreshProfiles(): Promise<void> {
    * `activeProviderId` would point the app at an account its adapter has never
    * heard of. Preferring the active provider's own profiles first means that
    * fallback is reached only when there is genuinely nothing else.
+   *
+   * The account that is *already* selected is kept whatever its flags say —
+   * this is a list refresh, and disabling a profile is not a reason to move the
+   * app off it mid-session. `setProfile` is the only thing that changes who
+   * pays, and it happens because someone asked. What the flags decide here is
+   * only where the app lands when the selection has genuinely gone: see
+   * `adoptableProfile`.
    */
   useApp.setState({ profiles });
   for (const pane of allPanes()) {
@@ -3013,7 +3030,9 @@ export async function refreshProfiles(): Promise<void> {
       if (current !== null && profiles.some((p) => p.id === current)) return {};
 
       const adopted =
-        profiles.find((p) => p.providerId === s.activeProviderId) ?? profiles[0] ?? null;
+        adoptableProfile(profiles, (p) => p.providerId === s.activeProviderId) ??
+        adoptableProfile(profiles) ??
+        null;
       return {
         activeProfileId: adopted?.id ?? null,
         activeProviderId: adopted?.providerId ?? s.activeProviderId,
@@ -3360,13 +3379,44 @@ function fromHandle(handle: RunHandle): RunState {
 /* Selection                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The profile to land on when the app has to choose one for the user.
+ *
+ * Three routes reach this — the active provider changed, the selected profile
+ * was deleted, prefs named an account that no longer exists — and none of them
+ * is a request to use a particular account. So the availability flags apply, in
+ * the order they were asked for:
+ *
+ *  1. **Preferably one in the pool.** Landing on an account the user told
+ *     Artemis not to pick is the whole thing `autoSelect: false` asks it not to
+ *     do, and here it would do it silently.
+ *  2. **Failing that, any enabled one.** An opt-out is a preference and a
+ *     disabled account is a wall, so the preference yields first. Someone whose
+ *     every account is out of the pool still has to end up somewhere real.
+ *  3. **Failing that, nothing.** `null` leaves the pane with no profile, which
+ *     the composer already handles — it is the first-run state. Adopting a
+ *     disabled account to avoid an empty selection would put the app on the one
+ *     account the user hid from the menu, and leave them looking at a picker
+ *     that does not list what it says is selected.
+ *
+ * `where` narrows the candidates before any of that, which is how the provider
+ * switch says "this provider's accounts only".
+ */
+function adoptableProfile(
+  profiles: readonly ProfileMetadata[],
+  where: (profile: ProfileMetadata) => boolean = () => true,
+): ProfileMetadata | undefined {
+  const candidates = profiles.filter(where);
+  return candidates.find(isProfileAutoSelectable) ?? candidates.find(isProfileEnabled);
+}
+
 export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()): void {
   setPaneState(pane, (s) => ({
     activeProviderId: providerId,
     activeProfileId:
       s.profiles.find((p) => p.id === s.activeProfileId)?.providerId === providerId
         ? s.activeProfileId
-        : (s.profiles.find((p) => p.providerId === providerId)?.id ?? null),
+        : (adoptableProfile(s.profiles, (p) => p.providerId === providerId)?.id ?? null),
     // Cleared, unlike on a profile switch: a catalogue belongs to a provider,
     // and leaving the old one loaded would have `activeModels` hand the new
     // provider's picker a list of models it cannot run. The descriptor's own
