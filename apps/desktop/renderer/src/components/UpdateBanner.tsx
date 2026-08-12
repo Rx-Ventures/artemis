@@ -1,16 +1,23 @@
 /**
- * The update banner — a strip under the header that appears when the main
- * process has found a newer release.
+ * The update banner — a strip under the header, shown only while the sidebar is
+ * hidden.
+ *
+ * ## Why it is the fallback rather than the surface
+ *
+ * The update lives at the foot of the sidebar now, as its own floating card —
+ * see `UpdateCard` for why that is the better home. But `Sidebar` renders
+ * `null` when collapsed, not a rail and not a sliver, and an update that is
+ * invisible because a pane is hidden is an update nobody installs. So this
+ * strip stands in, and `App` mounts exactly one of the two. Same state, same
+ * actions, one of them on screen at a time.
  *
  * ## Why it is not part of `ErrorSurface`
  *
  * The rows in `ErrorSurface` describe this *window's* failures, live in the
  * store, and stack per incident. An update is none of that: it is a fact about
  * the installation, there is at most one, and every window shows the same one.
- * So the banner spans the full window width — sidebar included — the way the
- * header does, and owns its own state instead of writing into the store: its
- * entire input is the updater's pushed {@link UpdateState}, and nothing else
- * in the renderer reads it.
+ * So the banner spans the full window width the way the header does, and reads
+ * the updater directly rather than through the store — see `useUpdateState`.
  *
  * ## What each phase renders
  *
@@ -29,7 +36,7 @@
  * banner racing a fresh offer can only ever silence the version it showed.
  */
 
-import { useEffect, useState, type ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import {
   DownloadIcon,
   LoaderCircleIcon,
@@ -38,38 +45,20 @@ import {
   XIcon,
 } from 'lucide-react';
 
-import type { UpdateState } from '@rx-artemis/protocol';
-
-import { call, resolveBridge } from '../lib/bridge';
+import {
+  dismissUpdate,
+  installUpdate,
+  restartForUpdate,
+  updaterChannels,
+  useUpdateState,
+} from '../hooks/useUpdateState';
 import { IconButton } from './disabled-reason';
 
-const IDLE: UpdateState = { phase: 'idle', version: null, message: null, releaseUrl: null };
-
 export function UpdateBanner(): ReactElement | null {
-  const [state, setState] = useState<UpdateState>(IDLE);
-
-  useEffect(() => {
-    const bridge = resolveBridge().bridge;
-    if (bridge === null) return undefined;
-    // Subscribe before the initial read, and let any push beat the read: the
-    // read answers with the state at *dispatch* time, so if a push lands while
-    // it is in flight, the read's resolution is the stale one. Without the
-    // flag, an offer arriving in that window would be silently overwritten by
-    // an idle answer.
-    let pushed = false;
-    const unsubscribe = bridge.updates.onChange((next) => {
-      pushed = true;
-      setState(next);
-    });
-    void call(() => bridge.updates.state({})).then((result) => {
-      if (result.ok && !pushed) setState(result.value.state);
-    });
-    return unsubscribe;
-  }, []);
+  const state = useUpdateState();
 
   if (state.phase === 'idle') return null;
 
-  const bridge = resolveBridge().bridge;
   const version = state.version ?? '';
 
   return (
@@ -101,7 +90,7 @@ export function UpdateBanner(): ReactElement | null {
         <button
           type="button"
           className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-lunar hover:bg-lunar/10"
-          onClick={() => void call(() => resolveBridge().bridge!.updates.install({}))}
+          onClick={installUpdate}
         >
           Update now
         </button>
@@ -111,7 +100,7 @@ export function UpdateBanner(): ReactElement | null {
         <button
           type="button"
           className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-lunar hover:bg-lunar/10"
-          onClick={() => void call(() => resolveBridge().bridge!.updates.restart({}))}
+          onClick={restartForUpdate}
         >
           Restart now
         </button>
@@ -131,12 +120,12 @@ export function UpdateBanner(): ReactElement | null {
         </a>
       )}
 
-      {(state.phase === 'available' || state.phase === 'error') && bridge !== null && (
+      {(state.phase === 'available' || state.phase === 'error') && updaterChannels() !== null && (
         <IconButton
           label="Dismiss"
           size="icon-xs"
           className="shrink-0 text-current"
-          onClick={() => void call(() => bridge.updates.dismiss({ version }))}
+          onClick={() => dismissUpdate(version)}
         >
           <XIcon />
         </IconButton>
