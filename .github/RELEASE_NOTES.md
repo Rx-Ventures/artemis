@@ -22,6 +22,9 @@ machine it targets, and boots before it ships.
   could open onto nothing; a burst of real work read as a stack of them.
 - The sidebar marks the session each column is showing, so you can tell
   which conversation is in front of you when several are open.
+- The mark inside the app is the icon in the dock. The dock has shown a bow
+  since the rename; the new-session page and the dead-end screen were still
+  showing the moon. They are one drawing now, not two.
 - The recent-folders menu keeps only directories that will still be there.
   Worktrees and temporary checkouts were taking slots in a ten-row menu and
   never giving them back, pushing out real projects with rows pointing at
