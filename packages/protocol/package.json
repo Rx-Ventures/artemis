@@ -1,6 +1,6 @@
 {
   "name": "@rx-artemis/protocol",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Shared contract for Artemis: normalized agent events, provider capabilities, profiles and the typed IPC surface. Zero runtime dependencies.",
   "license": "MIT",

@@ -1,31 +1,17 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.4.0
+## What's new in 0.5.0
 
-- A page the agent wrote opens instead of being blocked. The preview frame
-  was refused by the renderer's own content policy, so an HTML artifact
-  showed nothing; it renders now. The tile also sits in its own transcript
-  row rather than folded inside "edited 5 files", so the deliverable is not
-  hidden behind the machinery that produced it.
-- Clicking a session that is already on screen goes to it. It used to push
-  that run into the background and replay a half-written transcript into a
-  blank column, while the agent carried on working out of sight.
-- Rows hold still while agents work. The list stopped reshuffling under the
-  pointer every few seconds as running sessions took turns being the most
-  recently written, which is what made you open the wrong one.
-- An update waits at the foot of the sidebar as its own small card, instead
-  of a full-window strip pushing the header, both transcripts and every
-  composer down. The strip remains for when the sidebar is collapsed.
-- The conversation is set in Geist, not Geist Mono. 0.3.0 split the faces by
-  pane, which put answers, prompts and the composer in monospace and made a
-  conversation read as terminal output. Mono is now for text whose
-  characters are the content — code, diffs, paths, tool arguments — and the
-  app's own 11px labels.
-- `Start somewhere else` is gone from the sidebar. Every project is in the
-  list above it, a row click does the whole switch, and the folder chip
-  above the composer starts a fresh session anywhere — including somewhere
-  with no history at all.
+- The Artemis menu can check for updates. `Check for Updates…` sits under
+  About Artemis and answers either way: an update appears as the usual card
+  at the foot of the sidebar, and "nothing newer", "could not reach the
+  releases" and "already installing" each say so rather than leaving you
+  wondering whether the click landed. Asking also un-dismisses — a version
+  you declined by accident can be reached again.
+- The app grew a real menu bar in the process: Edit, View and Window with
+  the standard items. The shortcuts they carry (⌘C, ⌘V, ⌘Z, ⌘W, ⌘Q) worked
+  before and still do.
 
 ## Install
 
