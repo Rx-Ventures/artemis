@@ -61,6 +61,7 @@ Object.defineProperty(globalThis, 'artemis', {
 
 const { Transcript } = await import('@/components/Transcript');
 const { PreviewPane } = await import('@/components/PreviewPane');
+const { DockPane } = await import('@/components/DockPane');
 const { focusedPane, useApp } = await import('@/state/store');
 const { appTranscript, seedApp } = await import('@/state/testkit');
 
@@ -326,7 +327,17 @@ describe('the preview pane', () => {
     expect(container.textContent).toContain('window.stolen');
   });
 
-  it('closes on request, which is all the renderer has to do', () => {
+  /**
+   * The ✕ is on the *tab*, not on the pane.
+   *
+   * It used to be part of `PreviewPane`'s own header; that header is now
+   * `DockPane`'s tab strip, because the rail is shared with the user's
+   * terminals. The behaviour is unchanged and still worth pinning — closing is
+   * the entire contract between the renderer and a preview, since main retires
+   * what it granted on its own — so the assertion follows the button rather
+   * than being dropped with the header.
+   */
+  it('closes from its tab, which is all the renderer has to do', () => {
     useApp.setState({
       preview: owned({
         kind: 'frame' as const,
@@ -336,9 +347,13 @@ describe('the preview pane', () => {
         bytes: 1157,
       }),
     });
-    renderPane();
+    render(
+      <TooltipProvider>
+        <DockPane />
+      </TooltipProvider>,
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: /close the preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close report.html' }));
     expect(useApp.getState().preview).toBeNull();
   });
 });

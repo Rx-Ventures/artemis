@@ -92,6 +92,7 @@ import {
   PlusIcon,
   Settings2Icon,
   SquareIcon,
+  SquareTerminalIcon,
   XIcon,
 } from 'lucide-react';
 
@@ -106,6 +107,7 @@ import {
   newSession,
   openSettings,
   splitPane,
+  toggleTerminal,
   toggleSidebar,
   useApp,
 } from '../state/store';
@@ -300,6 +302,20 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <Rows2Icon />
+      </IconButton>
+      {/*
+        Beside the splits rather than next to New Session, because it is the same
+        kind of act: it changes what this window is showing, not what the agent
+        is doing. `toggleTerminal` opens the focused conversation's shell or
+        brings it forward — see the store for why repeating it does not stack up
+        terminals nobody asked for.
+      */}
+      <IconButton
+        label={`Terminal (${keyLabel('mod+j')})`}
+        onClick={() => toggleTerminal(pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <SquareTerminalIcon />
       </IconButton>
       <IconButton
         label={`New session (${keyLabel('mod+n')})`}

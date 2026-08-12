@@ -21,7 +21,8 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.226",
     "@rx-artemis/core": "workspace:*",
     "@rx-artemis/protocol": "workspace:*",
-    "electron-store": "^11.0.2"
+    "electron-store": "^11.0.2",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -35,6 +36,8 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

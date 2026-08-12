@@ -22,6 +22,7 @@
  * | `run`           | `RunInput`, `RunHandle`, `RunStatus`                       |
  * | `session`       | `SessionSummary`                                           |
  * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
+ * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
  * | `ipc`           | channel constants, request/response maps, `ArtemisBridge`    |
  *
  * What does *not* live here: the `ProviderAdapter` / `Run` interfaces. Those
@@ -42,4 +43,5 @@ export * from './attachment.js';
 export * from './run.js';
 export * from './session.js';
 export * from './profile.js';
+export * from './terminal.js';
 export * from './ipc.js';

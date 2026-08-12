@@ -106,6 +106,25 @@
 @import 'shadcn/tailwind.css';
 
 /*
+ * xterm.js's own stylesheet.
+ *
+ * Structural rather than decorative — it positions the cursor layer over the
+ * character layer, sizes the viewport against the screen, and lays out the
+ * selection overlay. None of it is optional: without this, a terminal renders
+ * as a column of overlapping absolutely-positioned rows.
+ *
+ * The *colours* are not here. They are handed to xterm as literal values by
+ * `lib/terminalSessions.ts`, which reads them back off the tokens below —
+ * xterm paints into a canvas and cannot resolve a CSS custom property. So this
+ * file remains the one place a colour is chosen, and the terminal gets its
+ * palette from the same tokens as everything else.
+ *
+ * Bundled through Vite from `node_modules`, exactly like the fonts above, so it
+ * is same-origin under `file:` and satisfies `style-src 'self'`.
+ */
+@import '@xterm/xterm/css/xterm.css';
+
+/*
  * Geist and Geist Mono, self-hosted.
  *
  * These come from `@fontsource-variable/*` rather than a CDN, and that is the
@@ -739,6 +758,32 @@
       transparent
     );
     animation: artemis-sweep 1.5s linear infinite;
+  }
+
+  /*
+   * The two corrections xterm's own stylesheet needs to live in this app.
+   *
+   * Deliberately minimal. `lib/terminalSessions.ts` hands xterm the palette, the
+   * font and the metrics, so the only things left are the ones a `theme` object
+   * cannot express — both of which are about the terminal sitting *inside*
+   * Artemis rather than owning a window.
+   */
+
+  /* Its scrollbar, matched to the app's. xterm renders the viewport itself, so
+     this is a real scrollable element rather than one of the app's own panes,
+     and it would otherwise be the single native scrollbar in the window. */
+  .xterm .xterm-viewport {
+    background: transparent !important;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  /* The focus ring belongs to the dock's panel, not to the emulator. xterm
+     focuses a hidden textarea, whose default ring would otherwise be drawn as a
+     one-line box floating over the character grid wherever the caret happens
+     to be. */
+  .xterm .xterm-helper-textarea:focus {
+    outline: none;
   }
 }
 

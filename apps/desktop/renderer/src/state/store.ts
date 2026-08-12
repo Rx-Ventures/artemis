@@ -69,6 +69,7 @@ import type {
   RunStatus,
   SessionId,
   SessionSummary,
+  TerminalId,
   TokenUsage,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
@@ -83,9 +84,29 @@ import {
 } from '../lib/extensions';
 import { detectArtifact, type Artifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
-import { isAbsolutePath } from '../lib/paths';
+import { isAbsolutePath, lastSegment } from '../lib/paths';
 import { newId } from '../lib/id';
 import { sessionKey } from '../lib/sessionGroups';
+import {
+  disposeTerminalSession,
+  ensureTerminalSession,
+  noteTerminalExit,
+  requestTerminalFocus,
+  setTerminalSessionHooks,
+  writeToTerminal,
+} from '../lib/terminalSessions';
+import {
+  learnSessionId,
+  nextActiveTab,
+  ownerIsShown,
+  PREVIEW_TAB,
+  sameTab,
+  visibleTabs,
+  type DockOwner,
+  type DockTab,
+  type ShownConversation,
+  type TerminalRecord,
+} from './dock';
 import type { PermissionItem, TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
@@ -151,27 +172,29 @@ export type RunSummary = 'always' | 'failures' | 'never';
 
 export type { PlanMeterFocus };
 
+// Re-exported so a component reaches for the dock's vocabulary through the same
+// module it reaches for the state — `state/dock.ts` is the model, not a second
+// public surface, and a component importing from both would have to know which
+// half lives where.
+export { PREVIEW_TAB, sameTab, tabKey, visibleTabs } from './dock';
+export type { DockOwner, DockTab, ShownConversation, TerminalRecord } from './dock';
+
 /**
  * Which conversation a preview belongs to.
  *
  * A preview is not a window-level object even though it is drawn at window
  * level: it is a file *this* conversation wrote, and it makes no sense beside a
- * different one. Recorded at open time and checked by {@link reconcilePreview},
+ * different one. Recorded at open time and checked by {@link reconcileDock},
  * which closes the pane once the conversation it came from is no longer in a
  * column.
  *
- * Both a session id and a run id, because neither alone covers the life of a
- * conversation. A run has no `sessionId` until `session.started` arrives — which
- * is precisely the window in which the first artifact of a fresh conversation is
- * usually written — so the run id is what identifies it until the session id
- * exists, at which point {@link reconcilePreview} adopts the id and the
- * ownership survives the run ending.
+ * Now an alias of {@link DockOwner}, which is the same three fields it always
+ * had — a preview and a terminal answer "whose is this?" identically, and the
+ * rules for doing so are written out once in `state/dock.ts`. The name is kept
+ * because it is what the field is called at every use site, and because
+ * "preview owner" says something the general name does not.
  */
-export interface PreviewOwner {
-  readonly paneId: PaneId;
-  readonly runId?: RunId;
-  readonly sessionId?: SessionId;
-}
+export type PreviewOwner = DockOwner;
 
 /**
  * What is being previewed, as the pane needs it.
@@ -315,6 +338,49 @@ export interface AppState {
    * it, and restoring one would reopen the pane onto a 404.
    */
   readonly preview: PreviewState | null;
+  /**
+   * Every terminal this window is holding, oldest first.
+   *
+   * The other half of the dock, and the half that behaves differently in the one
+   * way that matters: a record here is **not** removed when its conversation
+   * leaves the screen. It stops being drawn — see {@link visibleTabs} — and its
+   * shell goes on running, because the shell is very often the point (`pnpm
+   * dev`, `tail -f`, an ssh session) and killing it because the user clicked
+   * another row in the sidebar would make terminals unusable. Only
+   * {@link closeTerminal} ends one.
+   *
+   * Not persisted, and for a stronger reason than the preview's: a pseudo-
+   * terminal cannot outlive the process that owns it, so after a restart there
+   * is nothing on the other end of any of these. `bootstrap` re-reads them from
+   * the main process instead, which is the only source that can be right.
+   */
+  readonly terminals: readonly TerminalRecord[];
+  /**
+   * Which dock tab is on top, or `null` when the rail is closed.
+   *
+   * Held rather than derived because it is a *choice* — the user clicked a tab —
+   * and the visible set changes underneath it constantly as conversations come
+   * and go. {@link reconcileDock} is what keeps the two consistent, moving this
+   * only when the tab it names stops being visible.
+   */
+  readonly activeDockTab: DockTab | null;
+  /**
+   * The tabs to draw, left to right. Derived, but *stored*.
+   *
+   * Stored because the answer depends on both halves of the state — the window's
+   * `preview` and `terminals`, and every pane's own run and session — and a
+   * selector cannot subscribe to both. A component reading it through `useApp`
+   * would never re-render when the *pane* half changed, which is exactly when a
+   * tab appears or disappears. `mirrorToPanes` exists for the same reason, and
+   * its comment makes the general argument.
+   *
+   * {@link reconcileDock} is the only writer, and it is also the only writer of
+   * {@link activeDockTab}. Everything that changes the dock writes `preview` or
+   * `terminals` and lets the subscription settle the rest — which is what keeps
+   * "which tab is in front after this" from being answered slightly differently
+   * in five places.
+   */
+  readonly visibleDockTabs: readonly DockTab[];
 
   readonly providers: readonly ProviderDescriptor[];
   readonly profiles: readonly ProfileMetadata[];
@@ -1042,7 +1108,7 @@ function unwatchPane(paneId: PaneId): void {
  */
 function syncFromPanes(): void {
   syncRunningSessions();
-  reconcilePreview();
+  reconcileDock();
 }
 
 /** Mint a conversation the window is already watching. The only way panes are made. */
@@ -1067,6 +1133,9 @@ export const useApp = create<AppState>(() => ({
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
   preview: null,
+  terminals: [],
+  activeDockTab: null,
+  visibleDockTabs: [],
 
   providers: [],
   profiles: [],
@@ -1463,21 +1532,33 @@ export async function openPreview(path: string, pane: Pane = focusedPane()): Pro
    * owner that is already gone — `reconcilePreview` would then close it
    * immediately, which looks like the button not working.
    */
-  const state = paneState(pane);
-  const sessionId = sessionShownBy(state);
   useApp.setState({
-    preview: {
-      ...res.value,
-      owner: {
-        paneId: pane.id,
-        ...(state.run === null ? {} : { runId: state.run.runId }),
-        ...(sessionId === null ? {} : { sessionId }),
-      },
-    },
+    preview: { ...res.value, owner: ownerFor(pane) },
+    // Opening an artifact is a request to look at it. With a terminal already
+    // in the rail the tab would otherwise appear behind the one in front, and
+    // the click would read as having done nothing.
+    activeDockTab: PREVIEW_TAB,
   });
 }
 
-/** Close the preview pane. Nothing to tell the main process — see `preview.ts`. */
+/** Which conversation a pane is showing, in the shape the dock records. */
+function ownerFor(pane: Pane): DockOwner {
+  const state = paneState(pane);
+  const sessionId = sessionShownBy(state);
+  return {
+    paneId: pane.id,
+    ...(state.run === null ? {} : { runId: state.run.runId }),
+    ...(sessionId === null ? {} : { sessionId }),
+  };
+}
+
+/**
+ * Close the preview tab. Nothing to tell the main process — see `preview.ts`.
+ *
+ * Which tab comes forward is not decided here: dropping the preview is enough,
+ * and {@link reconcileDock} settles the strip on the write. See
+ * {@link AppState.visibleDockTabs} for why that is the only place it happens.
+ */
 export function closePreview(): void {
   if (useApp.getState().preview === null) return;
   useApp.setState({ preview: null });
@@ -1496,58 +1577,299 @@ function sessionShownBy(state: SessionState): SessionId | null {
 }
 
 /**
- * Close the preview once the conversation that produced it has left the screen.
+ * What each visible column is currently showing, in the shape `dock.ts` wants.
  *
- * An artifact is a thing *a conversation* made. Leaving it framed beside a
- * different conversation — or beside none, after its column was closed — is the
- * app asserting a relationship that no longer exists: the pane still says
- * `report.html`, and nothing on screen connects it to work the user can still
- * see. So it is not a persistent window object; it lives exactly as long as its
- * conversation has a column.
+ * **Visible panes only, and deliberately not `allLivePanes`.** A backgrounded
+ * run is one the user navigated away from; leaving its dock on screen while its
+ * transcript is not is orphaning by another route.
  *
- * **Visible panes only, and not `allLivePanes`.** A backgrounded run is one the
- * user navigated away from; keeping its artifact on screen while its transcript
- * is not is the same orphaning by another route. Backgrounding a conversation
- * closes its preview, and coming back to that conversation does not reopen it —
- * the tile in the transcript is the way back in, which is the whole reason the
- * tile exists.
- *
- * Runs on every pane write and every window write, which is often; it is written
- * to do nothing at all in the overwhelmingly common case where there is no
- * preview open.
+ * Memoised on the grid's identity for the reason {@link allPanes} gives, with
+ * one addition: this also has to change when a *pane's own* run or session
+ * changes, which the grid's identity does not capture. So the cached value is
+ * compared element-wise before being reused, which is cheap — a handful of
+ * string compares — and is what keeps `reconcileDock` from writing on every
+ * keystroke in a composer.
  */
-function reconcilePreview(): void {
-  const preview = useApp.getState().preview;
-  if (preview === null) return;
+let shownCache: readonly ShownConversation[] = [];
 
-  const { owner } = preview;
-  const panes = allPanes();
-
-  /*
-   * Adopt a session id the owning run has learned since. A conversation
-   * previewed before `session.started` is owned by its run; once it has a
-   * session id, that is the durable identity — it is what survives the run
-   * ending, and what a later resume of the same conversation will match on.
-   */
-  if (owner.sessionId === undefined && owner.runId !== undefined) {
-    const home = panes.find((pane) => pane.id === owner.paneId);
-    const learned = home === undefined ? null : sessionShownBy(paneState(home));
-    if (home !== undefined && learned !== null && paneState(home).run?.runId === owner.runId) {
-      useApp.setState({ preview: { ...preview, owner: { ...owner, sessionId: learned } } });
-      return;
-    }
-  }
-
-  const stillShown = panes.some((pane) => {
+function describeShown(): readonly ShownConversation[] {
+  const next = allPanes().map((pane) => {
     const state = paneState(pane);
-    if (owner.sessionId !== undefined) return sessionShownBy(state) === owner.sessionId;
-    // No session id yet: identity is the run, in the column it started in. A
-    // pane whose run has been replaced is showing a different conversation even
-    // though the column is the same one.
-    return pane.id === owner.paneId && state.run?.runId === owner.runId;
+    const sessionId = sessionShownBy(state);
+    return {
+      paneId: pane.id,
+      ...(state.run === null ? {} : { runId: state.run.runId }),
+      ...(sessionId === null ? {} : { sessionId }),
+    };
   });
 
-  if (!stillShown) useApp.setState({ preview: null });
+  const same =
+    next.length === shownCache.length &&
+    next.every((one, index) => {
+      const before = shownCache[index] as ShownConversation;
+      return (
+        one.paneId === before.paneId &&
+        one.runId === before.runId &&
+        one.sessionId === before.sessionId
+      );
+    });
+
+  if (!same) shownCache = next;
+  return shownCache;
+}
+
+/**
+ * Keep the dock honest about which conversation it belongs to.
+ *
+ * Three jobs, and the second is where the preview and the terminals part
+ * company — see `state/dock.ts` for the argument, which is the load-bearing
+ * design decision in this feature:
+ *
+ *  1. **Adopt session ids** that owning runs have learned since. A conversation
+ *     that opened something before `session.started` is owned by its run; once
+ *     there is a session id, that is the identity that survives the run ending
+ *     and matches a later resume.
+ *  2. **Retire what is orphaned.** A preview whose conversation has left the
+ *     screen is *destroyed* — it was a snapshot, and the tile in the transcript
+ *     is the way back. A terminal whose conversation has left is merely no
+ *     longer drawn: the record stays, the shell keeps running, and coming back
+ *     to that conversation brings the tab back with its scrollback.
+ *  3. **Keep the active tab on something visible**, falling to the neighbour on
+ *     the left rather than leaving the rail blank or jumping to the far end.
+ *
+ * Runs on every pane write and every window write, which is very often. It is
+ * written to do nothing at all — no allocation past `describeShown`'s reuse, no
+ * `setState` — in the overwhelmingly common case where nothing has moved.
+ */
+function reconcileDock(): void {
+  const state = useApp.getState();
+  const { preview, terminals, activeDockTab, visibleDockTabs } = state;
+
+  // The overwhelmingly common case: an empty dock that was already empty. This
+  // runs on every keystroke in a composer, so it returns before allocating.
+  if (preview === null && terminals.length === 0 && visibleDockTabs.length === 0) return;
+
+  const shown = describeShown();
+
+  const patch: {
+    preview?: PreviewState | null;
+    terminals?: readonly TerminalRecord[];
+    activeDockTab?: DockTab | null;
+    visibleDockTabs?: readonly DockTab[];
+  } = {};
+
+  let nextPreview = preview;
+  if (nextPreview !== null) {
+    const learned = learnSessionId(nextPreview.owner, shown);
+    if (learned !== null) {
+      nextPreview = { ...nextPreview, owner: { ...nextPreview.owner, sessionId: learned } };
+    }
+    // Destroyed, not hidden. The tile in the transcript is the way back.
+    if (!ownerIsShown(nextPreview.owner, shown)) nextPreview = null;
+    if (nextPreview !== preview) patch.preview = nextPreview;
+  }
+
+  // Terminals are only ever *re-owned* here, never dropped: a shell whose
+  // conversation has left the screen stops being drawn and goes on running.
+  const adopted = terminals.map((terminal) => {
+    const learned = learnSessionId(terminal.owner, shown);
+    return learned === null
+      ? terminal
+      : { ...terminal, owner: { ...terminal.owner, sessionId: learned } };
+  });
+  const nextTerminals = adopted.some((terminal, index) => terminal !== terminals[index])
+    ? adopted
+    : terminals;
+  if (nextTerminals !== terminals) patch.terminals = nextTerminals;
+
+  const visible = visibleTabs(nextPreview?.owner ?? null, nextTerminals, shown);
+  const moved =
+    visible.length !== visibleDockTabs.length ||
+    visible.some((tab, index) => !sameTab(tab, visibleDockTabs[index] as DockTab));
+  if (moved) patch.visibleDockTabs = visible;
+
+  /*
+   * `visibleDockTabs` is passed as the *previous* strip, which is what makes
+   * "fall to the neighbour on the left" answerable: by the time this runs the
+   * tab that went away is already gone from `visible`, and the stored value is
+   * the last state in which its position was known.
+   */
+  const nextActive = nextActiveTab(activeDockTab, visible, visibleDockTabs);
+  if (!sameTab(nextActive, activeDockTab)) patch.activeDockTab = nextActive;
+
+  if (Object.keys(patch).length > 0) useApp.setState(patch);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Terminals                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bring one dock tab to the front.
+ *
+ * Clicking a terminal's tab also asks for the caret, because that is what
+ * clicking a terminal means. Only here and in {@link openTerminal} — a tab that
+ * merely *reappears* when its conversation comes back must not take focus from
+ * the composer; see `requestTerminalFocus`.
+ */
+export function focusDockTab(tab: DockTab): void {
+  if (sameTab(useApp.getState().activeDockTab, tab)) return;
+  useApp.setState({ activeDockTab: tab });
+  if (tab.kind === 'terminal') requestTerminalFocus(tab.id);
+}
+
+/**
+ * Open a shell on this conversation's working directory.
+ *
+ * The size passed to `start` is a **guess, and deliberately a coarse one**: the
+ * rail has not been laid out yet — it may not even be mounted — so there is
+ * nothing to measure. `TerminalView` fits and resizes the moment it has a box,
+ * which is one frame later and before the shell has finished printing its
+ * prompt. Starting at a plausible size and correcting beats blocking the open on
+ * a layout pass, and beats starting at 0×0, which some shells hang on.
+ *
+ * A failure lands in the pane's transcript rather than on the error surface, the
+ * same call {@link openPreview} makes: failing to open a terminal is a fact
+ * about this conversation, and it belongs where the user is already looking.
+ */
+export async function openTerminal(pane: Pane = focusedPane()): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const cwd = paneState(pane).cwd;
+  if (cwd.trim().length === 0) {
+    pane.transcript.note('warn', 'Choose a folder first', 'A terminal needs somewhere to start.');
+    return;
+  }
+
+  const res = await call(() => bridge.terminal.start({ cwd, cols: 80, rows: 24 }));
+  if (!res.ok) {
+    pane.transcript.note('warn', 'Could not open a terminal', res.error.message);
+    return;
+  }
+
+  /*
+   * Ownership is read *after* the await, exactly as `openPreview` explains: the
+   * user may have resumed a different session into this column while the shell
+   * was starting, and stamping the terminal with the conversation that was there
+   * when the key was pressed would hand it an owner that is already gone.
+   */
+  const info = res.value.terminal;
+  /*
+   * The xterm instance is created *here*, not in `TerminalView`'s effect, and
+   * the ordering is load-bearing. The shell starts printing its prompt the
+   * moment `start` resolves, and those bytes arrive on the push channel within
+   * a millisecond or two — well before React has mounted anything. A session
+   * that did not exist yet would have them dropped by `writeToTerminal`, and
+   * the tab would open onto a blank pane with a live shell behind it.
+   */
+  ensureTerminalSession(info.id);
+
+  const record: TerminalRecord = {
+    info,
+    owner: ownerFor(pane),
+    title: lastSegment(info.shell),
+    exited: false,
+  };
+
+  useApp.setState((state) => ({
+    terminals: [...state.terminals, record],
+    activeDockTab: { kind: 'terminal', id: info.id },
+  }));
+  // Redeemed by `attachTerminal` once `TerminalView` has mounted, so that ⌘J
+  // leaves you able to type into the shell you just asked for.
+  requestTerminalFocus(info.id);
+}
+
+/**
+ * The focused conversation's terminal — the existing one, or a new one.
+ *
+ * What `⌘J` does. Pressing it repeatedly should not fill the strip with shells
+ * nobody asked for, so it opens one the first time and brings that one forward
+ * afterwards; the `+` on the strip is the deliberate way to get a second.
+ */
+export function toggleTerminal(pane: Pane = focusedPane()): void {
+  const state = useApp.getState();
+  const shown = describeShown();
+  const mine = state.terminals.find(
+    (terminal) => terminal.owner.paneId === pane.id && ownerIsShown(terminal.owner, shown),
+  );
+  if (mine === undefined) {
+    void openTerminal(pane);
+    return;
+  }
+
+  const tab: DockTab = { kind: 'terminal', id: mine.info.id };
+  // Already in front: the second press closes the rail rather than doing
+  // nothing, which is what makes it a toggle and what people expect of the key
+  // that opened it.
+  if (sameTab(state.activeDockTab, tab)) closeTerminal(mine.info.id);
+  else focusDockTab(tab);
+}
+
+/**
+ * Kill a terminal and drop its tab.
+ *
+ * The only thing that ends a shell — see `state/dock.ts`. Everything else that
+ * makes a tab disappear (switching session, closing a pane, reloading) leaves
+ * the process running on purpose.
+ *
+ * The record is dropped immediately rather than after the main process
+ * confirms. The alternative is a tab that lingers for a round trip after the
+ * user clicked ✕, and there is nothing useful to do with a failure: the shell
+ * is either dead or unreachable, and neither is worth keeping a tab for.
+ */
+export function closeTerminal(id: TerminalId): void {
+  const state = useApp.getState();
+  if (!state.terminals.some((terminal) => terminal.info.id === id)) return;
+
+  // Which tab comes forward is `reconcileDock`'s, on this write.
+  useApp.setState({
+    terminals: state.terminals.filter((terminal) => terminal.info.id !== id),
+  });
+
+  disposeTerminalSession(id);
+
+  const { bridge } = resolveBridge();
+  if (bridge) void call(() => bridge.terminal.close({ id }));
+}
+
+/**
+ * Rename a tab, because the program running in it said so.
+ *
+ * Driven by the OSC title sequence xterm parses for us — `vim` sets it, `ssh`
+ * sets it, and a well-configured shell sets it back to the directory afterwards.
+ * A no-op write is dropped because this fires on nearly every prompt.
+ */
+export function setTerminalTitle(id: TerminalId, title: string): void {
+  const trimmed = title.trim();
+  if (trimmed === '') return;
+  useApp.setState((state) => {
+    const index = state.terminals.findIndex((terminal) => terminal.info.id === id);
+    if (index < 0 || (state.terminals[index] as TerminalRecord).title === trimmed) return state;
+    const terminals = [...state.terminals];
+    terminals[index] = { ...(terminals[index] as TerminalRecord), title: trimmed };
+    return { ...state, terminals };
+  });
+}
+
+/**
+ * Note that a shell has ended, without closing its tab.
+ *
+ * The tab stays so that whatever the shell said on its way out — a stack trace,
+ * a `command not found`, an `exit 1` — is still readable. It is marked so the
+ * strip can grey it, and closing it is left to the user, who is the one who
+ * knows whether they have finished reading.
+ */
+export function markTerminalExited(id: TerminalId): void {
+  useApp.setState((state) => {
+    const index = state.terminals.findIndex((terminal) => terminal.info.id === id);
+    if (index < 0 || (state.terminals[index] as TerminalRecord).exited) return state;
+    const terminals = [...state.terminals];
+    const record = terminals[index] as TerminalRecord;
+    terminals[index] = { ...record, exited: true, info: { ...record.info, exited: true } };
+    return { ...state, terminals };
+  });
 }
 
 /**
@@ -2382,6 +2704,70 @@ export function installEventBridge(): () => void {
 }
 
 /**
+ * Subscribe to terminal output. Call alongside {@link installEventBridge}.
+ *
+ * Note what the `data` branch does *not* touch: the store. Output goes straight
+ * into the xterm instance that owns those bytes, because a `setState` sixty
+ * times a second per terminal would re-render the window to update a canvas
+ * that repaints itself. `exit` is the one that writes, and it happens once.
+ *
+ * An event for a terminal this window has no session for is dropped in
+ * `writeToTerminal` without ceremony. That is routine rather than exceptional:
+ * push channels broadcast to every window, so a second window hears about the
+ * first window's shells and has nowhere to put them.
+ */
+export function installTerminalFeed(): () => void {
+  const { bridge } = resolveBridge();
+  if (!bridge) return () => undefined;
+
+  setTerminalSessionHooks({ onTitle: setTerminalTitle });
+
+  return bridge.terminal.onEvent((event) => {
+    if (event.type === 'data') {
+      writeToTerminal(event.id, event.data);
+      return;
+    }
+    noteTerminalExit(event.id, event.exitCode, event.signal);
+    markTerminalExited(event.id);
+  });
+}
+
+/**
+ * Re-adopt the shells the main process is still holding, after a reload.
+ *
+ * The renderer's half of a terminal is an xterm instance and a subscription,
+ * and a reload destroys both while leaving the shell running — the same
+ * situation `adoptLiveRuns` handles for runs, and handled the same way: ask what
+ * exists, then rebuild a view of it.
+ *
+ * Everything adopted is owned by the **focused pane**, which is a guess, and the
+ * only one available: ownership is renderer state and it went with the old
+ * window. It is the right guess in the case that matters — one conversation,
+ * one window, a reload — and in a split it puts the tabs somewhere visible
+ * rather than nowhere, which beats a shell that is running with no way to reach
+ * it.
+ */
+async function adoptTerminals(pane: Pane): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const listed = await call(() => bridge.terminal.list({}));
+  if (!listed.ok || listed.value.terminals.length === 0) return;
+
+  const owner = ownerFor(pane);
+  const records: TerminalRecord[] = [];
+  for (const info of listed.value.terminals) {
+    const replayed = await call(() => bridge.terminal.replay({ id: info.id }));
+    // Seeded with the retained tail, so a reattached tab shows a screenful
+    // rather than opening blank onto a shell that has been working for an hour.
+    ensureTerminalSession(info.id, replayed.ok ? replayed.value.data : '');
+    records.push({ info, owner, title: lastSegment(info.shell), exited: info.exited });
+  }
+
+  useApp.setState({ terminals: records });
+}
+
+/**
  * Subscribe to the main process's plan-usage poll. Returns an unsubscribe.
  *
  * There is no timer here, and that is the point: the poll runs once in main
@@ -2441,6 +2827,7 @@ export async function bootstrap(): Promise<void> {
 
   await Promise.all([refreshProviders(), refreshProfiles()]);
   await adoptLiveRuns(focusedPane());
+  await adoptTerminals(focusedPane());
   await refreshSessions();
   useApp.setState({ booted: true });
 

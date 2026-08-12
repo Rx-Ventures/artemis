@@ -67,8 +67,14 @@ import {
 } from './errors.js';
 import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
-import { assertNoSecrets, EVENT_SCAN_POLICY, RESPONSE_SCAN_POLICY } from './redact.js';
+import {
+  assertNoSecrets,
+  EVENT_SCAN_POLICY,
+  RESPONSE_SCAN_POLICY,
+  TERMINAL_SCAN_POLICY,
+} from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import type { TerminalHost } from './terminal.js';
 import type { Updater } from './updater.js';
 import {
   validateProfilesCreate,
@@ -91,6 +97,12 @@ import {
   validateSessionsRename,
   validateProfilesSuggestDir,
   validatePreviewOpen,
+  validateTerminalClose,
+  validateTerminalList,
+  validateTerminalReplay,
+  validateTerminalResize,
+  validateTerminalStart,
+  validateTerminalWrite,
   validateAuthSignOut,
   validateAuthStatus,
   validateUsagePlan,
@@ -145,6 +157,7 @@ export interface IpcLayerOptions {
   readonly engine: EngineHost;
   readonly policy: SecurityPolicy;
   readonly updater: Updater;
+  readonly terminals: TerminalHost;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -159,7 +172,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy, updater } = options;
+  const { engine, policy, updater, terminals } = options;
 
   const handlers: ChannelHandlers = {
     /* ---------------------------------------------------------------- */
@@ -370,6 +383,67 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.previewOpen]: {
       validate: validatePreviewOpen,
       handle: async (request) => grantPreview(request.path),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Terminals                                                        */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Open a shell.
+     *
+     * `checkWorkingDirectory` is the same gate a run start goes through, and it
+     * is here for the same reason: a `cwd` that does not exist produces a
+     * `posix_spawnp` failure with no useful message, and the renderer's copy of
+     * a directory can be a moment out of date with the disk. Asking first turns
+     * that into a sentence.
+     *
+     * Note what this handler does *not* forward: nothing from `request` reaches
+     * the shell's argv or environment. It names a directory and a size, and
+     * `terminal.ts` decides everything else.
+     */
+    [IPC.terminalStart]: {
+      validate: validateTerminalStart,
+      handle: async (request) => {
+        const check = await checkWorkingDirectory(request.cwd);
+        if (!check.ok) throw new WorkspaceError(check.message);
+        return { terminal: await terminals.start(request) };
+      },
+    },
+
+    [IPC.terminalWrite]: {
+      validate: validateTerminalWrite,
+      handle: async (request) => {
+        terminals.write(request.id, request.data);
+        return { id: request.id };
+      },
+    },
+
+    [IPC.terminalResize]: {
+      validate: validateTerminalResize,
+      handle: async (request) => {
+        terminals.resize(request.id, request.cols, request.rows);
+        return { id: request.id };
+      },
+    },
+
+    /** The one thing that kills a shell. See `TerminalCloseRequest`. */
+    [IPC.terminalClose]: {
+      validate: validateTerminalClose,
+      handle: async (request) => {
+        terminals.close(request.id);
+        return { id: request.id };
+      },
+    },
+
+    [IPC.terminalList]: {
+      validate: validateTerminalList,
+      handle: async () => ({ terminals: terminals.list() }),
+    },
+
+    [IPC.terminalReplay]: {
+      validate: validateTerminalReplay,
+      handle: async (request) => ({ id: request.id, ...terminals.replay(request.id) }),
     },
 
     [IPC.sessionsMessages]: {
@@ -763,4 +837,30 @@ export function forwardAgentEvents(engine: EngineHost): Unsubscribe {
   };
 
   return engine.require().subscribe(send);
+}
+
+/**
+ * Push terminal output and exits at every open window.
+ *
+ * The same shape as {@link forwardAgentEvents} and the same failure rule —
+ * scan, then broadcast, dropping anything that fails rather than throwing —
+ * under {@link TERMINAL_SCAN_POLICY}, which exempts the byte stream itself from
+ * the credential patterns for the reasons written out there.
+ *
+ * Broadcast to every window, like everything else on a push channel. A second
+ * window has not been handed any of these ids, so it routes them to nothing;
+ * that is the same way `agentEvent` behaves for a run it did not start, and it
+ * keeps the preload's rule that a channel name is never built from a target.
+ */
+export function forwardTerminalEvents(terminals: TerminalHost): Unsubscribe {
+  return terminals.subscribe((event) => {
+    try {
+      assertNoSecrets(event, IPC_PUSH.terminalEvent, TERMINAL_SCAN_POLICY);
+    } catch (error) {
+      log.error(`Dropped a terminal ${event.type} event that failed its safety check`, error);
+      return;
+    }
+
+    broadcast(IPC_PUSH.terminalEvent, event);
+  });
 }

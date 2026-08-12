@@ -34,6 +34,21 @@ import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
 import type { SessionSummary } from './session.js';
+import type {
+  TerminalCloseRequest,
+  TerminalCloseResponse,
+  TerminalEvent,
+  TerminalListRequest,
+  TerminalListResponse,
+  TerminalReplayRequest,
+  TerminalReplayResponse,
+  TerminalResizeRequest,
+  TerminalResizeResponse,
+  TerminalStartRequest,
+  TerminalStartResponse,
+  TerminalWriteRequest,
+  TerminalWriteResponse,
+} from './terminal.js';
 import type { PlanUsage } from './usage.js';
 
 /* -------------------------------------------------------------------------- */
@@ -96,6 +111,33 @@ export const IPC = {
    * retains it retires on its own — see `preview.ts`.
    */
   previewOpen: 'artemis:preview:open',
+
+  /**
+   * A shell in a pseudo-terminal, and the four things you can do to one.
+   *
+   * Six channels rather than the preview's one, because a terminal is the only
+   * thing in this contract that is genuinely *bidirectional and long-lived*: it
+   * is opened, written to, resized as its pane changes shape, and eventually
+   * killed. Output comes back the other way on {@link IPC_PUSH.terminalEvent}.
+   *
+   * Every one but `start` names a terminal by an id main issued, and main
+   * resolves that id against its own registry before doing anything — see
+   * `./terminal.js`.
+   */
+  terminalStart: 'artemis:terminal:start',
+  terminalWrite: 'artemis:terminal:write',
+  terminalResize: 'artemis:terminal:resize',
+  /** Kill the shell. The only thing that does; see `TerminalCloseRequest`. */
+  terminalClose: 'artemis:terminal:close',
+  /**
+   * The reload pair, matching `runsList`/`runsEvents`.
+   *
+   * A renderer that has just been recreated has no idea which terminals it was
+   * showing, and the shells carried on without it. `list` says what exists;
+   * `replay` hands back the retained tail so a reattached tab is not blank.
+   */
+  terminalList: 'artemis:terminal:list',
+  terminalReplay: 'artemis:terminal:replay',
 
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'artemis:sessions:messages',
@@ -195,6 +237,19 @@ export const IPC_PUSH = {
    * ({@link IPC.updatesState}) exists only for the first paint.
    */
   updateState: 'artemis:push:update-state',
+  /**
+   * Carries a single {@link TerminalEvent} — output, or a child that has ended.
+   *
+   * One channel for every terminal, demultiplexed on `event.id`, for exactly the
+   * reason {@link agentEvent} gives: a channel per terminal would mean the
+   * preload composing channel names from renderer input, and the set of
+   * reachable channels would stop being readable in one screen.
+   *
+   * Pushed rather than polled because this is the one stream in the app the
+   * renderer cannot ask for at the right moment — output arrives when a program
+   * decides to print, not when a component renders.
+   */
+  terminalEvent: 'artemis:push:terminal-event',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -1026,6 +1081,12 @@ export type IpcRequestMap = {
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
   [IPC.previewOpen]: PreviewOpenRequest;
+  [IPC.terminalStart]: TerminalStartRequest;
+  [IPC.terminalWrite]: TerminalWriteRequest;
+  [IPC.terminalResize]: TerminalResizeRequest;
+  [IPC.terminalClose]: TerminalCloseRequest;
+  [IPC.terminalList]: TerminalListRequest;
+  [IPC.terminalReplay]: TerminalReplayRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
   [IPC.sessionsRename]: SessionsRenameRequest;
   [IPC.sessionsDelete]: SessionsDeleteRequest;
@@ -1064,6 +1125,12 @@ export type IpcResponseMap = {
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
   [IPC.previewOpen]: PreviewOpenResponse;
+  [IPC.terminalStart]: TerminalStartResponse;
+  [IPC.terminalWrite]: TerminalWriteResponse;
+  [IPC.terminalResize]: TerminalResizeResponse;
+  [IPC.terminalClose]: TerminalCloseResponse;
+  [IPC.terminalList]: TerminalListResponse;
+  [IPC.terminalReplay]: TerminalReplayResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
   [IPC.sessionsRename]: SessionsRenameResponse;
   [IPC.sessionsDelete]: SessionsDeleteResponse;
@@ -1110,6 +1177,7 @@ export type IpcPushMap = {
   [IPC_PUSH.windowState]: WindowState;
   [IPC_PUSH.planUsage]: PlanUsagePush;
   [IPC_PUSH.updateState]: UpdateState;
+  [IPC_PUSH.terminalEvent]: TerminalEvent;
 };
 
 /** Payload type for a push channel. */
@@ -1265,6 +1333,47 @@ export interface ArtemisBridge {
   readonly preview: {
     /** Snapshot the file at `path` and return the URL that serves it. */
     open(request: PreviewOpenRequest): Promise<IpcResult<PreviewOpenResponse>>;
+  };
+
+  /**
+   * A shell of one's own.
+   *
+   * The one surface here that hands the user *unmediated* execution: the agent's
+   * side of the app puts every tool call through a permission prompt, and this
+   * puts none on a keystroke. That is not an oversight — a terminal that asked
+   * before each command would not be a terminal — but it is worth being plain
+   * about, because it means the containment lives entirely in the two facts
+   * below rather than in a policy.
+   *
+   * **Main chooses the shell.** Nothing on this surface names a binary. The
+   * renderer says "a shell, here, this big"; `main/terminal.ts` decides what
+   * that means. So the worst a compromised renderer can do is what the user
+   * could already do by typing — it cannot pick the program.
+   *
+   * **Main owns the ids.** {@link start} is the only way to obtain one, and
+   * every other method resolves what it is given against main's registry.
+   */
+  readonly terminal: {
+    /** Open a shell in `cwd` at the given size. The id comes back with it. */
+    start(request: TerminalStartRequest): Promise<IpcResult<TerminalStartResponse>>;
+    /** Send input. Whatever the user typed or pasted, verbatim. */
+    write(request: TerminalWriteRequest): Promise<IpcResult<TerminalWriteResponse>>;
+    /** Tell the child its window changed shape. Becomes a `SIGWINCH`. */
+    resize(request: TerminalResizeRequest): Promise<IpcResult<TerminalResizeResponse>>;
+    /** Kill the shell and forget it. Nothing else ends one. */
+    close(request: TerminalCloseRequest): Promise<IpcResult<TerminalCloseResponse>>;
+    /** Every terminal main is holding — for a renderer that has just reloaded. */
+    list(request: TerminalListRequest): Promise<IpcResult<TerminalListResponse>>;
+    /** The retained tail of one terminal's output, to repaint a reattached tab. */
+    replay(request: TerminalReplayRequest): Promise<IpcResult<TerminalReplayResponse>>;
+    /**
+     * Output and exits, for every terminal at once.
+     *
+     * One subscription rather than one per terminal, matching
+     * {@link runs.onEvent}: the payload carries its own `id` and the renderer
+     * routes on it.
+     */
+    onEvent(listener: (event: TerminalEvent) => void): Unsubscribe;
   };
 
   /**

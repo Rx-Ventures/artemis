@@ -107,7 +107,7 @@ import {
 import { PaneProvider, usePane } from '../state/paneContext';
 import type { Pane, PaneRow } from '../state/pane';
 import { Composer } from './Composer';
-import { PreviewPane } from './PreviewPane';
+import { DockPane } from './DockPane';
 import { StatusLine } from './StatusLine';
 import { Transcript } from './Transcript';
 import { IconButton } from './disabled-reason';
@@ -129,15 +129,20 @@ const rowKey = (row: number): string => `row:${row}`;
 const cellKey = (row: number, column: number): string => `r${row}c${column}`;
 
 /**
- * The two panels of the preview split.
+ * The two panels of the dock split.
  *
- * Fixed strings rather than positional keys, because there is only ever one
- * preview and it is always to the right of everything else. They double as the
- * panel ids and as the stored keys — `cellKey` can never produce either, so the
- * two naming schemes cannot collide in `paneLayout`.
+ * Fixed strings rather than positional keys, because there is only ever one dock
+ * and it is always to the right of everything else. They double as the panel ids
+ * and as the stored keys — `cellKey` can never produce either, so the two naming
+ * schemes cannot collide in `paneLayout`.
+ *
+ * `DOCK_PANEL` was `'preview'` before the rail grew tabs. The old key is simply
+ * never read again: a window that had dragged the preview divider gets an even
+ * split once, and stores the new key from the next drag. Migrating it would mean
+ * carrying a rename through `localStorage` forever to save one adjustment.
  */
 const CONVERSATIONS_PANEL = 'conversations';
-const PREVIEW_PANEL = 'preview';
+const DOCK_PANEL = 'dock';
 
 /**
  * The layout a group should mount with, computed **once per group**.
@@ -199,9 +204,10 @@ const HANDLE = 'bg-transparent transition-colors hover:bg-lunar/30 data-[state=d
 export function WorkingArea(): ReactElement {
   const grid = useApp((s) => s.grid);
   const stored = useApp((s) => s.paneLayout);
-  // A boolean, not the preview itself: this component must re-render when a
-  // preview opens or closes and never when the page inside it changes.
-  const showPreview = useApp((s) => s.preview !== null);
+  // A boolean, not the tab list itself: this component must re-render when the
+  // dock opens or closes and never when a tab is switched, renamed, or when a
+  // shell prints a line.
+  const showDock = useApp((s) => s.visibleDockTabs.length > 0);
 
   /*
    * Whether a session is being dragged over this area.
@@ -258,33 +264,33 @@ export function WorkingArea(): ReactElement {
       // the overlay would be left on screen with nothing to dismiss it.
       onDragEnd={endDrag}
     >
-      {showPreview ? <PreviewSplit>{conversations}</PreviewSplit> : conversations}
+      {showDock ? <DockSplit>{conversations}</DockSplit> : conversations}
     </div>
   );
 }
 
 /**
- * The grid, against the preview pane.
+ * The grid, against the dock.
  *
- * A group of its own rather than another column inside the grid's, because a
- * preview is not a conversation — see `PreviewPane`. Keeping it outside means
- * the grid's own geometry (which row, which column, what is stored under
- * `r0c1`) is unchanged whether or not a preview is open, so opening one cannot
- * disturb dividers the user has already placed.
+ * A group of its own rather than another column inside the grid's, because
+ * nothing in the dock is a conversation — see `state/dock.ts`. Keeping it
+ * outside means the grid's own geometry (which row, which column, what is
+ * stored under `r0c1`) is unchanged whether or not the dock is open, so opening
+ * a terminal cannot disturb dividers the user has already placed.
  *
  * Its own component so {@link useStoredLayout} is scoped to the group's
- * lifetime, exactly as in `RowStack`: this mounts when a preview opens and
- * unmounts when it closes, which is the span `defaultLayout` must be constant
- * over.
+ * lifetime, exactly as in `RowStack`: this mounts when the first dock tab
+ * appears and unmounts when the last one goes, which is the span
+ * `defaultLayout` must be constant over.
  *
  * The stored key is not positional like the grid's, because there is only ever
  * one of these and it is always in the same place.
  */
-function PreviewSplit({ children }: { readonly children: ReactNode }): ReactElement {
+function DockSplit({ children }: { readonly children: ReactNode }): ReactElement {
   const stored = useApp((s) => s.paneLayout);
   const defaultLayout = useStoredLayout(stored, [
     { id: CONVERSATIONS_PANEL, key: CONVERSATIONS_PANEL },
-    { id: PREVIEW_PANEL, key: PREVIEW_PANEL },
+    { id: DOCK_PANEL, key: DOCK_PANEL },
   ]);
 
   return (
@@ -294,7 +300,7 @@ function PreviewSplit({ children }: { readonly children: ReactNode }): ReactElem
       onLayoutChanged={(layout, meta) => {
         if (!meta.isUserInteraction) return;
         const shares: Record<string, number> = {};
-        for (const id of [CONVERSATIONS_PANEL, PREVIEW_PANEL]) {
+        for (const id of [CONVERSATIONS_PANEL, DOCK_PANEL]) {
           const share = layout[id];
           if (typeof share === 'number') shares[id] = share;
         }
@@ -305,9 +311,9 @@ function PreviewSplit({ children }: { readonly children: ReactNode }): ReactElem
       <ResizablePanel id={CONVERSATIONS_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
         {children}
       </ResizablePanel>
-      <ResizableHandle withHandle aria-label="Resize the preview" className={HANDLE} />
-      <ResizablePanel id={PREVIEW_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
-        <PreviewPane />
+      <ResizableHandle withHandle aria-label="Resize the dock" className={HANDLE} />
+      <ResizablePanel id={DOCK_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
+        <DockPane />
       </ResizablePanel>
     </ResizablePanelGroup>
   );
