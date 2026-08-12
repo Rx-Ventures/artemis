@@ -418,6 +418,52 @@ describe('thinking', () => {
     expect(thinking[0]?.text).toBe('Hmm…');
   });
 
+  it('drops a completed thinking block the provider left empty', () => {
+    // The signature is full and the text is not: the provider kept the block
+    // and withheld its content. There is nothing to render, and emitting it
+    // anyway put an empty "thinking…" fold in the transcript.
+    const state = makeState();
+    const events = run(state, [
+      assistantMessage({
+        content: [
+          { type: 'thinking', thinking: '', signature: 'a'.repeat(3232) },
+          { type: 'text', text: 'done' },
+        ],
+      }),
+    ]);
+
+    expect(events.some((e) => e.type === 'thinking.delta')).toBe(false);
+    expect(events).toHaveLength(1);
+  });
+
+  it('still sends the completed block when the only streamed chunk was empty', () => {
+    // An empty chunk must not count as delivery: if it marked the block
+    // streamed, the completed message's real text would be suppressed and the
+    // thinking would be lost entirely.
+    const state = makeState();
+    const events = run(state, [
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u1',
+        session_id: 's',
+        event: { type: 'message_start', message: { id: 'msg_01' } },
+      },
+      {
+        type: 'stream_event',
+        parent_tool_use_id: null,
+        uuid: 'u2',
+        session_id: 's',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } },
+      },
+      assistantMessage({ content: [{ type: 'thinking', thinking: 'the real text', signature: 'sig' }] }),
+    ]);
+
+    const thinking = events.filter((e): e is ThinkingDeltaEvent => e.type === 'thinking.delta');
+    expect(thinking).toHaveLength(1);
+    expect(thinking[0]?.text).toBe('the real text');
+  });
+
   it('marks redacted thinking with empty text', () => {
     const state = makeState();
     const events = run(state, [

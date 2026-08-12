@@ -140,7 +140,10 @@ export function replayStoredMessage(
 
     if (type === 'thinking') {
       const text = asString(block.thinking);
-      if (text === undefined) return;
+      // A stored thinking block is very often `thinking: ''` beside a full
+      // signature — the provider kept the block and withheld its content. It
+      // replays as nothing worth a row, so it does not get one.
+      if (text === undefined || text === '') return;
       events.push({ ...envelope(), type: 'thinking.delta', messageId, blockIndex, text });
       return;
     }

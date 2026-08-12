@@ -185,6 +185,14 @@ export interface TextCompleteEvent extends AgentEventBase {
  *
  * `redacted` marks thinking the provider encrypted or withheld — render a
  * placeholder, and expect {@link text} to be empty.
+ *
+ * Empty {@link text} is otherwise not a valid event. A thinking block that is
+ * neither text nor redaction has nothing to show, and the model does think
+ * without handing back the plaintext: roughly half the `thinking` blocks in a
+ * stored Claude transcript are an empty string beside a full signature, which
+ * is the provider keeping the block's identity while withholding its content.
+ * Emitting those produced a transcript of empty "thinking…" folds, so a mapper
+ * that finds no text drops the event rather than passing the emptiness on.
  */
 export interface ThinkingDeltaEvent extends AgentEventBase {
   readonly type: 'thinking.delta';

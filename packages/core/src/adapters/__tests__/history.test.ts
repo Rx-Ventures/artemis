@@ -71,6 +71,33 @@ describe('replayStoredMessage', () => {
     expect(events[0]).toMatchObject({ type: 'text.complete', role: 'user', text: 'do the thing' });
   });
 
+  it('replays a stored thinking block', () => {
+    const [event] = replayStoredMessage(
+      assistant([{ type: 'thinking', thinking: 'weighing the options', signature: 'sig' }]),
+      ctx(),
+    );
+
+    expect(event).toMatchObject({ type: 'thinking.delta', text: 'weighing the options' });
+  });
+
+  it('skips a thinking block the provider stored without its text', () => {
+    // Roughly half the `thinking` blocks in a real stored transcript are an
+    // empty string beside a full signature — the provider kept the block and
+    // withheld its content. Replaying those filled the transcript with folds
+    // that opened onto nothing.
+    const events = replayStoredMessage(
+      assistant([
+        { type: 'thinking', thinking: '', signature: 'a'.repeat(3232) },
+        { type: 'text', text: 'the answer' },
+      ]),
+      ctx(),
+    );
+
+    expect(events.some((e) => e.type === 'thinking.delta')).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'text.complete', text: 'the answer' });
+  });
+
   it('replays a tool call and its result as a matched pair', () => {
     const events = replayStoredSession(
       [
