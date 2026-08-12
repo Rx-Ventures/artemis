@@ -1,40 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.6.0
+## What's new in 0.6.1
 
-- There is a terminal in the app now. ⌘J opens a shell on the focused
-  session's working directory, so running what the agent just wrote no
-  longer means leaving Artemis and finding the directory again. The
-  right-hand rail became a dock of tabs — the artifact the agent wrote and
-  the terminals you asked for, side by side, each closing with its own ✕.
-  Also reachable from the header button, the command palette, or the `+` on
-  the tab strip.
-- A plan arrives as a plan. When the agent finishes planning, its plan is
-  laid out to be read and approved rather than shown as a wall of prompt
-  text.
-- Answering a prompt survives a reload. ⌘R used to replay every permission
-  and plan prompt the run had ever raised, and the second answer could not
-  land — the question was already settled. Reloading now leaves answered
-  prompts answered.
-- A thinking block either shows its text or does not appear. Nearly half of
-  them were arriving with the text withheld and drew an empty fold you
-  could open onto nothing; a burst of real work read as a stack of them.
-- The sidebar marks the session each column is showing, so you can tell
-  which conversation is in front of you when several are open.
-- The mark inside the app is the icon in the dock. The dock has shown a bow
-  since the rename; the new-session page and the dead-end screen were still
-  showing the moon. They are one drawing now, not two.
-- The recent-folders menu keeps only directories that will still be there.
-  Worktrees and temporary checkouts were taking slots in a ten-row menu and
-  never giving them back, pushing out real projects with rows pointing at
-  places that had been deleted days earlier.
-- Updating cleans up after itself. Every update so far has left about 6.5MB
-  of the version it replaced sitting in your Applications folder, and
-  another copy in a temporary directory — the cleanup ran, deleted almost
-  everything, and silently failed on the one file it could not remove.
-  Installing this version sweeps away what earlier ones left behind, so
-  expect a little disk space back on first launch.
+- A bug can be reported from inside the app. The foot of the sidebar has a
+  permanent row now — one line, always there, because the moment you want
+  it is a moment you did not plan for and will not go menu-hunting during.
+  It opens a short form: a summary, what happened, steps if you have them,
+  and a checkbox that includes the two facts anyone triaging asks for first
+  — your version and your platform, and nothing else. The button says
+  *Continue on GitHub* because it does not file anything: it opens GitHub's
+  own new-issue form with all of it filled in, so the last read of what is
+  about to be public is yours, and the issue comes from an account that can
+  be replied to.
+- Updating no longer needs a GitHub account. This repository is public, so
+  the updater now reaches releases over plain HTTPS with no credential and
+  no tooling; your own `gh` stays as a second route for machines where the
+  direct one is blocked or proxied. The release archive is streamed to disk
+  as it arrives instead of being held whole in memory first — about 200MB
+  the app no longer asks of your machine while an update lands. And when a
+  check does fail, the app says what is actually likely wrong now: the
+  network, rather than a missing GitHub login.
+
+Carried over from 0.6.0, in case you are coming from 0.5.x:
+
+- There is a terminal in the app. ⌘J opens a shell on the focused session's
+  working directory, and the right-hand rail became a dock of tabs — the
+  artifact the agent wrote and the terminals you asked for, side by side.
+- A plan arrives as a plan, laid out to be read and approved rather than
+  shown as a wall of prompt text.
+- Updating cleans up after itself. Every update before 0.6.0 left about
+  6.5MB of the version it replaced behind; installing sweeps away what
+  earlier ones left, so expect a little disk space back on first launch.
 
 ## Install
 
@@ -63,9 +60,10 @@ Runs are billed to the Claude account each profile is signed into.
 
 ## Updates
 
-Artemis checks this repository for newer releases (using your own `gh` CLI
-login) and puts a card at the foot of the sidebar when one exists — or a
-strip under the header, if the sidebar is hidden. Installing parks at
-"restart when you're ready" — nothing restarts on its own.
+Artemis checks this repository for newer releases — public, so no account or
+GitHub CLI is needed — and puts a card at the foot of the sidebar when one
+exists, or a strip under the header if the sidebar is hidden. Installing
+parks at "restart when you're ready" — nothing restarts on its own.
 
-Feedback: open an issue in this repo.
+Feedback: **Report a bug** at the foot of the sidebar, or open an issue in
+this repo.
