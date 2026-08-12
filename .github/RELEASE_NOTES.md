@@ -1,18 +1,24 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.2.0
+## What's new in 0.3.0
 
-- A page the agent writes is something you can look at: HTML it produces
-  opens in a preview pane beside the transcript.
-- Markdown the agent writes is read, not diffed — prose renders as prose.
-- A question from the agent is answered, not approved: multiple-choice asks
-  render as choices inline in the transcript.
-- A run outlives the column that started it. Navigating away no longer
-  abandons work in flight.
-- The composer offers the one action that would work — Send becomes Stop
-  while a run is going.
-- A stretch of work collapses to one row, thinking included.
+- A page the agent makes shows itself. An HTML artifact takes its own
+  transcript row instead of a diff, opens the preview pane on the first one
+  of a conversation, and closes when that conversation leaves the screen.
+- A user row is what a person said. Prompts the harness injects — the body
+  of a skill a tool call just loaded, a continuation, a system reminder —
+  no longer arrive looking like something you typed.
+- The folder chip lists where you have been. Ten directories, alphabetical,
+  with "Add folder…" still there for one the app has never seen; Appearance
+  prunes the list.
+- An answer arrives a word at a time, each fading in as it lands, and never
+  pacing slower than the model actually answered. Appearance carries a
+  switch to turn it off.
+- The app is set in Geist and Geist Mono, packaged with it — correct on
+  first launch with no network.
+- Text size is the reader's to choose: 11px to 20px in Appearance, scaling
+  the boxes along with the text.
 
 ## Install
 
