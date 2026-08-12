@@ -793,6 +793,38 @@ function endToolCall(
 
 type UserMessage = SDKUserMessage | SDKUserMessageReplay;
 
+/**
+ * Is this user-role turn the person talking?
+ *
+ * `role: "user"` is an addressing slot, not a claim of authorship. It is the
+ * only place the API has to put text that goes *to* the model and did not come
+ * *from* it, so the harness writes its own prompts there too: the body of a
+ * skill a `Skill` call just loaded, an auto-continuation ("Continue from where
+ * you left off."), a system reminder, an interrupt marker. On disk those carry
+ * `isMeta`; over the SDK's wire they arrive as `isSynthetic`.
+ *
+ * This used to read the flag the other way round — as *surface this* — on the
+ * reasoning that anything Artemis did not itself send must be something the
+ * reader has not seen. That is true, and it is still the wrong conclusion: the
+ * transcript's user rows are a record of what a person said, and filling them
+ * with instructions the harness wrote puts words in someone's mouth. A skill's
+ * several hundred lines of design guidance appearing as though it had been
+ * typed is the case that made this obvious.
+ *
+ * Nothing is lost by dropping them, which is the other half of the argument.
+ * The `Skill` call that pulled the text in is already a tool row; a
+ * continuation is visible as the run continuing; a system reminder is
+ * addressed to the model and is not about the conversation at all. What the
+ * reader would gain is noise attributed to them.
+ *
+ * Replayed history is the case that stays: it is the same person's earlier
+ * turns, read back off disk, and it is checked for synthesis too so that a
+ * replayed injection does not sneak in the way a live one did.
+ */
+function isHumanTurn(message: UserMessage, isReplay: boolean): boolean {
+  return isReplay && message.isSynthetic !== true;
+}
+
 function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonly AgentEvent[] {
   const events: AgentEvent[] = [];
   const isReplay = 'isReplay' in message && message.isReplay === true;
@@ -801,18 +833,17 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
   const content = message.message.content;
 
   if (typeof content === 'string') {
-    // A plain string user turn. Artemis's own prompts come back this way; the
-    // renderer already rendered those, so only replayed history and
-    // provider-synthesised turns are surfaced.
-    if (isReplay || message.isSynthetic === true) {
+    // A plain string user turn. Artemis's own prompts come back this way and
+    // the renderer already drew them, so only replayed history is surfaced —
+    // see {@link isHumanTurn} for why synthesised turns are not.
+    if (isHumanTurn(message, isReplay)) {
       events.push({
         type: 'text.complete',
         ...stamp(state),
         messageId,
         role: 'user',
         text: content,
-        replay: isReplay ? true : undefined,
-        synthetic: message.isSynthetic === true ? true : undefined,
+        replay: true,
         agentId,
       });
     }
@@ -838,7 +869,7 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
       continue;
     }
 
-    if (block.type === 'text' && (isReplay || message.isSynthetic === true)) {
+    if (block.type === 'text' && isHumanTurn(message, isReplay)) {
       events.push({
         type: 'text.complete',
         ...stamp(state),
@@ -846,8 +877,7 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
         role: 'user',
         text: block.text,
         blockIndex,
-        replay: isReplay ? true : undefined,
-        synthetic: message.isSynthetic === true ? true : undefined,
+        replay: true,
         agentId,
       });
       continue;

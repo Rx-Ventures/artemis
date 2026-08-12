@@ -722,7 +722,7 @@ describe('user messages', () => {
     });
   });
 
-  it('surfaces provider-synthesised turns', () => {
+  it('does not attribute a synthesised turn to the user', () => {
     const state = makeState();
     const events = run(state, [
       {
@@ -731,11 +731,88 @@ describe('user messages', () => {
         uuid: 'u',
         session_id: 's',
         isSynthetic: true,
-        message: { role: 'user', content: [{ type: 'text', text: 'auto-continue' }] },
+        message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off.' }] },
       },
     ]);
 
-    expect(events[0]).toMatchObject({ type: 'text.complete', role: 'user', synthetic: true });
+    expect(events).toEqual([]);
+  });
+
+  it('drops the body of a skill a Skill call loaded', () => {
+    // The shape a live run actually delivers: the harness injects the skill's
+    // instructions as a `role: "user"` text block flagged `isSynthetic`. Read as
+    // authorship, it printed several hundred lines of design guidance in the
+    // transcript as though someone had typed them.
+    const state = makeState();
+    const events = run(state, [
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        uuid: 'u',
+        session_id: 's',
+        isSynthetic: true,
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Approach this as the design lead at a small studio…' },
+          ],
+        },
+      },
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it('drops a synthesised turn even when it is replayed', () => {
+    const state = makeState();
+    const events = run(state, [
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        uuid: 'u',
+        session_id: 's',
+        isReplay: true,
+        isSynthetic: true,
+        message: { role: 'user', content: 'an injected turn, read back off disk' },
+      },
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it('still closes tool calls carried by a synthesised message', () => {
+    // The text is dropped; the tool traffic in the same message is not. A
+    // `tool_result` arriving beside injected text still has to end its call, or
+    // the row spins forever.
+    const state = makeState();
+    const events = run(state, [
+      assistantMessage({
+        content: [
+          { type: 'tool_use', id: 'call-1', name: 'Read', input: { file_path: '/tmp/a.txt' } },
+        ],
+      }),
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        uuid: 'u',
+        session_id: 's',
+        isSynthetic: true,
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'call-1', content: 'ok' },
+            { type: 'text', text: '<system-reminder>plumbing</system-reminder>' },
+          ],
+        },
+      },
+    ]);
+
+    expect(events.filter((e) => e.type === 'text.complete')).toEqual([]);
+    expect(events.find((e) => e.type === 'tool.end')).toMatchObject({
+      type: 'tool.end',
+      toolCallId: 'call-1',
+      status: 'ok',
+    });
   });
 
   it('drops image and document attachments', () => {
