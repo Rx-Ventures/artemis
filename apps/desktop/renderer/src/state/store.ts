@@ -246,6 +246,34 @@ export interface AppState {
    */
   readonly runningSessions: readonly SessionId[];
   /**
+   * Sessions a column is showing right now — what the sidebar marks as open.
+   *
+   * The same projection {@link runningSessions} is, maintained by the same
+   * subscription ({@link syncOpenSessions}), and it exists for the same reason:
+   * the row lives in the window store and the answer lives in each pane's, so a
+   * selector that reached across the two would only be re-evaluated when the
+   * *window* happened to change. That is precisely how this broke — the marker
+   * read `resumeSessionId` out of the panes from inside a `useApp` selector, so
+   * resuming a session lit its row only when some unrelated window write came
+   * along to force the repaint.
+   *
+   * Two differences from `runningSessions`, and both are the point:
+   *
+   *  - **Visible columns only.** A backgrounded conversation has no column, so
+   *    it is not open; it is already marked as *working* by the running dot,
+   *    which is the true thing to say about it. Marking it open as well would
+   *    claim a column the user cannot find.
+   *  - **One id per pane, not both.** {@link sessionShownBy} answers "which
+   *    session is this column showing", and a column shows one. `runningSessions`
+   *    lists both ids because either may name work in flight; "open" is a
+   *    question about a column, and a fork is showing the new session, not the
+   *    history it came out of.
+   *
+   * Never persisted: it describes this window's columns, and a stale copy would
+   * mark rows that nothing is showing.
+   */
+  readonly openSessions: readonly SessionId[];
+  /**
    * Sort keys held still for the sessions being written right now.
    *
    * The sidebar orders by `updatedAt`, which is the transcript file's mtime, and
@@ -1034,14 +1062,16 @@ function unwatchPane(paneId: PaneId): void {
 /**
  * What the window recomputes when any conversation changes under it.
  *
- * Two projections rather than one subscription each, because they are triggered
- * by exactly the same events — a run starting, ending, or a session being
- * resumed into a column — and splitting them would only mean walking the panes
- * twice. Both are written to be cheap and to write nothing when nothing moved;
- * this runs on every keystroke in a composer, which shares the pane's store.
+ * Three projections rather than one subscription each, because they are
+ * triggered by exactly the same events — a run starting, ending, or a session
+ * being resumed into a column — and splitting them would only mean walking the
+ * panes three times. All are written to be cheap and to write nothing when
+ * nothing moved; this runs on every keystroke in a composer, which shares the
+ * pane's store.
  */
 function syncFromPanes(): void {
   syncRunningSessions();
+  syncOpenSessions();
   reconcilePreview();
 }
 
@@ -1063,6 +1093,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  openSessions: [],
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
@@ -1299,6 +1330,46 @@ function syncRunningSessions(): void {
   const current = useApp.getState().runningSessions;
   if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
   useApp.setState({ runningSessions: ids, sessionOrderHold: holdOrder(ids) });
+}
+
+/**
+ * Recompute {@link AppState.openSessions} — which sessions have a column.
+ *
+ * The sibling of {@link syncRunningSessions}, and it exists because the sidebar
+ * marker used to ask this question the wrong way round: it read the panes from
+ * inside a `useApp` selector, which subscribes to the *window*. Nothing about a
+ * pane can notify that selector, so the marker repainted only when some
+ * unrelated window write happened to come along — and the two cases where the
+ * user most wants the mark are exactly the two where none does.
+ *
+ * `allPanes`, not `allLivePanes`: this is the question "is this on screen
+ * somewhere", which a backgrounded conversation answers no. It is already
+ * marked as working by {@link AppState.runningSessions}, which is the true
+ * thing to say about a run with no column.
+ *
+ * {@link sessionShownBy} rather than either field alone. A column showing a
+ * brand-new conversation has a run id and no `resumeSessionId` until the turn
+ * ends; a forked one has both, and the new run is what is on screen. Reading
+ * `resumeSessionId` by itself was wrong in both — it left the session the user
+ * was watching unmarked, and after a fork it marked the history instead.
+ *
+ * Same shape and same guard as its sibling: an array so the compare is cheap
+ * and the value is stable, and no write at all when nothing moved — this runs
+ * on every keystroke in a composer.
+ */
+function syncOpenSessions(): void {
+  const ids: SessionId[] = [];
+  for (const pane of allPanes()) {
+    const id = sessionShownBy(paneState(pane));
+    // Two columns can show one session — `paneForSession` reveals rather than
+    // opens a second copy, but a fork passes through the state briefly — and a
+    // duplicate would make the compare below report a change that is not one.
+    if (id !== null && !ids.includes(id)) ids.push(id);
+  }
+
+  const current = useApp.getState().openSessions;
+  if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
+  useApp.setState({ openSessions: ids });
 }
 
 /**
