@@ -16,21 +16,24 @@
  *
  * ## Where the releases live, and how they are reached
  *
- * Releases sit on the same private GitHub repository this build was published
- * from (`electron-builder.yml`'s `publish` block, `scripts/release.ts`).
- * Private means authenticated — and Artemis holds no credentials, for updates
- * or anything else. The same answer as `claude auth login` applies: the
- * user's own tooling holds the credential. Every tester was given repository
- * access to download the app in the first place, and `gh` uses exactly that
- * access:
+ * Releases sit on the same GitHub repository this build was published from
+ * (`electron-builder.yml`'s `publish` block, `scripts/release.ts`), and that
+ * repository is public. So the ordering here is the reverse of what it was:
  *
- *   1. `gh release download` with the user's own GitHub CLI login, when a
- *      usable `gh` exists.
- *   2. Anonymous HTTPS against the public release URLs — dead code while the
- *      repository is private, and the zero-config path the day it is not.
+ *   1. Anonymous HTTPS against the public release URLs. No credential, no
+ *      tooling, no account — every machine that can reach github.com can
+ *      update, which is the whole dividend of going public.
+ *   2. `gh release download` with the user's own GitHub CLI login, when a
+ *      usable `gh` exists. No longer the route that grants *access*, only a
+ *      second way through: a proxy that mangles the CDN redirect, a transient
+ *      5xx, an enterprise network that trusts `gh` and not much else.
  *
- * No token is stored, asked for, or accepted. A machine with neither route
- * simply never sees a banner, and the release notes remain the manual path.
+ * While the repository was private these were the other way around, because
+ * private meant authenticated and Artemis holds no credentials — the same
+ * answer as `claude auth login`: the user's own tooling holds the credential.
+ * That is still true, and now nothing needs to hold one. No token is stored,
+ * asked for, or accepted. A machine with neither route simply never sees a
+ * banner, and the release notes remain the manual path.
  *
  * ## What the renderer sees
  *
@@ -41,12 +44,14 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
 // No `rm`: removing a tree that can hold an app bundle goes through
 // `removeTree` below, for a reason documented there.
 import { mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 import { app } from 'electron';
@@ -64,7 +69,7 @@ const log = createLogger('updater');
  * `publish` block in `apps/desktop/electron-builder.yml` by hand — there is no
  * runtime accessor for the builder's config, the same situation as `appId`.
  */
-const REPO = 'seth-torrence/artemis';
+const REPO = 'Rx-Ventures/artemis';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 /**
@@ -238,28 +243,52 @@ export function createUpdater(options: UpdaterOptions): Updater {
   }
 
   /**
-   * Download one release asset into `dir`, via `gh` when available, else the
-   * public URL. `tag` is empty for "latest release".
+   * Download one release asset into `dir`: the public URL first, `gh` as the
+   * fallback. `tag` is empty for "latest release".
+   *
+   * Both routes are tried for every asset, so a feed read and a 196MB zip take
+   * the same path and a failure in the first is never fatal on its own — see the
+   * file header for why the anonymous route leads now.
    */
   async function fetchAsset(name: string, tag: string, dir: string): Promise<string> {
     const destination = join(dir, name);
-    const gh = resolveGh();
-    if (gh !== null) {
+    const url =
+      tag === ''
+        ? `${RELEASES_URL}/latest/download/${name}`
+        : `${RELEASES_URL}/download/${tag}/${name}`;
+    try {
+      await fetchAnonymously(url, destination);
+      return destination;
+    } catch (error) {
+      const gh = resolveGh();
+      if (gh === null) throw error;
+      // Worth a line: a machine that quietly updates through `gh` every time is
+      // a machine whose plain HTTPS route is broken, and nothing else would say
+      // so until the day `gh` is uninstalled.
+      log.debug(`Anonymous download of ${name} failed; falling back to gh.`, error);
       const args = ['release', 'download'];
       if (tag !== '') args.push(tag);
       args.push('-R', REPO, '-p', name, '-D', dir, '--clobber');
       await execFileAsync(gh, args, { env: ghEnv(), timeout: 10 * 60 * 1000 });
       return destination;
     }
-    // Anonymous: the stable public download URL. 404s while the repo is private.
-    const url =
-      tag === ''
-        ? `${RELEASES_URL}/latest/download/${name}`
-        : `${RELEASES_URL}/download/${tag}/${name}`;
+  }
+
+  /**
+   * GET `url` to `destination`, streamed.
+   *
+   * Streamed and not `Buffer.from(await response.arrayBuffer())`, which is what
+   * this was while it was dead code behind the `gh` route. The largest thing it
+   * fetched then was a 500-byte feed; the largest thing it fetches now is the
+   * release zip, which is around 196MB and would otherwise be held in the
+   * privileged process's heap in one piece — twice over, for the moment the
+   * Buffer copy and the ArrayBuffer both exist — before a byte reached disk.
+   */
+  async function fetchAnonymously(url: string, destination: string): Promise<void> {
     const response = await fetch(url, { redirect: 'follow' });
     if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
-    await writeFile(destination, Buffer.from(await response.arrayBuffer()));
-    return destination;
+    if (response.body === null) throw new Error(`GET ${url} answered without a body`);
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
   }
 
   /* ----------------------------------------------------------------------- */

@@ -80,9 +80,9 @@ export function checkOutcomeNotice(
       return {
         message: 'Artemis could not check for updates.',
         detail:
-          'Releases live on a private repository, reached with your own GitHub CLI login — ' +
-          'Artemis holds no credentials of its own. Check that `gh` is installed and signed in, ' +
-          'then try again. The releases page always works as the manual path.',
+          'Releases are public and need no account, so this is almost always the network: ' +
+          'check your connection, or whether a proxy sits between you and github.com, then try ' +
+          'again. The releases page always works as the manual path.',
       };
     case 'busy':
       return {

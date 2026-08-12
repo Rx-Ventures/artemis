@@ -128,12 +128,12 @@ describe('UpdateBanner', () => {
         phase: 'error',
         version: '0.3.0',
         message: 'The update could not be installed.',
-        releaseUrl: 'https://github.com/seth-torrence/artemis/releases',
+        releaseUrl: 'https://github.com/Rx-Ventures/artemis/releases',
       });
     });
     expect(screen.getByText(/could not be installed/)).toBeTruthy();
     const link = screen.getByRole('link', { name: 'Open releases page' });
-    expect(link.getAttribute('href')).toBe('https://github.com/seth-torrence/artemis/releases');
+    expect(link.getAttribute('href')).toBe('https://github.com/Rx-Ventures/artemis/releases');
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
   });
 

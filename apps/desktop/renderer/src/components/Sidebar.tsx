@@ -59,12 +59,18 @@
  * The card names the *projects*, in the group headings inside the list. That is
  * a fact about the rows underneath each one, which is what a sidebar is for.
  *
- * ## The foot of the card is empty until something needs it
+ * ## The foot of the card is outside the card
  *
- * It used to be a permanent `Start somewhere else` row. What sits there now is
- * nothing, most of the time, and a second floating card when the updater has
- * something to say — see `UpdateCard`, which owns both the reasoning and the
- * chrome that makes it read as a sibling of this card rather than a panel in it.
+ * It used to be a permanent `Start somewhere else` row *inside* it. What sits
+ * below the card now are siblings of it: a floating notice when the updater has
+ * something to say (`UpdateCard`), and one permanent row for reporting a bug
+ * (`BugReportCard`). Each owns its own reasoning and both borrow this card's
+ * chrome, so they read as a stack rather than as panels bolted into it.
+ *
+ * The row that was removed and the row that was added are not the same argument
+ * twice. That one duplicated a control the sidebar already offered — see the
+ * note on `ProjectSwitcher` below — and this one is the only place the app offers
+ * its action at all; `BugReportCard` carries the rest of it.
  *
  * ## Resizing writes to the DOM, then to the store
  *
@@ -108,6 +114,7 @@ import {
 } from '../state/store';
 import { usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
+import { BugReportCard } from './BugReportCard';
 import { UpdateCard } from './UpdateCard';
 import { IconButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
@@ -158,10 +165,13 @@ export function Sidebar(): ReactElement | null {
       </div>
 
       {/*
-        A sibling of the card, not a row inside it, and absent entirely until
-        the updater has something to say. See `UpdateCard`.
+        Siblings of the card, not rows inside it. The update is absent entirely
+        until the updater has something to say (`UpdateCard`); the bug report is
+        always there and deliberately quieter than the card above it, so news and
+        furniture do not read as the same kind of thing (`BugReportCard`).
       */}
       <UpdateCard />
+      <BugReportCard />
 
       <ResizeHandle target={asideRef} />
     </aside>

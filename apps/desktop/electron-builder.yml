@@ -53,7 +53,7 @@ linux:
 # always runs with `--publish never`.
 publish:
   provider: github
-  owner: seth-torrence
+  owner: Rx-Ventures
   repo: artemis
 
 npmRebuild: false
