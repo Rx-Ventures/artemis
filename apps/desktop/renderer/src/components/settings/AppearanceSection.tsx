@@ -24,6 +24,13 @@
  * difference, and stops trusting the rest of the pane. When those become real
  * settings they belong here; until then the note at the foot says plainly that
  * they are not settings rather than leaving a suspicious gap.
+ *
+ * The word-fade switch is the first of those to graduate. It is deliberately
+ * *not* a general "reduce motion" — it governs one animation, the only one in
+ * the app that runs continuously while you are reading, and says so. A switch
+ * that promised to quiet everything would be back to promising more than it
+ * delivers. (Genuine `prefers-reduced-motion` is honoured by the stylesheet and
+ * is not a preference this pane owns.)
  */
 
 import { useMemo, useState, type ReactElement } from 'react';
@@ -40,6 +47,7 @@ import {
   setRunSummary,
   setSidebarCollapsed,
   setSidebarWidth,
+  setStreamingWordFade,
   useApp,
   type ConversationWidth,
   type PlanMeterFocus,
@@ -287,6 +295,7 @@ export function AppearanceSection(): ReactElement {
   const planMeterFocus = useApp((s) => s.planMeterFocus);
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
+  const wordFade = useApp((s) => s.streamingWordFade);
 
   return (
     <SettingsPane
@@ -309,6 +318,30 @@ export function AppearanceSection(): ReactElement {
           choices={RUN_SUMMARIES}
           onChange={setRunSummary}
         />
+      </SettingsGroup>
+
+      <SettingsGroup label="Streaming text">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Fade in each word</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                An answer arrives in whatever chunk the provider sent in the last frame, which lands
+                as a block. This fades those in a word at a time instead. It never paces behind the
+                model — whatever is waiting is on screen within a tenth of a second — but if you
+                read faster than it resolves, turn it off and text appears exactly as it arrives.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-streaming-word-fade"
+                aria-label="Fade in each word"
+                checked={wordFade}
+                onCheckedChange={setStreamingWordFade}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
       </SettingsGroup>
 
       <SettingsGroup label="Plan meter">
@@ -378,9 +411,10 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
-        Theme, density and motion are not settings. Artemis is dark-only by design, the transcript
-        uses one spacing scale so that message boundaries stay readable at a glance, and the only
-        animations in the app are the ones that show something arriving.
+        Theme and density are not settings. Artemis is dark-only by design, and the transcript uses
+        one spacing scale so that message boundaries stay readable at a glance. There is no global
+        motion switch either — the only animations in the app are the ones that show something
+        arriving, and the one that runs continuously is the switch above.
       </p>
     </SettingsPane>
   );

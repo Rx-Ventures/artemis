@@ -336,6 +336,16 @@ export interface AppState {
   readonly runSummary: RunSummary;
   /** Which plan-limit window the status-bar meter reports. */
   readonly planMeterFocus: PlanMeterFocus;
+  /**
+   * Whether streaming text fades in a word at a time.
+   *
+   * On by default, and off is a real answer rather than an accessibility
+   * fallback: the fade is there because a delta landing as a block reads as a
+   * stutter, and someone who reads faster than the fade resolves is entitled to
+   * find that the stutter was the lesser problem. Off is plain text arriving
+   * exactly as the model sends it — no pacing, no per-word elements.
+   */
+  readonly streamingWordFade: boolean;
 
   /**
    * Every session the listing returned, ungrouped and unsorted.
@@ -690,6 +700,7 @@ interface Prefs {
   conversationWidth?: ConversationWidth;
   runSummary?: RunSummary;
   planMeterFocus?: PlanMeterFocus;
+  streamingWordFade?: boolean;
   /**
    * Context windows learned from completed runs, keyed by model.
    *
@@ -782,6 +793,7 @@ function loadPrefs(): Prefs {
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     planMeterFocus: oneOf(raw['planMeterFocus'], PLAN_METER_FOCUSES),
+    streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     contextWindows: numberMap(raw['contextWindows']),
     // Same treatment as `contextWindows`, and for the same reason: these reach
     // a layout engine as percentages, so a string or a negative that survived
@@ -856,6 +868,7 @@ function savePrefs(): void {
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     planMeterFocus: s.planMeterFocus,
+    streamingWordFade: s.streamingWordFade,
     contextWindows: s.contextWindows,
   };
   try {
@@ -965,6 +978,9 @@ export const useApp = create<AppState>(() => ({
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   planMeterFocus: prefs.planMeterFocus ?? DEFAULT_PLAN_METER_FOCUS,
+  // `??`, not `||`: a persisted `false` is the whole point of the setting and
+  // must survive a reload.
+  streamingWordFade: prefs.streamingWordFade ?? true,
 
   sessions: [],
   sessionsScope: 'all',
@@ -3087,6 +3103,18 @@ export function setRunSummary(summary: RunSummary): void {
 
 export function setPlanMeterFocus(focus: PlanMeterFocus): void {
   useApp.setState({ planMeterFocus: focus });
+  savePrefs();
+}
+
+/**
+ * Turn the per-word fade on streaming text on or off.
+ *
+ * Takes effect on the next word, not the next run: `StreamingText` reads this
+ * live, and a block mid-stream when it is switched off simply stops pacing and
+ * shows what arrives.
+ */
+export function setStreamingWordFade(on: boolean): void {
+  useApp.setState({ streamingWordFade: on });
   savePrefs();
 }
 
