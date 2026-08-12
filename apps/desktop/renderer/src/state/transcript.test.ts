@@ -215,6 +215,61 @@ describe('TranscriptModel activity groups', () => {
     expect(rows.some((id) => isGroupId(id))).toBe(false);
   });
 
+  it('gives no row to a thinking block that arrives empty', () => {
+    const model = build();
+    for (const event of stream(
+      thought('m1', 0, ''),
+      { type: 'text.complete', messageId: 'm1', role: 'assistant', blockIndex: 1, text: 'no' },
+    )) {
+      model.apply(event);
+    }
+
+    // The fold would have said "thinking…" and opened onto nothing.
+    expect(model.getRowsSnapshot()).toEqual(['a:m1:1']);
+    expect(model.getItem('k:m1:0')).toBeUndefined();
+  });
+
+  it('keeps the redaction notice, which is not the same as empty', () => {
+    const model = build();
+    const [event] = stream({
+      type: 'thinking.delta',
+      messageId: 'm1',
+      blockIndex: 0,
+      text: '',
+      redacted: true,
+    });
+    model.apply(event as AgentEvent);
+
+    // Empty text, but it says something: the provider encrypted this one.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
+  });
+
+  it('creates the block on the delta that first carries text', () => {
+    const model = build();
+    for (const event of stream(thought('m1', 0, ''), thought('m1', 0, 'here it is'))) {
+      model.apply(event);
+    }
+
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
+    expect(model.getItem('k:m1:0')).toMatchObject({ kind: 'thinking', text: 'here it is' });
+  });
+
+  it('does not count an empty block toward a burst it never joined', () => {
+    const model = build();
+    for (const event of stream(
+      thought('m1', 0, 'first, look'),
+      ...call('c1', 'Grep'),
+      thought('m1', 1, ''),
+      ...call('c2', 'Read'),
+    )) {
+      model.apply(event);
+    }
+
+    const group = model.getGroup('g:k:m1:0');
+    expect(group?.ids).toEqual(['k:m1:0', 't:c1', 't:c2']);
+    expect(group?.thinking).toBe(1);
+  });
+
   it('folds a lone thinking row into the marker once a call joins it', () => {
     const model = build();
     model.apply(stream(thought('m1', 0, 'let me look'))[0] as AgentEvent);

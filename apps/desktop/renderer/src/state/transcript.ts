@@ -670,6 +670,16 @@ export class TranscriptModel {
       case 'thinking.delta': {
         const id = this.blockId('k', event.messageId, event.blockIndex);
         if (!this.items.has(id)) {
+          // A thinking block earns its row by having something in it. An event
+          // with neither text nor a redaction notice would open a fold that
+          // says "thinking…" and never fills, and the providers emit a lot of
+          // those — see `ThinkingDeltaEvent`. The mappers drop them at the
+          // source; this is the backstop that holds the invariant whatever a
+          // provider sends, and it is why the check is on *creation* rather
+          // than a later sweep: a block whose text arrives in a second delta is
+          // created by the delta that carries it, so nothing has to decide when
+          // an empty block has stayed empty long enough to retract.
+          if (event.text === '' && event.redacted !== true) break;
           this.insert({
             id,
             ts: event.ts,

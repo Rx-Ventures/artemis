@@ -626,7 +626,14 @@ function mapAssistantMessage(
         // There is no `thinking.complete` in the union — thinking is
         // presentational. When it was streamed, the deltas already carry it;
         // when it was not, one delta carries the whole block.
-        if (!wasStreamed(state, messageId, blockIndex)) {
+        //
+        // Unless the block has no plaintext to carry. The provider returns
+        // `thinking: ''` beside a full signature whenever it kept the block but
+        // withheld its content, and there is nothing to stream for one of
+        // those — the deltas never came, so this path is exactly where they
+        // land. Emitting one anyway put an empty fold in the transcript for
+        // every such block.
+        if (block.thinking !== '' && !wasStreamed(state, messageId, blockIndex)) {
           events.push({
             type: 'thinking.delta',
             ...stamp(state),
@@ -955,6 +962,12 @@ function mapStreamEvent(
       }
 
       if (delta.type === 'thinking_delta') {
+        // An empty chunk is not a delivery, so it does not mark the block
+        // streamed: marking it would tell the completed-message path that this
+        // block's text had already gone out, and a block whose only chunk was
+        // empty would lose whatever text the completed message did carry. Any
+        // chunk with text still marks it, so nothing arrives twice.
+        if (delta.thinking === '') return [];
         markStreamed(state, messageId, event.index);
         return [
           {
