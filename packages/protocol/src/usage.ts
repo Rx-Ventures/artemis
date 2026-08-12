@@ -345,6 +345,13 @@ export interface PlanRecommendation {
  * **A reading with no usable number.** A plan whose every window reports `null`
  * utilization cannot be ranked against one that reports figures.
  *
+ * **An account the user has taken out of the pool.** Not excluded here, and
+ * deliberately: `autoSelect` and `disabled` are facts about a *profile*, and
+ * this function is given readings. The caller filters with
+ * {@link isProfileAutoSelectable} before calling — which is also what makes
+ * `candidates` honest, since an account that could never win should not be
+ * counted among the ones the winner beat.
+ *
  * ## Why two candidates are required
  *
  * With one rankable account there is no choice to make, and a "Recommended"

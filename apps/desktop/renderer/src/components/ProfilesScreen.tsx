@@ -58,6 +58,8 @@ import {
 import { toast } from 'sonner';
 import {
   configDirProblem,
+  isProfileAutoSelectable,
+  isProfileEnabled,
   normalizeProfileColor,
   normalizeProfilePlanId,
   plansForProvider,
@@ -308,6 +310,15 @@ function ProfileCard({
           faster than a word and does not compete for the same slot; signed-in
           is the account line below, which names the account rather than
           asserting that one exists.
+
+          The two availability states earn a badge under the same rule, from
+          the other direction: neither is a problem, but both are the card
+          contradicting what the rest of the app shows. This screen is the only
+          place a hidden account appears at all, so if the state is not on the
+          card it is nowhere — and "why is this one never picked?" is
+          unanswerable by looking. Toneless, because nothing is wrong; only one
+          of the two ever shows, because a hidden account is not separately
+          worth telling you it is also not being suggested.
         */}
         <div className="flex items-center gap-2">
           <ProfileSwatch color={profile.color} className="size-2.5" />
@@ -325,6 +336,11 @@ function ProfileCard({
             {shortenPath(profile.configDir, { platform, max: 40 })}
           </span>
           {known && !signedIn ? <ToneBadge tone="amber">signed out</ToneBadge> : null}
+          {!isProfileEnabled(profile) ? (
+            <ToneBadge>disabled</ToneBadge>
+          ) : !isProfileAutoSelectable(profile) ? (
+            <ToneBadge>not suggested</ToneBadge>
+          ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             <Button size="xs" variant="ghost" onClick={onEdit}>
               Edit
@@ -694,6 +710,118 @@ function PlanField({
 }
 
 /* -------------------------------------------------------------------------- */
+/* Availability                                                               */
+/* -------------------------------------------------------------------------- */
+
+/** One switch and the sentence explaining what turning it off does. */
+function AvailabilityToggle({
+  id,
+  label,
+  checked,
+  disabled,
+  onCheckedChange,
+  children,
+}: {
+  readonly id: string;
+  readonly label: string;
+  readonly checked: boolean;
+  readonly disabled?: boolean;
+  readonly onCheckedChange: (next: boolean) => void;
+  readonly children: ReactElement | string;
+}): ReactElement {
+  return (
+    <div className={cn('flex items-start gap-2.5', disabled && 'opacity-55')}>
+      <Switch
+        id={id}
+        size="sm"
+        className="mt-0.5"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+      />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <Label htmlFor={id} className="text-2xs font-medium text-ink">
+          {label}
+        </Label>
+        <span className="text-2xs leading-relaxed text-ink-faint">{children}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How much Artemis is allowed to use this account.
+ *
+ * ## Why two switches rather than one scale
+ *
+ * The two answers people actually give are different in kind, not in degree.
+ * "Do not start sessions on this one, but leave it where I can reach it" is a
+ * statement about *automation* — it is the client account, the one whose quota
+ * is being saved, the one a colleague shares. "I am not using this at all" is a
+ * statement about the *menu*. A single three-position control would make the
+ * first a weaker form of the second, and then a user wanting the common case
+ * would have to reason about the rare one to find it.
+ *
+ * ## Both switches read the same direction
+ *
+ * On means available, for both, with the consequence spelled out under each.
+ * The temptation was to label the second one "Disabled" — that is how the
+ * request is phrased and how the card badge reads — but a group where one
+ * switch means "more" and the next means "less" is a group people flip the
+ * wrong way. The word survives where it is a state being reported rather than a
+ * control being set.
+ *
+ * ## Hiding the account settles the other question
+ *
+ * A hidden account is not one Artemis picks for you either — `disabled`
+ * dominates in {@link isProfileAutoSelectable} — so the first switch goes inert
+ * rather than staying live and implying otherwise. Its stored value is left
+ * alone, so turning the account back on restores what the user had chosen
+ * rather than resetting it.
+ */
+function AvailabilityField({
+  autoSelect,
+  enabled,
+  onAutoSelectChange,
+  onEnabledChange,
+}: {
+  readonly autoSelect: boolean;
+  readonly enabled: boolean;
+  readonly onAutoSelectChange: (next: boolean) => void;
+  readonly onEnabledChange: (next: boolean) => void;
+}): ReactElement {
+  return (
+    <Field>
+      <FieldLabel className="text-2xs text-ink-faint uppercase">Availability</FieldLabel>
+      <div className="flex flex-col gap-3 rounded-lg border border-line bg-inset/60 px-3 py-2.5">
+        <AvailabilityToggle
+          id="profile-auto-select"
+          label="Suggest automatically"
+          checked={autoSelect && enabled}
+          disabled={!enabled}
+          onCheckedChange={onAutoSelectChange}
+        >
+          {enabled
+            ? 'Let Artemis reach for this account on its own — the Recommended row in the profile picker, and the account a new session starts on. Off keeps it in the picker and out of the comparison, so it runs only when you pick it.'
+            : 'Nothing suggests a hidden account. Turn the account back on below to choose this separately.'}
+        </AvailabilityToggle>
+
+        <AvailabilityToggle
+          id="profile-enabled"
+          label="Show in the profile picker"
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+        >
+          Off removes it from the picker entirely — the way to shelve an account without deleting
+          its config directory, its login or its history. Sessions already recorded against it still
+          resume into it.
+        </AvailabilityToggle>
+      </div>
+    </Field>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Colour                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -852,6 +980,14 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const [configDir, setConfigDir] = useState(profile?.configDir ?? '');
   const [color, setColor] = useState(profile?.color ?? '');
   const [planId, setPlanId] = useState(profile?.planId ?? '');
+  /*
+    Held as the *positive* of what is stored, which is what lets both switches
+    read "on means available". Absent is the ordinary state for each — see
+    `Profile.autoSelect` — so the seeds are the two comparisons that make an
+    unset field mean yes.
+  */
+  const [autoSelect, setAutoSelect] = useState(profile?.autoSelect !== false);
+  const [enabled, setEnabled] = useState(profile?.disabled !== true);
   const [envText, setEnvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -959,6 +1095,12 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
         // Always sent, empty string included, for the same reason as the
         // colour: that is how a patch says "stop pinning a plan".
         planId: normalizeProfilePlanId(planId, providerId) ?? '',
+        // Always sent, both values included: a boolean with a default has no
+        // "absent" for the form to send, and omitting the one the user just
+        // switched off would save every other field and quietly drop that one.
+        // The store collapses the default back to absent on the way to disk.
+        autoSelect,
+        disabled: !enabled,
         ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
       });
       setBusy(false);
@@ -1098,6 +1240,24 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                 <FieldDescription className="text-2xs text-amber">{pathProblem}</FieldDescription>
               ) : null}
             </Field>
+
+            {/*
+              Edit only, on the same rule as the environment box below: a
+              profile being created is a profile about to be signed in to and
+              worked in, so both switches would be asking, at the least useful
+              moment, about a state nobody has reached yet. `ProfileDraft`
+              carries the fields regardless — the shape should not depend on
+              which form happens to be on screen — so a profile can be created
+              shelved by a caller that means it.
+            */}
+            {editing ? (
+              <AvailabilityField
+                autoSelect={autoSelect}
+                enabled={enabled}
+                onAutoSelectChange={setAutoSelect}
+                onEnabledChange={setEnabled}
+              />
+            ) : null}
 
             {/*
               Edit only. Creating a profile is meant to be two fields and a

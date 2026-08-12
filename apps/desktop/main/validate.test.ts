@@ -520,6 +520,37 @@ describe('validateProfilesUpdate', () => {
     const untouched = validateProfilesUpdate({ id: 'p1', patch: { label: 'Renamed' } });
     expect('color' in untouched.patch).toBe(false);
   });
+
+  it('carries both availability flags through, in either direction', () => {
+    const off = validateProfilesUpdate({
+      id: 'p1',
+      patch: { autoSelect: false, disabled: true },
+    });
+    expect(off.patch.autoSelect).toBe(false);
+    expect(off.patch.disabled).toBe(true);
+
+    // `true`/`false` is how the form says "back to normal" — there is no
+    // clearing vocabulary for a boolean with a default — so both values have to
+    // survive rather than only the interesting one.
+    const on = validateProfilesUpdate({ id: 'p1', patch: { autoSelect: true, disabled: false } });
+    expect(on.patch.autoSelect).toBe(true);
+    expect(on.patch.disabled).toBe(false);
+
+    const untouched = validateProfilesUpdate({ id: 'p1', patch: { label: 'Renamed' } });
+    expect('disabled' in untouched.patch).toBe(false);
+  });
+
+  it('refuses a non-boolean availability flag rather than coercing it', () => {
+    // Coercion is the failure worth ruling out: a truthy `"false"` would hide
+    // an account from the picker, and the user would have asked for the
+    // opposite.
+    expect(() => validateProfilesUpdate({ id: 'p1', patch: { disabled: 'true' } })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateProfilesUpdate({ id: 'p1', patch: { autoSelect: 0 } })).toThrow(
+      ValidationError,
+    );
+  });
 });
 
 describe('validateProfilesSuggestDir', () => {

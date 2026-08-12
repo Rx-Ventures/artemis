@@ -104,6 +104,7 @@ import {
   ShieldIcon,
   ZapIcon,
 } from 'lucide-react';
+import { isProfileEnabled } from '@rx-artemis/protocol';
 import type {
   PermissionMode,
   PlanRecommendation,
@@ -384,6 +385,20 @@ function profilesByProvider(
  * Grouping by provider is what makes one flat list readable, and it also puts
  * the fact that switching account can switch CLI in front of the person doing
  * it, at the moment they do it.
+ *
+ * ## A disabled profile is missing from here, unless it is the one running
+ *
+ * Hiding an account from this list is the entire effect of `disabled` — the
+ * field in `protocol/profile.ts` is careful about what it does not touch. The
+ * exception is the account currently selected, and it is not a softening of the
+ * rule: this is a radio group, and a group whose value names no row paints no
+ * check, so a menu that dropped the running account would answer "which account
+ * am I in?" with silence. The row also has to exist for there to be somewhere
+ * to move *off* it.
+ *
+ * That case is reachable and ordinary — disabling the profile you are working
+ * in is the obvious way to say "finish here, then stop using this" — so the row
+ * says why it is there rather than looking like the filter leaked.
  */
 function ProfileSegment(): ReactElement {
   const pane = usePaneRef();
@@ -392,7 +407,14 @@ function ProfileSegment(): ReactElement {
   const activeId = usePane((s) => s.activeProfileId);
   const profile = usePane(activeProfile);
 
-  const sections = useMemo(() => profilesByProvider(profiles, providers), [profiles, providers]);
+  const selectable = useMemo(
+    () => profiles.filter((p) => isProfileEnabled(p) || p.id === activeId),
+    [profiles, activeId],
+  );
+  const sections = useMemo(
+    () => profilesByProvider(selectable, providers),
+    [selectable, providers],
+  );
   const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
 
   // Amber only for a profile that has been *checked* and is signed out. An
@@ -428,8 +450,18 @@ function ProfileSegment(): ReactElement {
         <RecommendedProfile />
 
         {sections.length === 0 ? (
+          /*
+            Two different dead ends, and they need different sentences. "No
+            profile exists" is the first-run state and the answer is to make
+            one; "every profile is disabled" is a thing the user did, and the
+            answer is to undo it — telling them nothing exists would be a lie
+            about their own accounts, which is exactly when Manage is the wrong
+            thing to be hunting for.
+          */
           <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
-            No profile exists yet. A run needs an account, which comes from a profile.
+            {profiles.length === 0
+              ? 'No profile exists yet. A run needs an account, which comes from a profile.'
+              : 'Every profile is disabled. A run needs an account — turn one back on in Manage.'}
           </p>
         ) : (
           <DropdownMenuRadioGroup
@@ -610,6 +642,12 @@ function RecommendedProfile(): ReactElement | null {
  * answers "signed in" with no plan attached, while its rate-limit read reports
  * `team` — and which plan an account is on should not depend on which probe
  * happened to carry the answer.
+ *
+ * `disabled` is the third quiet word this row can carry, and only the running
+ * account can ever show it: every other disabled profile was filtered out
+ * upstream. It reads as ink-faint rather than amber because it is not a problem
+ * — it is a state the user chose, and colouring it as a warning would put a
+ * fault light on the account they are working in.
  */
 function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
@@ -638,6 +676,9 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
         <ProfileSwatch color={profile.color} />
         <span className="min-w-0 truncate text-ink">{profile.label}</span>
         {tier !== undefined ? <span className="shrink-0 text-ink-faint">{tier}</span> : null}
+        {isProfileEnabled(profile) ? null : (
+          <span className="shrink-0 text-ink-faint italic">disabled</span>
+        )}
         {status !== undefined && !status.loggedIn ? (
           <span className="shrink-0 text-amber">signed out</span>
         ) : null}
