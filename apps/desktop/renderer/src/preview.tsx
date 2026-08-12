@@ -409,7 +409,8 @@ function Gallery(): ReactElement {
             <p className="text-sm text-ink-muted">text-sm · 13px · transcript</p>
             <p className="text-xs text-ink-muted">text-xs · 12px · controls</p>
             <p className="text-2xs text-ink-faint">text-2xs · 11px · chrome labels</p>
-            <p className="font-mono text-sm text-ink">font-mono · transcript content</p>
+            <p className="text-sm text-ink">Geist · prose — prompts, answers, thinking</p>
+            <p className="font-mono text-sm text-ink">Geist Mono · code, paths, chrome labels</p>
           </div>
         </Section>
       </div>
