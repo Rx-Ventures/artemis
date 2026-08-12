@@ -5,48 +5,60 @@
  * `lucide-react`, which is what the shadcn registry components already import —
  * two icon sets in one tree is the same mistake as two component systems.
  *
- * This one stays hand-drawn because it is the product's identity: the moon, for
- * Artemis. It must never be swapped for a generic sparkle or a borrowed logo.
+ * This one stays hand-drawn because it is the product's identity: the bow, for
+ * Artemis the huntress. It must never be swapped for a generic sparkle or a
+ * borrowed logo.
  *
- * ## Why it is not lucide's `moon`, and not its `contrast` either
+ * ## It is the app icon, not a cousin of it
  *
- * The mark this replaced was a sun, and it had the same problem in the same
- * shape: a plain eight-ray sun is one of the most common glyphs there is, and
- * the app imports the icon set that ships one. It solved that by running the
- * four cardinal rays longer than the four diagonals.
+ * The four paths below are copied verbatim from `apps/desktop/build/icon.svg` —
+ * same coordinates, same stroke widths, same `translate/rotate` — because the
+ * thing in the dock and the thing on the new-session page have to be one mark.
+ * Two drawings of the same idea drift apart the first time either is touched,
+ * and the app then ships a logo that is *almost* its icon, which reads as a
+ * mistake rather than as a family. So: edit them together, or not at all. The
+ * `.png` and `.icns` beside the icon are rasterised from that `.svg`, so a
+ * change there has to be re-exported too.
  *
- * A moon has *two* stock glyphs to avoid, which is worse:
+ * The only deliberate differences are the two that have to differ:
  *
- *   - `moon` is a plain crescent with no disc behind it. Drawing a crescent is
- *     therefore not an option at all — it is the stock icon.
- *   - `contrast` is a circle with a half-disc inside it, straight-edged and
- *     inset from the rim. A disc split down a straight vertical line lands on
- *     it closely enough to read as "the theme toggle", which is the one thing a
- *     product mark must never be mistaken for.
+ *   - `currentColor` instead of the icon's literal `#a39af4`, so the mark takes
+ *     its colour from context — `--lunar` on a dark surface, `--lunar-ink` on a
+ *     lunar fill. The hex in the icon file *is* `--lunar`; it is spelled out
+ *     there only because an `.icns` has no cascade to inherit from.
+ *   - A cropped `viewBox`. The icon's generous margin is tile inset, which macOS
+ *     wants and a mark sat next to a line of text does not — uncropped, it
+ *     renders at about two thirds the size it was asked for and reads as a
+ *     rendering bug. The numbers are the art's own bounding box (stroke and
+ *     round caps included), padded a little so the caps are not flush with the
+ *     edge. Being square is not a coincidence: a shape on a 45° diagonal has the
+ *     same extent both ways.
  *
- * So: the full circumference stays (which rules out `moon`), and the terminator
- * is an *arc*, not a line (which rules out `contrast`). What is left is a real
- * lunar phase rather than a diagram of one. The curve is slight at 16px and
- * unmistakable at 128 — the same trade the sun's ray asymmetry made, and it
- * fails the same way if flattened, so it must not be "simplified" to a chord.
+ * ## Why a bow, and why not lucide's
+ *
+ * The mark this replaced was a moon — the other read on the name, and the one
+ * the `--lunar` accent is still named for. It went because a moon is a crowded
+ * glyph: `moon` and `contrast` both ship in the icon set the app already
+ * imports, so avoiding them cost a paragraph of geometry and still left a mark
+ * that a tired user could mistake for the theme toggle. A drawn bow has no such
+ * neighbour. Lucide's nearest misses are `target` and `crosshair`, which are
+ * scopes — a different weapon and a different era, in a different silhouette.
  *
  * ## Geometry
  *
- * Drawn on the same 16×16 grid as every lucide glyph, so it optically matches
- * icons beside it: stroke 1.5, round caps, centre at (8, 8). The disc is r 5.5,
- * which puts the stroke's outer edge at 6.25 from centre and keeps the whole
- * mark inside the viewBox — a circle drawn to the edge gets clipped flat and
- * stops reading as round.
+ * A 512 grid, drawn axis-aligned and then rotated -45° so the arrow flies up and
+ * to the right: the limb is a symmetric pair of cubics, the string a straight
+ * V drawn back to the nocking point, the shaft a horizontal line from that point
+ * out through the belly, and the head a filled triangle on the end.
  *
- * The terminator is an elliptical arc, rx 1.6 against the disc's own ry 5.5,
- * bowed towards the shadow so the lit limb is a waxing phase just past first
- * quarter. It is filled rather than stroked: at 16px a stroked terminator and
- * the rim it meets close into a solid blob, and the shadow — the thing that
- * makes this a moon — is the first casualty. Filling the lit side keeps the
- * shadow as negative space, which survives every size.
- *
- * `currentColor` throughout, so the mark takes its colour from context:
- * `--lunar` in the header, `--lunar-ink` on a filled app-icon tile.
+ * Stroke weight is graded rather than uniform — limb 38, shaft 30, string 15 —
+ * which is the one place this parts company with the lucide grid beside it. It
+ * has to: a bow's string is thin, and drawing it at the limb's weight produces a
+ * closed shape that reads as a leaf. The cost is a floor on size. The string is
+ * 15/512 of the box, so it thins below a pixel under about 20px and the mark
+ * starts to read as a bare arc with an arrow; every call site is comfortably
+ * above that, and anything wanting a 16px version needs a redrawn mark, not this
+ * one scaled down.
  */
 
 import type { ReactElement, SVGProps } from 'react';
@@ -60,21 +72,25 @@ export function LogoMark({ size = 18, ...rest }: LogoMarkProps): ReactElement {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
+      viewBox="93 100 319 319"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.5}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
       {...rest}
     >
-      {/* The full disc. Keeping the whole rim is what separates this from a
-          stock crescent. */}
-      <circle cx="8" cy="8" r="5.5" />
-      {/* The lit limb: down the curved terminator, back up the rim. */}
-      <path d="M8 2.5A1.6 5.5 0 0 0 8 13.5A5.5 5.5 0 0 0 8 2.5Z" fill="currentColor" stroke="none" />
+      <g transform="translate(36 -36) rotate(-45 256 256)">
+        {/* The limb. */}
+        <path d="M176 96C220 104 272 176 272 256C272 336 220 408 176 416" strokeWidth={38} />
+        {/* The string, drawn back to the nocking point at the elbow of the V. */}
+        <path d="M176 96L72 256L176 416" strokeWidth={15} />
+        {/* The shaft, from that same point out past the belly. */}
+        <path d="M72 256H326" strokeWidth={30} />
+        {/* The head. Filled, so it stays solid at every size the string survives. */}
+        <path d="M412 256L318 210L318 302Z" fill="currentColor" stroke="none" />
+      </g>
     </svg>
   );
 }
