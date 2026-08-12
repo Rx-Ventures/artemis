@@ -165,6 +165,52 @@ function loadPty(): Promise<{ spawn: PtySpawn }> {
 }
 
 /**
+ * The unpacked twin of a path that points inside an asar archive.
+ *
+ * `asarUnpack` extracts a file to `app.asar.unpacked/…` and leaves a stub
+ * behind in the archive, but module resolution goes on answering with the
+ * *archive* path: `require.resolve('node-pty')` in a packaged Artemis returns
+ * `…/Resources/app.asar/node_modules/node-pty/lib/index.js`, not the extracted
+ * copy beside it. Nothing can chmod that path — `app.asar` is a file, so the
+ * call fails with `ENOTDIR` — and nothing can exec it either.
+ *
+ * This is character-for-character the substitution node-pty performs on its own
+ * helper path in `unixTerminal.js`, and it has to be: the whole point of the
+ * repair below is to chmod *exactly* the file node-pty will later exec, so the
+ * two have to agree about which file that is. Like node-pty's, this replaces
+ * only the first occurrence. In a checkout there is no `app.asar` in the path
+ * at all and it returns its argument unchanged.
+ */
+function unpacked(path: string): string {
+  return path
+    .replace('app.asar', 'app.asar.unpacked')
+    .replace('node_modules.asar', 'node_modules.asar.unpacked');
+}
+
+/**
+ * Where `spawn-helper` could be, given the directory node-pty resolved to.
+ *
+ * Two layouts, because which one exists depends on how the module arrived:
+ * `prebuilds/` when a prebuilt binary was used, `build/Release/` when node-gyp
+ * compiled it locally (every Linux, including CI's). Both are mapped out of the
+ * archive by {@link unpacked}.
+ *
+ * Pure and exported for its tests: the packaged case is the one that broke, and
+ * it is not reproducible from a checkout — there is no `app.asar` to resolve
+ * out of — so the mapping has to be assertable on its own.
+ */
+export function spawnHelperCandidates(
+  packageRoot: string,
+  platform: NodeJS.Platform,
+  arch: string,
+): readonly string[] {
+  return [
+    join(packageRoot, 'prebuilds', `${platform}-${arch}`, 'spawn-helper'),
+    join(packageRoot, 'build', 'Release', 'spawn-helper'),
+  ].map(unpacked);
+}
+
+/**
  * Make node-pty's `spawn-helper` executable, if it is not already.
  *
  * On macOS and Linux node-pty does not `fork`/`exec` directly; it runs a tiny
@@ -175,15 +221,27 @@ function loadPty(): Promise<{ spawn: PtySpawn }> {
  * `posix_spawnp failed`, an error that names neither the file nor the
  * permission.
  *
- * Repairing it here rather than in a repo postinstall script is what makes it
- * true in a packaged app as well as in a checkout: `asarUnpack` extracts the
- * helper with whatever mode it had in the archive, so the same bit is missing
- * there. `chmod` does not disturb a code signature — that covers contents, not
- * mode — so this is safe inside a signed bundle.
+ * `asarUnpack` copies the helper out of the archive with the mode it had going
+ * in, so a packaged Artemis inherits the same missing bit. That is what
+ * {@link unpacked} is for, and getting it wrong is what made this bug survive a
+ * first fix: the repair used to chmod the *archive* path, which fails with
+ * `ENOTDIR` every time, into a `catch` that could not tell that apart from a
+ * layout being absent. It logged nothing, repaired nothing, and left the error
+ * to surface in production as `posix_spawnp failed` — the exact message the
+ * function exists to prevent.
  *
- * Failure is logged and swallowed. If the helper is already executable this is
- * a `stat` and nothing else; if the app is on a read-only mount the chmod
- * cannot help and the spawn below will report the real problem.
+ * So the two failures are caught separately now. A missing candidate is the
+ * common case and stays silent; a chmod that fails is a real problem and says
+ * so, with the path in the message.
+ *
+ * This is the second line of defence rather than the first. `build/after-pack.cjs`
+ * sets the bit at package time, which is the only place it can be set for an
+ * install the user cannot write to — under `/Applications` owned by an admin,
+ * or run straight off the read-only DMG. This repairs checkouts, and installs
+ * packaged before that hook existed.
+ *
+ * `chmod` does not disturb a code signature — that covers contents, not mode —
+ * so this is safe inside a signed bundle.
  */
 async function ensureHelperExecutable(): Promise<void> {
   if (process.platform === 'win32') return;
@@ -198,23 +256,28 @@ async function ensureHelperExecutable(): Promise<void> {
     return;
   }
 
-  // Both layouts, because which one exists depends on how the module arrived:
-  // `prebuilds/` when a prebuilt binary was used, `build/Release/` when
-  // node-gyp compiled it locally (every Linux, including CI's).
-  const candidates = [
-    join(packageRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
-    join(packageRoot, 'build', 'Release', 'spawn-helper'),
-  ];
-
-  for (const candidate of candidates) {
+  for (const candidate of spawnHelperCandidates(packageRoot, process.platform, process.arch)) {
+    let mode: number;
     try {
-      const info = await stat(candidate);
-      // Any execute bit is enough; node-pty runs it as the current user.
-      if ((info.mode & 0o111) !== 0) continue;
-      await chmod(candidate, 0o755);
-      log.info(`Marked ${basename(candidate)} executable; the prebuild ships it without the bit.`);
+      mode = (await stat(candidate)).mode;
     } catch {
       // A layout that is not present is the common case, not an error.
+      continue;
+    }
+
+    // Any execute bit is enough; node-pty runs it as the current user.
+    if ((mode & 0o111) !== 0) continue;
+
+    try {
+      await chmod(candidate, 0o755);
+      log.info(`Marked ${basename(candidate)} executable; the prebuild ships it without the bit.`);
+    } catch (error) {
+      log.warn(
+        `Could not make ${candidate} executable, so opening a terminal will fail with ` +
+          '"posix_spawnp failed". A read-only or another user\'s install cannot be repaired ' +
+          'from here; reinstalling Artemis is what fixes it.',
+        error,
+      );
     }
   }
 }

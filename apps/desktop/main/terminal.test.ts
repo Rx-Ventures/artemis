@@ -21,6 +21,7 @@ import {
   keepTail,
   MAX_TERMINALS,
   resolveShell,
+  spawnHelperCandidates,
   TailBuffer,
   TooManyTerminalsError,
   UnknownTerminalError,
@@ -340,6 +341,72 @@ describe('the terminal host', () => {
     (made[0] as FakePty).emit('after');
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(seen).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Finding the spawn helper                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The packaged case, which is the one that shipped broken.
+ *
+ * `spawn-helper` has no execute bit in node-pty's published tarball, so
+ * something has to add it, and for a long time nothing did: the repair chmodded
+ * the path `require.resolve` returns, which inside a bundle points *into*
+ * `app.asar`. chmod fails there with `ENOTDIR`, the failure was swallowed, and
+ * 0.6.1 shipped a terminal that could not start. Meanwhile the real-shell test
+ * below passed on every machine, because a checkout has no archive to resolve
+ * out of and its helper had already been chmodded in place.
+ *
+ * That is the gap these fill. They are string assertions about a path, which is
+ * all the bug ever was.
+ */
+describe('spawnHelperCandidates', () => {
+  const bundle = '/Applications/Artemis.app/Contents/Resources/app.asar/node_modules/node-pty';
+
+  it('points outside the archive for a packaged app', () => {
+    // Every candidate, because chmod on any `app.asar` path throws ENOTDIR —
+    // there is no layout for which the archive path is the right answer.
+    for (const candidate of spawnHelperCandidates(bundle, 'darwin', 'arm64')) {
+      expect(candidate).toContain('app.asar.unpacked');
+      expect(candidate).not.toMatch(/app\.asar(?!\.unpacked)/);
+    }
+  });
+
+  it('agrees with node-pty about where the helper is', () => {
+    // node-pty computes its exec path as `<native.dir>/spawn-helper` and then
+    // applies exactly this substitution (`lib/unixTerminal.js`). Chmodding a
+    // different file than the one it execs would repair nothing, so this is
+    // the assertion that the two cannot drift apart silently.
+    expect(spawnHelperCandidates(bundle, 'darwin', 'arm64')[0]).toBe(
+      '/Applications/Artemis.app/Contents/Resources/app.asar.unpacked' +
+        '/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper',
+    );
+  });
+
+  it('maps a node_modules.asar bundle too', () => {
+    const [prebuilt] = spawnHelperCandidates('/app/node_modules.asar/node-pty', 'linux', 'x64');
+    expect(prebuilt).toBe(
+      '/app/node_modules.asar.unpacked/node-pty/prebuilds/linux-x64/spawn-helper',
+    );
+  });
+
+  it('leaves a checkout path alone', () => {
+    const root = '/Users/dev/artemis/node_modules/node-pty';
+    expect(spawnHelperCandidates(root, 'darwin', 'arm64')).toEqual([
+      `${root}/prebuilds/darwin-arm64/spawn-helper`,
+      `${root}/build/Release/spawn-helper`,
+    ]);
+  });
+
+  it('covers both layouts, since which one exists depends on the install', () => {
+    // `prebuilds/` for a downloaded binary, `build/Release/` for one node-gyp
+    // compiled here — Linux, and CI, get the second.
+    const candidates = spawnHelperCandidates('/pkg/node-pty', 'linux', 'x64');
+    expect(candidates).toHaveLength(2);
+    expect(candidates[0]).toContain('/prebuilds/linux-x64/');
+    expect(candidates[1]).toContain('/build/Release/');
   });
 });
 
