@@ -143,9 +143,10 @@ export type StopReason =
  * A finished text block.
  *
  * Emitted for assistant output and, when a provider echoes them, for user
- * messages that Artemis did not originate (replayed history, synthetic turns).
- * `text` is the complete block: a consumer that ignored every delta and read
- * only `text.complete` would still render the full transcript.
+ * messages that Artemis did not originate — replayed history, and output an
+ * adapter deliberately attributes to the user side. `text` is the complete
+ * block: a consumer that ignored every delta and read only `text.complete`
+ * would still render the full transcript.
  */
 export interface TextCompleteEvent extends AgentEventBase {
   readonly type: 'text.complete';
@@ -158,7 +159,15 @@ export interface TextCompleteEvent extends AgentEventBase {
   readonly stopReason?: StopReason;
   /** True when this is a replay of history rather than new generation. */
   readonly replay?: boolean;
-  /** True for provider-generated messages the user did not type. */
+  /**
+   * True for text an adapter generated rather than relayed from the model or
+   * the person — a refusal notice, the output of a locally-run slash command.
+   *
+   * Not a general "the user did not type this" marker: a user-role turn the
+   * *harness* wrote (an injected skill body, an auto-continuation, a system
+   * reminder) is dropped rather than flagged, because a user row is a record of
+   * what someone said. See `isHumanTurn` in the Claude mapper.
+   */
   readonly synthetic?: boolean;
   readonly agentId?: AgentId;
 }
