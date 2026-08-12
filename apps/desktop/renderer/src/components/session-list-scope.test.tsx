@@ -23,12 +23,13 @@
 
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { SessionSummary } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SessionList } from '@/components/SessionList';
-import { useApp } from '@/state/store';
+import { focusedPane, useApp } from '@/state/store';
+import { setPaneState } from '@/state/pane';
 import { appSession, seedApp } from '@/state/testkit';
 
 class NoopObserver {
@@ -100,6 +101,31 @@ afterEach(cleanup);
 
 function mount(ui: ReactNode): void {
   render(<TooltipProvider delayDuration={0}>{ui}</TooltipProvider>);
+}
+
+/**
+ * Put a live run on the focused column, the way starting one does.
+ *
+ * Deliberately not `useApp.setState({ runningSessions, sessionOrderHold })`:
+ * both are projections of the panes, and the subscription that maintains them
+ * would recompute from the (idle) panes and wipe the injected values on the very
+ * next store write. The run is the input; everything else follows from it.
+ */
+function startRunning(sessionId: string): void {
+  act(() => {
+    setPaneState(focusedPane(), {
+      run: {
+        runId: 'run-1',
+        status: 'running',
+        providerId: 'claude',
+        profileId: 'p1',
+        cwd: '/code/api',
+        capabilities: CAPABILITIES,
+        startedAt: 1,
+        sessionId,
+      },
+    } as never);
+  });
 }
 
 describe('the session list', () => {
@@ -182,5 +208,52 @@ describe('the session list', () => {
 
     expect(appSession().cwd).toBe('/code/cli');
     expect(appSession().resumeSessionId).toBe('s3');
+  });
+
+  /*
+   * The rendered half of `AppState.sessionOrderHold`.
+   *
+   * The rules themselves are pinned down in `state/sessionOrder.test.ts`; what
+   * this adds is that the list actually *subscribes* to the hold — a memo that
+   * left it out of its dependencies would keep sorting by a stale record, and
+   * every assertion over there would still pass.
+   */
+  it('re-sorts when a run takes hold of a row', () => {
+    mount(<SessionList />);
+    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
+      'web',
+      'cli',
+      'api',
+    ]);
+
+    // The stalest project starts working: it leads until its run ends.
+    startRunning('s1');
+
+    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
+      'api',
+      'web',
+      'cli',
+    ]);
+  });
+
+  it('holds that row still while the poll reports newer mtimes', () => {
+    startRunning('s1');
+    mount(<SessionList />);
+
+    // A poll lands: every session's file has moved on, `/code/web`'s most of
+    // all. Nothing on screen may move — this is the four-second shuffle.
+    useApp.setState({
+      sessions: [
+        session('s1', '/code/api', 2_000, 'Adapter seam'),
+        session('s2', '/code/web', 3_000, 'Login redirect'),
+        session('s3', '/code/cli', 2_500, 'Flag parsing'),
+      ],
+    });
+
+    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
+      'api',
+      'web',
+      'cli',
+    ]);
   });
 });
