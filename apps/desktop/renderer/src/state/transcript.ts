@@ -193,6 +193,36 @@ export type TranscriptItem =
  * sage row, and burying it behind a marker would cost a click to reach the only
  * thing in there.
  *
+ * ## An artifact is never folded
+ *
+ * One kind of call is lifted out of the burst rather than hidden inside it: one
+ * that produced an artifact ({@link ArtifactTest}). The marker exists to hide
+ * *machinery*, and a page the agent made is not machinery — it is the
+ * deliverable. Folded away it reads as "edited 5 files", a description of the
+ * work rather than of the thing the work produced, and reaching it costs a click
+ * into a dropdown whose label gives no hint anything is in there worth opening.
+ *
+ * Lifted, **not** treated as a boundary. An artifact does not end the run and
+ * does not start a new one — the burst is walked to its natural end and only
+ * then split into what stays folded and what comes out. So a turn that writes
+ * three artifacts among its work reads
+ *
+ *     ▸ work · Ran 4 commands, edited 2 files
+ *     ▤ report.html                              [ Open ]
+ *     ▤ chart.svg                                [ Open ]
+ *     ▤ notes.md                                 [ Open ]
+ *
+ * — one folded line, with the things worth opening beside it. Ending the run at
+ * each artifact instead would be the obvious implementation and the wrong one:
+ * it turns a single burst into a marker per gap, so the more the agent made, the
+ * more machinery rows the reader has to scroll past to see it.
+ *
+ * A lifted call is not a member of the group, so the summary does not count it
+ * either. "Edited 5 files" beside five tiles that *are* those files would be the
+ * same work reported twice, and the marker's job is to describe what is still
+ * hidden. A burst whose only calls were artifacts therefore has nothing left to
+ * summarise and produces no marker at all.
+ *
  * ## Why this is computed here and not in the component
  *
  * The transcript's performance contract says the list hands React ids and
@@ -245,6 +275,19 @@ export interface ActivityGroup {
 export function isGroupId(id: string): boolean {
   return id.startsWith('g:');
 }
+
+/**
+ * Did this finished call produce something the reader is meant to *look at*?
+ *
+ * Injected rather than imported because the answer depends on the pane's
+ * working directory and the host platform — see `lib/artifact.ts` — and neither
+ * belongs in a model whose job is the shape of the transcript. `pane.ts` closes
+ * over both and hands the closure down.
+ *
+ * The model's use for it is narrow and structural: an artifact does not get
+ * folded. See {@link ActivityGroup} for why that is worth a rule of its own.
+ */
+export type ArtifactTest = (item: ToolItem) => boolean;
 
 /* -------------------------------------------------------------------------- */
 /* Scheduling                                                                 */
@@ -310,6 +353,21 @@ export class TranscriptModel {
   private structural = false;
   private pending = false;
 
+  /**
+   * How to tell an artifact from ordinary work, and what it last answered.
+   *
+   * The verdicts are memoised because {@link rebuildRows} asks per item per
+   * rebuild, and the test is not cheap — it re-parses the call's input into a
+   * diff. Memoising turns that into once per *call*, which is what the row
+   * rendering the card already pays.
+   *
+   * An entry is dropped in {@link replace}, because the answer genuinely changes
+   * there: a call is only ever an artifact once it has finished, so the verdict
+   * that matters is the one taken after `tool.end` merges the result in.
+   */
+  private artifactTest: ArtifactTest | null = null;
+  private artifactVerdicts = new Map<string, boolean>();
+
   private listListeners = new Set<Listener>();
   private itemListeners = new Map<string, Set<Listener>>();
 
@@ -318,6 +376,23 @@ export class TranscriptModel {
 
   constructor(schedule: Scheduler = frameScheduler) {
     this.schedule = schedule;
+  }
+
+  /**
+   * Teach the model which calls produced artifacts, so it can keep them out of
+   * the fold. See {@link ArtifactTest}.
+   *
+   * Installing a test — or replacing one, which is how a pane reacts to its
+   * working directory moving — throws away every cached verdict and rebuilds the
+   * rows, since the same call can stop being an artifact when `cwd` changes
+   * underneath it. Both are O(items) and both happen approximately never.
+   */
+  setArtifactTest(test: ArtifactTest | null): void {
+    if (test === this.artifactTest) return;
+    this.artifactTest = test;
+    this.artifactVerdicts.clear();
+    this.structural = true;
+    this.markPending();
   }
 
   /* ---- reads ---------------------------------------------------------- */
@@ -508,6 +583,9 @@ export class TranscriptModel {
     this.streaming.clear();
     this.openTools.clear();
     this.dirty.clear();
+    // The test itself survives a reset — it belongs to the pane, not to the
+    // conversation in it — but every verdict was about items that are now gone.
+    this.artifactVerdicts.clear();
     this.lastSeq = null;
     this.counter = 0;
     this.structural = true;
@@ -756,7 +834,17 @@ export class TranscriptModel {
   }
 
   private replace(id: string, item: TranscriptItem): void {
+    // A tool call's artifact verdict is taken again here, because this is where
+    // `tool.end` lands and a call that is still running is never an artifact.
+    // A verdict that *changed* is a structural change — the row has to leave the
+    // burst it was folded into — and `replace` does not otherwise set that flag,
+    // so without this the tile would not surface until the next unrelated insert.
+    const wasArtifact = this.isArtifact(id);
+    if (item.kind === 'tool') this.artifactVerdicts.delete(id);
+
     this.items.set(id, item);
+    if (item.kind === 'tool' && this.isArtifact(id) !== wasArtifact) this.structural = true;
+
     this.index(item);
     this.dirty.add(id);
     this.markPending();
@@ -797,25 +885,50 @@ export class TranscriptModel {
         i += 1;
         continue;
       }
+      /*
+       * The run is walked to its natural end — an artifact does *not* end it —
+       * and then split in two: what stays folded, and what is lifted out of the
+       * fold to stand beside the marker. See {@link ActivityGroup}.
+       *
+       * Walking first and splitting after is the whole difference between one
+       * marker with tiles under it and a marker per gap between artifacts. The
+       * burst is still one burst; only what it is willing to hide has changed.
+       */
       const run: string[] = [];
+      const lifted: string[] = [];
       let tools = 0;
       while (i < this.ids.length) {
         const next = this.ids[i];
         if (next === undefined || !this.isMachinery(next)) break;
+        i += 1;
+        if (this.isArtifact(next)) {
+          lifted.push(next);
+          continue;
+        }
         if (this.items.get(next)?.kind === 'tool') tools += 1;
         run.push(next);
-        i += 1;
       }
-      // Nothing was *done* here, so there is nothing to summarise: a stretch of
-      // thinking on its own stays the rows it already was.
-      if (tools === 0) {
+
+      // Nothing was *done* here — or nothing that is still hidden — so there is
+      // nothing to summarise: a stretch of thinking on its own stays the rows it
+      // already was. A burst whose only calls were artifacts lands here too, and
+      // correctly: with the tiles lifted out there is no work left to fold.
+      const first = run[0];
+      if (tools === 0 || first === undefined) {
         for (const memberId of run) rows.push(memberId);
-        continue;
+      } else {
+        // Named for the first *folded* member rather than the run's first item,
+        // so a burst that opens with an artifact still gets a stable id.
+        const groupId = `g:${first}`;
+        for (const memberId of run) groupOf.set(memberId, groupId);
+        members.set(groupId, run);
+        rows.push(groupId);
       }
-      const groupId = `g:${id}`;
-      for (const memberId of run) groupOf.set(memberId, groupId);
-      members.set(groupId, run);
-      rows.push(groupId);
+
+      // After the marker, in the order they were made. The tiles are the reason
+      // anyone is looking at this stretch of the transcript, so they come out
+      // below the one line that describes the work rather than above it.
+      for (const artifactId of lifted) rows.push(artifactId);
     }
 
     // Retire cached summaries whose group is gone or whose membership moved.
@@ -899,6 +1012,26 @@ export class TranscriptModel {
   private isMachinery(id: string): boolean {
     const kind = this.items.get(id)?.kind;
     return kind === 'tool' || kind === 'thinking';
+  }
+
+  /**
+   * Whether this row is an artifact, and therefore not foldable.
+   *
+   * `false` whenever no test is installed, which is the state a bare
+   * `new TranscriptModel()` is in — the model folds exactly as it always did
+   * until a pane teaches it otherwise, so nothing here depends on the wiring
+   * being present.
+   */
+  private isArtifact(id: string): boolean {
+    const cached = this.artifactVerdicts.get(id);
+    if (cached !== undefined) return cached;
+    const test = this.artifactTest;
+    if (test === null) return false;
+    const item = this.items.get(id);
+    if (item?.kind !== 'tool') return false;
+    const verdict = test(item);
+    this.artifactVerdicts.set(id, verdict);
+    return verdict;
   }
 
   /** Keep the open-work indexes in step with an item's current state. */

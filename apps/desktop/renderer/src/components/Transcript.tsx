@@ -367,13 +367,7 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
     case 'thinking':
       return <ThinkingRow item={item} />;
     case 'tool':
-      // Reached only if a tool ever escapes grouping; the model folds every
-      // one it knows about. Rendering the bare card is the honest fallback.
-      return (
-        <Line label="tool" tone="cyan" ts={item.ts}>
-          <ToolCard item={item} />
-        </Line>
-      );
+      return <ToolRow item={item} />;
     case 'permission':
       return <PermissionRow item={item} />;
     case 'notice':
@@ -683,6 +677,50 @@ function ThinkingCard({ item }: { readonly item: ThinkingItem }): ReactElement {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A tool call that is a row of its own rather than a member of a burst.
+ *
+ * Two things arrive here, and the gutter label is the whole reason this is not
+ * one line inside `ItemRow`:
+ *
+ *  - **An artifact.** The model deliberately keeps these out of the fold, so
+ *    that a page the agent made is visible and openable without first opening a
+ *    dropdown labelled "edited 5 files" — see `ActivityGroup` in
+ *    `state/transcript.ts`. It gets its own label, because `tool` in the gutter
+ *    beside a tile that says `report.html` describes the mechanism at exactly
+ *    the moment the reader has stopped caring about it.
+ *  - **An escapee.** A call that ended up ungrouped for any other reason. The
+ *    bare card under a `tool` label is the honest fallback it always was.
+ *
+ * The artifact test is repeated here rather than threaded down from the model,
+ * which is a real duplicate parse — but only of the rows that reach top level,
+ * and after the hoist that is the artifacts and almost nothing else. Paying it
+ * on a handful of rows per session is the cheaper half of the trade against
+ * putting `cwd` into `ToolCard`'s props and out of its own memo.
+ */
+function ToolRow({ item }: { readonly item: ToolItem }): ReactElement {
+  const cwd = usePane((s) => s.cwd);
+  const platform = useApp((s) => s.platform);
+  const artifact = useMemo(
+    () =>
+      item.status === 'ok'
+        ? detectArtifact(detectFileEdit(item.name, item.input), cwd, platform)
+        : null,
+    [item.name, item.input, item.status, cwd, platform],
+  );
+
+  return (
+    <Line
+      label={artifact ? 'artifact' : 'tool'}
+      tone={artifact ? 'sage' : 'cyan'}
+      ts={item.ts}
+      className={artifact ? 'my-1' : undefined}
+    >
+      <ToolCard item={item} />
+    </Line>
   );
 }
 
