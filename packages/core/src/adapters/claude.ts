@@ -143,6 +143,7 @@ import type { StoredMessage } from './history.js';
 import { readPlanUsage } from './planUsage.js';
 import { AsyncQueue, createDeferred } from './stream.js';
 import type { Deferred } from './stream.js';
+import { TaskLedger } from './taskLedger.js';
 import {
   SESSION_TITLE_INSTRUCTIONS,
   buildTitlePrompt,
@@ -1841,6 +1842,15 @@ class ClaudeProcess {
    * {@link #holdsWork}.
    */
   #liveTasks: readonly string[] = [];
+
+  /**
+   * Every task this process has delegated, for the pane that shows them.
+   *
+   * Per process and never carried across one, which is the SDK's own instruction
+   * for the level underneath it: nothing is emitted at startup, so a row brought
+   * forward would be a claim about work inside a CLI that no longer exists.
+   */
+  readonly #tasks = new TaskLedger(() => this.#deps.now());
   /** One-way, and {@link #holdsWork} explains why it cannot be counted down. */
   #registeredSchedule = false;
 
@@ -2144,13 +2154,24 @@ class ClaudeProcess {
   /**
    * Read what a provider message says about the process, before any turn sees it.
    *
-   * Only the live set, and only because it is the one fact that arrives outside a
-   * turn. Structurally checked rather than cast: this runs on every message on the
-   * hot path, and a payload the SDK reshapes should degrade to "no news" rather
-   * than throw inside the pump.
+   * Two readers, and keeping them apart is load-bearing rather than tidy. The
+   * **live set** below decides whether this process may be closed, and it is read
+   * from the raw level and nothing else. The **ledger** is what the delegated-work
+   * pane is drawn from, and it merges five different messages into a row each.
+   *
+   * Letting the ledger answer the retention question would be the tempting
+   * simplification and would be wrong: it holds rows for foreground subagents
+   * too, which are not outstanding work in the sense retention means, so a
+   * process would be pinned open by a task that finished inside its own turn.
+   *
+   * Structurally checked rather than cast: this runs on every message on the hot
+   * path, and a payload the SDK reshapes should degrade to "no news" rather than
+   * throw inside the pump.
    */
   #observeMessage(message: SDKMessage): void {
     if (message.type !== 'system') return;
+    this.#tasks.observe(message as unknown as { type?: unknown; subtype?: unknown });
+
     const record = message as unknown as { subtype?: unknown; tasks?: unknown };
     if (record.subtype !== 'background_tasks_changed') return;
     if (!Array.isArray(record.tasks)) return;
@@ -2177,6 +2198,34 @@ class ClaudeProcess {
      * rest of the session.
      */
     if (had && this.#liveTasks.length === 0) this.#awaitSettleTurn();
+  }
+
+  /**
+   * Put the current row set onto the turn being served, if it changed.
+   *
+   * The event is run-scoped because every event is, and that has one consequence
+   * worth stating plainly: between turns there is nowhere to put it. A task that
+   * makes progress while no turn is open updates the ledger and is not announced
+   * until something opens one — so a pane's token counts can lag behind the work
+   * by the length of that gap, while its own elapsed clock keeps running.
+   *
+   * In practice the gap closes itself at the moment it matters. A settling task
+   * is followed within about a tenth of a second by the provider's own turn about
+   * it, which `#ensureTurn` opens and adopts, and the first thing that turn
+   * carries is this — so the row settles on screen a beat after it settles in the
+   * CLI. What is genuinely lost is mid-flight progress during a long silence, and
+   * a row that says "24.1k tokens, as of a minute ago" is a smaller lie than a
+   * second event channel would be a cost.
+   */
+  #flushTasks(): void {
+    if (!this.#tasks.dirty || this.#state.ended) return;
+    this.#emit({
+      type: 'background.tasks',
+      // The turn's own envelope, so this takes its place in the same dense `seq`
+      // as everything else on the stream rather than beside it.
+      ...nextEventEnvelope(this.#state),
+      tasks: this.#tasks.snapshot(),
+    });
   }
 
   /** Hold the process briefly for a turn about work that just finished. */
@@ -2518,6 +2567,10 @@ class ClaudeProcess {
           if (event.type === 'tool.start') this.#observeToolCall(event.name);
           this.#emit(event);
         }
+
+        // After the turn's own events, so a row set describing what a tool call
+        // just launched arrives after the call that launched it.
+        this.#flushTasks();
 
         // Announced from here rather than from `beginTurn`, because this is where
         // it becomes true: the id arrives on the turn's own `init`, and for a

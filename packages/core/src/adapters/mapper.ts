@@ -474,46 +474,26 @@ function mapSystemMessage(
       return [];
 
     /*
-     * What is running outside the turn.
+     * Delegated work: what was launched, how it is going, how it ended, and
+     * which of it is still live.
      *
-     * The one message in this family that is carried, and it is carried because
-     * something depends on it rather than because it is interesting: the payload
-     * is every live task after the change — replace semantics, so an empty array
-     * is an authoritative "nothing is running" — and that is what tells the main
-     * process whether a provider process still has work in it when a turn ends.
-     * Closing one that does is how a backgrounded subagent used to die at the
-     * turn boundary.
+     * All five are handled, and none of them here. A row in the tasks pane is a
+     * merge of all of them — the level says which tasks exist, `task_started`
+     * carries the prompt and the agent type, `task_progress` the tokens and the
+     * tool in use, `task_notification` how it ended — and a merge needs state
+     * that outlives a turn, which is exactly what this mapper does not have.
+     * {@link ClaudeMapperState} is per turn, deliberately, and a task routinely
+     * outlives several.
      *
-     * `description` is the provider's own text and is scanned as content at the
-     * IPC boundary, like every other string a provider writes.
+     * So the ledger on the process owns them and emits `background.tasks` itself.
+     * Splitting it — the level mapped here, the detail merged there — would put
+     * two writers on one event type and make their order a matter of luck.
      */
     case 'background_tasks_changed':
-      return [
-        {
-          type: 'background.tasks',
-          ...stamp(state),
-          tasks: (Array.isArray(message.tasks) ? message.tasks : []).map((task) => ({
-            id: String(task.task_id),
-            kind: String(task.task_type),
-            description: String(task.description),
-          })),
-        },
-      ];
-
     case 'task_started':
     case 'task_updated':
     case 'task_progress':
     case 'task_notification':
-      // Per-task detail: start, progress, and the terminal notification. Not
-      // carried yet — the *set* above is what any decision currently rests on,
-      // and it arrives on every change including the last one, so nothing needs
-      // these to know whether work is outstanding. They are what a display of
-      // delegated work would be built from (#89), which is where the question of
-      // how to render progress belongs.
-      //
-      // Subagent work is also already partly visible without them: the spawning
-      // tool produces `tool.start`/`tool.end`, and nested events carry
-      // `agentId`/`parentToolCallId`.
       return [];
 
     case 'thinking_tokens':

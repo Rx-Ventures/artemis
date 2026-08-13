@@ -1625,6 +1625,62 @@ describe('a turn that ends while work is still running', () => {
     expect(fake.closed).toBe(false);
   });
 
+  it('reports the tasks as rows, merged from every message about them', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push({
+      type: 'system',
+      subtype: 'task_progress',
+      task_id: 't1',
+      description: 'sleep 40',
+      subagent_type: 'Explore',
+      usage: { total_tokens: 24_100, tool_uses: 7, duration_ms: 12_000 },
+      last_tool_name: 'Grep',
+      uuid: 'u-prog',
+      session_id: 'sess-abc',
+    } as unknown as SDKMessage);
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    const sets = events.filter((e) => e.type === 'background.tasks');
+
+    // One per change, each carrying the whole set — and the last one has the
+    // detail the level never carried, which is the point of the ledger.
+    expect(sets.length).toBeGreaterThanOrEqual(2);
+    expect(sets.at(-1)).toMatchObject({
+      tasks: [
+        {
+          id: 't1',
+          description: 'sleep 40',
+          status: 'running',
+          subagentType: 'Explore',
+          lastToolName: 'Grep',
+          totalTokens: 24_100,
+          toolUses: 7,
+        },
+      ],
+    });
+  });
+
+  it('keeps the sequence dense while it does so', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    // A row set takes its turn in the run's own numbering. A gap is what the
+    // transcript reads as events dropped in transit.
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
+  });
+
   it('survives the registry letting go of the finished turn', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
