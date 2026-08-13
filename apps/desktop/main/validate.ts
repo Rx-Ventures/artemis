@@ -66,6 +66,7 @@ import {
   type RunInput,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
+  type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
   type RunsRespondPermissionRequest,
@@ -1075,6 +1076,16 @@ export function validateRunsSend(raw: unknown): RunsSendRequest {
 export function validateRunsInterrupt(raw: unknown): RunsInterruptRequest {
   const request = requireRequest(raw);
   return { runId: requireId(request['runId'], 'runId') };
+}
+
+export function validateRunsStopTask(raw: unknown): RunsStopTaskRequest {
+  const request = requireRequest(raw);
+  return {
+    runId: requireId(request['runId'], 'runId'),
+    // The provider's own id for the task, echoed back to it. Length-bounded like
+    // every other id that crosses this boundary.
+    taskId: requireId(request['taskId'], 'taskId'),
+  };
 }
 
 export function validateRunsRespondPermission(raw: unknown): RunsRespondPermissionRequest {

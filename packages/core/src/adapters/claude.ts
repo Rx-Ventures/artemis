@@ -2397,6 +2397,30 @@ class ClaudeProcess {
     return { deliveredImmediately: false };
   }
 
+  /**
+   * Ask the provider to stop one delegated task.
+   *
+   * Deliberately says nothing about turns. A task outliving its turn is the
+   * ordinary case here, and the process is what holds the control channel; a
+   * gate on the active turn would refuse precisely the stops worth making.
+   *
+   * The task is not stopped when this resolves — it is stopped when the provider
+   * says so, which arrives as a `task_notification` with status `stopped` and
+   * settles the row through the same path a natural finish takes. Failures are
+   * reported and swallowed: an id that has already settled is not a mistake, and
+   * a control channel that will not answer is not something a person clicking a
+   * row can do anything about.
+   */
+  async stopTask(taskId: string): Promise<void> {
+    const sdkQuery = this.#query;
+    if (sdkQuery === undefined || this.#closed) return;
+    try {
+      await sdkQuery.stopTask(taskId);
+    } catch (error) {
+      this.#deps.diagnostic?.(`Could not stop task ${taskId}.`, describe(error));
+    }
+  }
+
   async interrupt(): Promise<InterruptResult> {
     // "Stop" is idempotent by nature; a run that already stopped is not an error.
     if (this.#state.ended) return { stillQueued: [] };
@@ -3022,6 +3046,15 @@ class ClaudeTurn implements Run {
     // Not gated on being active: "Stop" on a turn that has already finished is
     // idempotent by nature, and the process answers it that way.
     return this.#process.interrupt();
+  }
+
+  /**
+   * Not gated either, and here that is the entire feature rather than a
+   * courtesy: the tasks worth stopping are the ones that outlived the turn that
+   * launched them, so the run this arrives through has almost always ended.
+   */
+  async stopTask(taskId: string): Promise<void> {
+    return this.#process.stopTask(taskId);
   }
 
   async respondToPermission(

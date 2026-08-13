@@ -54,6 +54,7 @@ import {
   type ProvidersModelsRequest,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
+  type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
   type RunsRespondPermissionRequest,
@@ -452,6 +453,7 @@ const bridge: ArtemisBridge = Object.freeze({
     start: (request: RunsStartRequest) => invoke(IPC.runsStart, request),
     send: (request: RunsSendRequest) => invoke(IPC.runsSend, request),
     interrupt: (request: RunsInterruptRequest) => invoke(IPC.runsInterrupt, request),
+    stopTask: (request: RunsStopTaskRequest) => invoke(IPC.runsStopTask, request),
     respondToPermission: (request: RunsRespondPermissionRequest) =>
       invoke(IPC.runsRespondPermission, request),
     dispose: (request: RunsDisposeRequest) => invoke(IPC.runsDispose, request),

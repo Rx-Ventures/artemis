@@ -87,6 +87,7 @@ import {
   validateProvidersModels,
   validateRunsDispose,
   validateRunsInterrupt,
+  validateRunsStopTask,
   validateRunsEvents,
   validateRunsList,
   validateRunsRespondPermission,
@@ -285,6 +286,14 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
         return result.stillQueued
           ? { runId: request.runId, stillQueued: result.stillQueued }
           : { runId: request.runId };
+      },
+    },
+
+    [IPC.runsStopTask]: {
+      validate: validateRunsStopTask,
+      handle: async (request) => {
+        await engine.require().stopTask(request.runId, request.taskId);
+        return { runId: request.runId, taskId: request.taskId };
       },
     },
 
