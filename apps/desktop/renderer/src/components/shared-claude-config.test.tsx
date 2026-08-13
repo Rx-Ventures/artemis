@@ -75,9 +75,13 @@ describe('the warning gate', () => {
     fireEvent.click(toggle());
 
     // The dialog is up and naming the consequence, not just saying "advanced".
-    // The duplicate-rows warning counts the profiles it will actually affect,
-    // so a user with two accounts is told "2 times" rather than "several".
-    expect(screen.getByText(/Every session will appear 2 times/)).toBeTruthy();
+    // A shared store is listed once per conversation rather than once per
+    // profile, so the first consequence is the merged history itself.
+    expect(screen.getByText(/Every account’s history arrives in one list/)).toBeTruthy();
+    // The count is still stated where it is still true: a plugin expecting to
+    // be alone sees every profile sharing the directory, and a user with two
+    // accounts is told "2 profiles" rather than "several".
+    expect(screen.getByText(/all 2 profiles/)).toBeTruthy();
     expect(screen.getByText(/Plugins and skills are shared wholesale/)).toBeTruthy();
     expect(script()).toBeNull();
 

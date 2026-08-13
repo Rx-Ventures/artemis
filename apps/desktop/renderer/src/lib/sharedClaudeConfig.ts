@@ -51,32 +51,30 @@ import type { ProfileMetadata } from '@rx-artemis/protocol';
  * `todos`, and a symlink pointing at a path that does not exist is not an empty
  * folder — it is a broken read, reported as one by every tool that touches it.
  *
- * ## `projects` is in this list, and it duplicates the sidebar
+ * ## `projects` is in this list, and it merges the sidebar
  *
  * Recorded because it is the one entry whose consequence is not guessable from
- * its name, and because it is a defect in *Artemis* rather than in the script.
+ * its name.
  *
- * `projects/<encoded-cwd>/` holds the transcripts. Sharing it does not merge
- * history — Artemis already does that in the reader, and that is exactly the
- * problem. `listAllSessions` walks every profile, points `CLAUDE_CONFIG_DIR` at
- * each one in turn, enumerates whatever that directory's store contains, and
- * tags each result with the profile it came from. Nothing downstream
- * de-duplicates: `sessionGroups` keys rows on `profileId + id` on the stated
- * grounds that a session id is unique only inside its own profile.
+ * `projects/<encoded-cwd>/` holds the transcripts. Sharing it merges the store
+ * itself, so a conversation started on any sharing account is listed — and
+ * resumable — from all of them.
  *
- * Point three profiles at one store and all three enumerate the same
- * transcripts, so every session arrives three times under three different
- * account labels and renders as three rows.
+ * This used to cost a row per profile. `listAllSessions` walked every profile,
+ * pointed `CLAUDE_CONFIG_DIR` at each in turn, and nothing downstream
+ * de-duplicated, so three profiles aimed at one store rendered every session
+ * three times under three account labels. That is fixed: scopes are grouped by
+ * the realpath of the store they actually read, each store is read once, and
+ * the other profiles that reach it ride along in
+ * `SessionSummary.alsoInProfiles`. The account label on a shared row is
+ * therefore arbitrary among the sharers — which is why resuming prefers the
+ * account already in use over the one the row happens to name.
  *
  * Directory contents make the same point about what is actually being shared:
  * everything under `projects/` is session-scoped — the `.jsonl` transcript, and
  * a `<session-uuid>/` sidecar holding `subagents/`, `subagents/workflows/` and
  * `tool-results/` — except `memory/`, which is per-project knowledge and the
  * one thing in there that is not about an account at all.
- *
- * The fix is a de-duplication pass keyed on the transcript rather than on the
- * profile that happened to read it. Until that exists, this entry is honest
- * about costing duplicate rows, and the warning copy says so in those words.
  */
 export const SHARED_DIRECTORIES: readonly string[] = [
   'commands',

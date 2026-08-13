@@ -291,17 +291,18 @@ function WarningDialog({
               <ul className="flex list-disc flex-col gap-1.5 pl-4">
                 <li>
                   {/*
-                    First, and stated as a number, because it is the one
-                    consequence that is invisible in the script and shows up
-                    immediately in the sidebar. Artemis reads each profile's
-                    history separately and de-duplicates nothing, so pointing
-                    them at one store makes every profile report every session.
+                    First, because it is the one consequence that is invisible
+                    in the script and shows up immediately in the sidebar. No
+                    longer a duplicate count — a session several profiles reach
+                    is listed once — but a merged history is still not what
+                    "shared config" sounds like, so it is said plainly.
                   */}
-                  <span className="text-ink">Every session will appear {count} times.</span>{' '}
-                  <span className="font-mono">projects/</span> becomes one shared store, and Artemis
-                  still reads it once per profile — so the sidebar lists each conversation under
-                  every account, not just the one that ran it. Until Artemis de-duplicates that, it
-                  is the cost of sharing history.
+                  <span className="text-ink">Every account&rsquo;s history arrives in one list.</span>{' '}
+                  <span className="font-mono">projects/</span> becomes one shared store, so a
+                  conversation started on any of these accounts is listed — and resumable — from all
+                  of them. Each appears once, under a single account label chosen from the profiles
+                  that can reach it; opening it resumes on the account you are working in, not the
+                  one on the label.
                 </li>
                 <li>
                   <span className="text-ink">Plugins and skills are shared wholesale.</span> One
