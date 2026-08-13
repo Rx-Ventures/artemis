@@ -816,6 +816,25 @@ export class TranscriptModel {
         break;
       }
 
+      case 'background.tasks':
+        /*
+         * Not a transcript entry, and not for the usual reason.
+         *
+         * Everything else dropped here is dropped because it says nothing a
+         * reader wants; this one says something a reader very much wants — what
+         * is still running after the turn ended — and there is nowhere in a
+         * *thread* to put it. The set is replaced on every change, so a row for
+         * it would either be rewritten in place as tasks come and go, or become
+         * one row per change; the first is not what a transcript is, and the
+         * second is a log of a list.
+         *
+         * It is carried across IPC for the main process's sake — it decides
+         * whether a provider process still has work in it — and the surface that
+         * shows it to a person is a dock pane of its own (#89), which is a list
+         * and can be replaced wholesale the way the payload is.
+         */
+        break;
+
       default: {
         // Exhaustiveness without a throw: a provider that learns a new event
         // type should not be able to take the window down.

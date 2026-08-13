@@ -1494,3 +1494,95 @@ describe('nextEventEnvelope', () => {
     expect(after.map((e) => e.seq)).toEqual([2, 3]);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* background tasks                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one message in the task family that is carried, and the reason it is
+ * carried is a decision that depends on it: whether a provider process still
+ * has work in it when a turn ends. Get this wrong in the direction of "nothing
+ * is running" and a backgrounded subagent is killed at the turn boundary, which
+ * is the defect #91 is about.
+ */
+describe('background_tasks_changed', () => {
+  const changed = (tasks: readonly unknown[]) => ({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks,
+    uuid: 'u1',
+    session_id: 'sess-abc',
+  });
+
+  it('carries every live task, with the provider’s own words for what it is', () => {
+    const state = makeState();
+    const [event] = run(state, [
+      changed([
+        { task_id: 'b5hyzk8n3', task_type: 'local_bash', description: 'Sleep 25 seconds' },
+        { task_id: 'q2', task_type: 'subagent', description: 'Audit the mapper' },
+      ]),
+    ]);
+
+    expect(event).toMatchObject({
+      type: 'background.tasks',
+      runId: 'run-1',
+      tasks: [
+        { id: 'b5hyzk8n3', kind: 'local_bash', description: 'Sleep 25 seconds' },
+        { id: 'q2', kind: 'subagent', description: 'Audit the mapper' },
+      ],
+    });
+  });
+
+  it('carries an empty set as itself, not as silence', () => {
+    // Replace semantics: this is the authoritative "nothing is running any
+    // more", and it is the signal that releases a process. Dropping it as
+    // uninteresting would leave a process alive for work that had finished.
+    const state = makeState();
+    const [event] = run(state, [changed([])]);
+
+    expect(event).toMatchObject({ type: 'background.tasks', tasks: [] });
+  });
+
+  it('takes its turn in the run’s sequence', () => {
+    const state = makeState();
+    const events = run(state, [INIT, changed([]), resultMessage()]);
+
+    // Dense per run, like every other event. A gap here is what the transcript
+    // reads as dropped events.
+    expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('does not survive a kind the CLI has not shipped yet as anything but its name', () => {
+    // `task_type` is an open string in the SDK. A closed union here would either
+    // reject a kind added last week or fold it into a bucket and lose the name.
+    const state = makeState();
+    const [event] = run(state, [
+      changed([{ task_id: 't', task_type: 'something_new', description: 'x' }]),
+    ]);
+
+    expect(event).toMatchObject({ tasks: [{ kind: 'something_new' }] });
+  });
+
+  it('leaves the per-task messages alone for now', () => {
+    // The set arrives on every change including the last, so nothing needs
+    // these to know whether work is outstanding. They are what a display of
+    // delegated work is built from (#89).
+    const state = makeState();
+    const events = run(state, [
+      { type: 'system', subtype: 'task_started', task_id: 't', uuid: 'u', session_id: 's' },
+      { type: 'system', subtype: 'task_updated', task_id: 't', uuid: 'u', session_id: 's' },
+      { type: 'system', subtype: 'task_progress', task_id: 't', uuid: 'u', session_id: 's' },
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 't',
+        status: 'completed',
+        uuid: 'u',
+        session_id: 's',
+      },
+    ]);
+
+    expect(events).toEqual([]);
+  });
+});

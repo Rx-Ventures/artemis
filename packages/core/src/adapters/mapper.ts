@@ -473,14 +473,47 @@ function mapSystemMessage(
       // is their own tooling's business, not transcript content.
       return [];
 
+    /*
+     * What is running outside the turn.
+     *
+     * The one message in this family that is carried, and it is carried because
+     * something depends on it rather than because it is interesting: the payload
+     * is every live task after the change — replace semantics, so an empty array
+     * is an authoritative "nothing is running" — and that is what tells the main
+     * process whether a provider process still has work in it when a turn ends.
+     * Closing one that does is how a backgrounded subagent used to die at the
+     * turn boundary.
+     *
+     * `description` is the provider's own text and is scanned as content at the
+     * IPC boundary, like every other string a provider writes.
+     */
+    case 'background_tasks_changed':
+      return [
+        {
+          type: 'background.tasks',
+          ...stamp(state),
+          tasks: (Array.isArray(message.tasks) ? message.tasks : []).map((task) => ({
+            id: String(task.task_id),
+            kind: String(task.task_type),
+            description: String(task.description),
+          })),
+        },
+      ];
+
     case 'task_started':
     case 'task_updated':
     case 'task_progress':
     case 'task_notification':
-    case 'background_tasks_changed':
-      // Subagent/background task bookkeeping. Subagent work is already visible:
-      // the spawning Task tool produces `tool.start`/`tool.end`, and nested
-      // events carry `agentId`/`parentToolCallId`.
+      // Per-task detail: start, progress, and the terminal notification. Not
+      // carried yet — the *set* above is what any decision currently rests on,
+      // and it arrives on every change including the last one, so nothing needs
+      // these to know whether work is outstanding. They are what a display of
+      // delegated work would be built from (#89), which is where the question of
+      // how to render progress belongs.
+      //
+      // Subagent work is also already partly visible without them: the spawning
+      // tool produces `tool.start`/`tool.end`, and nested events carry
+      // `agentId`/`parentToolCallId`.
       return [];
 
     case 'thinking_tokens':
