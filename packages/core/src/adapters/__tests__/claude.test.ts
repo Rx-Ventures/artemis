@@ -7,7 +7,7 @@
  * decides what the provider actually inherits.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1196,8 +1196,9 @@ describe('listAllSessions', () => {
   });
 
   it('drops a session whose working directory cannot be recovered', async () => {
-    // Ungroupable and unresumable. A row for it would do nothing, and a guessed
-    // path would start an agent somewhere the user never worked.
+    // Nothing on disk to read it back out of either — `/app/profiles/work` does
+    // not exist — so this is the residue after the recovery below has tried. A
+    // guessed path would start an agent somewhere the user never worked.
     sdkMock.onListSessions = () =>
       Promise.resolve([
         { sessionId: 'good', summary: 'Has a cwd', lastModified: 2, cwd: '/repos/api' },
@@ -1210,6 +1211,88 @@ describe('listAllSessions', () => {
     });
 
     expect(result?.sessions.map((s) => s.id)).toEqual(['good']);
+  });
+
+  /**
+   * The reported bug: a conversation that opened with an image disappeared.
+   *
+   * The SDK's summary pass takes `firstPrompt` from the first user record whose
+   * content is a plain string and takes `cwd` from whatever record it settled on,
+   * so an opening message carrying an attachment comes back with neither — and
+   * the adapter used to drop the session on the spot. Real files here, because
+   * the recovery is a read of a real store's layout.
+   */
+  describe('a session the provider reports without a directory', () => {
+    const made: string[] = [];
+
+    afterEach(() => {
+      for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** A store holding one transcript, laid out the way Claude lays them out. */
+    function storeWith(sessionId: string, cwd: string): string {
+      const configDir = mkdtempSync(join(tmpdir(), 'artemis-recover-'));
+      made.push(configDir);
+      const project = join(configDir, 'projects', '-Users-me-code-app');
+      mkdirSync(project, { recursive: true });
+      writeFileSync(
+        join(project, `${sessionId}.jsonl`),
+        [
+          JSON.stringify({ type: 'queue-operation', operation: 'enqueue' }),
+          JSON.stringify({
+            type: 'user',
+            uuid: 'u1',
+            cwd,
+            message: {
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+                { type: 'text', text: 'look at this' },
+              ],
+            },
+          }),
+        ].join('\n'),
+      );
+      return configDir;
+    }
+
+    it('reads the directory out of the transcript instead of dropping the row', async () => {
+      const configDir = storeWith('imaged', '/Users/me/code/app');
+      sdkMock.onListSessions = () =>
+        Promise.resolve([
+          { sessionId: 'plain', summary: 'Ordinary', lastModified: 2, cwd: '/repos/api' },
+          // No `cwd`, and no `firstPrompt` either — the two go missing together.
+          { sessionId: 'imaged', summary: 'Opened with a screenshot', lastModified: 1 },
+        ]);
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [scope('work', configDir)],
+      });
+
+      // Both rows, and the recovered one carries the real directory — so it
+      // groups under its project and resumes where it ran, rather than being
+      // visible-but-dead.
+      expect(result?.sessions.map((s) => s.id)).toEqual(['plain', 'imaged']);
+      expect(result?.sessions[1]).toEqual(
+        expect.objectContaining({ id: 'imaged', cwd: '/Users/me/code/app', profileId: 'work' }),
+      );
+    });
+
+    it('rides along on a shared store like any other row', async () => {
+      const configDir = storeWith('imaged', '/Users/me/code/app');
+      sdkMock.onListSessions = () =>
+        Promise.resolve([{ sessionId: 'imaged', summary: 'No cwd', lastModified: 1 }]);
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [scope('work', configDir), scope('personal', configDir)],
+      });
+
+      // Recovery happens after the split into own/shared, so a recovered
+      // session has to come back with the same `alsoInProfiles` an ordinary one
+      // would — otherwise resuming it switches the user's account.
+      expect(result?.sessions).toHaveLength(1);
+      expect(result?.sessions[0]?.alsoInProfiles).toEqual(['personal']);
+    });
   });
 
   it('keeps going when one profile’s store cannot be read', async () => {
