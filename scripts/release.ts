@@ -24,6 +24,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { applyBump, inspectSinceLastTag, satisfies } from './nextVersion.js';
+
 function run(command: string, args: readonly string[]): void {
   console.log(`\n$ ${command} ${args.join(' ')}`);
   execFileSync(command, [...args], { stdio: 'inherit' });
@@ -56,6 +58,44 @@ try {
   fail(`tag ${tag} already exists — bump the version in apps/desktop/package.json.`);
 } catch {
   // tag absent: exactly what we want
+}
+
+/*
+ * Does the number match what shipped?
+ *
+ * The version is chosen by hand, in a commit written at the end of the work,
+ * which is the worst moment to be asked "did anything grow a new surface since
+ * the last tag?" — the answer is spread across a fortnight of commits and
+ * nobody has it. So it is read off the diff instead. See `nextVersion.ts` for
+ * what counts as what.
+ *
+ * A *bigger* bump than the changes call for is fine and passes: deciding to ship
+ * a minor where a patch would do is a judgement someone is allowed to make. The
+ * mistake worth catching is the other one — a new pane and a new IPC channel
+ * going out as a patch, which tells everyone downstream that nothing grew.
+ *
+ * `--bump-anyway` exists because a tool that cannot be overruled becomes a
+ * reason to stop cutting releases. It says so in the output, so the override is
+ * a decision someone made rather than a silent bypass.
+ */
+const { from, verdict } = inspectSinceLastTag();
+if (from !== null) {
+  console.log(`\nrelease: since ${from}, this looks like a ${verdict.bump} release.`);
+  for (const reason of verdict.reasons) console.log(`  • ${reason}`);
+
+  if (verdict.bump === 'none') {
+    fail('nothing has shipped since the last tag — only notes and tests changed.');
+  }
+  if (!satisfies(from, version, verdict.bump)) {
+    const wanted = applyBump(from, verdict.bump);
+    if (!process.argv.includes('--bump-anyway')) {
+      fail(
+        `apps/desktop/package.json says ${version}, but the changes above call for ${wanted}.\n` +
+          `        Bump the version, or re-run with --bump-anyway if you mean it.`,
+      );
+    }
+    console.log(`release: shipping ${version} anyway, against a ${verdict.bump}'s worth of change.`);
+  }
 }
 
 // ---- 2. Quality gates -----------------------------------------------------
