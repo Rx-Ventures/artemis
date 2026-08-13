@@ -3990,6 +3990,23 @@ export function openSettings(section?: SettingsSection): void {
   savePrefs();
 }
 
+/**
+ * Open Settings whenever the macOS menu bar asks.
+ *
+ * The menu is main's — on macOS the application menu belongs to the app rather
+ * than to any window — so the click cannot reach this store any other way. See
+ * {@link IPC_PUSH.menuOpenSettings}.
+ *
+ * Opens; never closes. The menu item has no accelerator and does not read as a
+ * toggle, and a menu pick that shut a dialog the user was reading would be a
+ * surprise. `⌘,` is still the toggle, and it is still the renderer's.
+ */
+export function installSettingsMenuFeed(): () => void {
+  const { bridge } = resolveBridge();
+  if (!bridge) return () => undefined;
+  return bridge.menu.onOpenSettings(() => openSettings());
+}
+
 /** Close settings and go back to the conversation. */
 export function closeSettings(): void {
   // `settingsSection` is left alone on purpose: it is a preference for where to

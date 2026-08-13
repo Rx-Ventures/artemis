@@ -68,6 +68,7 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type PlanUsagePush,
+  type MenuOpenSettings,
   type UpdateState,
   type UpdatesDismissRequest,
   type UpdatesInstallRequest,
@@ -216,6 +217,18 @@ function isPlanUsagePush(value: unknown): value is PlanUsagePush {
 }
 
 /**
+ * Minimal shape check on a menu-bar Settings push. Same standard as
+ * {@link isAgentEvent}.
+ *
+ * The payload carries nothing but its discriminator, so checking that
+ * discriminator is the entire check.
+ */
+function isMenuOpenSettings(value: unknown): value is MenuOpenSettings {
+  if (typeof value !== 'object' || value === null) return false;
+  return (value as { kind?: unknown }).kind === 'open-settings';
+}
+
+/**
  * Minimal shape check on a pushed updater state. Same standard as
  * {@link isAgentEvent}: a guard against a malformed payload reaching a
  * render, not validation of an untrusted sender.
@@ -354,6 +367,12 @@ const updateStates = createPushChannel<UpdateState>({
   isValid: isUpdateState,
 });
 
+const menuOpenSettings = createPushChannel<MenuOpenSettings>({
+  channel: IPC_PUSH.menuOpenSettings,
+  label: 'artemis.menu.onOpenSettings',
+  isValid: isMenuOpenSettings,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
@@ -363,6 +382,7 @@ window.addEventListener('beforeunload', () => {
   windowStates.reset();
   planUsages.reset();
   updateStates.reset();
+  menuOpenSettings.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -513,6 +533,10 @@ const bridge: ArtemisBridge = Object.freeze({
     restart: (request: UpdatesRestartRequest) => invoke(IPC.updatesRestart, request),
     dismiss: (request: UpdatesDismissRequest) => invoke(IPC.updatesDismiss, request),
     onChange: updateStates.subscribe,
+  }),
+
+  menu: Object.freeze({
+    onOpenSettings: menuOpenSettings.subscribe,
   }),
 });
 

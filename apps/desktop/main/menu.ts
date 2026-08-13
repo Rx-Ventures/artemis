@@ -4,6 +4,7 @@
  *      Artemis
  *      ├ About Artemis
  *      ├ ─────────────────────
+ *      ├ Settings…
  *      ├ Check for Updates…      ← the reason this file exists
  *      ├ ─────────────────────
  *      ├ Services              ▸
@@ -25,11 +26,17 @@
  *
  * ## What is deliberately *not* here
  *
- * No File → New, and no Preferences. `mod+n` and `mod+,` are the renderer's
- * (`useHotkeys`), and a menu accelerator wins against a `keydown` listener — so
- * naming either here would take the shortcut away from the code that implements
- * it and hand it to a menu item that does nothing. The renderer's other
- * bindings (`mod+b`, `mod+i`, `mod+\`) collide with nothing below.
+ * No File → New, and **no accelerators on anything the renderer already binds**.
+ * `mod+n` and `mod+,` are the renderer's (`useHotkeys`), and a menu accelerator
+ * wins against a `keydown` listener — so naming either here would take the
+ * shortcut away from the code that implements it and hand it to a menu item
+ * that does nothing. The renderer's other bindings (`mod+b`, `mod+i`, `mod+\`)
+ * collide with nothing below.
+ *
+ * Settings… is the one item that tests that rule rather than avoiding it. It is
+ * in the menu, because a menu bar with no way to reach settings is a menu bar
+ * people stop opening — but it carries *no* `⌘,`, so the renderer keeps the key
+ * and keeps the toggle it implements. The item opens; it does not close.
  *
  * ## macOS only
  *
@@ -48,6 +55,12 @@ const log = createLogger('menu');
 
 export interface ApplicationMenuOptions {
   readonly updater: Updater;
+  /**
+   * Runs when Settings… is picked. Main cannot open the dialog itself — it is
+   * renderer state — so `index.ts` passes a function that pushes the ask over
+   * {@link IPC_PUSH.menuOpenSettings}.
+   */
+  readonly onOpenSettings: () => void;
 }
 
 /**
@@ -113,8 +126,9 @@ export function applicationMenuTemplate(options: {
   /** Disables the update item and says why, while a check is in flight. */
   readonly checking: boolean;
   readonly onCheckForUpdates: () => void;
+  readonly onOpenSettings: () => void;
 }): MenuItemConstructorOptions[] {
-  const { appName, checking, onCheckForUpdates } = options;
+  const { appName, checking, onCheckForUpdates, onOpenSettings } = options;
 
   return [
     {
@@ -122,6 +136,20 @@ export function applicationMenuTemplate(options: {
       submenu: [
         { role: 'about' },
         { type: 'separator' },
+        {
+          // Above Check for Updates…, not in macOS's usual Settings slot below
+          // it, because that is where this app wants it.
+          //
+          // **No accelerator, deliberately.** `⌘,` belongs to the renderer's
+          // `useHotkeys`, where it *toggles* — it closes Settings when Settings
+          // are already open. A menu accelerator wins against a `keydown`
+          // listener, so naming `⌘,` here would silently replace that toggle
+          // with an open-only item. The click opens; the key keeps doing the
+          // better thing.
+          id: 'open-settings',
+          label: 'Settings…',
+          click: onOpenSettings,
+        },
         {
           // Under About, above Services: where macOS has put this item since
           // long before Sparkle made it a convention, and the first place
@@ -210,6 +238,7 @@ export function installApplicationMenu(options: ApplicationMenuOptions): void {
           appName: app.name,
           checking,
           onCheckForUpdates: () => void runCheck(),
+          onOpenSettings: options.onOpenSettings,
         }),
       ),
     );

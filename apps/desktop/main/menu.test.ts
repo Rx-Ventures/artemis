@@ -16,10 +16,22 @@ vi.mock('electron', () => ({
 
 const { applicationMenuTemplate, checkOutcomeNotice } = await import('./menu');
 
-type Item = { label?: string; role?: string; type?: string; enabled?: boolean; id?: string };
+type Item = {
+  label?: string;
+  role?: string;
+  type?: string;
+  enabled?: boolean;
+  id?: string;
+  accelerator?: string;
+};
 
 function template(checking = false) {
-  return applicationMenuTemplate({ appName: 'Artemis', checking, onCheckForUpdates: () => {} });
+  return applicationMenuTemplate({
+    appName: 'Artemis',
+    checking,
+    onCheckForUpdates: () => {},
+    onOpenSettings: () => {},
+  });
 }
 
 function submenuOf(label: string, checking = false): Item[] {
@@ -48,12 +60,60 @@ describe('applicationMenuTemplate', () => {
 
   it('calls back when the item is clicked', () => {
     const onCheckForUpdates = vi.fn();
-    const items = applicationMenuTemplate({ appName: 'Artemis', checking: false, onCheckForUpdates })
-      .find((entry) => entry.label === 'Artemis')?.submenu as { id?: string; click?: () => void }[];
+    const items = applicationMenuTemplate({
+      appName: 'Artemis',
+      checking: false,
+      onCheckForUpdates,
+      onOpenSettings: () => {},
+    }).find((entry) => entry.label === 'Artemis')?.submenu as { id?: string; click?: () => void }[];
 
     items.find((item) => item.id === 'check-for-updates')?.click?.();
 
     expect(onCheckForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it('puts Settings… under About and directly above Check for Updates…', () => {
+    const items = submenuOf('Artemis');
+    const about = items.findIndex((item) => item.role === 'about');
+    const settings = items.findIndex((item) => item.id === 'open-settings');
+    const check = items.findIndex((item) => item.id === 'check-for-updates');
+
+    expect(settings).toBeGreaterThan(about);
+    expect(check).toBe(settings + 1);
+    expect(items[settings]?.label).toBe('Settings…');
+  });
+
+  it('opens settings when the item is clicked', () => {
+    const onOpenSettings = vi.fn();
+    const items = applicationMenuTemplate({
+      appName: 'Artemis',
+      checking: false,
+      onCheckForUpdates: () => {},
+      onOpenSettings,
+    }).find((entry) => entry.label === 'Artemis')?.submenu as { id?: string; click?: () => void }[];
+
+    items.find((item) => item.id === 'open-settings')?.click?.();
+
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
+  /*
+   * The half of the ⌘, rule that a label check cannot catch. The renderer's
+   * `mod+,` *toggles* settings; this item only opens them. Giving it the
+   * accelerator would win against the keydown listener and quietly downgrade
+   * the key to open-only, which is a behaviour change nobody would think to
+   * look for in a menu template.
+   */
+  it('leaves ⌘, to the renderer by carrying no accelerator', () => {
+    const settings = submenuOf('Artemis').find((item) => item.id === 'open-settings');
+    expect(settings?.accelerator).toBeUndefined();
+  });
+
+  it('stays enabled while an update check is running', () => {
+    // The two items are unrelated: `checking` disables Check for Updates…, and
+    // a settings dialog is reachable regardless of what the updater is doing.
+    const settings = submenuOf('Artemis', true).find((item) => item.id === 'open-settings');
+    expect(settings?.enabled).not.toBe(false);
   });
 
   it('disables the item and says so while a check is running', () => {

@@ -1332,6 +1332,18 @@ export function createMockBridge(): ArtemisBridge {
       dismiss: async () => ok({ state: mockUpdateState() }),
       onChange: (): Unsubscribe => () => undefined,
     },
+
+    /**
+     * The menu bar, which a browser tab does not have.
+     *
+     * Inert rather than faked: the real push comes from a macOS application
+     * menu, and there is nothing in a tab to click. Settings are reachable in
+     * dev through `⌘,` and the header's own button, so nothing is lost by
+     * leaving this silent.
+     */
+    menu: {
+      onOpenSettings: (): Unsubscribe => () => undefined,
+    },
   };
 
   function mockUpdateState(): UpdateState {
