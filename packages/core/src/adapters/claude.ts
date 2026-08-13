@@ -58,6 +58,7 @@ import type {
   Options,
   PermissionResult,
   Query,
+  SDKMessage,
   SDKSessionInfo,
   SDKUserMessage,
   Settings,
@@ -1603,6 +1604,17 @@ interface PendingPermission {
   readonly question: QuestionPrompt | undefined;
 }
 
+/**
+ * Tools that leave a job inside the process rather than doing something and
+ * returning.
+ *
+ * A process that has called one of these has a timer in it that only fires
+ * while it is idle, so closing it at the next turn boundary is the difference
+ * between a scheduled job running and never running. Named explicitly — see
+ * {@link ClaudeProcess.#observeToolCall} on why this is not a pattern.
+ */
+const SCHEDULING_TOOLS = new Set(['CronCreate', 'ScheduleWakeup', 'CronUpdate']);
+
 interface ClaudeRunDeps {
   readonly now: () => number;
   readonly hostEnv?: EnvBundle;
@@ -1662,6 +1674,17 @@ class ClaudeProcess {
   #disposing: Promise<void> | undefined;
   #permissionCounter = 0;
   #detachAbortSignal: (() => void) | undefined;
+
+  /**
+   * What the process is holding that a turn boundary must not kill.
+   *
+   * Descriptions rather than the tasks themselves: the only use is deciding
+   * whether to keep the process and naming what kept it in a diagnostic. See
+   * {@link #holdsWork}.
+   */
+  #liveTasks: readonly string[] = [];
+  /** One-way, and {@link #holdsWork} explains why it cannot be counted down. */
+  #registeredSchedule = false;
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -1724,6 +1747,85 @@ class ClaudeProcess {
   /** Is this the turn the process is serving right now? */
   isActive(state: ClaudeMapperState): boolean {
     return this.#state === state;
+  }
+
+  /* ------------------------------ retention ------------------------------- */
+
+  /**
+   * Does this process still hold something that would die with it?
+   *
+   * Two answers, and they are different kinds of fact.
+   *
+   * **Live tasks** are authoritative and current. `background.tasks` carries the
+   * whole live set on every change, so an empty one is the provider saying
+   * "nothing is running" rather than the absence of news, and the count below is
+   * only ever as stale as the last message.
+   *
+   * **A registered schedule** is neither. `CronCreate`, `ScheduleWakeup` and
+   * `/loop` put a job *inside* the process and fire it while the REPL is idle —
+   * which is precisely the window a per-turn process never has — and there is no
+   * control request that asks a CLI what schedules it holds. `CronList` is a
+   * tool the model calls, not something this side can ask. So it is inferred
+   * from the one place it is visible: the tool call that registered it, on the
+   * stream this pump is already reading.
+   *
+   * Inferring it is a one-way latch on purpose. Deletion is visible too
+   * (`CronDelete`), but counting registrations against deletions would be this
+   * module keeping a shadow copy of state it cannot read back, and the failure
+   * mode of getting that wrong is a `/loop` silently killed at a turn boundary —
+   * the exact defect being fixed. A process that has ever registered one is kept
+   * until its conversation is dropped, which is a bounded cost with an obvious
+   * upper bound, and it is the honest reading of "we do not know".
+   */
+  #holdsWork(): boolean {
+    return this.#liveTasks.length > 0 || this.#registeredSchedule;
+  }
+
+  /** What is being held, for the diagnostic that says why a process stayed. */
+  #describeHeld(): string {
+    const parts: string[] = [];
+    if (this.#liveTasks.length > 0) {
+      parts.push(
+        this.#liveTasks.length === 1
+          ? `1 background task (${this.#liveTasks[0] ?? 'unnamed'})`
+          : `${String(this.#liveTasks.length)} background tasks`,
+      );
+    }
+    if (this.#registeredSchedule) parts.push('a registered schedule');
+    return parts.join(' and ');
+  }
+
+  /**
+   * Read what a provider message says about the process, before any turn sees it.
+   *
+   * Only the live set, and only because it is the one fact that arrives outside a
+   * turn. Structurally checked rather than cast: this runs on every message on the
+   * hot path, and a payload the SDK reshapes should degrade to "no news" rather
+   * than throw inside the pump.
+   */
+  #observeMessage(message: SDKMessage): void {
+    if (message.type !== 'system') return;
+    const record = message as unknown as { subtype?: unknown; tasks?: unknown };
+    if (record.subtype !== 'background_tasks_changed') return;
+    if (!Array.isArray(record.tasks)) return;
+
+    // Replace, not merge — the payload is the whole live set after the change,
+    // which is what makes an empty one authoritative. See `BackgroundTasksEvent`.
+    this.#liveTasks = record.tasks.map((task: unknown) =>
+      String((task as { description?: unknown }).description ?? 'unnamed task'),
+    );
+  }
+
+  /**
+   * Notice a tool call that leaves something behind in the process.
+   *
+   * Matched on the tool's name, which is the only handle there is. The set is
+   * small and explicit rather than a pattern: a pattern over "does this name
+   * look schedule-ish" would eventually match a tool that schedules nothing and
+   * pin a process open for the rest of the conversation.
+   */
+  #observeToolCall(name: string): void {
+    if (SCHEDULING_TOOLS.has(name)) this.#registeredSchedule = true;
   }
 
   /* ------------------------------ lifecycle ------------------------------- */
@@ -1991,6 +2093,18 @@ class ClaudeProcess {
   async #pump(sdkQuery: Query): Promise<void> {
     try {
       for await (const message of sdkQuery) {
+        /*
+         * Before mapping, and deliberately not from the mapped events.
+         *
+         * `mapSdkMessage` returns nothing once a turn's state is `ended` — it is
+         * a per-turn mapper and that is the right rule for a transcript. But the
+         * message that releases this process arrives *after* a turn has ended, by
+         * definition: it is the provider saying the work that outlived the turn
+         * has finished. Reading retention off the mapped stream meant never
+         * seeing it, and a process kept alive for work that had already settled.
+         */
+        this.#observeMessage(message);
+
         let events: readonly AgentEvent[] = [];
         try {
           events = mapSdkMessage(message, this.#state);
@@ -2003,8 +2117,39 @@ class ClaudeProcess {
           );
         }
 
-        for (const event of events) this.#emit(event);
-        if (this.#state.ended) break;
+        for (const event of events) {
+          // A schedule is only ever visible as the call that registered it, and
+          // a call only happens inside a turn — so this one is read off the
+          // mapped stream, where the tool's name has already been dug out of the
+          // assistant message's content blocks.
+          if (event.type === 'tool.start') this.#observeToolCall(event.name);
+          this.#emit(event);
+        }
+
+        /*
+         * The turn is over. Whether the *process* is over is a different
+         * question, and this is where the two used to be the same one.
+         *
+         * Leaving the loop closes the transport in the `finally` below, which is
+         * right when nothing is left running and wrong when something is: the
+         * `Agent` tool backgrounds by default and `Workflow` is always async, so
+         * work routinely outlives the turn that launched it and used to be
+         * killed here. Staying in the loop keeps the process, its subagents and
+         * its scheduled jobs alive, and leaves the pump reading a stream that
+         * still has things to say — the provider takes a turn of its own when a
+         * task settles.
+         *
+         * The turn itself ended properly either way: `run.end` was emitted above
+         * and its queue is closed, so a caller's `for await` has already
+         * finished. What continues is the process, with no active turn until
+         * something opens one.
+         */
+        if (this.#state.ended) {
+          if (!this.#holdsWork()) break;
+          this.#deps.diagnostic?.(
+            `Run ${this.runId}: turn ended with ${this.#describeHeld()} still live; keeping the process.`,
+          );
+        }
       }
 
       if (!this.#state.ended) {

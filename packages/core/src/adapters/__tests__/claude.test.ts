@@ -1524,3 +1524,147 @@ describe('checkAvailability', () => {
     expect(availability).toEqual({ available: true });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Keeping the process past the turn                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The defect: a turn ending closed the transport, and everything the process was
+ * holding went with it. The `Agent` tool backgrounds by default and `Workflow` is
+ * always async, so that is the ordinary case rather than an edge one.
+ *
+ * These assert on `fake.closed` — whether the SDK's `close()` was called — which
+ * is the exact act that killed the work. Measured against the real SDK before
+ * this was written: a `sleep 40` backgrounded in turn one was still running
+ * seventeen seconds after that turn's `result` when `close()` was withheld.
+ */
+describe('a turn that ends while work is still running', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const toolStart = (name: string) =>
+    ({
+      type: 'assistant',
+      message: {
+        id: `msg-${name}`,
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `toolu-${name}`, name, input: {} }],
+      },
+      session_id: 'sess-abc',
+      uuid: `u-${name}`,
+    }) as unknown as SDKMessage;
+
+  it('closes the transport when nothing is left running', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The ordinary turn, unchanged: no background work, so the process goes.
+    expect(fake.closed).toBe(true);
+  });
+
+  it('keeps it open while a background task is live', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+
+    // The turn still ends properly — this is what the caller sees, and it is
+    // unchanged. What changed is what happens to the transport underneath it.
+    const events = await drain(run.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'completed' });
+    expect(run.status).toBe('ended');
+
+    expect(fake.closed).toBe(false);
+  });
+
+  it('closes it once the last task settles', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    // Replace semantics: an empty set is the provider saying nothing is running,
+    // which is the signal that releases the process.
+    fake.messages.push(tasksChanged([]));
+    fake.messages.push(RESULT_MESSAGE);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fake.closed).toBe(true);
+  });
+
+  it('keeps it open after a scheduling tool has been called', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    // A cron job lives *inside* the process and fires only while it is idle —
+    // which is a window a per-turn process never has. There is no control
+    // request that asks a CLI what schedules it holds, so the call that
+    // registered it is the only evidence there is.
+    fake.messages.push(toolStart('CronCreate'));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    expect(fake.closed).toBe(false);
+  });
+
+  it('does not keep it open for an ordinary tool call', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(toolStart('Bash'));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The set is explicit rather than a pattern, so a tool that schedules
+    // nothing cannot pin a process open for the rest of the conversation.
+    expect(fake.closed).toBe(true);
+  });
+
+  it('still closes on dispose, whatever it is holding', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'audit the mapper' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    await run.dispose();
+
+    // Dropping the conversation is the escape hatch, and it has to win over
+    // retention or a wedged process would have nothing that ends it.
+    expect(fake.closed).toBe(true);
+  });
+});
