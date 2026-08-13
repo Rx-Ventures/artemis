@@ -450,6 +450,48 @@ describe('after ⌘R reloads the window', () => {
     expect(JSON.stringify(replayed)).toContain('still here');
   });
 
+  /*
+   * The reported bug, end to end.
+   *
+   * The column that took the *first* run replayed fine, because bootstrap hands
+   * `adoptLiveRuns` a pane that is already in the grid. Every run after it got a
+   * pane from `openPane`, which registers nothing — a pane reaches
+   * `allLivePanes` only once it has been written into the grid or into
+   * `background`, and that write happened after the whole loop had finished
+   * attaching. So `paneForRun` could not find the pane the replay was for and
+   * `applyAgentEvent` dropped every event of it on the floor.
+   *
+   * What made it read as "working, but never prints anything" is that the run
+   * state arrived anyway: `attachRun` writes that through the pane object it was
+   * handed rather than by routing, so the column came back marked live with an
+   * empty transcript. And it stayed that way — `adoptLiveRuns` is the only thing
+   * that reads the registry, and it runs once, at boot.
+   */
+  it('replays what the backgrounded runs said, not only the first one', async () => {
+    mainProcessRuns = [liveRun('run-a', 'sess-a'), liveRun('run-b', 'sess-b')];
+    retainedEvents = {
+      'run-a': [
+        { type: 'text.complete', runId: 'run-a', seq: 0, ts: 1, blockId: 'b1', text: 'first column' },
+      ],
+      'run-b': [
+        { type: 'text.complete', runId: 'run-b', seq: 0, ts: 1, blockId: 'b2', text: 'second column' },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    const backgrounded = background()[0];
+    expect(backgrounded).toBeDefined();
+    if (!backgrounded) return;
+    expect(paneState(backgrounded).run?.runId).toBe('run-b');
+
+    const shown = JSON.stringify(
+      rows(backgrounded).map((id) => backgrounded.transcript.getItem(id)),
+    );
+    expect(shown).toContain('second column');
+  });
+
   it('draws the earlier turns from the session file and the live one from the buffer', async () => {
     /*
      * The session holds five stored messages; this run began after the third.
