@@ -144,7 +144,7 @@ export type Screen = 'chat' | 'profiles';
  * for no behavioural gain. The section is the second axis: `screen` says
  * whether settings is up, this says what it is showing.
  */
-export type SettingsSection = 'profiles' | 'models' | 'appearance' | 'permissions';
+export type SettingsSection = 'profiles' | 'models' | 'appearance' | 'permissions' | 'advanced';
 
 /**
  * How wide the transcript column is allowed to grow.
@@ -473,6 +473,35 @@ export interface AppState {
    * exactly as the model sends it — no pacing, no per-word elements.
    */
   readonly streamingWordFade: boolean;
+
+  /**
+   * Whether the user has taken up the shared-`~/.claude` arrangement.
+   *
+   * A record of intent, not a switch that does anything. Artemis never links
+   * these directories itself — the Advanced pane generates a script and the
+   * user runs it — so this flag decides which script the pane offers and
+   * nothing else. It cannot be derived from disk either: the answer lives in
+   * the profile directories of a filesystem the renderer cannot read, and
+   * asking the main process would make an IPC round trip out of remembering a
+   * checkbox.
+   *
+   * Because the flag only *claims* the links exist, everything downstream of it
+   * is written to be true whether they do or not. The share script is
+   * idempotent and the undo script no-ops on a profile that was never linked,
+   * so a stale `true` costs a user one script that reports "keep" on every
+   * line.
+   */
+  readonly sharedClaudeConfig: boolean;
+  /**
+   * Whether the warning behind the shared-config toggle has ever been accepted.
+   *
+   * Separate from the flag above because "off" has two meanings and they need
+   * different panes. Off-and-never-on is a user who has not met this feature,
+   * and showing them an undo script for links they do not have is noise. Off-
+   * after-on is a user who ran the share script and has just asked to back out,
+   * and the undo script is the only thing they came for.
+   */
+  readonly sharedClaudeConfigAcknowledged: boolean;
 
   /**
    * Every session the listing returned, ungrouped and unsorted.
@@ -854,6 +883,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'models',
   'appearance',
   'permissions',
+  'advanced',
 ];
 
 const CONVERSATION_WIDTHS: readonly ConversationWidth[] = ['comfortable', 'wide', 'full'];
@@ -927,6 +957,8 @@ interface Prefs {
   runSummary?: RunSummary;
   fontSize?: number;
   streamingWordFade?: boolean;
+  sharedClaudeConfig?: boolean;
+  sharedClaudeConfigAcknowledged?: boolean;
   /**
    * Context windows learned from completed runs, keyed by model.
    *
@@ -1019,6 +1051,8 @@ function loadPrefs(): Prefs {
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
+    sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
+    sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
     contextWindows: numberMap(raw['contextWindows']),
     // Same treatment as `contextWindows`, and for the same reason: these reach
     // a layout engine as percentages, so a string or a negative that survived
@@ -1099,6 +1133,8 @@ function savePrefs(): void {
     runSummary: s.runSummary,
     fontSize: s.fontSize,
     streamingWordFade: s.streamingWordFade,
+    sharedClaudeConfig: s.sharedClaudeConfig,
+    sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
   };
   try {
@@ -1229,6 +1265,11 @@ export const useApp = create<AppState>(() => ({
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
+
+  // Both default to false, and the second is what keeps a fresh install from
+  // being offered an undo for something it never did.
+  sharedClaudeConfig: prefs.sharedClaudeConfig ?? false,
+  sharedClaudeConfigAcknowledged: prefs.sharedClaudeConfigAcknowledged ?? false,
 
   sessions: [],
   sessionsScope: 'all',
@@ -4016,6 +4057,29 @@ export function setFontSize(size: number): void {
  */
 export function setStreamingWordFade(on: boolean): void {
   useApp.setState({ streamingWordFade: on });
+  savePrefs();
+}
+
+/**
+ * Record that the user has taken up — or backed out of — the shared
+ * `~/.claude` arrangement.
+ *
+ * Changes nothing on disk. Artemis does not link these directories; the
+ * Advanced pane hands over a script and the user runs it. What this decides is
+ * which script that pane offers, so calling it is a claim about intent rather
+ * than a report of what the filesystem now looks like.
+ *
+ * Turning it on latches the acknowledgement, and turning it off deliberately
+ * does not clear it: the acknowledgement is the record that this user has met
+ * the feature, and it is what makes the undo script reachable after the toggle
+ * goes back down. Callers are expected to have shown the warning first — this
+ * is the write, not the gate.
+ */
+export function setSharedClaudeConfig(on: boolean): void {
+  useApp.setState((s) => ({
+    sharedClaudeConfig: on,
+    sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged || on,
+  }));
   savePrefs();
 }
 
