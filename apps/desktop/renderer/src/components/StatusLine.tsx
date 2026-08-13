@@ -399,6 +399,19 @@ function profilesByProvider(
  * That case is reachable and ordinary — disabling the profile you are working
  * in is the obvious way to say "finish here, then stop using this" — so the row
  * says why it is there rather than looking like the filter leaked.
+ *
+ * ## While a run is going, the accounts are not selectable
+ *
+ * `setProfile` refuses mid-run — a session belongs to the account it started on,
+ * so moving accounts would have to end the run — and this is where that is said
+ * *before* the click rather than in a banner after it, which is the rule the
+ * dead segments above follow.
+ *
+ * The menu still opens, and that is deliberate: it also holds Manage and the
+ * sign-in state of every account, none of which a run has any bearing on.
+ * Killing the trigger would take those away to prevent one action. So the rows
+ * go quiet and the reason goes above them, once, rather than as a tooltip
+ * repeated per row.
  */
 function ProfileSegment(): ReactElement {
   const pane = usePaneRef();
@@ -406,6 +419,7 @@ function ProfileSegment(): ReactElement {
   const providers = useApp((s) => s.providers);
   const activeId = usePane((s) => s.activeProfileId);
   const profile = usePane(activeProfile);
+  const live = usePane(isLive);
 
   const selectable = useMemo(
     () => profiles.filter((p) => isProfileEnabled(p) || p.id === activeId),
@@ -447,7 +461,17 @@ function ProfileSegment(): ReactElement {
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" side="top" className="w-56 max-w-[min(14rem,90vw)]">
-        <RecommendedProfile />
+        {/* Suppressed rather than disabled while a run is going: this row is an
+            action ("take me there") and there is nowhere to be taken. The line
+            below says why, which is more use than a greyed shortcut. */}
+        {live ? null : <RecommendedProfile />}
+
+        {live ? (
+          <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+            A run is going. A session belongs to the account it started on, so accounts move
+            when it ends.
+          </p>
+        ) : null}
 
         {sections.length === 0 ? (
           /*
@@ -485,7 +509,7 @@ function ProfileSegment(): ReactElement {
                   </>
                 ) : null}
                 {section.profiles.map((candidate) => (
-                  <ProfileItem key={candidate.id} id={candidate.id} />
+                  <ProfileItem key={candidate.id} id={candidate.id} locked={live} />
                 ))}
               </Fragment>
             ))}
@@ -649,7 +673,14 @@ function RecommendedProfile(): ReactElement | null {
  * — it is a state the user chose, and colouring it as a warning would put a
  * fault light on the account they are working in.
  */
-function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
+function ProfileItem({
+  id,
+  locked = false,
+}: {
+  readonly id: ProfileId;
+  /** A run is going, so no row is selectable. The menu says why once, above. */
+  readonly locked?: boolean;
+}): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
   const status = useApp((s) => s.authByProfile[id]);
   const polledTier = useApp((s) => s.planUsageByProfile[id]?.subscriptionType);
@@ -662,6 +693,7 @@ function ProfileItem({ id }: { readonly id: ProfileId }): ReactElement | null {
   return (
     <DropdownMenuRadioItem
       value={profile.id}
+      disabled={locked}
       className="gap-2 text-2xs"
       title={status?.email ? `${status.email} — ${path}` : path}
     >

@@ -3527,7 +3527,15 @@ export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()):
 }
 
 /**
- * Point the app at an account.
+ * Point a column at an account, with no rule about sessions attached.
+ *
+ * The write and the reads that follow from it, and nothing else. Split out
+ * because there are two kinds of caller and only one of them is a user changing
+ * their mind: {@link setProfile} is the gesture and owns the session rules,
+ * while {@link newSession} adopts a recommended account as *part of building a
+ * fresh session* — at which point there is no session to protect and the rules
+ * would either be no-ops or, if `seedBeside` ever carried a session id forward,
+ * a recursion.
  *
  * ## The provider moves with it
  *
@@ -3536,26 +3544,11 @@ export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()):
  * both places because both are routes to "which account runs" — leaving a Codex
  * profile active while `activeProviderId` still said `claude` would ask the
  * Claude adapter to answer for an account it has never heard of.
- *
- * Reading the provider off the profile rather than requiring the caller to move
- * the two together is what makes the picker able to span providers. It used to
- * be scoped to the active provider *because* selecting across one would have
- * desynced them, and that scoping was the bug: creating a Codex profile moved
- * the app to Codex, at which point every Claude account vanished from the only
- * picker on screen and the provider list in the palette was the sole way back.
- *
- * An unknown id is ignored rather than applied. It can only come from a stale
- * render of a profile that has since been deleted, and honouring it would point
- * the app at an account that is not there.
  */
-export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): void {
-  const state = paneState(pane);
-  const profile = state.profiles.find((p) => p.id === profileId);
-  if (!profile) return;
-
-  const switched = state.activeProviderId !== profile.providerId;
+function applyProfile(pane: Pane, profile: ProfileMetadata): void {
+  const switched = paneState(pane).activeProviderId !== profile.providerId;
   setPaneState(pane, {
-    activeProfileId: profileId,
+    activeProfileId: profile.id,
     activeProviderId: profile.providerId,
     // Cleared only when the provider actually changes, for the reason
     // `setProvider` gives — a catalogue and a session list both belong to the
@@ -3570,6 +3563,82 @@ export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): vo
   invalidateSessions();
   void refreshSessions();
   void refreshModels(pane);
+}
+
+/**
+ * Point the app at an account — which, like moving the directory, starts a new
+ * conversation.
+ *
+ * ## A session belongs to the account it started on
+ *
+ * This used to swap `activeProfileId` and return. It did not end the session,
+ * did not clear `resumeSessionId`, and said nothing — so the next message
+ * spawned under a different account and resumed a transcript that lives in the
+ * *previous* profile's `projects/` directory. A session id only resolves under
+ * the config directory it was written in, so that is a cross-store resume: it
+ * either fails several seconds after the user has typed a prompt, or — where the
+ * shared-config feature has symlinked `projects/` across profiles — succeeds and
+ * quietly bills the wrong account for the continuation of someone else's
+ * conversation.
+ *
+ * The directory half of this rule already existed: `setCwd` refuses while a run
+ * is live and otherwise starts a new session, because "a session belongs to the
+ * directory it started in". The account is exactly the same kind of fact — it is
+ * *the* fact, since it decides which credentials authenticate and which plan is
+ * billed — so it now behaves the same way. Two doors to "which account runs",
+ * one rule behind both.
+ *
+ * ## What that costs, stated plainly
+ *
+ * Switching accounts mid-conversation is no longer possible. Hitting a plan
+ * limit halfway through a session means starting a new session on the other
+ * account rather than continuing this one there. That is a real loss, and it is
+ * the honest one: continuing "there" was never actually happening — it was
+ * resuming a transcript the new account cannot see, or billing it for one it
+ * never had.
+ *
+ * A live run refuses outright rather than ending itself, for the reason `setCwd`
+ * gives: killing work in progress is not plausibly what someone reaching for the
+ * account picker meant to ask for.
+ *
+ * An unknown id is ignored rather than applied. It can only come from a stale
+ * render of a profile that has since been deleted, and honouring it would point
+ * the app at an account that is not there.
+ */
+export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): void {
+  const state = paneState(pane);
+  const profile = state.profiles.find((p) => p.id === profileId);
+  if (!profile) return;
+
+  // Re-selecting the account that is already active is not a session change —
+  // the same allowance `setCwd` makes for re-picking the current directory,
+  // which its native picker produces on every "Browse… → Choose".
+  if (profileId === state.activeProfileId) return;
+
+  if (isLive(state)) {
+    pushBanner(
+      'warn',
+      'A run is still going',
+      'Interrupt it first. A session belongs to the account it started on, so moving accounts would have to end this one.',
+    );
+    return;
+  }
+
+  const leaving = state.resumeSessionId !== null || state.run !== null;
+  // Without the profile hop, which would be this function undoing itself: the
+  // account the user just picked is the point.
+  if (leaving) newSession(pane, { adoptRecommendedProfile: false });
+
+  applyProfile(pane, profile);
+
+  // After `newSession`, which resets the very transcript this is written into.
+  if (leaving) {
+    pane.transcript.note(
+      'info',
+      'Started a new session',
+      `The account moved to ${profile.label}, and a session only resumes under the account it was created on.`,
+    );
+  }
 }
 
 /**
@@ -4698,7 +4767,13 @@ export function newSession(
     const { profiles, planUsageByProfile } = useApp.getState();
     const recommended = planRecommendation(profiles, planUsageByProfile, Date.now());
     if (recommended !== null && recommended.profileId !== paneState(target).activeProfileId) {
-      setProfile(recommended.profileId, target);
+      // `applyProfile`, not `setProfile`: the session was reset two statements
+      // ago, so the rule `setProfile` enforces — moving accounts starts a new
+      // conversation — has already been satisfied by the caller. Going through
+      // the gate would be this function asking itself for permission, and would
+      // recurse the moment `seedBeside` carried a session id forward.
+      const profile = profiles.find((p) => p.id === recommended.profileId);
+      if (profile) applyProfile(target, profile);
     }
   }
 
@@ -5425,6 +5500,35 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
   // one conversation, and quietly repointing the *other* column at a brand-new
   // signed-out profile would change what its next prompt bills.
   const pane = focusedPane();
+
+  /*
+   * Unless that column is holding a conversation — then nothing moves.
+   *
+   * This is the same rule `setProfile` enforces, arriving by a different door.
+   * A session id resolves only under the config directory it was written in, so
+   * repointing a column that has one at a brand-new profile is the cross-account
+   * resume that function now refuses; and it would be worse here, because the
+   * new account is signed out, so the next prompt would fail on credentials
+   * against a transcript it could not have read anyway.
+   *
+   * Not routed *through* `setProfile`, which would end the conversation to make
+   * room. Creating an account is account admin — a request about the app's
+   * accounts, not about the conversation on screen — so the honest response is
+   * to leave the conversation alone and say the account is there when they want
+   * it. First run, where adoption actually matters, has no session to protect
+   * and still adopts.
+   */
+  const holdingASession =
+    paneState(pane).resumeSessionId !== null || paneState(pane).run !== null;
+  if (holdingASession) {
+    pushBanner(
+      'info',
+      `${created.label} is ready to use`,
+      'It was not made active, because this conversation belongs to the account it started on. Start a new session to work on the new account.',
+    );
+    return true;
+  }
+
   const switched = paneState(pane).activeProviderId !== created.providerId;
   setPaneState(pane, {
     activeProfileId: created.id,
