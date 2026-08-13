@@ -1398,6 +1398,22 @@ export function anyPaneLive(state: AppState = useApp.getState()): boolean {
  * and the two must agree: a row that says "running now" and then opens as
  * history is the same disagreement seen from the other end.
  */
+/**
+ * Can this profile reach this session's transcript?
+ *
+ * True for the profile the session was read under, and for any other profile
+ * sharing that store — see `SessionSummary.alsoInProfiles`. Everything else is
+ * false, which is the ordinary answer: a config directory is normally a private
+ * store and a session in one is invisible to every other profile.
+ *
+ * The distinction is about which accounts *may* continue a conversation, not
+ * about which one wrote it. With a shared store nothing records the latter, and
+ * this deliberately does not pretend otherwise.
+ */
+export function canReachSession(session: SessionSummary, profileId: ProfileId): boolean {
+  return session.profileId === profileId || (session.alsoInProfiles?.includes(profileId) ?? false);
+}
+
 function paneForSession(
   sessionId: SessionId,
   state: AppState = useApp.getState(),
@@ -4644,7 +4660,26 @@ export function newSession(
 export function resumeSession(session: SessionSummary, pane: Pane = focusedPane()): void {
   const state = paneState(pane);
 
-  const profile = state.profiles.find((p) => p.id === session.profileId);
+  /*
+   * Which account continues this conversation.
+   *
+   * Normally `session.profileId`, because a transcript lives in exactly one
+   * profile's config directory and no other profile can reach it. When profiles
+   * share a store — see `alsoInProfiles` — several can, and the one that read it
+   * first is an arbitrary winner of a sort, not a fact about the conversation.
+   * Switching the user onto it would change which account the next prompt bills
+   * for no reason they could name.
+   *
+   * So an active profile that can reach the session keeps it. That makes the
+   * common gesture — click a row while working on an account that shares the
+   * store — a resume with nothing switched at all.
+   */
+  const resumeProfileId =
+    state.activeProfileId !== null && canReachSession(session, state.activeProfileId)
+      ? state.activeProfileId
+      : session.profileId;
+
+  const profile = state.profiles.find((p) => p.id === resumeProfileId);
   if (!profile) {
     pushBanner(
       'error',
@@ -4684,7 +4719,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     );
   }
 
-  const switchedProfile = state.activeProfileId !== session.profileId;
+  const switchedProfile = state.activeProfileId !== resumeProfileId;
   const switchedCwd = state.cwd !== session.cwd;
 
   // Whatever this column was working on moves aside rather than being killed —
@@ -4695,7 +4730,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   setPaneState(target, {
     run: null,
     activeProviderId: session.providerId,
-    activeProfileId: session.profileId,
+    activeProfileId: resumeProfileId,
     cwd: session.cwd,
     resumeSessionId: session.id,
     forkOnResume: false,
@@ -4727,7 +4762,10 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     target.transcript.note(
       'info',
       `Continuing "${session.title}"`,
-      `Switched ${moved.join(' and ')}, because a session only resumes under the profile and directory it was created in.`,
+      // Not "the profile it was created in" any more: with a shared store the
+      // session resumes under whichever of several profiles reaches it, and
+      // this note fires only when something actually moved.
+      `Switched ${moved.join(' and ')}, because a session resumes under a profile that can reach it, in the directory it was created in.`,
     );
   }
 
