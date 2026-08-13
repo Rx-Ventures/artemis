@@ -118,6 +118,7 @@ function paneWith(model: string | null): SessionState {
     modelsError: null,
     run: null,
     permissionQueue: [],
+    tasks: [],
     promptHistory: [],
     draft: '',
   };

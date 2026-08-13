@@ -8,6 +8,7 @@ import {
   validateProfilesUpdate,
   validateRunsRespondPermission,
   validateRunsSend,
+  validateRunsStopTask,
   validateRunsStart,
   validateSessionsList,
   validateTerminalClose,
@@ -107,6 +108,20 @@ describe('attachments', () => {
     mediaType: 'image/png',
     data: PNG,
     ...over,
+  });
+
+  it('accepts a stop aimed at one task of one run', () => {
+    const stop = validateRunsStopTask({ runId: 'run_1', taskId: 'b5hyzk8n3' });
+    expect(stop).toEqual({ runId: 'run_1', taskId: 'b5hyzk8n3' });
+  });
+
+  it('refuses a stop with no task to aim at', () => {
+    // Both ids are required: the run is how the main process finds the provider
+    // holding the task, and a request missing either would be a stop aimed at
+    // whatever the handler happened to resolve.
+    expect(() => validateRunsStopTask({ runId: 'run_1' })).toThrow(ValidationError);
+    expect(() => validateRunsStopTask({ taskId: 'b5hyzk8n3' })).toThrow(ValidationError);
+    expect(() => validateRunsStopTask({ runId: 'run_1', taskId: 42 })).toThrow(ValidationError);
   });
 
   it('accepts an image on a run and on a mid-run send', () => {

@@ -176,6 +176,8 @@ export interface ArtemisEngine {
     attachments?: readonly Attachment[],
   ): Promise<{ readonly deliveredImmediately: boolean }>;
   interruptRun(runId: RunId): Promise<{ readonly stillQueued?: readonly string[] }>;
+  /** Stop one delegated task, leaving the run and its other tasks alone. */
+  stopTask(runId: RunId, taskId: string): Promise<void>;
   respondToPermission(
     runId: RunId,
     requestId: PermissionRequestId,
@@ -595,6 +597,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
     sendToRun: (runId, text, attachments) => runs.send(runId, text, attachments),
     interruptRun: (runId) => runs.interrupt(runId),
+    stopTask: (runId, taskId) => runs.stopTask(runId, taskId),
     respondToPermission: async (runId, requestId, decision) => {
       await runs.respondToPermission(runId, requestId, decision);
     },

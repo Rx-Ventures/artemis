@@ -883,6 +883,15 @@ export function createMockBridge(): ArtemisBridge {
         handles.delete(runId);
         return ok({ runId });
       },
+      /*
+        Accepted and forgotten, which is the honest mock.
+
+        Stopping a task is a request, and the answer arrives later as a settled
+        row on the event stream — so a mock that has no delegated work to stop
+        has nothing to say beyond "asked". Fabricating the notification would
+        make the pane look like it works against a provider that never ran one.
+      */
+      stopTask: async ({ runId, taskId }) => ok({ runId, taskId }),
       list: async () => ok({ runs: [...handles.values()] }),
       /*
         Always empty, and never `truncated`.

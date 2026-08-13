@@ -85,6 +85,8 @@ export const IPC = {
   runsSend: 'artemis:runs:send',
   /** Ask a live run to stop what it is doing. */
   runsInterrupt: 'artemis:runs:interrupt',
+  /** Stop one delegated task, leaving the run alone. */
+  runsStopTask: 'artemis:runs:stop-task',
   /** Answer an outstanding permission request. */
   runsRespondPermission: 'artemis:runs:respond-permission',
   /** Tear a run down and release its resources. */
@@ -516,6 +518,24 @@ export interface RunsInterruptResponse {
    * Empty for providers that stop cleanly.
    */
   readonly stillQueued?: readonly string[];
+}
+
+/**
+ * Stop one piece of delegated work.
+ *
+ * Addressed by run *and* task, though the task id is unique on its own: the run
+ * is how the main process finds the provider process holding it, and carrying it
+ * means a stop cannot be aimed at another window's conversation by guessing an
+ * id.
+ */
+export interface RunsStopTaskRequest {
+  readonly runId: RunId;
+  readonly taskId: string;
+}
+
+export interface RunsStopTaskResponse {
+  readonly runId: RunId;
+  readonly taskId: string;
 }
 
 export interface RunsRespondPermissionRequest {
@@ -1190,6 +1210,7 @@ export type IpcRequestMap = {
   [IPC.runsStart]: RunsStartRequest;
   [IPC.runsSend]: RunsSendRequest;
   [IPC.runsInterrupt]: RunsInterruptRequest;
+  [IPC.runsStopTask]: RunsStopTaskRequest;
   [IPC.runsRespondPermission]: RunsRespondPermissionRequest;
   [IPC.runsDispose]: RunsDisposeRequest;
   [IPC.runsList]: RunsListRequest;
@@ -1235,6 +1256,7 @@ export type IpcResponseMap = {
   [IPC.runsStart]: RunsStartResponse;
   [IPC.runsSend]: RunsSendResponse;
   [IPC.runsInterrupt]: RunsInterruptResponse;
+  [IPC.runsStopTask]: RunsStopTaskResponse;
   [IPC.runsRespondPermission]: RunsRespondPermissionResponse;
   [IPC.runsDispose]: RunsDisposeResponse;
   [IPC.runsList]: RunsListResponse;
@@ -1371,6 +1393,7 @@ export interface ArtemisBridge {
     start(request: RunsStartRequest): Promise<IpcResult<RunsStartResponse>>;
     send(request: RunsSendRequest): Promise<IpcResult<RunsSendResponse>>;
     interrupt(request: RunsInterruptRequest): Promise<IpcResult<RunsInterruptResponse>>;
+    stopTask(request: RunsStopTaskRequest): Promise<IpcResult<RunsStopTaskResponse>>;
     respondToPermission(
       request: RunsRespondPermissionRequest,
     ): Promise<IpcResult<RunsRespondPermissionResponse>>;

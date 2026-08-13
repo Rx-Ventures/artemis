@@ -290,6 +290,27 @@ export interface Run {
   ): Promise<void>;
 
   /**
+   * Stop one delegated task, leaving everything else alone.
+   *
+   * Optional, and gated on {@link Capabilities.subagents}: a provider with no
+   * concept of delegated work has nothing to stop, and the registry refuses the
+   * call rather than an adapter having to implement a throw.
+   *
+   * **Not gated on the run being active**, which is the whole point of it. The
+   * tasks worth stopping are the ones that outlived the turn that launched them,
+   * so by the time a person decides twelve minutes is enough, the run they are
+   * looking at has usually ended. This addresses the *process's* work through one
+   * of its turns, exactly as {@link interrupt} does.
+   *
+   * Stopping is a request, not an assertion: the task ends when the provider says
+   * it has, which arrives as an ordinary settled row. Resolving here means the
+   * ask was delivered. An unknown or already-finished task id is not an error —
+   * "stop" is idempotent by nature, and a user clicking the button on a row that
+   * settled while they were reaching for it has done nothing wrong.
+   */
+  stopTask?(taskId: string): Promise<void>;
+
+  /**
    * Tear the run down and release everything it holds: subprocesses, sockets,
    * file handles, the input pump, and any promise the provider is parked on.
    *

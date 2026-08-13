@@ -1500,13 +1500,16 @@ describe('nextEventEnvelope', () => {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The one message in the task family that is carried, and the reason it is
- * carried is a decision that depends on it: whether a provider process still
- * has work in it when a turn ends. Get this wrong in the direction of "nothing
- * is running" and a backgrounded subagent is killed at the turn boundary, which
- * is the defect #91 is about.
+ * The whole task family, and the mapper's part in it: none.
+ *
+ * A row in the tasks pane is a merge of five different messages — which tasks
+ * exist, what each was asked to do, how it is going, how it ended — and a merge
+ * needs state that outlives a turn. `ClaudeMapperState` is per turn by design,
+ * so the ledger on the process owns all five and this stays out of it. These
+ * assertions exist so that a future "surely the level is easy to map here"
+ * fails on this file rather than by producing two writers for one event type.
  */
-describe('background_tasks_changed', () => {
+describe('the task family', () => {
   const changed = (tasks: readonly unknown[]) => ({
     type: 'system',
     subtype: 'background_tasks_changed',
@@ -1515,59 +1518,28 @@ describe('background_tasks_changed', () => {
     session_id: 'sess-abc',
   });
 
-  it('carries every live task, with the provider’s own words for what it is', () => {
+  it('leaves the live set to the ledger', () => {
     const state = makeState();
-    const [event] = run(state, [
+    const events = run(state, [
       changed([
         { task_id: 'b5hyzk8n3', task_type: 'local_bash', description: 'Sleep 25 seconds' },
-        { task_id: 'q2', task_type: 'subagent', description: 'Audit the mapper' },
       ]),
     ]);
 
-    expect(event).toMatchObject({
-      type: 'background.tasks',
-      runId: 'run-1',
-      tasks: [
-        { id: 'b5hyzk8n3', kind: 'local_bash', description: 'Sleep 25 seconds' },
-        { id: 'q2', kind: 'subagent', description: 'Audit the mapper' },
-      ],
-    });
+    expect(events).toEqual([]);
   });
 
-  it('carries an empty set as itself, not as silence', () => {
-    // Replace semantics: this is the authoritative "nothing is running any
-    // more", and it is the signal that releases a process. Dropping it as
-    // uninteresting would leave a process alive for work that had finished.
-    const state = makeState();
-    const [event] = run(state, [changed([])]);
-
-    expect(event).toMatchObject({ type: 'background.tasks', tasks: [] });
-  });
-
-  it('takes its turn in the run’s sequence', () => {
+  it('consumes no sequence number for any of them', () => {
+    // The events that *are* mapped must stay dense: a task message that took a
+    // `seq` on its way to being dropped is a gap, and the transcript reads a gap
+    // as dropped events.
     const state = makeState();
     const events = run(state, [INIT, changed([]), resultMessage()]);
 
-    // Dense per run, like every other event. A gap here is what the transcript
-    // reads as dropped events.
-    expect(events.map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+    expect(events.map((e) => e.seq)).toEqual([0, 1, 2]);
   });
 
-  it('does not survive a kind the CLI has not shipped yet as anything but its name', () => {
-    // `task_type` is an open string in the SDK. A closed union here would either
-    // reject a kind added last week or fold it into a bucket and lose the name.
-    const state = makeState();
-    const [event] = run(state, [
-      changed([{ task_id: 't', task_type: 'something_new', description: 'x' }]),
-    ]);
-
-    expect(event).toMatchObject({ tasks: [{ kind: 'something_new' }] });
-  });
-
-  it('leaves the per-task messages alone for now', () => {
-    // The set arrives on every change including the last, so nothing needs
-    // these to know whether work is outstanding. They are what a display of
-    // delegated work is built from (#89).
+  it('leaves the per-task detail alone too', () => {
     const state = makeState();
     const events = run(state, [
       { type: 'system', subtype: 'task_started', task_id: 't', uuid: 'u', session_id: 's' },

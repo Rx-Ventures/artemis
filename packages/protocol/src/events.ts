@@ -423,12 +423,38 @@ export interface RunEndEvent extends AgentEventBase {
  * async), or a command that was backgrounded. All three routinely outlive the
  * turn that launched them, which is the fact this event exists to carry.
  */
+/**
+ * Where a task has got to.
+ *
+ * A closed union, unlike {@link BackgroundTask.kind}, because these are states
+ * a UI must reason about rather than names it can pass through: something has
+ * to decide whether a row shows a spinner, a stop button or a strike-through.
+ * An unrecognised provider state maps onto the nearest of these rather than
+ * adding a seventh nobody can render.
+ *
+ * `stopped` covers both the user's stop and the provider's own kill: from the
+ * outside they are the same event — work that ended because something asked it
+ * to rather than because it finished.
+ */
+export type BackgroundTaskStatus =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'stopped';
+
+/** True while a task is still going, in whatever sense. */
+export function isTaskLive(task: BackgroundTask): boolean {
+  return task.status === 'pending' || task.status === 'running' || task.status === 'paused';
+}
+
 export interface BackgroundTask {
   /** The provider's task id. Stable for the life of the task. */
   readonly id: string;
   /**
-   * The provider's own word for the kind of work — `local_bash`, and whatever
-   * else the CLI grows.
+   * The provider's own word for the kind of work — `local_bash`,
+   * `local_workflow`, and whatever else the CLI grows.
    *
    * Deliberately an open string rather than a union. The SDK types it as one
    * (`task_type: string`), so a closed set here would either reject a kind the
@@ -439,20 +465,83 @@ export interface BackgroundTask {
   readonly kind: string;
   /** The provider's one-line description, as shown in its own task list. */
   readonly description: string;
+  /** Where it has got to. See {@link BackgroundTaskStatus}. */
+  readonly status: BackgroundTaskStatus;
+  /**
+   * When the host first heard of this task, as a host timestamp.
+   *
+   * The host's clock rather than the provider's, and that is deliberate: this
+   * exists so a row can tick an elapsed time without waiting for the next
+   * progress message, and mixing clocks to do arithmetic against `Date.now()`
+   * is how a timer ends up counting backwards. {@link durationMs} is the
+   * provider's own measurement and is the one to believe once it arrives.
+   */
+  readonly startedAt: number;
+  /** When it settled, host clock. Absent while it is still going. */
+  readonly endedAt?: number;
+  /** The agent type, for a subagent — `Explore`, `Plan`, a custom one. */
+  readonly subagentType?: string;
+  /** `meta.name` from the workflow script, when this is a workflow. */
+  readonly workflowName?: string;
+  /** What the task was actually asked to do, in full. */
+  readonly prompt?: string;
+  /** The tool it was using when it last said anything. */
+  readonly lastToolName?: string;
+  /** The provider's running summary of what it is doing, when it offers one. */
+  readonly summary?: string;
+  /** Tokens spent so far, as last reported. */
+  readonly totalTokens?: number;
+  /** Tool calls made so far, as last reported. */
+  readonly toolUses?: number;
+  /** The provider's own measure of how long it has been going. */
+  readonly durationMs?: number;
+  /** Where the provider wrote the task's output, once it has settled. */
+  readonly outputFile?: string;
+  /** Why it failed, when it did. */
+  readonly error?: string;
+  /**
+   * Ambient housekeeping the provider asks not to be shown inline.
+   *
+   * The SDK's guidance for `skip_transcript` is precisely "hide this from the
+   * inline transcript; it may still appear in a tasks panel" — so a pane built
+   * for delegated work is the one surface that should show these, and the
+   * transcript is the one that should not.
+   */
+  readonly ambient?: boolean;
 }
 
 /**
- * Every background task that is live right now.
+ * Every task this conversation knows about — running, and recently settled.
  *
  * **Replace, do not merge.** The payload is the whole set after a change, which
- * is the SDK's own contract for it — so an empty array is the authoritative
- * "nothing is running any more" rather than an absence of news.
+ * is the SDK's own contract for the signal underneath it — so a set with no live
+ * rows in it is the authoritative "nothing is running any more" rather than an
+ * absence of news. That shape is chosen for failure-resistance: a consumer that
+ * pairs start and finish edges wedges a stale spinner the moment it misses one,
+ * and a consumer that swaps its set cannot.
  *
  * That property is what makes this event load-bearing rather than decorative:
  * it is how the main process knows whether a provider process still has work in
  * it, which decides whether the process may be closed when a turn ends. Before
  * this existed the answer was assumed to be "no" and background work was killed
  * at every turn boundary.
+ *
+ * ## Settled rows are in here too, and are bounded
+ *
+ * A row does not vanish when its task finishes, because the moment it settles is
+ * the moment its result is worth reading — what it cost, what it said, where it
+ * wrote its output. It stays, marked, and the oldest settled rows are dropped
+ * once there are more than a handful: worth keeping for the one the reader is
+ * looking at, not for the ninety before it. Liveness is
+ * {@link isTaskLive}, never "is it still in the array".
+ *
+ * ## The set is per provider process, and starts empty
+ *
+ * The SDK emits nothing at startup, so a consumer must reset to empty whenever
+ * the provider process restarts rather than carrying rows across. In Artemis
+ * that is the adapter's job — see the task ledger — and it matters because a row
+ * carried across a restart is a claim about work in a process that no longer
+ * exists.
  */
 export interface BackgroundTasksEvent extends AgentEventBase {
   readonly type: 'background.tasks';

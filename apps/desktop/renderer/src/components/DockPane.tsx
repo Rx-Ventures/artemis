@@ -48,13 +48,22 @@
  */
 
 import { useCallback, useRef, type KeyboardEvent, type ReactElement } from 'react';
-import { FileTextIcon, PlusIcon, SquareArrowOutUpRightIcon, TerminalIcon, XIcon } from 'lucide-react';
+import {
+  FileTextIcon,
+  PlusIcon,
+  SquareArrowOutUpRightIcon,
+  TerminalIcon,
+  UsersIcon,
+  XIcon,
+} from 'lucide-react';
 
 import {
   closePreview,
   closeTerminal,
   focusDockTab,
+  liveTaskCount,
   openTerminal,
+  taskCount,
   sameTab,
   tabKey,
   useApp,
@@ -62,6 +71,7 @@ import {
   type TerminalRecord,
 } from '../state/store';
 import { PreviewPane } from './PreviewPane';
+import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
 import { IconButton } from './disabled-reason';
 import { cn } from '@/lib/utils';
@@ -156,11 +166,9 @@ function DockTabButton({
   readonly tab: DockTab;
   readonly active: boolean;
 }): ReactElement | null {
-  return tab.kind === 'preview' ? (
-    <PreviewTabButton active={active} />
-  ) : (
-    <TerminalTabButton id={tab.id} active={active} />
-  );
+  if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
+  if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
+  return <TasksTabButton paneId={tab.paneId} active={active} />;
 }
 
 /**
@@ -185,7 +193,15 @@ function TabShell({
   readonly title: string;
   readonly icon: ReactElement;
   readonly onSelect: () => void;
-  readonly onClose: () => void;
+  /**
+   * Absent for a tab that cannot be dismissed.
+   *
+   * One tab is like that — the delegated-work list, which holds the only record
+   * of work the user did not start and cannot reopen. Absent rather than
+   * disabled, and rather than a no-op: a ✕ that looks live and refuses is worse
+   * than one that was never there.
+   */
+  readonly onClose?: () => void;
   readonly closeLabel: string;
   readonly muted?: boolean;
 }): ReactElement {
@@ -198,7 +214,7 @@ function TabShell({
       // Middle-click closes, as it does on every other tab strip. On `auxiliary`
       // rather than `click` because a middle button never produces a `click`.
       onAuxClick={(event) => {
-        if (event.button !== 1) return;
+        if (event.button !== 1 || onClose === undefined) return;
         event.preventDefault();
         onClose();
       }}
@@ -218,6 +234,7 @@ function TabShell({
           {label}
         </span>
       </button>
+      {onClose === undefined ? null : (
       <button
         type="button"
         aria-label={closeLabel}
@@ -233,6 +250,7 @@ function TabShell({
       >
         <XIcon className="size-2.5" aria-hidden="true" />
       </button>
+      )}
     </div>
   );
 }
@@ -288,6 +306,53 @@ function TerminalTabButton({
   );
 }
 
+/**
+ * The one tab nobody opens, and the one with no ✕.
+ *
+ * Its label is the count, so the strip answers "is anything still running" while
+ * the pane is shut — which is the question the transcript answered wrongly by
+ * saying "delegated to 3 agents" in the past tense while they worked.
+ *
+ * `onClose` selects it instead of closing it. Every other tab in this strip
+ * holds something the user can get back — a preview is one click on the tile
+ * that is still in the transcript, a terminal is a shell they opened — and this
+ * one holds the only record of work they did not start and cannot reopen. So the
+ * ✕ is absent rather than disabled: a control that looks live and refuses is
+ * worse than one that was never offered.
+ */
+function TasksTabButton({
+  paneId,
+  active,
+}: {
+  readonly paneId: string;
+  readonly active: boolean;
+}): ReactElement | null {
+  // Two numbers rather than one object: a selector that allocates returns a new
+  // identity every call, which zustand reads as a change and React resolves by
+  // re-rendering for ever.
+  const total = useApp((s) => taskCount(s, paneId));
+  const live = useApp((s) => liveTaskCount(s, paneId));
+  if (total === 0) return null;
+
+  return (
+    <TabShell
+      active={active}
+      label={live === 0 ? 'Delegated' : `${String(live)} running`}
+      title={
+        live === 0
+          ? `${String(total)} finished task${total === 1 ? '' : 's'}`
+          : `${String(live)} of ${String(total)} still running`
+      }
+      icon={<UsersIcon className="size-3 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'tasks', paneId })}
+      closeLabel=""
+      // Nothing is running: the tab is a record rather than a readout, and it
+      // reads as one.
+      muted={live === 0}
+    />
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* The body                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -305,6 +370,7 @@ function DockBody({
   return (
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showPreview ? <PreviewPane /> : null}
+      {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
       {tabs.map((tab) => {
         if (tab.kind !== 'terminal') return null;
         const record = terminals.find((one) => one.info.id === tab.id);

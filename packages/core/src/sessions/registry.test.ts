@@ -990,6 +990,67 @@ describe('RunRegistry — termination', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Stopping one delegated task                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Stopping a task is not stopping a run, and the difference that matters is
+ * *when* it can be asked for: a task worth stopping has outlived the turn that
+ * launched it, so the run it is addressed through has usually ended.
+ */
+describe('RunRegistry — stopping a task', () => {
+  /** A run that can stop tasks — what an adapter with subagents looks like. */
+  class FakeDelegator extends FakeRun {
+    readonly stopped: string[] = [];
+    stopTask(taskId: string): Promise<void> {
+      this.stopped.push(taskId);
+      return Promise.resolve();
+    }
+  }
+
+  const withDelegator = () => {
+    const run = new FakeDelegator();
+    const h = harness({ adapter: { createRun: () => Promise.resolve(run) } });
+    return { ...h, run };
+  };
+
+  it('passes the id to the run holding the task', async () => {
+    const { registry, run } = withDelegator();
+    const handle = await registry.start(input());
+
+    await registry.stopTask(handle.runId, 'task-7');
+
+    expect(run.stopped).toEqual(['task-7']);
+  });
+
+  it('still works once the run that launched it has ended', async () => {
+    const { registry, run } = withDelegator();
+    const handle = await registry.start(input());
+    run.emit(runEnd(handle.runId, 0));
+    await flush();
+
+    // The case the whole feature is for. Refusing here would refuse every stop
+    // worth making, since a backgrounded task outlives its turn by definition.
+    await registry.stopTask(handle.runId, 'task-7');
+
+    expect(run.stopped).toEqual(['task-7']);
+  });
+
+  it('refuses a provider that has no delegated work to stop', async () => {
+    const { registry } = harness();
+    const handle = await registry.start(input());
+
+    await expect(registry.stopTask(handle.runId, 'task-7')).rejects.toBeInstanceOf(RunError);
+  });
+
+  it('refuses a run it has never heard of', async () => {
+    const { registry } = withDelegator();
+
+    await expect(registry.stopTask('no-such-run', 'task-7')).rejects.toBeInstanceOf(RunError);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Releasing versus disposing                                                 */
 /* -------------------------------------------------------------------------- */
 

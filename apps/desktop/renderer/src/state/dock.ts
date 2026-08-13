@@ -66,14 +66,30 @@ import type { PaneId } from './pane';
  * parsing it back out at every use. {@link tabKey} exists for the two places
  * that genuinely need a string — a React `key` and a `Set` — and nowhere else.
  */
-export type DockTab = { readonly kind: 'preview' } | { readonly kind: 'terminal'; readonly id: TerminalId };
+export type DockTab =
+  | { readonly kind: 'preview' }
+  | { readonly kind: 'terminal'; readonly id: TerminalId }
+  /**
+   * What one conversation has delegated. One tab, however many tasks — the list
+   * is the pane's content, not the strip's.
+   *
+   * Keyed by pane rather than being a constant beside {@link PREVIEW_TAB},
+   * because unlike a preview there can be two of these on screen at once: a
+   * split with an agent working in each column has two sets of delegated work,
+   * and they are not the same list. The pane is the right key rather than the
+   * run — the rows outlive the run that launched them, which is the entire
+   * subject — and rather than the session, which does not exist yet for a
+   * conversation whose first turn is the one delegating.
+   */
+  | { readonly kind: 'tasks'; readonly paneId: PaneId };
 
 /** The preview tab. A constant, because there is only ever one. */
 export const PREVIEW_TAB: DockTab = { kind: 'preview' };
 
 /** A stable string for one tab. For React keys and set membership only. */
 export function tabKey(tab: DockTab): string {
-  return tab.kind === 'preview' ? 'preview' : `terminal:${tab.id}`;
+  if (tab.kind === 'preview') return 'preview';
+  return tab.kind === 'terminal' ? `terminal:${tab.id}` : `tasks:${tab.paneId}`;
 }
 
 /** Whether two tabs are the same tab. */
@@ -105,6 +121,8 @@ export interface ShownConversation {
   readonly paneId: PaneId;
   readonly runId?: RunId;
   readonly sessionId?: SessionId;
+  /** Whether this column has any delegated work to show. */
+  readonly hasTasks?: boolean;
 }
 
 /**
@@ -195,10 +213,20 @@ export function learnSessionId(
 /**
  * The tabs to draw, left to right.
  *
- * Preview first, terminals after, in the order they were opened. Fixed rather
- * than most-recent-first, because a strip that reorders itself moves the ✕ the
- * user was aiming at — the same reason `sessionOrderHold` exists for the
- * sidebar.
+ * Preview first, terminals after in the order they were opened, tasks last.
+ * Fixed rather than most-recent-first, because a strip that reorders itself
+ * moves the ✕ the user was aiming at — the same reason `sessionOrderHold` exists
+ * for the sidebar.
+ *
+ * Tasks pin to the end for a sharper version of that argument. It is the one tab
+ * nobody opens: the agent delegates something and it appears, mid-turn, without
+ * anyone reaching for it. Anywhere but the end, that arrival would shift every
+ * tab to its right out from under a pointer already on the way to one.
+ *
+ * It appears with the first task and stays while any row remains — settled rows
+ * included, since the moment work finishes is when its result is worth reading.
+ * Nothing dismisses it, because the ✕ that would is the one control a person
+ * cannot get back: the rows are not theirs to reopen.
  */
 export function visibleTabs(
   previewOwner: DockOwner | null,
@@ -209,6 +237,9 @@ export function visibleTabs(
   if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
   for (const terminal of terminals) {
     if (ownerIsShown(terminal.owner, shown)) tabs.push({ kind: 'terminal', id: terminal.info.id });
+  }
+  for (const one of shown) {
+    if (one.hasTasks === true) tabs.push({ kind: 'tasks', paneId: one.paneId });
   }
   return tabs;
 }

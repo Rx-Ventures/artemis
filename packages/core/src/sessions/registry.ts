@@ -599,6 +599,29 @@ export class RunRegistry {
   }
 
   /**
+   * Stop one delegated task, leaving the run and its other tasks alone.
+   *
+   * Resolved against live *and* finished runs, which is not the leniency it
+   * looks like: a task worth stopping has by definition outlived the turn that
+   * launched it, so the run the user is looking at has usually ended. Refusing
+   * on that basis would refuse every stop that matters.
+   *
+   * @throws {RunError} `invalid_request` for an unknown run, or a provider with
+   *         no concept of delegated work to stop.
+   */
+  async stopTask(runId: RunId, taskId: string): Promise<void> {
+    const entry = this.#find(runId);
+    if (!entry) throw new RunError('invalid_request', `Unknown run "${runId}"`);
+    if (entry.run.stopTask === undefined) {
+      throw new RunError(
+        'invalid_request',
+        `Provider "${entry.handle.providerId}" cannot stop delegated tasks`,
+      );
+    }
+    await entry.run.stopTask(taskId);
+  }
+
+  /**
    * Answer an outstanding permission request.
    *
    * @throws {RunError} `invalid_request` when the run has no such open
