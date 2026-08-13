@@ -26,6 +26,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { IpcResult, PermissionDecision, PermissionRequest } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { forgetFolds } from '@/lib/foldMemory';
 
 class NoopObserver {
   observe(): void {}
@@ -104,6 +105,9 @@ function mount(ui: ReactNode): void {
 
 beforeEach(() => {
   sent = [];
+  // A fresh transcript, and no memory of folds opened in the last test: fold
+  // state is keyed by transcript id and these fixtures reuse ids.
+  forgetFolds();
   appTranscript().reset();
   seedApp({
     permissionMode: 'plan',

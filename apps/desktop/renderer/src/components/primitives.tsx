@@ -10,8 +10,9 @@
  * registry: `pnpm dlx shadcn@latest add <name>` from `apps/desktop`.
  */
 
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { type ReactElement, type ReactNode } from 'react';
 import { ChevronRightIcon } from 'lucide-react';
+import { useFold } from '@/hooks/useFold';
 import { Badge } from '@/components/ui/badge';
 import {
   Collapsible,
@@ -222,7 +223,21 @@ export interface FoldProps {
   /** The always-visible header. Rendered inside the trigger button. */
   readonly summary: ReactNode;
   readonly children: ReactNode;
+  /**
+   * Where this fold starts, the first time it is drawn and nobody has touched it.
+   *
+   * A default, not a rule — see {@link rememberAs}. Without a `rememberAs` it is
+   * re-applied on every mount, which is correct for a fold whose surroundings do
+   * not outlive it (a permission prompt) and was the bug for one whose do.
+   */
   readonly defaultOpen?: boolean;
+  /**
+   * Remember an explicit open or close under this key, for the app run.
+   *
+   * Give it the id of the transcript row the fold belongs to. Omit it and the
+   * fold is stateless between mounts, exactly as it always was.
+   */
+  readonly rememberAs?: string;
   readonly className?: string;
   readonly triggerClassName?: string;
   readonly contentClassName?: string;
@@ -245,16 +260,23 @@ export interface FoldProps {
  * Open state is local to this component and therefore local to the transcript
  * row that owns it — which is what makes it survive a `text.delta` re-render
  * of a sibling row, since each row is memoised on its own id.
+ *
+ * Local, however, is not the same as forgotten. A fold given a {@link rememberAs}
+ * key reads its opening position out of `lib/foldMemory` and writes every toggle
+ * back, so closing a work marker and switching sessions no longer hands the
+ * reader back the marker they had just closed. Nothing about the render path
+ * changes: the state still lives here, and the map is only consulted at mount.
  */
 export function Fold({
   summary,
   children,
   defaultOpen = false,
+  rememberAs,
   className,
   triggerClassName,
   contentClassName,
 }: FoldProps): ReactElement {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useFold(rememberAs, defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={className}>
       <CollapsibleTrigger

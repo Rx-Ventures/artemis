@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import { Transcript } from '@/components/Transcript';
+import { forgetFolds } from '@/lib/foldMemory';
 import { useApp } from '@/state/store';
 import { appTranscript, seedApp } from '@/state/testkit';
 
@@ -77,6 +78,9 @@ function call(id: string, name: string, status = 'ok'): Array<Omit<AgentEvent, '
 }
 
 beforeEach(() => {
+  // A fresh transcript, and no memory of folds opened in the last test: fold
+  // state is keyed by transcript id and these fixtures reuse ids.
+  forgetFolds();
   appTranscript().reset();
   appTranscript().flush();
   seedApp({
@@ -201,6 +205,106 @@ describe('the activity marker', () => {
     expect(screen.getByText('Ran a command')).not.toBeNull();
     expect(screen.getByText('Read a file')).not.toBeNull();
     expect(screen.getByText('halfway there')).not.toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Leaving the session and coming back                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Switching sessions resets the pane's transcript and replays the other one;
+ * coming back resets it again and replays this one. `switchAway` is that round
+ * trip, and it is deliberately the real thing rather than a re-render: the whole
+ * defect was that a rebuilt row read its `defaultOpen` again and threw away what
+ * the reader had done.
+ *
+ * The replay produces the same row ids because they are derived from what the
+ * provider said — `t:<toolCallId>` here — which is the property the memory keys
+ * depend on and the reason this can be tested at all.
+ */
+function switchAway(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): void {
+  cleanup();
+  appTranscript().reset();
+  appTranscript().flush();
+  play(...drafts);
+  render(<Transcript />);
+}
+
+describe('a fold the reader operated', () => {
+  it('stays closed after a session switch, even though it failed', () => {
+    const burst = [...call('c1', 'Bash'), ...call('c2', 'Bash', 'error')];
+    play(...burst);
+    render(<Transcript />);
+
+    // It opened itself, which is right the first time it is seen.
+    expect(screen.getAllByText('Bash').length).toBe(2);
+
+    fireEvent.click(screen.getByText('Ran 2 commands'));
+    expect(screen.queryByText('Bash')).toBeNull();
+
+    switchAway(...burst);
+
+    // The bug: `defaultOpen={group.failed > 0}` re-ran on the rebuilt row and
+    // handed back the marker the reader had just closed — every time, for as
+    // long as the group held a failure.
+    expect(screen.getByText('· 1 failed')).not.toBeNull();
+    expect(screen.queryByText('Bash')).toBeNull();
+  });
+
+  it('stays open after a session switch, though nothing failed', () => {
+    const burst = [...call('c1', 'Bash'), ...call('c2', 'Read')];
+    play(...burst);
+    render(<Transcript />);
+
+    fireEvent.click(screen.getByText('Ran a command, read a file'));
+    expect(screen.getByText('Bash')).not.toBeNull();
+
+    switchAway(...burst);
+
+    // The other direction, and the one a `defaultOpen`-only fix would miss: an
+    // explicit open has to survive too, or the reader is told their click was
+    // temporary in whichever direction the default happens to point.
+    expect(screen.getByText('Bash')).not.toBeNull();
+    expect(screen.getByText('Read')).not.toBeNull();
+  });
+
+  it('leaves a fold nobody touched to its own default', () => {
+    const burst = [...call('c1', 'Bash'), ...call('c2', 'Bash', 'error')];
+    play(...burst);
+    render(<Transcript />);
+    switchAway(...burst);
+
+    // Memory is written by clicking, never by rendering, so a group that has
+    // only ever been looked at still opens itself on the failure.
+    expect(screen.getAllByText('Bash').length).toBe(2);
+  });
+
+  it('remembers a tool card and its result fold separately from the marker', () => {
+    const burst = [...call('c1', 'Bash'), ...call('c2', 'Read')];
+    play(...burst);
+    render(<Transcript />);
+
+    fireEvent.click(screen.getByText('Ran a command, read a file'));
+    // Open the first card. Its `result` fold is closed by default — the call
+    // succeeded — so opening that too is a second, independent choice.
+    fireEvent.click(screen.getByText('Bash'));
+    fireEvent.click(screen.getByRole('button', { name: 'result' }));
+    expect(screen.getByRole('button', { name: 'result' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+
+    switchAway(...burst);
+
+    // All three choices come back: the marker open, that card open, its result
+    // open — three keys off two ids, none of them standing in for another.
+    expect(screen.getByText('Bash')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'result' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+    // And the card the reader never touched is still closed: it has no folds on
+    // screen to have an opinion about.
+    expect(screen.getAllByRole('button', { name: 'result' }).length).toBe(1);
   });
 });
 
