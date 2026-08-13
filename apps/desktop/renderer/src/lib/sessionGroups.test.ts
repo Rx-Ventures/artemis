@@ -44,17 +44,71 @@ describe('groupSessionsByProject', () => {
     expect(groups[1]!.sessions).toHaveLength(1);
   });
 
-  it('orders groups by their most recent session, newest first', () => {
-    // /code/web's newest (20) beats /code/api's newest (15), even though
-    // /code/api holds more sessions and one very old one.
+  it('orders groups by name, whatever their sessions have been doing', () => {
+    // /code/web holds the newest session by a distance. Under the old rule that
+    // put it first and moved /code/api down the sidebar; the folders are
+    // furniture now, so the only thing that decides is the name.
     const groups = groupSessionsByProject([
       session({ id: 'a', cwd: '/code/api', updatedAt: 15 }),
       session({ id: 'b', cwd: '/code/api', updatedAt: 1 }),
       session({ id: 'c', cwd: '/code/web', updatedAt: 20 }),
     ]);
 
-    expect(groups.map((g) => g.project)).toEqual(['/code/web', '/code/api']);
-    expect(groups[0]!.updatedAt).toBe(20);
+    expect(groups.map((g) => g.project)).toEqual(['/code/api', '/code/web']);
+    // The mtime is still reported honestly; it just no longer decides position.
+    expect(groups[1]!.updatedAt).toBe(20);
+  });
+
+  it('does not move a project when a session in it is worked on', () => {
+    // The report, in one assertion: send a prompt in the project at the bottom
+    // and the heading someone was reaching for must not slide out from under
+    // the pointer.
+    const before = groupSessionsByProject([
+      session({ id: 'a', cwd: '/code/api', updatedAt: 10 }),
+      session({ id: 'b', cwd: '/code/web', updatedAt: 20 }),
+      session({ id: 'c', cwd: '/code/zeta', updatedAt: 30 }),
+    ]);
+    const after = groupSessionsByProject([
+      session({ id: 'a', cwd: '/code/api', updatedAt: 10 }),
+      session({ id: 'b', cwd: '/code/web', updatedAt: 20 }),
+      // Just used, by a long way the newest thing in the list.
+      session({ id: 'c', cwd: '/code/zeta', updatedAt: 9_000 }),
+    ]);
+
+    expect(after.map((g) => g.project)).toEqual(before.map((g) => g.project));
+  });
+
+  it('sorts by the name the heading shows, not by the path it sits under', () => {
+    // The heading renders the last segment, so an order computed from the full
+    // path would look unsorted on screen: `zebra` before `api` because `/aaa`
+    // comes before `/zzz`.
+    const groups = groupSessionsByProject([
+      session({ id: 'a', cwd: '/aaa/zebra', updatedAt: 1 }),
+      session({ id: 'b', cwd: '/zzz/api', updatedAt: 2 }),
+    ]);
+
+    expect(groups.map((g) => g.project)).toEqual(['/zzz/api', '/aaa/zebra']);
+  });
+
+  it('keeps two projects of the same name together and in a fixed order', () => {
+    const groups = groupSessionsByProject([
+      session({ id: 'a', cwd: '/work/api', updatedAt: 1 }),
+      session({ id: 'b', cwd: '/code/api', updatedAt: 2 }),
+      session({ id: 'c', cwd: '/code/web', updatedAt: 3 }),
+    ]);
+
+    // Both `api` folders first, path breaking the tie, and the tie-break is
+    // total — an order that is not would reshuffle between renders.
+    expect(groups.map((g) => g.project)).toEqual(['/code/api', '/work/api', '/code/web']);
+  });
+
+  it('ignores case, so one project does not sit in an uppercase block', () => {
+    const groups = groupSessionsByProject([
+      session({ id: 'a', cwd: '/code/zulu', updatedAt: 1 }),
+      session({ id: 'b', cwd: '/code/Api', updatedAt: 2 }),
+    ]);
+
+    expect(groups.map((g) => g.project)).toEqual(['/code/Api', '/code/zulu']);
   });
 
   it('orders sessions within a group newest first', () => {
@@ -185,13 +239,14 @@ describe('groupSessionsByProject with a held order', () => {
     expect(groups[0]!.sessions.map((s) => s.id)).toEqual(['running', 'idle']);
   });
 
-  it('orders groups by the key too, so a project does not jump the queue on an mtime', () => {
+  it('does not reach the groups at all, which no longer sort by any key', () => {
     const groups = groupSessionsByProject(
       [
-        session({ id: 'running', cwd: '/code/api', updatedAt: 1 }),
-        // Written more recently than the pinned row, but not pinned itself: the
-        // whole point is that a poll moving this number moves nothing on screen.
-        session({ id: 'busy', cwd: '/code/web', updatedAt: 90 }),
+        session({ id: 'running', cwd: '/code/web', updatedAt: 1 }),
+        // Written more recently than the pinned row, but not pinned itself. Once
+        // it made no difference because the key was held; now it makes none
+        // because the groups are sorted by name either way.
+        session({ id: 'busy', cwd: '/code/api', updatedAt: 90 }),
       ],
       { orderKey: held({ running: 99 }) },
     );
@@ -200,8 +255,8 @@ describe('groupSessionsByProject with a held order', () => {
   });
 
   it('still reports the real newest updatedAt on the group', () => {
-    // The switcher renders this as "4m ago", which is a claim about when the
-    // work happened — not about where the row sits.
+    // Rendered as "4m ago", which is a claim about when the work happened — not
+    // about where the row sits, and never was.
     const groups = groupSessionsByProject(
       [
         session({ id: 'running', cwd: '/code/api', updatedAt: 10 }),
@@ -212,7 +267,6 @@ describe('groupSessionsByProject with a held order', () => {
 
     expect(groups[0]!.sessions[0]!.id).toBe('running');
     expect(groups[0]!.updatedAt).toBe(70);
-    expect(groups[0]!.order).toBe(99);
   });
 
   it('leaves the archive on the same rule', () => {

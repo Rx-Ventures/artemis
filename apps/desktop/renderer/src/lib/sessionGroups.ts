@@ -12,8 +12,7 @@
  *
  *  1. One group per **project**, which is the session's `cwd` resolved through
  *     {@link GroupOptions.projectOf} — see below.
- *  2. Groups are ordered by their most recent session, newest first — so the
- *     project you were last in is at the top, which is where a person looks.
+ *  2. Groups are ordered by name, and **do not move**. See the note below.
  *  3. Sessions inside a group are ordered newest first.
  *     "Newest" is {@link GroupOptions.orderKey}, which defaults to `updatedAt`
  *     and is overridden by the sidebar to hold a running session still. See
@@ -28,6 +27,31 @@
  *
  * Ties are broken by session id everywhere, so the order is total and a render
  * never reshuffles rows that compare equal.
+ *
+ * ## Why the projects hold still while their rows do not
+ *
+ * Groups used to sort by their newest session, which put the project you were
+ * last in at the top. That reads well in a screenshot and badly in use: every
+ * prompt in any project rewrites the order of the whole sidebar, so the heading
+ * someone was reaching for slides out from under the pointer, and a project
+ * worked in twice a week is somewhere different every time it is looked for.
+ * Reported directly — the folders were asked to stay put while their contents
+ * moved.
+ *
+ * The two levels answer different questions, which is why they now sort
+ * differently. *Which project* is navigation, and navigation wants furniture
+ * that stays where it was put: a name, sorted the way anyone would guess, moving
+ * only when a project is added or goes away. *Which session inside it* is
+ * recency, because within one project the thing you want is nearly always the
+ * thing you touched last.
+ *
+ * Sorted by the **displayed** name — the last path segment, which is what the
+ * heading shows — rather than the full path, so the list reads in the order it
+ * looks like it is in. `/code/api` and `/work/api` both read as `api`, so the
+ * full path breaks the tie and keeps the order total.
+ *
+ * Pinned and Archived are unaffected: both are nailed to an end of the list and
+ * neither has ever competed for position.
  *
  * ## Two sections stand outside the projects
  *
@@ -66,6 +90,8 @@
 
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
+import { compareFolderNames } from './paths';
+
 export interface SessionGroup {
   /**
    * The project's root directory. The group's identity and its `key`.
@@ -78,15 +104,14 @@ export interface SessionGroup {
   /** Newest first. */
   readonly sessions: readonly SessionSummary[];
   /**
-   * The most recent `updatedAt` in the group — what the project switcher shows.
+   * The most recent `updatedAt` in the group.
    *
-   * Deliberately the real mtime rather than the group's sort key: a held key
-   * says where a row sits, and a person reading "4m ago" is asking when the
-   * work happened.
+   * Deliberately the real mtime rather than any sort key: a held key says where
+   * a row sits, and a person reading "4m ago" is asking when the work happened.
+   * No longer what orders the groups — see the note on that in the file header —
+   * but still the honest answer to "when was this project last worked in".
    */
   readonly updatedAt: number;
-  /** The group's sort key: the highest {@link GroupOptions.orderKey} in it. */
-  readonly order: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -268,11 +293,20 @@ export function groupSessionsByProject(
       // Not `bucket[0]`: the first row is the one that sorts highest, which
       // under a held key is not necessarily the one written most recently.
       updatedAt: bucket.reduce((newest, s) => Math.max(newest, s.updatedAt), 0),
-      order: bucket.reduce((highest, s) => Math.max(highest, orderKey(s)), 0),
     });
   }
 
-  groups.sort((a, b) => b.order - a.order || a.project.localeCompare(b.project));
+  /*
+   * By name, using the app's one definition of folder order.
+   *
+   * `compareFolderNames` is what every other directory list in Artemis is sorted
+   * by, and the sidebar reading differently from the picker that chooses what
+   * goes in it would be a difference nobody could account for. It sorts on the
+   * displayed name — the last segment, which is what the heading shows — and
+   * breaks ties on the full path, so two checkouts called `api` sit together in
+   * a fixed order rather than swapping between renders.
+   */
+  groups.sort((a, b) => compareFolderNames(a.project, b.project));
   return groups;
 }
 
