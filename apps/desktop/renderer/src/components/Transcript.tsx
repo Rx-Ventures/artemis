@@ -1060,6 +1060,10 @@ const MAX_MARKER_ICONS = 3;
  *  - **Thinking in flight.** A block still arriving pulses the same dot without
  *    touching the tense — the calls it is thinking *about* are finished, and
  *    "Running 2 commands" would be a lie about work that is over.
+ *
+ * The gutter beside it carries no label. "work" only repeated the icons and the
+ * sentence next to them, and the failure it used to colour is already on the
+ * line itself, in signal — the first point above is what carries that now.
  */
 const ActivityRow = memo(function ActivityRow({ id }: { readonly id: string }): ReactElement | null {
   const group = useActivityGroup(id);
@@ -1079,7 +1083,7 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
   }
 
   return (
-    <Line label="work" tone={group.failed > 0 ? 'signal' : 'cyan'} ts={group.ts}>
+    <Line label="" ts={group.ts}>
       <Fold
         // A failure opens itself, matching what a single tool card already does
         // with its own error output. `defaultOpen` is read once, so a group that

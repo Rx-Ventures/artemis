@@ -605,18 +605,25 @@ export class TranscriptModel {
     this.checkSequence(event.seq);
 
     switch (event.type) {
-      case 'session.started': {
-        const detail = [
-          event.model ? `model ${event.model}` : null,
-          event.permissionMode ? `mode ${event.permissionMode}` : null,
-          event.resumedFrom ? `${event.forked ? 'forked from' : 'resumed'} ${event.resumedFrom}` : null,
-          event.providerVersion ? `${event.providerId} ${event.providerVersion}` : null,
-        ]
-          .filter((part): part is string => part !== null)
-          .join(' · ');
-        this.note('info', `Session ${short(event.sessionId)} started in ${event.cwd}`, detail);
+      case 'session.started':
+        /*
+         * Run-level facts, not a transcript entry — the same call `usage` gets
+         * below, and for a stronger reason: this one used to be a row.
+         *
+         * It read "Session d7ffb873… started in /path · model … · mode … ·
+         * resumed d7ffb873-…", which is a sentence about the provider process,
+         * printed where the conversation goes. "Started" is true of the run and
+         * false of the thread — the event fires once per prompt, so on a resumed
+         * session it landed mid-conversation announcing that the thing already on
+         * screen above it had just begun. The `resumed` clause was the only part
+         * that said otherwise, in the smaller text, after the contradiction.
+         *
+         * Nothing is lost by dropping it. Session id, model, mode and cwd are all
+         * in the run info dialog, which is where a fact that does not change
+         * during the run belongs; `handleAgentEvent` still folds the event into
+         * the pane's run state, which is what puts them there.
+         */
         break;
-      }
 
       case 'text.delta': {
         const id = this.blockId('a', event.messageId, event.blockIndex);
@@ -1178,10 +1185,6 @@ export class TranscriptModel {
     }
     if (this.lastSeq === null || seq > this.lastSeq) this.lastSeq = seq;
   }
-}
-
-function short(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
 /**

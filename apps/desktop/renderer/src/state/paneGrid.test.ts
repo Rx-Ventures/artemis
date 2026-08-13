@@ -261,6 +261,20 @@ describe('event routing', () => {
       ts: 0,
       sessionId: 'sess-other',
     } as never);
+    // A second event, of a kind that *does* draw. `session.started` writes run
+    // state and nothing else, so on its own it would leave the transcript empty
+    // whether or not the drop worked — the assertion below has to be aimed at an
+    // event that would show up if it were misrouted.
+    handleAgentEvent({
+      type: 'text.complete',
+      runId: 'run-someone-elses',
+      seq: 1,
+      ts: 0,
+      role: 'assistant',
+      messageId: 'm-other',
+      blockIndex: 0,
+      text: 'not for this pane',
+    } as never);
 
     expect(paneState(only).run?.sessionId).toBeUndefined();
     expect(only.transcript.isEmpty).toBe(true);
