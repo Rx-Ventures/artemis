@@ -11,9 +11,11 @@ import type {
 } from '@rx-artemis/protocol';
 
 import type {
+  ContinuationContext,
   InterruptResult,
   ProviderAdapter,
   ResolvedRunInput,
+  Run,
   SendResult,
 } from '../adapters/types.js';
 import { RunError } from './errors.js';
@@ -129,6 +131,23 @@ class FakeRun {
   }
 }
 
+/**
+ * A run that is one *turn* of something longer-lived.
+ *
+ * The shape the Claude adapter has had since a process could outlive the turn
+ * that spawned it: `release()` means "nobody is reading this turn any more" and
+ * leaves the process alone, `dispose()` still means take it down. A `FakeRun`
+ * without one models every other adapter, where the two are one act.
+ */
+class FakeTurn extends FakeRun {
+  releaseCount = 0;
+
+  release(): Promise<void> {
+    this.releaseCount += 1;
+    return Promise.resolve();
+  }
+}
+
 interface Harness {
   readonly registry: RunRegistry;
   readonly runs: FakeRun[];
@@ -161,6 +180,8 @@ function harness(
     disposeTimeoutMs?: number;
     historyLimit?: number;
     adapter?: Partial<{ createRun: () => Promise<FakeRun> }>;
+    /** Build runs that can be released without being torn down — see {@link FakeTurn}. */
+    releasable?: boolean;
     /** Present only when a test is about the history seam; absent models a provider that cannot count. */
     countSessionMessages?: (query: { sessionId: string }) => Promise<number>;
     resolveRun?: RunRegistryOptions['resolveRun'];
@@ -179,7 +200,7 @@ function harness(
       calls.push('createRun');
       resolved.push(runInput);
       if (options.adapter?.createRun) return options.adapter.createRun();
-      const run = new FakeRun();
+      const run = options.releasable === true ? new FakeTurn() : new FakeRun();
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -965,6 +986,217 @@ describe('RunRegistry — termination', () => {
     await expect(registry.dispose(handle.runId)).resolves.toBeDefined();
     expect(errors.some((e) => e.phase === 'dispose')).toBe(true);
     expect(registry.activeCount).toBe(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Releasing versus disposing                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the registry does to a run that ends by itself.
+ *
+ * It used to dispose it, which was right while a run *was* its transport. It is
+ * wrong now that a run can be one turn of a process that is deliberately still
+ * holding something — a backgrounded subagent, an async workflow, a registered
+ * schedule — because disposing the turn takes that process down and kills the
+ * work at the turn boundary, which is the defect the retention rule exists to
+ * fix. So the ordinary end of a run releases it, and only an explicit teardown
+ * disposes.
+ *
+ * `disposeCount` is the assertion in most of these for the same reason the
+ * adapter's own tests assert on `close()`: it is the act that killed the work.
+ */
+describe('RunRegistry — releasing a turn', () => {
+  it('releases a run that ends on its own rather than tearing it down', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    run.emit(sessionStarted(handle.runId), runEnd(handle.runId, 1));
+    await flush();
+
+    expect(run.releaseCount).toBe(1);
+    expect(run.disposeCount).toBe(0);
+    expect(registry.activeCount).toBe(0);
+    expect(registry.get(handle.runId)?.status).toBe('ended');
+  });
+
+  it('disposes instead when the adapter has no release', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    const run = firstRun(runs);
+
+    run.emit(runEnd(handle.runId, 0));
+    await flush();
+
+    expect(run.disposeCount).toBe(1);
+  });
+
+  it('still disposes when a teardown was asked for', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    await registry.dispose(handle.runId);
+
+    expect(run.disposeCount).toBe(1);
+    expect(run.releaseCount).toBe(0);
+  });
+
+  it('leaves the provider alone when a turn is interrupted', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    // Stop means "stop this turn". Work the user never asked to end — the
+    // subagent still running, the schedule still registered — is not this
+    // button's business, and disposing here would take all of it with the turn.
+    await registry.interrupt(handle.runId);
+    run.close();
+    await flush();
+
+    expect(run.disposeCount).toBe(0);
+    expect(run.releaseCount).toBe(1);
+  });
+
+  it('disposes a released run on shutdown, since nothing else can reach it', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    run.emit(runEnd(handle.runId, 0));
+    await flush();
+    expect(run.disposeCount).toBe(0);
+
+    // The run is finished, so `dispose(runId)` is a no-op by design — the
+    // retained tail is the only remaining handle on a process that may still be
+    // alive, and quitting has to be able to end it.
+    await registry.dispose(handle.runId);
+    expect(run.disposeCount).toBe(0);
+
+    await registry.disposeAll();
+    expect(run.disposeCount).toBe(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Adopting a turn the registry did not start                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The provider can open a turn nobody asked for: it answers when background
+ * work settles, and a subagent that outlived its own turn can park on a
+ * permission prompt. The adapter builds the run — it is the only thing that can
+ * — and hands it here, because ids, the replay buffer and the fan-out belong to
+ * the registry.
+ *
+ * What these assert is that an adopted run is not a second-class one: same
+ * entry, same pump, same termination guarantee, same replay.
+ */
+describe('RunRegistry — adopting', () => {
+  const context: ContinuationContext = {
+    providerId: 'claude',
+    profileId: 'profile-1',
+    cwd: '/repo',
+    sessionId: 'session-abc',
+  };
+
+  /** A run the adapter built for a turn it did not have a prompt for. */
+  function continuation(runId = 'run-c1'): FakeTurn {
+    return Object.assign(new FakeTurn(), {
+      runId,
+      providerId: 'claude',
+      capabilities: FULL_CAPABILITIES,
+      status: 'running',
+      sessionId: 'session-abc',
+    });
+  }
+
+  const adopt = (registry: RunRegistry, run: FakeTurn, ctx: ContinuationContext = context) =>
+    registry.adopt(run as unknown as Run, ctx);
+
+  it('registers the run and reports it as live', () => {
+    const { registry } = harness();
+    const handle = adopt(registry, continuation());
+
+    expect(handle).toMatchObject({
+      runId: 'run-c1',
+      providerId: 'claude',
+      profileId: 'profile-1',
+      cwd: '/repo',
+      status: 'running',
+      sessionId: 'session-abc',
+      capabilities: FULL_CAPABILITIES,
+    });
+    expect(registry.isActive('run-c1')).toBe(true);
+    expect(registry.list().map((h) => h.runId)).toContain('run-c1');
+  });
+
+  it('carries no history offset, because the seam cannot be known after the fact', () => {
+    const { registry } = harness();
+    // By the time a turn announces itself the provider has already written part
+    // of it, so any count taken here is wrong by an amount nothing can subtract.
+    expect(adopt(registry, continuation()).historyOffset).toBeUndefined();
+  });
+
+  it('pumps the adopted run to subscribers and retains it for replay', async () => {
+    const { registry } = harness();
+    const received: AgentEvent[] = [];
+    registry.subscribe((event) => received.push(event));
+
+    const run = continuation();
+    adopt(registry, run);
+    run.emit(sessionStarted('run-c1'), textComplete('run-c1', 1, 'the task finished'));
+    await flush();
+
+    expect(received.map((e) => e.type)).toEqual(['session.started', 'text.complete']);
+    expect(registry.eventsSince('run-c1', 0)).toHaveLength(1);
+  });
+
+  it('gives an adopted run the same guaranteed ending', async () => {
+    const { registry } = harness();
+    const received: AgentEvent[] = [];
+    registry.subscribe((event) => received.push(event));
+
+    const run = continuation();
+    adopt(registry, run);
+    run.emit(sessionStarted('run-c1'));
+    await flush();
+    run.close(); // the provider's stream stops without a run.end of its own
+
+    await flush();
+    const last = received.at(-1) as RunEndEvent | undefined;
+    expect(last?.type).toBe('run.end');
+    expect(last?.reason).toBe('completed');
+    expect(registry.activeCount).toBe(0);
+  });
+
+  it('answers a permission request raised on an adopted run', async () => {
+    const { registry } = harness();
+    const run = continuation();
+    adopt(registry, run);
+
+    run.emit(permissionRequest('run-c1', 0, 'req-1'));
+    await flush();
+    expect(registry.get('run-c1')?.status).toBe('awaiting_permission');
+
+    await registry.respondToPermission('run-c1', 'req-1', { behavior: 'allow' });
+    expect(run.answered).toEqual([{ requestId: 'req-1', decision: { behavior: 'allow' } }]);
+  });
+
+  it('refuses a run id it already knows', async () => {
+    const { registry } = harness();
+    const handle = await registry.start(input({ runId: 'run-1' }));
+
+    expect(() => adopt(registry, continuation(handle.runId))).toThrow(RunError);
+  });
+
+  it('refuses while the engine is shutting down', async () => {
+    const { registry } = harness();
+    await registry.disposeAll();
+
+    expect(() => adopt(registry, continuation())).toThrow(RunError);
   });
 });
 

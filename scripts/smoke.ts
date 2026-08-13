@@ -97,6 +97,10 @@ function describeEvent(event: AgentEvent): string {
       return `${event.usage.scope} in=${event.usage.tokens.inputTokens} out=${event.usage.tokens.outputTokens}${
         event.usage.costUsd === undefined ? '' : ` cost=$${event.usage.costUsd.toFixed(4)}`
       }`;
+    case 'background.tasks':
+      return event.tasks.length === 0
+        ? 'no background tasks left running'
+        : `${String(event.tasks.length)} background task(s): ${event.tasks.map((t) => t.description).join(', ')}`;
     case 'run.end':
       return `${event.reason}${event.error ? ` — ${event.error.code}: ${event.error.message}` : ''}${
         event.sessionId ? ` (resume with ${event.sessionId})` : ''

@@ -49,6 +49,17 @@ class FakeQuery {
   interruptImpl: () => Promise<{ still_queued: string[] }> = () =>
     Promise.resolve({ still_queued: [] });
 
+  /**
+   * The mid-session control requests, recorded in order.
+   *
+   * These are what make attaching to a live process sound rather than a silent
+   * downgrade — a turn asking for a different model has to move the process onto
+   * it — so the tests assert on them by name.
+   */
+  readonly models: (string | undefined)[] = [];
+  readonly modes: string[] = [];
+  readonly flags: unknown[] = [];
+
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return this.messages[Symbol.asyncIterator]();
   }
@@ -56,6 +67,18 @@ class FakeQuery {
   interrupt(): Promise<{ still_queued: string[] }> {
     this.interruptCalls += 1;
     return this.interruptImpl();
+  }
+
+  async setModel(model?: string): Promise<void> {
+    this.models.push(model);
+  }
+
+  async setPermissionMode(mode: string): Promise<void> {
+    this.modes.push(mode);
+  }
+
+  async applyFlagSettings(settings: unknown): Promise<void> {
+    this.flags.push(settings);
   }
 
   close(): void {
@@ -465,31 +488,37 @@ describe('streaming input', () => {
 /* Permissions                                                                */
 /* -------------------------------------------------------------------------- */
 
-describe('permissions', () => {
-  /** Call the adapter's canUseTool exactly as the SDK would. */
-  function callCanUseTool(
-    options: Record<string, unknown>,
-    signal: AbortSignal,
-    overrides: Record<string, unknown> = {},
-  ): Promise<unknown> {
-    const canUseTool = options['canUseTool'] as (
-      toolName: string,
-      input: Record<string, unknown>,
-      opts: Record<string, unknown>,
-    ) => Promise<unknown>;
-    return canUseTool(
-      'Bash',
-      { command: 'git status' },
-      {
-        signal,
-        toolUseID: 'toolu_1',
-        requestId: 'req_1',
-        title: 'Claude wants to run git status',
-        ...overrides,
-      },
-    );
-  }
+/**
+ * Call the adapter's canUseTool exactly as the SDK would.
+ *
+ * Module scope rather than inside the permissions suite: the continuation suite
+ * needs it too, because a prompt arriving after its turn ended is a permission
+ * question asked through the same callback.
+ */
+function callCanUseTool(
+  options: Record<string, unknown>,
+  signal: AbortSignal,
+  overrides: Record<string, unknown> = {},
+): Promise<unknown> {
+  const canUseTool = options['canUseTool'] as (
+    toolName: string,
+    input: Record<string, unknown>,
+    opts: Record<string, unknown>,
+  ) => Promise<unknown>;
+  return canUseTool(
+    'Bash',
+    { command: 'git status' },
+    {
+      signal,
+      toolUseID: 'toolu_1',
+      requestId: 'req_1',
+      title: 'Claude wants to run git status',
+      ...overrides,
+    },
+  );
+}
 
+describe('permissions', () => {
   it('emits permission.request and blocks until the answer arrives', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
@@ -1522,5 +1551,520 @@ describe('checkAvailability', () => {
     const availability = await createClaudeAdapter().checkAvailability?.();
     // The test runner is itself one of the supported platforms.
     expect(availability).toEqual({ available: true });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Keeping the process past the turn                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The defect: a turn ending closed the transport, and everything the process was
+ * holding went with it. The `Agent` tool backgrounds by default and `Workflow` is
+ * always async, so that is the ordinary case rather than an edge one.
+ *
+ * These assert on `fake.closed` — whether the SDK's `close()` was called — which
+ * is the exact act that killed the work. Measured against the real SDK before
+ * this was written: a `sleep 40` backgrounded in turn one was still running
+ * seventeen seconds after that turn's `result` when `close()` was withheld.
+ */
+describe('a turn that ends while work is still running', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const toolStart = (name: string) =>
+    ({
+      type: 'assistant',
+      message: {
+        id: `msg-${name}`,
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: `toolu-${name}`, name, input: {} }],
+      },
+      session_id: 'sess-abc',
+      uuid: `u-${name}`,
+    }) as unknown as SDKMessage;
+
+  const busyTask = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
+  it('closes the transport when nothing is left running', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The ordinary turn, unchanged: no background work, so the process goes.
+    expect(fake.closed).toBe(true);
+  });
+
+  it('keeps it open while a background task is live', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+
+    // The turn still ends properly — this is what the caller sees, and it is
+    // unchanged. What changed is what happens to the transport underneath it.
+    const events = await drain(run.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'completed' });
+    expect(run.status).toBe('ended');
+
+    expect(fake.closed).toBe(false);
+  });
+
+  it('survives the registry letting go of the finished turn', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    /*
+     * What the run registry does at the end of every run, and the reason
+     * `release` exists at all: it used to call `dispose`, which is the one act
+     * that overrules retention, so the work kept alive above was killed one
+     * layer up instead — with every adapter test still passing, because none of
+     * them goes through the registry.
+     */
+    await run.release?.();
+
+    expect(fake.closed).toBe(false);
+  });
+
+  it('closes it once the last task settles', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    /*
+     * Replace semantics: an empty set is the provider saying nothing is running.
+     * It does not release the process on its own, though — measured, the provider
+     * takes a turn about the work that just finished roughly a tenth of a second
+     * later, and closing the transport on the empty set killed exactly that turn.
+     * So the release happens at the end of the turn that follows.
+     */
+    fake.messages.push(tasksChanged([]));
+    expect(fake.closed).toBe(false);
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('releases the process when a task settles and no turn follows', async () => {
+    // The other half of that rule: a task that settles in silence must not pin a
+    // CLI open for the rest of the session. Only `setTimeout` is faked — the
+    // pump's own promises stay real, so this is the grace expiring rather than a
+    // rewritten event order.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const { fake } = harness();
+
+      fake.messages.push(INIT_MESSAGE);
+      fake.messages.push(tasksChanged(busyTask));
+      fake.messages.push(RESULT_MESSAGE);
+      await drain(run.events);
+
+      fake.messages.push(tasksChanged([]));
+      await vi.waitFor(() => expect(fake.closed).toBe(false));
+
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(fake.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps it open after a scheduling tool has been called', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    // A cron job lives *inside* the process and fires only while it is idle —
+    // which is a window a per-turn process never has. There is no control
+    // request that asks a CLI what schedules it holds, so the call that
+    // registered it is the only evidence there is.
+    fake.messages.push(toolStart('CronCreate'));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    expect(fake.closed).toBe(false);
+  });
+
+  it('does not keep it open for an ordinary tool call', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(toolStart('Bash'));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The set is explicit rather than a pattern, so a tool that schedules
+    // nothing cannot pin a process open for the rest of the conversation.
+    expect(fake.closed).toBe(true);
+  });
+
+  it('still closes on dispose, whatever it is holding', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'audit the mapper' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    await run.dispose();
+
+    // Dropping the conversation is the escape hatch, and it has to win over
+    // retention or a wedged process would have nothing that ends it.
+    expect(fake.closed).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The next turn joins a process that is still running                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Attaching is not an optimisation, it is what stops a correctness failure.
+ *
+ * Once a process can outlive its turn, a fresh spawn for the next message would
+ * put two CLIs on one conversation — both appending to the same
+ * `projects/…/<id>.jsonl`, with the second `--resume`ing a file the first is
+ * still writing. Every case here is about which of those two happened.
+ *
+ * `installQuery` captures the *latest* harness, so a second `query()` call is
+ * visible as a second harness object; a turn that attached leaves the first one
+ * in place.
+ */
+describe('attaching to a live process', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const busy = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
+  /** Turn one, left holding a background task so its process stays. */
+  async function firstTurn(over?: Partial<ResolvedRunInput>) {
+    const adapter = createClaudeAdapter();
+    const { harness } = installQuery();
+    const run = await adapter.createRun({ ...BASE_INPUT, ...over });
+    const first = harness();
+
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(tasksChanged(busy));
+    first.fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    return { adapter, first, harness };
+  }
+
+  /** What a second message from the renderer looks like: same session, resumed. */
+  const nextTurn = (over?: Partial<ResolvedRunInput>): ResolvedRunInput => ({
+    ...BASE_INPUT,
+    runId: 'run-2',
+    prompt: 'and now the other thing',
+    resumeSessionId: 'sess-abc',
+    ...over,
+  });
+
+  it('serves the next turn on the same process instead of spawning a second', async () => {
+    const { adapter, first } = await firstTurn();
+    expect(first.fake.closed).toBe(false);
+
+    const second = await adapter.createRun(nextTurn());
+
+    // No second `query()`: the same fake is still the only transport, and the
+    // turn is a new run on it.
+    expect(second.runId).toBe('run-2');
+    expect(first.fake.closed).toBe(false);
+
+    // And it is a real turn — the process's stream feeds it.
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(tasksChanged([]));
+    first.fake.messages.push(RESULT_MESSAGE);
+    const events = await drain(second.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end' });
+    // Each turn numbers its own events from zero, densely, which is the contract
+    // a run has and the reason turns stayed the unit of a run.
+    expect(events[0]?.seq).toBe(0);
+  });
+
+  it('spawns a fresh process when the last one is gone', async () => {
+    const adapter = createClaudeAdapter();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const first = harness();
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(first.fake.closed).toBe(true);
+
+    const second = await adapter.createRun(nextTurn());
+    const later = harness();
+
+    // A closed process must never be attached to: the next message would wait
+    // for a turn on a CLI that has stopped reading it.
+    expect(later.fake).not.toBe(first.fake);
+    expect(second.runId).toBe('run-2');
+  });
+
+  it('refuses to serve a fork on the process that owns the original', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(nextTurn({ forkSession: true }));
+
+    // A fork is a new conversation by definition; serving it here would write
+    // the branch into the trunk.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('refuses a turn pointed at a different directory', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(nextTurn({ cwd: REAL_CWD }));
+
+    // The cwd is fixed at spawn, and a session only resumes in the directory it
+    // was created in.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('refuses a turn pointed at a different store', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(
+      nextTurn({ env: { ...BASE_INPUT.env, CLAUDE_CONFIG_DIR: '/app/profiles/other' } }),
+    );
+
+    // Which account runs is fixed at spawn — the whole reason #98 locks a session
+    // to its profile. A session id does not resolve in another profile's store.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('moves the live process onto the new turn’s model and mode', async () => {
+    const { adapter, first } = await firstTurn({ model: 'sonnet', permissionMode: 'default' });
+
+    await adapter.createRun(nextTurn({ model: 'opus', permissionMode: 'plan' }));
+
+    // Silently running the new turn on the old model would be the failure that
+    // makes attaching unsafe: the status line would name one model and another
+    // would answer.
+    expect(first.fake.models).toEqual(['opus']);
+    expect(first.fake.modes).toEqual(['plan']);
+  });
+
+  it('sends no control requests when nothing changed', async () => {
+    const { adapter, first } = await firstTurn({ model: 'sonnet', permissionMode: 'default' });
+
+    await adapter.createRun(nextTurn({ model: 'sonnet', permissionMode: 'default' }));
+
+    expect(first.fake.models).toEqual([]);
+    expect(first.fake.modes).toEqual([]);
+    expect(first.fake.flags).toEqual([]);
+  });
+
+  it('clears a speed flag the new turn turned off, rather than omitting it', async () => {
+    const { adapter, first } = await firstTurn({ fastMode: true, effort: 'high' });
+
+    await adapter.createRun(nextTurn({ fastMode: false, effort: 'low' }));
+
+    // Successive `applyFlagSettings` calls shallow-merge and `undefined` is
+    // dropped by JSON, so omitting a flag leaves the previous turn's value in
+    // force — which would make turning fast mode off between turns do nothing.
+    expect(first.fake.flags).toEqual([{ fastMode: null, ultracode: null, effortLevel: 'low' }]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Turns the provider starts on its own                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Measured before it was built: when a backgrounded `sleep 40` settled, the CLI
+ * emitted `init`, an assistant message and a `result` with no prompt from
+ * anyone — the agent is told its task finished and answers.
+ *
+ * That output is written to the session's own `.jsonl` either way, so it is never
+ * lost; what is at stake is whether the live conversation shows it or quietly
+ * falls out of step with the provider's own record until it is reopened.
+ */
+describe('a turn nobody asked for', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const busy = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
+  /** An adapter that records the runs it is handed, the way the engine adopts them. */
+  function adapterWithSink() {
+    const adopted: { run: Run; context: unknown }[] = [];
+    let n = 0;
+    const adapter = createClaudeAdapter({
+      onContinuation: (run, context) => adopted.push({ run, context }),
+      newRunId: () => `run-c${String(++n)}` as RunId,
+    });
+    return { adapter, adopted };
+  }
+
+  it('opens a run for it, and the events land there rather than nowhere', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(adopted).toHaveLength(0);
+
+    // The task settles, and the provider takes a turn about it.
+    fake.messages.push(tasksChanged([]));
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push({
+      type: 'assistant',
+      message: {
+        id: 'msg-c',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'that finished' }],
+      },
+      session_id: 'sess-abc',
+      uuid: 'u-c',
+    } as unknown as SDKMessage);
+    fake.messages.push(RESULT_MESSAGE);
+
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+    const continuation = adopted[0]?.run as Run;
+
+    // Its own run, with its own dense sequence — the contract every run has.
+    expect(continuation.runId).toBe('run-c1');
+    const events = await drain(continuation.events);
+    expect(events[0]).toMatchObject({ type: 'session.started', seq: 0 });
+    expect(events.map((e) => e.type)).toContain('text.complete');
+    expect(events.at(-1)).toMatchObject({ type: 'run.end' });
+
+    // And it is the same conversation, which is what lets a pane adopt it.
+    expect(adopted[0]?.context).toMatchObject({
+      providerId: 'claude',
+      profileId: BASE_INPUT.profileId,
+      cwd: BASE_INPUT.cwd,
+      sessionId: 'sess-abc',
+    });
+  });
+
+  it('does not reopen the turn that already ended', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    const first = await drain(run.events);
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+
+    // `run.end` fired on the first turn and its stream terminated — a `Run`'s
+    // events are consumable exactly once, so there is nothing to re-read and
+    // nothing could have been appended to it.
+    expect(first.at(-1)).toMatchObject({ type: 'run.end' });
+
+    // The continuation is a different run with its own dense sequence, rather
+    // than more events on the one that ended.
+    const continuation = adopted[0]?.run as Run;
+    expect(continuation.runId).not.toBe(run.runId);
+    const events = await drain(continuation.events);
+    expect(events[0]).toMatchObject({ type: 'session.started', seq: 0 });
+  });
+
+  it('lets a subagent ask for permission long after its own turn ended', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake, options } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The subagent is still running and wants a tool. Denying here — which is
+    // what an ended run used to do — would stop the work this change exists to
+    // keep alive, at the one moment the user could have said yes.
+    const pending = callCanUseTool(options, new AbortController().signal);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+
+    const continuation = adopted[0]?.run as Run;
+    const iterator = continuation.events[Symbol.asyncIterator]();
+    const first = (await iterator.next()).value as PermissionRequestEvent;
+    expect(first.type).toBe('permission.request');
+
+    // Answerable, on the run it arrived on, and the tool call proceeds.
+    await continuation.respondToPermission(first.requestId, { behavior: 'allow' });
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+  });
+
+  it('denies instead of parking when nothing would receive the turn', async () => {
+    // No `onContinuation`: a prompt opened here would wait on a promise nobody
+    // can resolve, and the subagent would hang for ever. Refusing to pretend
+    // there is a turn is the honest failure.
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake, options } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    await expect(callCanUseTool(options, new AbortController().signal)).resolves.toMatchObject({
+      behavior: 'deny',
+    });
   });
 });

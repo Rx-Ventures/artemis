@@ -78,6 +78,10 @@ function label(event: AgentEvent): string {
       return `${event.requestId} ${event.outcome}`;
     case 'usage':
       return `${event.usage.scope} in=${String(event.usage.tokens.inputTokens)} out=${String(event.usage.tokens.outputTokens)}`;
+    // Codex has no background-task surface of its own, so this is here to keep
+    // the switch exhaustive rather than because this script expects to see one.
+    case 'background.tasks':
+      return `${String(event.tasks.length)} background task(s)`;
     case 'run.end':
       return `${event.reason}${event.error === undefined ? '' : ` — ${event.error.message}`}`;
   }

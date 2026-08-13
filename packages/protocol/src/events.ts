@@ -51,6 +51,7 @@ export type AgentEventType =
   | 'permission.request'
   | 'permission.resolved'
   | 'usage'
+  | 'background.tasks'
   | 'run.end';
 
 /** Every {@link AgentEventType}. Useful for validation at the IPC boundary. */
@@ -64,6 +65,7 @@ export const AGENT_EVENT_TYPES = [
   'permission.request',
   'permission.resolved',
   'usage',
+  'background.tasks',
   'run.end',
 ] as const satisfies readonly AgentEventType[];
 
@@ -411,6 +413,53 @@ export interface RunEndEvent extends AgentEventBase {
 }
 
 /* -------------------------------------------------------------------------- */
+/* background.tasks                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One piece of work running outside the turn that started it.
+ *
+ * A subagent spawned with `run_in_background`, a workflow (which is always
+ * async), or a command that was backgrounded. All three routinely outlive the
+ * turn that launched them, which is the fact this event exists to carry.
+ */
+export interface BackgroundTask {
+  /** The provider's task id. Stable for the life of the task. */
+  readonly id: string;
+  /**
+   * The provider's own word for the kind of work — `local_bash`, and whatever
+   * else the CLI grows.
+   *
+   * Deliberately an open string rather than a union. The SDK types it as one
+   * (`task_type: string`), so a closed set here would either reject a kind the
+   * CLI added last week or, worse, fold it into an `other` bucket and lose the
+   * name. A UI that wants friendly labels should map the ones it knows and show
+   * the raw value for the rest.
+   */
+  readonly kind: string;
+  /** The provider's one-line description, as shown in its own task list. */
+  readonly description: string;
+}
+
+/**
+ * Every background task that is live right now.
+ *
+ * **Replace, do not merge.** The payload is the whole set after a change, which
+ * is the SDK's own contract for it — so an empty array is the authoritative
+ * "nothing is running any more" rather than an absence of news.
+ *
+ * That property is what makes this event load-bearing rather than decorative:
+ * it is how the main process knows whether a provider process still has work in
+ * it, which decides whether the process may be closed when a turn ends. Before
+ * this existed the answer was assumed to be "no" and background work was killed
+ * at every turn boundary.
+ */
+export interface BackgroundTasksEvent extends AgentEventBase {
+  readonly type: 'background.tasks';
+  readonly tasks: readonly BackgroundTask[];
+}
+
+/* -------------------------------------------------------------------------- */
 /* union                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -429,6 +478,7 @@ export type AgentEvent =
   | PermissionRequestEvent
   | PermissionResolvedEvent
   | UsageEvent
+  | BackgroundTasksEvent
   | RunEndEvent;
 
 /** Look up an event variant by its `type`, e.g. `AgentEventOf<'tool.end'>`. */

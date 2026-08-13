@@ -55,6 +55,7 @@ import { isFileAttachment, isImageAttachment } from '@rx-artemis/protocol';
 
 import type {
   ConfigSource,
+  ContinuationContext,
   EnvBundle,
   ProviderAdapter,
   ResolvedRunInput,
@@ -233,6 +234,14 @@ interface RunEntry {
   ended: boolean;
   finalized: boolean;
   disposed: boolean;
+  /**
+   * The run ended and was let go of without a teardown — see {@link Run.release}.
+   *
+   * Tracked apart from `disposed` because it is a weaker statement: the adapter
+   * may still be holding a process for this conversation, and shutdown has to be
+   * able to take that down.
+   */
+  released: boolean;
   disposeRequested: boolean;
   interruptRequested: boolean;
   pump: Promise<void>;
@@ -454,6 +463,64 @@ export class RunRegistry {
       ...(historyOffset === undefined ? {} : { historyOffset }),
     };
 
+    this.#register(handle, run);
+    return handle;
+  }
+
+  /**
+   * Take on a run this registry did not start.
+   *
+   * The provider can open a turn nobody asked for: it answers when background
+   * work settles, and a subagent that outlived its own turn can park on a
+   * permission prompt. The adapter builds the {@link Run} for those — it is the
+   * only thing that can — and hands it up here, because ids, the replay buffer
+   * and the event fan-out belong to the registry. From this line on the run is
+   * indistinguishable from one {@link start} produced: same entry, same pump,
+   * same guarantee of exactly one `run.end`.
+   *
+   * Synchronous, unlike `start`, and it has to be: it is called from inside the
+   * adapter's own event pump, and every fact it would otherwise have to look up
+   * — capabilities, the conversation, whose account and which directory — is
+   * already fixed on the run or the process that opened it.
+   *
+   * No `historyOffset`. The seam it measures is "how much of the session file
+   * predates this run", and there is no honest answer here: by the time a turn
+   * announces itself the provider has already written part of it. Absent means
+   * "this cannot be counted", which is a case the renderer already handles by
+   * showing no earlier history rather than a duplicated turn — and the pane this
+   * lands in is normally the one that has the conversation on screen already.
+   *
+   * @throws {RunError} `cancelled` when the registry is shutting down.
+   * @throws {RunError} `invalid_request` when the run id is already known.
+   */
+  adopt(run: Run, context: ContinuationContext): RunHandle {
+    if (this.#closed) {
+      throw new RunError('cancelled', 'The engine is shutting down and cannot adopt runs');
+    }
+    const runId = run.runId;
+    if (this.#runs.has(runId) || this.#starting.has(runId) || this.#ended.has(runId)) {
+      throw new RunError('invalid_request', `Run "${runId}" is already known`);
+    }
+
+    const handle: RunHandle = {
+      runId,
+      providerId: context.providerId,
+      profileId: context.profileId,
+      cwd: context.cwd,
+      // Already under way — the turn exists because the provider started it.
+      // `starting` would describe a run waiting on a spawn that already happened.
+      status: 'running',
+      capabilities: run.capabilities,
+      startedAt: this.#now(),
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+    };
+
+    this.#register(handle, run);
+    return handle;
+  }
+
+  /** Index a run and start draining it. The one place a {@link RunEntry} is built. */
+  #register(handle: RunHandle, run: Run): RunEntry {
     const entry: RunEntry = {
       handle,
       run,
@@ -464,16 +531,16 @@ export class RunRegistry {
       ended: false,
       finalized: false,
       disposed: false,
+      released: false,
       disposeRequested: false,
       interruptRequested: false,
       pump: Promise.resolve(),
     };
-    this.#runs.set(runId, entry);
+    this.#runs.set(handle.runId, entry);
     // The pump handles its own failures; the `catch` is belt-and-braces so an
     // unexpected one can never surface as an unhandled rejection.
     entry.pump = this.#pump(entry).catch(() => undefined);
-
-    return handle;
+    return entry;
   }
 
   /**
@@ -624,6 +691,28 @@ export class RunRegistry {
         }
       }),
     );
+
+    /*
+     * And the runs that already finished, which is not the tidiness it looks
+     * like. A released run may have left a provider process alive on purpose —
+     * background work, a subagent, a registered `/loop` — and that process
+     * belongs to a conversation in an app that is now going away. Nothing else
+     * will ever ask it to stop: `dispose(runId)` returns early for a run that is
+     * no longer live, and the retained tail is the only remaining handle on it.
+     *
+     * Idempotent for everything else: an entry that was disposed rather than
+     * released skips straight back out of `#disposeRun`.
+     */
+    await Promise.all(
+      [...this.#ended.values()].map(async (entry) => {
+        try {
+          await this.#disposeRun(entry);
+        } catch (error) {
+          this.#report(error, entry.handle.runId, 'dispose');
+        }
+      }),
+    );
+
     this.#listeners.clear();
   }
 
@@ -822,12 +911,45 @@ export class RunRegistry {
     }
   }
 
-  /** Retire a finished run: dispose it, drop it from the live index. */
+  /**
+   * Let go of a run that ended on its own, exactly once.
+   *
+   * Not the same act as {@link #disposeRun}, and the difference is the whole
+   * point: a run that finished has already released everything it *owns*, and
+   * for an adapter where a run is one turn of a longer-lived process, tearing
+   * that process down here would kill work the turn deliberately left running.
+   * An adapter with no {@link Run.release} keeps the old behaviour, because for
+   * it the two really are one act.
+   *
+   * Recorded as disposed either way, so nothing reaches the adapter twice — and
+   * so a `dispose()` that arrives while this is in flight does not race it.
+   */
+  async #releaseRun(entry: RunEntry): Promise<void> {
+    if (entry.disposed || entry.released) return;
+    if (entry.run.release === undefined) {
+      await this.#disposeRun(entry);
+      return;
+    }
+    entry.released = true;
+    try {
+      await entry.run.release();
+    } catch (error) {
+      this.#report(error, entry.handle.runId, 'dispose');
+    }
+  }
+
+  /** Retire a finished run: let go of it, drop it from the live index. */
   async #finalize(entry: RunEntry): Promise<void> {
     if (entry.finalized) return;
     entry.finalized = true;
 
-    await this.#disposeRun(entry);
+    // Released rather than disposed unless something asked for a teardown. A run
+    // reaching its own end is the ordinary case and must not overrule an
+    // adapter's decision to keep a process; `dispose()` has already set
+    // `entry.disposed` by the time it gets here, so an explicit teardown still
+    // wins.
+    if (entry.disposeRequested) await this.#disposeRun(entry);
+    else await this.#releaseRun(entry);
 
     const { runId } = entry.handle;
     this.#runs.delete(runId);

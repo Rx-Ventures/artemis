@@ -5732,8 +5732,78 @@ export function handleAgentEvent(event: AgentEvent): void {
   applyAgentEvent(event);
 }
 
+/**
+ * Give a turn nobody in this window started the conversation it belongs to.
+ *
+ * The provider takes turns of its own now: told that background work finished,
+ * the agent answers, with no prompt from anyone. Those arrive on a run id this
+ * window has never seen, and `applyAgentEvent` routes on run id alone — so
+ * without this they are dropped, and the conversation on screen falls quietly
+ * out of step with what the provider is writing to its own transcript, until
+ * someone reopens it.
+ *
+ * `session.started` is the hook because it is the only event that names the
+ * conversation, and it is always the first of a turn. From the pane's side this
+ * is the same claim {@link adoptLiveRuns} makes at boot, one run at a time.
+ *
+ * ## Why the run state is built here rather than fetched
+ *
+ * A handle would have to come from `runs.list`, which is a round trip, and the
+ * events would have to be held for it. That is a real hazard rather than a
+ * hypothetical: an acknowledgement that a task finished can be over before the
+ * answer comes back, and a run no longer live is no longer in that list. So the
+ * pane synthesises the run from what it already has, which is sound because a
+ * continuation is by construction inside the conversation this pane last ran:
+ * the provider, the account, the directory and the capabilities were all fixed
+ * when the process was spawned and cannot have changed under it.
+ *
+ * Two panes in different windows can both hold the session, and both should
+ * show the turn — it is one conversation, open twice.
+ *
+ * Silent in three cases. A session no pane here holds is another window's
+ * business. A pane already running something is not free to be repointed: only
+ * the race where the user got a prompt in first can produce that, and stealing
+ * the column would lose the run they can see. And a pane that has never run
+ * anything nor picked an account cannot say whose turn this is, which is a
+ * conversation it could not have continued anyway.
+ */
+function claimContinuation(event: AgentEvent): Pane | undefined {
+  if (event.type !== 'session.started') return undefined;
+
+  const pane = paneForSession(event.sessionId);
+  if (!pane) return undefined;
+
+  const state = paneState(pane);
+  if (isLive(state)) return undefined;
+
+  const profileId = state.run?.profileId ?? state.activeProfileId;
+  if (!profileId) return undefined;
+
+  setPaneState(pane, {
+    run: {
+      ...state.run,
+      runId: event.runId,
+      status: 'running',
+      sessionId: event.sessionId,
+      providerId: state.run?.providerId ?? state.activeProviderId,
+      profileId,
+      cwd: state.run?.cwd ?? state.cwd,
+      capabilities: state.run?.capabilities ?? activeCapabilities(state),
+      // The turn started when the provider started it, which was moments ago and
+      // is not knowable more precisely from here. Carrying the previous run's
+      // time instead would date this turn to the last thing the user typed.
+      startedAt: Date.now(),
+      // Belongs to the run that ended, and would otherwise describe this one as
+      // having finished before its first event was applied.
+      endReason: undefined,
+      error: undefined,
+    },
+  });
+  return pane;
+}
+
 function applyAgentEvent(event: AgentEvent): void {
-  const pane = paneForRun(event.runId);
+  const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;
   const run = paneState(pane).run;
   if (!run) return;
