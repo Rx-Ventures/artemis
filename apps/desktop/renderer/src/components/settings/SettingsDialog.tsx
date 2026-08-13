@@ -46,9 +46,16 @@
  */
 
 import type { ReactElement } from 'react';
-import { BoxesIcon, KeyRoundIcon, PaletteIcon, ShieldIcon } from 'lucide-react';
+import {
+  BoxesIcon,
+  KeyRoundIcon,
+  PaletteIcon,
+  ShieldIcon,
+  SlidersHorizontalIcon,
+} from 'lucide-react';
 
 import { ProfilesSection } from '../ProfilesScreen';
+import { AdvancedSection } from './AdvancedSection';
 import { AppearanceSection } from './AppearanceSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
@@ -103,6 +110,16 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Permissions',
     hint: 'What runs without asking',
     icon: <ShieldIcon aria-hidden="true" />,
+  },
+  // Last, and last on purpose: nothing above it depends on anything in it, and
+  // what it holds are arrangements Artemis hands to the user to perform rather
+  // than settings it applies. Meeting it before Profiles would be meeting the
+  // exception before the rule.
+  {
+    id: 'advanced',
+    label: 'Advanced',
+    hint: 'Scripts you run yourself',
+    icon: <SlidersHorizontalIcon aria-hidden="true" />,
   },
 ];
 
@@ -215,6 +232,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <AppearanceSection />;
     case 'permissions':
       return <PermissionsSection />;
+    case 'advanced':
+      return <AdvancedSection />;
     case 'profiles':
       return <ProfilesSection />;
   }
