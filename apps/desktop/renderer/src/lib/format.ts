@@ -82,8 +82,8 @@ const TITLE_CHARS = 56;
  *
  * Applied to every title, not only the derived ones. A user who typed a
  * sentence as a custom title gets the same treatment, which is the right call
- * for a 200px column — and the full string is on the row's `title` attribute
- * either way, so nothing is lost, only folded.
+ * for a 200px column — and the row's tooltip restates the title in full
+ * (see `sessionTooltipTitle`) either way, so nothing is lost, only folded.
  *
  * The ellipsis is the character, not three dots: it is one glyph of column
  * width instead of three.

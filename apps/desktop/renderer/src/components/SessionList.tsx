@@ -154,7 +154,7 @@ import {
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
 import { useCapability } from '../hooks/useCapability';
-import { condenseTitle, formatRelative } from '../lib/format';
+import { condenseTitle } from '../lib/format';
 import { lastSegment } from '../lib/paths';
 import {
   flattenGroups,
@@ -181,6 +181,7 @@ import { usePane } from '../state/paneContext';
 import { CapabilityButton } from './capability-button';
 import { ProfileSwatch, StatusDot } from './primitives';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
+import { ProjectTooltip, SessionTooltip } from './SessionTooltip';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -192,6 +193,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Input } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /** See note 2 in the file header before changing this. */
@@ -454,49 +456,69 @@ const GroupHeading = memo(function GroupHeading({
 
   const name = projectLabel(project);
 
+  /*
+   * The heading's tooltip was `title={project}` — the one hover surface in the
+   * sidebar the app did not draw itself. It now uses the same bubble as the
+   * session rows (`ProjectTooltip`), which is what lets a root deep in a
+   * worktree wrap instead of running past the edge. A heading with no project
+   * has nothing to add to its own label, so it gets no tooltip at all rather
+   * than a bubble restating "No project".
+   */
+  const heading = (
+    <button
+      type="button"
+      onClick={() => toggleProjectCollapsed(project)}
+      aria-expanded={!collapsed}
+      className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+    >
+      <ChevronDownIcon
+        aria-hidden="true"
+        className={cn(
+          'size-2.5 shrink-0 text-ink-faint transition-transform',
+          collapsed && '-rotate-90',
+        )}
+      />
+      {/*
+        One folder, drawn the same way in every heading.
+        ------------------------------------------------------------------
+        Both the glyph and its colour used to turn on whether this was the
+        directory you were standing in, and the glyph did so invisibly: the
+        repository variant was chosen from `workspace`, which described only
+        the directory the column was standing in, so "is a git repo" and "is
+        the active project" were the same condition wearing different clothes.
+        A project's icon would silently change shape as you moved away from
+        it, which says something about the project that is not true.
+
+        So it is one folder at one weight throughout. The active project is
+        still marked — by the label beside this, which is a claim about
+        which project you are in rather than about what kind of thing it is.
+      */}
+      <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
+      <span
+        className={cn(
+          'min-w-0 truncate text-2xs font-medium tracking-tight',
+          current ? 'text-ink-muted' : 'text-ink-faint',
+        )}
+      >
+        {name ?? 'No project'}
+      </span>
+      <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
+      <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+    </button>
+  );
+
   return (
     <div style={{ top, height: HEADER_HEIGHT }} className="absolute inset-x-0 px-1.5">
-      <button
-        type="button"
-        onClick={() => toggleProjectCollapsed(project)}
-        aria-expanded={!collapsed}
-        title={project}
-        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
-      >
-        <ChevronDownIcon
-          aria-hidden="true"
-          className={cn(
-            'size-2.5 shrink-0 text-ink-faint transition-transform',
-            collapsed && '-rotate-90',
-          )}
-        />
-        {/*
-          One folder, drawn the same way in every heading.
-          ------------------------------------------------------------------
-          Both the glyph and its colour used to turn on whether this was the
-          directory you were standing in, and the glyph did so invisibly: the
-          repository variant was chosen from `workspace`, which described only
-          the directory the column was standing in, so "is a git repo" and "is
-          the active project" were the same condition wearing different clothes.
-          A project's icon would silently change shape as you moved away from
-          it, which says something about the project that is not true.
-
-          So it is one folder at one weight throughout. The active project is
-          still marked — by the label beside this, which is a claim about
-          which project you are in rather than about what kind of thing it is.
-        */}
-        <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
-        <span
-          className={cn(
-            'min-w-0 truncate text-2xs font-medium tracking-tight',
-            current ? 'text-ink-muted' : 'text-ink-faint',
-          )}
-        >
-          {name ?? 'No project'}
-        </span>
-        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
-        <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
-      </button>
+      {name === null ? (
+        heading
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{heading}</TooltipTrigger>
+          <TooltipContent side="right">
+            <ProjectTooltip project={project} count={count} />
+          </TooltipContent>
+        </Tooltip>
+      )}
     </div>
   );
 });
@@ -885,13 +907,15 @@ const Row = memo(function Row({
             : undefined
         }
         /*
-         * The timestamp lives here now rather than on the row. It was the
-         * first thing on the meta line and the least useful thing on it — the
-         * list is already in recency order, so "4m ago" mostly restated the
-         * row's position — and evicting it is what gave the profile the room
-         * it was being truncated for.
+         * Everything the two truncated lines cannot afford to show — the whole
+         * title, the directory, the branch, the account, the model, the
+         * timestamp the meta line evicted. It was a dash-joined sentence here
+         * once, and the sentence is what issue #85 was about: a working
+         * directory is one unbroken token, and it walked straight out of the
+         * bubble. `SessionTooltip` is the card that replaced it, and it owns
+         * the wrapping.
          */
-        tooltip={`${running ? 'Running now' : 'Resume'} — ${session.cwd}${profile ? ` — ${profile.label}` : ''} — ${formatRelative(session.updatedAt)}`}
+        tooltip={<SessionTooltip session={session} profile={profile} running={running} />}
         tooltipSide="right"
         onClick={() => resumeSession(session)}
         className={cn(
@@ -905,8 +929,11 @@ const Row = memo(function Row({
         {/* `shrink-0` on both lines: see note 2 in the file header. Without it
             a row one pixel too short compresses the line box and `truncate`
             clips the glyphs through the middle. */}
+        {/* No native `title` on either line. Both used to carry one — the full
+            title here, the profile below — and each raced the row's own bubble:
+            hover long enough and the OS chip landed on top of the tooltip that
+            already says it. `SessionTooltip` is now the single answer. */}
         <span
-          title={session.title}
           className={cn(
             'flex w-full shrink-0 items-center gap-1.5 truncate text-xs',
             active ? 'text-ink' : 'text-ink-muted',
@@ -953,9 +980,6 @@ const Row = memo(function Row({
            * the branch takes the slack and truncates, this does not.
            */}
           <span
-            title={
-              profile ? `Profile: ${profile.label}` : `Profile ${session.profileId} no longer exists`
-            }
             className={cn(
               'flex min-w-0 max-w-[11rem] shrink-0 items-center gap-1',
               orphaned && 'text-amber',

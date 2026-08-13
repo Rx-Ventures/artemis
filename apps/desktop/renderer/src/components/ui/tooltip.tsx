@@ -29,7 +29,7 @@ function TooltipTrigger({
 }
 
 /**
- * MODIFIED FROM THE REGISTRY. Two deliberate departures:
+ * MODIFIED FROM THE REGISTRY. Three deliberate departures:
  *
  * 1. Surface. The stock Nova tooltip is inverted — `bg-foreground` on
  *    `text-background`, i.e. a near-white bubble. That is fine for a two-word
@@ -43,10 +43,22 @@ function TooltipTrigger({
  *    to carry a border on exactly its two outward faces, which is fragile
  *    across sides. Offset bubbles without arrows are the norm in dev tooling,
  *    and the tooltip is anchored tightly enough that the arrow earns nothing.
+ *
+ * 3. Long tokens stay inside the bubble. Tooltip text here is full of
+ *    unbroken strings — working directories, branch names, model ids — and a
+ *    token wider than `max-w-[18rem]` used to walk straight through the
+ *    border (#85): plain `break-words` does not help inside a flex container,
+ *    because `overflow-wrap: break-word` is ignored by min-content sizing and
+ *    a flex item refuses to shrink below it. `wrap-anywhere` is the variant
+ *    whose break opportunities *do* count toward min-content, and it inherits,
+ *    so bare-string tooltips are covered without a wrapper. `collisionPadding`
+ *    keeps the bubble off the window edge for the same reason — most of these
+ *    open `side="right"` from a sidebar and the long ones flip or shift.
  */
 function TooltipContent({
   className,
   sideOffset = 6,
+  collisionPadding = 8,
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
@@ -55,8 +67,9 @@ function TooltipContent({
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
         className={cn(
-          "z-50 inline-flex w-fit max-w-[18rem] origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-md border border-line-strong bg-popover px-2.5 py-1.5 text-xs leading-snug text-popover-foreground shadow-lg shadow-black/40 has-data-[slot=kbd]:pr-1.5 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 inline-flex w-fit max-w-[18rem] origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-md border border-line-strong bg-popover px-2.5 py-1.5 text-xs leading-snug wrap-anywhere text-popover-foreground shadow-lg shadow-black/40 has-data-[slot=kbd]:pr-1.5 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
