@@ -783,7 +783,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           additionalDirectories: [...(input.additionalDirectories ?? []), directory],
         };
 
-        const run = new ClaudeRun(
+        const agent = new ClaudeProcess(
           granted,
           {
             now,
@@ -795,8 +795,11 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           },
           { directory, staged },
         );
-        run.start();
-        return run;
+        // The turn before the transport: `canUseTool` and the pump both read the
+        // active turn, and `start()` is what lets either of them run.
+        const turn = agent.beginTurn(granted);
+        agent.start();
+        return turn;
       } catch (error) {
         // Nothing owns the directory yet — the run that would have removed it
         // was never constructed.
@@ -1608,15 +1611,47 @@ interface ClaudeRunDeps {
   readonly sdkExecutablePath?: string;
 }
 
-class ClaudeRun implements Run {
-  readonly runId: string;
+/**
+ * The provider process, and the turns it serves.
+ * ----------------------------------------------------------------------------
+ *
+ * A `Run` is one turn. A process is not: it is the transport, and it can serve
+ * several turns before it goes away. Those were the same object until now,
+ * which is why closing a finished turn took the process — and everything it was
+ * holding — down with it.
+ *
+ * The split is along the line the SDK itself draws. `query()` takes the prompt
+ * iterable *once* and returns one `Query`, so the input stream, the transport,
+ * the abort controller, the staging directory and the `canUseTool` callback are
+ * all fixed at spawn and belong to the process. What belongs to a turn is
+ * exactly what {@link ClaudeMapperState} holds — a run id, a dense `seq`, the
+ * tool calls opened in it, whether it has ended — plus the event queue the
+ * caller iterates.
+ *
+ * ## The active turn
+ *
+ * `#state` and `#eventQueue` are the *current* turn's, and they are reassigned
+ * by {@link beginTurn}. Every method below that reads them means "the turn this
+ * process is serving now", which is well-defined because the CLI serves turns
+ * strictly one at a time: a `result` closes one before the next `init` opens
+ * another. That is what lets the mapping, the permission callback and the pump
+ * stay exactly as they were rather than being threaded with a turn argument.
+ *
+ * The `Run` handed to the caller is {@link ClaudeTurn}, which captures its own
+ * state and queue. So a consumer still iterating turn one's stream is
+ * unaffected by turn two starting, and a control call arriving late is refused
+ * rather than silently applied to whatever turn is running now.
+ */
+class ClaudeProcess {
   readonly providerId = CLAUDE_PROVIDER_ID;
   readonly capabilities = CLAUDE_CAPABILITIES;
 
   readonly #input: ResolvedRunInput;
   readonly #deps: ClaudeRunDeps;
-  readonly #state: ClaudeMapperState;
-  readonly #eventQueue: AsyncQueue<AgentEvent>;
+  /** The active turn's mapping state. Reassigned by {@link beginTurn}. */
+  #state!: ClaudeMapperState;
+  /** The active turn's event stream. Reassigned by {@link beginTurn}. */
+  #eventQueue!: AsyncQueue<AgentEvent>;
   readonly #promptQueue: AsyncQueue<SDKUserMessage>;
   readonly #pending = new Map<PermissionRequestId, PendingPermission>();
   readonly #abort = new AbortController();
@@ -1641,13 +1676,33 @@ class ClaudeRun implements Run {
   ) {
     this.#input = input;
     this.#deps = deps;
-    this.runId = input.runId;
     this.#stagingDir = staging.directory;
     this.#openingStaged = staging.staged;
     this.#stagedCount = staging.staged.length;
+    this.#promptQueue = new AsyncQueue<SDKUserMessage>();
+  }
 
-    this.#state = createClaudeMapperState(input.runId, {
-      now: deps.now,
+  /** The turn this process is serving, for the diagnostics that name one. */
+  get runId(): string {
+    return this.#state.runId;
+  }
+
+  /**
+   * Open a turn on this process, and hand back the `Run` for it.
+   *
+   * Called once per turn: by `createRun` for a prompt the user sent, and — once
+   * a process can outlive a turn — by the pump for a turn the provider starts on
+   * its own when background work settles.
+   *
+   * The state is fresh every time, which is the whole contract a run has: `seq`
+   * restarts at 0, dense, and `ended` is false. Nothing conversation-scoped
+   * lives in it, so there is nothing to carry across — the session id arrives
+   * again on this turn's own `init`, because the CLI emits one per turn in
+   * streaming mode.
+   */
+  beginTurn(input: ResolvedRunInput): ClaudeTurn {
+    const state = createClaudeMapperState(input.runId, {
+      now: this.#deps.now,
       resumedFrom: input.resumeSessionId,
       forked: input.forkSession === true,
     });
@@ -1655,12 +1710,20 @@ class ClaudeRun implements Run {
     // Abandoning the event stream does not tear the run down — dispose() is the
     // explicit way to do that — but it does mean nobody is listening, which is
     // worth recording.
-    this.#eventQueue = new AsyncQueue<AgentEvent>({
+    const events = new AsyncQueue<AgentEvent>({
       onAbandoned: () => {
-        this.#deps.diagnostic?.(`Run ${this.runId}: event stream abandoned by its consumer.`);
+        this.#deps.diagnostic?.(`Run ${input.runId}: event stream abandoned by its consumer.`);
       },
     });
-    this.#promptQueue = new AsyncQueue<SDKUserMessage>();
+
+    this.#state = state;
+    this.#eventQueue = events;
+    return new ClaudeTurn(this, state, events);
+  }
+
+  /** Is this the turn the process is serving right now? */
+  isActive(state: ClaudeMapperState): boolean {
+    return this.#state === state;
   }
 
   /* ------------------------------ lifecycle ------------------------------- */
@@ -1728,19 +1791,20 @@ class ClaudeRun implements Run {
     this.#pumpDone = this.#pump(sdkQuery);
   }
 
-  get status(): RunStatus {
-    if (this.#state.ended) return 'ended';
-    if (this.#pending.size > 0) return 'awaiting_permission';
-    if (this.#state.sessionStarted) return 'running';
+  /**
+   * How one turn is doing.
+   *
+   * Takes the turn rather than reading the active one, because the caller
+   * holding a `Run` is asking about *its* turn — and `awaiting_permission` is
+   * the reason that distinction matters: the pending map is the process's, so a
+   * prompt parked by a later turn must not make an earlier, finished one report
+   * that it is waiting for an answer.
+   */
+  statusOf(state: ClaudeMapperState): RunStatus {
+    if (state.ended) return 'ended';
+    if (this.isActive(state) && this.#pending.size > 0) return 'awaiting_permission';
+    if (state.sessionStarted) return 'running';
     return 'starting';
-  }
-
-  get sessionId(): SessionId | undefined {
-    return this.#state.sessionId;
-  }
-
-  get events(): AsyncIterable<AgentEvent> {
-    return this.#eventQueue;
   }
 
   /* -------------------------------- control -------------------------------- */
@@ -2266,6 +2330,93 @@ class ClaudeRun implements Run {
   #withStderr(error: AgentError): AgentError {
     if (this.#stderrTail.length === 0) return error;
     return { ...error, details: { stderr: [...this.#stderrTail] } };
+  }
+}
+
+/**
+ * One turn, as the caller holds it.
+ *
+ * Thin on purpose: everything that does work lives on the process, and this is
+ * the {@link Run} contract wrapped around one turn of it. What it adds is the
+ * identity — its own state, its own event queue, and the check that a control
+ * call is aimed at the turn that is actually running.
+ *
+ * That check is the reason this is an object rather than the process itself.
+ * `send` on a turn that has ended used to be impossible to get wrong, because
+ * the run *was* the process and an ended run had no transport left. Once a
+ * process outlives its turns, a stale handle is reachable — a renderer that
+ * kept one across a `run.end` it had not yet applied — and pushing that text
+ * into whatever turn is running now would deliver a message to the wrong point
+ * in the conversation. It is refused with the same error an ended run always
+ * gave.
+ */
+class ClaudeTurn implements Run {
+  readonly providerId = CLAUDE_PROVIDER_ID;
+  readonly capabilities = CLAUDE_CAPABILITIES;
+
+  readonly #process: ClaudeProcess;
+  readonly #state: ClaudeMapperState;
+  readonly #events: AsyncQueue<AgentEvent>;
+
+  constructor(process: ClaudeProcess, state: ClaudeMapperState, events: AsyncQueue<AgentEvent>) {
+    this.#process = process;
+    this.#state = state;
+    this.#events = events;
+  }
+
+  get runId(): string {
+    return this.#state.runId;
+  }
+
+  get status(): RunStatus {
+    return this.#process.statusOf(this.#state);
+  }
+
+  get sessionId(): SessionId | undefined {
+    return this.#state.sessionId;
+  }
+
+  /**
+   * This turn's own stream, not the process's current one.
+   *
+   * Captured at construction so a consumer still draining turn one is
+   * unaffected by turn two opening — the queues are separate objects and each
+   * terminates on its own `run.end`.
+   */
+  get events(): AsyncIterable<AgentEvent> {
+    return this.#events;
+  }
+
+  async send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
+    this.#requireActive();
+    return this.#process.send(text, attachments);
+  }
+
+  async interrupt(): Promise<InterruptResult> {
+    // Not gated on being active: "Stop" on a turn that has already finished is
+    // idempotent by nature, and the process answers it that way.
+    return this.#process.interrupt();
+  }
+
+  async respondToPermission(
+    requestId: PermissionRequestId,
+    decision: PermissionDecision,
+  ): Promise<void> {
+    return this.#process.respondToPermission(requestId, decision);
+  }
+
+  dispose(): Promise<void> {
+    return this.#process.dispose();
+  }
+
+  /** Refuse a control call aimed at a turn the process has moved on from. */
+  #requireActive(): void {
+    if (this.#state.ended || !this.#process.isActive(this.#state)) {
+      throw adapterError(
+        'invalid_request',
+        `Run ${this.runId} has already ended; start a new run with resumeSessionId to continue.`,
+      );
+    }
   }
 }
 
