@@ -47,6 +47,7 @@ import {
   IPC_PUSH,
   ipcFail,
   ipcOk,
+  sharedConfigDirs,
   type AgentEvent,
   type IpcChannel,
   type IpcHandlerResult,
@@ -74,6 +75,7 @@ import {
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import { readSharedConfigStatus } from './sharedConfig.js';
 import type { TerminalHost } from './terminal.js';
 import type { Updater } from './updater.js';
 import {
@@ -95,6 +97,7 @@ import {
   validateSessionsListAll,
   validateSessionsMessages,
   validateSessionsRename,
+  validateSharedConfigStatus,
   validateProfilesSuggestDir,
   validatePreviewOpen,
   validateTerminalClose,
@@ -364,6 +367,33 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.workspaceDescribe]: {
       validate: validateWorkspaceDescribe,
       handle: async (request) => describeWorkspace(request.path),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Shared Claude config                                             */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Is the shared `~/.claude` arrangement actually in place?
+     *
+     * The request is empty (see `validateSharedConfigStatus`), so the *handler*
+     * is where the directories come from: the profile store, through the same
+     * `sharedConfigDirs` the renderer feeds to the script generator. Two
+     * consequences, both intended. The renderer cannot ask this to `lstat` a
+     * path of its own choosing, and the reading covers exactly the directories
+     * the script covers — which is what makes "the switch says yes and the disk
+     * says no" a comparison rather than two unrelated lists.
+     *
+     * Goes through the engine only for the profile list. The reading itself is
+     * `lstat` against `$HOME`, needs no provider and no adapter, and so does not
+     * belong behind one.
+     */
+    [IPC.sharedConfigStatus]: {
+      validate: validateSharedConfigStatus,
+      handle: async () =>
+        readSharedConfigStatus({
+          dirs: sharedConfigDirs(await engine.require().listProfiles({})),
+        }),
     },
 
     /* ---------------------------------------------------------------- */

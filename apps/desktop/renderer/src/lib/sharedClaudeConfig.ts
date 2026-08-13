@@ -10,7 +10,8 @@
  *
  * This module writes the shell that undoes the second half without touching the
  * first — symlinks from each profile's directory to the matching entry under
- * the user's own `~/.claude`.
+ * the user's own `~/.claude` — and reads the main process's report of what that
+ * shell actually did.
  *
  * ---------------------------------------------------------------------------
  * WHY A SCRIPT AND NOT A BUTTON
@@ -28,84 +29,40 @@
  * for the same reason — it is the part worth testing, and it can be tested
  * without a filesystem.
  *
+ * The cost of that refusal is that the app has no idea whether the user ran
+ * anything, which is what the second half of this module is about: the reading
+ * comes back over `sharedConfig.status`, and everything below
+ * {@link entryGap} turns nine states per profile into the two or three sentences
+ * a pane can show. All of it pure, for the same reason the generator is.
+ *
  * ---------------------------------------------------------------------------
- * WHAT IS NOT SHARED, AND WHY THAT LIST IS SHORT
+ * WHERE THE VOCABULARY LIVES
  * ---------------------------------------------------------------------------
  *
- * `.claude.json`, `settings.json`, `sessions/` and the stored credential stay
- * per profile. They are what make two accounts two accounts — linking them is
- * how every profile ends up signed into whichever one logged in last, which is
- * precisely the failure `resolveEnv` exists to prevent. Sharing the *whole*
- * directory is the obvious thing to try and the one thing that cannot work.
- *
- * Everything in {@link SHARED_DIRECTORIES} and {@link SHARED_FILES} is content
- * the user authored or accumulated, not identity the provider issued.
+ * {@link SHARED_DIRECTORIES}, {@link SHARED_FILES}, {@link BACKUP_SUFFIX} and
+ * {@link sharedConfigDirs} moved to `@rx-artemis/protocol` when the status
+ * display was added, and are re-exported here so that this module stays the one
+ * import for anything to do with the arrangement. They had to move: the main
+ * process `lstat`s exactly these names, and a second copy of the list is a
+ * script that links a directory the pane will never mention.
  */
 
-import type { ProfileMetadata } from '@rx-artemis/protocol';
+import {
+  BACKUP_SUFFIX,
+  SHARED_DIRECTORIES,
+  SHARED_FILES,
+  type SharedConfigDirStatus,
+  type SharedConfigEntry,
+  type SharedConfigStatus,
+} from '@rx-artemis/protocol';
 
-/**
- * Directories linked from the root config into every profile.
- *
- * Created under the root when absent. A fresh `~/.claude` has no `commands` or
- * `todos`, and a symlink pointing at a path that does not exist is not an empty
- * folder — it is a broken read, reported as one by every tool that touches it.
- *
- * ## `projects` is in this list, and it merges the sidebar
- *
- * Recorded because it is the one entry whose consequence is not guessable from
- * its name.
- *
- * `projects/<encoded-cwd>/` holds the transcripts. Sharing it merges the store
- * itself, so a conversation started on any sharing account is listed — and
- * resumable — from all of them.
- *
- * This used to cost a row per profile. `listAllSessions` walked every profile,
- * pointed `CLAUDE_CONFIG_DIR` at each in turn, and nothing downstream
- * de-duplicated, so three profiles aimed at one store rendered every session
- * three times under three account labels. That is fixed: scopes are grouped by
- * the realpath of the store they actually read, each store is read once, and
- * the other profiles that reach it ride along in
- * `SessionSummary.alsoInProfiles`. The account label on a shared row is
- * therefore arbitrary among the sharers — which is why resuming prefers the
- * account already in use over the one the row happens to name.
- *
- * Directory contents make the same point about what is actually being shared:
- * everything under `projects/` is session-scoped — the `.jsonl` transcript, and
- * a `<session-uuid>/` sidecar holding `subagents/`, `subagents/workflows/` and
- * `tool-results/` — except `memory/`, which is per-project knowledge and the
- * one thing in there that is not about an account at all.
- */
-export const SHARED_DIRECTORIES: readonly string[] = [
-  'commands',
-  'ide',
-  'plans',
-  'plugins',
-  'skills',
-  'todos',
-  'session-env',
-  'projects',
-];
-
-/**
- * Files linked from the root config into every profile.
- *
- * Never created when absent, which is the opposite rule to the directories
- * above and is the difference between a folder and an instruction file. An
- * empty `commands/` offers no commands; an empty `CLAUDE.md` is a document that
- * tells the agent nothing, written into every profile at once by a script that
- * was asked to share a file the user does not have.
- */
-export const SHARED_FILES: readonly string[] = ['CLAUDE.md'];
-
-/**
- * What a displaced directory is renamed to.
- *
- * Not `.bak`: this suffix has to survive being read months later by someone
- * deciding whether the folder is safe to delete, and "pre-shared" answers that
- * where "bak" only raises it.
- */
-export const BACKUP_SUFFIX = '.pre-shared';
+export {
+  BACKUP_SUFFIX,
+  SHARED_DIRECTORIES,
+  SHARED_ENTRIES,
+  SHARED_FILES,
+  sharedConfigDirs,
+} from '@rx-artemis/protocol';
 
 /** Which script to generate. */
 export type SharedConfigMode = 'share' | 'restore';
@@ -120,32 +77,6 @@ export type SharedConfigMode = 'share' | 'restore';
  */
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-/**
- * The Claude config directories a script should cover, in a stable order.
- *
- * Filtered to Claude because the entry names are Claude's vocabulary and mean
- * nothing under another provider. Disabled profiles are *kept*: disabled hides
- * an account from the picker, it does not retire its directory, and a profile
- * re-enabled a week later that had been skipped would be the only one left
- * un-shared with nothing on screen explaining why.
- *
- * De-duplicated by path rather than by profile id — two profiles are allowed to
- * name the same directory, and linking it twice would move the first pass's own
- * symlinks aside into backups on the second.
- */
-export function sharedConfigDirs(profiles: readonly ProfileMetadata[]): readonly string[] {
-  const seen = new Set<string>();
-  const dirs: string[] = [];
-  for (const profile of profiles) {
-    if (profile.providerId !== 'claude') continue;
-    const dir = profile.configDir.trim();
-    if (dir.length === 0 || seen.has(dir)) continue;
-    seen.add(dir);
-    dirs.push(dir);
-  }
-  return dirs;
 }
 
 /**
@@ -339,4 +270,156 @@ ${calls(dirs, 'profile')}
 
 printf '\\nDone. Start Artemis again to pick up the new layout.\\n'
 `;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reading the status                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Is this entry work the share script still has to do?
+ *
+ * `linked` never is. Everything else is, with one exception that matters: a
+ * *file* the root does not have is one the share script deliberately skips
+ * (`skip  CLAUDE.md (no …)`), so a profile without it is correctly arranged and
+ * counting it as a gap would leave a perfectly-run share reading as incomplete
+ * forever. A *directory* the root lacks is not the same case — the script
+ * `mkdir -p`s it and links it — so that one stays a gap.
+ *
+ * `foreign` counts as a gap. The share script would move it aside and link over
+ * it, which is a thing that will happen and therefore a thing to show.
+ */
+export function entryGap(entry: SharedConfigEntry, rootMissing: readonly string[]): boolean {
+  if (entry.state === 'linked') return false;
+  if (entry.state !== 'missing') return true;
+  return !(SHARED_FILES.includes(entry.name) && rootMissing.includes(entry.name));
+}
+
+/** How one profile directory reads, reduced to what a single line can say. */
+export interface SharedConfigDirSummary {
+  readonly dir: string;
+  /**
+   * What the pane says about this directory as a whole.
+   *
+   *  - `shared`   — every entry that could be linked is linked.
+   *  - `partial`  — some are, some are not. The row the whole display exists for.
+   *  - `unshared` — none are.
+   *  - `root`     — this directory *is* `~/.claude`; both scripts skip it.
+   *  - `absent`   — the directory is not there.
+   */
+  readonly state: 'shared' | 'partial' | 'unshared' | 'root' | 'absent';
+  /** How many entries are symlinked to the root right now. */
+  readonly linked: number;
+  /** Names the share script would still act on, in script order. */
+  readonly gaps: readonly string[];
+  /** Names with a `…{@link BACKUP_SUFFIX}` sitting alongside them. */
+  readonly backups: readonly string[];
+}
+
+/**
+ * Reduce one directory's entries to a row.
+ *
+ * `shared` requires that there be at least one link, not merely no gaps: a
+ * directory where the root had nothing to offer would otherwise report as fully
+ * shared on the strength of entries nobody could have linked.
+ */
+export function summarizeDir(
+  status: SharedConfigDirStatus,
+  rootMissing: readonly string[],
+): SharedConfigDirSummary {
+  if (status.state !== 'checked') {
+    return { dir: status.dir, state: status.state, linked: 0, gaps: [], backups: [] };
+  }
+
+  const linked = status.entries.filter((entry) => entry.state === 'linked').length;
+  const gaps = status.entries
+    .filter((entry) => entryGap(entry, rootMissing))
+    .map((entry) => entry.name);
+  const backups = status.entries
+    .filter((entry) => entry.backup === true)
+    .map((entry) => entry.name);
+
+  const state = gaps.length === 0 && linked > 0 ? 'shared' : linked > 0 ? 'partial' : 'unshared';
+
+  return { dir: status.dir, state, linked, gaps, backups };
+}
+
+/** Every directory's row, in the order the reading listed them. */
+export function summarizeStatus(status: SharedConfigStatus): readonly SharedConfigDirSummary[] {
+  return status.dirs.map((dir) => summarizeDir(dir, status.rootMissing));
+}
+
+/**
+ * The directories one script still has work to do in.
+ *
+ * This is what the pane offers as the narrow script — the one that covers a
+ * fifth account added after the first four were linked, without walking back
+ * over the four. Both scripts are safe to re-run over everything, so this is not
+ * a correctness fix; what it buys is a script whose text names only the
+ * directories that are actually going to change, which is a shorter thing to
+ * read before running it and a smaller blast radius if the reading is wrong.
+ *
+ * `root` and `absent` are never included, in either direction. Both scripts skip
+ * them by name, so a script generated for them would print `skip` and do
+ * nothing — offering it would imply Artemis could fix a directory that is not
+ * there.
+ */
+export function dirsNeedingWork(
+  status: SharedConfigStatus,
+  mode: SharedConfigMode,
+): readonly string[] {
+  return summarizeStatus(status)
+    .filter((summary) => {
+      if (summary.state === 'root' || summary.state === 'absent') return false;
+      // Sharing: anywhere with an entry still to link. Undoing: anywhere that
+      // still has one of this arrangement's links, or a backup waiting to come
+      // back — a directory the undo script would print nothing for is one there
+      // is nothing left to undo in.
+      return mode === 'share'
+        ? summary.gaps.length > 0
+        : summary.linked > 0 || summary.backups.length > 0;
+    })
+    .map((summary) => summary.dir);
+}
+
+/**
+ * Does the disk disagree with what the switch says?
+ *
+ * The question the whole display exists to answer, and it is asked in both
+ * directions because both are silent failures:
+ *
+ *  - switch on, not everything linked — the user flipped it, read the script and
+ *    closed the terminal; or the script ran before the newest profile existed.
+ *  - switch off, links still there — prefs were reset, or a new install met an
+ *    old disk, or the script was run by hand. The pane claims isolation the
+ *    accounts do not have.
+ *
+ * `false` when there is nothing to compare, because "you asked for sharing and
+ * there are no profiles" is already said by the empty state, and saying it twice
+ * in different words reads as two problems.
+ */
+export function statusDisagrees(status: SharedConfigStatus, intended: boolean): boolean {
+  const rows = summarizeStatus(status).filter(
+    (summary) => summary.state !== 'root' && summary.state !== 'absent',
+  );
+  if (rows.length === 0) return false;
+  return intended
+    ? rows.some((summary) => summary.state !== 'shared')
+    : rows.some((summary) => summary.linked > 0);
+}
+
+/**
+ * Is there any sign on disk that this arrangement was ever set up?
+ *
+ * What decides whether a user who has never touched the switch is shown a status
+ * block at all. Nine `missing` entries per profile is the ordinary state of a
+ * machine that never wanted this, and reporting it would turn a feature nobody
+ * enabled into a paragraph of nothing-is-wrong on the Advanced pane. A link or a
+ * leftover backup is different: something happened here, and the switch says it
+ * did not.
+ */
+export function statusHasLinks(status: SharedConfigStatus): boolean {
+  return status.dirs.some((dir) =>
+    dir.entries.some((entry) => entry.state === 'linked' || entry.backup === true),
+  );
 }

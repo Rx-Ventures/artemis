@@ -61,6 +61,7 @@ import {
   type RunsStartRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
+  type SharedConfigStatusRequest,
   type Unsubscribe,
   type SessionsDeleteRequest,
   type SessionsMessagesRequest,
@@ -451,6 +452,19 @@ const bridge: ArtemisBridge = Object.freeze({
     pickDirectory: (request: WorkspacePickDirectoryRequest) =>
       invoke(IPC.workspacePickDirectory, request),
     describe: (request: WorkspaceDescribeRequest) => invoke(IPC.workspaceDescribe, request),
+  }),
+
+  /**
+   * One read, and nothing that writes.
+   *
+   * The shared-`~/.claude` arrangement is made by a script the user runs, so the
+   * only thing to expose is the reading of what that script did. Note that the
+   * request names nothing — no path, no profile — which is the rule this file
+   * keeps everywhere, read from the other direction: main derives what to look at,
+   * so the renderer cannot aim this at the filesystem.
+   */
+  sharedConfig: Object.freeze({
+    status: (request: SharedConfigStatusRequest) => invoke(IPC.sharedConfigStatus, request),
   }),
 
   preview: Object.freeze({

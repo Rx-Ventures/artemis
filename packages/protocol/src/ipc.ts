@@ -34,6 +34,7 @@ import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
 import type { SessionSummary } from './session.js';
+import type { SharedConfigStatus } from './sharedConfig.js';
 import type {
   TerminalCloseRequest,
   TerminalCloseResponse,
@@ -102,6 +103,19 @@ export const IPC = {
   workspacePickDirectory: 'artemis:workspace:pick-directory',
   /** Name a directory: its own name, and its repository's when it has one. */
   workspaceDescribe: 'artemis:workspace:describe',
+
+  /**
+   * Read which of each Claude profile's shared entries are actually symlinked
+   * into `~/.claude`.
+   *
+   * The only channel whose whole purpose is to contradict a stored preference.
+   * `sharedClaudeConfig` records that the user asked for the arrangement; the
+   * script that performs it runs in a terminal Artemis never sees, so nothing
+   * else in the app can tell a share that happened from one that was read and
+   * closed. This is `lstat`, and nothing but `lstat` — see
+   * {@link SharedConfigStatusRequest} for why it takes no arguments at all.
+   */
+  sharedConfigStatus: 'artemis:shared-config:status',
 
   /**
    * Make a file the agent wrote renderable, and say where to render it from.
@@ -803,6 +817,39 @@ export interface WorkspaceDescribeResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Shared Claude config                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What is actually linked?
+ *
+ * Empty, and that is the interesting part of the design. The renderer does not
+ * name a path, a profile, or an entry: the main process derives the directories
+ * from the profile store with {@link sharedConfigDirs} and the names from
+ * {@link SHARED_ENTRIES}, so this channel cannot be used to `lstat` anything the
+ * user has not already registered as a Claude profile. A request that carried a
+ * `dirs` array would be a general-purpose filesystem prober wearing a feature's
+ * name.
+ *
+ * It also means the reading always covers exactly what the scripts cover. The
+ * pane compares a reading against an intention, and a comparison between two
+ * differently-derived lists would be worth nothing.
+ *
+ * Cheap enough to run on every open of the Advanced pane and behind a refresh
+ * button: one `lstat` per shared name per profile, plus one per name on the root,
+ * with no directory traversal anywhere. It is deliberately not polled — nothing
+ * changes these paths but a script the user runs by hand.
+ */
+export type SharedConfigStatusRequest = Record<string, never>;
+
+/**
+ * The reading. See {@link SharedConfigStatus} — the response *is* the status,
+ * flattened rather than nested under a key, the same way
+ * {@link WorkspaceDescribeResponse} is.
+ */
+export type SharedConfigStatusResponse = SharedConfigStatus;
+
+/* -------------------------------------------------------------------------- */
 /* Preview                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -1123,6 +1170,7 @@ export type IpcRequestMap = {
   [IPC.sessionsListAll]: SessionsListAllRequest;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryRequest;
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
+  [IPC.sharedConfigStatus]: SharedConfigStatusRequest;
   [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.terminalStart]: TerminalStartRequest;
   [IPC.terminalWrite]: TerminalWriteRequest;
@@ -1167,6 +1215,7 @@ export type IpcResponseMap = {
   [IPC.sessionsListAll]: SessionsListAllResponse;
   [IPC.workspacePickDirectory]: WorkspacePickDirectoryResponse;
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
+  [IPC.sharedConfigStatus]: SharedConfigStatusResponse;
   [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.terminalStart]: TerminalStartResponse;
   [IPC.terminalWrite]: TerminalWriteResponse;
@@ -1364,6 +1413,23 @@ export interface ArtemisBridge {
      * it whenever the working directory changes.
      */
     describe(request: WorkspaceDescribeRequest): Promise<IpcResult<WorkspaceDescribeResponse>>;
+  };
+
+  /**
+   * What the shared-`~/.claude` script actually did.
+   *
+   * One method, and it is a read with no counterpart: there is no `link` or
+   * `unlink` here, and there is not going to be. Artemis hands the user a script
+   * and the user runs it — see the Advanced pane's header for why a button was
+   * refused — so the app's side of this arrangement is writing the shell and
+   * then being honest about what came of it.
+   *
+   * Safe to call whenever the pane opens. `lstat` only, bounded by the number of
+   * registered Claude profiles.
+   */
+  readonly sharedConfig: {
+    /** Read every registered Claude profile's shared entries off the disk. */
+    status(request: SharedConfigStatusRequest): Promise<IpcResult<SharedConfigStatusResponse>>;
   };
 
   /**

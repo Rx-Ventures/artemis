@@ -27,6 +27,7 @@ import type {
   ProviderModelOption,
   RunEndReason,
   RunHandle,
+  SharedConfigEntryState,
   UpdateState,
   RunsStartRequest,
   SessionSummary,
@@ -35,7 +36,7 @@ import type {
   Unsubscribe,
   WindowState,
 } from '@rx-artemis/protocol';
-import { NO_CAPABILITIES, normalizeProfileColor } from '@rx-artemis/protocol';
+import { NO_CAPABILITIES, SHARED_ENTRIES, normalizeProfileColor } from '@rx-artemis/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -49,6 +50,22 @@ const mockSignInCommand = (profileId: string): string => {
 const MOCK_CONFIG_DIRS: Record<string, string> = {
   'demo-personal': '/Users/demo/.claude',
   'demo-work': '/Users/demo/Library/Application Support/Artemis/profiles/demo-work',
+};
+
+/** The `~/.claude` the fake `sharedConfig.status` reading compares against. */
+const MOCK_SHARED_ROOT = '/Users/demo/.claude';
+
+/**
+ * The entries the fake reading reports as something other than linked.
+ *
+ * Anything absent from this map reads as `linked`, so the shape stays honest as
+ * the shared list grows: a name added to `SHARED_DIRECTORIES` shows up here as
+ * one more linked row rather than as a hole.
+ */
+const MOCK_SHARED_STATES: Record<string, SharedConfigEntryState> = {
+  'session-env': 'own',
+  projects: 'foreign',
+  'CLAUDE.md': 'missing',
 };
 
 /**
@@ -1030,6 +1047,41 @@ export function createMockBridge(): ArtemisBridge {
           ...temporary,
         });
       },
+    },
+
+    /*
+     * A half-finished share, because that is the state worth being able to look
+     * at in dev.
+     *
+     * No filesystem here, so the reading is scripted — and scripted to the one
+     * case a real machine hides: `demo-personal` *is* `~/.claude` and must read
+     * as the root rather than as unlinked, while `demo-work` has some entries
+     * linked, one folder of its own with a backup beside it, one link into
+     * somebody else's dotfiles, and a `CLAUDE.md` that is missing for the
+     * blameless reason that the root has none either. Between them they exercise
+     * every row the pane can draw.
+     */
+    sharedConfig: {
+      status: async () =>
+        ok({
+          root: MOCK_SHARED_ROOT,
+          rootMissing: ['CLAUDE.md'],
+          dirs: [
+            { dir: MOCK_SHARED_ROOT, state: 'root' as const, entries: [] },
+            {
+              dir: MOCK_CONFIG_DIRS['demo-work'] ?? '/Users/demo/work',
+              state: 'checked' as const,
+              entries: SHARED_ENTRIES.map((name) => ({
+                name,
+                state: MOCK_SHARED_STATES[name] ?? ('linked' as const),
+                ...(name === 'projects'
+                  ? { target: '/Users/demo/dotfiles/claude/projects' }
+                  : {}),
+                ...(name === 'session-env' ? { backup: true } : {}),
+              })),
+            },
+          ],
+        }),
     },
 
     /*
