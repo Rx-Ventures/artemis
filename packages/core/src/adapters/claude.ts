@@ -2989,6 +2989,22 @@ class ClaudeTurn implements Run {
     return this.#process.dispose();
   }
 
+  /**
+   * Nobody is reading this turn any more. The process is not this turn's to end.
+   *
+   * A no-op, and deliberately: by the time anything releases a turn its `run.end`
+   * has already been emitted, and the pump decided *there* whether the process
+   * lives on — it stays only while it holds live tasks or a registered schedule,
+   * and closes its own transport otherwise. Anything done here would be a second,
+   * later opinion on a question that has already been answered correctly.
+   *
+   * It exists to stop the registry reaching for {@link dispose} at the end of
+   * every turn, which is the one call that overrules retention on purpose.
+   */
+  release(): Promise<void> {
+    return Promise.resolve();
+  }
+
   /** Refuse a control call aimed at a turn the process has moved on from. */
   #requireActive(): void {
     if (this.#state.ended || !this.#process.isActive(this.#state)) {

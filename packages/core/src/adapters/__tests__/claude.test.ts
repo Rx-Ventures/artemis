@@ -1625,6 +1625,28 @@ describe('a turn that ends while work is still running', () => {
     expect(fake.closed).toBe(false);
   });
 
+  it('survives the registry letting go of the finished turn', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    /*
+     * What the run registry does at the end of every run, and the reason
+     * `release` exists at all: it used to call `dispose`, which is the one act
+     * that overrules retention, so the work kept alive above was killed one
+     * layer up instead — with every adapter test still passing, because none of
+     * them goes through the registry.
+     */
+    await run.release?.();
+
+    expect(fake.closed).toBe(false);
+  });
+
   it('closes it once the last task settles', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);

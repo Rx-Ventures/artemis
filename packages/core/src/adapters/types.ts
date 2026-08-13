@@ -299,6 +299,28 @@ export interface Run {
    * `reason: 'disposed'` before completing the stream.
    */
   dispose(): Promise<void>;
+
+  /**
+   * The caller is finished with this run, which is *not* the same as asking for
+   * the provider to be torn down.
+   *
+   * The registry calls this — not {@link dispose} — when a run ends of its own
+   * accord, and that distinction is the whole reason it exists. For an adapter
+   * where a run owns its transport the two are one act, which is why this is
+   * optional: leave it out and the registry disposes, exactly as it always did.
+   *
+   * It matters where a run is one *turn* of something longer-lived. The Claude
+   * adapter keeps a process across turns when it still holds background work,
+   * subagents or a registered schedule, and disposing a finished turn would take
+   * that process down with it — which is the defect the retention rule exists to
+   * fix, arriving one layer up. There, releasing a turn is a no-op: the process
+   * decided its own fate when the turn ended, and the only thing left to say is
+   * that nobody is reading this turn's stream any more.
+   *
+   * Same obligations as {@link dispose}: idempotent, and it must not reject.
+   * What it must *not* do is end work the user can still see the point of.
+   */
+  release?(): Promise<void>;
 }
 
 /* -------------------------------------------------------------------------- */

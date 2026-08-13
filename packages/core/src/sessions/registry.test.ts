@@ -129,6 +129,23 @@ class FakeRun {
   }
 }
 
+/**
+ * A run that is one *turn* of something longer-lived.
+ *
+ * The shape the Claude adapter has had since a process could outlive the turn
+ * that spawned it: `release()` means "nobody is reading this turn any more" and
+ * leaves the process alone, `dispose()` still means take it down. A `FakeRun`
+ * without one models every other adapter, where the two are one act.
+ */
+class FakeTurn extends FakeRun {
+  releaseCount = 0;
+
+  release(): Promise<void> {
+    this.releaseCount += 1;
+    return Promise.resolve();
+  }
+}
+
 interface Harness {
   readonly registry: RunRegistry;
   readonly runs: FakeRun[];
@@ -161,6 +178,8 @@ function harness(
     disposeTimeoutMs?: number;
     historyLimit?: number;
     adapter?: Partial<{ createRun: () => Promise<FakeRun> }>;
+    /** Build runs that can be released without being torn down — see {@link FakeTurn}. */
+    releasable?: boolean;
     /** Present only when a test is about the history seam; absent models a provider that cannot count. */
     countSessionMessages?: (query: { sessionId: string }) => Promise<number>;
     resolveRun?: RunRegistryOptions['resolveRun'];
@@ -179,7 +198,7 @@ function harness(
       calls.push('createRun');
       resolved.push(runInput);
       if (options.adapter?.createRun) return options.adapter.createRun();
-      const run = new FakeRun();
+      const run = options.releasable === true ? new FakeTurn() : new FakeRun();
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -965,6 +984,97 @@ describe('RunRegistry — termination', () => {
     await expect(registry.dispose(handle.runId)).resolves.toBeDefined();
     expect(errors.some((e) => e.phase === 'dispose')).toBe(true);
     expect(registry.activeCount).toBe(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Releasing versus disposing                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the registry does to a run that ends by itself.
+ *
+ * It used to dispose it, which was right while a run *was* its transport. It is
+ * wrong now that a run can be one turn of a process that is deliberately still
+ * holding something — a backgrounded subagent, an async workflow, a registered
+ * schedule — because disposing the turn takes that process down and kills the
+ * work at the turn boundary, which is the defect the retention rule exists to
+ * fix. So the ordinary end of a run releases it, and only an explicit teardown
+ * disposes.
+ *
+ * `disposeCount` is the assertion in most of these for the same reason the
+ * adapter's own tests assert on `close()`: it is the act that killed the work.
+ */
+describe('RunRegistry — releasing a turn', () => {
+  it('releases a run that ends on its own rather than tearing it down', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    run.emit(sessionStarted(handle.runId), runEnd(handle.runId, 1));
+    await flush();
+
+    expect(run.releaseCount).toBe(1);
+    expect(run.disposeCount).toBe(0);
+    expect(registry.activeCount).toBe(0);
+    expect(registry.get(handle.runId)?.status).toBe('ended');
+  });
+
+  it('disposes instead when the adapter has no release', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    const run = firstRun(runs);
+
+    run.emit(runEnd(handle.runId, 0));
+    await flush();
+
+    expect(run.disposeCount).toBe(1);
+  });
+
+  it('still disposes when a teardown was asked for', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    await registry.dispose(handle.runId);
+
+    expect(run.disposeCount).toBe(1);
+    expect(run.releaseCount).toBe(0);
+  });
+
+  it('leaves the provider alone when a turn is interrupted', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    // Stop means "stop this turn". Work the user never asked to end — the
+    // subagent still running, the schedule still registered — is not this
+    // button's business, and disposing here would take all of it with the turn.
+    await registry.interrupt(handle.runId);
+    run.close();
+    await flush();
+
+    expect(run.disposeCount).toBe(0);
+    expect(run.releaseCount).toBe(1);
+  });
+
+  it('disposes a released run on shutdown, since nothing else can reach it', async () => {
+    const { registry, runs } = harness({ releasable: true });
+    const handle = await registry.start(input());
+    const run = firstRun(runs) as FakeTurn;
+
+    run.emit(runEnd(handle.runId, 0));
+    await flush();
+    expect(run.disposeCount).toBe(0);
+
+    // The run is finished, so `dispose(runId)` is a no-op by design — the
+    // retained tail is the only remaining handle on a process that may still be
+    // alive, and quitting has to be able to end it.
+    await registry.dispose(handle.runId);
+    expect(run.disposeCount).toBe(0);
+
+    await registry.disposeAll();
+    expect(run.disposeCount).toBe(1);
   });
 });
 
