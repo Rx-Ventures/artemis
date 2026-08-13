@@ -326,6 +326,32 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       ...(options.sdkExecutablePath === undefined
         ? {}
         : { sdkExecutablePath: options.sdkExecutablePath }),
+      /*
+       * The provider started a turn nobody asked for — register it.
+       *
+       * It does that when background work settles (it is told the task finished
+       * and answers), and a subagent that outlived its own turn can park on a
+       * permission prompt the same way. The adapter builds the run because only
+       * it can; the registry is what gives that run an id, a replay buffer and
+       * an audience, so this line is the whole of the connection between them.
+       *
+       * `runs` is declared below and captured, not called, until a process is
+       * live — which is necessarily long after both exist.
+       *
+       * Failures are logged and swallowed. This is called from inside the
+       * adapter's own event pump: throwing would take down the stream carrying
+       * the very work being rescued, to complain that it could not be displayed.
+       * The turn still runs and the provider still writes it to the session
+       * file, so the cost of the refusal is a live transcript that catches up
+       * when the conversation is reopened.
+       */
+      onContinuation: (run, context) => {
+        try {
+          runs.adopt(run, context);
+        } catch (error) {
+          log.error(`Could not adopt the provider's own turn on run ${run.runId}`, error);
+        }
+      },
     },
   });
 
