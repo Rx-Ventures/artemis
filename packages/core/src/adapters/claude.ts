@@ -42,7 +42,8 @@
  * dangerous case rather than a harmless one.
  */
 
-import { isAbsolute } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   deleteSession as sdkDeleteSession,
@@ -162,6 +163,7 @@ import type {
   SessionDeleteQuery,
   SessionListPage,
   SessionListQuery,
+  SessionListScope,
   SessionMessageCountQuery,
   SessionMessagesQuery,
   SessionTitleQuery,
@@ -845,10 +847,30 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
      * `cwd` out of the transcript rather than from the directory name. That
      * matters: the directory name is a lossy encoding of the path (every
      * non-alphanumeric character becomes `-`), so reconstructing a cwd from it
-     * would be a guess. Since every Artemis profile has its own
-     * `CLAUDE_CONFIG_DIR`, one such call per profile covers the whole
-     * (profile × project) space, and a session's profile falls out of *which*
-     * config directory it was found in — no extra bookkeeping anywhere.
+     * would be a guess. One such call per *store* covers the whole
+     * (profile × project) space.
+     *
+     * ## Per store, not per profile
+     *
+     * This read used to be per profile, on the reasoning that a profile's
+     * config directory is its own store, so a session's profile falls out of
+     * which directory it was found in and no bookkeeping is needed anywhere.
+     * That holds right up until two profiles resolve to one store — two naming
+     * the same `configDir`, or a `projects/` symlinked between them to share
+     * history across accounts — and then it fails in the most visible way
+     * available: each profile enumerates the same transcripts, every
+     * conversation comes back once per profile, and the sidebar lists it that
+     * many times under that many account labels.
+     *
+     * So scopes are grouped by the store they actually read — `realpath` of the
+     * directory the SDK walks — and each store is read once. The first profile
+     * in a group owns the resulting summaries and the rest ride along in
+     * `alsoInProfiles`, which is what lets a caller resume under an account the
+     * user is already using instead of switching them to whichever profile
+     * happened to sort first.
+     *
+     * Reading once per store rather than once per profile is also simply less
+     * work; the correctness is the reason, but the saving is real.
      *
      * ## Read-only, and credential-free
      *
@@ -868,32 +890,42 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       const unreadableProfiles: ProfileId[] = [];
       let droppedWithoutCwd = 0;
 
-      for (const scope of request.profiles) {
-        const configDir = readEnv(scope.env, CLAUDE_CONFIG_DIR_ENV);
+      for (const group of await groupByStore(request.profiles)) {
+        const owner = group.scopes[0];
+        if (owner === undefined) continue;
 
         let infos;
         try {
-          // No `dir`, no `limit`, no `offset`: everything this profile has.
+          // No `dir`, no `limit`, no `offset`: everything this store has.
           // Pagination belongs to whoever merges across profiles — slicing here
           // would drop one profile's older sessions in favour of another's
           // newer ones before they were ever compared.
-          infos = await withClaudeConfigDir(configDir, () => sdkListSessions({}));
+          infos = await withClaudeConfigDir(group.configDir, () => sdkListSessions({}));
         } catch (error) {
-          unreadableProfiles.push(scope.profileId);
+          // Every profile in the group, not just the first: they were grouped
+          // because they read one store, so one store failing fails all of
+          // them, and reporting only the owner would leave the others looking
+          // like they had simply contributed nothing.
+          for (const scope of group.scopes) unreadableProfiles.push(scope.profileId);
           diagnostic?.(
-            `Could not read session history for profile ${scope.profileId}.`,
+            `Could not read session history for ${group.scopes.length === 1 ? `profile ${owner.profileId}` : `profiles ${group.scopes.map((s) => s.profileId).join(', ')}`}.`,
             describe(error),
           );
           continue;
         }
 
+        const alsoInProfiles = group.scopes.slice(1).map((scope) => scope.profileId);
+
         for (const info of infos) {
-          const summary = mapAggregatedSessionInfo(info, { profileId: scope.profileId });
+          const summary = mapAggregatedSessionInfo(info, { profileId: owner.profileId });
           if (summary === null) {
             droppedWithoutCwd += 1;
             continue;
           }
-          sessions.push(summary);
+          // The field is omitted rather than set empty in the ordinary case, so
+          // "shared" is legible in a payload at a glance and every existing
+          // consumer sees exactly the shape it saw before.
+          sessions.push(alsoInProfiles.length === 0 ? summary : { ...summary, alsoInProfiles });
         }
       }
 
@@ -1232,6 +1264,79 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
 function byNewestThenId(a: SessionSummary, b: SessionSummary): number {
   if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** Profiles that read one store, and the config directory to read it through. */
+interface StoreGroup {
+  /**
+   * The first scope's config directory. Any of the group's would do.
+   *
+   * `undefined` carries the same meaning it has in {@link withClaudeConfigDir}
+   * — read whatever the ambient environment points at — rather than "no store".
+   */
+  readonly configDir: string | undefined;
+  /** In the order the caller supplied. The first owns the summaries. */
+  readonly scopes: SessionListScope[];
+}
+
+/**
+ * Group key for a scope that names no config directory.
+ *
+ * A NUL byte cannot appear in a path, so this can never collide with a real
+ * `realpath` result. Every such scope reads the one ambient store, so they do
+ * belong together — `resolveStoreEnv` always emits the variable, which is why
+ * this is a contract detail rather than a case Artemis reaches.
+ */
+const AMBIENT_STORE = '\0ambient';
+
+/**
+ * The directory the SDK actually walks for a given config directory.
+ *
+ * `listSessions({})` with no `dir` enumerates `$CLAUDE_CONFIG_DIR/projects/*`,
+ * so `projects` — resolved through symlinks — is the store's identity. Resolving
+ * the *config* directory instead would miss the case this exists for: sharing
+ * history across accounts is done by linking `projects` between profiles
+ * precisely because linking the config directory itself would share the
+ * credential and collapse the accounts into one.
+ */
+async function sessionStoreIdentity(configDir: string | undefined): Promise<string> {
+  if (configDir === undefined) return AMBIENT_STORE;
+  try {
+    return await realpath(join(configDir, 'projects'));
+  } catch {
+    /*
+     * No store on disk yet, or one that cannot be resolved.
+     *
+     * Falls back to the config directory's own resolved path rather than to a
+     * shared constant, so profiles that merely have *no history* stay in
+     * separate groups. Collapsing them would be wrong in the one direction that
+     * matters: a session written by one of them a moment later would come back
+     * attributed to another.
+     */
+    return resolve(configDir);
+  }
+}
+
+/**
+ * Group scopes by the store they read, preserving the caller's order.
+ *
+ * Order matters twice over — the first scope in a group owns its summaries, and
+ * the groups themselves come back in first-appearance order — because a history
+ * list that reshuffles between identical reads looks broken. Both fall out of
+ * `Map` preserving insertion order.
+ */
+async function groupByStore(scopes: readonly SessionListScope[]): Promise<StoreGroup[]> {
+  const groups = new Map<string, StoreGroup>();
+
+  for (const scope of scopes) {
+    const configDir = readEnv(scope.env, CLAUDE_CONFIG_DIR_ENV);
+    const key = await sessionStoreIdentity(configDir);
+    const existing = groups.get(key);
+    if (existing === undefined) groups.set(key, { configDir, scopes: [scope] });
+    else existing.scopes.push(scope);
+  }
+
+  return [...groups.values()];
 }
 
 function validateRunInput(input: ResolvedRunInput): void {

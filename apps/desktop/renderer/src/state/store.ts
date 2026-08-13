@@ -1439,6 +1439,22 @@ export function anyPaneLive(state: AppState = useApp.getState()): boolean {
  * and the two must agree: a row that says "running now" and then opens as
  * history is the same disagreement seen from the other end.
  */
+/**
+ * Can this profile reach this session's transcript?
+ *
+ * True for the profile the session was read under, and for any other profile
+ * sharing that store — see `SessionSummary.alsoInProfiles`. Everything else is
+ * false, which is the ordinary answer: a config directory is normally a private
+ * store and a session in one is invisible to every other profile.
+ *
+ * The distinction is about which accounts *may* continue a conversation, not
+ * about which one wrote it. With a shared store nothing records the latter, and
+ * this deliberately does not pretend otherwise.
+ */
+export function canReachSession(session: SessionSummary, profileId: ProfileId): boolean {
+  return session.profileId === profileId || (session.alsoInProfiles?.includes(profileId) ?? false);
+}
+
 function paneForSession(
   sessionId: SessionId,
   state: AppState = useApp.getState(),
@@ -3272,14 +3288,47 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
 
   await attachRun(pane, first);
 
-  const adopted: Pane[] = [];
-  for (const handle of rest) {
+  /*
+   * Backgrounded *before* they are attached, which is not a tidiness point.
+   *
+   * `openPane` registers a pane nowhere — it mints one and starts watching it,
+   * and the caller decides where it lives. Until that pane is in the grid or in
+   * `background`, `allLivePanes` does not list it, so `paneForRun` cannot find
+   * it and `applyAgentEvent` drops every event addressed to its run.
+   * `attachRun` routes the whole replay through exactly that path, so attaching
+   * first and registering afterwards threw away each adopted run's transcript
+   * in full.
+   *
+   * The run state survived it, because `attachRun` writes that through the pane
+   * object it was handed rather than by routing — which is why the failure
+   * looked like a conversation that was working but never printing rather than
+   * like an empty column. It also never repaired itself: this function is the
+   * only reader of the registry, and it runs once, at boot. A `run.end` lost
+   * this way left the column live forever, so the next prompt was steered into
+   * a run the registry had already retired ("Run … has already ended") and Stop
+   * had nothing live to interrupt.
+   *
+   * Registering first also settles the sidebar's working light, which
+   * `syncRunningSessions` recomputes from pane writes: the write that mattered
+   * was `attachRun`'s, and it used to land while the pane was still invisible
+   * to `allLivePanes`.
+   */
+  const adopted = rest.map((handle) => {
     const extra = openPane(seedSession());
-    adopted.push(extra);
-    await attachRun(extra, handle);
-  }
+    // The run goes on before the pane is backgrounded, not just inside
+    // `attachRun` afterwards, so the pane is never in `background` while it
+    // reads as finished. `pruneBackground` counts anything that is not live as
+    // an ended conversation, and a column waiting for its replay would have
+    // qualified — an eviction mid-loop would then drop the pane and orphan the
+    // very run this function exists to rescue.
+    setPaneState(extra, { run: fromHandle(handle) });
+    return { pane: extra, handle };
+  });
   if (adopted.length > 0) {
-    useApp.setState((s) => ({ background: [...s.background, ...adopted] }));
+    useApp.setState((s) => ({ background: [...s.background, ...adopted.map((a) => a.pane)] }));
+  }
+  for (const { pane: extra, handle } of adopted) {
+    await attachRun(extra, handle);
   }
 }
 
@@ -4675,7 +4724,26 @@ export function newSession(
 export function resumeSession(session: SessionSummary, pane: Pane = focusedPane()): void {
   const state = paneState(pane);
 
-  const profile = state.profiles.find((p) => p.id === session.profileId);
+  /*
+   * Which account continues this conversation.
+   *
+   * Normally `session.profileId`, because a transcript lives in exactly one
+   * profile's config directory and no other profile can reach it. When profiles
+   * share a store — see `alsoInProfiles` — several can, and the one that read it
+   * first is an arbitrary winner of a sort, not a fact about the conversation.
+   * Switching the user onto it would change which account the next prompt bills
+   * for no reason they could name.
+   *
+   * So an active profile that can reach the session keeps it. That makes the
+   * common gesture — click a row while working on an account that shares the
+   * store — a resume with nothing switched at all.
+   */
+  const resumeProfileId =
+    state.activeProfileId !== null && canReachSession(session, state.activeProfileId)
+      ? state.activeProfileId
+      : session.profileId;
+
+  const profile = state.profiles.find((p) => p.id === resumeProfileId);
   if (!profile) {
     pushBanner(
       'error',
@@ -4715,7 +4783,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     );
   }
 
-  const switchedProfile = state.activeProfileId !== session.profileId;
+  const switchedProfile = state.activeProfileId !== resumeProfileId;
   const switchedCwd = state.cwd !== session.cwd;
 
   // Whatever this column was working on moves aside rather than being killed —
@@ -4726,7 +4794,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   setPaneState(target, {
     run: null,
     activeProviderId: session.providerId,
-    activeProfileId: session.profileId,
+    activeProfileId: resumeProfileId,
     cwd: session.cwd,
     resumeSessionId: session.id,
     forkOnResume: false,
@@ -4758,7 +4826,10 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     target.transcript.note(
       'info',
       `Continuing "${session.title}"`,
-      `Switched ${moved.join(' and ')}, because a session only resumes under the profile and directory it was created in.`,
+      // Not "the profile it was created in" any more: with a shared store the
+      // session resumes under whichever of several profiles reaches it, and
+      // this note fires only when something actually moved.
+      `Switched ${moved.join(' and ')}, because a session resumes under a profile that can reach it, in the directory it was created in.`,
     );
   }
 

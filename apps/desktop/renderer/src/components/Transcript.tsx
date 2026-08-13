@@ -76,13 +76,19 @@
  *    80%-wide blob would both squeeze the code and fight `.md`, which already
  *    draws its own wells and rules. Ghost strips the chrome and lets the answer
  *    read as full-width prose, which is what it is.
- *  - **One avatar, on the agent's side only.** The gutter of an agent turn
- *    carries the mark of the provider that answered — Anthropic's or OpenAI's
- *    — because with two accounts signed in at once, *which model wrote this* is
- *    a fact about the transcript rather than a setting to go and look up. The
- *    user's own turns get no avatar: alignment and the tinted fill already say
- *    whose they are, so a second constant glyph down the thread would spend
- *    horizontal room to repeat something the layout has already said.
+ *  - **One avatar, on the agent's side only, and it *is* the label.** The
+ *    gutter of an agent turn carries the mark of the provider that answered —
+ *    Anthropic's or OpenAI's — because with two accounts signed in at once,
+ *    *which model wrote this* is a fact about the transcript rather than a
+ *    setting to go and look up. It sits in a ringed disc with no word under it:
+ *    "agent" beneath a mark that already means the agent was a second line of
+ *    gutter spent saying nothing, and on a one-line answer that line was taller
+ *    than the answer. The ring is what makes the mark read as an avatar rather
+ *    than as a stray glyph now that it stands alone. A subagent keeps its word,
+ *    because the mark cannot say *which* agent. The user's own turns get no
+ *    avatar: alignment and the tinted fill already say whose they are, so a
+ *    second constant glyph down the thread would spend horizontal room to
+ *    repeat something the layout has already said.
  *
  * Thinking, tool calls, permissions, notices and run-ends are NOT conversation
  * turns and are not bubbles. They stay the compact rows that expand in place,
@@ -290,10 +296,18 @@ export function Transcript(): ReactElement {
         className="h-full overflow-x-hidden overflow-y-auto overscroll-contain"
       >
         {/* Horizontal padding lives here rather than on each row so every row —
-            bubble or machinery — shares one left edge for its gutter. */}
+            bubble or machinery — shares one left edge for its gutter.
+
+            `gap-0.5` is the whole thread's baseline rhythm, and it is this
+            tight on purpose: a burst of machinery rows is a log, and a log
+            reads as one block or as scattered lines with nothing in between.
+            The air that separates *turns* is bought back where it means
+            something — a margin above a user prompt and above an answer — so
+            the spacing says where the conversation is rather than being spread
+            evenly over rows that are all equally uninteresting. */}
         <div
           ref={contentRef}
-          className={cn('mx-auto flex w-full flex-col gap-1.5 px-4 py-4', COLUMN_MAX[width])}
+          className={cn('mx-auto flex w-full flex-col gap-0.5 px-4 py-4', COLUMN_MAX[width])}
         >
           {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
           <Working />
@@ -334,7 +348,7 @@ function Working(): ReactElement | null {
 
   if (!live || streams || waiting) return null;
   return (
-    <Line label="agent" tone="cyan" avatar={<AgentAvatar />}>
+    <Line label="" avatar={<AgentAvatar />}>
       <span className="flex items-center gap-2 py-1 font-mono text-2xs text-ink-faint">
         <StatusDot tone="cyan" pulse />
         Working — this provider sends whole messages, so nothing appears until the block is done.
@@ -383,9 +397,22 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
  * Shared row chrome: the label gutter and the content column.
  *
  * `w-14` is not arbitrary. `formatClock` produces `HH:MM:SS` — eight monospace
- * characters, ~53px at `text-2xs` — and the clock has to fit on one line under
- * the label or the gutter reflows on hover and shoves every row down by a line.
- * 3.5rem is the first Tailwind step that clears it.
+ * characters, ~53px at `text-2xs` — and the clock has to fit on one line or the
+ * gutter reflows on hover and shoves every row down by a line. 3.5rem is the
+ * first Tailwind step that clears it.
+ *
+ * The clock *cross-fades with the chrome* rather than sitting under it, and
+ * that is what made this pane tight. Stacked, it reserved a second 16px line in
+ * every gutter whether or not anyone was hovering — so a collapsed work marker
+ * was 35px of row around 16px of content, and a one-line answer had 29px of
+ * dead space beneath it. Reserving nothing means the row is exactly as tall as
+ * what is in it, which is why the gap between rows could come down to 2px
+ * without the thread closing up.
+ *
+ * Absolute-positioning the clock *below* the chrome instead would keep the
+ * avatar on screen while hovering, and was tried: with rows 2px apart a revealed
+ * clock paints straight over the next row's label. Swapping is the version that
+ * costs no height and cannot collide.
  *
  * The gutter follows `align`: the row reverses for `end`, so a user turn's
  * label lands on the right next to its bubble. The text alignment has to flip
@@ -398,9 +425,11 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
  * so it has to keep that name even though `components/ui/message` is not used;
  * plain `group` is what the clock's hover reveal uses.
  *
- * `avatar` renders above the label rather than beside it — a 14px mark and a
- * word do not both fit across 3.5rem, and the alternative (widening the spine)
- * would spend the content column's width on every row to decorate two.
+ * `avatar` renders above the label rather than beside it — a disc and a word do
+ * not both fit across 3.5rem, and the alternative (widening the spine) would
+ * spend the content column's width on every row to decorate two. An empty
+ * `label` renders nothing at all, which is how an agent turn gets a gutter that
+ * is just the mark and a notice gets one that is just the clock.
  */
 function Line({
   label,
@@ -427,13 +456,27 @@ function Line({
         className,
       )}
     >
-      <div className="flex w-14 shrink-0 flex-col items-end pt-px group-data-[align=end]/message:items-start">
-        {avatar}
-        <div className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}>
-          {label}
+      <div className="relative flex w-14 shrink-0 flex-col items-end pt-px group-data-[align=end]/message:items-start">
+        <div
+          className={cn(
+            'flex flex-col items-end gap-0.5 transition-opacity group-data-[align=end]/message:items-start',
+            // Only fade for a row that has a clock to arrive in its place. The
+            // working row carries no `ts`, and fading it unconditionally would
+            // trade the mark for an empty gutter.
+            ts === undefined ? undefined : 'group-hover:opacity-0',
+          )}
+        >
+          {avatar}
+          {label === '' ? null : (
+            <div
+              className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}
+            >
+              {label}
+            </div>
+          )}
         </div>
         {ts === undefined ? null : (
-          <div className="mt-0.5 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60">
+          <div className="pointer-events-none absolute top-px right-0 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60 group-data-[align=end]/message:right-auto group-data-[align=end]/message:left-0">
             {formatClock(ts)}
           </div>
         )}
@@ -459,17 +502,21 @@ function Line({
  * Read from the pane rather than the window, which is the same rule one scope
  * out: with several conversations open the window has no single answer, and the
  * one that matters is the account *this* column is billing.
+ *
+ * The disc is the whole difference between a mark and an avatar. Bare, at 13px
+ * against the page, the mark read as decoration on the label under it — and
+ * with that label gone there is nothing left to read it against. A hairline
+ * ring on a barely-raised fill is the least chrome that still says "this is
+ * who", and it is `--line` rather than a brand colour for the reason the marks
+ * are monochrome at all: see `provider-mark.tsx`.
  */
 function AgentAvatar(): ReactElement {
   const providerId = usePane((s) => s.run?.providerId ?? s.activeProviderId);
   const label = useApp((s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId);
   return (
-    <ProviderLogo
-      providerId={providerId}
-      title={label}
-      size={13}
-      className="mb-0.5 text-ink-muted"
-    />
+    <span className="flex size-5 items-center justify-center rounded-full border border-line bg-raised/50 text-ink-muted">
+      <ProviderLogo providerId={providerId} title={label} size={11} />
+    </span>
   );
 }
 
@@ -479,7 +526,7 @@ function AgentAvatar(): ReactElement {
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   return (
-    <Line label="you" tone="lunar" ts={item.ts} align="end" className="turn-in mt-3">
+    <Line label="you" tone="lunar" ts={item.ts} align="end" className="turn-in mt-2">
       <Bubble
         align="end"
         variant="tinted"
@@ -553,11 +600,14 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
 function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement {
   return (
     <Line
-      label={item.agentId ? 'subagent' : 'agent'}
+      // No word for the main agent — the mark above says it, and see the header
+      // note on the avatar. A subagent still needs one: the mark is the
+      // provider, which is the same for both.
+      label={item.agentId ? 'subagent' : ''}
       tone="neutral"
       ts={item.ts}
       avatar={<AgentAvatar />}
-      className="turn-in"
+      className="turn-in mt-1.5"
     >
       {/* `ghost` zeroes the padding and the fill, so `.md` renders against the
           page exactly as it did before the bubbles landed and needs no
@@ -1113,7 +1163,7 @@ function NoticeRow({ item }: { readonly item: NoticeItem }): ReactElement {
   const tone: Tone = item.level === 'error' ? 'signal' : item.level === 'warn' ? 'amber' : 'neutral';
   const Icon = item.level === 'info' ? InfoIcon : TriangleAlertIcon;
   return (
-    <Line label="" tone={tone} ts={item.ts}>
+    <Line label="" ts={item.ts}>
       <div className="flex items-start gap-1.5 py-0.5">
         <Icon
           className={cn('mt-[2px] size-3 shrink-0', toneClasses.text[tone])}
@@ -1171,7 +1221,7 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
   const accounting = setting !== 'never';
 
   return (
-    <Line label="end" tone={tone} ts={item.ts} className="mb-4">
+    <Line label="end" tone={tone} ts={item.ts} className="mt-1.5 mb-2">
       <div
         className={cn(
           'rounded-lg border px-2.5 py-1.5',

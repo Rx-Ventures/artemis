@@ -7,7 +7,10 @@
  * decides what the provider actually inherits.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, PermissionRequestEvent, RunEndEvent } from '@rx-artemis/protocol';
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -1156,20 +1159,23 @@ describe('listAllSessions', () => {
       profiles: [scope('work', '/app/profiles/work'), scope('home', '/app/profiles/home')],
     });
 
-    // One call per profile, each with the profile's own config directory
-    // swapped in, and no `dir` — the SDK enumerates every project itself.
+    // One call per *store*, which for two ordinary profiles is one per
+    // profile, each with its own config directory swapped in and no `dir` —
+    // the SDK enumerates every project itself.
     expect(seen.map((call) => call.configDir)).toEqual([
       '/app/profiles/work',
       '/app/profiles/home',
     ]);
     expect(seen[0]?.options).toEqual({});
 
-    // The profile is not tracked anywhere: it is which directory the session
-    // was found in, and that is what lands on the summary.
+    // The profile is which store the session was found in, and that is what
+    // lands on the summary. `alsoInProfiles` stays absent while stores are
+    // private, so the ordinary payload is exactly the shape it always was.
     expect(result?.sessions).toEqual([
       expect.objectContaining({ id: 'p1', profileId: 'home', cwd: '/repos/blog' }),
       expect.objectContaining({ id: 'w1', profileId: 'work', cwd: '/repos/api' }),
     ]);
+    expect(result?.sessions.every((s) => s.alsoInProfiles === undefined)).toBe(true);
     expect(result?.unreadableProfiles).toEqual([]);
   });
 
@@ -1276,6 +1282,128 @@ describe('listAllSessions', () => {
     // A per-profile limit would drop one profile's older sessions in favour of
     // another's newer ones before the two were ever compared.
     expect(seenOptions).toEqual({});
+  });
+
+  /**
+   * Profiles that resolve to one store — the defect behind #79.
+   *
+   * Real directories, because the grouping is a `realpath` of the directory the
+   * SDK walks and a fake path proves nothing about symlink resolution. Every
+   * other test in this describe uses invented paths, which is precisely why
+   * they never caught this: an unresolvable path falls back to itself and each
+   * profile stays in its own group, so they exercise the private-store case
+   * only.
+   */
+  describe('when profiles share a store', () => {
+    const made: string[] = [];
+
+    afterEach(() => {
+      for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** A root `.claude` plus `count` profile dirs whose `projects` link into it. */
+    function sharedStore(count: number): { root: string; profiles: string[] } {
+      const base = mkdtempSync(join(tmpdir(), 'artemis-store-'));
+      made.push(base);
+
+      const root = join(base, 'root-claude');
+      mkdirSync(join(root, 'projects'), { recursive: true });
+
+      const profiles: string[] = [];
+      for (let n = 0; n < count; n += 1) {
+        const dir = join(base, `profile-${String(n)}`);
+        mkdirSync(dir, { recursive: true });
+        // Exactly what the shared-config script does: link `projects`, and
+        // nothing else, so the credential stays per profile.
+        symlinkSync(join(root, 'projects'), join(dir, 'projects'));
+        profiles.push(dir);
+      }
+      return { root, profiles };
+    }
+
+    it('lists a shared session once and names the profiles that can reach it', async () => {
+      const { profiles } = sharedStore(3);
+      let calls = 0;
+      sdkMock.onListSessions = () => {
+        calls += 1;
+        return Promise.resolve([
+          { sessionId: 'shared', summary: 'One conversation', lastModified: 4, cwd: '/repos/api' },
+        ]);
+      };
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [
+          scope('work', profiles[0] ?? ''),
+          scope('personal', profiles[1] ?? ''),
+          scope('max', profiles[2] ?? ''),
+        ],
+      });
+
+      // One row, not three. This is the bug: before the fix each profile
+      // enumerated the same transcript and the sidebar rendered it per profile.
+      expect(result?.sessions).toHaveLength(1);
+      expect(result?.sessions[0]).toEqual(
+        expect.objectContaining({ id: 'shared', profileId: 'work' }),
+      );
+      // The other two ride along so a caller can resume under either.
+      expect(result?.sessions[0]?.alsoInProfiles).toEqual(['personal', 'max']);
+      // And the store is read once rather than once per profile.
+      expect(calls).toBe(1);
+    });
+
+    it('groups two profiles that simply name the same directory', async () => {
+      const { root } = sharedStore(0);
+      sdkMock.onListSessions = () =>
+        Promise.resolve([{ sessionId: 's', summary: 'x', lastModified: 1, cwd: '/repos/api' }]);
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [scope('a', root), scope('b', root)],
+      });
+
+      // No symlink involved — two profiles are allowed to name one configDir,
+      // and that shares a store just as thoroughly.
+      expect(result?.sessions).toHaveLength(1);
+      expect(result?.sessions[0]?.alsoInProfiles).toEqual(['b']);
+    });
+
+    it('reports every profile in the group when the shared store cannot be read', async () => {
+      const { profiles } = sharedStore(2);
+      sdkMock.onListSessions = () => Promise.reject(new Error('EACCES: permission denied'));
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [scope('work', profiles[0] ?? ''), scope('personal', profiles[1] ?? '')],
+      });
+
+      // Naming only the group's first profile would leave the other looking
+      // like it had merely contributed nothing, when it is just as broken.
+      expect(result?.unreadableProfiles).toEqual(['work', 'personal']);
+    });
+
+    it('keeps profiles with no store yet apart', async () => {
+      const base = mkdtempSync(join(tmpdir(), 'artemis-store-'));
+      made.push(base);
+      const a = join(base, 'a');
+      const b = join(base, 'b');
+      mkdirSync(a, { recursive: true });
+      mkdirSync(b, { recursive: true });
+
+      sdkMock.onListSessions = () => {
+        const dir = process.env['CLAUDE_CONFIG_DIR'];
+        return Promise.resolve([
+          { sessionId: dir === a ? 'sa' : 'sb', summary: 'x', lastModified: 1, cwd: '/repos/api' },
+        ]);
+      };
+
+      const result = await createClaudeAdapter().listAllSessions?.({
+        profiles: [scope('a', a), scope('b', b)],
+      });
+
+      // Neither has a `projects` directory, so neither resolves. Collapsing
+      // them on that basis would be wrong in the direction that matters: a
+      // session written by one a moment later would come back under the other.
+      expect(result?.sessions.map((s) => s.profileId).sort()).toEqual(['a', 'b']);
+      expect(result?.sessions.every((s) => s.alsoInProfiles === undefined)).toBe(true);
+    });
   });
 
   it('answers an empty profile list without touching the SDK', async () => {

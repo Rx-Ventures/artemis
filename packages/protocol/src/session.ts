@@ -31,8 +31,34 @@ import type { ProviderId } from './provider.js';
 export interface SessionSummary {
   readonly id: SessionId;
   readonly providerId: ProviderId;
-  /** The profile whose config directory this session was found in. */
+  /**
+   * The profile whose config directory this session was found in.
+   *
+   * When several reach it — see {@link alsoInProfiles} — this is the first of
+   * them in the order the profiles were listed, chosen so that repeated reads
+   * agree with each other rather than because it means anything.
+   */
   readonly profileId: ProfileId;
+  /**
+   * The *other* profiles whose config directory reaches this same transcript,
+   * when more than one does. Absent in the ordinary case, which is one.
+   *
+   * A profile's config directory is normally its own store, so a session
+   * belongs to exactly one account and `profileId` says which. That stops being
+   * true the moment two profiles resolve to one store — two profiles naming the
+   * same `configDir`, or a `projects/` symlinked between them to share history
+   * across accounts. Then a single conversation is reachable from several, and
+   * a field that can only name one of them is not enough to describe it.
+   *
+   * Carried rather than inferred because only the adapter can answer it: it is
+   * the component that knows where a provider keeps its store and can resolve
+   * two paths to the same place. Consumers use it for two things — not listing
+   * one conversation once per profile, and resuming under an account the user
+   * is already using instead of switching them to an arbitrary one.
+   *
+   * Excludes {@link profileId}. The full set is `[profileId, ...alsoInProfiles]`.
+   */
+  readonly alsoInProfiles?: readonly ProfileId[];
   /** Working directory the session ran in. */
   readonly cwd: string;
 
