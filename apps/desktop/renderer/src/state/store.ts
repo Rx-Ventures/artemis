@@ -3231,14 +3231,47 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
 
   await attachRun(pane, first);
 
-  const adopted: Pane[] = [];
-  for (const handle of rest) {
+  /*
+   * Backgrounded *before* they are attached, which is not a tidiness point.
+   *
+   * `openPane` registers a pane nowhere — it mints one and starts watching it,
+   * and the caller decides where it lives. Until that pane is in the grid or in
+   * `background`, `allLivePanes` does not list it, so `paneForRun` cannot find
+   * it and `applyAgentEvent` drops every event addressed to its run.
+   * `attachRun` routes the whole replay through exactly that path, so attaching
+   * first and registering afterwards threw away each adopted run's transcript
+   * in full.
+   *
+   * The run state survived it, because `attachRun` writes that through the pane
+   * object it was handed rather than by routing — which is why the failure
+   * looked like a conversation that was working but never printing rather than
+   * like an empty column. It also never repaired itself: this function is the
+   * only reader of the registry, and it runs once, at boot. A `run.end` lost
+   * this way left the column live forever, so the next prompt was steered into
+   * a run the registry had already retired ("Run … has already ended") and Stop
+   * had nothing live to interrupt.
+   *
+   * Registering first also settles the sidebar's working light, which
+   * `syncRunningSessions` recomputes from pane writes: the write that mattered
+   * was `attachRun`'s, and it used to land while the pane was still invisible
+   * to `allLivePanes`.
+   */
+  const adopted = rest.map((handle) => {
     const extra = openPane(seedSession());
-    adopted.push(extra);
-    await attachRun(extra, handle);
-  }
+    // The run goes on before the pane is backgrounded, not just inside
+    // `attachRun` afterwards, so the pane is never in `background` while it
+    // reads as finished. `pruneBackground` counts anything that is not live as
+    // an ended conversation, and a column waiting for its replay would have
+    // qualified — an eviction mid-loop would then drop the pane and orphan the
+    // very run this function exists to rescue.
+    setPaneState(extra, { run: fromHandle(handle) });
+    return { pane: extra, handle };
+  });
   if (adopted.length > 0) {
-    useApp.setState((s) => ({ background: [...s.background, ...adopted] }));
+    useApp.setState((s) => ({ background: [...s.background, ...adopted.map((a) => a.pane)] }));
+  }
+  for (const { pane: extra, handle } of adopted) {
+    await attachRun(extra, handle);
   }
 }
 
