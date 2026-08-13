@@ -55,6 +55,7 @@ import { isFileAttachment, isImageAttachment } from '@rx-artemis/protocol';
 
 import type {
   ConfigSource,
+  ContinuationContext,
   EnvBundle,
   ProviderAdapter,
   ResolvedRunInput,
@@ -462,6 +463,64 @@ export class RunRegistry {
       ...(historyOffset === undefined ? {} : { historyOffset }),
     };
 
+    this.#register(handle, run);
+    return handle;
+  }
+
+  /**
+   * Take on a run this registry did not start.
+   *
+   * The provider can open a turn nobody asked for: it answers when background
+   * work settles, and a subagent that outlived its own turn can park on a
+   * permission prompt. The adapter builds the {@link Run} for those — it is the
+   * only thing that can — and hands it up here, because ids, the replay buffer
+   * and the event fan-out belong to the registry. From this line on the run is
+   * indistinguishable from one {@link start} produced: same entry, same pump,
+   * same guarantee of exactly one `run.end`.
+   *
+   * Synchronous, unlike `start`, and it has to be: it is called from inside the
+   * adapter's own event pump, and every fact it would otherwise have to look up
+   * — capabilities, the conversation, whose account and which directory — is
+   * already fixed on the run or the process that opened it.
+   *
+   * No `historyOffset`. The seam it measures is "how much of the session file
+   * predates this run", and there is no honest answer here: by the time a turn
+   * announces itself the provider has already written part of it. Absent means
+   * "this cannot be counted", which is a case the renderer already handles by
+   * showing no earlier history rather than a duplicated turn — and the pane this
+   * lands in is normally the one that has the conversation on screen already.
+   *
+   * @throws {RunError} `cancelled` when the registry is shutting down.
+   * @throws {RunError} `invalid_request` when the run id is already known.
+   */
+  adopt(run: Run, context: ContinuationContext): RunHandle {
+    if (this.#closed) {
+      throw new RunError('cancelled', 'The engine is shutting down and cannot adopt runs');
+    }
+    const runId = run.runId;
+    if (this.#runs.has(runId) || this.#starting.has(runId) || this.#ended.has(runId)) {
+      throw new RunError('invalid_request', `Run "${runId}" is already known`);
+    }
+
+    const handle: RunHandle = {
+      runId,
+      providerId: context.providerId,
+      profileId: context.profileId,
+      cwd: context.cwd,
+      // Already under way — the turn exists because the provider started it.
+      // `starting` would describe a run waiting on a spawn that already happened.
+      status: 'running',
+      capabilities: run.capabilities,
+      startedAt: this.#now(),
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+    };
+
+    this.#register(handle, run);
+    return handle;
+  }
+
+  /** Index a run and start draining it. The one place a {@link RunEntry} is built. */
+  #register(handle: RunHandle, run: Run): RunEntry {
     const entry: RunEntry = {
       handle,
       run,
@@ -477,12 +536,11 @@ export class RunRegistry {
       interruptRequested: false,
       pump: Promise.resolve(),
     };
-    this.#runs.set(runId, entry);
+    this.#runs.set(handle.runId, entry);
     // The pump handles its own failures; the `catch` is belt-and-braces so an
     // unexpected one can never surface as an unhandled rejection.
     entry.pump = this.#pump(entry).catch(() => undefined);
-
-    return handle;
+    return entry;
   }
 
   /**

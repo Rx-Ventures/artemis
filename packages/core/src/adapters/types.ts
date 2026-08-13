@@ -323,6 +323,28 @@ export interface Run {
   release?(): Promise<void>;
 }
 
+/**
+ * What a caller needs in order to register a run it did not ask for.
+ *
+ * A provider can open a turn of its own — answering when background work
+ * settles, or asking for a tool on behalf of a subagent whose own turn ended
+ * long ago. The adapter is the only thing that can build the {@link Run} for
+ * one, and it cannot register it: run ids and the event fan-out belong to the
+ * host. So it reports the run, with the four facts the host has no other way to
+ * know about a turn it never started.
+ *
+ * Every one of them is fixed when the process is spawned, which is what makes
+ * this a snapshot rather than a lookup: a continuation is by definition inside
+ * the conversation that process is already serving.
+ */
+export interface ContinuationContext {
+  readonly providerId: ProviderId;
+  readonly profileId: ProfileId;
+  readonly cwd: string;
+  /** The conversation the turn is being written into, once the provider has said. */
+  readonly sessionId: SessionId | undefined;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Session listing                                                            */
 /* -------------------------------------------------------------------------- */

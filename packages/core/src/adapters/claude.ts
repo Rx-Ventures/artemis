@@ -158,6 +158,7 @@ import type {
   AdapterAvailability,
   AggregatedSessionList,
   AllSessionsQuery,
+  ContinuationContext,
   EnvBundle,
   InterruptResult,
   ModelCatalogue,
@@ -1751,14 +1752,6 @@ interface ClaudeRunDeps {
   readonly onContinuation?: (run: Run, context: ContinuationContext) => void;
   /** Ids for those turns. Injected so tests do not depend on `randomUUID`. */
   readonly newRunId?: () => RunId;
-}
-
-/** What a caller needs to register a run it did not ask for. */
-export interface ContinuationContext {
-  readonly providerId: ProviderId;
-  readonly profileId: ProfileId;
-  readonly cwd: string;
-  readonly sessionId: SessionId | undefined;
 }
 
 /**

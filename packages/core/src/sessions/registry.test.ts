@@ -11,9 +11,11 @@ import type {
 } from '@rx-artemis/protocol';
 
 import type {
+  ContinuationContext,
   InterruptResult,
   ProviderAdapter,
   ResolvedRunInput,
+  Run,
   SendResult,
 } from '../adapters/types.js';
 import { RunError } from './errors.js';
@@ -1075,6 +1077,126 @@ describe('RunRegistry — releasing a turn', () => {
 
     await registry.disposeAll();
     expect(run.disposeCount).toBe(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Adopting a turn the registry did not start                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The provider can open a turn nobody asked for: it answers when background
+ * work settles, and a subagent that outlived its own turn can park on a
+ * permission prompt. The adapter builds the run — it is the only thing that can
+ * — and hands it here, because ids, the replay buffer and the fan-out belong to
+ * the registry.
+ *
+ * What these assert is that an adopted run is not a second-class one: same
+ * entry, same pump, same termination guarantee, same replay.
+ */
+describe('RunRegistry — adopting', () => {
+  const context: ContinuationContext = {
+    providerId: 'claude',
+    profileId: 'profile-1',
+    cwd: '/repo',
+    sessionId: 'session-abc',
+  };
+
+  /** A run the adapter built for a turn it did not have a prompt for. */
+  function continuation(runId = 'run-c1'): FakeTurn {
+    return Object.assign(new FakeTurn(), {
+      runId,
+      providerId: 'claude',
+      capabilities: FULL_CAPABILITIES,
+      status: 'running',
+      sessionId: 'session-abc',
+    });
+  }
+
+  const adopt = (registry: RunRegistry, run: FakeTurn, ctx: ContinuationContext = context) =>
+    registry.adopt(run as unknown as Run, ctx);
+
+  it('registers the run and reports it as live', () => {
+    const { registry } = harness();
+    const handle = adopt(registry, continuation());
+
+    expect(handle).toMatchObject({
+      runId: 'run-c1',
+      providerId: 'claude',
+      profileId: 'profile-1',
+      cwd: '/repo',
+      status: 'running',
+      sessionId: 'session-abc',
+      capabilities: FULL_CAPABILITIES,
+    });
+    expect(registry.isActive('run-c1')).toBe(true);
+    expect(registry.list().map((h) => h.runId)).toContain('run-c1');
+  });
+
+  it('carries no history offset, because the seam cannot be known after the fact', () => {
+    const { registry } = harness();
+    // By the time a turn announces itself the provider has already written part
+    // of it, so any count taken here is wrong by an amount nothing can subtract.
+    expect(adopt(registry, continuation()).historyOffset).toBeUndefined();
+  });
+
+  it('pumps the adopted run to subscribers and retains it for replay', async () => {
+    const { registry } = harness();
+    const received: AgentEvent[] = [];
+    registry.subscribe((event) => received.push(event));
+
+    const run = continuation();
+    adopt(registry, run);
+    run.emit(sessionStarted('run-c1'), textComplete('run-c1', 1, 'the task finished'));
+    await flush();
+
+    expect(received.map((e) => e.type)).toEqual(['session.started', 'text.complete']);
+    expect(registry.eventsSince('run-c1', 0)).toHaveLength(1);
+  });
+
+  it('gives an adopted run the same guaranteed ending', async () => {
+    const { registry } = harness();
+    const received: AgentEvent[] = [];
+    registry.subscribe((event) => received.push(event));
+
+    const run = continuation();
+    adopt(registry, run);
+    run.emit(sessionStarted('run-c1'));
+    await flush();
+    run.close(); // the provider's stream stops without a run.end of its own
+
+    await flush();
+    const last = received.at(-1) as RunEndEvent | undefined;
+    expect(last?.type).toBe('run.end');
+    expect(last?.reason).toBe('completed');
+    expect(registry.activeCount).toBe(0);
+  });
+
+  it('answers a permission request raised on an adopted run', async () => {
+    const { registry } = harness();
+    const run = continuation();
+    adopt(registry, run);
+
+    run.emit(permissionRequest('run-c1', 0, 'req-1'));
+    await flush();
+    expect(registry.get('run-c1')?.status).toBe('awaiting_permission');
+
+    await registry.respondToPermission('run-c1', 'req-1', { behavior: 'allow' });
+    expect(run.answered).toEqual([{ requestId: 'req-1', decision: { behavior: 'allow' } }]);
+  });
+
+  it('refuses a run id it already knows', async () => {
+    const { registry } = harness();
+    const handle = await registry.start(input({ runId: 'run-1' }));
+
+    expect(() => adopt(registry, continuation(handle.runId))).toThrow(RunError);
+  });
+
+  it('refuses while the engine is shutting down', async () => {
+    const { registry } = harness();
+    await registry.disposeAll();
+
+    expect(() => adopt(registry, continuation())).toThrow(RunError);
   });
 });
 
