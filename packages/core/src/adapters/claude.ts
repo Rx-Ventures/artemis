@@ -58,6 +58,7 @@ import type {
   Options,
   PermissionResult,
   Query,
+  SDKSessionInfo,
   SDKUserMessage,
   Settings,
   SettingSource,
@@ -130,6 +131,7 @@ import {
   toPermissionResult,
 } from './mapper.js';
 import type { ClaudeMapperState } from './mapper.js';
+import { recoverSessionCwds } from './claudeSessionCwd.js';
 import { replayStoredSession } from './history.js';
 import type { StoredMessage } from './history.js';
 import { readPlanUsage } from './planUsage.js';
@@ -889,6 +891,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       const sessions: SessionSummary[] = [];
       const unreadableProfiles: ProfileId[] = [];
       let droppedWithoutCwd = 0;
+      let recoveredWithoutCwd = 0;
 
       for (const group of await groupByStore(request.profiles)) {
         const owner = group.scopes[0];
@@ -915,20 +918,61 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         }
 
         const alsoInProfiles = group.scopes.slice(1).map((scope) => scope.profileId);
+        // The field is omitted rather than set empty in the ordinary case, so
+        // "shared" is legible in a payload at a glance and every existing
+        // consumer sees exactly the shape it saw before.
+        const own = (summary: SessionSummary): SessionSummary =>
+          alsoInProfiles.length === 0 ? summary : { ...summary, alsoInProfiles };
+
+        const withoutCwd: SDKSessionInfo[] = [];
 
         for (const info of infos) {
           const summary = mapAggregatedSessionInfo(info, { profileId: owner.profileId });
           if (summary === null) {
-            droppedWithoutCwd += 1;
+            withoutCwd.push(info);
             continue;
           }
-          // The field is omitted rather than set empty in the ordinary case, so
-          // "shared" is legible in a payload at a glance and every existing
-          // consumer sees exactly the shape it saw before.
-          sessions.push(alsoInProfiles.length === 0 ? summary : { ...summary, alsoInProfiles });
+          sessions.push(own(summary));
+        }
+
+        /*
+         * The sessions the SDK could not name a directory for.
+         *
+         * Dropping them is what made a conversation disappear from the sidebar
+         * with its transcript intact on disk — the worst available outcome,
+         * because it reads as data loss. The directory is in the file; see
+         * `claudeSessionCwd.ts` for which sessions the SDK loses it for and why
+         * reading it back is authoritative rather than a guess.
+         *
+         * A second pass, so the ordinary path is untouched: a store whose
+         * sessions all report a cwd never opens a file here.
+         */
+        if (withoutCwd.length > 0) {
+          const recovered = await recoverSessionCwds({
+            configDir: group.configDir,
+            sessionIds: withoutCwd.map((info) => info.sessionId),
+          });
+
+          for (const info of withoutCwd) {
+            const cwd = recovered.get(info.sessionId);
+            if (cwd === undefined) {
+              droppedWithoutCwd += 1;
+              continue;
+            }
+            // The recovered directory plays exactly the role a scoped listing's
+            // `dir` plays, which is why this is the per-project mapper rather
+            // than a third code path.
+            sessions.push(own(mapSessionInfo(info, { profileId: owner.profileId, fallbackCwd: cwd })));
+            recoveredWithoutCwd += 1;
+          }
         }
       }
 
+      if (recoveredWithoutCwd > 0) {
+        diagnostic?.(
+          `Read the working directory out of the transcript for ${String(recoveredWithoutCwd)} session(s) the provider reported without one.`,
+        );
+      }
       if (droppedWithoutCwd > 0) {
         diagnostic?.(
           `Skipped ${String(droppedWithoutCwd)} session(s) whose working directory could not be read from the transcript.`,
