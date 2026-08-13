@@ -31,6 +31,7 @@ import type {
 } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { forgetFolds } from '@/lib/foldMemory';
 
 class NoopObserver {
   observe(): void {}
@@ -127,6 +128,9 @@ function answersSent(): readonly QuestionAnswer[] | undefined {
 beforeEach(() => {
   sent = [];
   respond = () => ({ ok: true, value: { requestId: REQUEST.id } });
+  // A fresh transcript, and no memory of folds opened in the last test: fold
+  // state is keyed by transcript id and these fixtures reuse ids.
+  forgetFolds();
   appTranscript().reset();
   seedApp({
     run: {

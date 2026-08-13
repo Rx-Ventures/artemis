@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { forgetFolds } from '@/lib/foldMemory';
 
 class NoopObserver {
   observe(): void {}
@@ -206,6 +207,9 @@ beforeEach(() => {
   for (const pane of useApp.getState().grid.flatMap((row) => row.panes).slice(1)) {
     closePane(pane.id);
   }
+  // A fresh transcript, and no memory of folds opened in the last test: fold
+  // state is keyed by transcript id and these fixtures reuse ids.
+  forgetFolds();
   focusedPane().transcript.reset();
   focusedPane().transcript.flush();
   useApp.setState({ preview: null });

@@ -159,6 +159,7 @@ import {
 
 import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
+import { useFold } from '../hooks/useFold';
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { formatBytes } from '../lib/attachments';
 import { detectArtifact } from '../lib/artifact';
@@ -673,8 +674,13 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
   return (
     <Line label="thinking" tone="sage" ts={item.ts}>
       {/* Collapsed by default: thinking is context for the answer, not the
-          answer, and expanded by default it buries every other row. */}
+          answer, and expanded by default it buries every other row. Opened by
+          hand it stays open, keyed by the block's own id — which is the same key
+          {@link ThinkingCard} uses, so a block that moves between the two
+          renderings keeps the reader's choice. It is one thinking block either
+          way, and the model decides which shape it takes. */}
       <Fold
+        rememberAs={item.id}
         triggerClassName="text-2xs"
         summary={
           <span className="flex min-w-0 items-center gap-1.5 text-sage/80">
@@ -702,13 +708,15 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
  * just what the model was working through between two calls.
  */
 function ThinkingCard({ item }: { readonly item: ThinkingItem }): ReactElement {
-  const [open, setOpen] = useState(false);
+  // Not a `Fold` — see the note above on why this wears the card's chrome — but
+  // the same state and so the same memory, under the same key `ThinkingRow` uses.
+  const [open, setOpen] = useFold(item.id);
   return (
     <div className={cn('rounded-lg border bg-panel/60', open ? 'border-sage/40' : 'border-line')}>
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
         className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <BrainIcon className="size-3 shrink-0 text-sage/80" aria-hidden="true" />
@@ -799,10 +807,13 @@ const TOOL_TONE: Record<ToolItem['status'], Tone> = {
  * own spine would put a second `tool` label under the marker's.
  *
  * Open state is local, which is what lets it survive the re-renders driven by
- * the external transcript store.
+ * the external transcript store — and remembered under the call's own id, so
+ * opening a card, leaving the session and coming back does not close it again.
+ * The two folds *inside* it keep their own memory, keyed off the same id: a
+ * reader who opened the result and closed the input meant both.
  */
 function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFold(item.id);
   const tone = TOOL_TONE[item.status];
   const summary = item.title ?? summarizeToolInput(item.input);
   const failed = item.status === 'error' || item.status === 'denied';
@@ -863,7 +874,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
           <button
             type="button"
             aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => setOpen(!open)}
             aria-label={open ? 'Hide the diff' : 'Show the diff'}
             className="shrink-0 rounded p-0.5 text-ink-faint outline-none hover:bg-raised/60 focus-visible:ring-2 focus-visible:ring-ring/50"
           >
@@ -915,7 +926,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
         <button
           type="button"
           aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setOpen(!open)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <Icon
@@ -977,6 +988,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
             // The raw arguments stay available even when a diff was rendered:
             // the diff is a reading of the input, and the input is the record.
             defaultOpen={edit === null}
+            rememberAs={`${item.id}:input`}
             triggerClassName="text-2xs"
             summary={
               <span className="font-mono text-2xs">{edit ? 'raw arguments' : 'input'}</span>
@@ -992,6 +1004,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
               // A failure opens itself. Everything else stays folded: a
               // successful `Read` of a 4,000-line file is noise.
               defaultOpen={failed}
+              rememberAs={`${item.id}:result`}
               triggerClassName="text-2xs"
               summary={
                 <span className={cn('font-mono text-2xs', failed && 'text-signal')}>
@@ -1090,6 +1103,11 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
         // fails *after* being drawn does not spring open under the reader — the
         // signal-toned count on the line is what catches that case.
         defaultOpen={group.failed > 0}
+        // And read once *per mount*, which is how a failed group used to reopen
+        // itself every time the reader came back to the session having closed
+        // it. The group id keys the memory: it is `g:` + its first member's id,
+        // so it names the same burst after a replay. See `lib/foldMemory.ts`.
+        rememberAs={group.id}
         triggerClassName="text-2xs"
         summary={
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
