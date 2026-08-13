@@ -49,6 +49,17 @@ class FakeQuery {
   interruptImpl: () => Promise<{ still_queued: string[] }> = () =>
     Promise.resolve({ still_queued: [] });
 
+  /**
+   * The mid-session control requests, recorded in order.
+   *
+   * These are what make attaching to a live process sound rather than a silent
+   * downgrade — a turn asking for a different model has to move the process onto
+   * it — so the tests assert on them by name.
+   */
+  readonly models: (string | undefined)[] = [];
+  readonly modes: string[] = [];
+  readonly flags: unknown[] = [];
+
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return this.messages[Symbol.asyncIterator]();
   }
@@ -56,6 +67,18 @@ class FakeQuery {
   interrupt(): Promise<{ still_queued: string[] }> {
     this.interruptCalls += 1;
     return this.interruptImpl();
+  }
+
+  async setModel(model?: string): Promise<void> {
+    this.models.push(model);
+  }
+
+  async setPermissionMode(mode: string): Promise<void> {
+    this.modes.push(mode);
+  }
+
+  async applyFlagSettings(settings: unknown): Promise<void> {
+    this.flags.push(settings);
   }
 
   close(): void {
@@ -1666,5 +1689,164 @@ describe('a turn that ends while work is still running', () => {
     // Dropping the conversation is the escape hatch, and it has to win over
     // retention or a wedged process would have nothing that ends it.
     expect(fake.closed).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The next turn joins a process that is still running                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Attaching is not an optimisation, it is what stops a correctness failure.
+ *
+ * Once a process can outlive its turn, a fresh spawn for the next message would
+ * put two CLIs on one conversation — both appending to the same
+ * `projects/…/<id>.jsonl`, with the second `--resume`ing a file the first is
+ * still writing. Every case here is about which of those two happened.
+ *
+ * `installQuery` captures the *latest* harness, so a second `query()` call is
+ * visible as a second harness object; a turn that attached leaves the first one
+ * in place.
+ */
+describe('attaching to a live process', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const busy = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
+  /** Turn one, left holding a background task so its process stays. */
+  async function firstTurn(over?: Partial<ResolvedRunInput>) {
+    const adapter = createClaudeAdapter();
+    const { harness } = installQuery();
+    const run = await adapter.createRun({ ...BASE_INPUT, ...over });
+    const first = harness();
+
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(tasksChanged(busy));
+    first.fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    return { adapter, first, harness };
+  }
+
+  /** What a second message from the renderer looks like: same session, resumed. */
+  const nextTurn = (over?: Partial<ResolvedRunInput>): ResolvedRunInput => ({
+    ...BASE_INPUT,
+    runId: 'run-2',
+    prompt: 'and now the other thing',
+    resumeSessionId: 'sess-abc',
+    ...over,
+  });
+
+  it('serves the next turn on the same process instead of spawning a second', async () => {
+    const { adapter, first } = await firstTurn();
+    expect(first.fake.closed).toBe(false);
+
+    const second = await adapter.createRun(nextTurn());
+
+    // No second `query()`: the same fake is still the only transport, and the
+    // turn is a new run on it.
+    expect(second.runId).toBe('run-2');
+    expect(first.fake.closed).toBe(false);
+
+    // And it is a real turn — the process's stream feeds it.
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(tasksChanged([]));
+    first.fake.messages.push(RESULT_MESSAGE);
+    const events = await drain(second.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end' });
+    // Each turn numbers its own events from zero, densely, which is the contract
+    // a run has and the reason turns stayed the unit of a run.
+    expect(events[0]?.seq).toBe(0);
+  });
+
+  it('spawns a fresh process when the last one is gone', async () => {
+    const adapter = createClaudeAdapter();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const first = harness();
+    first.fake.messages.push(INIT_MESSAGE);
+    first.fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(first.fake.closed).toBe(true);
+
+    const second = await adapter.createRun(nextTurn());
+    const later = harness();
+
+    // A closed process must never be attached to: the next message would wait
+    // for a turn on a CLI that has stopped reading it.
+    expect(later.fake).not.toBe(first.fake);
+    expect(second.runId).toBe('run-2');
+  });
+
+  it('refuses to serve a fork on the process that owns the original', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(nextTurn({ forkSession: true }));
+
+    // A fork is a new conversation by definition; serving it here would write
+    // the branch into the trunk.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('refuses a turn pointed at a different directory', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(nextTurn({ cwd: REAL_CWD }));
+
+    // The cwd is fixed at spawn, and a session only resumes in the directory it
+    // was created in.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('refuses a turn pointed at a different store', async () => {
+    const { adapter, first, harness } = await firstTurn();
+
+    await adapter.createRun(
+      nextTurn({ env: { ...BASE_INPUT.env, CLAUDE_CONFIG_DIR: '/app/profiles/other' } }),
+    );
+
+    // Which account runs is fixed at spawn — the whole reason #98 locks a session
+    // to its profile. A session id does not resolve in another profile's store.
+    expect(harness().fake).not.toBe(first.fake);
+  });
+
+  it('moves the live process onto the new turn’s model and mode', async () => {
+    const { adapter, first } = await firstTurn({ model: 'sonnet', permissionMode: 'default' });
+
+    await adapter.createRun(nextTurn({ model: 'opus', permissionMode: 'plan' }));
+
+    // Silently running the new turn on the old model would be the failure that
+    // makes attaching unsafe: the status line would name one model and another
+    // would answer.
+    expect(first.fake.models).toEqual(['opus']);
+    expect(first.fake.modes).toEqual(['plan']);
+  });
+
+  it('sends no control requests when nothing changed', async () => {
+    const { adapter, first } = await firstTurn({ model: 'sonnet', permissionMode: 'default' });
+
+    await adapter.createRun(nextTurn({ model: 'sonnet', permissionMode: 'default' }));
+
+    expect(first.fake.models).toEqual([]);
+    expect(first.fake.modes).toEqual([]);
+    expect(first.fake.flags).toEqual([]);
+  });
+
+  it('clears a speed flag the new turn turned off, rather than omitting it', async () => {
+    const { adapter, first } = await firstTurn({ fastMode: true, effort: 'high' });
+
+    await adapter.createRun(nextTurn({ fastMode: false, effort: 'low' }));
+
+    // Successive `applyFlagSettings` calls shallow-merge and `undefined` is
+    // dropped by JSON, so omitting a flag leaves the previous turn's value in
+    // force — which would make turning fast mode off between turns do nothing.
+    expect(first.fake.flags).toEqual([{ fastMode: null, ultracode: null, effortLevel: 'low' }]);
   });
 });

@@ -54,6 +54,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
+  EffortLevel,
   ModelInfo,
   Options,
   PermissionResult,
@@ -85,6 +86,7 @@ import type {
   Capabilities,
   JsonObject,
   PermissionDecision,
+  PermissionMode,
   PermissionRequestId,
   PermissionResolvedEvent,
   PlanUsage,
@@ -720,6 +722,23 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       ? {}
       : { pathToClaudeCodeExecutable: options.sdkExecutablePath };
 
+  /**
+   * Processes that outlived the turn that spawned them, by the conversation they
+   * are writing to.
+   *
+   * Keyed on the session id alone, with the store and directory checked by
+   * `canServe` before anything is served: a session id is already unique across
+   * both — it is minted per conversation and resolves under exactly one config
+   * directory — so keying on a composite would be spelling out a uniqueness the
+   * id already has, and would need the id anyway to look anything up.
+   *
+   * Bounded by the retention rule rather than by a cap: an entry exists only
+   * while its process holds live work or a registered schedule, and disappears
+   * the moment the transport goes — see `onClosed`. A conversation the user drops
+   * disposes its run, which closes the process, which empties the entry.
+   */
+  const live = new Map<SessionId, ClaudeProcess>();
+
   return {
     id: CLAUDE_PROVIDER_ID,
     label: 'Claude',
@@ -758,6 +777,29 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       validateRunInput(input);
 
       /*
+       * Is a process for this conversation already running?
+       *
+       * It is whenever the previous turn left work behind — a backgrounded
+       * subagent, a workflow, a registered schedule — because the pump now keeps
+       * the transport for exactly that case. Attaching is not an optimisation
+       * here; it is what stops there being *two* CLIs on one conversation, both
+       * appending to the same `projects/…/<id>.jsonl` with the second resuming a
+       * file the first is still writing.
+       *
+       * It is also the better outcome by a distance: the conversation is already
+       * in the process's context, so nothing re-reads a transcript that only
+       * grows, and the model's own prompt cache is still warm.
+       */
+      const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
+      const alive = input.resumeSessionId === undefined ? undefined : live.get(input.resumeSessionId);
+      if (alive !== undefined && alive.canServe(input, configDir)) {
+        diagnostic?.(
+          `Run ${input.runId}: continuing on the process already serving session ${input.resumeSessionId ?? '—'}.`,
+        );
+        return alive.continueWith(input);
+      }
+
+      /*
        * The staging directory is created for *every* run, attachments or not.
        *
        * It has to exist before `start()`, because the only way to tell the SDK
@@ -793,6 +835,18 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             ...(options?.sdkExecutablePath === undefined
               ? {}
               : { sdkExecutablePath: options.sdkExecutablePath }),
+            // The pool is keyed on the one fact the process discovers rather
+            // than is given. A stale entry is worse than none — it would attach
+            // the next message to a CLI that has stopped reading — so the
+            // removal is unconditional and the entry is only replaced by
+            // identity.
+            onSession: (sessionId, process) => live.set(sessionId, process),
+            onClosed: (process) => {
+              const sessionId = process.sessionId;
+              if (sessionId !== undefined && live.get(sessionId) === process) {
+                live.delete(sessionId);
+              }
+            },
           },
           { directory, staged },
         );
@@ -1621,6 +1675,44 @@ interface ClaudeRunDeps {
   readonly diagnostic?: (message: string, detail?: unknown) => void;
   /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
   readonly sdkExecutablePath?: string;
+  /**
+   * Called the first time the process learns which provider session it is
+   * writing to, and again when it goes away.
+   *
+   * The adapter keeps the pool; the process is what discovers the one fact the
+   * pool is keyed on. A process cannot be pooled at construction because its
+   * session id arrives on the first `init` — for a resumed conversation it is
+   * the id that was resumed, and for a fresh one it is minted by the CLI.
+   */
+  readonly onSession?: (sessionId: SessionId, process: ClaudeProcess) => void;
+  readonly onClosed?: (process: ClaudeProcess) => void;
+}
+
+/**
+ * What a turn asks of the process serving it, beyond the prompt.
+ *
+ * Every one of these has a mid-session setter, which is what makes attaching to
+ * a live process sound rather than a silent downgrade: a turn that asks for a
+ * different model gets `setModel` called before its prompt is pushed. Compared
+ * against what the process last applied so that an unchanged turn sends no
+ * control requests at all.
+ */
+interface TurnSettings {
+  readonly model: string | undefined;
+  readonly permissionMode: PermissionMode | undefined;
+  readonly effort: string | undefined;
+  readonly fastMode: boolean | undefined;
+  readonly ultracode: boolean | undefined;
+}
+
+function turnSettings(input: ResolvedRunInput): TurnSettings {
+  return {
+    model: input.model,
+    permissionMode: input.permissionMode,
+    effort: input.effort,
+    fastMode: input.fastMode,
+    ultracode: input.ultracode,
+  };
 }
 
 /**
@@ -1686,6 +1778,13 @@ class ClaudeProcess {
   /** One-way, and {@link #holdsWork} explains why it cannot be counted down. */
   #registeredSchedule = false;
 
+  /** The conversation this process writes to, learned from its first `init`. */
+  #sessionId: SessionId | undefined;
+  /** True once the transport is gone, so the pool can never hand it out again. */
+  #closed = false;
+  /** What was last applied to the live process, so a turn only sends what differs. */
+  #settings: TurnSettings;
+
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
   #stagedCount: number;
@@ -1703,6 +1802,9 @@ class ClaudeProcess {
     this.#openingStaged = staging.staged;
     this.#stagedCount = staging.staged.length;
     this.#promptQueue = new AsyncQueue<SDKUserMessage>();
+    // What the spawn is about to apply, so the first attached turn compares
+    // against what is actually in force rather than against nothing.
+    this.#settings = turnSettings(input);
   }
 
   /** The turn this process is serving, for the diagnostics that name one. */
@@ -1747,6 +1849,121 @@ class ClaudeProcess {
   /** Is this the turn the process is serving right now? */
   isActive(state: ClaudeMapperState): boolean {
     return this.#state === state;
+  }
+
+  /* -------------------------------- attaching ------------------------------ */
+
+  /** The conversation this process is writing to, once its first `init` said so. */
+  get sessionId(): SessionId | undefined {
+    return this.#sessionId;
+  }
+
+  /** True once the transport is gone. A closed process must never be attached to. */
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  /**
+   * Can this process serve the turn described by `input`?
+   *
+   * The identity checks are the same three facts a session id resolves under —
+   * store, directory, conversation — and every one of them is fixed at spawn.
+   * A mismatch is not a downgrade to be reconciled; it is a different
+   * conversation, and #98 is what guarantees the store cannot change under one.
+   *
+   * A fork is deliberately refused. `forkSession` means "branch this into a new
+   * conversation", so serving it on the process that owns the original would
+   * write the branch into the trunk.
+   */
+  canServe(input: ResolvedRunInput, configDir: string | undefined): boolean {
+    if (this.#closed || this.#disposing !== undefined) return false;
+    if (input.forkSession === true) return false;
+    if (this.#sessionId === undefined) return false;
+    if (input.resumeSessionId !== this.#sessionId) return false;
+    if (input.cwd !== this.#input.cwd) return false;
+    return configDir === readEnv(this.#input.env, CLAUDE_CONFIG_DIR_ENV);
+  }
+
+  /**
+   * Open the next turn on a process that is already running.
+   *
+   * The counterpart to `start()`, and the difference between them is the whole
+   * point of this work: `start()` spawns a CLI and hands it a prompt, this hands
+   * a prompt to one that is already sitting there — with the conversation still
+   * in its context, its subagents still running, and its scheduled jobs still
+   * registered.
+   *
+   * Settings are reconciled before the prompt is pushed, never after: a turn
+   * that asked for a different model must not have its first token generated by
+   * the old one.
+   */
+  async continueWith(input: ResolvedRunInput): Promise<ClaudeTurn> {
+    const turn = this.beginTurn(input);
+    await this.#applySettings(turnSettings(input));
+    const staged = await this.#stage(input.attachments);
+    this.#promptQueue.push(this.#userMessage(input.prompt, input.attachments, staged));
+    return turn;
+  }
+
+  /**
+   * Move the live process onto this turn's settings.
+   *
+   * Only what differs, so an unchanged turn costs no control requests. Each
+   * failure is reported and swallowed rather than failing the turn: the setters
+   * are best-effort by nature — a model the account cannot use is refused by the
+   * provider either way — and a turn that refused to start because a *speed*
+   * knob could not be applied would be worse than one that runs slightly wrong
+   * and says so.
+   */
+  async #applySettings(next: TurnSettings): Promise<void> {
+    const query = this.#query;
+    if (query === undefined) return;
+    const last = this.#settings;
+    this.#settings = next;
+
+    const attempt = async (what: string, apply: () => Promise<unknown>): Promise<void> => {
+      try {
+        await apply();
+      } catch (error) {
+        this.#deps.diagnostic?.(
+          `Run ${this.runId}: could not apply ${what} to the running process.`,
+          describe(error),
+        );
+      }
+    };
+
+    if (next.model !== last.model) {
+      await attempt('the model', () => query.setModel(next.model));
+    }
+    if (next.permissionMode !== last.permissionMode && next.permissionMode !== undefined) {
+      await attempt('the permission mode', () =>
+        query.setPermissionMode(next.permissionMode as PermissionMode),
+      );
+    }
+
+    /*
+     * The flag layer, which mid-session is the only route for all three of
+     * these — including effort, which at spawn is a *top-level option* and has
+     * no setter of its own. `buildFlagSettings` is deliberately not reused: it
+     * composes the spawn-time shape, where effort does not belong.
+     *
+     * `null` rather than omission for anything that is off. Successive calls
+     * shallow-merge top-level keys and `undefined` is dropped by JSON, so
+     * omitting a flag leaves the previous turn's value in force — which would
+     * make turning fast mode *off* between turns do nothing at all.
+     */
+    const flags = {
+      fastMode: next.fastMode === true ? true : null,
+      ultracode: next.ultracode === true ? true : null,
+      effortLevel: (next.effort ?? null) as EffortLevel | null,
+    };
+    const changed =
+      next.fastMode !== last.fastMode ||
+      next.ultracode !== last.ultracode ||
+      next.effort !== last.effort;
+    if (changed) {
+      await attempt('the thinking and speed settings', () => query.applyFlagSettings(flags));
+    }
   }
 
   /* ------------------------------ retention ------------------------------- */
@@ -2126,6 +2343,15 @@ class ClaudeProcess {
           this.#emit(event);
         }
 
+        // Announced from here rather than from `beginTurn`, because this is where
+        // it becomes true: the id arrives on the turn's own `init`, and for a
+        // fresh conversation the CLI is what mints it. Once, on the first turn to
+        // learn it — every later turn on this process reports the same one.
+        if (this.#sessionId === undefined && this.#state.sessionId !== undefined) {
+          this.#sessionId = this.#state.sessionId;
+          this.#deps.onSession?.(this.#state.sessionId, this);
+        }
+
         /*
          * The turn is over. Whether the *process* is over is a different
          * question, and this is where the two used to be the same one.
@@ -2167,6 +2393,12 @@ class ClaudeProcess {
         }
       }
     } finally {
+      // Before anything else: the pool must not hand out a process whose
+      // transport is on its way down, or the next message attaches to a CLI that
+      // is about to stop reading it and waits for a turn that never starts.
+      this.#closed = true;
+      this.#deps.onClosed?.(this);
+
       try {
         sdkQuery.close();
       } catch {
