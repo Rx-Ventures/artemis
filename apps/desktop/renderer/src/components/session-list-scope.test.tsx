@@ -12,9 +12,10 @@
  *
  * The scoping was itself a fix for a real complaint — an undifferentiated stream
  * of every repository buried "what was I doing in *this* repo". What answers it
- * now is recency plus a per-project fold, so the assertions below cover the
- * order and the folding as well as the listing: the project you touched last
- * leads, and any project can be put away without taking the others with it.
+ * now is a per-project fold plus two different orders, so the assertions below
+ * cover both as well as the listing: the headings are furniture and sit in name
+ * order whatever their sessions do, the rows inside one are newest first, and
+ * any project can be put away without taking the others with it.
  *
  * Same caveat as the other component tests: `renderer/tsconfig.json` excludes
  * them, so `pnpm typecheck` never sees this file and the assertions are
@@ -147,14 +148,36 @@ describe('the session list', () => {
     expect(screen.getByText('cli')).not.toBeNull();
   });
 
-  it('orders projects by the most recent session, newest first', () => {
+  it('orders projects by name, and leaves them there', () => {
     mount(<SessionList />);
 
     const headings = screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent);
-    // /code/web was touched at 90, /code/cli at 50, /code/api at 10 — and
-    // /code/api is where the window is pointed, which now buys it nothing. The
-    // top of the list is wherever you were last, not wherever you are.
-    expect(headings).toEqual(['web', 'cli', 'api']);
+    // /code/web was touched at 90, /code/cli at 50, /code/api at 10, and none of
+    // that decides anything: the folders are furniture. Neither does being the
+    // project the window is pointed at — /code/api leads because of its name.
+    expect(headings).toEqual(['api', 'cli', 'web']);
+  });
+
+  it('does not move a project when work happens in it', () => {
+    mount(<SessionList />);
+
+    // The report, on screen: the stalest project becomes by a distance the
+    // newest, and the strip of headings is identical afterwards.
+    act(() => {
+      useApp.setState({
+        sessions: [
+          session('s1', '/code/api', 9_000, 'Adapter seam'),
+          session('s2', '/code/web', 90, 'Login redirect'),
+          session('s3', '/code/cli', 50, 'Flag parsing'),
+        ],
+      });
+    });
+
+    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
+      'api',
+      'cli',
+      'web',
+    ]);
   });
 
   it('folds one project without touching the others', () => {
@@ -218,42 +241,48 @@ describe('the session list', () => {
    * left it out of its dependencies would keep sorting by a stale record, and
    * every assertion over there would still pass.
    */
-  it('re-sorts when a run takes hold of a row', () => {
-    mount(<SessionList />);
-    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
-      'web',
-      'cli',
-      'api',
-    ]);
+  /**
+   * Two sessions in one project, so there is a row order to observe.
+   *
+   * The hold is a claim about rows now — the headings above them do not move for
+   * anything short of a project appearing — so a fixture of one session per
+   * project has nothing to say about it.
+   */
+  const twoInApi = (staleMtime: number, siblingMtime: number): void => {
+    act(() => {
+      useApp.setState({
+        sessions: [
+          session('s1', '/code/api', staleMtime, 'Adapter seam'),
+          session('s4', '/code/api', siblingMtime, 'Token refresh'),
+          session('s2', '/code/web', 90, 'Login redirect'),
+        ],
+      });
+    });
+  };
 
-    // The stalest project starts working: it leads until its run ends.
+  const apiRows = (): (string | null)[] =>
+    screen.getAllByText(/^(Adapter seam|Token refresh)$/).map((el) => el.textContent);
+
+  it('lifts a row inside its project when a run takes hold of it', () => {
+    mount(<SessionList />);
+    twoInApi(10, 80);
+    expect(apiRows()).toEqual(['Token refresh', 'Adapter seam']);
+
+    // The stalest row starts working: it leads its project until the run ends.
     startRunning('s1');
 
-    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
-      'api',
-      'web',
-      'cli',
-    ]);
+    expect(apiRows()).toEqual(['Adapter seam', 'Token refresh']);
   });
 
   it('holds that row still while the poll reports newer mtimes', () => {
-    startRunning('s1');
     mount(<SessionList />);
+    twoInApi(10, 80);
+    startRunning('s1');
 
-    // A poll lands: every session's file has moved on, `/code/web`'s most of
-    // all. Nothing on screen may move — this is the four-second shuffle.
-    useApp.setState({
-      sessions: [
-        session('s1', '/code/api', 2_000, 'Adapter seam'),
-        session('s2', '/code/web', 3_000, 'Login redirect'),
-        session('s3', '/code/cli', 2_500, 'Flag parsing'),
-      ],
-    });
+    // A poll lands: both files have moved on, and the sibling's by more. Nothing
+    // on screen may move — this is the four-second shuffle.
+    twoInApi(2_000, 3_000);
 
-    expect(screen.getAllByText(/^(api|web|cli)$/).map((el) => el.textContent)).toEqual([
-      'api',
-      'web',
-      'cli',
-    ]);
+    expect(apiRows()).toEqual(['Adapter seam', 'Token refresh']);
   });
 });

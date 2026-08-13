@@ -299,14 +299,17 @@ export interface AppState {
   /**
    * Sort keys held still for the sessions being written right now.
    *
-   * The sidebar orders by `updatedAt`, which is the transcript file's mtime, and
-   * a working agent rewrites that file every few seconds. With one session
-   * running nobody notices — it is already at the top. With several, every poll
-   * re-answered "who wrote most recently" with a different name, so rows swapped
-   * places and whole project groups jumped the queue while the user was reading
-   * them, roughly every four seconds. Rows are positioned by index, so they
-   * teleport; a list that reshuffles under the pointer is also a list that opens
-   * the wrong session.
+   * The sidebar orders rows by `updatedAt`, which is the transcript file's
+   * mtime, and a working agent rewrites that file every few seconds. With one
+   * session running nobody notices — it is already at the top. With several,
+   * every poll re-answered "who wrote most recently" with a different name, so
+   * rows swapped places while the user was reading them, roughly every four
+   * seconds. Rows are positioned by index, so they teleport; a list that
+   * reshuffles under the pointer is also a list that opens the wrong session.
+   *
+   * The headings above them used to be dragged around by the same numbers, and
+   * are not any more: a project sits where its name puts it. This holds the rows
+   * still inside one.
    *
    * So a session's position is pinned when it starts running and released when
    * it stops: `updatedAt` stays truthful and this is consulted *instead of* it
@@ -317,8 +320,9 @@ export interface AppState {
    * row back to its real mtime, which by then is a few seconds old, so a run
    * ending moves nothing.
    *
-   * The list is therefore ordered by "most recently started or written", and it
-   * only ever moves on something the user did.
+   * Rows are therefore ordered by "most recently started or written", and they
+   * only ever move on something the user did. Project headings do not use this
+   * at all — they sort by name and stay put; see `sessionGroups.ts`.
    *
    * Keyed by bare {@link SessionId}, like {@link runningSessions} beside it and
    * the row marker that reads it.

@@ -11,7 +11,8 @@
  *         Profile store encryption
  *         ▪ Home
  *
- * Every project, most recently worked in first.
+ * Every project, in name order, holding still. Every session inside one, newest
+ * first.
  *
  * The list was once scoped to the working directory, with everything else behind
  * an "All projects" switcher, because an undifferentiated stream of every
@@ -22,10 +23,15 @@
  * session. History you have to destroy your place to look at is not history you
  * can browse.
  *
- * Recency answers the first question well enough on its own, because the project
- * you are working in is almost always the one you touched last. It is also the
- * order that makes the list *stable*: the top of it is where you just were,
- * wherever that was, rather than moving under you when the directory changes.
+ * The two levels sort differently because they answer different questions, and
+ * the headings sorted by recency for a while on the assumption that they were
+ * the same question. *Which project* is navigation, and navigation wants
+ * furniture: a name, in the order anyone would guess, moving only when a project
+ * is added or goes away. Sorting those by recency meant every prompt in any
+ * project rewrote the whole sidebar, so the heading someone was reaching for
+ * slid out from under the pointer. *Which session inside it* is recency, because
+ * within one project the row you want is nearly always the one you touched last.
+ * See `sessionGroups.ts`, which owns both rules.
  *
  * Clicking any row does the whole switch — provider, profile, directory and
  * transcript — because `resumeSession` already had to: a session id only
@@ -240,11 +246,12 @@ export function SessionList(): ReactElement {
   );
 
   /*
-   * Every project, grouped, newest first.
+   * Every project, grouped, in name order; every session inside one, newest
+   * first.
    *
-   * `groupSessionsByProject` owns the query matching, the recency order and the
-   * id tie-break, and it is the part of this feature that has tests — filtering
-   * here instead would quietly fork all three.
+   * `groupSessionsByProject` owns the query matching, both orders and the id
+   * tie-break, and it is the part of this feature that has tests — filtering
+   * here instead would quietly fork all four.
    */
   const collapsed = useMemo(() => new Set(collapsedProjects), [collapsedProjects]);
   const archivedKeys = useMemo(() => new Set(archivedSessions), [archivedSessions]);

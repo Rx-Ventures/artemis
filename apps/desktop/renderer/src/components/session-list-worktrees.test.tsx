@@ -143,14 +143,15 @@ describe('a session run in a worktree', () => {
     expect(useApp.getState().collapsedProjects).toEqual([REPO]);
   });
 
-  it('lifts its project up the list, since the newest work is in it', () => {
+  it('does not move the project it merges into', () => {
     mount(<SessionList />);
 
-    // `/code/api` was touched at 50 and the checkout itself at 10, so while the
-    // worktree was its own group artemis sat *below* api despite holding the
-    // most recent session in the window.
+    // The worktree holds the most recent session in the window, and that decides
+    // nothing about where its project sits: headings are ordered by name. What
+    // the merge changes is which rows are *inside* artemis — asserted above —
+    // not where the heading is, which is the point of a folder that holds still.
     const headings = screen.getAllByText(/^(artemis|api)$/).map((el) => el.textContent);
-    expect(headings).toEqual(['artemis', 'api']);
+    expect(headings).toEqual(['api', 'artemis']);
   });
 
   it('still resumes in the directory it ran in', () => {

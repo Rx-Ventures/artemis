@@ -182,9 +182,21 @@ export function lastSegment(path: string): string {
  * mutation of state nobody asked for.
  */
 export function sortFoldersByName(paths: readonly string[]): readonly string[] {
-  const collate = (a: string, b: string): number =>
-    a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
-  return [...paths].sort(
-    (a, b) => collate(lastSegment(a), lastSegment(b)) || collate(a, b),
-  );
+  return [...paths].sort(compareFolderNames);
+}
+
+/**
+ * The comparator behind {@link sortFoldersByName}, for callers sorting objects
+ * rather than bare paths.
+ *
+ * Shared rather than reimplemented: the sidebar's project headings and every
+ * directory list in the app are the same question asked in two places, and two
+ * copies of "by name, then by path, base sensitivity, numeric" would be two
+ * chances for the sidebar to order itself differently from the picker that
+ * chooses what goes in it.
+ */
+export function compareFolderNames(a: string, b: string): number {
+  const collate = (x: string, y: string): number =>
+    x.localeCompare(y, undefined, { sensitivity: 'base', numeric: true });
+  return collate(lastSegment(a), lastSegment(b)) || collate(a, b);
 }
