@@ -488,31 +488,37 @@ describe('streaming input', () => {
 /* Permissions                                                                */
 /* -------------------------------------------------------------------------- */
 
-describe('permissions', () => {
-  /** Call the adapter's canUseTool exactly as the SDK would. */
-  function callCanUseTool(
-    options: Record<string, unknown>,
-    signal: AbortSignal,
-    overrides: Record<string, unknown> = {},
-  ): Promise<unknown> {
-    const canUseTool = options['canUseTool'] as (
-      toolName: string,
-      input: Record<string, unknown>,
-      opts: Record<string, unknown>,
-    ) => Promise<unknown>;
-    return canUseTool(
-      'Bash',
-      { command: 'git status' },
-      {
-        signal,
-        toolUseID: 'toolu_1',
-        requestId: 'req_1',
-        title: 'Claude wants to run git status',
-        ...overrides,
-      },
-    );
-  }
+/**
+ * Call the adapter's canUseTool exactly as the SDK would.
+ *
+ * Module scope rather than inside the permissions suite: the continuation suite
+ * needs it too, because a prompt arriving after its turn ended is a permission
+ * question asked through the same callback.
+ */
+function callCanUseTool(
+  options: Record<string, unknown>,
+  signal: AbortSignal,
+  overrides: Record<string, unknown> = {},
+): Promise<unknown> {
+  const canUseTool = options['canUseTool'] as (
+    toolName: string,
+    input: Record<string, unknown>,
+    opts: Record<string, unknown>,
+  ) => Promise<unknown>;
+  return canUseTool(
+    'Bash',
+    { command: 'git status' },
+    {
+      signal,
+      toolUseID: 'toolu_1',
+      requestId: 'req_1',
+      title: 'Claude wants to run git status',
+      ...overrides,
+    },
+  );
+}
 
+describe('permissions', () => {
   it('emits permission.request and blocks until the answer arrives', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
@@ -1584,6 +1590,8 @@ describe('a turn that ends while work is still running', () => {
       uuid: `u-${name}`,
     }) as unknown as SDKMessage;
 
+  const busyTask = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
   it('closes the transport when nothing is left running', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
@@ -1630,13 +1638,45 @@ describe('a turn that ends while work is still running', () => {
     await drain(run.events);
     expect(fake.closed).toBe(false);
 
-    // Replace semantics: an empty set is the provider saying nothing is running,
-    // which is the signal that releases the process.
+    /*
+     * Replace semantics: an empty set is the provider saying nothing is running.
+     * It does not release the process on its own, though — measured, the provider
+     * takes a turn about the work that just finished roughly a tenth of a second
+     * later, and closing the transport on the empty set killed exactly that turn.
+     * So the release happens at the end of the turn that follows.
+     */
     fake.messages.push(tasksChanged([]));
-    fake.messages.push(RESULT_MESSAGE);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fake.closed).toBe(false);
 
-    expect(fake.closed).toBe(true);
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('releases the process when a task settles and no turn follows', async () => {
+    // The other half of that rule: a task that settles in silence must not pin a
+    // CLI open for the rest of the session. Only `setTimeout` is faked — the
+    // pump's own promises stay real, so this is the grace expiring rather than a
+    // rewritten event order.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const { fake } = harness();
+
+      fake.messages.push(INIT_MESSAGE);
+      fake.messages.push(tasksChanged(busyTask));
+      fake.messages.push(RESULT_MESSAGE);
+      await drain(run.events);
+
+      fake.messages.push(tasksChanged([]));
+      await vi.waitFor(() => expect(fake.closed).toBe(false));
+
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(fake.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps it open after a scheduling tool has been called', async () => {
@@ -1848,5 +1888,161 @@ describe('attaching to a live process', () => {
     // dropped by JSON, so omitting a flag leaves the previous turn's value in
     // force — which would make turning fast mode off between turns do nothing.
     expect(first.fake.flags).toEqual([{ fastMode: null, ultracode: null, effortLevel: 'low' }]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Turns the provider starts on its own                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Measured before it was built: when a backgrounded `sleep 40` settled, the CLI
+ * emitted `init`, an assistant message and a `result` with no prompt from
+ * anyone — the agent is told its task finished and answers.
+ *
+ * That output is written to the session's own `.jsonl` either way, so it is never
+ * lost; what is at stake is whether the live conversation shows it or quietly
+ * falls out of step with the provider's own record until it is reopened.
+ */
+describe('a turn nobody asked for', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  const busy = [{ task_id: 't1', task_type: 'local_bash', description: 'sleep 40' }];
+
+  /** An adapter that records the runs it is handed, the way the engine adopts them. */
+  function adapterWithSink() {
+    const adopted: { run: Run; context: unknown }[] = [];
+    let n = 0;
+    const adapter = createClaudeAdapter({
+      onContinuation: (run, context) => adopted.push({ run, context }),
+      newRunId: () => `run-c${String(++n)}` as RunId,
+    });
+    return { adapter, adopted };
+  }
+
+  it('opens a run for it, and the events land there rather than nowhere', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(adopted).toHaveLength(0);
+
+    // The task settles, and the provider takes a turn about it.
+    fake.messages.push(tasksChanged([]));
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push({
+      type: 'assistant',
+      message: {
+        id: 'msg-c',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'that finished' }],
+      },
+      session_id: 'sess-abc',
+      uuid: 'u-c',
+    } as unknown as SDKMessage);
+    fake.messages.push(RESULT_MESSAGE);
+
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+    const continuation = adopted[0]?.run as Run;
+
+    // Its own run, with its own dense sequence — the contract every run has.
+    expect(continuation.runId).toBe('run-c1');
+    const events = await drain(continuation.events);
+    expect(events[0]).toMatchObject({ type: 'session.started', seq: 0 });
+    expect(events.map((e) => e.type)).toContain('text.complete');
+    expect(events.at(-1)).toMatchObject({ type: 'run.end' });
+
+    // And it is the same conversation, which is what lets a pane adopt it.
+    expect(adopted[0]?.context).toMatchObject({
+      providerId: 'claude',
+      profileId: BASE_INPUT.profileId,
+      cwd: BASE_INPUT.cwd,
+      sessionId: 'sess-abc',
+    });
+  });
+
+  it('does not reopen the turn that already ended', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    const first = await drain(run.events);
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+
+    // `run.end` fired on the first turn and its stream terminated — a `Run`'s
+    // events are consumable exactly once, so there is nothing to re-read and
+    // nothing could have been appended to it.
+    expect(first.at(-1)).toMatchObject({ type: 'run.end' });
+
+    // The continuation is a different run with its own dense sequence, rather
+    // than more events on the one that ended.
+    const continuation = adopted[0]?.run as Run;
+    expect(continuation.runId).not.toBe(run.runId);
+    const events = await drain(continuation.events);
+    expect(events[0]).toMatchObject({ type: 'session.started', seq: 0 });
+  });
+
+  it('lets a subagent ask for permission long after its own turn ended', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake, options } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The subagent is still running and wants a tool. Denying here — which is
+    // what an ended run used to do — would stop the work this change exists to
+    // keep alive, at the one moment the user could have said yes.
+    const pending = callCanUseTool(options, new AbortController().signal);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+
+    const continuation = adopted[0]?.run as Run;
+    const iterator = continuation.events[Symbol.asyncIterator]();
+    const first = (await iterator.next()).value as PermissionRequestEvent;
+    expect(first.type).toBe('permission.request');
+
+    // Answerable, on the run it arrived on, and the tool call proceeds.
+    await continuation.respondToPermission(first.requestId, { behavior: 'allow' });
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+  });
+
+  it('denies instead of parking when nothing would receive the turn', async () => {
+    // No `onContinuation`: a prompt opened here would wait on a promise nobody
+    // can resolve, and the subagent would hang for ever. Refusing to pretend
+    // there is a turn is the honest failure.
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake, options } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busy));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    await expect(callCanUseTool(options, new AbortController().signal)).resolves.toMatchObject({
+      behavior: 'deny',
+    });
   });
 });

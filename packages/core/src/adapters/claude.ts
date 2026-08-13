@@ -42,6 +42,7 @@
  * dangerous case rather than a harmless one.
  */
 
+import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
@@ -92,10 +93,12 @@ import type {
   PlanUsage,
   ProfileId,
   ProviderEffortOption,
+  ProviderId,
   ProviderModelOption,
   QuestionAnswer,
   QuestionPrompt,
   RunEndReason,
+  RunId,
   RunStatus,
   SessionId,
   SessionSummary,
@@ -703,13 +706,31 @@ export interface ClaudeAdapterOptions {
    * resolves itself.
    */
   readonly sdkExecutablePath?: string;
+  /**
+   * A turn started that nobody asked for — adopt it, or it goes unseen.
+   *
+   * The provider takes a turn of its own when background work settles, and a
+   * subagent left running can park on a permission prompt whose own turn ended
+   * long ago. Both arrive with no run to carry them.
+   *
+   * The host is what can register a run: ids and the event fan-out belong to the
+   * registry. Wire this to it and the turn appears in the conversation it came
+   * from; leave it out and the process still keeps the work alive but has nowhere
+   * to report it, which is what a smoke script or a test wants and is also why a
+   * permission prompt in that state is denied rather than parked — see
+   * `ClaudeProcess.#ensureTurn`.
+   */
+  readonly onContinuation?: (run: Run, context: ContinuationContext) => void;
+  /** Ids for those turns. Defaults to `randomUUID`; injected by tests. */
+  readonly newRunId?: () => RunId;
 }
 
 /**
  * Create the Claude adapter.
  *
- * The adapter is a stateless singleton: one instance serves every run, and all
- * per-run state lives on the {@link Run} objects it returns.
+ * The adapter holds one thing now: the processes that outlived the turn that
+ * spawned them, by conversation. Everything else per-run still lives on the
+ * {@link Run} objects it returns.
  */
 export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAdapter {
   const now = options?.now ?? Date.now;
@@ -840,6 +861,10 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             // the next message to a CLI that has stopped reading — so the
             // removal is unconditional and the entry is only replaced by
             // identity.
+            ...(options?.onContinuation === undefined
+              ? {}
+              : { onContinuation: options.onContinuation }),
+            newRunId: options?.newRunId ?? (() => randomUUID() as RunId),
             onSession: (sessionId, process) => live.set(sessionId, process),
             onClosed: (process) => {
               const sessionId = process.sessionId;
@@ -1669,6 +1694,31 @@ interface PendingPermission {
  */
 const SCHEDULING_TOOLS = new Set(['CronCreate', 'ScheduleWakeup', 'CronUpdate']);
 
+/**
+ * How long a settled task holds the process, waiting for the turn about it.
+ *
+ * Measured at about a tenth of a second between the empty task set and the
+ * provider's own `init`. Two seconds is an order of magnitude of headroom for a
+ * loaded machine, and it is the *upper* bound on a process outliving its work by
+ * nothing useful — the turn itself clears it the moment it starts.
+ */
+const SETTLE_GRACE_MS = 2_000;
+
+/**
+ * Does this message open a turn?
+ *
+ * `init` does, once per turn — the CLI emits one at the head of every turn in
+ * streaming-input mode, which is what makes an unprompted turn detectable from
+ * the outside at all. Measured rather than assumed: three streamed turns on one
+ * process produced three `init`s carrying one session id.
+ */
+function startsTurn(message: SDKMessage): boolean {
+  return (
+    message.type === 'system' &&
+    (message as unknown as { subtype?: unknown }).subtype === 'init'
+  );
+}
+
 interface ClaudeRunDeps {
   readonly now: () => number;
   readonly hostEnv?: EnvBundle;
@@ -1686,6 +1736,29 @@ interface ClaudeRunDeps {
    */
   readonly onSession?: (sessionId: SessionId, process: ClaudeProcess) => void;
   readonly onClosed?: (process: ClaudeProcess) => void;
+  /**
+   * A turn nobody asked for has started, and here is the run for it.
+   *
+   * The provider takes a turn of its own when background work settles — it is
+   * told the task finished and answers — and it can also park on a permission
+   * prompt for a subagent whose own turn ended long ago. Both produce events
+   * with no run to carry them, and dropping them would leave what is on screen
+   * quietly out of step with what the provider has written to its own transcript.
+   *
+   * The adapter cannot register a run itself: ids and the fan-out belong to the
+   * registry. So it builds the run and hands it up.
+   */
+  readonly onContinuation?: (run: Run, context: ContinuationContext) => void;
+  /** Ids for those turns. Injected so tests do not depend on `randomUUID`. */
+  readonly newRunId?: () => RunId;
+}
+
+/** What a caller needs to register a run it did not ask for. */
+export interface ContinuationContext {
+  readonly providerId: ProviderId;
+  readonly profileId: ProfileId;
+  readonly cwd: string;
+  readonly sessionId: SessionId | undefined;
 }
 
 /**
@@ -1784,6 +1857,11 @@ class ClaudeProcess {
   #closed = false;
   /** What was last applied to the live process, so a turn only sends what differs. */
   #settings: TurnSettings;
+  /** Fallback numbering for continuation ids when no minter was injected. */
+  #continuations = 0;
+  /** A task settled and the turn about it has not arrived yet. See `#awaitSettleTurn`. */
+  #settling = false;
+  #settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -1849,6 +1927,64 @@ class ClaudeProcess {
   /** Is this the turn the process is serving right now? */
   isActive(state: ClaudeMapperState): boolean {
     return this.#state === state;
+  }
+
+  /**
+   * Make sure there is a turn to put events on, opening one if there is not.
+   *
+   * Called from the two places a provider can speak without being asked: the
+   * pump, when an `init` arrives after the last turn ended, and the permission
+   * callback, when a subagent parks on a tool long after the turn that launched
+   * it finished. Both used to be impossible — an ended run had no transport — and
+   * both are now ordinary consequences of a process outliving its turns.
+   *
+   * What it must not do is reopen the turn that ended. `run.end` fired, its queue
+   * closed, and a consumer's `for await` has already finished; pushing more onto
+   * it would be events after a terminal event, on a stream nobody is reading. So
+   * this is a *new* run, with its own id and its own dense `seq`, announced
+   * upward so something adopts it.
+   *
+   * Refuses when nothing is listening, and that is load-bearing rather than
+   * defensive. An adapter with no `onContinuation` — a test, a smoke script — has
+   * nowhere to report the turn, so a permission prompt opened on one would park
+   * on a promise no one can resolve and the subagent would wait for ever. The
+   * work still finishes and the process is still kept; what is refused is
+   * pretending there is a turn somebody can see. The caller decides what that
+   * means: the pump drops the events, the permission callback denies.
+   *
+   * @returns whether there is now a turn that something will receive.
+   */
+  #ensureTurn(): boolean {
+    // Whatever opens a turn is what the settle grace was holding the process for.
+    this.#settling = false;
+    clearTimeout(this.#settleTimer);
+
+    if (!this.#state.ended) return true;
+    if (this.#deps.onContinuation === undefined) return false;
+
+    const runId = this.#deps.newRunId?.() ?? `run_c_${String(++this.#continuations)}`;
+    const turn = this.beginTurn({
+      ...this.#input,
+      runId: runId as ResolvedRunInput['runId'],
+      prompt: '',
+      // Not a resume and not a fork: this turn is *inside* the session the
+      // process is already on, so echoing either onto its `session.started`
+      // would describe a continuation as a re-entry.
+      resumeSessionId: undefined,
+      forkSession: false,
+      attachments: undefined,
+    });
+
+    this.#deps.diagnostic?.(
+      `Run ${runId}: the provider started a turn of its own on session ${this.#sessionId ?? '—'}.`,
+    );
+    this.#deps.onContinuation(turn, {
+      providerId: CLAUDE_PROVIDER_ID,
+      profileId: this.#input.profileId,
+      cwd: this.#input.cwd,
+      sessionId: this.#sessionId,
+    });
+    return true;
   }
 
   /* -------------------------------- attaching ------------------------------ */
@@ -1995,7 +2131,7 @@ class ClaudeProcess {
    * upper bound, and it is the honest reading of "we do not know".
    */
   #holdsWork(): boolean {
-    return this.#liveTasks.length > 0 || this.#registeredSchedule;
+    return this.#liveTasks.length > 0 || this.#registeredSchedule || this.#settling;
   }
 
   /** What is being held, for the diagnostic that says why a process stayed. */
@@ -2026,11 +2162,51 @@ class ClaudeProcess {
     if (record.subtype !== 'background_tasks_changed') return;
     if (!Array.isArray(record.tasks)) return;
 
+    const had = this.#liveTasks.length > 0;
     // Replace, not merge — the payload is the whole live set after the change,
     // which is what makes an empty one authoritative. See `BackgroundTasksEvent`.
     this.#liveTasks = record.tasks.map((task: unknown) =>
       String((task as { description?: unknown }).description ?? 'unnamed task'),
     );
+
+    /*
+     * The last task just settled — so do not release the process yet.
+     *
+     * Measured ordering, and it is the whole reason this exists: the empty set
+     * arrives about a tenth of a second *before* the provider's own turn about
+     * the work that finished. Releasing on the empty set alone closed the
+     * transport underneath that turn, which is to say it killed the one piece of
+     * output the user was waiting for.
+     *
+     * So a settle holds the process for a beat. The turn that follows clears it,
+     * and the timer is what guarantees the process is still released if no turn
+     * ever comes — a task that settles in silence must not pin a CLI open for the
+     * rest of the session.
+     */
+    if (had && this.#liveTasks.length === 0) this.#awaitSettleTurn();
+  }
+
+  /** Hold the process briefly for a turn about work that just finished. */
+  #awaitSettleTurn(): void {
+    this.#settling = true;
+    clearTimeout(this.#settleTimer);
+    this.#settleTimer = setTimeout(() => {
+      this.#settling = false;
+      // Nothing came. Release the way a turn boundary would have, by taking the
+      // transport down — the pump's own `finally` does the rest.
+      if (this.#state.ended && !this.#holdsWork()) {
+        this.#deps.diagnostic?.(
+          `Run ${this.runId}: background work settled with no turn about it; releasing the process.`,
+        );
+        try {
+          this.#query?.close();
+        } catch {
+          // Already gone.
+        }
+      }
+    }, SETTLE_GRACE_MS);
+    // Never a reason to keep a Node process alive on its own.
+    this.#settleTimer.unref?.();
   }
 
   /**
@@ -2322,6 +2498,13 @@ class ClaudeProcess {
          */
         this.#observeMessage(message);
 
+        // An `init` after the last turn ended is the provider starting one of its
+        // own — it emits one per turn in streaming mode, which is what makes this
+        // detectable at all. Before mapping, so the `init` itself lands on the new
+        // turn and becomes its `session.started` rather than being dropped by a
+        // mapper that is finished with the old state.
+        if (startsTurn(message)) this.#ensureTurn();
+
         let events: readonly AgentEvent[] = [];
         try {
           events = mapSdkMessage(message, this.#state);
@@ -2397,6 +2580,8 @@ class ClaudeProcess {
       // transport is on its way down, or the next message attaches to a CLI that
       // is about to stop reading it and waits for a turn that never starts.
       this.#closed = true;
+      this.#settling = false;
+      clearTimeout(this.#settleTimer);
       this.#deps.onClosed?.(this);
 
       try {
@@ -2588,7 +2773,25 @@ class ClaudeProcess {
    * to an allow or a deny.
    */
   readonly #canUseTool: CanUseTool = async (toolName, input, options) => {
-    if (this.#state.ended || this.#disposing !== undefined) {
+    if (this.#disposing !== undefined) {
+      return this.#denyResult(DISPOSED_DENY_MESSAGE, options.toolUseID);
+    }
+
+    /*
+     * A prompt can now arrive with no turn to put it on.
+     *
+     * A subagent left running past its turn asks for a tool like any other
+     * caller, and the turn that launched it ended minutes ago. Denying — which
+     * is what the old `state.ended` check did, correctly, when an ended run
+     * meant a dead transport — would stop the work this whole change exists to
+     * keep alive, at the one point where the user could simply have said yes.
+     *
+     * So a turn is opened for it, and the prompt lands in the conversation it
+     * came from as an ordinary permission request. That is also the only honest
+     * place for it: the answer decides whether a subagent of *this* conversation
+     * continues.
+     */
+    if (!this.#ensureTurn()) {
       return this.#denyResult(DISPOSED_DENY_MESSAGE, options.toolUseID);
     }
 
