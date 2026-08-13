@@ -32,15 +32,26 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { ProfileMetadata } from '@rx-artemis/protocol';
+import type {
+  ProfileMetadata,
+  SharedConfigDirStatus,
+  SharedConfigEntry,
+  SharedConfigStatus,
+} from '@rx-artemis/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BACKUP_SUFFIX,
   SHARED_DIRECTORIES,
+  SHARED_ENTRIES,
   buildSharedConfigScript,
+  dirsNeedingWork,
+  entryGap,
   sharedConfigDirs,
   shellQuote,
+  statusDisagrees,
+  statusHasLinks,
+  summarizeDir,
 } from './sharedClaudeConfig';
 
 /**
@@ -362,5 +373,232 @@ describe('the generated text', () => {
   it('quotes every directory it names', () => {
     const script = buildSharedConfigScript(['/Users/x/Application Support/p'], 'share');
     expect(script).toContain("profile '/Users/x/Application Support/p'");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Reading the status                                                         */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * These are the judgement calls the pane makes about a reading the main process
+ * took — pure, so asserted here rather than through a rendered component. The
+ * reading itself is tested against a real filesystem in `main/sharedConfig.test.ts`.
+ */
+
+/** A `checked` directory: everything linked except the names overridden. */
+function checked(dir: string, over: Record<string, SharedConfigEntry> = {}): SharedConfigDirStatus {
+  return {
+    dir,
+    state: 'checked',
+    entries: SHARED_ENTRIES.map((name) => over[name] ?? { name, state: 'linked' }),
+  };
+}
+
+function status(
+  dirs: readonly SharedConfigDirStatus[],
+  rootMissing: readonly string[] = [],
+): SharedConfigStatus {
+  return { root: '/home/u/.claude', rootMissing, dirs };
+}
+
+describe('entryGap', () => {
+  it('is nothing to do for a link that already points at the root', () => {
+    expect(entryGap({ name: 'skills', state: 'linked' }, [])).toBe(false);
+  });
+
+  it('is work for a folder of its own, a foreign link, or an absent directory', () => {
+    expect(entryGap({ name: 'skills', state: 'own' }, [])).toBe(true);
+    expect(entryGap({ name: 'skills', state: 'foreign' }, [])).toBe(true);
+    // The root does not have it either, but the script `mkdir -p`s a directory
+    // and links it — so this one is still outstanding work.
+    expect(entryGap({ name: 'plans', state: 'missing' }, ['plans'])).toBe(true);
+  });
+
+  it('is not work for a file the root does not have', () => {
+    // The share script prints `skip  CLAUDE.md (no …)`. Counting this as a gap
+    // would leave a perfectly-run share reading as incomplete forever.
+    expect(entryGap({ name: 'CLAUDE.md', state: 'missing' }, ['CLAUDE.md'])).toBe(false);
+    // The root *does* have one here, so the profile is genuinely unlinked.
+    expect(entryGap({ name: 'CLAUDE.md', state: 'missing' }, [])).toBe(true);
+  });
+});
+
+describe('summarizeDir', () => {
+  it('reads a fully linked directory as shared', () => {
+    const summary = summarizeDir(checked('/a'), []);
+    expect(summary.state).toBe('shared');
+    expect(summary.linked).toBe(SHARED_ENTRIES.length);
+    expect(summary.gaps).toEqual([]);
+  });
+
+  it('names what is missing on a half-linked directory', () => {
+    const summary = summarizeDir(
+      checked('/a', {
+        skills: { name: 'skills', state: 'own', backup: true },
+        projects: { name: 'projects', state: 'missing' },
+      }),
+      [],
+    );
+
+    expect(summary.state).toBe('partial');
+    expect(summary.linked).toBe(SHARED_ENTRIES.length - 2);
+    // In script order, not in the order the states happen to differ.
+    expect(summary.gaps).toEqual(['skills', 'projects']);
+    expect(summary.backups).toEqual(['skills']);
+  });
+
+  it('reads a never-shared directory as unshared', () => {
+    const entries = SHARED_ENTRIES.map((name) => ({ name, state: 'missing' as const }));
+    const summary = summarizeDir({ dir: '/a', state: 'checked', entries }, []);
+
+    expect(summary.state).toBe('unshared');
+    expect(summary.linked).toBe(0);
+  });
+
+  it('does not call a directory shared just because nothing could be linked', () => {
+    // Every entry absent, and every absence one the script deliberately skips:
+    // no gaps, and no links either. Without the `linked > 0` guard this reads as
+    // fully shared, which is the one wrong answer a user could not argue with.
+    const summary = summarizeDir(
+      { dir: '/a', state: 'checked', entries: [{ name: 'CLAUDE.md', state: 'missing' }] },
+      ['CLAUDE.md'],
+    );
+
+    expect(summary.gaps).toEqual([]);
+    expect(summary.state).toBe('unshared');
+  });
+
+  it('passes the root and the absent through untouched', () => {
+    expect(summarizeDir({ dir: '/a', state: 'root', entries: [] }, []).state).toBe('root');
+    expect(summarizeDir({ dir: '/a', state: 'absent', entries: [] }, []).state).toBe('absent');
+  });
+});
+
+describe('dirsNeedingWork', () => {
+  const partial = checked('/partial', { skills: { name: 'skills', state: 'own' } });
+  const whole = checked('/whole');
+  const fresh: SharedConfigDirStatus = {
+    dir: '/fresh',
+    state: 'checked',
+    entries: SHARED_ENTRIES.map((name) => ({ name, state: 'missing' as const })),
+  };
+  const reading = status([
+    whole,
+    partial,
+    fresh,
+    { dir: '/home/u/.claude', state: 'root', entries: [] },
+    { dir: '/gone', state: 'absent', entries: [] },
+  ]);
+
+  it('covers only the directories the share script would change', () => {
+    // The point of the narrow script: a fifth account added after the first four
+    // were linked is covered without walking back over the four.
+    expect(dirsNeedingWork(reading, 'share')).toEqual(['/partial', '/fresh']);
+  });
+
+  it('covers only the directories the undo script would change', () => {
+    expect(dirsNeedingWork(reading, 'restore')).toEqual(['/whole', '/partial']);
+  });
+
+  it('counts a leftover backup as work for the undo script', () => {
+    // Nothing is linked here any more, but the original is still sitting beside
+    // the name it was moved out of, and `restore_one` would bring it back.
+    const left: SharedConfigDirStatus = {
+      dir: '/left',
+      state: 'checked',
+      entries: SHARED_ENTRIES.map((name) => ({
+        name,
+        state: 'missing' as const,
+        ...(name === 'projects' ? { backup: true } : {}),
+      })),
+    };
+    expect(dirsNeedingWork(status([left]), 'restore')).toEqual(['/left']);
+  });
+
+  it('never offers a script for the root or for a directory that is gone', () => {
+    // Both scripts skip these by name, so a script generated for them would
+    // print `skip` and do nothing.
+    const only = status([
+      { dir: '/home/u/.claude', state: 'root', entries: [] },
+      { dir: '/gone', state: 'absent', entries: [] },
+    ]);
+    expect(dirsNeedingWork(only, 'share')).toEqual([]);
+    expect(dirsNeedingWork(only, 'restore')).toEqual([]);
+  });
+});
+
+describe('statusDisagrees', () => {
+  it('is quiet when the switch is on and everything is linked', () => {
+    expect(statusDisagrees(status([checked('/a'), checked('/b')]), true)).toBe(false);
+  });
+
+  it('speaks up when the switch is on and one profile was left behind', () => {
+    // The failure that actually happens: the script covered the profiles that
+    // existed when it was generated.
+    const fresh: SharedConfigDirStatus = {
+      dir: '/new',
+      state: 'checked',
+      entries: SHARED_ENTRIES.map((name) => ({ name, state: 'missing' as const })),
+    };
+    expect(statusDisagrees(status([checked('/a'), fresh]), true)).toBe(true);
+  });
+
+  it('speaks up when the switch is off and the links are still there', () => {
+    // Prefs reset, a new install, or the script run by hand. The pane would
+    // otherwise claim an isolation the accounts do not have.
+    expect(statusDisagrees(status([checked('/a')]), false)).toBe(true);
+  });
+
+  it('is quiet when the switch is off and nothing is linked', () => {
+    const fresh: SharedConfigDirStatus = {
+      dir: '/a',
+      state: 'checked',
+      entries: SHARED_ENTRIES.map((name) => ({ name, state: 'own' as const })),
+    };
+    expect(statusDisagrees(status([fresh]), false)).toBe(false);
+  });
+
+  it('says nothing when there is nothing to compare', () => {
+    // A reading of the root alone, or of directories that are not there, is not
+    // a disagreement — and the empty state already says the useful thing.
+    const only = status([
+      { dir: '/home/u/.claude', state: 'root', entries: [] },
+      { dir: '/gone', state: 'absent', entries: [] },
+    ]);
+    expect(statusDisagrees(only, true)).toBe(false);
+    expect(statusDisagrees(status([]), true)).toBe(false);
+  });
+
+  it('counts the root profile as neither shared nor a straggler', () => {
+    // A user whose only Claude profile *is* `~/.claude` has asked for something
+    // that is already true of their machine, and a permanent warning would be
+    // the pane inventing a problem.
+    const only = status([checked('/a'), { dir: '/home/u/.claude', state: 'root', entries: [] }]);
+    expect(statusDisagrees(only, true)).toBe(false);
+  });
+});
+
+describe('statusHasLinks', () => {
+  it('is false for a machine that never ran the script', () => {
+    const fresh: SharedConfigDirStatus = {
+      dir: '/a',
+      state: 'checked',
+      entries: SHARED_ENTRIES.map((name) => ({ name, state: 'missing' as const })),
+    };
+    // What keeps the pane from showing a status block to somebody who has never
+    // touched the switch.
+    expect(statusHasLinks(status([fresh]))).toBe(false);
+  });
+
+  it('is true for a link, and for a backup left behind by one', () => {
+    expect(statusHasLinks(status([checked('/a')]))).toBe(true);
+
+    const left: SharedConfigDirStatus = {
+      dir: '/a',
+      state: 'checked',
+      entries: [{ name: 'projects', state: 'missing', backup: true }],
+    };
+    expect(statusHasLinks(status([left]))).toBe(true);
   });
 });

@@ -73,6 +73,7 @@ import {
   type RunsStartRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
+  type SharedConfigStatusRequest,
   type SystemPromptSpec,
   type SessionsDeleteRequest,
   type SessionsMessagesRequest,
@@ -1166,6 +1167,21 @@ export function validateWorkspacePickDirectory(raw: unknown): WorkspacePickDirec
 export function validateWorkspaceDescribe(raw: unknown): WorkspaceDescribeRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
+/**
+ * Reading the shared-config links: nothing at all, and that is the whole
+ * security story for the channel.
+ *
+ * Held to the same standard as {@link validateWindowRequest} and returning a
+ * fresh empty object for the same reason — a renderer that attaches a `dirs`
+ * array finds it dropped before the handler could read it. The handler derives
+ * the directories from the profile store, so this channel cannot be pointed at a
+ * path, and there is no validator here that could accidentally permit one.
+ */
+export function validateSharedConfigStatus(raw: unknown): SharedConfigStatusRequest {
+  requireRequest(raw);
+  return {};
 }
 
 /**
