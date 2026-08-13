@@ -107,6 +107,7 @@ import {
   focusedPane,
   installEventBridge,
   installPlanUsageFeed,
+  installSettingsMenuFeed,
   installTerminalFeed,
   startSessionFeed,
   interruptRun,
@@ -149,6 +150,9 @@ export function App(): ReactElement {
     // them arrives on this channel. Subscribing afterwards would drop whatever a
     // busy terminal printed during the adoption.
     const stopTerminalFeed = installTerminalFeed();
+    // The macOS menu bar's Settings… item. Nothing races here — the click can
+    // only arrive after the app is up — but it is torn down with the rest.
+    const stopSettingsMenuFeed = installSettingsMenuFeed();
     if (!started.current) {
       started.current = true;
       void bootstrap();
@@ -158,6 +162,7 @@ export function App(): ReactElement {
       stopFeed();
       stopUsageFeed();
       stopTerminalFeed();
+      stopSettingsMenuFeed();
     };
   }, []);
 

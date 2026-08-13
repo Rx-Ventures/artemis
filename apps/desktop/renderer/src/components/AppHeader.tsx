@@ -3,15 +3,13 @@
  * ============================================================================
  *
  *     ┌──────────────────────────────────────────────────────────────────┐
- *     │ ●●● [◧] artemis › Wire the seam  [⊞][⊟] [+] [⚙]   [–][□][✕] │
+ *     │ ●●● [◧] artemis › Wire the seam           [>_] [⚙]   [–][□][✕] │
  *     └──────────────────────────────────────────────────────────────────┘
- *       ↑    ↑   ↑                        ↑  ↑   ↑   ↑        ↑
- *       │    │   │                        │  │   │   │        └ Windows and
- *       │    │   │                        │  │   │   │          Linux only
- *       │    │   │                        │  │   │   └ settings
- *       │    │   │                        │  │   └ new session
- *       │    │   │                        │  └ split downwards
- *       │    │   │                        └ split to the right
+ *       ↑    ↑   ↑                                 ↑   ↑        ↑
+ *       │    │   │                                 │   │        └ Windows and
+ *       │    │   │                                 │   │          Linux only
+ *       │    │   │                                 │   └ settings
+ *       │    │   │                                 └ terminal
  *       │    │   └ what the focused pane shows
  *       │    └ show/hide the sidebar — always present
  *       └ macOS traffic lights: the system's own, drawn over this bar
@@ -41,14 +39,15 @@
  * `WorkingArea`. That is why the title is read through `usePane` (which falls
  * back to the focused pane outside a pane) rather than off the app store.
  *
- * ## Two split controls, not one toggle
+ * ## Splitting is not here
  *
- * Splitting right and splitting down are different actions with different
- * results — right grows a row, down adds a full-width one — so they are two
- * buttons rather than one that guesses. Each is disabled *with its reason
- * attached* when the grid has no room in that direction, per the app-wide rule
- * that a gate is explained rather than hidden. Closing is on each pane's own
- * caption, where the thing being closed is unambiguous.
+ * The bar used to carry a split-right and a split-down button. They are gone:
+ * this is window chrome, and a header that grows a control per pane operation
+ * competes with the panes' own captions for the same job. Splitting is reached
+ * by `⌘\` and `⌘⇧\` (`App.tsx`) and by "Open beside" in the command palette;
+ * closing stays on each pane's caption, where the thing being closed is
+ * unambiguous. Only the two controls that act on *the window rather than the
+ * grid* are left — the focused conversation's terminal, and settings.
  *
  * ## Why the app grew a header
  *
@@ -64,12 +63,14 @@
  * duplication, not an oversight: it is a live control, it costs 20px, and
  * removing it would have meant editing a file this change does not own.
  *
- * ## New session is here as well as in the sidebar
+ * ## New session is not here either
  *
- * Hiding the sidebar must not hide the app's primary action. The alternative —
- * showing this button only while the sidebar is collapsed — was rejected
- * because a control that appears and disappears as a side effect of an
- * unrelated toggle is harder to learn than a redundant one. It never moves.
+ * It was, on the argument that hiding the sidebar must not hide the app's
+ * primary action. The button is gone and that argument still stands, so the
+ * routes that answer it are `⌘N`, the command palette, and the sidebar's own
+ * button — none of which depend on this bar. If hiding the sidebar ever does
+ * start to feel like losing the way to start work, this is the paragraph that
+ * was wrong, and the button comes back.
  *
  * ## The whole bar is an Electron drag region
  *
@@ -83,13 +84,10 @@
 import { type ReactElement } from 'react';
 import {
   ChevronRightIcon,
-  Columns2Icon,
   CopyIcon,
   MinusIcon,
   PanelLeftCloseIcon,
-  Rows2Icon,
   PanelLeftIcon,
-  PlusIcon,
   Settings2Icon,
   SquareIcon,
   SquareTerminalIcon,
@@ -101,16 +99,7 @@ import { useWindowState } from '../hooks/useWindowState';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import {
-  SPLIT_LIMIT_REASON,
-  canSplit,
-  newSession,
-  openSettings,
-  splitPane,
-  toggleTerminal,
-  toggleSidebar,
-  useApp,
-} from '../state/store';
+import { openSettings, toggleTerminal, toggleSidebar, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
 
@@ -241,7 +230,6 @@ export function AppHeader(): ReactElement {
   const windowState = useWindowState();
   const gutter = useTrafficLightGutter(windowState.fullScreen);
   const pane = usePaneRef();
-  const room = useApp(canSplit);
 
   const project = cwd.trim().length > 0 ? lastSegment(cwd) : null;
 
@@ -280,35 +268,9 @@ export function AppHeader(): ReactElement {
       </div>
 
       {/*
-        The keyboard routes are `⌘\\` and `⌘⇧\\`; these are the discoverable
-        ones, and the only route for someone who never drags a session out of
-        the sidebar. Both act on the focused pane, which is what its brighter
-        caption marks.
-      */}
-      <IconButton
-        label={`Split to the right (${keyLabel('mod+\\')})`}
-        disabled={!room}
-        disabledReason={room ? undefined : SPLIT_LIMIT_REASON}
-        onClick={() => splitPane('right', pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <Columns2Icon />
-      </IconButton>
-      <IconButton
-        label={`Split downwards, full width (${keyLabel('mod+shift+\\')})`}
-        disabled={!room}
-        disabledReason={room ? undefined : SPLIT_LIMIT_REASON}
-        onClick={() => splitPane('down', pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <Rows2Icon />
-      </IconButton>
-      {/*
-        Beside the splits rather than next to New Session, because it is the same
-        kind of act: it changes what this window is showing, not what the agent
-        is doing. `toggleTerminal` opens the focused conversation's shell or
-        brings it forward — see the store for why repeating it does not stack up
-        terminals nobody asked for.
+        `toggleTerminal` opens the focused conversation's shell or brings it
+        forward — see the store for why repeating it does not stack up terminals
+        nobody asked for.
       */}
       <IconButton
         label={`Terminal (${keyLabel('mod+j')})`}
@@ -316,13 +278,6 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <SquareTerminalIcon />
-      </IconButton>
-      <IconButton
-        label={`New session (${keyLabel('mod+n')})`}
-        onClick={() => newSession(pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <PlusIcon />
       </IconButton>
       <IconButton
         label={`Settings (${keyLabel('mod+,')})`}

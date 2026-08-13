@@ -201,6 +201,18 @@ export const IPC = {
 } as const;
 
 /**
+ * Payload for {@link IPC_PUSH.menuOpenSettings}.
+ *
+ * Carries no data — the ask *is* the whole message. It is an object with a
+ * discriminator rather than `undefined` so the preload's guard has something to
+ * check: a channel whose validator accepts anything is a channel that cannot
+ * tell a real push from a stray one.
+ */
+export interface MenuOpenSettings {
+  readonly kind: 'open-settings';
+}
+
+/**
  * Main → renderer push channels, used with `webContents.send` /
  * `ipcRenderer.on`.
  */
@@ -250,6 +262,22 @@ export const IPC_PUSH = {
    * decides to print, not when a component renders.
    */
   terminalEvent: 'artemis:push:terminal-event',
+  /**
+   * Asks the renderer to open Settings, because the macOS menu bar was clicked.
+   *
+   * A push rather than a pull for the reason every item on this list is one:
+   * the renderer has no way to observe a click on a menu it does not draw. The
+   * menu lives in main because on macOS the application menu is the app's, not
+   * the window's — see `main/menu.ts`.
+   *
+   * Broadcast to every window, like the rest of this list. Two Artemis windows
+   * both landing on Settings is the honest reading of an app-level menu item:
+   * the click was at the app, not at one window. The alternative — routing to
+   * the focused window — would make the item do nothing at all when the click
+   * arrives with no window focused, which is exactly when someone reaching for
+   * the menu bar needs it.
+   */
+  menuOpenSettings: 'artemis:push:menu-open-settings',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -1221,6 +1249,7 @@ export type IpcPushMap = {
   [IPC_PUSH.planUsage]: PlanUsagePush;
   [IPC_PUSH.updateState]: UpdateState;
   [IPC_PUSH.terminalEvent]: TerminalEvent;
+  [IPC_PUSH.menuOpenSettings]: MenuOpenSettings;
 };
 
 /** Payload type for a push channel. */
@@ -1526,6 +1555,24 @@ export interface ArtemisBridge {
      * is still in flight.
      */
     onChange(listener: (state: UpdateState) => void): Unsubscribe;
+  };
+
+  /**
+   * The macOS application menu, in the one direction it can travel.
+   *
+   * Listen-only, and deliberately so. The renderer cannot build, reorder or
+   * enable anything in the menu bar — that menu is assembled in main, where the
+   * app's identity lives, and a renderer able to rewrite it would put window
+   * state in charge of app-level chrome. All that crosses is the news that a
+   * user picked something.
+   */
+  readonly menu: {
+    /**
+     * Subscribe to the menu bar's Settings… item. The listener runs on every
+     * click; opening Settings when they are already open is a no-op in the
+     * store, which is why this needs no matching "close" push.
+     */
+    onOpenSettings(listener: (payload: MenuOpenSettings) => void): Unsubscribe;
   };
 }
 

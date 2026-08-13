@@ -312,7 +312,12 @@ async function bootstrap(): Promise<void> {
   // Before the window, like everything else that must never be half-installed
   // while something can already be clicked. macOS only, and it replaces the
   // default menu wholesale — see menu.ts for what that costs.
-  installApplicationMenu({ updater });
+  installApplicationMenu({
+    updater,
+    // Main cannot open the dialog — Settings are renderer state — so the click
+    // travels as a push and the renderer decides what to do with it.
+    onOpenSettings: () => broadcast(IPC_PUSH.menuOpenSettings, { kind: 'open-settings' }),
+  });
 
   // After `adoptLoginShellPath`, which has by now corrected `process.env.PATH` —
   // a shell inherits that env, so a terminal opened from a Finder launch finds
