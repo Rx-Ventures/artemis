@@ -1,91 +1,111 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.7.0
+## What's new in 0.8.0
 
-- A reopened conversation opens. Coming back to a session could instead
-  produce "Artemis blocked a response that failed its credential-safety
-  check", sitting under a "Could not load earlier messages" warning with an
-  empty pane behind it. The transcript was intact on disk the whole time; the
-  app was refusing to show it to you. Replaying a session hands back the same
-  events a live run pushes, but the replay was being checked as though Artemis
-  had authored it — so the agent explaining `export ANTHROPIC_API_KEY=…`, a
-  command carrying an `env`, or a tool result quoting a key was enough to take
-  the entire history down with it, and a long enough session could fail on its
-  length alone. Replayed events are now checked exactly as they were when they
-  were live, one at a time. The same mismatch was hiding a reloaded terminal's
-  scrollback and refusing to preview any file that documents a key; both open
-  now. Nothing loosened structurally — no profile field, secret reference or
-  API key may appear in any reply, at any depth.
+- Every conversation comes back from a restart, not just the first. Reload or
+  quit with more than one run in flight and each column after the first
+  returned marked as working with an empty transcript behind it: it never
+  printed anything, Stop did nothing, and the next prompt failed with
+  `Run "run_…" has already ended` while the agent was plainly still going. No
+  work was ever lost — the provider's own session file was intact the whole
+  time, which is why quitting and starting again showed all of it. Artemis had
+  put those columns nowhere. A replayed event is routed to its pane by run id,
+  the pane had not been registered by the time the replay arrived, and every
+  event addressed to it was dropped without a word. The run *state* took a
+  different path and landed anyway, so the column looked alive while being
+  deaf — and nothing repaired it, because the function that adopts live runs
+  runs once, at boot. That one missing registration is also why Stop was inert
+  and why the sidebar light never came on. A pane is now registered, with its
+  run already on it, before its transcript is replayed. Three separate reports
+  turned out to be this single write.
+- The transcript gets its vertical space back. The gutter clock used to sit
+  below the avatar in normal flow, invisible until you hovered — but holding
+  its line in every row whether anyone hovered or not, so a collapsed work
+  marker was 35px of row around 16px of content and a one-line answer carried
+  29px of nothing beneath it. The clock now cross-fades with the avatar in the
+  same spot instead of being given a line of its own, so a row is exactly as
+  tall as what is in it. That is what pays for the rest: the gap between turns
+  drops from 6px to 2px, with air bought back only where it marks something —
+  above a user turn, above an assistant turn, and around the end of a run. The
+  word "agent" is gone from the gutter, since the mark beside it already means
+  that and on a one-line answer the label stood taller than the answer; the
+  mark gained a disc so that standing alone it reads as a mark rather than as
+  decoration. `subagent` keeps its word, because there the mark shows the
+  provider and both look the same.
+- Profiles can share one `~/.claude`. A profile's config directory isolates the
+  account and, as a side effect nobody asked for, everything else with it — a
+  skill written once has to be written again for every account you have.
+  Settings gains an **Advanced** tab that closes that gap, pointing the
+  shareable parts of each Claude profile at your own `~/.claude`: `commands`,
+  `skills`, `plugins`, `plans`, `todos`, `ide`, `session-env`, `projects` and
+  `CLAUDE.md`. Deliberately not shared are `.claude.json`, `settings.json`,
+  `sessions/` and the credential — those are what make two accounts two
+  accounts, and linking the whole directory is the obvious thing to reach for
+  and the one thing that cannot work, because every profile ends up signed into
+  whichever account logged in last. Artemis does not run any of this: it writes
+  the shell script and you read it and run it yourself. That is a refusal
+  rather than an unfinished feature — the operation moves directories holding
+  months of transcripts, across accounts, along paths read out of a JSON file
+  you can edit by hand. A button would make that one click with nothing to read
+  beforehand and no record afterwards, where a script can be reviewed, kept,
+  re-run, and run at the point when Artemis itself is the thing that is broken.
+  Nothing is deleted either: whatever already occupies a name is renamed to
+  `<name>.pre-shared` before the link is made, the undo script puts it back,
+  and it removes only the links still pointing where it put them.
+- A conversation two accounts can reach is listed once. History was read per
+  profile, on the reasoning that a profile's config directory is its own store
+  — so where a session was found *is* its account, and no bookkeeping is needed
+  anywhere. That holds until two profiles resolve to one store, and then it
+  fails in the most visible way available: every conversation comes back once
+  per profile and the sidebar renders it that many times under that many
+  account labels, so three accounts sharing a store tripled the list. Two ways
+  in, neither exotic — two profiles are allowed to name the same directory, and
+  symlinking `projects/` is how history gets shared across accounts, which is
+  exactly what the Advanced tab above now does on purpose. Sessions are grouped
+  by the store they actually read rather than by the profile that read it, and
+  each store is read once, which is also less work than before. Resuming
+  changed with it: opening a shared conversation keeps you on the account you
+  are already working in, when that account can reach the transcript, rather
+  than switching you to whichever profile happened to sort first. Which one
+  that is is insertion order — and moving the account your next prompt bills to
+  was never something to do on the strength of an ordering.
+
+Carried over from 0.7.0, if you are coming from 0.6.3 or earlier:
+
+- A reopened conversation opens. Coming back to a session could instead produce
+  "Artemis blocked a response that failed its credential-safety check" over an
+  empty pane, with the transcript intact on disk the whole time — a replay was
+  being credential-checked as though Artemis had authored it, so an agent that
+  had merely explained `export ANTHROPIC_API_KEY=…` took its own history down.
+  Replayed events are now checked exactly as they were when they were live.
 - The meter under the composer is three rings where it was one bar. `5hr`,
-  `Week` and `Fable`, each named, each carrying its own percentage. Before,
-  a single bar counted down a single window and a setting in Appearance
-  decided which one — but the 5-hour limit is what stops you mid-task, the
-  weekly is what you budget across days, and Fable's weekly is what runs out
-  first on an account that leans on it. Choosing one meant being blind to two.
-  The disc inside each ring takes its arc's colour, so an account going amber
-  is noticeable without being looked at; the thresholds are the ones the bar
-  used. It is still one control, opening the same popover with every window
-  your plan reports. And it is *up to* three rings: a window your plan does
-  not report gets none rather than an empty one, since a ring at 0% and a ring
-  for a limit you do not have look identical. The **Plan meter** setting is
-  gone with the bar — every answer it offered is now on screen.
+  `Week` and `Fable`, each named and each carrying its own percentage, instead
+  of one bar counting down whichever single window a setting in Appearance had
+  picked. The **Plan meter** setting is gone with the bar — every answer it
+  offered is now on screen.
 - Sessions can be pinned, and the session menu answers to four letters. A
-  pinned session lifts out to a **Pinned** section above every project — the
-  mirror of what archiving already does below — open by default, and present
-  only once something is in it. Pinning and archiving are opposite claims
-  about a row, so each clears the other. In the right-click menu, `A`
-  archives, `D` deletes, `R` renames and `P` pins, each letter shown on the
-  item it belongs to: `D` reaches the confirmation and never the deletion, an
-  item you are not allowed to use stays inert, and a key aimed at the window
-  — ⌘R — still reaches the window. Like archiving, this is Artemis's own
-  bookkeeping: nothing on disk changes, and it works against every provider.
-- An account can sit out, or leave the picker entirely. Artemis reaches for
-  profiles on its own now — it leads the menu with a Recommended row and
-  starts a new session on whichever account has the most room — which is the
-  wrong default for a client's account, a colleague's, or one whose quota is
-  being saved for something that runs overnight. Nothing in a usage reading
-  tells those apart, so it is asked rather than inferred. Two switches under
-  **Availability** on a profile, both on unless you say otherwise: *Suggest
-  automatically* takes an account out of the pool Artemis picks from while
-  leaving it one click away in the menu, and *Show in the profile picker*
-  takes it out of the list — the thing to reach for instead of deleting a
-  profile, when the record is also a config directory, a login and a session
-  history. Neither unbinds anything: a session already recorded against a
-  hidden account still resumes into it, and the account you are running on
-  keeps its row, marked.
+  pinned session lifts out to a **Pinned** section above every project, the
+  mirror of what archiving already does below; in the right-click menu `A`
+  archives, `D` deletes, `R` renames and `P` pins.
+- An account can sit out, or leave the picker entirely. Two switches under
+  **Availability** on a profile: *Suggest automatically* takes an account out
+  of the pool Artemis picks from while leaving it one click away, and *Show in
+  the profile picker* takes it out of the list — the thing to reach for instead
+  of deleting a profile. Neither unbinds anything already recorded against it.
 
-Carried over from 0.6.3 and 0.6.2, if you are coming from 0.6.1 or earlier:
+And from 0.6.x, if you are coming from 0.5.x:
 
-- The button that copies a new profile's sign-in command copies it. It never
-  had — Chromium gates the clipboard behind a permission Artemis refused, and
-  the button gave its tick regardless, so the paste that followed produced
-  whatever you had copied beforehand. Writing the clipboard is now allowed to
-  Artemis's own window and to nothing else.
-- The terminal works in an installed copy. ⌘J has been in the app since 0.6.0
-  and had never once opened a shell in one — the single file needed to spawn a
-  shell shipped without its execute bit. A development checkout has no archive
-  to unpack and so no bit to lose, which is why the tests went on passing while
-  every download was broken.
+- The button that copies a new profile's sign-in command copies it — Chromium
+  gated the clipboard behind a permission Artemis refused, and the button gave
+  its tick regardless.
+- The terminal works in an installed copy. ⌘J had never once opened a shell in
+  one: the file needed to spawn it shipped without its execute bit.
 - A worktree's sessions stay with the project they came from, instead of
-  appearing under a repository named after the branch. Sessions started in a
-  subdirectory group with the project too. Expect one thing once: a group you
-  had collapsed against a worktree path arrives open.
-
-And from 0.6.1 and 0.6.0, if you are coming from 0.5.x:
-
-- A bug can be reported from inside the app. A permanent row at the foot of
-  the sidebar opens a short form and hands it to GitHub's own new-issue page
-  with all of it filled in — the last read of what is about to be public is
-  yours.
-- Updating needs no GitHub account. This repository is public, so the updater
-  reaches releases over plain HTTPS, and streams the archive to disk rather
-  than holding about 200MB in memory while it lands.
-- A plan arrives as a plan, laid out to be read and approved rather than shown
-  as a wall of prompt text.
-- Updating cleans up after itself. Every update before 0.6.0 left about 6.5MB
-  of the version it replaced behind, so expect a little disk space back on
-  first launch.
+  appearing under a repository named after the branch.
+- A bug can be reported from inside the app, updating needs no GitHub account
+  and cleans up after itself, and a plan arrives laid out to be read and
+  approved rather than as a wall of prompt text.
 
 ## Install
 
