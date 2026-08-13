@@ -109,6 +109,7 @@ import {
   type ShownConversation,
   type TerminalRecord,
 } from './dock';
+import { isTaskLive } from '@rx-artemis/protocol';
 import type { PermissionItem, TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
@@ -1188,6 +1189,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     modelsError: null,
     run: null,
     permissionQueue: [],
+    tasks: [],
     promptHistory: [],
     draft: '',
     ...overrides,
@@ -1779,6 +1781,11 @@ function describeShown(): readonly ShownConversation[] {
       paneId: pane.id,
       ...(state.run === null ? {} : { runId: state.run.runId }),
       ...(sessionId === null ? {} : { sessionId }),
+      // Whether this column has anything to put in a tasks tab. A boolean rather
+      // than the rows themselves: the dock only decides whether the tab exists,
+      // and carrying the set through here would make every progress message
+      // rebuild the strip.
+      ...(state.tasks.length === 0 ? {} : { hasTasks: true }),
     };
   });
 
@@ -1789,7 +1796,8 @@ function describeShown(): readonly ShownConversation[] {
       return (
         one.paneId === before.paneId &&
         one.runId === before.runId &&
-        one.sessionId === before.sessionId
+        one.sessionId === before.sessionId &&
+        one.hasTasks === before.hasTasks
       );
     });
 
@@ -1824,9 +1832,26 @@ function reconcileDock(): void {
   const state = useApp.getState();
   const { preview, terminals, activeDockTab, visibleDockTabs } = state;
 
-  // The overwhelmingly common case: an empty dock that was already empty. This
-  // runs on every keystroke in a composer, so it returns before allocating.
-  if (preview === null && terminals.length === 0 && visibleDockTabs.length === 0) return;
+  /*
+   * The overwhelmingly common case: an empty dock that was already empty. This
+   * runs on every keystroke in a composer, so it returns before allocating.
+   *
+   * Delegated work is in the condition because it is the one thing in the dock
+   * that no user action puts there. A preview and a terminal are both opened by
+   * something that also writes to the window store, so the strip could never
+   * need rebuilding while all three of these were empty — until a column could
+   * acquire tasks on its own, at which point this returned early and the tab
+   * never appeared. The walk is over the open columns, of which there are at
+   * most four, reading one field each.
+   */
+  if (
+    preview === null &&
+    terminals.length === 0 &&
+    visibleDockTabs.length === 0 &&
+    !allPanes().some((pane) => paneState(pane).tasks.length > 0)
+  ) {
+    return;
+  }
 
   const shown = describeShown();
 
@@ -3367,6 +3392,7 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     activeProfileId: handle.profileId,
     cwd: handle.cwd,
     permissionQueue: [],
+    tasks: [],
     // The session the next prompt continues is this run's own. Set now rather
     // than waiting for `run.end`, because until it is set the sidebar cannot
     // mark the row the user needs in order to find this conversation again.
@@ -4891,6 +4917,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     resumeSessionId: session.id,
     forkOnResume: false,
     permissionQueue: [],
+    tasks: [],
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
@@ -5168,6 +5195,9 @@ export async function submitPrompt(
       permissionMode: state.permissionMode,
     },
     permissionQueue: [],
+    // Not `tasks`. A subagent launched last turn is still running as this one
+    // starts — that is the ordinary case now — and the next `background.tasks`
+    // replaces the set anyway.
   });
 
   // Both are sent only when the *live descriptor* still offers them. A stored
@@ -5277,6 +5307,58 @@ export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   if (queued.length > 0) {
     pane.transcript.note('warn', `${queued.length} queued message(s) will still run.`);
   }
+}
+
+/**
+ * How much delegated work a column is holding, and how much of it is live.
+ *
+ * Two selectors returning numbers rather than one returning a summary object,
+ * and that is a rule about zustand rather than a style choice: a selector that
+ * builds an object returns a new identity on every call, so the default equality
+ * check never matches and the component re-renders itself forever. The label the
+ * tab shows is assembled from these two numbers where it is drawn.
+ */
+export function taskCount(state: AppState, paneId: PaneId): number {
+  const pane = allLivePanes(state).find((one) => one.id === paneId);
+  return pane === undefined ? 0 : paneState(pane).tasks.length;
+}
+
+/**
+ * The count that goes on the tab.
+ *
+ * Live work, not total: a tab reading "3" over three finished rows would be the
+ * same past-tense lie the transcript already tells with "delegated to 3 agents"
+ * while they are still working.
+ */
+export function liveTaskCount(state: AppState, paneId: PaneId): number {
+  const pane = allLivePanes(state).find((one) => one.id === paneId);
+  if (pane === undefined) return 0;
+  let live = 0;
+  for (const task of paneState(pane).tasks) if (isTaskLive(task)) live += 1;
+  return live;
+}
+
+/**
+ * Ask the provider to stop one delegated task.
+ *
+ * Addressed through the pane's run, which is how the main process finds the
+ * provider process holding it — and deliberately not gated on that run being
+ * live. A task worth stopping is one that outlived the turn that launched it, so
+ * the run named here has usually ended, and refusing on that basis would refuse
+ * every stop worth making.
+ *
+ * Nothing is written optimistically. The row settles when the provider says it
+ * has, through the same `background.tasks` event a natural finish arrives on, so
+ * a stop that silently failed looks different from one that worked — which is
+ * the whole reason to wait.
+ */
+export async function stopTask(taskId: string, pane: Pane = focusedPane()): Promise<void> {
+  const { bridge } = resolveBridge();
+  const run = paneState(pane).run;
+  if (!bridge || !run) return;
+
+  const result = await call(() => bridge.runs.stopTask({ runId: run.runId, taskId }));
+  if (!result.ok) reportFailure('Could not stop the task', result.error);
 }
 
 /*
@@ -5837,6 +5919,20 @@ function applyAgentEvent(event: AgentEvent): void {
       break;
     }
 
+    /*
+     * The whole set, swapped in. Never merged — that is the event's contract,
+     * and it is what makes a missed one impossible to wedge a spinner with.
+     *
+     * On the pane rather than in the transcript because a task is not a thing
+     * that was *said*: the set is replaced as work comes and goes, so a row for
+     * it would either be rewritten in place in a thread that never rewrites, or
+     * become one entry per change, which is a log of a list. The dock pane is
+     * the surface for it, and this is what feeds it.
+     */
+    case 'background.tasks':
+      setPaneState(pane, { tasks: event.tasks });
+      break;
+
     case 'session.started':
       setPaneState(pane, {
         run: {
@@ -5918,6 +6014,9 @@ function applyAgentEvent(event: AgentEvent): void {
 
       setPaneState(pane, (s) => ({
         permissionQueue: [],
+        // `tasks` is deliberately not cleared here. Work that outlived the turn
+        // that launched it is exactly what this list is for, and a run ending is
+        // the moment it becomes the only record of it.
         // `forkOnResume` is a one-shot choice. The fork already happened and
         // `endedSessionId` is the fork's own id, so leaving the flag set would
         // fork the fork on the next turn.

@@ -51,6 +51,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type {
   AgentError,
+  BackgroundTask,
   Capabilities,
   PermissionMode,
   PermissionRequest,
@@ -177,6 +178,22 @@ export interface SessionState extends MirroredState {
    * other one.
    */
   readonly permissionQueue: readonly PermissionRequest[];
+  /**
+   * What this conversation has delegated: subagents, workflows, backgrounded
+   * commands — running and recently settled.
+   *
+   * Per pane because a task belongs to a conversation, exactly as its transcript
+   * does, and because two columns can each be running their own. Replaced
+   * wholesale on every `background.tasks` event rather than merged, which is that
+   * event's contract and the reason a missed message cannot leave a spinner
+   * turning for work that finished.
+   *
+   * Survives a run ending, which is the point: the tasks worth showing are the
+   * ones that outlived the turn that launched them. Never persisted — it
+   * describes work inside a provider process, and a row restored from disk would
+   * be a claim about a process that no longer exists.
+   */
+  readonly tasks: readonly BackgroundTask[];
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
