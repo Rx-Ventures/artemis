@@ -30,6 +30,10 @@
  *
  * Synthesised events continue the run's `seq` numbering from the highest seq
  * seen, so a consumer sorting by `seq` still sees the end last.
+ *
+ * The one exception is the prompt each turn is recorded with, which reuses the
+ * current seq rather than taking a new one and is never emitted — it exists so
+ * a reloaded window can replay the message it asked for. See `#recordPrompt`.
  */
 
 import path from 'node:path';
@@ -230,6 +234,8 @@ interface RunEntry {
   readonly history: AgentEvent[];
   /** Subscribers scoped to this run. */
   readonly listeners: Set<RunEventListener>;
+  /** How many prompts have been recorded into `history`, for message ids. */
+  prompts: number;
   maxSeq: number;
   ended: boolean;
   finalized: boolean;
@@ -331,6 +337,11 @@ export class RunRegistry {
    * for an unknown or long-finished run; the buffer is bounded by
    * {@link RunRegistryOptions.historyLimit}, so a very long run may have
    * dropped its earliest events.
+   *
+   * Includes the prompts the run was asked, which the adapter's own stream does
+   * not carry — see `#recordPrompt`. They sit in the buffer where they were
+   * sent, so insertion order is the order to apply them in; their `seq` repeats
+   * the neighbouring event's rather than taking a slot of its own.
    */
   eventsSince(runId: RunId, afterSeq = -1): readonly AgentEvent[] {
     const entry = this.#find(runId);
@@ -463,7 +474,7 @@ export class RunRegistry {
       ...(historyOffset === undefined ? {} : { historyOffset }),
     };
 
-    this.#register(handle, run);
+    this.#register(handle, run, input.prompt);
     return handle;
   }
 
@@ -519,14 +530,22 @@ export class RunRegistry {
     return handle;
   }
 
-  /** Index a run and start draining it. The one place a {@link RunEntry} is built. */
-  #register(handle: RunHandle, run: Run): RunEntry {
+  /**
+   * Index a run and start draining it. The one place a {@link RunEntry} is built.
+   *
+   * `prompt` is the message the run was started with, and is recorded into the
+   * replay buffer before the pump so it lands ahead of the provider's first
+   * event — the question has to come before the answer. Omitted by {@link adopt},
+   * where nobody typed anything.
+   */
+  #register(handle: RunHandle, run: Run, prompt?: string): RunEntry {
     const entry: RunEntry = {
       handle,
       run,
       pending: new Set(),
       history: [],
       listeners: new Set(),
+      prompts: 0,
       maxSeq: -1,
       ended: false,
       finalized: false,
@@ -537,10 +556,55 @@ export class RunRegistry {
       pump: Promise.resolve(),
     };
     this.#runs.set(handle.runId, entry);
+    if (prompt !== undefined) this.#recordPrompt(entry, prompt);
     // The pump handles its own failures; the `catch` is belt-and-braces so an
     // unexpected one can never surface as an unhandled rejection.
     entry.pump = this.#pump(entry).catch(() => undefined);
     return entry;
+  }
+
+  /**
+   * Put a prompt into the run's replay buffer, without emitting it.
+   *
+   * The user's own message is the one part of a turn the event stream does not
+   * carry. Providers echo it back, and the Claude mapper deliberately drops the
+   * echo because the renderer drew the message optimistically the moment it was
+   * typed (see `isHumanTurn`). That is right for as long as the window lives,
+   * and it is exactly what a reload takes away: `runs.events` was then a
+   * complete record of the turn apart from the sentence that started it, so ⌘R
+   * mid-run redrew the agent's work under no question at all. On a session that
+   * had only just started, the whole conversation came back headless.
+   *
+   * Retained, not emitted. Every live listener already has the optimistic row,
+   * and `confirmUserMessage` has by then taken it out of the queue that
+   * reconciles echoes — a second copy would render the prompt twice rather than
+   * merge with it. This is only ever read back by a window that lost the first.
+   *
+   * `seq` is the run's current position rather than a fresh number, which is
+   * the one subtlety worth stating: the numbering belongs to the adapter and is
+   * contracted to be dense from 0, so consuming a slot here would either open a
+   * gap the transcript reports as dropped events, or push `run.end` past a seq
+   * the adapter still means to use. Order comes from the buffer itself —
+   * {@link eventsSince} returns it in insertion order — so the duplicate value
+   * costs nothing.
+   *
+   * Attachments are not recorded. The event union carries text, and a replay is
+   * not the place to push base64 back across IPC; `mapUserMessage` makes the
+   * same trade for a replayed image.
+   */
+  #recordPrompt(entry: RunEntry, text: string): void {
+    if (text.length === 0) return;
+    entry.prompts += 1;
+    this.#retain(entry, {
+      type: 'text.complete',
+      runId: entry.handle.runId,
+      seq: Math.max(entry.maxSeq, 0),
+      ts: this.#now(),
+      messageId: `${entry.handle.runId}:prompt:${String(entry.prompts)}`,
+      role: 'user',
+      text,
+      replay: true,
+    });
   }
 
   /**
@@ -568,6 +632,11 @@ export class RunRegistry {
       );
     }
     const result = await entry.run.send(text, attachments);
+    // After the adapter took it, so a message that was refused does not sit in
+    // the replay as though it had been asked. See `#recordPrompt`: without this
+    // a reload loses every mid-run steer the same way it lost the opening
+    // prompt, and those are the ones with no session file to fall back on.
+    this.#recordPrompt(entry, text);
     // Trust the adapter's own answer; fall back to its advertised capability
     // only if it returned nothing.
     const deliveredImmediately =

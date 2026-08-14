@@ -520,6 +520,53 @@ describe('after ⌘R reloads the window', () => {
     expect(shown).not.toContain('turn 4');
   });
 
+  /*
+   * The reported bug: ⌘R on a session that had only just started came back with
+   * the agent working away under no question at all.
+   *
+   * The prompt was only ever a renderer-side row, drawn optimistically the
+   * moment it was typed — the Claude mapper drops the provider's echo of it
+   * precisely because that row already exists. A reload throws the row away, and
+   * neither source `attachRun` reads could put it back: a new session has a
+   * `historyOffset` of 0, so there is no file to read, and the registry's buffer
+   * held only what the adapter emitted. The registry now records the prompt into
+   * that buffer itself, which is why this asserts on a *user* row rather than on
+   * the text being present somewhere.
+   */
+  it('replays the prompt the run was started with', async () => {
+    mainProcessRuns = [{ ...liveRun('run-a', 'sess-a'), historyOffset: 0 }];
+    retainedEvents = {
+      'run-a': [
+        {
+          type: 'text.complete',
+          runId: 'run-a',
+          seq: 0,
+          ts: 1,
+          messageId: 'run-a:prompt:1',
+          role: 'user',
+          text: 'find the bug',
+          replay: true,
+        },
+        {
+          type: 'text.complete',
+          runId: 'run-a',
+          seq: 1,
+          ts: 2,
+          messageId: 'm1',
+          role: 'assistant',
+          text: 'looking now',
+        },
+      ],
+    };
+
+    await bootstrap();
+    await settled();
+
+    const items = rows(pane()).map((id) => pane().transcript.getItem(id));
+    expect(items.map((item) => item?.kind)).toEqual(['user', 'assistant']);
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'find the bug', pending: false });
+  });
+
   it('shows the run alone when the provider could not measure the seam', async () => {
     // No `historyOffset` on the handle — a provider that cannot count its own
     // stored messages. Reading the file here would duplicate the live turn, so
