@@ -2,7 +2,7 @@
  * `@rx-artemis/core` — the headless engine.
  *
  * Everything Artemis does that is not drawing pixels or talking to Electron
- * happens here: provider adapters, profile and credential resolution, and the
+ * happens here: provider adapters, profile and environment resolution, and the
  * registry of live runs.
  *
  * ```
@@ -11,8 +11,7 @@
  * │ each mapping a wildly different transport onto the same AgentEvent   │
  * │ union and publishing a capability descriptor the UI degrades against.│
  * ├── profiles ──────────────────────────────────────────────────────────┤
- * │ ProfileStore    CRUD over account records (never secrets)            │
- * │ SecretStore     the seam to encrypted OS storage, injected by the host│
+ * │ ProfileStore    CRUD over account records — a label and a config dir │
  * │ resolveEnv      profile → the env bundle a run executes with         │
  * ├── sessions ──────────────────────────────────────────────────────────┤
  * │ RunRegistry     live runs by id, event fan-out, guaranteed teardown  │
@@ -30,11 +29,15 @@
  *
  *  1. **No `electron` import, ever** — directly or transitively. Core has to
  *     run in a plain Node process and under vitest with no Electron runtime
- *     present. Anything that genuinely needs the main process (encrypted
- *     storage, the user-data path) is injected as an interface.
- *  2. **Secrets stay here.** Core reads credentials to build an environment
- *     for a provider; the only profile shape it hands upward is
- *     `ProfileMetadata`, which carries a masked hint and nothing else.
+ *     present. Anything that genuinely needs the main process (the user-data
+ *     path, say) is injected as a constructor argument.
+ *  2. **No secrets, anywhere.** Core holds no credential and no handle to
+ *     one: the provider's own CLI login writes its token into a profile's
+ *     config directory, and core's part is to point one environment variable
+ *     at that directory while stripping every variable that could
+ *     authenticate the provider some other way. The only profile shape it
+ *     hands upward is `ProfileMetadata`, which carries no secret because
+ *     none exists.
  *
  * Types shared with the renderer — events, capabilities, IPC payloads — live
  * in `@rx-artemis/protocol` and are re-exported from nowhere: import them from
