@@ -155,9 +155,11 @@ export function partitionSessions(
   const active: SessionSummary[] = [];
   const put: SessionSummary[] = [];
   for (const session of sessions) {
-    const key = sessionKey(session);
-    if (sets.pinned.has(key)) pinned.push(session);
-    else if (sets.archived.has(key)) put.push(session);
+    // Aliases, not the one key: a shared session's key moves when its owner is
+    // recorded, and the filing must survive that. See `sessionKeyAliases`.
+    const keys = sessionKeyAliases(session);
+    if (keys.some((key) => sets.pinned.has(key))) pinned.push(session);
+    else if (keys.some((key) => sets.archived.has(key))) put.push(session);
     else active.push(session);
   }
   return { pinned, active, archived: put };
@@ -195,13 +197,31 @@ export function orderSessions(
   const query = options.query ?? '';
   const lookup = options.profileLabel;
   const kept = query
-    ? sessions.filter((s) => matchesQuery(s, query, lookup?.(s.profileId)))
+    ? sessions.filter((s) => matchesQuery(s, query, searchLabel(s, lookup)))
     : [...sessions];
   return kept.sort(byRecency(options.orderKey ?? byUpdatedAt));
 }
 
 /** Resolves a profile id to its display label, for search and for the row badge. */
 export type ProfileLabelLookup = (id: ProfileId) => string | undefined;
+
+/**
+ * The account label a search is allowed to match this session on.
+ *
+ * `undefined` for a row whose owner was never recorded, even though it carries
+ * a `profileId`. That id is the adapter's arbitrary pick among the profiles
+ * sharing one store — see `SessionSummary.profileIsUnknown` — so matching on it
+ * would make "everything on my work account" return conversations that have
+ * nothing to do with that account, and hide the fact behind a row that does not
+ * even display the label it was matched on.
+ */
+function searchLabel(
+  session: SessionSummary,
+  lookup: ProfileLabelLookup | undefined,
+): string | undefined {
+  if (session.profileIsUnknown === true) return undefined;
+  return lookup?.(session.profileId);
+}
 
 /**
  * Everything a user might plausibly type when hunting for a session.
@@ -276,7 +296,7 @@ export function groupSessionsByProject(
 
   const byProject = new Map<string, SessionSummary[]>();
   for (const session of sessions) {
-    if (query && !matchesQuery(session, query, lookup?.(session.profileId))) continue;
+    if (query && !matchesQuery(session, query, searchLabel(session, lookup))) continue;
     const project = projectOf?.(session.cwd) ?? session.cwd;
     const bucket = byProject.get(project);
     if (bucket) bucket.push(session);
@@ -325,6 +345,34 @@ function byRecency(orderKey: SessionOrderKey) {
  */
 export function sessionKey(session: SessionSummary): string {
   return `${session.profileId}:${session.id}`;
+}
+
+/**
+ * Every key this session may have been *stored* under, canonical one first.
+ *
+ * {@link sessionKey} embeds the profile, and for a shared store the profile is
+ * not stable. A row starts out attributed to the adapter's arbitrary pick among
+ * the sharers; the first time the user opens it, Artemis records the account it
+ * was opened under and the listing comes back naming that one instead — see
+ * `SessionSummary.profileIsUnknown`. The id did not change and the transcript
+ * did not move, but the key did.
+ *
+ * That matters because pins and archive are persisted as these strings, in
+ * `localStorage`, by {@link AppState.pinnedSessions} and
+ * {@link AppState.archivedSessions}. Matching on the canonical key alone would
+ * mean a pinned conversation quietly leaving the Pinned section the first time
+ * it was opened — the user's own filing undone by a background correction they
+ * never asked for and cannot connect to what they just did.
+ *
+ * So membership is tested against every profile that reaches the store, and the
+ * toggles rewrite to the canonical key, which converges each entry the next
+ * time it is touched. One element for an ordinary unshared session, which is
+ * the same string {@link sessionKey} returns and the same cost as before.
+ */
+export function sessionKeyAliases(session: SessionSummary): readonly string[] {
+  const also = session.alsoInProfiles;
+  if (also === undefined || also.length === 0) return [sessionKey(session)];
+  return [session.profileId, ...also].map((profileId) => `${profileId}:${session.id}`);
 }
 
 /* -------------------------------------------------------------------------- */
