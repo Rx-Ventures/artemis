@@ -609,7 +609,10 @@ describe('RunRegistry — event fan-out', () => {
 
     expect(received).toHaveLength(1);
     expect(registry.isActive(handle.runId)).toBe(true);
+    // The prompt heads the buffer. What this asserts is the two after it: with
+    // nobody subscribed the run still retains everything it produces.
     expect(registry.eventsSince(handle.runId).map((e) => e.type)).toEqual([
+      'text.complete',
       'session.started',
       'text.complete',
     ]);
@@ -652,6 +655,96 @@ describe('RunRegistry — event fan-out', () => {
     await flush();
 
     expect(registry.eventsSince(handle.runId).map((e) => e.seq)).toEqual([1, 2]);
+  });
+});
+
+/*
+  The prompt is the one part of a turn no adapter puts on the stream, so
+  without these the replay a reloaded window reads is the agent's answer to a
+  question that is nowhere on screen.
+*/
+describe('RunRegistry — prompts in the replay buffer', () => {
+  it('records the starting prompt ahead of the provider’s first event', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input({ prompt: 'find the bug' }));
+    firstRun(runs).emit(sessionStarted(handle.runId));
+    await flush();
+
+    expect(registry.eventsSince(handle.runId)[0]).toMatchObject({
+      type: 'text.complete',
+      runId: handle.runId,
+      role: 'user',
+      text: 'find the bug',
+      replay: true,
+    });
+  });
+
+  it('leaves the adapter’s seq numbering dense', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    firstRun(runs).emit(sessionStarted(handle.runId), textComplete(handle.runId, 1, 'working'));
+    await flush();
+
+    // The prompt repeats seq 0 rather than taking it: a slot of its own would
+    // either open a gap the transcript reports as dropped events, or push the
+    // adapter's own numbering along under it.
+    expect(registry.eventsSince(handle.runId).map((e) => e.seq)).toEqual([0, 0, 1]);
+  });
+
+  it('does not deliver the recorded prompt to live subscribers', async () => {
+    const { registry, runs } = harness();
+    const received: AgentEvent[] = [];
+    registry.subscribe((event) => received.push(event));
+
+    const handle = await registry.start(input({ prompt: 'find the bug' }));
+    firstRun(runs).emit(sessionStarted(handle.runId));
+    await flush();
+
+    // The window that sent it drew it optimistically; a second copy on the wire
+    // would render the message twice.
+    expect(received.map((e) => e.type)).toEqual(['session.started']);
+  });
+
+  it('records a mid-run message where it was sent', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input({ prompt: 'first' }));
+    const run = firstRun(runs);
+    run.emit(sessionStarted(handle.runId), textComplete(handle.runId, 1, 'working'));
+    await flush();
+
+    await registry.send(handle.runId, 'actually, do this instead');
+    await flush();
+
+    expect(
+      registry
+        .eventsSince(handle.runId)
+        .map((e) => (e.type === 'text.complete' ? e.text : e.type)),
+    ).toEqual(['first', 'session.started', 'working', 'actually, do this instead']);
+  });
+
+  it('records nothing for a message the adapter refused', async () => {
+    const { registry, runs } = harness();
+    const handle = await registry.start(input({ prompt: 'first' }));
+    const run = firstRun(runs);
+    run.send = () => Promise.reject(new Error('provider is gone'));
+
+    await expect(registry.send(handle.runId, 'never arrived')).rejects.toThrow('provider is gone');
+
+    expect(registry.eventsSince(handle.runId).map((e) => e.type)).toEqual(['text.complete']);
+  });
+
+  it('records nothing for a run it adopted', () => {
+    const { registry } = harness();
+    const run = new FakeTurn();
+    const handle = registry.adopt(run as unknown as Run, {
+      providerId: 'claude',
+      profileId: 'profile-1',
+      cwd: '/repo',
+      sessionId: 'session-abc',
+    });
+
+    // Nobody typed anything: the provider opened this turn itself.
+    expect(registry.eventsSince(handle.runId)).toEqual([]);
   });
 });
 
