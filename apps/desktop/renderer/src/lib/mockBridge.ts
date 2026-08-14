@@ -102,6 +102,7 @@ const CLAUDE_CAPS: Capabilities = {
   forkSession: true,
   listSessions: true,
   subagents: true,
+  subagentTranscripts: true,
   renameSession: true,
   deleteSession: true,
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
@@ -122,6 +123,7 @@ const CODEX_CAPS: Capabilities = {
   forkSession: false,
   listSessions: false,
   subagents: false,
+  subagentTranscripts: false,
   renameSession: false,
   deleteSession: false,
   permissionModes: ['default', 'bypassPermissions'],
@@ -1005,6 +1007,35 @@ export function createMockBridge(): ArtemisBridge {
         return ok({
           events: limit === undefined ? stored : stored.slice(0, limit),
           hasMore: limit !== undefined && limit < stored.length,
+        });
+      },
+
+      /*
+        A subagent's own conversation, which the parent transcript never holds.
+
+        Grows with `offset` rather than being a fixed fixture, because the
+        surface it feeds *polls*: the delegated tab follows a running agent by
+        asking for whatever is past what it already has. A mock that answered
+        the same four messages every time would make an agent that never
+        progresses look exactly like one that does, which is the one thing this
+        pane exists to tell apart.
+      */
+      subagentMessages: async ({ runId, agentId, offset = 0, limit }) => {
+        const stored: AgentEvent[] = [
+          { runId, seq: 0, ts: Date.now(), type: 'text.complete', messageId: `${agentId}_1`, role: 'assistant', text: 'Reading the files I was pointed at.', replay: true },
+          { runId, seq: 1, ts: Date.now(), type: 'tool.start', toolCallId: `${agentId}_t1`, name: 'Read', input: { file_path: '/repo/src/auth/session.ts' } },
+          { runId, seq: 2, ts: Date.now(), type: 'tool.end', toolCallId: `${agentId}_t1`, status: 'ok', result: 'export function authenticate() {' },
+          { runId, seq: 3, ts: Date.now(), type: 'tool.start', toolCallId: `${agentId}_t2`, name: 'Grep', input: { pattern: 'authenticate\\(' } },
+          { runId, seq: 4, ts: Date.now(), type: 'tool.end', toolCallId: `${agentId}_t2`, status: 'ok', result: 'src/api/login.ts:12' },
+          { runId, seq: 5, ts: Date.now(), type: 'text.complete', messageId: `${agentId}_2`, role: 'assistant', text: 'Auth is entered from `src/api/login.ts:12`.', replay: true },
+        ] as AgentEvent[];
+        const page = stored.slice(offset, limit === undefined ? undefined : offset + limit);
+        return ok({
+          events: page,
+          hasMore: limit !== undefined && offset + limit < stored.length,
+          // One stored message per event in the mock, which is the one place
+          // the two counts are allowed to agree.
+          consumed: page.length,
         });
       },
 

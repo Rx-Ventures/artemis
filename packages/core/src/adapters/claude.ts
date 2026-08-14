@@ -49,6 +49,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import {
   deleteSession as sdkDeleteSession,
   getSessionMessages as sdkGetSessionMessages,
+  getSubagentMessages as sdkGetSubagentMessages,
   listSessions as sdkListSessions,
   query,
   renameSession as sdkRenameSession,
@@ -179,6 +180,8 @@ import type {
   SessionTitleQuery,
   SessionTitleUpdate,
   SessionTranscript,
+  SubagentMessagesQuery,
+  SubagentTranscript,
 } from './types.js';
 
 /* -------------------------------------------------------------------------- */
@@ -201,6 +204,7 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
   forkSession: true, // `Options.forkSession`
   listSessions: true, // the SDK's `listSessions({ dir })`
   subagents: true, // `parent_tool_use_id` / `agentID`
+  subagentTranscripts: true, // the SDK's `getSubagentMessages(session, agentId)`
   renameSession: true, // the SDK's `renameSession(id, title)`
   deleteSession: true, // the SDK's `deleteSession(id)` — unlinks the transcript
 
@@ -1168,6 +1172,57 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       });
 
       return { events, hasMore };
+    },
+
+    /**
+     * Read one subagent's own conversation.
+     *
+     * The same three moves as `getSessionMessages` — swap the config directory
+     * around the call, page with `limit + 1`, replay the page through the
+     * shared mapper — against a different file. The SDK resolves that file from
+     * the agent id alone, including the nested
+     * `subagents/workflows/<run>/agent-<id>.jsonl` a workflow's agents write
+     * to, so a workflow agent and a plain `Agent` call are one code path here.
+     *
+     * **An empty read is not an error.** A subagent that has been spawned but
+     * has not yet written its first message has no file, and the SDK answers
+     * with an empty array rather than throwing. That is the ordinary state of a
+     * row the user clicked the instant it appeared, and it has to render as an
+     * empty conversation that fills in — which is what the poll behind it is
+     * for — rather than as a failure.
+     */
+    async getSubagentMessages(input: SubagentMessagesQuery): Promise<SubagentTranscript> {
+      const limit = input.limit;
+      const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
+
+      let stored;
+      try {
+        stored = await withClaudeConfigDir(configDir, () =>
+          sdkGetSubagentMessages(input.sessionId, input.agentId, {
+            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+            ...(limit === undefined ? {} : { limit: limit + 1 }),
+            ...(input.offset === undefined ? {} : { offset: input.offset }),
+          }),
+        );
+      } catch (error) {
+        throw adapterError('unknown', `Could not read that agent: ${describe(error)}`, {
+          cause: error,
+        });
+      }
+
+      const hasMore = limit !== undefined && stored.length > limit;
+      const page = hasMore ? stored.slice(0, limit) : stored;
+
+      let seq = 0;
+      const events = replayStoredSession(page as unknown as readonly StoredMessage[], {
+        runId: input.runId,
+        sessionId: input.sessionId,
+        ts: now(),
+        next: () => seq++,
+      });
+
+      // Counted in stored messages, not events — see `SubagentTranscript`.
+      return { events, hasMore, consumed: page.length };
     },
 
     /**

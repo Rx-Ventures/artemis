@@ -826,6 +826,49 @@ describe('user messages', () => {
     expect(events).toEqual([]);
   });
 
+  it('drops a replayed task notification, which is harness-authored but not synthetic', () => {
+    // The one harness turn `isSynthetic` misses: a background task's
+    // notification is written into a user slot with only its `origin` marking
+    // it. Read as authorship, it dumped `<task-notification><task-id>…` into
+    // the transcript as though the user had typed it.
+    const state = makeState();
+    const events = run(state, [
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        uuid: 'u',
+        session_id: 's',
+        isReplay: true,
+        origin: { kind: 'task-notification' },
+        message: {
+          role: 'user',
+          content: '<task-notification>\n<task-id>a1b2</task-id>\n<status>completed</status>',
+        },
+      },
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it('surfaces a replayed turn whose origin declares the person', () => {
+    // Believing `origin` must not over-drop: `kind: 'human'` is exactly the
+    // case the user rows exist for.
+    const state = makeState();
+    const events = run(state, [
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        uuid: 'u',
+        session_id: 's',
+        isReplay: true,
+        origin: { kind: 'human' },
+        message: { role: 'user', content: 'typed by a person' },
+      },
+    ]);
+
+    expect(events[0]).toMatchObject({ type: 'text.complete', role: 'user', text: 'typed by a person' });
+  });
+
   it('still closes tool calls carried by a synthesised message', () => {
     // The text is dropped; the tool traffic in the same message is not. A
     // `tool_result` arriving beside injected text still has to end its call, or

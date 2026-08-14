@@ -81,15 +81,38 @@ export type DockTab =
    * subject — and rather than the session, which does not exist yet for a
    * conversation whose first turn is the one delegating.
    */
-  | { readonly kind: 'tasks'; readonly paneId: PaneId };
+  | { readonly kind: 'tasks'; readonly paneId: PaneId }
+  /**
+   * One delegated agent's own conversation, opened from a row in the tasks tab.
+   *
+   * The list answers "what is running"; this answers "what is it *doing*", and
+   * nothing else can. A subagent writes its own transcript beside its parent's
+   * and the parent keeps only the final report — so the work itself, the tool
+   * calls and the reasoning, exists on disk in a file the delegating session
+   * never shows. Without this the only view of an agent is a one-line summary.
+   *
+   * Keyed by pane *and* task, for the reason the tasks tab is keyed by pane:
+   * two columns can each have delegated work, and their agents are not the same
+   * agents. The task id is the provider's own, which is also the id its
+   * transcript is filed under — see `openAgentTab`.
+   */
+  | { readonly kind: 'agent'; readonly paneId: PaneId; readonly taskId: string };
 
 /** The preview tab. A constant, because there is only ever one. */
 export const PREVIEW_TAB: DockTab = { kind: 'preview' };
 
 /** A stable string for one tab. For React keys and set membership only. */
 export function tabKey(tab: DockTab): string {
-  if (tab.kind === 'preview') return 'preview';
-  return tab.kind === 'terminal' ? `terminal:${tab.id}` : `tasks:${tab.paneId}`;
+  switch (tab.kind) {
+    case 'preview':
+      return 'preview';
+    case 'terminal':
+      return `terminal:${tab.id}`;
+    case 'tasks':
+      return `tasks:${tab.paneId}`;
+    default:
+      return `agent:${tab.paneId}:${tab.taskId}`;
+  }
 }
 
 /** Whether two tabs are the same tab. */
@@ -241,6 +264,15 @@ export function visibleTabs(
   previewOwner: DockOwner | null,
   terminals: readonly TerminalRecord[],
   shown: readonly ShownConversation[],
+  /**
+   * Agent transcripts the user has opened, in the order they opened them.
+   *
+   * Passed as (pane, task) pairs rather than as whole views, for the reason
+   * `hasTasks` is a boolean: this module decides which tabs exist, and carrying
+   * a transcript model through it would rebuild the strip on every message the
+   * agent produced.
+   */
+  agents: readonly { readonly paneId: PaneId; readonly taskId: string }[] = [],
 ): readonly DockTab[] {
   const tabs: DockTab[] = [];
   if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
@@ -249,6 +281,12 @@ export function visibleTabs(
   }
   for (const one of shown) {
     if (one.hasTasks === true) tabs.push({ kind: 'tasks', paneId: one.paneId });
+    // A column's open agents sit directly after its own list, so the thing a
+    // tab was opened *from* stays beside it rather than at the far end of a
+    // split's strip.
+    for (const agent of agents) {
+      if (agent.paneId === one.paneId) tabs.push({ kind: 'agent', ...agent });
+    }
   }
   return tabs;
 }

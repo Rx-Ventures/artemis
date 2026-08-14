@@ -77,6 +77,30 @@ function asString(value: unknown): string | undefined {
 }
 
 /**
+ * Text the harness wrote into a user slot, recognised by its own frame.
+ *
+ * `role: "user"` is an addressing slot, not a claim of authorship — the CLI
+ * writes its own prompts there too, and the live mapper drops those by reading
+ * the message's `origin`. That field never reaches this module: the SDK's
+ * stored-session read strips everything but the message body, and the one
+ * harness turn it does not filter out on its own is the task notification —
+ * `origin: { kind: 'task-notification' }` on disk, but *not* `isMeta`, so it
+ * comes back looking exactly like something the person typed. Replayed as a
+ * user row it dumps `<task-notification><task-id>…` into the transcript as
+ * though the user had said it, which is the bug this exists to stop.
+ *
+ * So the check here is on the text itself, and deliberately narrow: the
+ * notification's opening tag, and the interrupt markers the CLI records when a
+ * turn is stopped. All three are the harness's own fixed frames, not shapes a
+ * person's message could drift into by accident — a real message *quoting* one
+ * would have to start with the tag character-for-character.
+ */
+function isHarnessNote(text: string): boolean {
+  if (text.startsWith('<task-notification>')) return true;
+  return text === '[Request interrupted by user]' || text === '[Request interrupted by user for tool use]';
+}
+
+/**
  * The provider's message id out of a stored record, when it has one.
  *
  * Deliberately narrow: only a non-empty string counts, so a malformed record
@@ -124,6 +148,9 @@ export function replayStoredMessage(
     if (type === 'text') {
       const text = asString(block.text);
       if (text === undefined) return;
+      // A harness note in a user slot is not the person talking. See
+      // {@link isHarnessNote} for why this is a shape check rather than a flag.
+      if (stored.type === 'user' && isHarnessNote(text)) return;
       events.push({
         ...envelope(),
         type: 'text.complete',

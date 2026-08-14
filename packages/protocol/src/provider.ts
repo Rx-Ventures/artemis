@@ -91,6 +91,20 @@ export interface Capabilities {
   readonly subagents: boolean;
 
   /**
+   * A subagent's own conversation can be read back — the adapter's
+   * `getSubagentMessages`.
+   *
+   * Separate from {@link subagents}, because delegating and being *legible*
+   * are different powers. A provider can spawn agents whose work is only ever
+   * summarised back into the parent transcript, which is exactly what makes
+   * delegated work hard to follow: the parent sees the final report and none
+   * of the reasoning, the tool calls or the failures behind it. This flag says
+   * the work itself is on disk somewhere addressable, so a delegated row can
+   * be opened into a readable conversation rather than only stopped.
+   */
+  readonly subagentTranscripts: boolean;
+
+  /**
    * A stored session can be given a user-chosen title, which the provider
    * persists alongside the transcript — the adapter's `setSessionTitle`.
    *
@@ -219,6 +233,7 @@ export const NO_CAPABILITIES: Capabilities = {
   forkSession: false,
   listSessions: false,
   subagents: false,
+  subagentTranscripts: false,
   renameSession: false,
   deleteSession: false,
   permissionModes: [],

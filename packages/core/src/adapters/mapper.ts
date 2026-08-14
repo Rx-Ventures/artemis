@@ -847,9 +847,20 @@ type UserMessage = SDKUserMessage | SDKUserMessageReplay;
  * Replayed history is the case that stays: it is the same person's earlier
  * turns, read back off disk, and it is checked for synthesis too so that a
  * replayed injection does not sneak in the way a live one did.
+ *
+ * The synthesis flag is not the whole story, though. The harness also writes
+ * turns it does not consider synthetic — a task notification about background
+ * work is the one that matters, `origin: { kind: 'task-notification' }` and
+ * nothing else marking it — and those replay with the flag unset. So when a
+ * message declares its own authorship, that declaration is believed outright:
+ * only `kind: 'human'` is the person. An absent `origin` still passes, because
+ * the field is newer than the transcripts it would be read from, and history
+ * written before it existed is overwhelmingly the person talking.
  */
 function isHumanTurn(message: UserMessage, isReplay: boolean): boolean {
-  return isReplay && message.isSynthetic !== true;
+  if (!isReplay || message.isSynthetic === true) return false;
+  const origin = message.origin;
+  return origin === undefined || origin.kind === 'human';
 }
 
 function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonly AgentEvent[] {

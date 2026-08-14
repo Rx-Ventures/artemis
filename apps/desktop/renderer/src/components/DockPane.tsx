@@ -49,6 +49,7 @@
 
 import { useCallback, useRef, type KeyboardEvent, type ReactElement } from 'react';
 import {
+  BotIcon,
   FileTextIcon,
   PlusIcon,
   SquareArrowOutUpRightIcon,
@@ -58,6 +59,8 @@ import {
 } from 'lucide-react';
 
 import {
+  agentViewIsLive,
+  closeAgentTab,
   closePreview,
   closeTasks,
   closeTerminal,
@@ -71,6 +74,7 @@ import {
   type DockTab,
   type TerminalRecord,
 } from '../state/store';
+import { AgentPane } from './AgentPane';
 import { PreviewPane } from './PreviewPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
@@ -169,7 +173,8 @@ function DockTabButton({
 }): ReactElement | null {
   if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
-  return <TasksTabButton paneId={tab.paneId} active={active} />;
+  if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
+  return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
 }
 
 /**
@@ -354,6 +359,49 @@ function TasksTabButton({
   );
 }
 
+/**
+ * One agent's own conversation, opened from a row in the tab to its left.
+ *
+ * Named after the work rather than the agent type, because that is what the
+ * user clicked: the row said "Audit scripts, CI, packaging" and the tab that
+ * opens from it should say the same thing. The type — `Explore`, a workflow's
+ * name — is in the row and in the transcript's own first turn.
+ *
+ * Its ✕ is the weakest in the strip: this tab owns nothing, not even a view of
+ * something running. It is a read of a file, so closing it stops a poll and
+ * nothing else. The agent keeps working, the row keeps its ⏹, and clicking the
+ * row again reopens exactly this.
+ */
+function AgentTabButton({
+  paneId,
+  taskId,
+  active,
+}: {
+  readonly paneId: string;
+  readonly taskId: string;
+  readonly active: boolean;
+}): ReactElement | null {
+  const key = `${paneId}:${taskId}`;
+  const title = useApp((s) => s.agentViews.find((one) => one.key === key)?.title);
+  const live = useApp((s) => agentViewIsLive(s, key));
+  if (title === undefined) return null;
+
+  return (
+    <TabShell
+      active={active}
+      label={title}
+      title={live ? `${title} — still running` : `${title} — finished`}
+      icon={<BotIcon className="size-3 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'agent', paneId, taskId })}
+      onClose={() => closeAgentTab(paneId, taskId)}
+      closeLabel={`Close ${title}`}
+      // Struck through once the agent has finished, the same way an exited
+      // shell's tab is: the transcript is a record now rather than a readout.
+      muted={!live}
+    />
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* The body                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -372,6 +420,15 @@ function DockBody({
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showPreview ? <PreviewPane /> : null}
       {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
+      {/*
+       * Only the active one, unlike the terminals below. An agent tab holds no
+       * live element to re-parent — its transcript lives in the store, not in
+       * the DOM — so unmounting costs a re-render and keeps the poll in the one
+       * tab the user is actually reading.
+       */}
+      {active?.kind === 'agent' ? (
+        <AgentPane key={tabKey(active)} viewKey={`${active.paneId}:${active.taskId}`} />
+      ) : null}
       {tabs.map((tab) => {
         if (tab.kind !== 'terminal') return null;
         const record = terminals.find((one) => one.info.id === tab.id);

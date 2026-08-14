@@ -314,6 +314,28 @@ export interface ArtemisEngine {
   }): Promise<{ readonly events: readonly AgentEvent[]; readonly hasMore: boolean }>;
 
   /**
+   * One subagent's stored messages, replayed as events.
+   *
+   * The parent session names the conversation that delegated; `agentId` — which
+   * is the task id — names the work. `consumed` counts stored messages rather
+   * than events, so a caller following a running agent can page from where it
+   * left off; see the protocol's `SessionsSubagentMessagesResponse`.
+   */
+  getSubagentMessages(options: {
+    readonly profileId: ProfileId;
+    readonly sessionId: SessionId;
+    readonly agentId: string;
+    readonly runId: RunId;
+    readonly cwd?: string;
+    readonly limit?: number;
+    readonly offset?: number;
+  }): Promise<{
+    readonly events: readonly AgentEvent[];
+    readonly hasMore: boolean;
+    readonly consumed: number;
+  }>;
+
+  /**
    * Every profile's history, across every project.
    *
    * Same read as {@link listSessions} with both of its scopes removed. Returns
@@ -882,6 +904,31 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       return adapter.getSessionMessages({
         profileId: query.profileId,
         sessionId: query.sessionId,
+        runId: query.runId,
+        env: await storeEnvFor(query.profileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
+        ...(query.offset === undefined ? {} : { offset: query.offset }),
+      });
+    },
+
+    getSubagentMessages: async (query) => {
+      const profile = await profiles.require(query.profileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter === undefined) {
+        throw new EngineUnavailableError(
+          `No adapter is registered for provider "${profile.providerId}".`,
+        );
+      }
+      if (adapter.getSubagentMessages === undefined) {
+        throw new EngineUnavailableError(`${adapter.label} cannot open a subagent's transcript.`);
+      }
+      // Read-only, exactly as `getSessionMessages` is: the store environment
+      // carries the config directory and no credential.
+      return adapter.getSubagentMessages({
+        profileId: query.profileId,
+        sessionId: query.sessionId,
+        agentId: query.agentId,
         runId: query.runId,
         env: await storeEnvFor(query.profileId, profile.providerId),
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),

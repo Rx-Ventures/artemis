@@ -12,6 +12,7 @@ import {
   validateRunsStart,
   validateSessionsList,
   validateSessionsListAll,
+  validateSessionsSubagentMessages,
   validateTerminalClose,
   validateTerminalList,
   validateTerminalReplay,
@@ -848,5 +849,56 @@ describe('the terminal validators', () => {
   it('takes nothing at all for a list', () => {
     expect(validateTerminalList({})).toEqual({});
     expect(validateTerminalList(undefined)).toEqual({});
+  });
+});
+
+/**
+ * Opening a subagent's transcript.
+ *
+ * The field that matters here is `agentId`, because the provider turns it into
+ * a *filename* — `subagents/agent-<id>.jsonl` — so it is renderer-supplied
+ * input that reaches the filesystem. Everything else on this request is the
+ * same shape a session read already takes.
+ */
+describe('validateSessionsSubagentMessages', () => {
+  const base = {
+    profileId: 'profile-1',
+    sessionId: 'sess-1',
+    agentId: 'a12e2a10eff61ec31',
+    runId: 'agent:a12e2a10eff61ec31',
+  };
+
+  it('accepts a task id, which is what an agent id is', () => {
+    expect(validateSessionsSubagentMessages({ ...base, cwd: '/repo', offset: 12, limit: 200 })).toEqual({
+      ...base,
+      cwd: '/repo',
+      offset: 12,
+      limit: 200,
+    });
+  });
+
+  it('refuses an agent id that is really a path', () => {
+    // The one that matters: a `..` segment would climb out of the session's own
+    // directory on its way to becoming a filename.
+    expect(() =>
+      validateSessionsSubagentMessages({ ...base, agentId: '../../../etc/passwd' }),
+    ).toThrow(ValidationError);
+    expect(() => validateSessionsSubagentMessages({ ...base, agentId: 'a/b' })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateSessionsSubagentMessages({ ...base, agentId: '' })).toThrow(
+      ValidationError,
+    );
+  });
+
+  it('requires the agent id at all', () => {
+    const { agentId: _dropped, ...without } = base;
+    expect(() => validateSessionsSubagentMessages(without)).toThrow(ValidationError);
+  });
+
+  it('rebuilds the request, so nothing extra reaches the provider', () => {
+    expect(
+      validateSessionsSubagentMessages({ ...base, sessionStore: { load: 'evil' }, dir: '/etc' }),
+    ).toEqual(base);
   });
 });

@@ -40,7 +40,14 @@ import type { BackgroundTask } from '@rx-artemis/protocol';
 import { isTaskLive } from '@rx-artemis/protocol';
 import { CheckIcon, ClockIcon, CircleStopIcon, PauseIcon, PlayIcon, XIcon } from 'lucide-react';
 
-import { allLivePanes, stopTask, useApp } from '../state/store';
+import {
+  allLivePanes,
+  canOpenSubagents,
+  openAgentTab,
+  stopTask,
+  taskHasTranscript,
+  useApp,
+} from '../state/store';
 import { paneState, type Pane, type PaneId } from '../state/pane';
 import { IconButton } from './disabled-reason';
 import { cn } from '@/lib/utils';
@@ -92,6 +99,20 @@ const TaskRow = memo(function TaskRow({
   readonly pane: Pane;
 }): ReactElement {
   const live = isTaskLive(task);
+  /*
+   * Whether this row opens into a conversation.
+   *
+   * Both halves are needed and neither implies the other: the provider has to
+   * keep subagent transcripts at all, and *this* task has to be the kind that
+   * has one. A row that fails either stays exactly as it was — a readout with a
+   * stop button — rather than growing an affordance that opens onto nothing.
+   */
+  const openable = useApp(
+    (s) =>
+      taskHasTranscript(task) &&
+      allLivePanes(s).some((one) => one.id === pane.id) &&
+      canOpenSubagents(paneState(pane)),
+  );
 
   return (
     <li className="group flex items-start gap-2 px-2 py-1 hover:bg-raised/30">
@@ -99,9 +120,30 @@ const TaskRow = memo(function TaskRow({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className={cn('min-w-0 flex-1 truncate text-2xs', !live && 'text-ink-faint')}>
-            {task.description}
-          </span>
+          {openable ? (
+            /*
+             * The description is the control, rather than a separate "open"
+             * button beside it. Clicking the name of a thing to see the thing
+             * is what a list row means everywhere else, and the row already
+             * carries one button — a second would put two targets a few pixels
+             * apart, one of which stops the work.
+             */
+            <button
+              type="button"
+              onClick={() => openAgentTab(pane.id, task.id)}
+              title={`Open ${task.description}`}
+              className={cn(
+                'min-w-0 flex-1 truncate text-left text-2xs hover:underline focus-visible:underline focus-visible:outline-none',
+                !live && 'text-ink-faint',
+              )}
+            >
+              {task.description}
+            </button>
+          ) : (
+            <span className={cn('min-w-0 flex-1 truncate text-2xs', !live && 'text-ink-faint')}>
+              {task.description}
+            </span>
+          )}
           <span className="shrink-0 font-mono text-3xs text-ink-faint tabular-nums">
             {formatElapsed(task, now)}
           </span>

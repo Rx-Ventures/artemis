@@ -539,6 +539,42 @@ export interface SessionDeleteQuery {
 }
 
 /**
+ * What reading one subagent's stored messages needs.
+ *
+ * {@link SessionMessagesQuery} plus the one field that changes which file is
+ * read. The `agentId` is the provider's **task id** unchanged — the same string
+ * a `background.tasks` row carries — which is what lets a delegated row be
+ * opened without anything having to correlate two identifier spaces.
+ */
+export interface SubagentMessagesQuery {
+  readonly profileId: ProfileId;
+  /** The *parent* session — the conversation that delegated this work. */
+  readonly sessionId: SessionId;
+  /** The subagent's id, which is the task id. */
+  readonly agentId: string;
+  /** The directory the session ran in. Narrows the search; omit to search all. */
+  readonly cwd?: string;
+  /** The profile's resolved environment — this is what locates the store. */
+  readonly env: EnvBundle;
+  /** The run id to stamp replayed events with, so they join one transcript. */
+  readonly runId: RunId;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+/**
+ * A subagent's stored conversation, replayed as events.
+ *
+ * {@link SessionTranscript} plus the count of stored messages behind it, so a
+ * caller following a running agent can ask for "everything after what I have"
+ * without counting in the wrong units. See
+ * `SessionsSubagentMessagesResponse.consumed`.
+ */
+export interface SubagentTranscript extends SessionTranscript {
+  readonly consumed: number;
+}
+
+/**
  * What counting one session's stored messages needs.
  *
  * The same locating fields a read takes, minus everything to do with
@@ -984,6 +1020,25 @@ export interface ProviderAdapter {
    * replayed history and anything sent next land in one continuous view.
    */
   getSessionMessages?(query: SessionMessagesQuery): Promise<SessionTranscript>;
+
+  /**
+   * Read one subagent's own conversation, replayed as events.
+   *
+   * Present **iff** {@link Capabilities.subagentTranscripts} is set, and the
+   * reason both exist is that the parent session is not a record of this work.
+   * A delegating turn stores the subagent's *final report* and nothing else —
+   * not the reasoning, not the tool calls, not the failures — so the only place
+   * the work exists is the subagent's own transcript beside its parent's.
+   *
+   * Keyed by the task id, which the provider also uses as the agent id. That is
+   * not a coincidence worth hiding behind a mapping table: it is what makes a
+   * row in a delegated-work list directly openable.
+   *
+   * @throws if the transcript cannot be read. A subagent that has not written
+   *         anything yet is **not** an error — it answers with no events, which
+   *         is how a just-started agent renders as empty rather than as broken.
+   */
+  getSubagentMessages?(query: SubagentMessagesQuery): Promise<SubagentTranscript>;
 
   /**
    * How many messages a session holds right now.

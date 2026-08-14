@@ -109,7 +109,7 @@ import {
   type ShownConversation,
   type TerminalRecord,
 } from './dock';
-import { isTaskLive } from '@rx-artemis/protocol';
+import { isTaskLive, type BackgroundTask } from '@rx-artemis/protocol';
 import { setEventsDroppedHook, type PermissionItem, type TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
@@ -395,6 +395,16 @@ export interface AppState {
    * the main process instead, which is the only source that can be right.
    */
   readonly terminals: readonly TerminalRecord[];
+  /**
+   * Delegated agents the user has opened into tabs of their own.
+   *
+   * Not persisted, for the terminal's reason rather than the preview's: each
+   * one holds a live `TranscriptModel` built by replaying a file, and rebuilding
+   * that on demand is a read the next click pays for anyway. What *is* worth
+   * keeping across navigation is the tab itself, which is why these outlive
+   * their conversation leaving the screen — see {@link visibleTabs}.
+   */
+  readonly agentViews: readonly AgentView[];
   /**
    * Which dock tab is on top, or `null` when the rail is closed.
    *
@@ -1266,6 +1276,7 @@ export const useApp = create<AppState>(() => ({
   paneLayout: prefs.paneLayout ?? {},
   preview: null,
   terminals: [],
+  agentViews: [],
   activeDockTab: null,
   visibleDockTabs: [],
 
@@ -1500,7 +1511,14 @@ function syncRunningSessions(): void {
   const ids: SessionId[] = [];
   for (const pane of allLivePanes()) {
     const state = paneState(pane);
-    if (!isLive(state)) continue;
+    /*
+     * `hasLiveWork`, not `isLive`: a session whose agents are still going,
+     * marked idle the moment its launching turn ended, is exactly the "nothing
+     * tells me anything is running" hole the delegated pane was built to close.
+     * The pane's tab only exists while its conversation is on screen; this
+     * marker is what says so from the sidebar when it is not.
+     */
+    if (!hasLiveWork(state)) continue;
     /*
      * Both ids, not the better of the two.
      *
@@ -1818,6 +1836,321 @@ export function toggleTasks(pane: Pane = focusedPane()): void {
   focusDockTab(tab);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Delegated agents, opened into tabs of their own                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How often an open agent tab asks for what its agent has said since.
+ *
+ * The one thing a delegated row cannot do is show the work, and the reason to
+ * poll at all is that a subagent's transcript is a *file* — the provider streams
+ * none of it to the parent process, so there is no event to subscribe to. Two
+ * and a half seconds is the same order as the tasks pane's own clock and slow
+ * enough that a long conversation is not re-read faster than a person can read
+ * it; each poll asks only for messages past the ones already held.
+ */
+const AGENT_POLL_MS = 2_500;
+
+/**
+ * How many stored messages one poll may bring back.
+ *
+ * A bound rather than an unbounded read, because the first fetch on a finished
+ * agent can be a very long conversation and the transcript builds it
+ * synchronously. Pages continue on the next tick, which is what makes a large
+ * transcript arrive progressively instead of freezing the window once.
+ */
+const AGENT_PAGE = 200;
+
+/**
+ * One delegated agent's conversation, held open in a tab.
+ *
+ * The `pane` is the load-bearing part and is not a column: it is an off-grid
+ * {@link Pane} that exists solely to own a `TranscriptModel`, so the subagent's
+ * events can be rendered by the *same* `Transcript` component the main
+ * conversation uses — every tool card, diff and thinking fold, for free. It is
+ * deliberately created with `createPane` rather than `openPane`: a watched pane
+ * would be walked by `syncRunningSessions` and `describeShown`, and an agent
+ * transcript is not a conversation the window is having.
+ */
+export interface AgentView {
+  /** `${paneId}:${taskId}` — the tab's identity, and the map key. */
+  readonly key: string;
+  /** The column that delegated this work. */
+  readonly paneId: PaneId;
+  /** The provider's task id, which is also its agent id on disk. */
+  readonly taskId: string;
+  /** What the row called it, so the tab has a name before anything is read. */
+  readonly title: string;
+  readonly pane: Pane;
+  /**
+   * Stored messages already folded in — the cursor the next poll reads from.
+   *
+   * Counted in the provider's units rather than in events, because one stored
+   * message becomes several events or none. See `SubagentTranscript.consumed`.
+   */
+  readonly consumed: number;
+  /** True while a fetch is in flight, so polls cannot overlap. */
+  readonly loading: boolean;
+  /** Set when the last read failed; the pane shows it instead of a blank. */
+  readonly error: string | null;
+}
+
+/** The tab identity for one agent view. */
+function agentViewKey(paneId: PaneId, taskId: string): string {
+  return `${paneId}:${taskId}`;
+}
+
+/**
+ * Does this row have a conversation behind it worth opening?
+ *
+ * Not every delegated task is an agent. The provider files a transcript under
+ * the task id for work that *is* one — a `Task`/`Agent` call — and files nothing
+ * for the rest, so the question is answered from the kind rather than by opening
+ * a tab and discovering it is empty.
+ *
+ * Two cases deliberately answer no:
+ *
+ *  - **A backgrounded command.** `local_bash` and its kin are a process, not a
+ *    conversation. There was never a transcript to read.
+ *  - **A workflow.** Measured, not assumed: a workflow's *own* task id has no
+ *    transcript — its agents each write one, filed under ids of their own, in a
+ *    directory named after the workflow run. Those agents are not reported as
+ *    rows, so there is nothing here to hang them off yet. A workflow row stays
+ *    a progress readout, which is what it already was.
+ *
+ * The test is `kind` **or** a known subagent type, rather than an exact match on
+ * `local_agent`, so a CLI that adds another agent-shaped kind keeps working: the
+ * type is only ever set for a genuine subagent.
+ */
+export function taskHasTranscript(task: BackgroundTask): boolean {
+  return task.kind === 'local_agent' || task.subagentType !== undefined;
+}
+
+/**
+ * Can this column's delegated work be opened at all?
+ *
+ * Answered from the **run's** capabilities rather than through
+ * {@link activeCapabilities}, and the difference is the whole point: a
+ * delegated task belongs to the run that launched it, and by the time anyone
+ * wants to read one that run has almost always ended. `activeCapabilities`
+ * falls back to the currently *selected* provider once a run is over, so a
+ * finished Claude run whose selector has since been moved to another provider
+ * would answer "no subagent transcripts" about transcripts that plainly exist.
+ *
+ * The same reasoning decides which account the read is made under — see
+ * {@link refreshAgentView}, which addresses the run's own profile and session.
+ */
+export function canOpenSubagents(state: SessionState): boolean {
+  if (state.run !== null) return state.run.capabilities.subagentTranscripts;
+  return activeCapabilities(state).subagentTranscripts;
+}
+
+/**
+ * Open one delegated agent's conversation in a tab of its own.
+ *
+ * The whole feature in one function: a row in the delegated list names a task,
+ * the provider files that task's transcript under the same id, and this is what
+ * turns the one into the other. Nothing correlates two identifier spaces because
+ * there is only one — see `SessionsSubagentMessagesRequest`.
+ *
+ * Idempotent: a second click on a row whose tab is already open brings that tab
+ * forward rather than opening a duplicate, which is what a person clicking a
+ * list row expects. The first open seeds its pane from the delegating column, so
+ * the transcript renders against the same working directory — that is what makes
+ * a subagent's file paths and diffs read correctly rather than as absolutes from
+ * nowhere.
+ */
+export function openAgentTab(paneId: PaneId, taskId: string): void {
+  const key = agentViewKey(paneId, taskId);
+  const existing = useApp.getState().agentViews.find((view) => view.key === key);
+  if (existing !== undefined) {
+    focusDockTab({ kind: 'agent', paneId, taskId });
+    return;
+  }
+
+  const owner = allLivePanes().find((one) => one.id === paneId);
+  if (owner === undefined) return;
+  const ownerState = paneState(owner);
+  const task = ownerState.tasks.find((one) => one.id === taskId);
+  // Guarded here as well as in the row, because the row is not the only way in:
+  // opening a tab onto work that files no transcript would produce a permanent
+  // "left no transcript" pane the user cannot tell from a broken one.
+  if (task !== undefined && !taskHasTranscript(task)) return;
+  if (!canOpenSubagents(ownerState)) return;
+
+  /*
+   * Seeded from the delegating column, with the conversation stripped out.
+   *
+   * The inherited half is what makes the transcript render correctly: `cwd`
+   * decides how a subagent's file paths are shortened and which of its writes
+   * count as artifacts, and the mirrored catalogues are what tool cards read.
+   * The cleared half is everything that would claim this pane is *having* a
+   * conversation — a run to stop, a queue to answer, a list of its own
+   * delegated work — none of which is true of a view onto a file.
+   */
+  const pane = createPane({
+    ...ownerState,
+    run: null,
+    permissionQueue: [],
+    tasks: [],
+    dismissedTasks: [],
+    draft: '',
+  });
+
+  useApp.setState((s) => ({
+    agentViews: [
+      ...s.agentViews,
+      {
+        key,
+        paneId,
+        taskId,
+        title: task?.description ?? 'agent',
+        pane,
+        consumed: 0,
+        loading: false,
+        error: null,
+      },
+    ],
+  }));
+
+  focusDockTab({ kind: 'agent', paneId, taskId });
+  void refreshAgentView(key);
+}
+
+/**
+ * Close one agent tab. The agent is not touched.
+ *
+ * The same weak ✕ the delegated list has, for a stronger reason: this tab owns
+ * nothing at all. It is a read of a file that the provider goes on writing, so
+ * closing it stops a poll and releases a transcript, and the row it was opened
+ * from is still there to open it again. Stopping the agent is the ⏹ on that
+ * row, and remains the only thing that does.
+ */
+export function closeAgentTab(paneId: PaneId, taskId: string): void {
+  const key = agentViewKey(paneId, taskId);
+  const view = useApp.getState().agentViews.find((one) => one.key === key);
+  if (view === undefined) return;
+  // The transcript is the only thing here worth reclaiming, and it can be
+  // large: a finished agent's conversation is routinely hundreds of messages.
+  view.pane.transcript.reset();
+  useApp.setState((s) => ({ agentViews: s.agentViews.filter((one) => one.key !== key) }));
+}
+
+/** Drop every agent tab belonging to a conversation that has been retired. */
+function closeAgentTabsFor(paneId: PaneId): void {
+  const { agentViews } = useApp.getState();
+  const doomed = agentViews.filter((view) => view.paneId === paneId);
+  if (doomed.length === 0) return;
+  for (const view of doomed) view.pane.transcript.reset();
+  useApp.setState({ agentViews: agentViews.filter((view) => view.paneId !== paneId) });
+}
+
+/** True while the task behind an open tab is still going. Drives the poll. */
+export function agentViewIsLive(state: AppState, key: string): boolean {
+  const view = state.agentViews.find((one) => one.key === key);
+  if (view === undefined) return false;
+  const owner = allLivePanes(state).find((one) => one.id === view.paneId);
+  if (owner === undefined) return false;
+  const task = paneState(owner).tasks.find((one) => one.id === view.taskId);
+  return task !== undefined && isTaskLive(task);
+}
+
+/**
+ * Read whatever the agent has written since the last read, and fold it in.
+ *
+ * Append-only by construction: the request starts at `consumed`, so a poll on a
+ * long conversation carries the handful of messages that are new rather than
+ * the whole thing again, and the transcript is never rebuilt from scratch under
+ * a reader.
+ *
+ * Two guards worth naming. A fetch already in flight is not joined by a second
+ * one — the poll fires on a timer and a slow read must not stack. And the view
+ * is re-read from the store *after* the await, because the tab can be closed
+ * while its page is in transit and applying events to a transcript nobody is
+ * subscribed to is the cheap version of a leak.
+ */
+export async function refreshAgentView(key: string): Promise<void> {
+  const state = useApp.getState();
+  const view = state.agentViews.find((one) => one.key === key);
+  if (view === undefined || view.loading) return;
+
+  const owner = allLivePanes(state).find((one) => one.id === view.paneId);
+  if (owner === undefined) return;
+  const ownerState = paneState(owner);
+  /*
+   * The run's own account and session, not the column's current selection.
+   *
+   * A task belongs to the run that launched it, and both of these can move
+   * afterwards — the user picks another profile, or resumes something else into
+   * the column — while the transcript on disk stays exactly where that run put
+   * it. Reading under the selection would look in another account's store for a
+   * file that was never there.
+   */
+  const sessionId = ownerState.run?.sessionId ?? sessionShownBy(ownerState);
+  const profileId = ownerState.run?.profileId ?? ownerState.activeProfileId;
+  const cwd = ownerState.run?.cwd ?? ownerState.cwd;
+
+  // Before the first turn has landed a session id there is no transcript to
+  // read — the agent's file is filed under its parent, and the parent has no
+  // name yet. The poll comes back a beat later, by which time it does.
+  if (sessionId === null || profileId === null) return;
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  setAgentView(key, { loading: true });
+  const result = await call(() =>
+    bridge.sessions.subagentMessages({
+      profileId,
+      sessionId,
+      agentId: view.taskId,
+      /*
+       * A synthetic run id, and it must not be the owning run's.
+       *
+       * Replayed pages restart their `seq` at zero, and the transcript reports
+       * a sequence it cannot explain by asking the store whether that run is
+       * still alive — which, for a real run id, can settle the user's live
+       * conversation as though its end had been dropped. Nothing owns this id,
+       * so that path finds no pane and does nothing, which is the correct
+       * amount of nothing.
+       */
+      runId: `agent:${view.taskId}` as RunId,
+      ...(cwd === null ? {} : { cwd }),
+      offset: view.consumed,
+      limit: AGENT_PAGE,
+    }),
+  );
+
+  // Re-read: the tab may have been closed while this was in flight.
+  const still = useApp.getState().agentViews.find((one) => one.key === key);
+  if (still === undefined) return;
+
+  if (!result.ok) {
+    setAgentView(key, { loading: false, error: result.error.message });
+    return;
+  }
+
+  for (const event of result.value.events) still.pane.transcript.apply(event);
+  setAgentView(key, {
+    loading: false,
+    error: null,
+    consumed: still.consumed + result.value.consumed,
+  });
+
+  // More is already waiting: keep paging rather than leaving the rest of a
+  // finished conversation behind the next poll, which for a settled agent
+  // would never come.
+  if (result.value.hasMore) void refreshAgentView(key);
+}
+
+/** Patch one view in place, leaving the others' identities alone. */
+function setAgentView(key: string, patch: Partial<AgentView>): void {
+  useApp.setState((s) => ({
+    agentViews: s.agentViews.map((view) => (view.key === key ? { ...view, ...patch } : view)),
+  }));
+}
+
 /**
  * Which session a column is showing, or `null` before it has one.
  *
@@ -1917,7 +2250,7 @@ function describeShown(): readonly ShownConversation[] {
  */
 function reconcileDock(): void {
   const state = useApp.getState();
-  const { preview, terminals, activeDockTab, visibleDockTabs } = state;
+  const { preview, terminals, activeDockTab, visibleDockTabs, agentViews } = state;
 
   /*
    * The overwhelmingly common case: an empty dock that was already empty. This
@@ -1935,6 +2268,7 @@ function reconcileDock(): void {
     preview === null &&
     terminals.length === 0 &&
     visibleDockTabs.length === 0 &&
+    agentViews.length === 0 &&
     !allPanes().some((pane) => showsTasks(paneState(pane)))
   ) {
     return;
@@ -1973,7 +2307,7 @@ function reconcileDock(): void {
     : terminals;
   if (nextTerminals !== terminals) patch.terminals = nextTerminals;
 
-  const visible = visibleTabs(nextPreview?.owner ?? null, nextTerminals, shown);
+  const visible = visibleTabs(nextPreview?.owner ?? null, nextTerminals, shown, agentViews);
   const moved =
     visible.length !== visibleDockTabs.length ||
     visible.some((tab, index) => !sameTab(tab, visibleDockTabs[index] as DockTab));
@@ -2328,6 +2662,11 @@ const MAX_BACKGROUND_ENDED = 8;
 function retirePane(pane: Pane): void {
   unwatchPane(pane.id);
   pane.transcript.reset();
+  // The agent tabs opened from this conversation go with it. They are views
+  // onto its delegated work, and `openAgentTab` resolves their owner through
+  // the live panes — so one left behind could never be refreshed again, and
+  // would sit in the strip showing a transcript frozen at whatever it last read.
+  closeAgentTabsFor(pane.id);
   // Any catalogue fetch still in flight for it has nowhere to land. Dropping the
   // token both releases the entry and makes the reply's own staleness check
   // fail, which is what stops it writing into a store nothing is subscribed to.
@@ -2337,7 +2676,9 @@ function retirePane(pane: Pane): void {
 /** Evict finished conversations past {@link MAX_BACKGROUND_ENDED}, oldest first. */
 function pruneBackground(): void {
   const { background } = useApp.getState();
-  const ended = background.filter((pane) => !isLive(paneState(pane)));
+  // `hasLiveWork`: a pane whose run ended but whose workflow has not is not
+  // "finished" — evicting it would orphan the settle turn. See `hasLiveWork`.
+  const ended = background.filter((pane) => !hasLiveWork(paneState(pane)));
   if (ended.length <= MAX_BACKGROUND_ENDED) return;
 
   const evicted = new Set(ended.slice(0, ended.length - MAX_BACKGROUND_ENDED).map((p) => p.id));
@@ -2368,7 +2709,7 @@ function handOver(outgoing: Pane, incoming: Pane): void {
   const at = locate(state.grid, outgoing.id);
   if (!at) return;
 
-  const keep = isLive(paneState(outgoing));
+  const keep = hasLiveWork(paneState(outgoing));
   const grid = state.grid.map((row, index) =>
     index === at.row
       ? { ...row, panes: row.panes.map((p) => (p.id === outgoing.id ? incoming : p)) }
@@ -2432,7 +2773,7 @@ export function closePane(paneId: PaneId): void {
   if (!at) return;
   const pane = (state.grid[at.row] as PaneRow).panes[at.column] as Pane;
 
-  const keep = isLive(paneState(pane));
+  const keep = hasLiveWork(paneState(pane));
   if (!keep) retirePane(pane);
 
   const grid: PaneRow[] = [];
@@ -2489,6 +2830,29 @@ export function activeProviderLabel(state: SessionState): string {
 /** True when a run is accepting events. */
 export function isLive(state: SessionState): boolean {
   return state.run !== null && state.run.status !== 'ended';
+}
+
+/**
+ * True while leaving this conversation would walk away from something running.
+ *
+ * A strictly wider question than {@link isLive}, and the difference is
+ * delegated work: the `Agent` tool backgrounds by default and `Workflow` is
+ * always async, so subagents routinely outlive the run that launched them by
+ * minutes. Every "is this conversation worth keeping around" decision —
+ * backgrounding on navigation, eviction from the background set, the sidebar's
+ * working marker — has to ask this one rather than `isLive`, because a pane
+ * retired on "the run ended" takes its task rows with it, and with them the
+ * only place the settle turn could land: the continuation run that reports the
+ * work finished is claimed by the pane holding its session, and a session
+ * nobody holds is dropped. Retiring on run-end made an ultracode workflow
+ * vanish from every surface the moment the user looked at anything else.
+ *
+ * The rows settle through the same `background.tasks` event a natural finish
+ * arrives on, so this goes false on its own — nothing has to remember to
+ * clean up.
+ */
+export function hasLiveWork(state: SessionState): boolean {
+  return isLive(state) || state.tasks.some(isTaskLive);
 }
 
 export function activeProfile(state: SessionState): ProfileMetadata | undefined {
@@ -4884,11 +5248,20 @@ export function newSession(
   // which avoids remounting the column — and the composer the user is typing in
   // — for what is, in that case, nothing more than an erase.
   let target = pane;
-  if (isLive(paneState(pane))) {
+  if (hasLiveWork(paneState(pane))) {
     target = handOffToBlank(pane);
   } else {
     pane.transcript.reset();
-    setPaneState(pane, { run: null, resumeSessionId: null, permissionQueue: [] });
+    // `tasks` too: the rows belong to the conversation being erased, and a
+    // fresh session inheriting the old one's settled list would open with a
+    // Delegated tab full of work it never asked for.
+    setPaneState(pane, {
+      run: null,
+      resumeSessionId: null,
+      permissionQueue: [],
+      tasks: [],
+      dismissedTasks: [],
+    });
   }
 
   if (adoptRecommendedProfile) {

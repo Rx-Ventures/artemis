@@ -25,6 +25,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   forkSession: 'forking a session',
   listSessions: 'listing past sessions',
   subagents: 'subagents',
+  subagentTranscripts: "opening a subagent's transcript",
   renameSession: 'renaming a session',
   deleteSession: 'deleting a session',
   resumeSession: 'resuming a session',

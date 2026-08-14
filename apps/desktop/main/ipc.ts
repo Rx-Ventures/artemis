@@ -106,6 +106,7 @@ import {
   validateSessionsDelete,
   validateSessionsListAll,
   validateSessionsMessages,
+  validateSessionsSubagentMessages,
   validateSessionsRename,
   validateSharedConfigStatus,
   validateProfilesSuggestDir,
@@ -568,6 +569,16 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.sessionsMessages]: {
       validate: validateSessionsMessages,
       handle: async (request) => engine.require().getSessionMessages(request),
+    },
+
+    /**
+     * One subagent's own conversation. Read-only, and the reason a delegated
+     * row can be opened rather than only watched: the parent transcript holds
+     * the final report and none of the work.
+     */
+    [IPC.sessionsSubagentMessages]: {
+      validate: validateSessionsSubagentMessages,
+      handle: async (request) => engine.require().getSubagentMessages(request),
     },
 
     [IPC.sessionsRename]: {
