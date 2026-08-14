@@ -186,10 +186,12 @@ describe('the warning gate', () => {
     // Both profile directories, quoted, and the entries the user asked for.
     expect(text).toContain("profile '/home/u/.personal'");
     expect(text).toContain("profile '/home/u/.work'");
+    // Literal words in the `for` list, not a variable the loop expands: zsh does
+    // not split on IFS, and this script reaches the user through a Copy button.
     expect(text).toContain(
-      'SHARED_DIRS="commands ide plans plugins skills todos session-env projects"',
+      "for name in 'commands' 'ide' 'plans' 'plugins' 'skills' 'todos' 'session-env' 'projects'",
     );
-    expect(text).toContain('SHARED_FILES="CLAUDE.md"');
+    expect(text).toContain("for name in 'CLAUDE.md'");
   });
 });
 

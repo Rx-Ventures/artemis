@@ -50,6 +50,7 @@
 import {
   BACKUP_SUFFIX,
   SHARED_DIRECTORIES,
+  SHARED_ENTRIES,
   SHARED_FILES,
   type SharedConfigDirStatus,
   type SharedConfigEntry,
@@ -90,6 +91,10 @@ export function shellQuote(value: string): string {
  * The root is written as `$HOME/.claude` and left for the shell to expand. The
  * renderer does not know the home directory, and asking the main process for it
  * would add an IPC channel to interpolate a string the shell already has.
+ *
+ * The shared names are written into the `for` lists as literal words rather than
+ * expanded out of a variable — see {@link wordList}, which is not a style
+ * preference.
  */
 export function buildSharedConfigScript(dirs: readonly string[], mode: SharedConfigMode): string {
   return mode === 'share' ? shareScript(dirs) : restoreScript(dirs);
@@ -99,6 +104,35 @@ export function buildSharedConfigScript(dirs: readonly string[], mode: SharedCon
 function calls(dirs: readonly string[], fn: string): string {
   if (dirs.length === 0) return '# No Claude profiles to cover.';
   return dirs.map((dir) => `${fn} ${shellQuote(dir)}`).join('\n');
+}
+
+/**
+ * The names of a `for` list, as literal quoted words.
+ *
+ * Not `SHARED_DIRS="commands ide …"` with `for name in $SHARED_DIRS`, which is
+ * the POSIX idiom for this and was the bug it replaced. Unquoted expansion
+ * iterates by splitting the value on `IFS`, and zsh does not do that —
+ * `SH_WORD_SPLIT` is off by default there, so the loop runs exactly once with
+ * `$name` bound to the entire string.
+ *
+ * The `#!/bin/sh` line does not save it. The pane hands the user a Copy button
+ * and tells them to run the script in a terminal; on macOS that terminal is
+ * zsh, and to a shell that is already running, `#!` is a comment.
+ *
+ * What that produced was not an error message. It was `mkdir -p` on a directory
+ * named `commands ide plans plugins skills todos session-env projects`, one
+ * symlink pointing at it per profile, eight directories that were never linked
+ * at all, and — because `SHARED_FILES` holds a single name and so survived not
+ * being split — a correctly linked `CLAUDE.md` sitting on top of the wreckage
+ * making the pane report the arrangement as partly done.
+ *
+ * Literal words behave identically in sh, bash and zsh for the reason that there
+ * is no expansion left to disagree about: they are already the words. Quoted for
+ * the same reason every path here is — nothing about a name being a constant
+ * today stops a later one from holding a space or a `*`.
+ */
+function wordList(names: readonly string[]): string {
+  return names.map(shellQuote).join(' ');
 }
 
 function shareScript(dirs: readonly string[]): string {
@@ -128,9 +162,6 @@ set -eu
 
 ROOT="$HOME/.claude"
 SUFFIX="${BACKUP_SUFFIX}"
-
-SHARED_DIRS="${SHARED_DIRECTORIES.join(' ')}"
-SHARED_FILES="${SHARED_FILES.join(' ')}"
 
 # Move whatever is at $1 out of the way, then link it to $2.
 link_one() {
@@ -174,12 +205,12 @@ profile() {
 
   printf '%s\\n' "$dir"
 
-  for name in $SHARED_DIRS; do
+  for name in ${wordList(SHARED_DIRECTORIES)}; do
     mkdir -p "$ROOT/$name"
     link_one "$dir/$name" "$ROOT/$name"
   done
 
-  for name in $SHARED_FILES; do
+  for name in ${wordList(SHARED_FILES)}; do
     if [ ! -e "$ROOT/$name" ]; then
       printf '  skip  %s (no %s to share)\\n' "$name" "$ROOT/$name"
       continue
@@ -221,9 +252,6 @@ set -eu
 ROOT="$HOME/.claude"
 SUFFIX="${BACKUP_SUFFIX}"
 
-SHARED_DIRS="${SHARED_DIRECTORIES.join(' ')}"
-SHARED_FILES="${SHARED_FILES.join(' ')}"
-
 restore_one() {
   target="$1"
   source="$2"
@@ -261,7 +289,7 @@ profile() {
 
   printf '%s\\n' "$dir"
 
-  for name in $SHARED_DIRS $SHARED_FILES; do
+  for name in ${wordList(SHARED_ENTRIES)}; do
     restore_one "$dir/$name" "$ROOT/$name"
   done
 }
