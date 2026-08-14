@@ -17,6 +17,8 @@
  * ├── sessions ──────────────────────────────────────────────────────────┤
  * │ RunRegistry     live runs by id, event fan-out, guaranteed teardown  │
  * │ SessionNamer    names a new session from its opening message         │
+ * │ SessionOwners   which account each session ran under, once a store   │
+ * │                 is shared and the directory no longer says           │
  * ├── workspace ─────────────────────────────────────────────────────────┤
  * │ checkWorkingDirectory  is this cwd real, a directory, and readable?  │
  * │ describeWorkspace      what is it called — repository, or folder?    │

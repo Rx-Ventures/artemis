@@ -172,6 +172,7 @@ import {
 } from '../lib/sessionGroups';
 import { writeSessionDrag } from '../lib/sessionDrag';
 import {
+  canReachSession,
   refreshSessions,
   renameSession,
   resumeSession,
@@ -840,10 +841,35 @@ const Row = memo(function Row({
   const renaming = useCapability('renameSession');
   const deleting = useCapability('deleteSession');
 
-  // A session whose profile is gone cannot be resumed at all — its transcript
-  // lives in that profile's config directory. Say so on the row rather than
-  // letting the click fail somewhere the user is not looking.
-  const orphaned = profile === undefined;
+  /*
+   * Whether this row is allowed to name an account at all.
+   *
+   * Set when the transcript lives in a store several profiles reach and nothing
+   * recorded which one ran it — the shared-config arrangement, where
+   * `projects/` is symlinked into every profile. `session.profileId` is then
+   * the adapter's stable pick among the sharers and means nothing, so naming it
+   * would print the same account on every shared row. The sidebar's account
+   * marker exists to answer "whose is this", and the honest answer here is
+   * nothing rather than the first profile in the list.
+   *
+   * It clears itself: opening the session records the account it was opened
+   * under, so the badge appears from the next listing onward. See
+   * `SessionSummary.profileIsUnknown`.
+   */
+  const unattributed = session.profileIsUnknown === true;
+  /*
+   * A session no existing profile can reach cannot be resumed at all — its
+   * transcript lives in a config directory nothing points at any more. Say so
+   * on the row rather than letting the click fail somewhere the user is not
+   * looking.
+   *
+   * Asked of every profile that shares the store, not just the one on the
+   * summary. With `projects/` shared, deleting the profile the adapter happened
+   * to pick leaves the transcript exactly where it was and two other accounts
+   * still reading it; treating that row as orphaned would disable a resume that
+   * works.
+   */
+  const orphaned = useApp((s) => !s.profiles.some((p) => canReachSession(session, p.id)));
 
   /*
    * Two pieces of row-local UI state, and both are deliberately here rather
@@ -910,7 +936,7 @@ const Row = memo(function Row({
         disabled={orphaned}
         disabledReason={
           orphaned
-            ? 'The profile that created this session no longer exists, so its transcript cannot be reached.'
+            ? 'No profile still points at the config directory holding this session, so its transcript cannot be reached.'
             : undefined
         }
         /*
@@ -970,7 +996,11 @@ const Row = memo(function Row({
               <span className="truncate">{session.gitBranch}</span>
             </span>
           ) : null}
-          {session.gitBranch ? (
+          {/* Both sides, not just the branch. The separator joins two things,
+              and an unattributed row draws no profile — a `·` conditioned on
+              the branch alone would trail off the end of the branch with
+              nothing after it. */}
+          {session.gitBranch && !unattributed ? (
             <span aria-hidden="true" className="shrink-0">
               ·
             </span>
@@ -986,15 +1016,25 @@ const Row = memo(function Row({
            * apart. It now sits directly after the branch and is given the room:
            * the branch takes the slack and truncates, this does not.
            */}
-          <span
-            className={cn(
-              'flex min-w-0 max-w-[11rem] shrink-0 items-center gap-1',
-              orphaned && 'text-amber',
-            )}
-          >
-            <ProfileSwatch color={profile?.color} />
-            <span className="truncate">{profile ? profile.label : 'profile missing'}</span>
-          </span>
+          {/*
+           * Nothing at all when the owner was never recorded, rather than a
+           * placeholder word. "unknown" in the account slot is still a claim
+           * about the account, and it would sit on most rows of a shared
+           * install's history — a column of the same non-answer, which reads as
+           * a broken field rather than an absent fact. The tooltip is where
+           * there is room to say which it is; the row just leaves the space.
+           */}
+          {unattributed ? null : (
+            <span
+              className={cn(
+                'flex min-w-0 max-w-[11rem] shrink-0 items-center gap-1',
+                orphaned && 'text-amber',
+              )}
+            >
+              <ProfileSwatch color={profile?.color} />
+              <span className="truncate">{profile ? profile.label : 'profile missing'}</span>
+            </span>
+          )}
         </span>
       </CapabilityButton>
           </div>

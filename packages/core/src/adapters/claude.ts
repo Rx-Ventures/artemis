@@ -1003,11 +1003,24 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         }
 
         const alsoInProfiles = group.scopes.slice(1).map((scope) => scope.profileId);
-        // The field is omitted rather than set empty in the ordinary case, so
-        // "shared" is legible in a payload at a glance and every existing
-        // consumer sees exactly the shape it saw before.
+        /*
+         * Both fields are omitted rather than set empty or false in the
+         * ordinary case, so "shared" is legible in a payload at a glance and
+         * every existing consumer sees exactly the shape it saw before.
+         *
+         * `profileIsUnknown` travels with `alsoInProfiles` because it is the
+         * same fact stated from the reader's side. The owner is `scopes[0]`: a
+         * pick made so that repeated reads agree, carrying no claim about who
+         * ran anything. Nothing in this store can turn it into a claim — the
+         * transcript records no account — so the adapter says so rather than
+         * letting a sidebar render the pick as an answer and label every shared
+         * row with the same arbitrary profile. Only the host's own ledger of
+         * runs it started can settle it, and the host clears this when it does.
+         */
         const own = (summary: SessionSummary): SessionSummary =>
-          alsoInProfiles.length === 0 ? summary : { ...summary, alsoInProfiles };
+          alsoInProfiles.length === 0
+            ? summary
+            : { ...summary, alsoInProfiles, profileIsUnknown: true };
 
         const withoutCwd: SDKSessionInfo[] = [];
 

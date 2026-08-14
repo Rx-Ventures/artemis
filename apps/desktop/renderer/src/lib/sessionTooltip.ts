@@ -72,6 +72,14 @@ export function sessionTooltipTitle(title: string): string {
  * its tooltip is the `disabledReason` sentence instead (see `ReasonButton`),
  * so in practice this branch shows only if that gating ever changes — but a
  * helper that printed `undefined` the day it does would be a trap left armed.
+ *
+ * The unrecorded-profile wording is not defensive at all — it is the ordinary
+ * state for any history that predates the ownership ledger on a machine using
+ * the shared-config arrangement. The row itself shows no account there (see
+ * `SessionSummary.profileIsUnknown`), which is honest but silent, and silence
+ * on a row invites the reading that the field failed to load. The tooltip is
+ * where there is room to say which of the two it is, and how many accounts the
+ * conversation is reachable from.
  */
 export function sessionTooltipRows(
   session: SessionSummary,
@@ -85,7 +93,10 @@ export function sessionTooltipRows(
 
   rows.push({
     label: 'profile',
-    value: options.profileLabel ?? `${session.profileId} (no longer exists)`,
+    value:
+      session.profileIsUnknown === true
+        ? unrecordedProfile(session)
+        : (options.profileLabel ?? `${session.profileId} (no longer exists)`),
     mono: false,
   });
 
@@ -104,6 +115,22 @@ export function sessionTooltipRows(
   });
 
   return rows;
+}
+
+/**
+ * What to say instead of an account, when no account is known.
+ *
+ * Two facts, because either alone misleads. "Not recorded" without the count
+ * reads as data loss; the count without it reads as though the conversation
+ * belongs to all of them, which is not what a shared store means — one account
+ * ran it and the store simply did not write down which.
+ *
+ * Counted from the full sharer set, `[profileId, ...alsoInProfiles]`, and never
+ * below two: the flag is only ever set on a store several profiles reach.
+ */
+function unrecordedProfile(session: SessionSummary): string {
+  const sharers = 1 + (session.alsoInProfiles?.length ?? 0);
+  return `not recorded — ${String(sharers)} accounts share this history`;
 }
 
 /** `22` → `22 sessions`, for the project heading's tooltip. */
