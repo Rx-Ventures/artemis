@@ -64,6 +64,7 @@ import {
   type SessionsListRequest,
   type CerebroDraftRequest,
   type CerebroListRequest,
+  type CerebroPreflightRequest,
   type CerebroRetireRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
@@ -503,6 +504,7 @@ const bridge: ArtemisBridge = Object.freeze({
   cerebro: Object.freeze({
     status: (request: CerebroStatusRequest) => invoke(IPC.cerebroStatus, request),
     list: (request: CerebroListRequest) => invoke(IPC.cerebroList, request),
+    preflight: (request: CerebroPreflightRequest) => invoke(IPC.cerebroPreflight, request),
     setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
     sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
     draft: (request: CerebroDraftRequest) => invoke(IPC.cerebroDraft, request),

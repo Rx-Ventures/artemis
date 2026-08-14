@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { parseCerebroList, parseCerebroStatus } from './cerebro';
+import { parseCerebroDoctor, parseCerebroList, parseCerebroStatus } from './cerebro';
 
 const STATUS_FIXTURE = JSON.stringify({
   repo: '/Users/demo/Documents/cerebro',
@@ -115,5 +115,53 @@ describe('parseCerebroList', () => {
 
   it('throws when the list is not an array', () => {
     expect(() => parseCerebroList('{}')).toThrow(/not an array/);
+  });
+});
+
+describe('parseCerebroDoctor', () => {
+  it('carries every check and its remedy through', () => {
+    const preflight = parseCerebroDoctor(
+      JSON.stringify({
+        ready: false,
+        checks: [
+          { id: 'git', label: 'git', state: 'ok', detail: 'git version 2.55.0', remedy: null },
+          {
+            id: 'git-identity',
+            label: 'git identity',
+            state: 'fail',
+            detail: 'user.name or user.email is unset — commits would be refused',
+            remedy: 'git config --global user.name "Your Name"',
+          },
+          { id: 'gh', label: 'GitHub CLI (optional)', state: 'warn', detail: 'not on PATH', remedy: 'brew install gh' },
+        ],
+      }),
+    );
+    expect(preflight.ready).toBe(false);
+    expect(preflight.checks).toHaveLength(3);
+    expect(preflight.checks[1]).toEqual({
+      id: 'git-identity',
+      label: 'git identity',
+      state: 'fail',
+      detail: 'user.name or user.email is unset — commits would be refused',
+      remedy: 'git config --global user.name "Your Name"',
+    });
+  });
+
+  it('drops a check whose state the protocol does not name', () => {
+    const preflight = parseCerebroDoctor(
+      JSON.stringify({
+        ready: true,
+        checks: [
+          { id: 'git', label: 'git', state: 'ok', detail: 'fine', remedy: null },
+          { id: 'future', label: 'Something new', state: 'skipped', detail: 'from a newer CLI' },
+        ],
+      }),
+    );
+    expect(preflight.checks.map((entry) => entry.id)).toEqual(['git']);
+    expect(preflight.ready).toBe(true);
+  });
+
+  it('treats a missing ready flag as not ready', () => {
+    expect(parseCerebroDoctor(JSON.stringify({ checks: [] })).ready).toBe(false);
   });
 });
