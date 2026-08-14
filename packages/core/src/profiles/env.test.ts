@@ -272,6 +272,48 @@ describe('resolveEnv — merging', () => {
     expect(env[CLAUDE_CONFIG_DIR_ENV]).toBe(configDir);
   });
 
+  it('BILLING: drops the provider’s whole namespace from baseEnv, not just the managed keys', async () => {
+    // The resolved bundle is layered *over* the adapter's own scrubbed
+    // host-environment merge, and the bundle wins. So a baseEnv built from
+    // `process.env` — exactly what the docs suggest — would carry the shell's
+    // `ANTHROPIC_BASE_URL` (re-routes every request, and the credential with
+    // it) and `CLAUDE_CODE_USE_BEDROCK` (re-bills the run onto a backend the
+    // profile never chose) straight past the adapter's scrub. Neither is in
+    // `managedEnvKeys`, which is why the filter has to reach the namespace.
+    const env = await resolveEnv(makeProfile(), {
+      ...ENV_OPTS,
+      baseEnv: {
+        ANTHROPIC_BASE_URL: 'https://proxy.corp.example',
+        CLAUDE_CODE_USE_BEDROCK: '1',
+        ANTHROPIC_MODEL: 'someone-elses-default',
+        PATH: '/usr/bin',
+        HOME: '/Users/me',
+      },
+    });
+
+    expect(env['ANTHROPIC_BASE_URL']).toBeUndefined();
+    expect(env['CLAUDE_CODE_USE_BEDROCK']).toBeUndefined();
+    expect(env['ANTHROPIC_MODEL']).toBeUndefined();
+    // The host's own environment is not the provider's and passes untouched.
+    expect(env['PATH']).toBe('/usr/bin');
+    expect(env['HOME']).toBe('/Users/me');
+  });
+
+  it('still lets the profile set a provider variable deliberately, via publicEnv', async () => {
+    // The namespace drop is about *ambient* variables nobody chose. A model
+    // selection written into the profile is a choice, and publicEnv is layered
+    // after baseEnv precisely so choices win over accidents.
+    const env = await resolveEnv(
+      makeProfile({ publicEnv: { ANTHROPIC_MODEL: 'claude-sonnet-5' } }),
+      {
+        ...ENV_OPTS,
+        baseEnv: { ANTHROPIC_MODEL: 'ambient-shell-model' },
+      },
+    );
+
+    expect(env['ANTHROPIC_MODEL']).toBe('claude-sonnet-5');
+  });
+
   it('drops credential-shaped publicEnv from a hand-edited profile', async () => {
     const env = await resolveEnv(
       makeProfile({ publicEnv: { ANTHROPIC_API_KEY: 'sk-ant-smuggled', MY_TOKEN: 'x' } }),
@@ -364,6 +406,25 @@ describe('resolveEnv — provider vocabulary', () => {
     });
 
     expect(env['ANTHROPIC_API_KEY']).toBe('not-mine');
+  });
+
+  it('derives the dropped namespaces from the spec, not from Claude', async () => {
+    // `OTHER_BASE_URL` is not managed and not credential-shaped, but it lives
+    // in the namespace this spec's own variable names declare — so it goes,
+    // for the same reason `ANTHROPIC_BASE_URL` goes under Claude's spec. And
+    // Claude's namespace means nothing here.
+    const env = await resolveEnv(makeProfile({ providerId: 'codex' }), {
+      credentials: OTHER_CREDENTIALS,
+      baseEnv: {
+        OTHER_BASE_URL: 'https://elsewhere.example',
+        ANTHROPIC_BASE_URL: 'https://not-this-providers-problem',
+        PATH: '/usr/bin',
+      },
+    });
+
+    expect(env['OTHER_BASE_URL']).toBeUndefined();
+    expect(env['ANTHROPIC_BASE_URL']).toBe('https://not-this-providers-problem');
+    expect(env['PATH']).toBe('/usr/bin');
   });
 });
 

@@ -409,6 +409,14 @@ export class RunRegistry {
     if (this.#runs.has(runId) || this.#starting.has(runId)) {
       throw new RunError('invalid_request', `Run "${runId}" is already active`);
     }
+    // A retired id is just as taken, exactly as `adopt` treats it: `#ended`
+    // still answers `eventsSince` and `dispose` for that id, so a new run
+    // wearing it would replay a finished transcript ahead of its own events
+    // and hand its teardown to the old entry. Ids are minted fresh; reuse is
+    // a caller bug worth failing loudly.
+    if (this.#ended.has(runId)) {
+      throw new RunError('invalid_request', `Run "${runId}" has already ended; run ids are not reusable`);
+    }
 
     // Reserve before awaiting, so two concurrent starts with the same
     // caller-supplied id cannot both get through.

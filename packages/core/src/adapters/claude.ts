@@ -2029,6 +2029,14 @@ class ClaudeProcess {
    */
   canServe(input: ResolvedRunInput, configDir: string | undefined): boolean {
     if (this.#closed || this.#disposing !== undefined) return false;
+    // A process mid-turn is not attachable. `beginTurn` replaces the active
+    // state and queue outright — the invariant `#ensureTurn` documents is that
+    // a turn only opens after the last one's `run.end` — so attaching here
+    // would strand the first turn's consumer on a queue nobody closes and map
+    // its remaining messages with the second turn's state. Refusing sends the
+    // caller down the fresh-spawn path with `--resume`, which is safe: the
+    // provider serialises the two CLIs on its own transcript.
+    if (!this.#state.ended) return false;
     if (input.forkSession === true) return false;
     if (this.#sessionId === undefined) return false;
     if (input.resumeSessionId !== this.#sessionId) return false;
@@ -2676,6 +2684,16 @@ class ClaudeProcess {
       this.#promptQueue.close();
       this.#eventQueue.close();
       this.#detachAbortSignal?.();
+
+      // The transport is gone, so nothing can read the staged files any more —
+      // and for a run that ends naturally this is the only place that hears
+      // about it: `release()` is a no-op on purpose, and dispose() never runs.
+      // Left behind, these are copies of the user's own files sitting in /tmp
+      // after the conversation ended. Harmless to repeat under `#teardown`,
+      // which also removes it: removal is best-effort and force-recursive.
+      await removeStagingDirectory(this.#stagingDir, (message) => {
+        this.#deps.diagnostic?.(`Run ${this.runId}: ${message}`);
+      });
     }
   }
 
@@ -2689,6 +2707,12 @@ class ClaudeProcess {
     const explained = await this.#explainLaunchFailure(toAgentError(error, 'provider_not_found'));
     this.#finalize('error', this.#withStderr(explained));
     this.#eventQueue.close();
+    // No process ever opened, so no pump `finally` will ever run — without this
+    // the staged copies of the user's files would outlive a run that never
+    // started at all.
+    await removeStagingDirectory(this.#stagingDir, (message) => {
+      this.#deps.diagnostic?.(`Run ${this.runId}: ${message}`);
+    });
   }
 
   /**

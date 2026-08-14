@@ -1,9 +1,11 @@
 /**
  * Tests for the JSON-RPC codec the Codex adapter is built on.
  *
- * The subprocess half is not covered here — it is four event handlers around
- * `spawn`. Everything with logic in it lives in `JsonRpcConnection` and
- * `LineSplitter`, both of which are driven by hand below.
+ * The subprocess half is mostly not covered here — it is four event handlers
+ * around `spawn`. Everything with logic in it lives in `JsonRpcConnection` and
+ * `LineSplitter`, both of which are driven by hand below. The one spawn-level
+ * test is the line-cap overflow, because "the connection fails" is a property
+ * of the wiring rather than of either object alone.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -15,7 +17,9 @@ import {
   JsonRpcConnection,
   JsonRpcError,
   LineSplitter,
+  MAX_UNTERMINATED_LINE_LENGTH,
   isJsonRpcError,
+  spawnJsonRpcSubprocess,
 } from '../jsonrpc.js';
 
 /** A connection plus the frames it wrote, for asserting on both directions. */
@@ -387,4 +391,82 @@ describe('LineSplitter', () => {
     splitter.flush();
     expect(lines).toEqual(['{"a":1}']);
   });
+
+  it('overflows on a single line that exceeds the cap, and goes inert', () => {
+    // Without the cap a peer that never emits a newline grows the buffer by
+    // however much it writes, for as long as it writes — an unbounded leak
+    // that only a misbehaving process can trigger and only an OOM reports.
+    const lines: string[] = [];
+    let overflowed: number | undefined;
+    const splitter = new LineSplitter((line) => lines.push(line), {
+      maxBuffered: 64,
+      onOverflow: (buffered) => {
+        overflowed = buffered;
+      },
+    });
+
+    splitter.push('x'.repeat(100));
+
+    expect(overflowed).toBe(100);
+    // The oversized fragment is discarded, not delivered: a truncated frame
+    // would only parse as garbage.
+    expect(lines).toEqual([]);
+    expect(splitter.buffered).toBe(0);
+
+    // A stream that overflowed once has nothing trustworthy left to say.
+    splitter.push('{"late":true}\n');
+    splitter.flush();
+    expect(lines).toEqual([]);
+  });
+
+  it('overflows only once, however much more arrives', () => {
+    const overflows: number[] = [];
+    const splitter = new LineSplitter(() => undefined, {
+      maxBuffered: 8,
+      onOverflow: (buffered) => {
+        overflows.push(buffered);
+      },
+    });
+    splitter.push('x'.repeat(16));
+    splitter.push('y'.repeat(16));
+    expect(overflows).toEqual([16]);
+  });
+
+  it('does not count completed frames against the cap', () => {
+    // The cap bounds what is *held back* waiting for a newline. Any number of
+    // well-framed messages must pass through a small cap untouched.
+    const lines: string[] = [];
+    const splitter = new LineSplitter((line) => lines.push(line), {
+      maxBuffered: 16,
+      onOverflow: () => {
+        throw new Error('a framed stream must never overflow');
+      },
+    });
+    for (let i = 0; i < 100; i += 1) splitter.push('{"n":12345678}\n');
+    expect(lines).toHaveLength(100);
+  });
+});
+
+describe('spawnJsonRpcSubprocess — unframed output', () => {
+  it('fails the connection with a clear error when a peer exceeds the line cap', async () => {
+    // A real subprocess writing just past the 8 MiB default without ever
+    // sending a newline. The connection must fail — settling every pending
+    // request with a reason that names the problem — rather than buffering
+    // until the host runs out of memory.
+    const child = spawnJsonRpcSubprocess({
+      executable: process.execPath,
+      args: [
+        '-e',
+        `process.stdout.write('x'.repeat(${String(MAX_UNTERMINATED_LINE_LENGTH + 1024)})); setInterval(() => {}, 1000);`,
+      ],
+      cwd: process.cwd(),
+      env: { PATH: process.env['PATH'] ?? '' },
+    });
+
+    try {
+      await expect(child.connection.request('model/list')).rejects.toThrow(/without a newline/);
+    } finally {
+      await child.dispose();
+    }
+  }, 20_000);
 });
