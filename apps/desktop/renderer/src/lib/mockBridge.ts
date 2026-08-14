@@ -15,6 +15,7 @@
 
 import type {
   AgentEvent,
+  AgentPromptsDocument,
   AuthStatusInfo,
   Capabilities,
   CerebroMemory,
@@ -37,7 +38,12 @@ import type {
   Unsubscribe,
   WindowState,
 } from '@rx-artemis/protocol';
-import { NO_CAPABILITIES, SHARED_ENTRIES, normalizeProfileColor } from '@rx-artemis/protocol';
+import {
+  NO_CAPABILITIES,
+  SHARED_ENTRIES,
+  normalizeProfileColor,
+  parseAgentPromptsDocument,
+} from '@rx-artemis/protocol';
 import { newId } from './id';
 
 const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
@@ -103,6 +109,7 @@ const CLAUDE_CAPS: Capabilities = {
   usageReporting: true,
   costReporting: true,
   planUsageReporting: true,
+  systemPromptAppend: true,
   imageInput: true,
   fileInput: true,
 };
@@ -125,6 +132,12 @@ const CODEX_CAPS: Capabilities = {
   // like Claude answers its own. What differs is the *shape* of the answer —
   // see `mockCodexPlanUsage`.
   planUsageReporting: true,
+  // False, as the real adapter declares: Codex's only instruction lever
+  // replaces the preset rather than appending to it. Kept accurate rather than
+  // convenient — the Agents pane's whole scope list depends on this flag being
+  // the truth about a provider, and a mock that claimed otherwise would hide
+  // the one state that pane exists to explain.
+  systemPromptAppend: false,
   // False *unlike* the real adapter, which supports both. This is the mock's
   // job: the composer's attach button has a disabled state with a reason
   // attached, and with both mock providers advertising the capability there
@@ -305,6 +318,32 @@ let mockCerebroMemories: CerebroMemory[] = [
     author: 'demo@example.com',
   },
 ];
+
+/**
+ * The prompt library, in memory.
+ *
+ * Seeded with one user prompt rather than none, so the pane's populated state
+ * — a selected row, an editor with content, a scope narrowed to one profile —
+ * is what a developer meets first. The empty state is one delete away; the
+ * populated one would otherwise have to be typed on every reload.
+ *
+ * Scoped to `demo-personal` on purpose: that is the Claude profile, and it puts
+ * the Codex row of the scope list in its disabled-with-a-reason state without
+ * anyone having to arrange it.
+ */
+let mockAgentPrompts: AgentPromptsDocument = parseAgentPromptsDocument({
+  version: 1,
+  prompts: [
+    {
+      id: 'prompt-house-style',
+      name: 'House style',
+      markdown:
+        '## House style\n\n- Run `pnpm typecheck` before claiming a change is done.\n- Prefer editing an existing module over adding a parallel one.\n- Say what you *did not* do as plainly as what you did.',
+      enabled: true,
+      scope: { kind: 'profiles', profileIds: ['demo-personal'] },
+    },
+  ],
+});
 
 export function createMockBridge(): ArtemisBridge {
   /** Profiles a `refresh` has been run for — what fills the real cache. */
@@ -1199,6 +1238,23 @@ export function createMockBridge(): ArtemisBridge {
       retire: async (request) => {
         mockCerebroMemories = mockCerebroMemories.filter((m) => m.name !== request.name);
         return ok({ message: `cerebro: opened PR for memory-20260814-retire-${request.name}` });
+      },
+    },
+
+    /*
+     * The prompt library, in memory.
+     *
+     * `save` re-parses through the same protocol helper the main process uses,
+     * so the mock reproduces the one behaviour the pane has to cope with: the
+     * document that comes back is not necessarily the one that went in — a
+     * built-in's body is dropped, a missing built-in reappears. A mock that
+     * echoed the request would let a bug in that handling reach a real build.
+     */
+    agentPrompts: {
+      list: async () => ok({ document: mockAgentPrompts }),
+      save: async (request) => {
+        mockAgentPrompts = parseAgentPromptsDocument(request.document);
+        return ok({ document: mockAgentPrompts });
       },
     },
 

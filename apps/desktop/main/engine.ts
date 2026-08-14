@@ -63,6 +63,8 @@ import type {
   Unsubscribe,
   PlanUsage,
   AuthStatusResponse,
+  AgentPromptsDocument,
+  BuiltInPromptId,
 } from '@rx-artemis/protocol';
 
 import {
@@ -85,8 +87,10 @@ import {
   type SessionListScope,
   type SessionNamingPlan,
 } from '@rx-artemis/core';
-import { lowestTierModel } from '@rx-artemis/protocol';
+import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
+import { AgentPromptStore } from './agentPrompts.js';
+import { isCerebroInstalled } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
@@ -102,6 +106,45 @@ const log = createLogger('engine');
  * it is appended to the transcript and read back into a one-line row.
  */
 const MAX_SESSION_TITLE = 200;
+
+/**
+ * Fold the prompt library's text into whatever `systemPrompt` a run already
+ * carries.
+ *
+ * Exported and pure so the three cases can be tested without standing up an
+ * engine. Each of them is a decision rather than a fallthrough:
+ *
+ *  - **Absent, or `default`.** The ordinary path — every run the renderer
+ *    starts. Becomes an `append`. Note that absent is *not* the same as
+ *    `{ kind: 'default' }` downstream (see `mapSystemPrompt`), but both mean
+ *    "the provider's own preset, untouched", which is exactly what an append
+ *    adds to.
+ *  - **Already an `append`.** Concatenated, with the caller's text first.
+ *    Nothing in the renderer sends one today, but the field is part of
+ *    `RunInput`; a caller that set one meant it, and dropping either side would
+ *    be this function picking a winner between two things that were both asked
+ *    for.
+ *  - **`replace`.** Left alone. `replace` means "the provider's preset should
+ *    not be there", and the library's prompts are written to sit after a preset
+ *    that has already described the tools. Appending to a replacement would
+ *    silently change what the user's own text is being added *to*.
+ *
+ * `text` being `undefined` — nothing in the library applies to this run — hands
+ * the input back untouched, which is what keeps an empty library from putting
+ * an `append` carrying nothing on every run.
+ */
+export function withSystemPromptAppended(input: RunInput, text: string | undefined): RunInput {
+  if (text === undefined || text.length === 0) return input;
+
+  const existing = input.systemPrompt;
+  if (existing === undefined || existing.kind === 'default') {
+    return { ...input, systemPrompt: { kind: 'append', text } };
+  }
+  if (existing.kind === 'append') {
+    return { ...input, systemPrompt: { kind: 'append', text: `${existing.text}\n\n${text}` } };
+  }
+  return input;
+}
 
 /* -------------------------------------------------------------------------- */
 /* The interface the IPC layer calls                                          */
@@ -170,6 +213,19 @@ export interface ArtemisEngine {
   ): Promise<{ readonly id: ProfileId; readonly configDirDeleted: boolean }>;
   /** A config-directory path to prefill the create form with. Creates nothing. */
   suggestConfigDir(label: string): Promise<string>;
+
+  /**
+   * The standing-instruction library, as stored.
+   *
+   * On the host rather than instantiated in `ipc.ts` — which is where Cerebro
+   * and the shared-config probe live — because this is the one settings surface
+   * whose data is also read on the path of a run. Two owners would mean two
+   * caches, and the pane's save would land in the copy `startRun` is not
+   * reading.
+   */
+  readAgentPrompts(): Promise<AgentPromptsDocument>;
+  /** Replace the library. Answers with what was actually stored. */
+  writeAgentPrompts(document: AgentPromptsDocument): Promise<AgentPromptsDocument>;
 
   startRun(input: RunInput): Promise<RunHandle>;
   sendToRun(
@@ -373,6 +429,65 @@ function createEngine(options: EngineOptions): ArtemisEngine {
   ];
 
   const profiles = new ProfileStore({ userDataDir, managedEnvKeys: managed });
+
+  const agentPrompts = new AgentPromptStore({ userDataDir });
+
+  /**
+   * Which built-in prompts have the thing they talk about.
+   *
+   * Read per run rather than cached at startup, because the precondition can
+   * change while the app is open — setting Cerebro up is a button in the
+   * settings dialog, and a user who clicks it should not have to restart before
+   * the prompt that describes it starts arriving. `isCerebroInstalled` is one
+   * `existsSync`, which is affordable at that rate; the full status probe,
+   * which spawns the CLI, is not.
+   */
+  const availableBuiltIns = (): ReadonlySet<BuiltInPromptId> => {
+    const available = new Set<BuiltInPromptId>();
+    if (isCerebroInstalled()) available.add('builtin:cerebro');
+    return available;
+  };
+
+  /**
+   * Attach the library's standing instructions to a run.
+   *
+   * Two things this deliberately does not do:
+   *
+   *  - **It does not send to a provider that cannot take it.** See
+   *    `Capabilities.systemPromptAppend`: an adapter without an append honours
+   *    the run and ignores the prompt, which would leave the pane claiming an
+   *    instruction the model never read.
+   *  - **It does not fail a run.** A library that cannot be read is logged and
+   *    treated as empty. Starting the agent is the app's job; standing
+   *    instructions are an enhancement to it, and one should never cost the
+   *    other.
+   *
+   * The merge itself is {@link withSystemPromptAppended}, which is pure and
+   * tested — this half is the I/O around it.
+   */
+  const withAgentPrompts = async (input: RunInput): Promise<RunInput> => {
+    let capabilities;
+    try {
+      capabilities = providers.require(input.providerId).capabilities;
+    } catch {
+      // An unknown provider is `runs.start`'s error to report, in its own
+      // words. Handing the input back unchanged lets it get there.
+      return input;
+    }
+    if (!capabilities.systemPromptAppend) return input;
+
+    try {
+      const { prompts } = await agentPrompts.read();
+      const text = composeAgentPrompts(prompts, {
+        profileId: input.profileId,
+        availableBuiltIns: availableBuiltIns(),
+      });
+      return withSystemPromptAppended(input, text);
+    } catch (error) {
+      log.warn('Could not compose the agent prompt library; starting without it', error);
+      return input;
+    }
+  };
 
   /** The credential vocabulary of the provider a request names. */
   const credentialsFor = (providerId: ProviderId): ProviderCredentialSpec =>
@@ -635,8 +750,17 @@ function createEngine(options: EngineOptions): ArtemisEngine {
      * never recorded acquires one. Each filters at its own call site rather
      * than here, so neither rule has to be restated in the composition root.
      */
+    readAgentPrompts: () => agentPrompts.read(),
+    writeAgentPrompts: (document) => agentPrompts.write(document),
+
     startRun: async (input) => {
-      const handle = await runs.start(input);
+      // The library is attached here and not in the renderer, so that every
+      // path that will ever start a run gets it without having to remember to.
+      // `namer` and `owners` are told about the *original* input on purpose:
+      // they record what the user asked for — the prompt to name the session
+      // by, the account to attribute it to — and neither is a fact about the
+      // system prompt the run happened to carry.
+      const handle = await runs.start(await withAgentPrompts(input));
       namer.noteRun(input, handle.runId);
       owners.noteRun(input, handle.runId);
       return handle;

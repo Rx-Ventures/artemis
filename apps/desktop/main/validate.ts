@@ -28,11 +28,14 @@
 import { isAbsolute } from 'node:path';
 
 import {
+  AGENT_PROMPTS_VERSION,
+  AGENT_PROMPT_LIMITS,
   ATTACHMENT_LIMITS,
   attachmentBytes,
   base64Bytes,
   CEREBRO_MEMORY_TYPES,
   configDirProblem,
+  isBuiltInPromptId,
   IMAGE_MEDIA_TYPES,
   isCredentialRoutingEnvKey,
   isImageAttachment,
@@ -45,7 +48,12 @@ import {
   normalizeProfilePlanId,
   profileColorProblem,
   profilePlanIdProblem,
+  type AgentPrompt,
+  type AgentPromptScope,
+  type AgentPromptsListRequest,
+  type AgentPromptsSaveRequest,
   type Attachment,
+  type BuiltInPromptId,
   type CerebroDraftRequest,
   type CerebroListRequest,
   type CerebroMemoryType,
@@ -138,6 +146,14 @@ const LIMITS = {
   envValue: 8_192,
   ruleUpdates: 64,
   rulesPerUpdate: 256,
+  /**
+   * Profile ids one prompt's scope may name.
+   *
+   * A bound on a corrupt or hostile payload, not on a plausible one: the list
+   * is built by ticking checkboxes against the profiles that exist, and nobody
+   * has 256 accounts.
+   */
+  promptScopeProfiles: 256,
   /**
    * Bounds on an answered question prompt.
    *
@@ -1518,4 +1534,90 @@ export function validateCerebroRetire(raw: unknown): CerebroRetireRequest {
   }
   const reason = optionalString(request['reason'], 'reason', 200);
   return { name, ...(reason === undefined ? {} : { reason }) };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Agent prompts                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** Empty; main owns the library's location. @see validateCerebroStatus */
+export function validateAgentPromptsList(raw: unknown): AgentPromptsListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+function validateAgentPromptScope(value: unknown, field: string): AgentPromptScope {
+  const scope = requireObject(value, field);
+  const kind = requireString(scope['kind'], `${field}.kind`, 20);
+  if (kind === 'all') return { kind: 'all' };
+  if (kind !== 'profiles') {
+    throw new ValidationError(`${field}.kind`, 'must be "all" or "profiles"');
+  }
+  return {
+    kind: 'profiles',
+    profileIds:
+      optionalStringArray(
+        scope['profileIds'],
+        `${field}.profileIds`,
+        LIMITS.promptScopeProfiles,
+        LIMITS.id,
+      ) ?? [],
+  };
+}
+
+function validateAgentPrompt(value: unknown, field: string): AgentPrompt {
+  const prompt = requireObject(value, field);
+  const id = requireId(prompt['id'], `${field}.id`);
+
+  const rawBuiltIn = optionalString(prompt['builtIn'], `${field}.builtIn`, 200);
+  if (rawBuiltIn !== undefined && !isBuiltInPromptId(rawBuiltIn)) {
+    throw new ValidationError(`${field}.builtIn`, `names no prompt this build ships`);
+  }
+  const builtIn = rawBuiltIn as BuiltInPromptId | undefined;
+
+  return {
+    id,
+    name: requireString(prompt['name'], `${field}.name`, AGENT_PROMPT_LIMITS.name),
+    // Not merely allowed to be empty for a built-in — required to be. Their
+    // text ships with Artemis, and accepting a body here would let the renderer
+    // put words into a prompt the pane presents as Artemis's own.
+    markdown: builtIn === undefined
+      ? optionalString(prompt['markdown'], `${field}.markdown`, AGENT_PROMPT_LIMITS.markdown) ?? ''
+      : '',
+    enabled: optionalBoolean(prompt['enabled'], `${field}.enabled`) ?? true,
+    scope: validateAgentPromptScope(prompt['scope'], `${field}.scope`),
+    ...(builtIn === undefined ? {} : { builtIn }),
+  };
+}
+
+/**
+ * The whole library, rebuilt prompt by prompt.
+ *
+ * The count and length caps are the bounds from the protocol, enforced here so
+ * a renderer cannot hand the main process an unbounded string to write to disk
+ * — the one thing this channel does that costs something.
+ */
+export function validateAgentPromptsSave(raw: unknown): AgentPromptsSaveRequest {
+  const request = requireRequest(raw);
+  const document = requireObject(request['document'], 'document');
+
+  const rawPrompts = document['prompts'];
+  if (!Array.isArray(rawPrompts)) {
+    throw new ValidationError('document.prompts', 'must be an array');
+  }
+  if (rawPrompts.length > AGENT_PROMPT_LIMITS.count) {
+    throw new ValidationError(
+      'document.prompts',
+      `must hold at most ${AGENT_PROMPT_LIMITS.count} prompts`,
+    );
+  }
+
+  return {
+    document: {
+      version: AGENT_PROMPTS_VERSION,
+      prompts: rawPrompts.map((entry, index) =>
+        validateAgentPrompt(entry, `document.prompts[${index}]`),
+      ),
+    },
+  };
 }

@@ -25,6 +25,7 @@
  * encrypted storage.
  */
 
+import type { AgentPromptsDocument } from './agentPrompts.js';
 import type { AgentEvent } from './events.js';
 import type { AgentError } from './errors.js';
 import type { Attachment } from './attachment.js';
@@ -250,6 +251,21 @@ export const IPC = {
   cerebroSync: 'artemis:cerebro:sync',
   cerebroDraft: 'artemis:cerebro:draft',
   cerebroRetire: 'artemis:cerebro:retire',
+  /**
+   * The standing-instruction library.
+   *
+   * Two channels, and `save` takes the whole document rather than one prompt.
+   * The pane edits a *list* — a body retyped, a row reordered, a scope
+   * unticked, a prompt deleted — and per-prompt channels would turn each of
+   * those into its own request and its own way to leave the stored order
+   * disagreeing with the one on screen. One document in, one document out, and
+   * the response is what actually landed rather than an echo: main re-derives
+   * the library's invariants on write (built-ins present, their text not
+   * stored), so the answer can differ from the request and the pane should take
+   * the answer.
+   */
+  agentPromptsList: 'artemis:agent-prompts:list',
+  agentPromptsSave: 'artemis:agent-prompts:save',
 } as const;
 
 /**
@@ -1379,6 +1395,38 @@ export interface CerebroRetireRequest {
 export type CerebroRetireResponse = CerebroActionResponse;
 
 /* -------------------------------------------------------------------------- */
+/* Agent prompts                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** Empty; the library is per-machine and main knows where it is. */
+export type AgentPromptsListRequest = Record<string, never>;
+
+/**
+ * The library as stored.
+ *
+ * Includes the built-in rows, with their `markdown` empty — the text belongs to
+ * {@link BUILT_IN_AGENT_PROMPTS} and the renderer already has it. Sending it
+ * over the wire as well would put a second copy in play whose only possible
+ * contribution is to be out of date.
+ */
+export interface AgentPromptsListResponse {
+  readonly document: AgentPromptsDocument;
+}
+
+/** Replace the library. */
+export interface AgentPromptsSaveRequest {
+  readonly document: AgentPromptsDocument;
+}
+
+/**
+ * What landed — not what was asked for. See the channel comment: main restores
+ * the library's invariants on the way in, so a save can legitimately answer
+ * with a document that differs from the request, and a pane that assumed
+ * otherwise would show state the disk does not have.
+ */
+export type AgentPromptsSaveResponse = AgentPromptsListResponse;
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1433,6 +1481,8 @@ export type IpcRequestMap = {
   [IPC.cerebroSync]: CerebroSyncRequest;
   [IPC.cerebroDraft]: CerebroDraftRequest;
   [IPC.cerebroRetire]: CerebroRetireRequest;
+  [IPC.agentPromptsList]: AgentPromptsListRequest;
+  [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -1486,6 +1536,8 @@ export type IpcResponseMap = {
   [IPC.cerebroSync]: CerebroSyncResponse;
   [IPC.cerebroDraft]: CerebroDraftResponse;
   [IPC.cerebroRetire]: CerebroRetireResponse;
+  [IPC.agentPromptsList]: AgentPromptsListResponse;
+  [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
 };
 
 /** Request type for a channel. */
@@ -1707,6 +1759,20 @@ export interface ArtemisBridge {
     draft(request: CerebroDraftRequest): Promise<IpcResult<CerebroDraftResponse>>;
     /** Remove a memory through the same gates. */
     retire(request: CerebroRetireRequest): Promise<IpcResult<CerebroRetireResponse>>;
+  };
+  /**
+   * Standing instructions, attached to runs by the main process.
+   *
+   * Read and write, and nothing that starts a run: the renderer edits the
+   * library and never composes it. Composition happens where runs do — see
+   * `engine.ts` — which is what keeps "the pane says this prompt is on" and
+   * "the model was told it" from being two separately maintained facts.
+   */
+  readonly agentPrompts: {
+    /** The library as stored, built-in rows included. */
+    list(request: AgentPromptsListRequest): Promise<IpcResult<AgentPromptsListResponse>>;
+    /** Replace the library. Answers with what landed, which may differ. */
+    save(request: AgentPromptsSaveRequest): Promise<IpcResult<AgentPromptsSaveResponse>>;
   };
 
   /**

@@ -62,6 +62,8 @@ import {
   type RunsStartRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
+  type AgentPromptsListRequest,
+  type AgentPromptsSaveRequest,
   type CerebroDraftRequest,
   type CerebroListRequest,
   type CerebroPreflightRequest,
@@ -509,6 +511,12 @@ const bridge: ArtemisBridge = Object.freeze({
     sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
     draft: (request: CerebroDraftRequest) => invoke(IPC.cerebroDraft, request),
     retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
+  }),
+
+  /** The standing-instruction library. Read and replaced whole; see {@link IPC}. */
+  agentPrompts: Object.freeze({
+    list: (request: AgentPromptsListRequest) => invoke(IPC.agentPromptsList, request),
+    save: (request: AgentPromptsSaveRequest) => invoke(IPC.agentPromptsSave, request),
   }),
 
   preview: Object.freeze({

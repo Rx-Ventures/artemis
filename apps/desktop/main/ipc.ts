@@ -118,6 +118,8 @@ import {
   validateTerminalWrite,
   validateAuthSignOut,
   validateAuthStatus,
+  validateAgentPromptsList,
+  validateAgentPromptsSave,
   validateCerebroDraft,
   validateCerebroList,
   validateCerebroPreflight,
@@ -458,6 +460,29 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.cerebroRetire]: {
       validate: validateCerebroRetire,
       handle: async (request) => retireCerebroMemory(request),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Agent prompts                                                    */
+    /* ---------------------------------------------------------------- */
+
+    /*
+     * Through the engine rather than through a store of this file's own, which
+     * is the opposite of what Cerebro above does and is deliberate. Cerebro's
+     * data lives in a repository nothing else reads; the prompt library is read
+     * on the path of every run, so the one instance that `startRun` composes
+     * from has to be the one the pane writes to — see `EngineHost`.
+     */
+    [IPC.agentPromptsList]: {
+      validate: validateAgentPromptsList,
+      handle: async () => ({ document: await engine.require().readAgentPrompts() }),
+    },
+
+    [IPC.agentPromptsSave]: {
+      validate: validateAgentPromptsSave,
+      handle: async (request) => ({
+        document: await engine.require().writeAgentPrompts(request.document),
+      }),
     },
 
     /* ---------------------------------------------------------------- */

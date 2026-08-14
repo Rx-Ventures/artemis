@@ -383,6 +383,25 @@ export async function readCerebroPreflight(): Promise<CerebroPreflight> {
   return { ready: !checks.some((entry) => entry.state === 'fail'), checks };
 }
 
+/**
+ * Is the bank on this machine at all?
+ *
+ * The same `existsSync` {@link readCerebroStatus} opens with, exposed on its
+ * own because one caller needs the answer and cannot afford the rest.
+ * `readCerebroStatus` spawns `bin/cerebro status` — tens of milliseconds and a
+ * subprocess — which is right for a settings pane the user just opened and
+ * wrong for the path of every run, where the Agents pane's built-in Cerebro
+ * prompt has to be gated on the bank existing.
+ *
+ * Deliberately answers the weaker question. "The CLI is there" is not "the
+ * profiles are enabled", "the preflight passes" or "the bank has memories", and
+ * a prompt that mentions a tool the user has cloned but not finished wiring up
+ * is a far cheaper error than a subprocess per run.
+ */
+export function isCerebroInstalled(): boolean {
+  return existsSync(cerebroCli(cerebroRoot()));
+}
+
 /** The bank's condition. `installed: false` is a complete answer, not a fault. */
 export async function readCerebroStatus(): Promise<CerebroStatus> {
   const root = cerebroRoot();

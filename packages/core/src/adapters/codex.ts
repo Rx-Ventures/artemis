@@ -180,6 +180,12 @@ export const CODEX_CAPABILITIES: Capabilities = {
   planUsageReporting: true,
   subagents: false,
   costReporting: false,
+  // Codex's only instruction lever is `baseInstructions`, which *replaces* the
+  // coding-agent preset rather than adding to it — the adapter uses it exactly
+  // once, for the ephemeral session-naming turn, where losing the preset is the
+  // point. There is no append, so `RunInput.systemPrompt` is not read on the
+  // run path and this stays false rather than approximating one with the other.
+  systemPromptAppend: false,
   imageInput: true, // `localImage` input items, staged to temp files
   fileInput: true, // staged to a granted temp directory and named in the prompt
   permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],

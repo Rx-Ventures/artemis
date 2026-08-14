@@ -24,6 +24,7 @@
  * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
  * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
+ * | `agentPrompts`  | the standing-instruction library, and how it composes       |
  * | `ipc`           | channel constants, request/response maps, `ArtemisBridge`    |
  *
  * What does *not* live here: the `ProviderAdapter` / `Run` interfaces. Those
@@ -46,4 +47,5 @@ export * from './session.js';
 export * from './profile.js';
 export * from './terminal.js';
 export * from './sharedConfig.js';
+export * from './agentPrompts.js';
 export * from './ipc.js';

@@ -183,6 +183,26 @@ export interface Capabilities {
    * what the flag exists to prevent.
    */
   readonly fileInput: boolean;
+
+  /**
+   * The adapter honours {@link import('./run.js').RunInput.systemPrompt} with
+   * `kind: 'append'` — standing instructions reach the model on top of the
+   * provider's own preset.
+   *
+   * A flag rather than an assumption because the failure without one is the
+   * quietest kind there is. `systemPrompt` is an optional field, and an adapter
+   * that never reads it accepts a run carrying one and starts it normally: no
+   * error, no warning, and a prompt library that the settings pane says is on
+   * while the model has never been told a word of it. That is the same hazard
+   * `fastMode` and `effort` are gated on at the point of send — a setting
+   * "accepted and ignored" is worse than one refused — applied to the one
+   * setting whose whole purpose is to change how the agent behaves.
+   *
+   * The UI's obligation is to say so rather than to hide it: a profile whose
+   * provider lacks this stays visible in the scope list, disabled, with the
+   * reason attached.
+   */
+  readonly systemPromptAppend: boolean;
 }
 
 /**
@@ -206,6 +226,7 @@ export const NO_CAPABILITIES: Capabilities = {
   usageReporting: false,
   costReporting: false,
   planUsageReporting: false,
+  systemPromptAppend: false,
   imageInput: false,
   fileInput: false,
 };

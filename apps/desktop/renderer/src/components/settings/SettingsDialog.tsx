@@ -47,6 +47,7 @@
 
 import type { ReactElement } from 'react';
 import {
+  BotIcon,
   BoxesIcon,
   BrainIcon,
   KeyRoundIcon,
@@ -57,6 +58,7 @@ import {
 
 import { ProfilesSection } from '../ProfilesScreen';
 import { AdvancedSection } from './AdvancedSection';
+import { AgentsSection } from './AgentsSection';
 import { AppearanceSection } from './AppearanceSection';
 import { CerebroSection } from './CerebroSection';
 import { ModelsSection } from './ModelsSection';
@@ -112,6 +114,15 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Permissions',
     hint: 'What runs without asking',
     icon: <ShieldIcon aria-hidden="true" />,
+  },
+  // Above Cerebro because it is the general case of what Cerebro's pane is one
+  // instance of: what the agent is told before the conversation starts. A user
+  // who meets the bank first has met an example without the rule.
+  {
+    id: 'agents',
+    label: 'Agents',
+    hint: 'Standing instructions',
+    icon: <BotIcon aria-hidden="true" />,
   },
   {
     id: 'cerebro',
@@ -240,6 +251,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <AppearanceSection />;
     case 'permissions':
       return <PermissionsSection />;
+    case 'agents':
+      return <AgentsSection />;
     case 'cerebro':
       return <CerebroSection />;
     case 'advanced':

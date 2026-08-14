@@ -177,3 +177,38 @@ export function useCerebro(): CerebroPane {
     retire,
   };
 }
+
+/**
+ * Just "is the bank on this machine?".
+ *
+ * The Agents pane needs this one boolean, to decide whether its built-in
+ * Cerebro prompt is currently being sent. Reaching for {@link useCerebro} there
+ * would work and would also pull every memory in the bank across IPC — bodies
+ * included — plus a preflight that shells out to `cerebro doctor`, all to
+ * answer a yes/no question on a pane that shows neither.
+ *
+ * `null` while the read is in flight, and *stays* `null` if it fails. Not
+ * `false`: "not installed" is a claim the pane puts on screen next to a prompt
+ * it says is not being sent, and a failed read is not evidence for it.
+ */
+export function useCerebroInstalled(): boolean | null {
+  const [installed, setInstalled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const channel = cerebroChannel();
+    if (channel === null) return undefined;
+
+    let cancelled = false;
+    void (async () => {
+      const result = await call(() => channel.status({}));
+      if (cancelled) return;
+      if (result.ok) setInstalled(result.value.installed);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return installed;
+}
