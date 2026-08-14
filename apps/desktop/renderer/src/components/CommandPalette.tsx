@@ -54,6 +54,7 @@
 
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import {
+  BotIcon,
   BrainIcon,
   CpuIcon,
   FolderIcon,
@@ -430,6 +431,13 @@ function RootPage({
         >
           <ShieldIcon />
           Permissions and tools…
+        </CommandItem>
+        <CommandItem
+          value="settings agents prompts instructions system prompt global prompt injection"
+          onSelect={() => openSettings('agents')}
+        >
+          <BotIcon />
+          Agents and standing prompts…
         </CommandItem>
         <CommandItem
           value="settings cerebro team memory bank memories shared knowledge"

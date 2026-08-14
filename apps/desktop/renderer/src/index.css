@@ -690,6 +690,43 @@
   }
 
   /*
+   * The Markdown editor's writing surface.
+   *
+   * Deliberately only three rules, because the editor renders into `.md` — the
+   * same treatment the transcript uses for the agent's prose. That reuse is the
+   * whole point rather than a saving: a prompt is being written to be read by
+   * something, and the strongest thing this pane can say about what the user is
+   * typing is that it already looks like text that has been read.
+   *
+   * `.ProseMirror` is ProseMirror's own class on its contenteditable root, and
+   * `[data-placeholder]` is what the Placeholder extension writes there. Both
+   * are the library's DOM contract; nothing else in this app targets them.
+   */
+  .md.ProseMirror {
+    /* The caret is the only thing in the surface that needs the accent. */
+    caret-color: var(--lunar);
+  }
+  /*
+   * The placeholder line.
+   *
+   * `::before` on the first empty paragraph rather than a rendered element, so
+   * it occupies no space in the document, is never selectable, and cannot end
+   * up in what the serialiser reads. `float` is what keeps the real (empty)
+   * paragraph's caret at the start of the line instead of after the hint.
+   */
+  .md.ProseMirror p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: var(--ink-faint);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
+  /* An empty document still has to be a target big enough to click into. */
+  .md.ProseMirror > :first-child {
+    margin-top: 0;
+  }
+
+  /*
    * A word of streaming text arriving. Paced by `StreamingText.tsx`, which
    * decides *which* words start together and has to know when one is finished
    * so it can fold it back into the settled text — so the duration is a
