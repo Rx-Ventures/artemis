@@ -18,10 +18,15 @@
  * renderer code — and it is the single most valuable assertion available here:
  * the pane's reading and the script's writing are two independent
  * implementations of one arrangement, and this is the only place they are made
- * to agree. If `SHARED_ENTRIES` and the script's `SHARED_DIRS` ever drift, or a
- * link's spelling stops matching what the prober compares against, a share that
- * ran perfectly starts rendering as a gap — and nothing else in the suite would
- * notice.
+ * to agree. If the names the script walks and the names {@link SHARED_ENTRIES}
+ * lists ever drift, or a link's spelling stops matching what the prober compares
+ * against, a share that ran perfectly starts rendering as a gap — and nothing
+ * else in the suite would notice.
+ *
+ * That round trip runs once per shell on the machine, for the reason set out in
+ * the generator's own suite: the script reaches the user through a Copy button,
+ * so the shell that runs it is whichever one they had open, and it has already
+ * behaved differently in one of them.
  *
  * Skipped on Windows, where there is no `/bin/sh` and the feature is not offered.
  */
@@ -38,6 +43,18 @@ import { buildSharedConfigScript } from '@/lib/sharedClaudeConfig';
 import { readSharedConfigStatus } from './sharedConfig.js';
 
 const canRunShell = process.platform !== 'win32';
+
+/** Every shell present, for the reason given in the header. Detected, not assumed. */
+const SHELLS: readonly string[] = !canRunShell
+  ? []
+  : ['sh', 'bash', 'zsh'].filter((shell) => {
+      try {
+        execFileSync(shell, ['-c', 'exit 0'], { stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    });
 
 /* -------------------------------------------------------------------------- */
 /* Sandbox                                                                    */
@@ -85,10 +102,20 @@ function sandbox(): Sandbox {
   return { home, root, work, max };
 }
 
-function runScript(box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string {
+function runScriptIn(
+  shell: string,
+  box: Sandbox,
+  dirs: readonly string[],
+  mode: 'share' | 'restore',
+): string {
   const script = path.join(box.home, `${mode}.sh`);
   writeFileSync(script, buildSharedConfigScript(dirs, mode));
-  return execFileSync('sh', [script], { encoding: 'utf8', env: { ...process.env, HOME: box.home } });
+  // Named explicitly rather than left to the shebang, which is what a pasted
+  // script does not get.
+  return execFileSync(shell, [script], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: box.home },
+  });
 }
 
 /** One directory's reading, by path. */
@@ -106,7 +133,10 @@ function stateOf(status: SharedConfigDirStatus, name: string): string | undefine
 /* The round trip                                                             */
 /* -------------------------------------------------------------------------- */
 
-describe.skipIf(!canRunShell)('after the real share script runs', () => {
+describe.each(SHELLS)('after the real share script runs (%s)', (shell) => {
+  const runScript = (box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string =>
+    runScriptIn(shell, box, dirs, mode);
+
   it('reads every entry as linked', async () => {
     const box = sandbox();
     runScript(box, [box.work, box.max], 'share');

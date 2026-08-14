@@ -6,7 +6,7 @@
  * claim this feature makes is a claim about a filesystem — "nothing is
  * deleted", "auth is untouched", "re-running is safe", "the undo puts it back"
  * — so the substantial tests here build a sandbox, point `HOME` at it, run the
- * generated script with `/bin/sh`, and look at what is on disk afterwards.
+ * generated script, and look at what is on disk afterwards.
  *
  * That is worth the cost because of what the script does when it is wrong. It
  * moves directories holding months of transcripts. The failure mode of a bad
@@ -14,6 +14,9 @@
  * to have — and the profile directory Artemis ships with by default lives under
  * `~/Library/Application Support`, which is to say every real invocation runs
  * through a path with a space in it. The sandbox reproduces that on purpose.
+ *
+ * Every suite that runs the script runs it once per shell on the machine — see
+ * {@link SHELLS}, which is the other half of a bug this file used to pass.
  *
  * Skipped on Windows, where there is no `/bin/sh` and the feature is not
  * offered either.
@@ -60,6 +63,37 @@ import {
  * dead zone when the first `it.skipIf` reads it.
  */
 const canRunShell = process.platform !== 'win32';
+
+/**
+ * The shells the generated script is run under here.
+ *
+ * `sh` used to be the only one, and it is the single shell that could not have
+ * caught what this file let through. The script iterated its list of shared
+ * names with `for name in $SHARED_DIRS` — splitting on `IFS`, which sh and bash
+ * do and zsh does not. The suite passed green while every user who pasted the
+ * script into the default macOS shell got one symlink named after all eight
+ * directories joined by spaces and nothing else linked at all.
+ *
+ * The shebang is not the thing under test, because it is not the thing that
+ * runs: the pane says "run this in a terminal" beside a Copy button, and a
+ * shell that is already running treats `#!` as a comment. So the question these
+ * suites have to answer is not "does this work in sh" but "does this work in
+ * whatever the user pasted it into", and the only honest way to ask it is to
+ * paste it into all of them.
+ *
+ * Detected rather than assumed. CI images are not guaranteed to carry zsh, and
+ * a suite that fails on a missing shell is a suite somebody deletes.
+ */
+const SHELLS: readonly string[] = !canRunShell
+  ? []
+  : ['sh', 'bash', 'zsh'].filter((shell) => {
+      try {
+        execFileSync(shell, ['-c', 'exit 0'], { stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    });
 
 /* -------------------------------------------------------------------------- */
 /* Selecting the directories                                                  */
@@ -179,10 +213,17 @@ function sandbox(): Sandbox {
   return { home, root, work, max };
 }
 
-function run(box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string {
+function runIn(
+  shell: string,
+  box: Sandbox,
+  dirs: readonly string[],
+  mode: 'share' | 'restore',
+): string {
   const script = path.join(box.home, `${mode}.sh`);
   writeFileSync(script, buildSharedConfigScript(dirs, mode));
-  return execFileSync('sh', [script], {
+  // The shell is named explicitly rather than left to the shebang, because the
+  // shebang is exactly what a pasted script does not get.
+  return execFileSync(shell, [script], {
     encoding: 'utf8',
     env: { ...process.env, HOME: box.home },
   });
@@ -206,11 +247,16 @@ function exists(p: string): boolean {
   }
 }
 
-describe.skipIf(!canRunShell)('the share script', () => {
+describe.each(SHELLS)('the share script (%s)', (shell) => {
+  const run = (box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string =>
+    runIn(shell, box, dirs, mode);
+
   it('links every shared directory and creates the ones the root lacks', () => {
     const box = sandbox();
     run(box, [box.work, box.max], 'share');
 
+    // Every name its own link. Under zsh this used to be a single link called
+    // `commands ide plans plugins skills todos session-env projects`.
     for (const name of SHARED_DIRECTORIES) {
       expect(linkTarget(path.join(box.work, name))).toBe(path.join(box.root, name));
       expect(linkTarget(path.join(box.max, name))).toBe(path.join(box.root, name));
@@ -312,7 +358,10 @@ describe.skipIf(!canRunShell)('the share script', () => {
   });
 });
 
-describe.skipIf(!canRunShell)('the restore script', () => {
+describe.each(SHELLS)('the restore script (%s)', (shell) => {
+  const run = (box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string =>
+    runIn(shell, box, dirs, mode);
+
   it('puts the original layout back', () => {
     const box = sandbox();
     run(box, [box.work], 'share');
@@ -373,6 +422,21 @@ describe('the generated text', () => {
   it('quotes every directory it names', () => {
     const script = buildSharedConfigScript(['/Users/x/Application Support/p'], 'share');
     expect(script).toContain("profile '/Users/x/Application Support/p'");
+  });
+
+  /*
+   * The rule the per-shell suites enforce by consequence, stated here as itself
+   * so the next person to reach for `SHARED_DIRS="…"` gets a failure that names
+   * what is wrong rather than a puzzling zsh-only symlink.
+   */
+  it('never iterates a list by expanding a variable', () => {
+    for (const mode of ['share', 'restore'] as const) {
+      const script = buildSharedConfigScript(['/tmp/p'], mode);
+      // Word splitting is what sh does and zsh does not; the names have to be
+      // literal words in the script text or the loop runs once on all of them.
+      expect(script).not.toMatch(/for\s+\w+\s+in\s+\$/);
+      for (const name of SHARED_ENTRIES) expect(script).toContain(`'${name}'`);
+    }
   });
 });
 
