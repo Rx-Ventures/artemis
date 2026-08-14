@@ -59,6 +59,7 @@ import {
 
 import {
   closePreview,
+  closeTasks,
   closeTerminal,
   focusDockTab,
   liveTaskCount,
@@ -194,14 +195,11 @@ function TabShell({
   readonly icon: ReactElement;
   readonly onSelect: () => void;
   /**
-   * Absent for a tab that cannot be dismissed.
-   *
-   * One tab is like that — the delegated-work list, which holds the only record
-   * of work the user did not start and cannot reopen. Absent rather than
-   * disabled, and rather than a no-op: a ✕ that looks live and refuses is worse
-   * than one that was never there.
+   * What the ✕ does — which is not the same thing on all three tabs. A preview's
+   * destroys a snapshot, a terminal's kills a shell, and the delegated list's
+   * closes a view of work that goes on running either way.
    */
-  readonly onClose?: () => void;
+  readonly onClose: () => void;
   readonly closeLabel: string;
   readonly muted?: boolean;
 }): ReactElement {
@@ -214,7 +212,7 @@ function TabShell({
       // Middle-click closes, as it does on every other tab strip. On `auxiliary`
       // rather than `click` because a middle button never produces a `click`.
       onAuxClick={(event) => {
-        if (event.button !== 1 || onClose === undefined) return;
+        if (event.button !== 1) return;
         event.preventDefault();
         onClose();
       }}
@@ -234,7 +232,6 @@ function TabShell({
           {label}
         </span>
       </button>
-      {onClose === undefined ? null : (
       <button
         type="button"
         aria-label={closeLabel}
@@ -250,7 +247,6 @@ function TabShell({
       >
         <XIcon className="size-2.5" aria-hidden="true" />
       </button>
-      )}
     </div>
   );
 }
@@ -307,18 +303,19 @@ function TerminalTabButton({
 }
 
 /**
- * The one tab nobody opens, and the one with no ✕.
+ * The one tab nobody opens, and the one whose ✕ costs nothing.
  *
  * Its label is the count, so the strip answers "is anything still running" while
  * the pane is shut — which is the question the transcript answered wrongly by
  * saying "delegated to 3 agents" in the past tense while they worked.
  *
- * `onClose` selects it instead of closing it. Every other tab in this strip
- * holds something the user can get back — a preview is one click on the tile
- * that is still in the transcript, a terminal is a shell they opened — and this
- * one holds the only record of work they did not start and cannot reopen. So the
- * ✕ is absent rather than disabled: a control that looks live and refuses is
- * worse than one that was never offered.
+ * The ✕ closes the view and leaves the work alone. That is worth saying plainly
+ * because the two tabs to its left have taught the opposite: a preview's ✕
+ * destroys the snapshot, a terminal's kills the shell. This pane owns nothing —
+ * the rows live on the conversation, the subagents live in the provider — so
+ * dismissing it is closer to collapsing a panel than to closing a document.
+ * `closeTasks` writes down what was on screen so it stays shut; the next thing
+ * delegated brings it back, the same way the first one did.
  */
 function TasksTabButton({
   paneId,
@@ -345,7 +342,11 @@ function TasksTabButton({
       }
       icon={<UsersIcon className="size-3 shrink-0" aria-hidden="true" />}
       onSelect={() => focusDockTab({ kind: 'tasks', paneId })}
-      closeLabel=""
+      onClose={() => closeTasks(paneId)}
+      // "Hide" rather than "Close", because the ✕ beside it on a terminal ends a
+      // process and this one ends nothing. The word is the only warning the user
+      // gets before they click.
+      closeLabel="Hide delegated work"
       // Nothing is running: the tab is a record rather than a readout, and it
       // reads as one.
       muted={live === 0}

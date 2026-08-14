@@ -1194,6 +1194,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     run: null,
     permissionQueue: [],
     tasks: [],
+    dismissedTasks: [],
     promptHistory: [],
     draft: '',
     ...overrides,
@@ -1750,6 +1751,65 @@ export function closePreview(): void {
 }
 
 /**
+ * Shut one column's delegated tab, without touching what it was showing.
+ *
+ * The ✕ here means less than it does on the two tabs beside it, and deliberately
+ * so. A preview's ✕ destroys a snapshot and a terminal's kills a process; this
+ * one ends a *view*. Every row stays exactly where it was, every subagent keeps
+ * running, every stop button keeps working through `stopTask` — the tab was
+ * never what owned any of it, and a pane that arrives on its own is not one the
+ * window should be able to trap the user inside.
+ *
+ * What is written is the ids that were on screen, which is what makes the tab
+ * stay shut through the progress messages that follow. Work delegated *after*
+ * this is not in that set, so the tab comes back for it in the same way it
+ * arrived the first time — which is the only way back, since these rows are not
+ * something anyone can reopen by hand.
+ */
+export function closeTasks(paneId: PaneId): void {
+  const pane = allLivePanes().find((one) => one.id === paneId);
+  if (pane === undefined) return;
+  // Which tab comes forward is `reconcileDock`'s, on this write.
+  setPaneState(pane, { dismissedTasks: paneState(pane).tasks.map((task) => task.id) });
+}
+
+/**
+ * What the header's delegated button does: open it, bring it forward, or shut it.
+ *
+ * The reason this exists at all is that {@link closeTasks} would otherwise be a
+ * one-way door. The tab arrives on its own and cannot be opened by hand — there
+ * is no tile in the transcript to click, the way there is for a preview — so
+ * dismissing it once would put the rows out of reach until the agent happened to
+ * delegate something else. A ✕ with no matching way back is not a control, it is
+ * a trapdoor.
+ *
+ * Undoing the dismissal is unconditional rather than a stored "and then they
+ * reopened it" flag: the record exists to keep the tab shut through the progress
+ * messages that follow, and once the user has asked for it back there is nothing
+ * left for it to suppress.
+ *
+ * Shaped as a toggle for the same reason {@link toggleTerminal} is — a button
+ * that opens something and then does nothing on the second press reads as
+ * broken, and this one is next to that one in the header.
+ */
+export function toggleTasks(pane: Pane = focusedPane()): void {
+  const state = paneState(pane);
+  // Nothing delegated: there is no tab for this column and nothing to put in
+  // one. The button says as much and is disabled, but this cannot lean on that —
+  // the palette and any future hotkey come straight here.
+  if (state.tasks.length === 0) return;
+
+  const tab: DockTab = { kind: 'tasks', paneId: pane.id };
+  if (sameTab(useApp.getState().activeDockTab, tab)) {
+    closeTasks(pane.id);
+    return;
+  }
+
+  if (state.dismissedTasks.length > 0) setPaneState(pane, { dismissedTasks: [] });
+  focusDockTab(tab);
+}
+
+/**
  * Which session a column is showing, or `null` before it has one.
  *
  * The run's own id first, the pane's `resumeSessionId` second, and both for the
@@ -1777,6 +1837,20 @@ function sessionShownBy(state: SessionState): SessionId | null {
  */
 let shownCache: readonly ShownConversation[] = [];
 
+/**
+ * Whether this column has delegated work it should be offering a tab for.
+ *
+ * Which is not the same question as whether it has any: closing the tab records
+ * the rows that were in it, and a column whose every row has been dismissed has
+ * work but nothing left to announce. The tab comes back on the first task that
+ * is not in that record — see `dismissedTasks`.
+ */
+function showsTasks(state: SessionState): boolean {
+  if (state.tasks.length === 0) return false;
+  if (state.dismissedTasks.length === 0) return true;
+  return state.tasks.some((task) => !state.dismissedTasks.includes(task.id));
+}
+
 function describeShown(): readonly ShownConversation[] {
   const next = allPanes().map((pane) => {
     const state = paneState(pane);
@@ -1789,7 +1863,7 @@ function describeShown(): readonly ShownConversation[] {
       // than the rows themselves: the dock only decides whether the tab exists,
       // and carrying the set through here would make every progress message
       // rebuild the strip.
-      ...(state.tasks.length === 0 ? {} : { hasTasks: true }),
+      ...(showsTasks(state) ? { hasTasks: true } : {}),
     };
   });
 
@@ -1852,7 +1926,7 @@ function reconcileDock(): void {
     preview === null &&
     terminals.length === 0 &&
     visibleDockTabs.length === 0 &&
-    !allPanes().some((pane) => paneState(pane).tasks.length > 0)
+    !allPanes().some((pane) => showsTasks(paneState(pane)))
   ) {
     return;
   }
@@ -3397,6 +3471,7 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     cwd: handle.cwd,
     permissionQueue: [],
     tasks: [],
+    dismissedTasks: [],
     // The session the next prompt continues is this run's own. Set now rather
     // than waiting for `run.end`, because until it is set the sidebar cannot
     // mark the row the user needs in order to find this conversation again.
@@ -4922,6 +4997,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     forkOnResume: false,
     permissionQueue: [],
     tasks: [],
+    dismissedTasks: [],
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
@@ -5933,9 +6009,27 @@ function applyAgentEvent(event: AgentEvent): void {
      * become one entry per change, which is a log of a list. The dock pane is
      * the surface for it, and this is what feeds it.
      */
-    case 'background.tasks':
-      setPaneState(pane, { tasks: event.tasks });
+    case 'background.tasks': {
+      /*
+       * The dismissal record is pruned against the same set, so that it only
+       * ever names rows the provider is still reporting. Left to grow it would
+       * accumulate every task the session ever ran, and the `some` that reads it
+       * runs on every one of these messages.
+       *
+       * Rewritten only when something was actually dropped — `filter` preserves
+       * order and only removes, so an unchanged length is an unchanged array,
+       * and a needless write here would rebuild the strip several times a second
+       * for every column with an agent working in it.
+       */
+      const { dismissedTasks } = paneState(pane);
+      const reported = new Set(event.tasks.map((task) => task.id));
+      const kept = dismissedTasks.filter((id) => reported.has(id));
+      setPaneState(pane, {
+        tasks: event.tasks,
+        ...(kept.length === dismissedTasks.length ? {} : { dismissedTasks: kept }),
+      });
       break;
+    }
 
     case 'session.started':
       setPaneState(pane, {

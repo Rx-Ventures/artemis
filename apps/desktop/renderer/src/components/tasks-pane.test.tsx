@@ -14,7 +14,10 @@
  *  - a settled row **stays**, since the moment work finishes is the moment its
  *    result — what it cost, what it said, where it wrote its output — is worth
  *    reading;
- *  - a row can be **stopped**, and stopping it is a request rather than a claim.
+ *  - a row can be **stopped**, and stopping it is a request rather than a claim;
+ *  - the tab can be **shut**, and shutting it ends a view rather than the work —
+ *    it stays shut through the progress messages that follow, and the next thing
+ *    delegated brings it back.
  *
  * Same caveat as the other component tests: `renderer/tsconfig.json` excludes
  * them, so `pnpm typecheck` never sees this file and the assertions are
@@ -71,8 +74,8 @@ Object.defineProperty(globalThis, 'artemis', {
 });
 
 const { DockPane } = await import('@/components/DockPane');
-const { focusedPane, useApp } = await import('@/state/store');
-const { setPaneState } = await import('@/state/pane');
+const { focusedPane, toggleTasks, useApp } = await import('@/state/store');
+const { paneState, setPaneState } = await import('@/state/pane');
 
 const task = (over: Partial<BackgroundTask> = {}): BackgroundTask => ({
   id: 't1',
@@ -104,6 +107,9 @@ beforeEach(() => {
   setPaneState(focusedPane(), {
     cwd: '/Users/me/project',
     tasks: [],
+    // Cleared with the rows, or a test that closes the tab would hide it from
+    // the next one — the column is module-level and outlives each `it`.
+    dismissedTasks: [],
     resumeSessionId: null,
     run: {
       runId: 'run-1',
@@ -216,16 +222,75 @@ describe('the delegated-work pane', () => {
     expect(screen.getAllByRole('button', { name: /^Stop / })).toHaveLength(1);
   });
 
-  it('cannot be dismissed, because its rows are not the user’s to reopen', () => {
+  it('can be dismissed, and the work it was describing does not notice', () => {
     renderDock();
     haveTasks(task());
     fireEvent.click(screen.getByRole('tab', { name: /1 running/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hide delegated work' }));
 
-    // Every other tab in this strip holds something that can be got back — a
-    // preview is one click on the tile still in the transcript, a terminal is a
-    // shell the user opened. This one holds the only record of work they did not
-    // start, so the ✕ is absent rather than disabled.
-    expect(screen.queryByRole('button', { name: /^Close/ })).toBeNull();
+    // The ✕ beside this one on a terminal kills a shell. This one closes a view:
+    // the pane never owned the rows, and the subagent it was describing is still
+    // running in the provider afterwards.
+    expect(screen.queryByRole('tab', { name: /running|Delegated/ })).toBeNull();
+    expect(paneState(focusedPane()).tasks).toHaveLength(1);
+  });
+
+  it('stays shut through the progress messages that follow', () => {
+    renderDock();
+    haveTasks(task({ id: 'a' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hide delegated work' }));
+
+    // The set is replaced wholesale several times a second while anything runs.
+    // A dismissal recorded as a flag would be cleared by the first of these, and
+    // the tab would come back a moment after the user closed it.
+    haveTasks(task({ id: 'a', lastToolName: 'Grep' }));
+    haveTasks(task({ id: 'a', status: 'completed', endedAt: Date.now() }));
+
+    expect(screen.queryByRole('tab', { name: /running|Delegated/ })).toBeNull();
+  });
+
+  it('is reopened by the header button, which is the ✕’s way back', () => {
+    renderDock();
+    haveTasks(task());
+    fireEvent.click(screen.getByRole('button', { name: 'Hide delegated work' }));
+
+    act(() => {
+      toggleTasks(focusedPane());
+    });
+
+    // Without this the ✕ is a trapdoor. Nobody opens this tab by hand — there is
+    // no tile in the transcript to click, the way there is for a preview — so a
+    // dismissal would otherwise hold until the agent happened to delegate
+    // something else.
+    expect(screen.getByRole('tab', { name: /1 running/ })).not.toBeNull();
+    expect(screen.getByText('Audit the mapper')).not.toBeNull();
+  });
+
+  it('is shut again by the same button, because it sits next to a toggle', () => {
+    renderDock();
+    haveTasks(task());
+
+    // The tab arrived and, being the only one, is already in front — so this
+    // press is the second one. A button beside ⌘J's that opened but never closed
+    // would read as broken.
+    act(() => {
+      toggleTasks(focusedPane());
+    });
+
+    expect(screen.queryByRole('tab', { name: /running|Delegated/ })).toBeNull();
+    expect(paneState(focusedPane()).tasks).toHaveLength(1);
+  });
+
+  it('comes back when something new is delegated', () => {
+    renderDock();
+    haveTasks(task({ id: 'a' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hide delegated work' }));
+    haveTasks(task({ id: 'a' }), task({ id: 'b' }));
+
+    // The only way back, and the same way it arrived the first time: nobody
+    // opens this tab by hand, so a dismissal that outlived the work it was about
+    // would hide the next agent too.
+    expect(screen.getByRole('tab', { name: /2 running/ })).not.toBeNull();
   });
 
   it('survives the run that launched the work ending', () => {

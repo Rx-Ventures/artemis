@@ -55,6 +55,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   run: true,
   permissionQueue: true,
   tasks: true,
+  dismissedTasks: true,
   promptHistory: true,
   draft: true,
 };
