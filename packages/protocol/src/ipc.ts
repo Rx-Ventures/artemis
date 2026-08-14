@@ -158,6 +158,18 @@ export const IPC = {
   /** One stored session's messages, replayed as events. */
   sessionsMessages: 'artemis:sessions:messages',
 
+  /**
+   * One *subagent's* messages, replayed as events.
+   *
+   * A separate channel rather than a flag on {@link IPC.sessionsMessages},
+   * because it reads a different file: a subagent keeps its own transcript
+   * beside its parent's, and the parent's contains almost none of it — the
+   * delegating session sees the final report and nothing of the work. That
+   * asymmetry is the whole reason this exists, and it is why a `Task` row can
+   * be opened into a readable conversation at all.
+   */
+  sessionsSubagentMessages: 'artemis:sessions:subagent-messages',
+
   /** Give a stored session a user-chosen title. */
   sessionsRename: 'artemis:sessions:rename',
   /**
@@ -1007,6 +1019,47 @@ export interface SessionsMessagesResponse {
   readonly hasMore: boolean;
 }
 
+/**
+ * Open one subagent's conversation.
+ *
+ * The same locating fields a session read takes, plus the `agentId` — which is
+ * the provider's **task id**, unchanged. That identity is what makes this
+ * channel usable from a delegated-work row without any correlation table: the
+ * row already carries the id, and the transcript on disk is named after it.
+ *
+ * `offset` is how a running agent is followed rather than re-read. The caller
+ * holds the count it already has, asks for what comes after it, and appends —
+ * so watching an agent work costs one page of new messages per poll instead of
+ * the whole conversation each time.
+ */
+export interface SessionsSubagentMessagesRequest {
+  readonly profileId: ProfileId;
+  /** The *parent* session — the one that delegated. */
+  readonly sessionId: SessionId;
+  /** The subagent's id, which is the task id from `background.tasks`. */
+  readonly agentId: string;
+  /** Run id to stamp replayed events with, so they join one transcript. */
+  readonly runId: RunId;
+  readonly cwd?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+export interface SessionsSubagentMessagesResponse {
+  /** The same event shape a live run emits — one rendering path, not two. */
+  readonly events: readonly AgentEvent[];
+  readonly hasMore: boolean;
+  /**
+   * How many stored messages were consumed to build `events`.
+   *
+   * Not `events.length`: one stored message becomes several events, or none at
+   * all. The caller's next `offset` has to be counted in the provider's units,
+   * and computing it from the events would drift out of step the first time a
+   * message replayed as two blocks — which is most of them.
+   */
+  readonly consumed: number;
+}
+
 /** Which profile's plan to report on. Plan limits belong to an account. */
 /**
  * A profile's login state, as reported by the provider's own CLI.
@@ -1376,6 +1429,7 @@ export type IpcRequestMap = {
   [IPC.terminalList]: TerminalListRequest;
   [IPC.terminalReplay]: TerminalReplayRequest;
   [IPC.sessionsMessages]: SessionsMessagesRequest;
+  [IPC.sessionsSubagentMessages]: SessionsSubagentMessagesRequest;
   [IPC.sessionsRename]: SessionsRenameRequest;
   [IPC.sessionsDelete]: SessionsDeleteRequest;
   [IPC.usagePlanCached]: UsagePlanRequest;
@@ -1428,6 +1482,7 @@ export type IpcResponseMap = {
   [IPC.terminalList]: TerminalListResponse;
   [IPC.terminalReplay]: TerminalReplayResponse;
   [IPC.sessionsMessages]: SessionsMessagesResponse;
+  [IPC.sessionsSubagentMessages]: SessionsSubagentMessagesResponse;
   [IPC.sessionsRename]: SessionsRenameResponse;
   [IPC.sessionsDelete]: SessionsDeleteResponse;
   [IPC.usagePlanCached]: UsagePlanResponse;
@@ -1591,6 +1646,16 @@ export interface ArtemisBridge {
      * transcript: the agent holds the whole conversation, the user sees none.
      */
     messages(request: SessionsMessagesRequest): Promise<IpcResult<SessionsMessagesResponse>>;
+    /**
+     * Open one subagent's conversation, replayed as events.
+     *
+     * Rejects on a provider with no subagent transcripts to read — which is
+     * every provider but Claude today, and the reason the delegated pane only
+     * offers the row as openable when the seam is there.
+     */
+    subagentMessages(
+      request: SessionsSubagentMessagesRequest,
+    ): Promise<IpcResult<SessionsSubagentMessagesResponse>>;
     /**
      * Retitle a stored session, in the transcript itself.
      *

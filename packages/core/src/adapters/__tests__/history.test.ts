@@ -71,6 +71,51 @@ describe('replayStoredMessage', () => {
     expect(events[0]).toMatchObject({ type: 'text.complete', role: 'user', text: 'do the thing' });
   });
 
+  it('drops a stored task notification instead of attributing it to the user', () => {
+    // The harness writes background-task notifications into a user slot,
+    // marked only by an `origin` the SDK's stored-session read strips before
+    // this module sees the record. Replayed as a user row, the whole
+    // `<task-notification>…` frame appeared in the transcript as though the
+    // person had typed it — one per settled task.
+    const events = replayStoredMessage(
+      {
+        type: 'user',
+        uuid: 'm',
+        message: {
+          role: 'user',
+          content:
+            '<task-notification>\n<task-id>a12e2a10</task-id>\n<status>completed</status>\n<summary>Agent "Audit scripts" finished</summary>\n</task-notification>',
+        },
+      },
+      ctx(),
+    );
+
+    expect(events).toEqual([]);
+  });
+
+  it('drops the interrupt markers the CLI records when a turn is stopped', () => {
+    const c = ctx();
+    for (const text of ['[Request interrupted by user]', '[Request interrupted by user for tool use]']) {
+      expect(
+        replayStoredMessage(
+          { type: 'user', uuid: 'm', message: { role: 'user', content: [{ type: 'text', text }] } },
+          c,
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it('keeps assistant text that merely quotes the notification frame', () => {
+    // The shape check is scoped to user slots: the model *talking about* a
+    // task notification is ordinary assistant text and must replay.
+    const [event] = replayStoredMessage(
+      assistant([{ type: 'text', text: '<task-notification> is the frame the harness uses.' }]),
+      ctx(),
+    );
+
+    expect(event).toMatchObject({ type: 'text.complete', role: 'assistant' });
+  });
+
   it('replays a stored thinking block', () => {
     const [event] = replayStoredMessage(
       assistant([{ type: 'thinking', thinking: 'weighing the options', signature: 'sig' }]),

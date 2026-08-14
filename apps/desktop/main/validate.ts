@@ -86,6 +86,7 @@ import {
   type SystemPromptSpec,
   type SessionsDeleteRequest,
   type SessionsMessagesRequest,
+  type SessionsSubagentMessagesRequest,
   type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
@@ -1330,6 +1331,29 @@ export function validateSessionsMessages(raw: unknown): SessionsMessagesRequest 
   return compact<SessionsMessagesRequest>({
     profileId: requireId(request['profileId'], 'profileId'),
     sessionId: requireId(request['sessionId'], 'sessionId'),
+    runId: requireId(request['runId'], 'runId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+    limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.messagePage),
+    offset: optionalInteger(request['offset'], 'offset', 0, LIMITS.offset),
+  });
+}
+
+/**
+ * Opening one subagent's conversation.
+ *
+ * `agentId` goes through {@link requireId} for a reason worth stating: the
+ * provider resolves it into a *filename* (`subagents/agent-<id>.jsonl`), so it
+ * is renderer-supplied input that reaches the filesystem. `ID_PATTERN` admits
+ * no `/` and no leading `.`, which is what makes traversal out of the session's
+ * own directory unexpressible rather than merely unlikely — the same guarantee
+ * every other id on this seam already relies on.
+ */
+export function validateSessionsSubagentMessages(raw: unknown): SessionsSubagentMessagesRequest {
+  const request = requireRequest(raw);
+  return compact<SessionsSubagentMessagesRequest>({
+    profileId: requireId(request['profileId'], 'profileId'),
+    sessionId: requireId(request['sessionId'], 'sessionId'),
+    agentId: requireId(request['agentId'], 'agentId'),
     runId: requireId(request['runId'], 'runId'),
     cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
     limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.messagePage),
