@@ -407,6 +407,30 @@ function truncate(text: string, max = 200): string {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * The most characters {@link LineSplitter} will hold waiting for a newline.
+ *
+ * 8 MiB — an order of magnitude above the largest frame a real app server has
+ * been seen to emit, so a legitimate message never trips it, while a peer that
+ * simply stops writing newlines (a crash loop spewing binary, a log
+ * accidentally pointed at stdout) is bounded instead of growing the buffer
+ * until the host process dies of it.
+ */
+export const MAX_UNTERMINATED_LINE_LENGTH = 8 * 1024 * 1024;
+
+/** Options for {@link LineSplitter}. */
+export interface LineSplitterOptions {
+  /** Cap on characters buffered without a newline. Defaults to {@link MAX_UNTERMINATED_LINE_LENGTH}. */
+  readonly maxBuffered?: number;
+  /**
+   * Called once, when the cap is exceeded, with how many characters were held.
+   * The buffer is discarded — a truncated frame would only parse as garbage —
+   * and the splitter goes inert, since a stream that overflowed once has
+   * nothing trustworthy left to say.
+   */
+  readonly onOverflow?: (buffered: number) => void;
+}
+
+/**
  * Reassemble newline-delimited frames from arbitrarily-chunked stream data.
  *
  * A pipe delivers bytes, not messages: one `data` event can carry half a frame,
@@ -417,13 +441,22 @@ function truncate(text: string, max = 200): string {
  *
  * `\r` is stripped so a peer using CRLF does not leave a stray carriage return
  * on the end of every frame.
+ *
+ * The buffer is capped: only an *unterminated* line counts against it, since a
+ * completed frame is handed off immediately. Without the cap, a peer that
+ * never emits a newline is a slow memory leak the size of whatever it writes.
  */
 export class LineSplitter {
   #buffer = '';
+  #overflowed = false;
   readonly #onLine: (line: string) => void;
+  readonly #maxBuffered: number;
+  readonly #onOverflow: ((buffered: number) => void) | undefined;
 
-  constructor(onLine: (line: string) => void) {
+  constructor(onLine: (line: string) => void, options?: LineSplitterOptions) {
     this.#onLine = onLine;
+    this.#maxBuffered = options?.maxBuffered ?? MAX_UNTERMINATED_LINE_LENGTH;
+    this.#onOverflow = options?.onOverflow;
   }
 
   /** Bytes held back waiting for their newline. Diagnostics and tests only. */
@@ -432,6 +465,7 @@ export class LineSplitter {
   }
 
   push(chunk: string): void {
+    if (this.#overflowed) return;
     this.#buffer += chunk;
 
     let index = this.#buffer.indexOf('\n');
@@ -440,6 +474,15 @@ export class LineSplitter {
       this.#buffer = this.#buffer.slice(index + 1);
       if (line !== '') this.#onLine(line);
       index = this.#buffer.indexOf('\n');
+    }
+
+    // After the loop, so complete frames in the same chunk still land: only
+    // what is left waiting for a newline can exceed the cap.
+    if (this.#buffer.length > this.#maxBuffered) {
+      const held = this.#buffer.length;
+      this.#buffer = '';
+      this.#overflowed = true;
+      this.#onOverflow?.(held);
     }
   }
 
@@ -535,9 +578,29 @@ export function spawnJsonRpcSubprocess(options: SpawnJsonRpcOptions): JsonRpcSub
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
   });
 
-  const splitter = new LineSplitter((line) => {
-    connection.handleLine(line);
-  });
+  const splitter = new LineSplitter(
+    (line) => {
+      connection.handleLine(line);
+    },
+    {
+      // A peer that stops framing has stopped speaking the protocol; every
+      // request outstanding on this connection would otherwise wait on a
+      // message that is never going to complete, while the buffer grows by
+      // however much the peer writes. Fail loudly and take the process down —
+      // `finish` settles every pending request with this reason, and the
+      // first reason wins over the exit that follows the kill.
+      onOverflow: (buffered) => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already gone.
+        }
+        finish(
+          `The provider wrote ${String(buffered)} characters without a newline (limit ${String(MAX_UNTERMINATED_LINE_LENGTH)}); the connection was closed to bound memory.`,
+        );
+      },
+    },
+  );
 
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {

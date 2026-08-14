@@ -137,6 +137,20 @@ const DEFAULT_RENAME_RETRY_MS = 1_000;
 const MAX_PENDING = 64;
 
 /**
+ * How many already-named runs to remember.
+ *
+ * Unlike the two pending maps, `#handled` has no contractual moment to shrink
+ * at — its whole job is to outlive the run so a re-emitted event cannot bill a
+ * second naming call — so without a cap it grows by one id per named session
+ * for the life of the process. The cap trades that leak for a bounded risk:
+ * an id evicted here could in principle be named twice, but the ids worth
+ * remembering are the recent ones — a run this many sessions old has no
+ * events left in any replay buffer to re-arrive. Oldest go first; a `Set`
+ * iterates in insertion order.
+ */
+const MAX_HANDLED = 1024;
+
+/**
  * Names new sessions from their opening message.
  *
  * One per application, wired to the run registry's event feed. Every method is
@@ -160,7 +174,7 @@ export class SessionNamer {
    * the id here closes the window from the other side.
    */
   readonly #earlySessions = new Map<RunId, SessionId>();
-  /** Runs already named, or being named. Naming happens once. */
+  /** Runs already named, or being named. Naming happens once. Bounded by {@link MAX_HANDLED}. */
   readonly #handled = new Set<RunId>();
   /** In-flight naming work, so {@link dispose} can wait for it. */
   readonly #inFlight = new Set<Promise<void>>();
@@ -277,6 +291,7 @@ export class SessionNamer {
    */
   #start(runId: RunId, sessionId: SessionId, record: PendingRun): void {
     this.#handled.add(runId);
+    this.#evictOverflow();
     const work = this.#name(runId, sessionId, record).catch((error: unknown) => {
       this.#report(error, runId, sessionId);
     });
@@ -333,7 +348,7 @@ export class SessionNamer {
     }
   }
 
-  /** Keep the bookkeeping maps from growing without bound. */
+  /** Keep the bookkeeping collections from growing without bound. */
   #evictOverflow(): void {
     for (const map of [this.#pending, this.#earlySessions] as const) {
       while (map.size > MAX_PENDING) {
@@ -341,6 +356,11 @@ export class SessionNamer {
         if (oldest.done === true) break;
         map.delete(oldest.value);
       }
+    }
+    while (this.#handled.size > MAX_HANDLED) {
+      const oldest = this.#handled.values().next();
+      if (oldest.done === true) break;
+      this.#handled.delete(oldest.value);
     }
   }
 

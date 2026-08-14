@@ -7,7 +7,7 @@
  * decides what the provider actually inherits.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1903,6 +1903,35 @@ describe('attaching to a live process', () => {
     expect(second.runId).toBe('run-2');
   });
 
+  it('refuses to attach while the previous turn is still streaming', async () => {
+    const adapter = createClaudeAdapter();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const first = harness();
+
+    // Turn one has its session id — so the pool knows the process — but no
+    // `result` yet: it is mid-turn, and its consumer is still reading.
+    const firstEvents = drain(run.events);
+    first.fake.messages.push(INIT_MESSAGE);
+    await vi.waitFor(() => expect(run.sessionId).toBe('sess-abc'));
+
+    const second = await adapter.createRun(nextTurn());
+
+    // A fresh spawn, not an attach. `beginTurn` replaces the active state and
+    // queue outright, so attaching here would strand turn one's consumer on a
+    // queue nobody ever closes and map its remaining messages with turn two's
+    // state. Two CLIs on one conversation is the lesser harm: `--resume` is
+    // serialised by the provider's own transcript.
+    expect(harness().fake).not.toBe(first.fake);
+    expect(second.runId).toBe('run-2');
+
+    // And turn one is untouched by the refusal — its own `result` still ends
+    // its stream normally.
+    first.fake.messages.push(RESULT_MESSAGE);
+    const events = await firstEvents;
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'completed' });
+  });
+
   it('refuses to serve a fork on the process that owns the original', async () => {
     const { adapter, first, harness } = await firstTurn();
 
@@ -1966,6 +1995,66 @@ describe('attaching to a live process', () => {
     // dropped by JSON, so omitting a flag leaves the previous turn's value in
     // force — which would make turning fast mode off between turns do nothing.
     expect(first.fake.flags).toEqual([{ fastMode: null, ultracode: null, effortLevel: 'low' }]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The staging directory's lifetime                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Staged attachments are copies of the user's own files, sitting in the system
+ * temp directory. Dispose has always removed them — but most runs are never
+ * disposed: they end naturally and are *released*, which is a no-op on purpose.
+ * The process closing its transport is the moment nothing can read the staged
+ * files any more, so that is when they must go, or every finished conversation
+ * leaves its attachments behind in /tmp.
+ */
+describe('the staging directory', () => {
+  /** "hello", staged under the user's own file name. */
+  const NOTES = { kind: 'file', id: 'file-1', name: 'notes.md', data: 'aGVsbG8=' } as const;
+
+  it('is removed when the run ends naturally, without a dispose', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun({ ...BASE_INPUT, attachments: [NOTES] });
+
+    // The run granted itself the directory — the last additional directory is
+    // how a test finds it, the same way the CLI would.
+    const dirs = harness().options.additionalDirectories as readonly string[];
+    const staging = dirs.at(-1) as string;
+    expect(existsSync(join(staging, 'notes.md'))).toBe(true);
+
+    harness().fake.messages.push(INIT_MESSAGE);
+    harness().fake.messages.push(RESULT_MESSAGE);
+    const events = await drain(run.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'completed' });
+
+    // Removal happens after the event stream closes, so poll rather than race.
+    await vi.waitFor(() => expect(existsSync(staging)).toBe(false));
+  });
+
+  it('is removed when the run never launches', async () => {
+    let staging: string | undefined;
+    sdkMock.onQuery = (params) => {
+      const { additionalDirectories } = params.options as {
+        additionalDirectories?: readonly string[];
+      };
+      staging = additionalDirectories?.at(-1);
+      throw new Error('spawn claude ENOENT');
+    };
+
+    const run = await createClaudeAdapter().createRun({
+      ...BASE_INPUT,
+      cwd: REAL_CWD,
+      attachments: [NOTES],
+    });
+    const events = await drain(run.events);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'error' });
+
+    // No process ever opened, so no transport close will ever run — the launch
+    // failure path has to clean up after itself.
+    expect(staging).toBeDefined();
+    await vi.waitFor(() => expect(existsSync(staging as string)).toBe(false));
   });
 });
 

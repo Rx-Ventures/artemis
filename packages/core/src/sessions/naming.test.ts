@@ -393,3 +393,42 @@ describe('dispose', () => {
     expect(signal?.aborted).toBe(true);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Bounded memory                                                             */
+/* -------------------------------------------------------------------------- */
+
+describe('bounding the named-run set', () => {
+  it('drops the oldest named runs beyond the cap, and only those', async () => {
+    // The set of already-named runs has no contractual moment to shrink at —
+    // its job is to outlive the run — so without a cap it grows by one id per
+    // named session for the life of the process. This drives one more run
+    // through than the cap holds and checks both edges: the newest id is still
+    // deduplicated, and the oldest has genuinely been let go.
+    const CAP = 1024; // mirrors MAX_HANDLED in naming.ts
+    const fake = new FakeAdapter();
+    const namer = makeNamer(fake.adapter);
+
+    for (let i = 0; i <= CAP; i += 1) {
+      const runId = `run-${i}` as RunId;
+      namer.noteRun(runInput(), runId);
+      namer.handleEvent(sessionStarted(runId, `session-${i}` as SessionId));
+    }
+    await settle();
+    expect(fake.suggested).toHaveLength(CAP + 1);
+
+    // The newest run is still remembered: a re-delivered event spends nothing.
+    namer.noteRun(runInput(), `run-${CAP}` as RunId);
+    namer.handleEvent(sessionStarted(`run-${CAP}` as RunId, `session-${CAP}` as SessionId));
+    await settle();
+    expect(fake.suggested).toHaveLength(CAP + 1);
+
+    // The oldest fell off — the price of the bound, and proof it holds. An id
+    // this old has no events left in any replay buffer to re-arrive, so the
+    // second naming here takes a deliberate re-announcement to provoke.
+    namer.noteRun(runInput(), 'run-0' as RunId);
+    namer.handleEvent(sessionStarted('run-0' as RunId, 'session-0' as SessionId));
+    await settle();
+    expect(fake.suggested).toHaveLength(CAP + 2);
+  });
+});

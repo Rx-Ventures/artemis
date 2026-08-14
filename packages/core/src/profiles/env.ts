@@ -61,6 +61,36 @@ function managedEnvKeySet(spec: ProviderCredentialSpec): ReadonlySet<string> {
 }
 
 /**
+ * The provider's own variable namespaces, derived from its credential spec.
+ *
+ * `ANTHROPIC_` and `CLAUDE_` for Claude; `OPENAI_` and `CODEX_` for Codex —
+ * read off the spec's variable names, never hard-coded, so this module still
+ * knows no provider's vocabulary.
+ *
+ * Why the whole namespace and not just {@link managedEnvKeys}: the adapter
+ * scrubs *more* than the spec lists when it merges the host environment — the
+ * Claude adapter's scrub list also covers `ANTHROPIC_BASE_URL`,
+ * `ANTHROPIC_MODEL` and the `CLAUDE_CODE_USE_*` backend switches — and the
+ * resolved bundle is layered on top of that merge and wins. A `baseEnv` filter
+ * narrower than the adapter's scrub would carry exactly those variables back
+ * in through the bundle and silently re-route or re-bill the run. The scrub
+ * list itself is not reachable from the spec, so the namespaces stand in for
+ * it: every variable either adapter scrubs lives inside one, and a variable in
+ * a provider's namespace that the adapter does *not* scrub is re-inherited
+ * from the host environment anyway, so dropping it here costs nothing.
+ */
+function providerEnvPrefixes(spec: ProviderCredentialSpec): readonly string[] {
+  const prefixes = new Set<string>();
+  for (const key of managedEnvKeys(spec)) {
+    const cut = key.indexOf('_');
+    // A key with no underscore has no namespace to speak of; the exact-match
+    // managed check already covers it.
+    if (cut > 0) prefixes.add(key.slice(0, cut + 1));
+  }
+  return [...prefixes];
+}
+
+/**
  * Validate a {@link Profile.configDir} and return it normalized.
  *
  * A profile record is JSON on disk and a user can edit it, so this runs on
@@ -188,13 +218,23 @@ export interface ResolveEnvOptions {
    */
   readonly credentials: ProviderCredentialSpec;
   /**
-   * Environment to start from — normally `process.env`. Variables the provider
-   * manages ({@link managedEnvKeys}) are stripped from it, so a credential in
-   * the user's shell can never shadow the selected profile.
+   * Environment to start from. Safe to hand `process.env`, because everything
+   * provider-flavoured is dropped from it: the variables the provider manages
+   * ({@link managedEnvKeys}) *and* everything else in the provider's own
+   * namespaces (`ANTHROPIC_*`/`CLAUDE_*` for Claude, `OPENAI_*`/`CODEX_*` for
+   * Codex). `PATH`, `HOME` and the rest pass through untouched.
+   *
+   * The namespace-wide drop is load-bearing, not tidiness: the resolved bundle
+   * is layered *over* the adapter's own scrubbed host-environment merge and
+   * wins, so a shell's `ANTHROPIC_BASE_URL` or `CLAUDE_CODE_USE_BEDROCK`
+   * carried in here would re-route or re-bill the run past every scrub the
+   * adapter performs. A provider variable the user genuinely wants belongs in
+   * the profile's `publicEnv`, where it is a choice rather than an accident.
    *
    * Defaults to `{}`: an empty bundle, which is the conservative choice for a
    * library. The host process decides how much of its own environment the
-   * agent inherits.
+   * agent inherits — the adapter merges the host environment in itself, so
+   * omitting this loses nothing on the normal path.
    */
   readonly baseEnv?: Readonly<Record<string, string | undefined>>;
   /**
@@ -245,7 +285,9 @@ export async function resolveStoreEnv(
  *
  * Precedence, lowest to highest:
  *
- *  1. `baseEnv`, minus every managed key.
+ *  1. `baseEnv`, minus every managed key and everything else in the provider's
+ *     own namespaces — see {@link ResolveEnvOptions.baseEnv} for why the whole
+ *     namespace goes and not just the managed list.
  *  2. `profile.publicEnv`, minus every managed key, anything that looks like a
  *     credential, and anything that decides where a credential is sent. A
  *     hand-edited profile file cannot smuggle a token in through the "extra env
@@ -274,12 +316,18 @@ export async function resolveEnv(
 ): Promise<Record<string, string>> {
   const credentials = options.credentials;
   const managed = managedEnvKeySet(credentials);
+  const prefixes = providerEnvPrefixes(credentials);
 
   const env: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(options.baseEnv ?? {})) {
     if (value === undefined) continue;
     if (managed.has(key)) continue;
+    // The provider's whole namespace, not just the managed keys: this bundle
+    // outranks the adapter's own host-env scrub, so a `baseEnv` built from
+    // `process.env` would otherwise carry the shell's endpoint, model and
+    // backend overrides straight past it. See `providerEnvPrefixes`.
+    if (prefixes.some((prefix) => key.startsWith(prefix))) continue;
     env[key] = value;
   }
 

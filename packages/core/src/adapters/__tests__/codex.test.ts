@@ -1,16 +1,27 @@
 /**
  * Tests for the Codex adapter's decision-making.
  *
- * Everything here is a pure function or a rejection that happens before a
+ * Most of this is a pure function or a rejection that happens before a
  * process is spawned, so none of it touches the `codex` binary. The live
  * transport is covered by `jsonrpc.test.ts` on one side and `codexMapper.test.ts`
  * on the other; what is left in between — permission mapping, input validation,
  * response parsing, approval translation — is what this file pins down.
+ *
+ * The one exception is the permission lifecycle at the bottom, which drives a
+ * real `CodexRun` against a *scripted* fake app server — a few lines of Node
+ * standing in for `codex app-server` — because `permission.resolved` is
+ * emitted from the run's answer/interrupt/dispose paths and nothing short of
+ * the run exercises them. Still no real `codex` binary.
  */
+
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import type {
+  AgentEvent,
   JsonValue,
   PermissionMode,
   ProfileId,
@@ -33,8 +44,9 @@ import {
   validateCodexRunInput,
 } from '../codex.js';
 import { CODEX_SERVER_REQUEST } from '../codexProtocol.js';
+import { DISPOSED_DENY_MESSAGE } from '../mapper.js';
 import { isAdapterError } from '../types.js';
-import type { ProbeResult, ResolvedRunInput } from '../types.js';
+import type { ProbeResult, ResolvedRunInput, Run } from '../types.js';
 
 const PROFILE = 'p-1' as ProfileId;
 
@@ -554,19 +566,240 @@ describe('toApprovalResponse', () => {
     // This is the whole reason the translation is per-request-kind: the
     // permissions request expects a granted subset and a scope, and would not
     // understand `{ decision: 'accept' }`.
+    const requested: JsonValue = [{ kind: 'network', hosts: ['registry.npmjs.org'] }];
+
+    // An allow echoes the requested set back as the grant. The answer to this
+    // request *is* the granted list — an allow that returned `[]` would grant
+    // nothing, turning the user's Allow click into a refusal wearing the
+    // transcript's approval.
+    expect(
+      toApprovalResponse(CODEX_SERVER_REQUEST.permissionsApproval, { behavior: 'allow' }, requested),
+    ).toEqual({ permissions: requested, scope: 'turn' });
+
+    expect(
+      toApprovalResponse(
+        CODEX_SERVER_REQUEST.permissionsApproval,
+        { behavior: 'allow', scope: 'session' },
+        requested,
+      ),
+    ).toEqual({ permissions: requested, scope: 'session' });
+
+    // A request that named nothing still gets a well-formed answer.
     expect(
       toApprovalResponse(CODEX_SERVER_REQUEST.permissionsApproval, { behavior: 'allow' }),
     ).toEqual({ permissions: [], scope: 'turn' });
 
+    // A denial grants the empty set no matter what was asked for.
     expect(
-      toApprovalResponse(CODEX_SERVER_REQUEST.permissionsApproval, {
-        behavior: 'allow',
-        scope: 'session',
-      }),
-    ).toEqual({ permissions: [], scope: 'session' });
-
-    expect(
-      toApprovalResponse(CODEX_SERVER_REQUEST.permissionsApproval, { behavior: 'deny' }),
+      toApprovalResponse(CODEX_SERVER_REQUEST.permissionsApproval, { behavior: 'deny' }, requested),
     ).toEqual({ permissions: [] });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Permission lifecycle on the stream                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A scripted stand-in for `codex app-server`, speaking just enough of the
+ * protocol to park a run on one approval: it answers the handshake, opens a
+ * thread and a turn, then sends a single command-execution approval request
+ * and goes quiet. Everything else it is asked gets a `result: null`, which is
+ * what lets `turn/interrupt` during dispose come back cleanly.
+ *
+ * The shebang pins the exact Node running this test, so the fake needs no
+ * PATH lookup to start.
+ */
+const FAKE_APP_SERVER = `#!${process.execPath}
+'use strict';
+let buffer = '';
+const write = (frame) => process.stdout.write(JSON.stringify(frame) + '\\n');
+const handle = (message) => {
+  if (message.method === 'initialize') {
+    write({ id: message.id, result: { userAgent: 'fake-codex' } });
+    return;
+  }
+  if (message.method === 'thread/start') {
+    write({ id: message.id, result: { thread: { id: 'thread-1' } } });
+    return;
+  }
+  if (message.method === 'turn/start') {
+    write({ id: message.id, result: { turn: { id: 'turn-1' } } });
+    write({
+      id: 999,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        command: 'rm -rf ./build',
+        cwd: process.cwd(),
+      },
+    });
+    return;
+  }
+  if (typeof message.method === 'string' && message.id !== undefined) {
+    write({ id: message.id, result: null });
+  }
+  // Notifications ('initialized') and the answer to our approval need no reply.
+};
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf('\\n');
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim() !== '') handle(JSON.parse(line));
+    index = buffer.indexOf('\\n');
+  }
+});
+`;
+
+interface FakeRunHarness {
+  readonly run: Run;
+  readonly events: readonly AgentEvent[];
+  /** Resolve the first event matching `predicate`, seen already or still to come. */
+  waitFor(predicate: (event: AgentEvent) => boolean): Promise<AgentEvent>;
+  cleanup(): Promise<void>;
+}
+
+/** Start a real CodexRun against the scripted server, with its stream pumped. */
+async function startFakeRun(): Promise<FakeRunHarness> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'artemis-codex-fake-'));
+  const script = path.join(dir, 'fake-codex.cjs');
+  await writeFile(script, FAKE_APP_SERVER, { mode: 0o755 });
+  const codexHome = path.join(dir, 'home');
+  await mkdir(codexHome);
+
+  const adapter = createCodexAdapter({ executable: script });
+  const run = await adapter.createRun({
+    providerId: 'codex',
+    profileId: PROFILE,
+    cwd: dir,
+    prompt: 'build the thing',
+    runId: 'run-fake' as RunId,
+    env: { [CODEX_HOME_ENV]: codexHome },
+  });
+
+  const events: AgentEvent[] = [];
+  const waiters: Array<{
+    predicate: (event: AgentEvent) => boolean;
+    resolve: (event: AgentEvent) => void;
+  }> = [];
+
+  const pumpDone = (async () => {
+    for await (const event of run.events) {
+      events.push(event);
+      for (const waiter of [...waiters]) {
+        if (waiter.predicate(event)) {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          waiter.resolve(event);
+        }
+      }
+    }
+  })();
+
+  const waitFor = (predicate: (event: AgentEvent) => boolean): Promise<AgentEvent> => {
+    const seen = events.find(predicate);
+    if (seen !== undefined) return Promise.resolve(seen);
+    return new Promise<AgentEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(
+          new Error(
+            `No matching event within 10s. Saw: ${events.map((event) => event.type).join(', ')}`,
+          ),
+        );
+      }, 10_000);
+      waiters.push({
+        predicate,
+        resolve: (event) => {
+          clearTimeout(timer);
+          resolve(event);
+        },
+      });
+    });
+  };
+
+  const cleanup = async (): Promise<void> => {
+    await run.dispose();
+    await pumpDone;
+    await rm(dir, { recursive: true, force: true });
+  };
+
+  return { run, events, waitFor, cleanup };
+}
+
+describe('CodexRun — permission.resolved on the stream', () => {
+  /*
+   * Why these exist: answering a prompt is an IPC call, invisible to any
+   * consumer that was not the caller. The event stream is the account a
+   * reloaded renderer replays, and without a `permission.resolved` for every
+   * way a request ends, every replayed `permission.request` reads as still
+   * open — the user is re-asked a question that was already answered, and
+   * answering the ghost fails. See `PermissionResolvedEvent`.
+   */
+
+  it('emits allowed when the user approves', async () => {
+    const harness = await startFakeRun();
+    try {
+      const request = await harness.waitFor((event) => event.type === 'permission.request');
+      if (request.type !== 'permission.request') throw new Error('unreachable');
+
+      await harness.run.respondToPermission(request.requestId, { behavior: 'allow' });
+
+      const resolved = await harness.waitFor((event) => event.type === 'permission.resolved');
+      if (resolved.type !== 'permission.resolved') throw new Error('unreachable');
+      expect(resolved.requestId).toBe(request.requestId);
+      expect(resolved.outcome).toBe('allowed');
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('emits denied, carrying the user’s message, when the user refuses', async () => {
+    const harness = await startFakeRun();
+    try {
+      const request = await harness.waitFor((event) => event.type === 'permission.request');
+      if (request.type !== 'permission.request') throw new Error('unreachable');
+
+      await harness.run.respondToPermission(request.requestId, {
+        behavior: 'deny',
+        message: 'not on this branch',
+      });
+
+      const resolved = await harness.waitFor((event) => event.type === 'permission.resolved');
+      if (resolved.type !== 'permission.resolved') throw new Error('unreachable');
+      expect(resolved.requestId).toBe(request.requestId);
+      expect(resolved.outcome).toBe('denied');
+      expect(resolved.note).toBe('not on this branch');
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('withdraws a pending request on dispose, before run.end', async () => {
+    const harness = await startFakeRun();
+    try {
+      const request = await harness.waitFor((event) => event.type === 'permission.request');
+      if (request.type !== 'permission.request') throw new Error('unreachable');
+
+      await harness.run.dispose();
+      await harness.waitFor((event) => event.type === 'run.end');
+
+      const resolved = harness.events.find((event) => event.type === 'permission.resolved');
+      if (resolved?.type !== 'permission.resolved') throw new Error('no permission.resolved emitted');
+      expect(resolved.requestId).toBe(request.requestId);
+      // `withdrawn`, not `denied`: nobody answered, and a transcript recording
+      // this as the user's refusal would be lying about who decided.
+      expect(resolved.outcome).toBe('withdrawn');
+      expect(resolved.note).toBe(DISPOSED_DENY_MESSAGE);
+
+      // The resolution must land on the stream, ahead of the terminal event.
+      const types = harness.events.map((event) => event.type);
+      expect(types.indexOf('permission.resolved')).toBeLessThan(types.indexOf('run.end'));
+    } finally {
+      await harness.cleanup();
+    }
   });
 });

@@ -42,6 +42,7 @@ import type {
   PermissionMode,
   PermissionRequest,
   PermissionRequestId,
+  PermissionResolvedEvent,
   PlanUsage,
   PlanUsageWindow,
   ProviderEffortOption,
@@ -61,6 +62,7 @@ import {
 } from './attachments.js';
 
 import { composeProviderEnv, readEnv } from './env.js';
+import { DISPOSED_DENY_MESSAGE, WITHDRAWN_DENY_MESSAGE } from './mapper.js';
 import {
   CODEX_METHOD,
   CODEX_NOTIFICATION,
@@ -1126,6 +1128,15 @@ interface PendingApproval {
   /** Which server request this was, so the answer uses the right vocabulary. */
   readonly method: string;
   readonly toolName: string;
+  /**
+   * What a permissions request asked for, verbatim off the wire.
+   *
+   * Kept so an allow can echo it back as the granted set. The answer to
+   * `item/permissions/requestApproval` is a *list of grants*, not a decision —
+   * answering an approval with `{ permissions: [] }` grants nothing, which
+   * turns the user's Allow click into a refusal. See {@link toApprovalResponse}.
+   */
+  readonly requestedPermissions?: JsonValue;
 }
 
 /**
@@ -1294,7 +1305,7 @@ class CodexRun implements Run {
 
     // An interrupt with prompts still open would deadlock: the turn cannot wind
     // down while it is parked waiting for an answer nobody is going to give.
-    this.#denyAllPending();
+    this.#denyAllPending(WITHDRAWN_DENY_MESSAGE);
 
     try {
       await withTimeout(
@@ -1336,7 +1347,16 @@ class CodexRun implements Run {
       this.#state.permissionDenyInterrupted = true;
     }
 
-    entry.deferred.resolve(toApprovalResponse(entry.method, decision));
+    entry.deferred.resolve(toApprovalResponse(entry.method, decision, entry.requestedPermissions));
+    // The stream has to say how the request ended — an answer is an IPC call,
+    // invisible to any consumer that was not the caller, and a replayed history
+    // without this line shows a prompt still open forever. See
+    // `PermissionResolvedEvent`.
+    this.#emitResolved(
+      requestId,
+      decision.behavior === 'allow' ? 'allowed' : 'denied',
+      decision.behavior === 'deny' ? decision.message : undefined,
+    );
   }
 
   dispose(): Promise<void> {
@@ -1547,10 +1567,17 @@ class CodexRun implements Run {
     const params = asRecord(request.params);
     const permissionRequest = toPermissionRequest(requestId, this.runId, kind, params, this.#deps.now());
 
+    // A permissions request names what it wants in `params.permissions`, and
+    // the eventual allow has to hand exactly that back — the UI shows the user
+    // this set, so echoing it is what makes the grant match the click.
+    const requestedPermissions =
+      kind === 'permissions' ? (params['permissions'] as JsonValue | undefined) : undefined;
+
     this.#pending.set(requestId, {
       deferred,
       method: request.method,
       toolName: permissionRequest.toolName,
+      ...(requestedPermissions === undefined ? {} : { requestedPermissions }),
     });
 
     this.#emit({
@@ -1581,7 +1608,7 @@ class CodexRun implements Run {
   /** End the run with an error, honouring the reason precedence rules. */
   #fail(error: AgentError): void {
     if (this.#state.ended) return;
-    this.#denyAllPending();
+    this.#denyAllPending(WITHDRAWN_DENY_MESSAGE);
     for (const event of finalizeCodexRun(this.#state, 'error', { error })) this.#emit(event);
     this.#eventQueue.close();
   }
@@ -1592,7 +1619,7 @@ class CodexRun implements Run {
 
     // 1. Unblock the provider first. A parked approval holds the turn open, and
     //    the app server will not shut down while it is waiting on one.
-    this.#denyAllPending();
+    this.#denyAllPending(DISPOSED_DENY_MESSAGE);
 
     // 2. Let the bootstrap finish so it cannot resurrect a session underneath
     //    the teardown. It swallows its own errors, so this cannot reject.
@@ -1630,7 +1657,7 @@ class CodexRun implements Run {
     for (const event of flushCodexToolCalls(this.#state)) this.#emit(event);
     for (const event of finalizeCodexRun(this.#state, 'disposed')) this.#emit(event);
     this.#eventQueue.close();
-    this.#denyAllPending();
+    this.#denyAllPending(DISPOSED_DENY_MESSAGE);
   }
 
   /**
@@ -1638,14 +1665,43 @@ class CodexRun implements Run {
    *
    * Called from teardown, interrupt and failure. Idempotent by construction —
    * `Deferred` settles once — so overlapping paths are harmless.
+   *
+   * Each one is announced as `withdrawn`, not `denied`: the user was never
+   * given the choice, and a transcript that recorded this as their refusal
+   * would be lying about who decided. `note` says why nobody could answer.
    */
-  #denyAllPending(): void {
+  #denyAllPending(note: string): void {
     if (this.#pending.size === 0) return;
     const entries = [...this.#pending.entries()];
     this.#pending.clear();
-    for (const [, entry] of entries) {
+    for (const [requestId, entry] of entries) {
       entry.deferred.resolve(toApprovalResponse(entry.method, { behavior: 'deny' }));
+      this.#emitResolved(requestId, 'withdrawn', note);
     }
+  }
+
+  /**
+   * Say on the stream that a parked request is no longer parked.
+   *
+   * Every path that settles one goes through here — the user's answer, an
+   * interrupt, a failure, dispose — because the alternative, remembering to
+   * emit at each site, is the bug `PermissionResolvedEvent` exists to fix one
+   * level down. Emitting after `run.end` is a no-op: `#emit` drops onto a
+   * closed queue, which is the right answer for the second `#denyAllPending`
+   * in `#teardown`.
+   */
+  #emitResolved(
+    requestId: PermissionRequestId,
+    outcome: PermissionResolvedEvent['outcome'],
+    note?: string,
+  ): void {
+    this.#emit({
+      type: 'permission.resolved',
+      ...nextCodexEventEnvelope(this.#state),
+      requestId,
+      outcome,
+      ...(note === undefined ? {} : { note }),
+    });
   }
 
   #emit(event: AgentEvent): void {
@@ -1748,8 +1804,20 @@ function toPermissionRequest(
  *
  * `scope: 'session'` is the mapping for Artemis's `scope: 'session'` — the
  * "always allow" affordance. Anything else stays scoped to this one call.
+ *
+ * `requestedPermissions` is what the permissions request carried in its
+ * params, verbatim. It is required to make an allow *mean* allow: the answer
+ * to `item/permissions/requestApproval` is the granted set, so an allow that
+ * omitted it would grant the empty set — the user clicks Allow, the server is
+ * told "you may have none of it", and the denial wears the transcript's
+ * approval. Artemis's prompt is all-or-nothing, so an allow grants exactly
+ * what was asked and shown.
  */
-export function toApprovalResponse(method: string, decision: PermissionDecision): JsonValue {
+export function toApprovalResponse(
+  method: string,
+  decision: PermissionDecision,
+  requestedPermissions?: JsonValue,
+): JsonValue {
   const persist =
     decision.behavior === 'allow' &&
     (decision.scope === 'session' || (decision.updatedPermissions?.length ?? 0) > 0);
@@ -1758,7 +1826,7 @@ export function toApprovalResponse(method: string, decision: PermissionDecision)
     // A denial grants the empty set rather than refusing to answer: the tool
     // asked which permissions it may have, and "none" is a valid answer.
     return decision.behavior === 'allow'
-      ? { permissions: [], scope: persist ? 'session' : 'turn' }
+      ? { permissions: requestedPermissions ?? [], scope: persist ? 'session' : 'turn' }
       : { permissions: [] };
   }
 

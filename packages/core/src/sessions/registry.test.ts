@@ -335,6 +335,22 @@ describe('RunRegistry — starting', () => {
     await expect(registry.start(input({ runId: 'mine' }))).rejects.toBeInstanceOf(RunError);
   });
 
+  it('rejects reusing the id of a run that has already ended', async () => {
+    // A retired id is still in service: `#ended` answers `eventsSince` and
+    // `dispose` for it, exactly as `adopt` already treats it. A new run wearing
+    // the same id would replay the finished run's transcript ahead of its own
+    // events and hand its teardown to the old entry.
+    const { registry, runs } = harness();
+    await registry.start(input({ runId: 'mine' }));
+    firstRun(runs).emit(runEnd('mine', 0));
+    await flush();
+    expect(registry.isActive('mine')).toBe(false);
+
+    const error = await registry.start(input({ runId: 'mine' })).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RunError);
+    expect((error as RunError).code).toBe('invalid_request');
+  });
+
   it('reports provider_not_found when no adapter is registered', async () => {
     const { registry } = harness();
     const error = await registry.start(input({ providerId: 'codex' })).catch((e: unknown) => e);
