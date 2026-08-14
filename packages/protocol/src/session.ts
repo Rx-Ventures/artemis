@@ -59,6 +59,31 @@ export interface SessionSummary {
    * Excludes {@link profileId}. The full set is `[profileId, ...alsoInProfiles]`.
    */
   readonly alsoInProfiles?: readonly ProfileId[];
+  /**
+   * Set when {@link profileId} is a pick rather than an answer.
+   *
+   * A shared store has no record of which account ran any given conversation:
+   * the transcript names a session, a directory and a branch, and nothing about
+   * who paid for it. So when several profiles reach one store the adapter has
+   * to put *some* id on the row, and it uses the first sharer — see
+   * {@link profileId}. That is stable across reads and means nothing, and a UI
+   * that renders it as a fact states the same account on every shared row.
+   *
+   * Which is a worse failure than it looks. The label is the only place the
+   * sidebar answers "whose conversation is this", so an arbitrary one is not a
+   * cosmetic slip — it is a confident wrong answer to the question the label
+   * exists for. A consumer seeing this flag should show no account rather than
+   * name one: absent is honest where arbitrary is not.
+   *
+   * Cleared, with {@link profileId} rewritten, when the host's own ledger has
+   * recorded the account a session actually ran under — which it does for every
+   * session Artemis starts or resumes. So a row is unattributed only until the
+   * user next opens it, and never for a conversation this install began.
+   *
+   * Omitted rather than set `false` in the ordinary case, matching
+   * {@link alsoInProfiles}: absent means {@link profileId} says what it means.
+   */
+  readonly profileIsUnknown?: boolean;
   /** Working directory the session ran in. */
   readonly cwd: string;
 

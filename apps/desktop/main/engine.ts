@@ -66,6 +66,7 @@ import type {
 } from '@rx-artemis/protocol';
 
 import {
+  attributeSession,
   checkAuthStatus,
   createDefaultProviderRegistry,
   managedEnvKeys,
@@ -75,6 +76,7 @@ import {
   resolveStoreEnv,
   RunRegistry,
   SessionNamer,
+  SessionOwners,
   signInCommand,
   signOut as cliSignOut,
   type EnvBundle,
@@ -85,7 +87,7 @@ import {
 } from '@rx-artemis/core';
 import { lowestTierModel } from '@rx-artemis/protocol';
 
-import { EngineUnavailableError } from './errors.js';
+import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
 const log = createLogger('engine');
@@ -508,8 +510,34 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
   });
 
+  /**
+   * Remembers which account each session ran under.
+   *
+   * The second subscriber, wired exactly like the namer and for the same
+   * reason: it must never delay, fail or touch the run it learns from.
+   *
+   * It exists because of the shared-config feature. Once `projects/` is
+   * symlinked across profiles, every profile enumerates one store and the
+   * directory a transcript was found in stops identifying an account — the
+   * adapter then has to pick one, and says so with
+   * `SessionSummary.profileIsUnknown`. Nothing on disk can settle it: the
+   * transcript records a session, a directory and a branch, and no account. The
+   * only component that ever knows is this process, at the moment it starts a
+   * run, which is the moment this writes it down. See `SessionOwners`.
+   */
+  const owners = new SessionOwners({
+    userDataDir,
+    onError: (error, context) => {
+      // A warning, like the namer's, and for a smaller cost still: every
+      // failure here loses a label on a sidebar row. The session exists,
+      // resumes and lists exactly as it did before this feature.
+      log.warn(`Session ownership ledger failed during ${context.stage}`, error);
+    },
+  });
+
   runs.subscribe((event) => {
     namer.handleEvent(event);
+    owners.handleEvent(event);
   });
 
   return {
@@ -580,19 +608,37 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       const updated: { readonly id: ProfileId } = await profiles.update(id, patch);
       return profiles.describe(updated.id);
     },
-    deleteProfile: (id, query) => profiles.delete(id, { deleteConfigDir: query.deleteConfigDir }),
+    deleteProfile: async (id, query) => {
+      const result = await profiles.delete(id, { deleteConfigDir: query.deleteConfigDir });
+      // The ledger's claims for a deleted account are dropped rather than left
+      // to rot. Harmless on their own — nothing resolves these ids back into
+      // accounts except by matching against profiles that exist — but a config
+      // directory reused by a new profile would otherwise inherit them.
+      // Awaited only for its errors, which `SessionOwners` reports rather than
+      // throws, so this cannot fail a deletion that already happened.
+      await owners.forget([id]);
+      return result;
+    },
 
     /**
-     * Start a run, and — if it opens a new session — have that session named.
+     * Start a run, and — if it opens a new session — have that session named
+     * and its account recorded.
      *
-     * `noteRun` is told the registry's id rather than the input's, because
-     * `RunInput.runId` is optional and core mints one when it is absent. It
-     * returns immediately and starts nothing; the naming call is triggered by
-     * the `session.started` event, which the namer is subscribed to above.
+     * Both subscribers are told the registry's id rather than the input's,
+     * because `RunInput.runId` is optional and core mints one when it is
+     * absent. Both return immediately and start nothing; each is triggered by
+     * the `session.started` event they are subscribed to above.
+     *
+     * `owners.noteRun` is called for every run and `namer.noteRun` is not —
+     * the namer filters resumes and forks out because they are not first
+     * messages, whereas a resume is precisely when a session whose account was
+     * never recorded acquires one. Each filters at its own call site rather
+     * than here, so neither rule has to be restated in the composition root.
      */
     startRun: async (input) => {
       const handle = await runs.start(input);
       namer.noteRun(input, handle.runId);
+      owners.noteRun(input, handle.runId);
       return handle;
     },
     sendToRun: (runId, text, attachments) => runs.send(runId, text, attachments),
@@ -750,7 +796,13 @@ function createEngine(options: EngineOptions): ArtemisEngine {
        */
       const title = query.title.trim().slice(0, MAX_SESSION_TITLE);
       if (title.length === 0) {
-        throw new EngineUnavailableError('A session title cannot be empty.');
+        // `ValidationError`, not `EngineUnavailableError`: an all-whitespace
+        // title is bad *input*, and the engine claiming to be unavailable
+        // over it surfaced as `provider_not_found` with the actively
+        // misleading sentence "Artemis's engine is unavailable: A session
+        // title cannot be empty." The IPC validator cannot catch this case —
+        // it deliberately does not trim, for the reason documented above.
+        throw new ValidationError('title', 'cannot be empty');
       }
 
       await adapter.setSessionTitle({
@@ -871,6 +923,33 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         }
       }
 
+      /*
+       * Put the real account back on the rows an adapter could only pick one for.
+       *
+       * `profileIsUnknown` marks a session in a store several profiles reach —
+       * the shared-config arrangement, where `projects/` is symlinked into
+       * every profile — and on those rows `profileId` is the first sharer
+       * rather than an answer. Left alone, every shared row in the sidebar
+       * carries the same arbitrary account label, which is the one question the
+       * label exists to answer, answered wrongly and confidently.
+       *
+       * The ledger settles it for every session this install started or
+       * resumed. A session it has never seen keeps the flag and the pick, and
+       * the sidebar shows no account for it rather than inventing one.
+       *
+       * Done here rather than in the adapter because the adapter is the wrong
+       * component to know it: it reads a provider's store, and this is Artemis's
+       * own bookkeeping about runs it drove. The ledger is only opened when a
+       * row actually needs it, so an install with no shared store never touches
+       * the file.
+       */
+      if (collected.some((summary) => summary.profileIsUnknown === true)) {
+        const recorded = await owners.all();
+        for (const [index, summary] of collected.entries()) {
+          collected[index] = attributeSession(summary, recorded);
+        }
+      }
+
       collected.sort((a, b) =>
         a.updatedAt !== b.updatedAt
           ? b.updatedAt - a.updatedAt
@@ -892,10 +971,15 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
     subscribe: (listener) => runs.subscribe(listener),
 
-    // Both, and in parallel: a half-written title is not worth delaying quit
-    // for, and `SessionNamer.dispose` aborts rather than waits.
+    // All three, and in parallel: a half-written title is not worth delaying
+    // quit for, and `SessionNamer.dispose` aborts rather than waits.
+    //
+    // `owners.flush` is the one that genuinely waits, and it is cheap — a write
+    // already in flight, or nothing. Skipping it would drop the account for
+    // whichever session was started last, which is exactly the session the user
+    // will look for first when they reopen.
     dispose: async () => {
-      await Promise.all([runs.disposeAll(), namer.dispose()]);
+      await Promise.all([runs.disposeAll(), namer.dispose(), owners.flush()]);
     },
   };
 }

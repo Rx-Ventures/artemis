@@ -90,9 +90,19 @@ export function SessionTooltip({
                 row.mono ? 'font-mono break-all' : 'wrap-anywhere',
               )}
             >
+              {/*
+                The swatch is the account's colour, so it is drawn only when
+                there is an account. On a row whose owner was never recorded
+                `profile` is the adapter's arbitrary pick among the sharers —
+                painting its colour here would put a confident dot next to the
+                words "not recorded", which is the contradiction the row above
+                already avoids by showing nothing.
+              */}
               {row.label === 'profile' ? (
                 <span className="flex min-w-0 items-center gap-1">
-                  <ProfileSwatch color={profile?.color} />
+                  {session.profileIsUnknown === true ? null : (
+                    <ProfileSwatch color={profile?.color} />
+                  )}
                   <span className="min-w-0 wrap-anywhere">{row.value}</span>
                 </span>
               ) : (
