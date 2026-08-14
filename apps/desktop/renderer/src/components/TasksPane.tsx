@@ -69,7 +69,7 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
   return (
     <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Delegated work">
       {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} now={now} />
+        <TaskRow key={task.id} task={task} now={now} pane={pane} />
       ))}
     </ul>
   );
@@ -78,9 +78,18 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
 const TaskRow = memo(function TaskRow({
   task,
   now,
+  pane,
 }: {
   readonly task: BackgroundTask;
   readonly now: number;
+  /**
+   * The column this task belongs to, threaded down so the ⏹ can address its
+   * stop through *that* column's run. The dock is a window-level surface and
+   * clicking its tabs never moves pane focus, so "the focused pane" — the
+   * default everywhere else — is exactly the wrong pane here whenever the tab
+   * in front belongs to the other column of a split.
+   */
+  readonly pane: Pane;
 }): ReactElement {
   const live = isTaskLive(task);
 
@@ -108,7 +117,7 @@ const TaskRow = memo(function TaskRow({
           // appears once the pointer is on the thing it acts on, and that stays
           // reachable from the keyboard throughout.
           className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => void stopTask(task.id)}
+          onClick={() => void stopTask(task.id, pane)}
         >
           <CircleStopIcon />
         </IconButton>

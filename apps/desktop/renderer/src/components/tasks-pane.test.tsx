@@ -74,7 +74,7 @@ Object.defineProperty(globalThis, 'artemis', {
 });
 
 const { DockPane } = await import('@/components/DockPane');
-const { focusedPane, toggleTasks, useApp } = await import('@/state/store');
+const { closePane, focusedPane, splitPane, toggleTasks, useApp } = await import('@/state/store');
 const { paneState, setPaneState } = await import('@/state/pane');
 
 const task = (over: Partial<BackgroundTask> = {}): BackgroundTask => ({
@@ -103,7 +103,19 @@ function renderDock(): void {
 
 beforeEach(() => {
   stopped = [];
-  useApp.setState({ preview: null, terminals: [], activeDockTab: null, visibleDockTabs: [] });
+  // Back to one column, whatever the previous test left: the split test below
+  // makes a second one, and a survivor would double every tab query after it.
+  for (const extra of useApp.getState().grid.flatMap((row) => row.panes).slice(1)) {
+    setPaneState(extra, { run: null, tasks: [], dismissedTasks: [] } as never);
+    closePane(extra.id);
+  }
+  useApp.setState({
+    preview: null,
+    terminals: [],
+    activeDockTab: null,
+    visibleDockTabs: [],
+    background: [],
+  });
   setPaneState(focusedPane(), {
     cwd: '/Users/me/project',
     tasks: [],
@@ -204,6 +216,34 @@ describe('the delegated-work pane', () => {
     });
 
     expect(stopped).toEqual([{ runId: 'run-1', taskId: 'b5hyzk8n3' }]);
+  });
+
+  it('stops the task through the column that owns it, not the focused one', async () => {
+    // A split: the focused column has its own run and nothing delegated; the
+    // *other* column owns the task. Clicking a dock tab brings a view forward
+    // without moving pane focus, so a stop routed through "the focused pane"
+    // — the default every other session-scoped action gets away with — would
+    // ask run-1 to stop a task it has never heard of.
+    const left = focusedPane();
+    const right = splitPane('right', left);
+    if (right === null) throw new Error('expected a second column');
+    setPaneState(right, {
+      tasks: [task({ id: 'elsewhere' })],
+      dismissedTasks: [],
+      run: { ...paneState(left).run, runId: 'run-2' },
+    } as never);
+    useApp.setState({ focusedPaneId: left.id });
+
+    renderDock();
+    fireEvent.click(screen.getByRole('tab', { name: /1 running/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Stop / }));
+    });
+
+    // The premise first — the tab click left focus where it was — then the
+    // claim: the stop was addressed through the owning column's run.
+    expect(focusedPane().id).toBe(left.id);
+    expect(stopped).toEqual([{ runId: 'run-2', taskId: 'elsewhere' }]);
   });
 
   it('does not strike the row through until the provider says it stopped', async () => {

@@ -110,7 +110,7 @@ import {
   type TerminalRecord,
 } from './dock';
 import { isTaskLive } from '@rx-artemis/protocol';
-import type { PermissionItem, TranscriptModel } from './transcript';
+import { setEventsDroppedHook, type PermissionItem, type TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
   createPane,
@@ -4669,7 +4669,12 @@ export async function deleteSession(session: SessionSummary): Promise<boolean> {
   // than one column — the sidebar row marks it active while it is showing
   // anywhere — and clearing only the pane the user happened to right-click from
   // would leave the others pointed at a file that no longer exists.
-  for (const pane of allPanes()) {
+  //
+  // `allLivePanes`, not `allPanes`: "every pane" has to include the backgrounded
+  // conversations too. A pane the user navigated away from keeps its
+  // `resumeSessionId`, and coming back to it after the delete would aim its next
+  // prompt at the destroyed transcript just the same.
+  for (const pane of allLivePanes()) {
     setPaneState(pane, (p) =>
       p.resumeSessionId === session.id ? { resumeSessionId: null } : {},
     );
@@ -5211,6 +5216,12 @@ export async function submitPrompt(
   const prompt = text.trim();
   if (prompt.length === 0) return false;
 
+  // Recorded before anything can refuse the send — the guards below included.
+  // Up-arrow recall is about getting a prompt back, and the prompt you most
+  // want back is the one that just failed to go anywhere; the composer has
+  // already cleared its field by the time any of these banners appear.
+  rememberPrompt(prompt, pane);
+
   const { bridge } = resolveBridge();
   const state = paneState(pane);
   if (!bridge) {
@@ -5226,11 +5237,6 @@ export async function submitPrompt(
     pushBanner('error', 'Set a working directory', 'The agent needs an absolute path to work in.');
     return false;
   }
-
-  // Recorded before the send is attempted. Up-arrow recall is about getting a
-  // prompt back, and the prompt you most want back is the one that just failed
-  // to go anywhere.
-  rememberPrompt(prompt, pane);
 
   const live = isLive(state) ? state.run : null;
 
@@ -5392,6 +5398,60 @@ function endRunLocally(
   pane.transcript.localRunEnd(reason, error);
 }
 
+/*
+ * The transport can drop events, and one of the droppable events is `run.end`.
+ *
+ * The transcript notes a `seq` gap and carries on, which is the right answer
+ * for text — the next flush corrects the screen. It is the wrong answer when
+ * the hole swallowed the run's terminal event: nothing else ever says "this
+ * ended", so the pane stays live forever — composer locked on Stop, session
+ * feed pinned to its fast poll, sidebar light on. So a detected drop asks the
+ * main process one question — is this run still in the registry? — and a run
+ * that is gone is settled through the same local-end path a failed start takes.
+ *
+ * One reconcile per drop burst: gaps arrive in clusters, every one of them
+ * asking the same question about the same run, and the set below holds the
+ * run's id for as long as one answer is in flight.
+ */
+const dropReconciles = new Set<RunId>();
+
+function reconcileDroppedRun(runId: RunId): void {
+  if (dropReconciles.has(runId)) return;
+
+  const pane = paneForRun(runId);
+  if (!pane) return;
+  if (paneState(pane).run?.status === 'ended') return;
+
+  dropReconciles.add(runId);
+  void (async () => {
+    try {
+      const { bridge } = resolveBridge();
+      if (!bridge) return;
+      const listed = await call(() => bridge.runs.list({}));
+      if (!listed.ok) return;
+      // Still in the registry and still going: whatever the gap swallowed, it
+      // was not this run's end, and the stream corrects itself from here.
+      if (listed.value.runs.some((h) => h.runId === runId && h.status !== 'ended')) return;
+      // The real `run.end` may have landed while the list was in flight, and a
+      // second terminal card on top of it would say the run ended twice.
+      const current = paneState(pane).run;
+      if (!current || current.runId !== runId || current.status === 'ended') return;
+      // The registry retires a run when it ends, so "not in the list" means the
+      // provider finished — what the drop cost is only *how*. `completed` is
+      // the least-wrong reading, and the dropped-events note the transcript has
+      // already printed sits right above this card saying why it is a reading.
+      endRunLocally(runId, 'completed', pane);
+    } finally {
+      dropReconciles.delete(runId);
+    }
+  })();
+}
+
+// At module scope because the transcript is live from the first pane onwards —
+// a hook registered at bootstrap would miss nothing in practice, but there is
+// no reason to leave the gap.
+setEventsDroppedHook(reconcileDroppedRun);
+
 export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
   const run = paneState(pane).run;
@@ -5449,8 +5509,18 @@ export function liveTaskCount(state: AppState, paneId: PaneId): number {
  * has, through the same `background.tasks` event a natural finish arrives on, so
  * a stop that silently failed looks different from one that worked — which is
  * the whole reason to wait.
+ *
+ * The pane is **required**, breaking the house convention of defaulting to
+ * {@link focusedPane} — deliberately. The only surface that offers a stop is the
+ * dock's delegated tab, which names the column it belongs to, and clicking a
+ * dock tab never moves pane focus. So in a split the focused pane is precisely
+ * the wrong guess: a stop pressed in the right column's task list would be
+ * routed through the left column's run, and either interrupt a stranger's task
+ * or find no task at all and silently do nothing. There is no caller for whom
+ * "whichever column has focus" is the right answer, so the signature refuses to
+ * offer it.
  */
-export async function stopTask(taskId: string, pane: Pane = focusedPane()): Promise<void> {
+export async function stopTask(taskId: string, pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
   const run = paneState(pane).run;
   if (!bridge || !run) return;
@@ -5654,13 +5724,13 @@ function describeScope(scope: PermissionScope | undefined): string {
  * caller is expected to send the user to the sign-in step next; see
  * `ProfilesScreen`.
  */
-export async function createProfile(draft: ProfileDraft): Promise<boolean> {
+export async function createProfile(draft: ProfileDraft): Promise<ProfileId | null> {
   const { bridge } = resolveBridge();
-  if (!bridge) return false;
+  if (!bridge) return null;
   const result = await call(() => bridge.profiles.create({ draft }));
   if (!result.ok) {
     reportFailure('Could not create the profile', result.error);
-    return false;
+    return null;
   }
   await refreshProfiles();
 
@@ -5706,7 +5776,7 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
       `${created.label} is ready to use`,
       'It was not made active, because this conversation belongs to the account it started on. Start a new session to work on the new account.',
     );
-    return true;
+    return created.id;
   }
 
   const switched = paneState(pane).activeProviderId !== created.providerId;
@@ -5727,7 +5797,7 @@ export async function createProfile(draft: ProfileDraft): Promise<boolean> {
   // account — the freshly created one may well be the first that can answer at
   // all, since `refreshModels` no-ops without a profile.
   void refreshModels(pane);
-  return true;
+  return created.id;
 }
 
 export async function updateProfile(id: ProfileId, patch: ProfilePatch): Promise<boolean> {
@@ -6071,7 +6141,16 @@ function applyAgentEvent(event: AgentEvent): void {
     case 'permission.request':
       setPaneState(pane, (s) => ({
         permissionQueue: [...s.permissionQueue, event.request],
-        run: s.run ? { ...s.run, status: 'awaiting_permission' } : s.run,
+        // `ended` survives, the same guard `session.started` above applies: a
+        // request straggling in after `run.end` — a re-ordered transport, a
+        // replay — must not flip a finished conversation back to live. Nothing
+        // can answer on a run the registry has already retired, and a pane
+        // resurrected this way would lock its composer on a wait that cannot
+        // end.
+        run:
+          s.run && s.run.status !== 'ended'
+            ? { ...s.run, status: 'awaiting_permission' }
+            : s.run,
       }));
       break;
 
