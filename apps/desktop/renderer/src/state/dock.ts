@@ -121,7 +121,14 @@ export interface ShownConversation {
   readonly paneId: PaneId;
   readonly runId?: RunId;
   readonly sessionId?: SessionId;
-  /** Whether this column has any delegated work to show. */
+  /**
+   * Whether this column has delegated work it is still offering a tab for.
+   *
+   * Not simply "has any": a column whose rows have all been dismissed by the
+   * tab's ✕ answers no until something new is delegated. The store decides that
+   * — see `showsTasks` — because it is a question about rows, and carrying the
+   * rows through here would make every progress message rebuild the strip.
+   */
   readonly hasTasks?: boolean;
 }
 
@@ -225,8 +232,10 @@ export function learnSessionId(
  *
  * It appears with the first task and stays while any row remains — settled rows
  * included, since the moment work finishes is when its result is worth reading.
- * Nothing dismisses it, because the ✕ that would is the one control a person
- * cannot get back: the rows are not theirs to reopen.
+ * Its ✕ dismisses the tab and nothing else: the rows are still there, the
+ * subagents are still running, and the next thing delegated brings it back. See
+ * `closeTasks` in the store for why that is a weaker ✕ than the two beside it,
+ * and `hasTasks` for where a dismissed column stops answering yes.
  */
 export function visibleTabs(
   previewOwner: DockOwner | null,

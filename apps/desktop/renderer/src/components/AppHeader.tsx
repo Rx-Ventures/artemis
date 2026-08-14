@@ -91,6 +91,7 @@ import {
   Settings2Icon,
   SquareIcon,
   SquareTerminalIcon,
+  UsersIcon,
   XIcon,
 } from 'lucide-react';
 
@@ -99,7 +100,7 @@ import { useWindowState } from '../hooks/useWindowState';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import { openSettings, toggleTerminal, toggleSidebar, useApp } from '../state/store';
+import { openSettings, toggleTasks, toggleTerminal, toggleSidebar, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
 
@@ -225,6 +226,10 @@ export function AppHeader(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const cwd = usePane((s) => s.cwd);
   const title = useSessionTitle();
+  // A count, not the rows: this only decides whether the button has anything to
+  // open, and a selector returning the array would re-render the header on every
+  // progress message the delegated work emits.
+  const delegated = usePane((s) => s.tasks.length);
   // Subscribed once, here, and passed down. Two components calling the hook
   // would open two IPC subscriptions to describe one window.
   const windowState = useWindowState();
@@ -238,7 +243,12 @@ export function AppHeader(): ReactElement {
       // `pl` is overridden inline only when there are traffic lights to clear;
       // see `useTrafficLightGutter`.
       style={gutter > 0 ? { paddingLeft: gutter } : undefined}
-      className="drag-region flex h-11 shrink-0 items-center gap-1 bg-abyss px-2"
+      // The rule at the bottom is doing real work: the header and the app body
+      // below it are both `bg-abyss`, so without it the window chrome and the
+      // conversation are one continuous field and the title reads as though it
+      // belongs to the transcript. `border-line` rather than anything heavier,
+      // to match the seam the dock's tab strip already draws.
+      className="drag-region flex h-11 shrink-0 items-center gap-1 border-b border-line bg-abyss px-2"
     >
       <IconButton
         label={`${collapsed ? 'Show' : 'Hide'} the sidebar (${keyLabel('mod+b')})`}
@@ -278,6 +288,25 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <SquareTerminalIcon />
+      </IconButton>
+      {/*
+        After the terminal rather than before it, because that is the order the
+        two appear in down in the strip — terminals, then delegated work pinned
+        to the end. Two controls for one rail should not disagree about which way
+        round it is.
+
+        Disabled rather than hidden when there is nothing delegated, which is the
+        rule `disabled-reason.tsx` sets out: a control that vanishes teaches
+        nothing, and this is the one surface that says what the button is for.
+      */}
+      <IconButton
+        label="Delegated work"
+        disabled={delegated === 0}
+        disabledReason="Nothing delegated in this conversation yet."
+        onClick={() => toggleTasks(pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <UsersIcon />
       </IconButton>
       <IconButton
         label={`Settings (${keyLabel('mod+,')})`}

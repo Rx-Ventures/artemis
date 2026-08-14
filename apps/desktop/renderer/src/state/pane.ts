@@ -194,6 +194,22 @@ export interface SessionState extends MirroredState {
    * be a claim about a process that no longer exists.
    */
   readonly tasks: readonly BackgroundTask[];
+  /**
+   * The ids of the tasks that were on screen when the user shut the dock's
+   * delegated tab, so that shutting it stays shut.
+   *
+   * Ids rather than a flag, because `tasks` is replaced wholesale several times
+   * a second while anything is running: a boolean would be cleared by the next
+   * progress message and the tab would reappear a moment after it was closed.
+   * Against a set of ids, "is there work here the user has not already
+   * dismissed" stays answerable through any number of those writes, and the
+   * answer changes exactly once — when something genuinely new is delegated.
+   *
+   * Pruned to what is still in `tasks` on every one of those events, which
+   * bounds it to the rows the provider is currently reporting rather than to
+   * everything the session ever ran.
+   */
+  readonly dismissedTasks: readonly string[];
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
