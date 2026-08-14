@@ -17,7 +17,12 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-const minimumLevel: LogLevel = process.env['LIBRA_LOG_LEVEL'] === 'debug' ? 'debug' : 'info';
+// `LIBRA_LOG_LEVEL` is the app's original name, kept so an old shell alias
+// still works; `ARTEMIS_LOG_LEVEL` is the one current docs should teach.
+const minimumLevel: LogLevel =
+  process.env['ARTEMIS_LOG_LEVEL'] === 'debug' || process.env['LIBRA_LOG_LEVEL'] === 'debug'
+    ? 'debug'
+    : 'info';
 
 /**
  * Render one argument for output, scrubbing strings and unwrapping errors.

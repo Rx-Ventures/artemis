@@ -61,6 +61,21 @@
  * refreshes it — and that a page referencing a sibling file (`./chart.css`)
  * renders without it. Both are real, and both are the honest shape of "one file,
  * exactly as it was" rather than "a web server pointed at your home directory".
+ *
+ * ## What is deliberately not checked: where the file lives
+ *
+ * Nothing here confines the path to a workspace, so under the
+ * compromised-renderer threat model (see `validate.ts`) this channel is a read
+ * of any renderable file on disk — capped at 8MB and gated on extension, but
+ * not on location. It stays that way because main holds no honest set of roots
+ * to confine to: the directory picker hands its result to the renderer and
+ * retains nothing, a run's cwd dies with the run while previews are opened
+ * from historical transcripts, and agents legitimately write artifacts outside
+ * the workspace (`/tmp` above all — a root set that excluded it would break
+ * the feature's most common case). Doing this properly means main remembering
+ * which paths it has *seen the agent write* — recorded off the event stream it
+ * already relays — and that state does not exist yet. Until it does, this
+ * paragraph is the record that the gap is known rather than overlooked.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -208,6 +223,17 @@ export async function grantPreview(path: string): Promise<PreviewOpenResponse> {
   }
 
   const body = await readFile(path);
+  // The stat above answered for a moment that has already passed: a file
+  // replaced between the stat and the read arrives here at whatever size the
+  // replacement chose, and the buffer is what this module holds in memory for
+  // as long as the preview stays servable. So the ceiling is enforced twice —
+  // once against the metadata, to refuse cheaply, and once against what was
+  // actually read, which is the number that matters.
+  if (body.byteLength > MAX_BYTES) {
+    throw new Error(
+      `${basename(path)} is ${Math.round(body.byteLength / 1024 / 1024)} MB, which is too large to preview.`,
+    );
+  }
   const title = basename(path);
 
   /*
@@ -236,7 +262,13 @@ export async function grantPreview(path: string): Promise<PreviewOpenResponse> {
   return { kind: 'frame', url: `${PREVIEW_SCHEME}://${token}/`, title, path, bytes: body.byteLength };
 }
 
-/** Forget every granted preview. For teardown. */
+/**
+ * Forget every granted preview. Called from the `before-quit` sequence in
+ * `index.ts`, alongside the other module teardowns: the engine gets up to
+ * three more seconds to shut down after that point, and the protocol handler
+ * is still registered for all of it, so dropping the grants is what makes
+ * "the app is quitting" also mean "nothing is servable any more".
+ */
 export function clearPreviews(): void {
   granted.clear();
 }

@@ -208,6 +208,22 @@ const LIMITS = {
 } as const;
 
 /**
+ * Page size applied to `sessions.listAll` when the renderer omits `limit`.
+ *
+ * The protocol documents "omit for everything", and on a heavy account
+ * "everything" is exactly what breaks: the merged history crosses the IPC
+ * boundary through the leak scanner in `redact.ts`, whose scan gives up at
+ * 50,000 nodes and fails *closed*. A session summary is ~13 nodes, so around
+ * 3,800 sessions turned the whole sidebar into a false "credential-safety
+ * check" error. Filling in a default page here keeps the response bounded —
+ * 500 summaries is ~6,500 nodes, comfortably inside the budget — and
+ * `hasMore` already tells the caller the history continues. An explicit
+ * `limit` is still capped at {@link LIMITS.pageSize}, which at ~13,000 nodes
+ * also stays well clear of the scan budget.
+ */
+const LIST_ALL_DEFAULT_LIMIT = 500;
+
+/**
  * Character set for every identifier that crosses IPC — profile ids, run ids,
  * session ids, permission request ids.
  *
@@ -1157,7 +1173,10 @@ export function validateSessionsListAll(raw: unknown): SessionsListAllRequest {
   }
   return compact<SessionsListAllRequest>({
     providerId: providerId === undefined || providerId === null ? undefined : providerId,
-    limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.pageSize),
+    // An omitted limit becomes a default page rather than "everything" — see
+    // {@link LIST_ALL_DEFAULT_LIMIT} for why an unbounded merged history is a
+    // request this boundary must not forward.
+    limit: optionalInteger(request['limit'], 'limit', 1, LIMITS.pageSize) ?? LIST_ALL_DEFAULT_LIMIT,
     offset: optionalInteger(request['offset'], 'offset', 0, LIMITS.offset),
   });
 }

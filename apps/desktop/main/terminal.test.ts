@@ -231,6 +231,40 @@ describe('the terminal host', () => {
     await expect(terminals.start(start)).rejects.toThrow(TooManyTerminalsError);
   });
 
+  /*
+   * The cap must bind callers that arrive together, not just one at a time. A
+   * synchronous spawn override never yields, so the check-then-register window
+   * does not exist under the other tests here; the async loader is the seam
+   * that opens it, exactly the way the real node-pty import does. Without the
+   * reservation, every one of these starts counts zero live shells and all of
+   * them spawn.
+   */
+  it('holds the cap against concurrent starts', async () => {
+    const { spawn } = fakeSpawn();
+    let open = (): void => {};
+    const gate = new Promise<PtySpawn>((resolve) => {
+      open = () => resolve(spawn);
+    });
+    const terminals = createTerminalHost({
+      platform: 'darwin',
+      env: {},
+      flushMs: 1,
+      loadSpawn: () => gate,
+    });
+
+    const attempts = Array.from({ length: MAX_TERMINALS + 4 }, () =>
+      terminals.start(start).then(
+        () => 'ok' as const,
+        (error: unknown) => error,
+      ),
+    );
+    open();
+    const settled = await Promise.all(attempts);
+
+    expect(settled.filter((outcome) => outcome === 'ok')).toHaveLength(MAX_TERMINALS);
+    expect(settled.filter((outcome) => outcome instanceof TooManyTerminalsError)).toHaveLength(4);
+  });
+
   /* A shell that has exited does not hold a slot; a tab left open is not a
      process, and the user should be able to open another. */
   it('counts only live shells against the cap', async () => {

@@ -43,7 +43,7 @@ import {
 import { createLogger } from './log.js';
 import { installApplicationMenu } from './menu.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
-import { registerPreviewScheme, servePreviews } from './preview.js';
+import { clearPreviews, registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
 import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
@@ -407,6 +407,12 @@ app.on('before-quit', (event) => {
   // adapters there is nothing to shut down gracefully — the tab is already
   // gone — so this does not need a place in the timeout.
   terminals?.disposeAll();
+  // Granted previews are byte snapshots held in this process's memory, and the
+  // preview protocol handler stays registered for the up-to-three seconds the
+  // engine gets below. Dropping the grants here makes "the app is quitting"
+  // also mean "no preview is servable any more" — the teardown half that
+  // `clearPreviews` was written for.
+  clearPreviews();
 
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
   void Promise.race([engineHost.stop(), timeout]).finally(() => {
