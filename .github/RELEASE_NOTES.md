@@ -1,45 +1,58 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.11.2
+## What's new in 0.12.0
 
-- The sidebar floats clear of the header. The session card had an even gutter on
-  three sides and none on the fourth — a leftover from when it became a floating
-  card, invisible for as long as the header and the page below it were one
-  unbroken field. 0.11.1 drew a rule under the header, and that left the card's
-  two top corners rounding into a border they sat directly on, reading as bolted
-  to the chrome rather than floating below it. The gap above the card is now the
-  same gap you can already see below **Report a bug** at the other end of the
-  same column.
+- **Light mode, with a system/light/dark toggle in the header.** Artemis was
+  dark-only by construction, and the Appearance pane said so in as many words.
+  It supports a theme now, and the control sits beside Settings in the window
+  rather than inside it — the theme is the one preference whose whole effect is
+  the window you are looking at, and putting it behind a modal means covering it
+  up to reach it. **System** keeps answering after the machine changes its mind
+  at sunset. The choice is resolved before the first frame, so choosing light on
+  a dark machine no longer means watching the wrong palette flash on every
+  launch. The values are measured rather than picked: every hue holds fixed
+  between the two palettes, so a diff is the same green in both.
 
-Carried over from 0.11.1, if you are coming from 0.11.0 or earlier:
+- **Standing instructions every run carries: Settings → Agents.** The
+  conventions that hold for every session — "run the typechecker before saying
+  it's done", "this repo uses pnpm" — had nowhere to live except the first
+  message of each conversation, retyped. Now they are a library of named
+  prompts, each with a Markdown body and its own profile scoping, appended to
+  the provider's system prompt on every run. **It appends and never replaces**,
+  so the provider's own description of its tools stays intact. Artemis ships one
+  prompt of its own, for Cerebro, read-only so that it improves when Artemis
+  updates rather than freezing at whatever you first saw.
 
-- The delegated-work tab can be put away, and brought back. **Closing it closes a
-  view, and nothing else** — every row stays, every subagent carries on, and the
-  ⏹ on a row goes on working whether or not anything is drawing it. It comes back
-  by itself the next time something is delegated, and a **Delegated work** button
-  beside the terminal button in the header opens it whenever you want it.
-- A window you reload shows the prompt it asked, not just the answer. Nothing was
-  ever lost — the message reached the model — but the line saying what had been
-  asked was drawn by the window that is now gone, and nothing rebuilt it.
-  Reopened windows replay it, including a steering message sent mid-run.
-- Shared Claude config links every directory, not just the first. The setup
-  script is pasted into a shell that is already running, which on macOS is zsh,
-  and zsh did not split its list the way the script assumed — so it linked one
-  directory named after all eight and left the rest untouched.
-- A rule under the app header, so the window's own chrome stops running into the
-  conversation underneath it.
+- **A delegated agent's conversation opens in a tab.** The delegated list could
+  say what a subagent was costing, but not what it was *doing* — a subagent
+  writes its own transcript beside its parent's, and the delegating turn keeps
+  only the final report. On one real session, a single agent's file held **41
+  tool calls** that appear nowhere in the thread that launched it. Clicking a row
+  opens that conversation, with every tool card, diff and fold the main
+  transcript has.
 
-And from 0.11.0, if you are coming from 0.10.x:
+- **A conversation with live delegated work is no longer treated as idle.**
+  Backgrounded agents routinely outlive the turn that launched them, and
+  navigating away used to retire the pane outright — destroying the rows, the tab
+  they feed, and the only place the finish could land.
 
-- Delegated work has somewhere to be watched: a tab in the right-hand rail, one
-  per conversation, listing every subagent, workflow and backgrounded command it
-  has going — what each was asked to do, what it is using, how long it has been
-  at it and what it has spent. **A row can be stopped**, one at a time, without
-  touching the run or the others.
-- The sidebar's projects hold still, and only their rows move. Headings are
-  ordered by name rather than by whichever held the most recent session, so a
-  prompt anywhere no longer rewrites the list under the pointer.
+- **A reopened session no longer replays task notifications as things you said.**
+  The CLI writes them into the transcript marked as user turns; **106** of them
+  had accumulated across recent local sessions.
+
+- **Cerebro, the team memory bank, has a settings pane** — onboarding, sync, and
+  drafting or retiring memories. It checks the machine before offering setup,
+  rather than proposing a step that cannot work from here.
+
+- **The sidebar names the account that ran a session**, or names none at all
+  rather than guessing at one.
+
+- Fixes: an empty rename title comes back as a bad request instead of reading as
+  a broken engine; the sign-in step polls the profile it just made, so a lost
+  event no longer wedges a column; a live process is not offered as attachable
+  mid-turn, and a run cleans up after itself; the terminal cap counts the starts
+  already in flight, and an update that stalls lets go.
 
 ## Install
 
