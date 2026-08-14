@@ -17,6 +17,7 @@ import type {
   AgentEvent,
   AuthStatusInfo,
   Capabilities,
+  CerebroMemory,
   IpcResult,
   ArtemisBridge,
   PermissionDecision,
@@ -275,6 +276,35 @@ const SIGNED_IN: AuthStatusInfo = {
 const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
 const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
+
+/** The Cerebro "clone": drafts upsert here, retire deletes. See the bridge entry. */
+let mockCerebroInstalled = true;
+let mockCerebroMemories: CerebroMemory[] = [
+  {
+    name: 'cerebro-memory-bank',
+    type: 'reference',
+    description: "What Cerebro is — the team's agent-maintained memory bank — and how agents keep it current",
+    body: 'Cerebro is the shared memory bank for all developers on the Artemis harness — and agents, not developers, maintain it.',
+    added: '2026-08-14',
+    author: 'demo@example.com',
+  },
+  {
+    name: 'writing-team-memories',
+    type: 'feedback',
+    description: 'House style for Cerebro memories: atomic, durable, absolute dates, team-relevant, no secrets',
+    body: 'A Cerebro memory is one fact per file, written so a teammate (or their agent) who lacks your context can act on it.',
+    added: '2026-08-14',
+    author: 'demo@example.com',
+  },
+  {
+    name: 'artemis-agent-harness',
+    type: 'reference',
+    description: 'Artemis is our in-house Claude agent harness; where its profiles, projects, and memory live on disk',
+    body: 'Artemis is the team’s in-house agent harness, an Electron app wrapping the Claude Agent SDK.',
+    added: '2026-08-14',
+    author: 'demo@example.com',
+  },
+];
 
 export function createMockBridge(): ArtemisBridge {
   /** Profiles a `refresh` has been run for — what fills the real cache. */
@@ -1091,6 +1121,55 @@ export function createMockBridge(): ArtemisBridge {
             },
           ],
         }),
+    },
+
+    /*
+     * A bank with no repo behind it. The array below is the "clone": drafts
+     * upsert into it, retire deletes from it, and the messages are worded the
+     * way the real CLI words them so the receipt line is exercised honestly.
+     * `setup` flips nothing because the mock starts installed — the not-set-up
+     * state is reachable by editing `mockCerebroInstalled` while developing
+     * that path, which beats a hidden toggle nobody will find.
+     */
+    cerebro: {
+      status: async () =>
+        ok({
+          installed: mockCerebroInstalled,
+          repoPath: '/Users/demo/Documents/cerebro',
+          remote: 'https://github.com/Rx-Ventures/cerebro.git',
+          source: 'cerebro@52a0a32',
+          memories: mockCerebroMemories.length,
+          validationErrors: 0,
+          projects: 27,
+          profiles: [
+            { name: 'demo-personal', label: 'Demo — personal', enabled: true, hook: true },
+            { name: 'demo-work', label: 'Demo — work', enabled: true, hook: false },
+          ],
+        }),
+      list: async () => ok({ memories: [...mockCerebroMemories] }),
+      setup: async () => {
+        mockCerebroInstalled = true;
+        return ok({ message: 'Cloned the bank. Enabled every profile. cerebro@52a0a32: 3 memories -> 27 project(s).' });
+      },
+      sync: async () => ok({ message: 'cerebro@52a0a32: 3 memories -> 27 project(s) across 3 profile(s)' }),
+      draft: async (request) => {
+        const memory = {
+          name: request.name,
+          type: request.type,
+          description: request.description,
+          body: request.body,
+          added: '2026-08-14',
+          author: 'demo@example.com',
+        };
+        const index = mockCerebroMemories.findIndex((m) => m.name === request.name);
+        if (index === -1) mockCerebroMemories.push(memory);
+        else mockCerebroMemories[index] = memory;
+        return ok({ message: `cerebro: opened PR for memory-20260814-${request.name}` });
+      },
+      retire: async (request) => {
+        mockCerebroMemories = mockCerebroMemories.filter((m) => m.name !== request.name);
+        return ok({ message: `cerebro: opened PR for memory-20260814-retire-${request.name}` });
+      },
     },
 
     /*

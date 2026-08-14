@@ -214,6 +214,32 @@ export const IPC = {
   updatesInstall: 'artemis:updates:install',
   updatesRestart: 'artemis:updates:restart',
   updatesDismiss: 'artemis:updates:dismiss',
+
+  /**
+   * Cerebro — the team's shared, agent-maintained memory bank.
+   *
+   * Six channels and not one of them names a path or a binary: main owns the
+   * repo location and the CLI inside it, so the renderer can no more aim these
+   * at the filesystem than it can pick the program a terminal runs. Everything
+   * here is a thin seam over `bin/cerebro`, the single-file CLI that lives *in*
+   * the bank's own repository — reimplementing its logic in Artemis would mean
+   * two implementations of one contract drifting apart, and the CLI updates
+   * itself with the bank (`sync` fast-forwards the clone the CLI ships in).
+   *
+   * `setup` is the whole onboarding story: clone if missing, `enable` the
+   * profiles, `sync` once. Idempotent, so the pane can offer it without
+   * tracking state of its own. The write channels (`draft`, `retire`) do not
+   * write to the bank directly — they queue and land changes through the same
+   * validated, PR-gated path the agents use, which is why their response is a
+   * message rather than data: the outcome is a commit or a pull request, not
+   * a mutation the renderer should pretend it can see.
+   */
+  cerebroStatus: 'artemis:cerebro:status',
+  cerebroList: 'artemis:cerebro:list',
+  cerebroSetup: 'artemis:cerebro:setup',
+  cerebroSync: 'artemis:cerebro:sync',
+  cerebroDraft: 'artemis:cerebro:draft',
+  cerebroRetire: 'artemis:cerebro:retire',
 } as const;
 
 /**
@@ -1195,6 +1221,128 @@ export interface UpdatesStateResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Cerebro                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** The four kinds of memory the bank's own schema accepts. */
+export const CEREBRO_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'] as const;
+
+export type CerebroMemoryType = (typeof CEREBRO_MEMORY_TYPES)[number];
+
+/**
+ * One memory, as the bank's CLI reports it.
+ *
+ * `type` is a plain string rather than {@link CerebroMemoryType} on purpose:
+ * this is a *reading* of files the bank validates on its own side, and a pane
+ * that refused to list a memory because a future bank added a fifth type would
+ * be hiding data to satisfy a stale union. The union constrains what Artemis
+ * *writes* (see {@link CerebroDraftRequest}), not what it is willing to show.
+ */
+export interface CerebroMemory {
+  readonly name: string;
+  readonly type: string;
+  readonly description: string;
+  readonly body: string;
+  /** ISO date the memory was added, when the frontmatter recorded one. */
+  readonly added: string | null;
+  readonly author: string | null;
+}
+
+/** One Artemis profile, as Cerebro sees it: wired in, or not yet. */
+export interface CerebroProfileState {
+  readonly name: string;
+  readonly label: string;
+  /** The managed block is present in the profile's CLAUDE.md. */
+  readonly enabled: boolean;
+  /** The SessionStart sync hook is installed in the profile's settings.json. */
+  readonly hook: boolean;
+}
+
+/**
+ * The bank's condition on this machine, in one reading.
+ *
+ * `installed: false` is a complete, renderable answer — the repo is not cloned
+ * yet and every other field is at its zero value — because "not set up" is the
+ * state the settings pane exists to fix, not an error to fail on.
+ */
+export interface CerebroStatus {
+  readonly installed: boolean;
+  readonly repoPath: string;
+  readonly remote: string | null;
+  /** Provenance stamp of the working tree, e.g. `cerebro@52a0a32`. */
+  readonly source: string | null;
+  readonly memories: number;
+  readonly validationErrors: number;
+  /** Projects whose Artemis memory currently carries the bank. */
+  readonly projects: number;
+  readonly profiles: readonly CerebroProfileState[];
+}
+
+/**
+ * Empty for the same reason {@link SharedConfigStatusRequest} is: main derives
+ * the repo path and the profile list itself, so this channel cannot be used to
+ * probe a location the user did not already adopt as the team bank.
+ */
+export type CerebroStatusRequest = Record<string, never>;
+export type CerebroStatusResponse = CerebroStatus;
+
+/** Empty; see {@link CerebroStatusRequest}. */
+export type CerebroListRequest = Record<string, never>;
+
+export interface CerebroListResponse {
+  readonly memories: readonly CerebroMemory[];
+}
+
+/** Empty; the clone URL and destination are main's alone. */
+export type CerebroSetupRequest = Record<string, never>;
+
+/**
+ * What a Cerebro action has to say for itself — one line of CLI output.
+ *
+ * A message rather than structured data, because the interesting outcome
+ * happens elsewhere: a commit in the bank's repo, a pull request on its
+ * remote, a re-installed memory directory. The pane re-reads `status` and
+ * `list` for the facts; this is the receipt.
+ */
+export interface CerebroActionResponse {
+  readonly message: string;
+}
+
+export type CerebroSetupResponse = CerebroActionResponse;
+
+/** Empty; syncing takes no aim. */
+export type CerebroSyncRequest = Record<string, never>;
+export type CerebroSyncResponse = CerebroActionResponse;
+
+/**
+ * A memory to queue and land through the bank's own gates.
+ *
+ * The one place the renderer supplies bank content — and it still lands
+ * nothing itself: the CLI validates the draft (schema, secret scan, injection
+ * lint) and then commits or opens a PR exactly as it does for an agent.
+ * Re-using an existing name is the update path, by the bank's design.
+ */
+export interface CerebroDraftRequest {
+  /** Kebab-case slug; becomes the filename. */
+  readonly name: string;
+  readonly type: CerebroMemoryType;
+  /** One line answering "when is this relevant?". */
+  readonly description: string;
+  readonly body: string;
+}
+
+export type CerebroDraftResponse = CerebroActionResponse;
+
+/** Remove a memory through the same gates a promotion goes through. */
+export interface CerebroRetireRequest {
+  readonly name: string;
+  /** Short reason recorded in the commit message. */
+  readonly reason?: string;
+}
+
+export type CerebroRetireResponse = CerebroActionResponse;
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1242,6 +1390,12 @@ export type IpcRequestMap = {
   [IPC.updatesInstall]: UpdatesInstallRequest;
   [IPC.updatesRestart]: UpdatesRestartRequest;
   [IPC.updatesDismiss]: UpdatesDismissRequest;
+  [IPC.cerebroStatus]: CerebroStatusRequest;
+  [IPC.cerebroList]: CerebroListRequest;
+  [IPC.cerebroSetup]: CerebroSetupRequest;
+  [IPC.cerebroSync]: CerebroSyncRequest;
+  [IPC.cerebroDraft]: CerebroDraftRequest;
+  [IPC.cerebroRetire]: CerebroRetireRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -1288,6 +1442,12 @@ export type IpcResponseMap = {
   [IPC.updatesInstall]: UpdatesStateResponse;
   [IPC.updatesRestart]: UpdatesStateResponse;
   [IPC.updatesDismiss]: UpdatesStateResponse;
+  [IPC.cerebroStatus]: CerebroStatusResponse;
+  [IPC.cerebroList]: CerebroListResponse;
+  [IPC.cerebroSetup]: CerebroSetupResponse;
+  [IPC.cerebroSync]: CerebroSyncResponse;
+  [IPC.cerebroDraft]: CerebroDraftResponse;
+  [IPC.cerebroRetire]: CerebroRetireResponse;
 };
 
 /** Request type for a channel. */
@@ -1482,6 +1642,31 @@ export interface ArtemisBridge {
   readonly sharedConfig: {
     /** Read every registered Claude profile's shared entries off the disk. */
     status(request: SharedConfigStatusRequest): Promise<IpcResult<SharedConfigStatusResponse>>;
+  };
+
+  /**
+   * The team memory bank, through the bank's own CLI.
+   *
+   * Two reads, one bootstrap, three actions — and none of them lets the
+   * renderer name a path, a binary, or a git remote. Main resolves the bank's
+   * repo on this machine and invokes `bin/cerebro` inside it; the bank's own
+   * validation and PR gates decide what actually lands. See the channel
+   * comments in {@link IPC} for why the write channels answer with a message
+   * rather than data.
+   */
+  readonly cerebro: {
+    /** The bank's condition on this machine. `installed: false` is an answer, not an error. */
+    status(request: CerebroStatusRequest): Promise<IpcResult<CerebroStatusResponse>>;
+    /** Every memory in the bank, bodies included. */
+    list(request: CerebroListRequest): Promise<IpcResult<CerebroListResponse>>;
+    /** Clone if missing, enable every profile, sync once. Idempotent. */
+    setup(request: CerebroSetupRequest): Promise<IpcResult<CerebroSetupResponse>>;
+    /** Promote queued drafts, fetch, re-install everywhere. Bypasses the throttle. */
+    sync(request: CerebroSyncRequest): Promise<IpcResult<CerebroSyncResponse>>;
+    /** Queue a memory and land it through the bank's gates. */
+    draft(request: CerebroDraftRequest): Promise<IpcResult<CerebroDraftResponse>>;
+    /** Remove a memory through the same gates. */
+    retire(request: CerebroRetireRequest): Promise<IpcResult<CerebroRetireResponse>>;
   };
 
   /**

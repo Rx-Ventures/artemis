@@ -271,6 +271,20 @@ const PREVIEW_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
+ * Scan policy for the Cerebro bank's memory listing.
+ *
+ * `body` is a teammate's prose off the bank's reviewed main branch, not
+ * Artemis's data — the same argument as {@link PREVIEW_SCAN_POLICY}'s `text`.
+ * The bank's own validator refuses credential-shaped strings before a memory
+ * can land, and a memory that merely *documents* a key format must still be
+ * listable. Structure stays strict: no profile field at any depth.
+ */
+const CEREBRO_SCAN_POLICY: ScanPolicy = {
+  ...RESPONSE_SCAN_POLICY,
+  contentKeys: new Set([...RESPONSE_SCAN_POLICY.contentKeys, 'body']),
+};
+
+/**
  * Scan a payload carrying replayed {@link import('@rx-artemis/protocol').AgentEvent}s.
  *
  * Each event is scanned exactly as the live push path scans it: same policy,
@@ -336,6 +350,10 @@ export function assertResponseSafe(value: unknown, channel: IpcChannel): void {
     // A file the user asked to see.
     case IPC.previewOpen:
       return assertNoSecrets(value, channel, PREVIEW_SCAN_POLICY);
+
+    // Team-authored memory bodies, already gated by the bank's own validator.
+    case IPC.cerebroList:
+      return assertNoSecrets(value, channel, CEREBRO_SCAN_POLICY);
 
     default:
       return assertNoSecrets(value, channel, RESPONSE_SCAN_POLICY);

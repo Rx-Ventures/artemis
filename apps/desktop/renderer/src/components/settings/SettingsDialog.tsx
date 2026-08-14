@@ -48,6 +48,7 @@
 import type { ReactElement } from 'react';
 import {
   BoxesIcon,
+  BrainIcon,
   KeyRoundIcon,
   PaletteIcon,
   ShieldIcon,
@@ -57,6 +58,7 @@ import {
 import { ProfilesSection } from '../ProfilesScreen';
 import { AdvancedSection } from './AdvancedSection';
 import { AppearanceSection } from './AppearanceSection';
+import { CerebroSection } from './CerebroSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
 import { closeSettings, setSettingsSection, useApp, type SettingsSection } from '../../state/store';
@@ -110,6 +112,12 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Permissions',
     hint: 'What runs without asking',
     icon: <ShieldIcon aria-hidden="true" />,
+  },
+  {
+    id: 'cerebro',
+    label: 'Cerebro',
+    hint: 'Team memory bank',
+    icon: <BrainIcon aria-hidden="true" />,
   },
   // Last, and last on purpose: nothing above it depends on anything in it, and
   // what it holds are arrangements Artemis hands to the user to perform rather
@@ -232,6 +240,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <AppearanceSection />;
     case 'permissions':
       return <PermissionsSection />;
+    case 'cerebro':
+      return <CerebroSection />;
     case 'advanced':
       return <AdvancedSection />;
     case 'profiles':

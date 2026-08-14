@@ -31,6 +31,7 @@ import {
   ATTACHMENT_LIMITS,
   attachmentBytes,
   base64Bytes,
+  CEREBRO_MEMORY_TYPES,
   configDirProblem,
   IMAGE_MEDIA_TYPES,
   isCredentialRoutingEnvKey,
@@ -45,6 +46,13 @@ import {
   profileColorProblem,
   profilePlanIdProblem,
   type Attachment,
+  type CerebroDraftRequest,
+  type CerebroListRequest,
+  type CerebroMemoryType,
+  type CerebroRetireRequest,
+  type CerebroSetupRequest,
+  type CerebroStatusRequest,
+  type CerebroSyncRequest,
   type FileAttachment,
   type ImageAttachment,
   type JsonObject,
@@ -1414,4 +1422,74 @@ export function validateUpdatesRestart(raw: unknown): UpdatesRestartRequest {
 export function validateUpdatesDismiss(raw: unknown): UpdatesDismissRequest {
   const request = requireRequest(raw);
   return { version: requireString(request['version'], 'version', LIMITS.label) };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Cerebro                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** The bank's own slug rule, mirrored so a bad name fails here with a field error rather than as CLI stderr. */
+const CEREBRO_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The four empty requests. Empty for the reason `SharedConfigStatusRequest`
+ * is: main owns the bank's location, so there is nothing safe for a renderer
+ * to say here — see the Cerebro block in `protocol/src/ipc.ts`.
+ */
+export function validateCerebroStatus(raw: unknown): CerebroStatusRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateCerebroStatus */
+export function validateCerebroList(raw: unknown): CerebroListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateCerebroStatus */
+export function validateCerebroSetup(raw: unknown): CerebroSetupRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateCerebroStatus */
+export function validateCerebroSync(raw: unknown): CerebroSyncRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * The limits mirror the bank's validator (name 60, description 160, body
+ * 6000) so nothing that passes here is later refused by the CLI for size —
+ * the CLI still re-checks everything, including what these bounds cannot see
+ * (secret shapes, injection phrasing).
+ */
+export function validateCerebroDraft(raw: unknown): CerebroDraftRequest {
+  const request = requireRequest(raw);
+  const name = requireString(request['name'], 'name', 60);
+  if (!CEREBRO_SLUG_PATTERN.test(name)) {
+    throw new ValidationError('name', 'must be a kebab-case slug, such as deploy-approval-flow');
+  }
+  const type = requireString(request['type'], 'type', 20);
+  if (!(CEREBRO_MEMORY_TYPES as readonly string[]).includes(type)) {
+    throw new ValidationError('type', `must be one of ${CEREBRO_MEMORY_TYPES.join(', ')}`);
+  }
+  return {
+    name,
+    type: type as CerebroMemoryType,
+    description: requireString(request['description'], 'description', 160),
+    body: requireString(request['body'], 'body', 6_000),
+  };
+}
+
+/** Retirement names a slug; the CLI answers "no memory named …" for one that does not exist. */
+export function validateCerebroRetire(raw: unknown): CerebroRetireRequest {
+  const request = requireRequest(raw);
+  const name = requireString(request['name'], 'name', 60);
+  if (!CEREBRO_SLUG_PATTERN.test(name)) {
+    throw new ValidationError('name', 'is not a valid memory slug');
+  }
+  const reason = optionalString(request['reason'], 'reason', 200);
+  return { name, ...(reason === undefined ? {} : { reason }) };
 }

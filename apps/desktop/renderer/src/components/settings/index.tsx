@@ -17,5 +17,6 @@ export { SettingsDialog } from './SettingsDialog';
 export { ModelsSection } from './ModelsSection';
 export { AppearanceSection } from './AppearanceSection';
 export { PermissionsSection } from './PermissionsSection';
+export { CerebroSection } from './CerebroSection';
 export { AdvancedSection } from './AdvancedSection';
 export { ProfilesSection } from '../ProfilesScreen';

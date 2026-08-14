@@ -431,6 +431,13 @@ function RootPage({
           <ShieldIcon />
           Permissions and tools…
         </CommandItem>
+        <CommandItem
+          value="settings cerebro team memory bank memories shared knowledge"
+          onSelect={() => openSettings('cerebro')}
+        >
+          <BrainIcon />
+          Cerebro memory bank…
+        </CommandItem>
       </CommandGroup>
 
       <CommandSeparator />

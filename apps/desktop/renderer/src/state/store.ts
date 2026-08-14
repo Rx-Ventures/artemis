@@ -145,7 +145,13 @@ export type Screen = 'chat' | 'profiles';
  * for no behavioural gain. The section is the second axis: `screen` says
  * whether settings is up, this says what it is showing.
  */
-export type SettingsSection = 'profiles' | 'models' | 'appearance' | 'permissions' | 'advanced';
+export type SettingsSection =
+  | 'profiles'
+  | 'models'
+  | 'appearance'
+  | 'permissions'
+  | 'cerebro'
+  | 'advanced';
 
 /**
  * How wide the transcript column is allowed to grow.
@@ -888,6 +894,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'models',
   'appearance',
   'permissions',
+  'cerebro',
   'advanced',
 ];
 

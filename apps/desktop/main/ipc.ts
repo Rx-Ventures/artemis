@@ -60,6 +60,14 @@ import {
 
 import { checkWorkingDirectory, describeWorkspace } from '@rx-artemis/core';
 
+import {
+  draftCerebroMemory,
+  readCerebroList,
+  readCerebroStatus,
+  retireCerebroMemory,
+  setupCerebro,
+  syncCerebro,
+} from './cerebro.js';
 import type { EngineHost } from './engine.js';
 import {
   toIpcError,
@@ -109,6 +117,12 @@ import {
   validateTerminalWrite,
   validateAuthSignOut,
   validateAuthStatus,
+  validateCerebroDraft,
+  validateCerebroList,
+  validateCerebroRetire,
+  validateCerebroSetup,
+  validateCerebroStatus,
+  validateCerebroSync,
   validateUsagePlan,
   validateUpdatesDismiss,
   validateUpdatesInstall,
@@ -403,6 +417,40 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
         readSharedConfigStatus({
           dirs: sharedConfigDirs(await engine.require().listProfiles({})),
         }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Cerebro                                                          */
+    /* ---------------------------------------------------------------- */
+
+    [IPC.cerebroStatus]: {
+      validate: validateCerebroStatus,
+      handle: async () => readCerebroStatus(),
+    },
+
+    [IPC.cerebroList]: {
+      validate: validateCerebroList,
+      handle: async () => ({ memories: await readCerebroList() }),
+    },
+
+    [IPC.cerebroSetup]: {
+      validate: validateCerebroSetup,
+      handle: async () => setupCerebro(),
+    },
+
+    [IPC.cerebroSync]: {
+      validate: validateCerebroSync,
+      handle: async () => syncCerebro(),
+    },
+
+    [IPC.cerebroDraft]: {
+      validate: validateCerebroDraft,
+      handle: async (request) => draftCerebroMemory(request),
+    },
+
+    [IPC.cerebroRetire]: {
+      validate: validateCerebroRetire,
+      handle: async (request) => retireCerebroMemory(request),
     },
 
     /* ---------------------------------------------------------------- */

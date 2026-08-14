@@ -62,6 +62,12 @@ import {
   type RunsStartRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
+  type CerebroDraftRequest,
+  type CerebroListRequest,
+  type CerebroRetireRequest,
+  type CerebroSetupRequest,
+  type CerebroStatusRequest,
+  type CerebroSyncRequest,
   type SharedConfigStatusRequest,
   type Unsubscribe,
   type SessionsDeleteRequest,
@@ -487,6 +493,20 @@ const bridge: ArtemisBridge = Object.freeze({
    */
   sharedConfig: Object.freeze({
     status: (request: SharedConfigStatusRequest) => invoke(IPC.sharedConfigStatus, request),
+  }),
+
+  /**
+   * The team memory bank. Same rule as everywhere else in this file: nothing
+   * here names a path, a binary or a remote — main resolves the bank's repo
+   * and its CLI, so the renderer can ask for the bank and only the bank.
+   */
+  cerebro: Object.freeze({
+    status: (request: CerebroStatusRequest) => invoke(IPC.cerebroStatus, request),
+    list: (request: CerebroListRequest) => invoke(IPC.cerebroList, request),
+    setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
+    sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
+    draft: (request: CerebroDraftRequest) => invoke(IPC.cerebroDraft, request),
+    retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
   }),
 
   preview: Object.freeze({
