@@ -1,64 +1,45 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.11.1
+## What's new in 0.11.2
 
-- The delegated-work tab can be put away, and brought back. 0.11.0 shipped it
-  without a close button and said so on this page, deliberately: every other tab
-  in that strip holds something you can get back, and this one holds the only
-  record of work you did not start. That is a good reason to make the ✕ *safe*.
-  It was not a reason to make the pane permanent, which is what it amounted to.
-  **Closing it closes a view, and nothing else.** Every row stays where it was,
-  every subagent carries on, and the ⏹ on a row goes on working whether or not
-  anything is drawing it — the tab never owned any of that. It stays shut while
-  the work it was showing continues, comes back by itself the next time something
-  is delegated, and a **Delegated work** button next to the terminal button in the
-  header opens it whenever you want it.
-- A window you reload shows the prompt it asked, not just the answer. ⌘R on a
-  conversation that had only just started brought the agent back working away
-  under no question at all. Nothing was ever lost — the message reached the model
-  and the provider had it written down — but the line on screen saying what had
-  been asked was drawn by the window that is now gone, and nothing rebuilt it.
-  Reopened windows replay the prompt along with the rest of the turn, including a
-  steering message sent mid-run, which had it worse: no file to fall back on at
-  all.
+- The sidebar floats clear of the header. The session card had an even gutter on
+  three sides and none on the fourth — a leftover from when it became a floating
+  card, invisible for as long as the header and the page below it were one
+  unbroken field. 0.11.1 drew a rule under the header, and that left the card's
+  two top corners rounding into a border they sat directly on, reading as bolted
+  to the chrome rather than floating below it. The gap above the card is now the
+  same gap you can already see below **Report a bug** at the other end of the
+  same column.
+
+Carried over from 0.11.1, if you are coming from 0.11.0 or earlier:
+
+- The delegated-work tab can be put away, and brought back. **Closing it closes a
+  view, and nothing else** — every row stays, every subagent carries on, and the
+  ⏹ on a row goes on working whether or not anything is drawing it. It comes back
+  by itself the next time something is delegated, and a **Delegated work** button
+  beside the terminal button in the header opens it whenever you want it.
+- A window you reload shows the prompt it asked, not just the answer. Nothing was
+  ever lost — the message reached the model — but the line saying what had been
+  asked was drawn by the window that is now gone, and nothing rebuilt it.
+  Reopened windows replay it, including a steering message sent mid-run.
 - Shared Claude config links every directory, not just the first. The setup
-  script the Advanced pane hands you is pasted into a shell that is already
-  running, which on macOS is zsh — and zsh does not split a list into words the
-  way the script assumed. So it made a single directory whose name was all eight
-  names run together, linked that, and left the other eight untouched. The status
-  pane then reported "1 linked, 8 not", which reads as half-finished rather than
-  as broken. The names are written out literally now, leaving no shell anything to
-  disagree about.
+  script is pasted into a shell that is already running, which on macOS is zsh,
+  and zsh did not split its list the way the script assumed — so it linked one
+  directory named after all eight and left the rest untouched.
 - A rule under the app header, so the window's own chrome stops running into the
   conversation underneath it.
 
-Carried over from 0.11.0, if you are coming from 0.10.0 or earlier:
+And from 0.11.0, if you are coming from 0.10.x:
 
-- Delegated work has somewhere to be watched. A turn that hands three agents a job
-  used to draw as one folded line reading "delegated to 3 agents" — past tense,
-  while they worked, and nothing that ever came back. There is now a tab in the
-  right-hand rail, one per conversation, listing every subagent, workflow and
-  backgrounded command it has going: what each was asked to do, what it is using
-  right now, how long it has been at it and what it has spent. **A row can be
-  stopped**, one at a time, without touching the run or the others. Finished work
-  stays on the list, with what it said and where it wrote its output. The tab
-  appears by itself when the first task starts.
-- The sidebar's projects hold still, and only their rows move. Headings were
-  ordered by whichever held the most recent session, so every prompt anywhere
-  rewrote the whole list under the pointer. They are ordered by name now and stay
-  put. The sessions *inside* one are unchanged: newest first, held in place while
-  their agent is working.
-
-And from 0.10.x, if you are coming from 0.9.x:
-
-- Work that outlives a turn is no longer killed at the end of it. A conversation
-  holding background work holds a provider process, at roughly 400 MB, until the
-  work settles or you quit.
-- A conversation that opened with an image comes back to the sidebar.
-- A session belongs to the account it started on, rather than billing the wrong
-  one for a continuation.
-- A work section you closed stays closed when you come back to it.
+- Delegated work has somewhere to be watched: a tab in the right-hand rail, one
+  per conversation, listing every subagent, workflow and backgrounded command it
+  has going — what each was asked to do, what it is using, how long it has been
+  at it and what it has spent. **A row can be stopped**, one at a time, without
+  touching the run or the others.
+- The sidebar's projects hold still, and only their rows move. Headings are
+  ordered by name rather than by whichever held the most recent session, so a
+  prompt anywhere no longer rewrites the list under the pointer.
 
 ## Install
 
