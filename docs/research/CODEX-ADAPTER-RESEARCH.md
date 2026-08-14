@@ -116,7 +116,7 @@ Two of these are notably *better* than the Claude equivalents:
 
 ## Capabilities Codex declares
 
-As implemented in [codex.ts](packages/core/src/adapters/codex.ts):
+As implemented in [codex.ts](../../packages/core/src/adapters/codex.ts):
 
 ```ts
 export const CODEX_CAPABILITIES: Capabilities = {
@@ -281,12 +281,12 @@ Steps 1–6 are built and verified against the real CLI. What landed:
 
 | File | Lines | What |
 | --- | --- | --- |
-| [jsonrpc.ts](packages/core/src/adapters/jsonrpc.ts) | 630 | The codec (framing, id correlation, server-request dispatch) split from the subprocess, so the logic is testable without spawning |
-| [codexProtocol.ts](packages/core/src/adapters/codexProtocol.ts) | 517 | The slice of the wire protocol Artemis speaks, transcribed from `generate-ts` |
-| [codexMapper.ts](packages/core/src/adapters/codexMapper.ts) | 921 | Pure notification → `AgentEvent` translation |
-| [codex.ts](packages/core/src/adapters/codex.ts) | 1661 | The adapter: process, threads, turns, approvals, disposal |
+| [jsonrpc.ts](../../packages/core/src/adapters/jsonrpc.ts) | 630 | The codec (framing, id correlation, server-request dispatch) split from the subprocess, so the logic is testable without spawning |
+| [codexProtocol.ts](../../packages/core/src/adapters/codexProtocol.ts) | 517 | The slice of the wire protocol Artemis speaks, transcribed from `generate-ts` |
+| [codexMapper.ts](../../packages/core/src/adapters/codexMapper.ts) | 921 | Pure notification → `AgentEvent` translation |
+| [codex.ts](../../packages/core/src/adapters/codex.ts) | 1661 | The adapter: process, threads, turns, approvals, disposal |
 | Tests | 1470 | 30 jsonrpc + 50 mapper + 38 adapter, plus 5 new registry tests |
-| [smoke-codex.ts](scripts/smoke-codex.ts) | 208 | End-to-end runner that *checks* the event contract, not just prints it |
+| [smoke-codex.ts](../../scripts/smoke-codex.ts) | 208 | End-to-end runner that *checks* the event contract, not just prints it |
 
 That is 3729 lines of implementation against the 1600–2200 I estimated. The gap is
 almost entirely comment density — matching the surrounding files' habit of explaining
