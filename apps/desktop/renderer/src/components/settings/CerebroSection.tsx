@@ -113,6 +113,8 @@ export function CerebroSection(): ReactElement {
 /* -------------------------------------------------------------------------- */
 
 function SetupGroup({ pane }: { readonly pane: CerebroPane }): ReactElement {
+  const blocked = pane.preflight !== null && !pane.preflight.ready;
+
   return (
     <SettingsGroup label="Set up">
       <p className="text-2xs leading-relaxed text-ink-muted">
@@ -122,16 +124,61 @@ function SetupGroup({ pane }: { readonly pane: CerebroPane }): ReactElement {
         maintains itself — agents record team facts as they surface, and every change lands as a
         reviewed commit or pull request.
       </p>
-      <CodeBlock
-        text={`git clone https://github.com/Rx-Ventures/cerebro.git ${pane.status?.repoPath ?? '~/Documents/cerebro'}`}
-        className="max-h-16"
-      />
-      <div>
-        <Button size="sm" disabled={pane.busy !== null} onClick={pane.setup}>
+
+      {pane.preflight === null ? (
+        <p className="text-2xs leading-relaxed text-ink-faint">Checking what this machine needs…</p>
+      ) : (
+        <RequirementList pane={pane} />
+      )}
+
+      <div className="flex items-center gap-2">
+        <Button size="sm" disabled={pane.busy !== null || blocked} onClick={pane.setup}>
           {pane.busy === 'setup' ? 'Setting up…' : 'Set up Cerebro'}
         </Button>
+        <Button size="sm" variant="ghost" disabled={pane.busy !== null} onClick={pane.refresh}>
+          Re-check
+        </Button>
+        {blocked ? (
+          <span className="text-2xs text-amber">
+            Fix the requirements above first — setup would fail partway through.
+          </span>
+        ) : null}
       </div>
     </SettingsGroup>
+  );
+}
+
+/**
+ * The requirements, each with its fix.
+ *
+ * Shown before setup rather than after a failure: every one of these has a
+ * one-line remedy, and a user who learns about a missing git identity from a
+ * half-finished clone has been told the least useful version of the truth.
+ * `warn` rows stay visible — "works, but you will open pull requests by hand"
+ * is worth knowing before the first one appears.
+ */
+function RequirementList({ pane }: { readonly pane: CerebroPane }): ReactElement {
+  const checks = pane.preflight?.checks ?? [];
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
+      {checks.map((entry) => (
+        <div key={entry.id} className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2 text-2xs">
+            <StatusDot
+              tone={entry.state === 'ok' ? 'mint' : entry.state === 'warn' ? 'amber' : 'signal'}
+            />
+            <span className="font-medium text-ink">{entry.label}</span>
+            <span className="min-w-0 flex-1 truncate text-ink-faint" title={entry.detail}>
+              {entry.detail}
+            </span>
+          </div>
+          {entry.state !== 'ok' && entry.remedy !== null ? (
+            <p className="pl-4 font-mono text-2xs leading-relaxed text-ink-muted">{entry.remedy}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
   );
 }
 

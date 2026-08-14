@@ -49,6 +49,7 @@ import {
   type CerebroDraftRequest,
   type CerebroListRequest,
   type CerebroMemoryType,
+  type CerebroPreflightRequest,
   type CerebroRetireRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
@@ -1462,6 +1463,12 @@ export function validateCerebroStatus(raw: unknown): CerebroStatusRequest {
 
 /** @see validateCerebroStatus */
 export function validateCerebroList(raw: unknown): CerebroListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateCerebroStatus */
+export function validateCerebroPreflight(raw: unknown): CerebroPreflightRequest {
   requireRequest(raw);
   return {};
 }

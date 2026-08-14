@@ -1147,6 +1147,36 @@ export function createMockBridge(): ArtemisBridge {
           ],
         }),
       list: async () => ok({ memories: [...mockCerebroMemories] }),
+      preflight: async () =>
+        ok({
+          // One of each state, so the requirement list's three rows are all
+          // reachable in dev — the failing row is what gates the button.
+          ready: false,
+          checks: [
+            { id: 'git', label: 'git', state: 'ok' as const, detail: 'git version 2.55.0', remedy: null },
+            {
+              id: 'git-identity',
+              label: 'git identity',
+              state: 'fail' as const,
+              detail: 'user.name or user.email is unset — commits would be refused',
+              remedy: 'git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
+            },
+            {
+              id: 'gh',
+              label: 'GitHub CLI (optional)',
+              state: 'warn' as const,
+              detail: 'not found — memory changes push a branch for you to open a PR from',
+              remedy: 'brew install gh',
+            },
+            {
+              id: 'remote',
+              label: 'Bank access',
+              state: 'ok' as const,
+              detail: 'https://github.com/Rx-Ventures/cerebro.git reachable',
+              remedy: null,
+            },
+          ],
+        }),
       setup: async () => {
         mockCerebroInstalled = true;
         return ok({ message: 'Cloned the bank. Enabled every profile. cerebro@52a0a32: 3 memories -> 27 project(s).' });
