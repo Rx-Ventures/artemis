@@ -11,6 +11,7 @@ import {
   validateRunsStopTask,
   validateRunsStart,
   validateSessionsList,
+  validateSessionsListAll,
   validateTerminalClose,
   validateTerminalList,
   validateTerminalReplay,
@@ -637,6 +638,35 @@ describe('validateSessionsList', () => {
     expect(() =>
       validateSessionsList({ providerId: 'claude', profileId: 'p1', cwd: '/a', limit: 10_000_000 }),
     ).toThrow(ValidationError);
+  });
+});
+
+/**
+ * The aggregated listing. The property worth pinning is the *default*: an
+ * omitted limit once meant "the entire merged history", which on a heavy
+ * account is a response big enough to trip the IPC leak scanner's node budget
+ * and fail closed as a false credential-safety error. This boundary now always
+ * forwards a bounded page.
+ */
+describe('validateSessionsListAll', () => {
+  it('fills in a default page size when limit is omitted', () => {
+    expect(validateSessionsListAll({}).limit).toBe(500);
+    expect(validateSessionsListAll(undefined).limit).toBe(500);
+  });
+
+  it('keeps an explicit limit that is within bounds', () => {
+    expect(validateSessionsListAll({ limit: 25 }).limit).toBe(25);
+    expect(validateSessionsListAll({ limit: 1_000 }).limit).toBe(1_000);
+  });
+
+  it('rejects a limit past the page cap rather than forwarding it', () => {
+    expect(() => validateSessionsListAll({ limit: 10_000_000 })).toThrow(ValidationError);
+    expect(() => validateSessionsListAll({ limit: 0 })).toThrow(ValidationError);
+  });
+
+  it('rejects an unknown provider filter and accepts none at all', () => {
+    expect(() => validateSessionsListAll({ providerId: 'gpt' })).toThrow(ValidationError);
+    expect(validateSessionsListAll({}).providerId).toBeUndefined();
   });
 });
 

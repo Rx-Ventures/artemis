@@ -87,7 +87,7 @@ import {
 } from '@rx-artemis/core';
 import { lowestTierModel } from '@rx-artemis/protocol';
 
-import { EngineUnavailableError } from './errors.js';
+import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
 const log = createLogger('engine');
@@ -796,7 +796,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
        */
       const title = query.title.trim().slice(0, MAX_SESSION_TITLE);
       if (title.length === 0) {
-        throw new EngineUnavailableError('A session title cannot be empty.');
+        // A title that trims to nothing is a bad request, not a broken engine:
+        // `EngineUnavailableError` maps to `provider_not_found`, which reached
+        // the user as "Artemis's engine is unavailable: A session title cannot
+        // be empty" — a sentence about the wrong thing entirely.
+        throw new ValidationError('title', 'cannot be empty');
       }
 
       await adapter.setSessionTitle({

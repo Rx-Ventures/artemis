@@ -44,12 +44,12 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
+import { accessSync, constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
 // No `rm`: removing a tree that can hold an app bundle goes through
 // `removeTree` below, for a reason documented there.
 import { mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
@@ -84,6 +84,19 @@ const FEED_NAME = `latest-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.yml`
  * an update is never urgent enough to compete with startup. */
 const FIRST_CHECK_MS = 15_000;
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Deadlines on the anonymous downloads.
+ *
+ * The subprocess routes have always had these — `gh` gets ten minutes, `ditto`
+ * and `rm` five — but the `fetch` route had none, and a server that answers
+ * and then drips bytes forever would hold `checking` (or `installing`) set
+ * until relaunch, with the menu item greyed out for the duration. The feed is
+ * a few hundred bytes, so thirty seconds is already generous; the zip is
+ * ~196MB and gets the same ten minutes the `gh` fallback allows it.
+ */
+const FEED_FETCH_TIMEOUT_MS = 30_000;
+const ZIP_FETCH_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Where `gh` tends to live when a GUI launch doesn't inherit the shell's PATH. */
 const EXTRA_BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local', 'bin')];
@@ -174,6 +187,124 @@ async function removeTree(path: string): Promise<void> {
   await execFileAsync('/bin/rm', ['-rf', path], { timeout: 5 * 60 * 1000 });
 }
 
+/* -------------------------------------------------------------------------- */
+/* Reaching the release                                                       */
+/* -------------------------------------------------------------------------- */
+
+// These lived inside `createUpdater` until the fetch route grew a deadline.
+// None of them ever touched the updater's state, and at module scope the two
+// with behaviour worth pinning — the timeout and the basename reduction — are
+// exported where a test can reach them.
+
+/** An executable `gh`, from PATH or the usual homes, or null. */
+function resolveGh(): string | null {
+  const fromPath = (process.env['PATH'] ?? '').split(delimiter);
+  for (const dir of [...fromPath, ...EXTRA_BIN_DIRS]) {
+    if (dir === '') continue;
+    const candidate = join(dir, 'gh');
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+/** Env for `gh`, with PATH widened so its own helpers resolve under a GUI launch. */
+function ghEnv(): NodeJS.ProcessEnv {
+  const path = [process.env['PATH'] ?? '', ...EXTRA_BIN_DIRS].filter(Boolean).join(delimiter);
+  return { ...process.env, PATH: path };
+}
+
+/**
+ * Download one release asset into `dir`: the public URL first, `gh` as the
+ * fallback. `tag` is empty for "latest release".
+ *
+ * Both routes are tried for every asset, so a feed read and a 196MB zip take
+ * the same path and a failure in the first is never fatal on its own — see the
+ * file header for why the anonymous route leads now.
+ */
+export async function fetchAsset(
+  name: string,
+  tag: string,
+  dir: string,
+  timeoutMs: number,
+): Promise<string> {
+  // `name` is feed-controlled when it is the zip's `path`. The feed comes from
+  // the repository this build was published from, so a hostile value here
+  // means that repository — or the channel to it — is already compromised, and
+  // an attacker that far in has better moves than a crafted filename. But "the
+  // feed is trusted" must not be the only thing standing between a
+  // `path: ../../x.zip` and a write outside the staging directory, so the
+  // value is reduced to a bare filename before it touches the filesystem.
+  const asset = basename(name);
+  const destination = join(dir, asset);
+  const url =
+    tag === ''
+      ? `${RELEASES_URL}/latest/download/${asset}`
+      : `${RELEASES_URL}/download/${tag}/${asset}`;
+  try {
+    await fetchAnonymously(url, destination, timeoutMs);
+    return destination;
+  } catch (error) {
+    const gh = resolveGh();
+    if (gh === null) throw error;
+    // Worth a line: a machine that quietly updates through `gh` every time is
+    // a machine whose plain HTTPS route is broken, and nothing else would say
+    // so until the day `gh` is uninstalled.
+    log.debug(`Anonymous download of ${asset} failed; falling back to gh.`, error);
+    const args = ['release', 'download'];
+    if (tag !== '') args.push(tag);
+    args.push('-R', REPO, '-p', asset, '-D', dir, '--clobber');
+    await execFileAsync(gh, args, { env: ghEnv(), timeout: 10 * 60 * 1000 });
+    return destination;
+  }
+}
+
+/**
+ * GET `url` to `destination`, streamed, abandoned after `timeoutMs`.
+ *
+ * Streamed and not `Buffer.from(await response.arrayBuffer())`, which is what
+ * this was while it was dead code behind the `gh` route. The largest thing it
+ * fetched then was a 500-byte feed; the largest thing it fetches now is the
+ * release zip, which is around 196MB and would otherwise be held in the
+ * privileged process's heap in one piece — twice over, for the moment the
+ * Buffer copy and the ArrayBuffer both exist — before a byte reached disk.
+ *
+ * The timeout is one signal over the whole transfer — connect, headers, and
+ * every body chunk — because the failure worth defending against is not the
+ * refused connection, which already rejects on its own, but the server that
+ * answers and then stalls. The same signal is handed to the pipeline so the
+ * half-written destination stream is destroyed rather than left open.
+ */
+export async function fetchAnonymously(
+  url: string,
+  destination: string,
+  timeoutMs: number,
+): Promise<void> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(url, { redirect: 'follow', signal });
+  if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
+  if (response.body === null) throw new Error(`GET ${url} answered without a body`);
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(destination), { signal });
+}
+
+/**
+ * The sha512 of `file`, streamed.
+ *
+ * Streamed for the same reason the download above is: the one file this is
+ * ever asked about is the ~196MB release zip, and `readFile` would hold the
+ * whole of it in the privileged process's heap for the sake of one digest —
+ * the exact spike the streamed download just avoided.
+ */
+export async function sha512Of(file: string): Promise<string> {
+  const hash = createHash('sha512');
+  await pipeline(createReadStream(file), hash);
+  return hash.digest('base64');
+}
+
 export function createUpdater(options: UpdaterOptions): Updater {
   const { userDataDir, broadcast } = options;
   const settingsPath = join(userDataDir, 'update-settings.json');
@@ -217,81 +348,6 @@ export function createUpdater(options: UpdaterOptions): Updater {
   }
 
   /* ----------------------------------------------------------------------- */
-  /* Reaching the release                                                    */
-  /* ----------------------------------------------------------------------- */
-
-  /** An executable `gh`, from PATH or the usual homes, or null. */
-  function resolveGh(): string | null {
-    const fromPath = (process.env['PATH'] ?? '').split(delimiter);
-    for (const dir of [...fromPath, ...EXTRA_BIN_DIRS]) {
-      if (dir === '') continue;
-      const candidate = join(dir, 'gh');
-      try {
-        accessSync(candidate, fsConstants.X_OK);
-        return candidate;
-      } catch {
-        // keep looking
-      }
-    }
-    return null;
-  }
-
-  /** Env for `gh`, with PATH widened so its own helpers resolve under a GUI launch. */
-  function ghEnv(): NodeJS.ProcessEnv {
-    const path = [process.env['PATH'] ?? '', ...EXTRA_BIN_DIRS].filter(Boolean).join(delimiter);
-    return { ...process.env, PATH: path };
-  }
-
-  /**
-   * Download one release asset into `dir`: the public URL first, `gh` as the
-   * fallback. `tag` is empty for "latest release".
-   *
-   * Both routes are tried for every asset, so a feed read and a 196MB zip take
-   * the same path and a failure in the first is never fatal on its own — see the
-   * file header for why the anonymous route leads now.
-   */
-  async function fetchAsset(name: string, tag: string, dir: string): Promise<string> {
-    const destination = join(dir, name);
-    const url =
-      tag === ''
-        ? `${RELEASES_URL}/latest/download/${name}`
-        : `${RELEASES_URL}/download/${tag}/${name}`;
-    try {
-      await fetchAnonymously(url, destination);
-      return destination;
-    } catch (error) {
-      const gh = resolveGh();
-      if (gh === null) throw error;
-      // Worth a line: a machine that quietly updates through `gh` every time is
-      // a machine whose plain HTTPS route is broken, and nothing else would say
-      // so until the day `gh` is uninstalled.
-      log.debug(`Anonymous download of ${name} failed; falling back to gh.`, error);
-      const args = ['release', 'download'];
-      if (tag !== '') args.push(tag);
-      args.push('-R', REPO, '-p', name, '-D', dir, '--clobber');
-      await execFileAsync(gh, args, { env: ghEnv(), timeout: 10 * 60 * 1000 });
-      return destination;
-    }
-  }
-
-  /**
-   * GET `url` to `destination`, streamed.
-   *
-   * Streamed and not `Buffer.from(await response.arrayBuffer())`, which is what
-   * this was while it was dead code behind the `gh` route. The largest thing it
-   * fetched then was a 500-byte feed; the largest thing it fetches now is the
-   * release zip, which is around 196MB and would otherwise be held in the
-   * privileged process's heap in one piece — twice over, for the moment the
-   * Buffer copy and the ArrayBuffer both exist — before a byte reached disk.
-   */
-  async function fetchAnonymously(url: string, destination: string): Promise<void> {
-    const response = await fetch(url, { redirect: 'follow' });
-    if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
-    if (response.body === null) throw new Error(`GET ${url} answered without a body`);
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
-  }
-
-  /* ----------------------------------------------------------------------- */
   /* The periodic check                                                      */
   /* ----------------------------------------------------------------------- */
 
@@ -325,7 +381,9 @@ export function createUpdater(options: UpdaterOptions): Updater {
       try {
         const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
         try {
-          feed = parseUpdateFeed(await readFile(await fetchAsset(FEED_NAME, '', dir), 'utf8'));
+          feed = parseUpdateFeed(
+            await readFile(await fetchAsset(FEED_NAME, '', dir, FEED_FETCH_TIMEOUT_MS), 'utf8'),
+          );
         } finally {
           await removeTree(dir);
         }
@@ -379,16 +437,10 @@ export function createUpdater(options: UpdaterOptions): Updater {
     return bundle;
   }
 
-  async function sha512Of(file: string): Promise<string> {
-    return createHash('sha512')
-      .update(await readFile(file))
-      .digest('base64');
-  }
-
   async function runInstall(feed: UpdateFeed, bundle: string): Promise<void> {
     const staging = await mkdtemp(join(tmpdir(), 'artemis-update-'));
     try {
-      const zip = await fetchAsset(feed.zipPath, `v${feed.version}`, staging);
+      const zip = await fetchAsset(feed.zipPath, `v${feed.version}`, staging, ZIP_FETCH_TIMEOUT_MS);
 
       const digest = await sha512Of(zip);
       if (digest !== feed.sha512) {
@@ -506,12 +558,18 @@ export function createUpdater(options: UpdaterOptions): Updater {
     },
 
     async dismiss(version: string): Promise<UpdateState> {
-      await writeDismissed(version);
       // Only a decision that is still open can be dismissed. `ready` is
       // deliberately not dismissible: the update is already on disk, so the
       // honest states are "restart now" and "it arrives on your next launch" —
       // hiding the banner cannot un-install anything.
+      //
+      // The same condition gates the *persistence*, and used not to: `version`
+      // is a renderer-supplied string, and writing it down unconditionally let
+      // anything that could speak this channel pre-dismiss a release that was
+      // never offered — silencing a future update banner. A version that
+      // matches nothing on screen is a no-op, not a record.
       if (current.version === version && (current.phase === 'available' || current.phase === 'error')) {
+        await writeDismissed(version);
         offered = null;
         return setState(IDLE);
       }

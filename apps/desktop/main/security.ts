@@ -170,8 +170,17 @@ function isAllowedUrl(url: string, policy: SecurityPolicy): boolean {
 
   if (parsed.protocol === 'file:') {
     // Only the built renderer bundle, not "any file on this machine".
+    //
+    // Compared against `parsed.href` — the *serialized* parse — and not the
+    // raw string, because the raw form can still carry unresolved dot
+    // segments: `file:///…/renderer/../../../etc/passwd` starts with the
+    // renderer directory as a string while naming something far outside it.
+    // The URL parser resolves those (including `%2e`-encoded ones) before
+    // producing `href`, so this comparison sees the path a navigation would
+    // actually load. Callers that pass canonical URLs are unaffected: a
+    // canonical URL serializes to itself.
     const rendererDir = policy.rendererFileUrl.slice(0, policy.rendererFileUrl.lastIndexOf('/') + 1);
-    return url.startsWith(rendererDir);
+    return parsed.href.startsWith(rendererDir);
   }
 
   if (policy.devServerOrigin) {

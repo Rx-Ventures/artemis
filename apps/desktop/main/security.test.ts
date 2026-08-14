@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
   shell: { openExternal: () => Promise.resolve() },
 }));
 
-const { applySessionPolicy } = await import('./security');
+const { applySessionPolicy, isTrustedFrame } = await import('./security');
 
 const RENDERER_FILE_URL =
   'file:///Applications/Artemis.app/Contents/Resources/app.asar/out/renderer/index.html';
@@ -136,5 +136,41 @@ describe('everything else', () => {
   it('denies a permission whose origin does not parse', () => {
     expect(checks('clipboard-sanitized-write', '')).toBe(false);
     expect(checks('clipboard-sanitized-write', 'null')).toBe(false);
+  });
+});
+
+/**
+ * The `file:` allowlist, asked through `isTrustedFrame` — the exported surface
+ * that sits directly on `isAllowedUrl`.
+ *
+ * The case that earns its own block: the allowlist once compared the *raw*
+ * string against the renderer directory, so a URL that began with the right
+ * prefix and then climbed out of it with `..` passed. The parsed URL resolves
+ * dot segments before it is compared, and these tests pin that.
+ */
+describe('the file: allowlist', () => {
+  const policy = { devServerOrigin: null, rendererFileUrl: RENDERER_FILE_URL };
+  const rendererDir = RENDERER_FILE_URL.slice(0, RENDERER_FILE_URL.lastIndexOf('/') + 1);
+
+  it('allows the built renderer bundle', () => {
+    expect(isTrustedFrame(RENDERER_FILE_URL, true, policy)).toBe(true);
+    expect(isTrustedFrame(`${rendererDir}assets/index.js`, true, policy)).toBe(true);
+  });
+
+  it('rejects a file URL that starts inside the bundle and .. climbs out', () => {
+    const sneaky = `${rendererDir}../../../../../../../etc/passwd`;
+    // The raw string really does begin with the allowed prefix — that is the
+    // whole trap — and the resolved URL is nowhere near it.
+    expect(sneaky.startsWith(rendererDir)).toBe(true);
+    expect(isTrustedFrame(sneaky, true, policy)).toBe(false);
+  });
+
+  it('rejects the same climb spelled with %2e, which the URL parser also resolves', () => {
+    const sneaky = `${rendererDir}%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd`;
+    expect(isTrustedFrame(sneaky, true, policy)).toBe(false);
+  });
+
+  it('rejects any file outside the bundle directory', () => {
+    expect(isTrustedFrame('file:///etc/passwd', true, policy)).toBe(false);
   });
 });

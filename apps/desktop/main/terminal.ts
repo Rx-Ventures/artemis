@@ -451,6 +451,12 @@ export interface TerminalHost {
 export interface TerminalHostOptions {
   /** Overrides node-pty. Tests pass a fake; nothing in the app passes anything. */
   readonly spawn?: PtySpawn;
+  /**
+   * Overrides the async node-pty module load. Tests use it to hold `start` at
+   * its first `await` — the window in which the cap's reservation has to bind —
+   * which a synchronous {@link spawn} override can never open.
+   */
+  readonly loadSpawn?: () => Promise<PtySpawn>;
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
   /** Injected so a test does not have to wait a real frame for a flush. */
@@ -480,6 +486,12 @@ export function createTerminalHost(options: TerminalHostOptions = {}): TerminalH
 
   const entries = new Map<TerminalId, Entry>();
   const listeners = new Set<(event: TerminalEvent) => void>();
+
+  // Starts that have passed the cap check but not yet registered in `entries`.
+  // The count-then-spawn sequence below awaits (`loadPty`), so without this
+  // reservation N concurrent starts would each see the same count and the cap
+  // would only ever bind sequential callers.
+  let reserved = 0;
 
   const emit = (event: TerminalEvent): void => {
     // A copy, so a listener that unsubscribes while being notified does not
@@ -520,67 +532,76 @@ export function createTerminalHost(options: TerminalHostOptions = {}): TerminalH
   return {
     async start(request: TerminalStartRequest): Promise<TerminalInfo> {
       const live = [...entries.values()].filter((entry) => !entry.info.exited);
-      if (live.length >= MAX_TERMINALS) throw new TooManyTerminalsError();
+      if (live.length + reserved >= MAX_TERMINALS) throw new TooManyTerminalsError();
+      // Held across the awaits below, so concurrent starts each count the ones
+      // already in flight; released in the `finally` once the entry is
+      // registered (or the spawn failed).
+      reserved += 1;
+      try {
+        const spawn =
+          options.spawn ??
+          (options.loadSpawn !== undefined ? await options.loadSpawn() : (await loadPty()).spawn);
+        const { file, args } = resolveShell(platform, baseEnv);
 
-      const spawn = options.spawn ?? (await loadPty()).spawn;
-      const { file, args } = resolveShell(platform, baseEnv);
+        /*
+         * Random, not sequential, for the same reason `preview.ts` mints random
+         * grant tokens: the contract calls this an unguessable handle, and
+         * `term-1` would make that sentence false. Nothing today can exploit a
+         * sequential id — Artemis opens exactly one window, and `list` would hand
+         * a second one every id anyway — but "the renderer can only name a
+         * terminal it was given" is a property worth being true rather than
+         * nearly true, and sixteen bytes is not a cost.
+         */
+        const id: TerminalId = `term-${randomBytes(12).toString('hex')}`;
 
-      /*
-       * Random, not sequential, for the same reason `preview.ts` mints random
-       * grant tokens: the contract calls this an unguessable handle, and
-       * `term-1` would make that sentence false. Nothing today can exploit a
-       * sequential id — Artemis opens exactly one window, and `list` would hand
-       * a second one every id anyway — but "the renderer can only name a
-       * terminal it was given" is a property worth being true rather than
-       * nearly true, and sixteen bytes is not a cost.
-       */
-      const id: TerminalId = `term-${randomBytes(12).toString('hex')}`;
-
-      const pty = spawn(file, args, {
-        name: 'xterm-256color',
-        cwd: request.cwd,
-        cols: request.cols,
-        rows: request.rows,
-        env: buildEnv(baseEnv),
-      });
-
-      const entry: Entry = {
-        info: {
-          id,
-          shell: file,
+        const pty = spawn(file, args, {
+          name: 'xterm-256color',
           cwd: request.cwd,
-          startedAt: Date.now(),
-          exited: false,
-        },
-        pty,
-        buffer: new TailBuffer(MAX_REPLAY_BYTES),
-        pending: [],
-        timer: null,
-      };
-      entries.set(id, entry);
-      pruneExited();
-
-      pty.onData((data) => {
-        entry.buffer.append(data);
-        entry.pending.push(data);
-        entry.timer ??= setTimeout(() => flush(entry), flushMs);
-      });
-
-      pty.onExit(({ exitCode, signal }) => {
-        // Flush first: a program's last words are usually the reason it ended,
-        // and they are sitting in `pending` at exactly this moment.
-        flush(entry);
-        entry.info.exited = true;
-        emit({
-          type: 'exit',
-          id,
-          exitCode,
-          ...(signal === undefined ? {} : { signal }),
+          cols: request.cols,
+          rows: request.rows,
+          env: buildEnv(baseEnv),
         });
-      });
 
-      log.info(`Started ${basename(file)} (pid ${String(pty.pid)}) in ${request.cwd}.`);
-      return { ...entry.info };
+        const entry: Entry = {
+          info: {
+            id,
+            shell: file,
+            cwd: request.cwd,
+            startedAt: Date.now(),
+            exited: false,
+          },
+          pty,
+          buffer: new TailBuffer(MAX_REPLAY_BYTES),
+          pending: [],
+          timer: null,
+        };
+        entries.set(id, entry);
+        pruneExited();
+
+        pty.onData((data) => {
+          entry.buffer.append(data);
+          entry.pending.push(data);
+          entry.timer ??= setTimeout(() => flush(entry), flushMs);
+        });
+
+        pty.onExit(({ exitCode, signal }) => {
+          // Flush first: a program's last words are usually the reason it ended,
+          // and they are sitting in `pending` at exactly this moment.
+          flush(entry);
+          entry.info.exited = true;
+          emit({
+            type: 'exit',
+            id,
+            exitCode,
+            ...(signal === undefined ? {} : { signal }),
+          });
+        });
+
+        log.info(`Started ${basename(file)} (pid ${String(pty.pid)}) in ${request.cwd}.`);
+        return { ...entry.info };
+      } finally {
+        reserved -= 1;
+      }
     },
 
     write(id: TerminalId, data: string): void {
