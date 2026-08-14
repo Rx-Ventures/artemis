@@ -18,5 +18,17 @@ allowBuilds:
   electron-winstaller: true
   node-pty: true
 
+# A dependency has to have sat on the registry for a day before an install
+# here will resolve to it. Compromised versions of popular packages are
+# usually spotted and yanked within hours of publication; a 24-hour quarantine
+# means a resolution in this repo never races that yank. It costs nothing in
+# CI — frozen-lockfile installs resolve no versions at all — and only delays
+# the moment a person deliberately updating a dependency sees its newest
+# release.
+minimumReleaseAge: 1440 # minutes: one day
+
+# tsx was taken same-day, before the gate above existed. The exclusion is
+# pinned to that exact version, so it stops matching — and the quarantine
+# starts applying — on the next tsx bump, which is the intended expiry.
 minimumReleaseAgeExclude:
   - tsx@4.23.12

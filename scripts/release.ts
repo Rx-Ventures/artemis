@@ -53,11 +53,39 @@ if (capture('git', ['status', '--porcelain']) !== '') {
 if (capture('git', ['branch', '--show-current']) !== 'main') {
   fail('releases are cut from main.');
 }
+/*
+ * Up to date means *equal to* origin/main, not merely not-behind. Behind would
+ * tag a commit that is missing merged work; ahead would push commits to main
+ * as a side effect of releasing, which is not what anyone running `pnpm
+ * release` said they wanted. Either way the remedy is the same: make local
+ * main and origin/main agree first.
+ */
+capture('git', ['fetch', 'origin', 'main']);
+if (capture('git', ['rev-parse', 'HEAD']) !== capture('git', ['rev-parse', 'origin/main'])) {
+  fail('local main and origin/main disagree — pull (or push through review) first.');
+}
 try {
   capture('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`]);
   fail(`tag ${tag} already exists — bump the version in apps/desktop/package.json.`);
 } catch {
   // tag absent: exactly what we want
+}
+
+/*
+ * The notes have to be about this release. `release.yml` publishes
+ * `.github/RELEASE_NOTES.md` verbatim as the release body, and nothing in that
+ * pipeline reads the file's contents — so notes left over from the previous
+ * version would go out under the new one's heading-less name, telling every
+ * updater's "what's new" card a story about the release before it. The file's
+ * convention is a `## What's new in X` heading per version; the one for the
+ * version being cut has to exist before the tag does.
+ */
+const notes = readFileSync('.github/RELEASE_NOTES.md', 'utf8');
+if (!notes.includes(`What's new in ${version}`)) {
+  fail(
+    `.github/RELEASE_NOTES.md never mentions ${version} — it still leads with the previous ` +
+      `release's notes.\n        Add a "## What's new in ${version}" section (it publishes verbatim), then re-run.`,
+  );
 }
 
 /*

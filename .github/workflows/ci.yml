@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# A run superseded by a newer push to the same ref is checking a commit nobody
+# will merge — cancel it and give the runner to the one somebody will.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -18,3 +24,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      # Production bundling is its own way to fail — electron-vite resolves,
+      # tree-shakes and externalizes differently from the dev server, and an
+      # Electron app whose bundling only runs at release time ships bundling
+      # regressions blind. This is the same `pnpm run build` the release
+      # workflow performs before packaging, exercised on every change.
+      - run: pnpm build

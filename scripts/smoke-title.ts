@@ -35,8 +35,10 @@
  *
  * The config directory defaults to `~/.claude`; point it at an Artemis profile
  * with `CLAUDE_CONFIG_DIR=…` to name against that account instead. It must be
- * signed in — `claude auth status --json` says whether it is — and the naming
- * call spends a few hundred tokens on the cheapest model the profile has.
+ * signed in — checked up front, the same way smoke.ts checks, so a signed-out
+ * machine hears the sign-in command instead of an SDK failure mid-title — and
+ * the naming call spends a few hundred tokens on the cheapest model the
+ * profile has.
  *
  * Exit codes: `0` everything held, `1` an assertion failed, `2` it could not
  * get far enough to check.
@@ -49,7 +51,12 @@ import { join } from 'node:path';
 import { lowestTierModel } from '@rx-artemis/protocol';
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
-import { createClaudeAdapter } from '@rx-artemis/core';
+import {
+  checkAuthStatus,
+  createClaudeAdapter,
+  createDefaultProviderRegistry,
+  signInCommand,
+} from '@rx-artemis/core';
 
 const CONFIG_DIR = process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude');
 const PROJECTS = join(CONFIG_DIR, 'projects');
@@ -63,10 +70,25 @@ const adapter = createClaudeAdapter({
 });
 const env = { CLAUDE_CONFIG_DIR: CONFIG_DIR };
 
+/**
+ * The project directories under the config dir.
+ *
+ * A profile that has signed in and never run a session has no `projects/` at
+ * all. That is zero sessions to count and nothing to copy — not an ENOENT to
+ * die on, which is what a bare readdir turned it into.
+ */
+async function projectDirs(): Promise<readonly string[]> {
+  try {
+    return await readdir(PROJECTS);
+  } catch {
+    return [];
+  }
+}
+
 /** Every session file under the config directory, which must not grow. */
 async function countSessions(): Promise<number> {
   let total = 0;
-  for (const project of await readdir(PROJECTS)) {
+  for (const project of await projectDirs()) {
     try {
       const entries = await readdir(join(PROJECTS, project));
       total += entries.filter((file) => file.endsWith('.jsonl')).length;
@@ -80,7 +102,7 @@ async function countSessions(): Promise<number> {
 /** The smallest real session on this machine, so the copy below is cheap. */
 async function smallestSession(): Promise<{ project: string; file: string } | null> {
   let best: { project: string; file: string; bytes: number } | null = null;
-  for (const project of await readdir(PROJECTS)) {
+  for (const project of await projectDirs()) {
     let entries: string[];
     try {
       entries = await readdir(join(PROJECTS, project));
@@ -170,6 +192,26 @@ async function checkRoundTrip(title: string): Promise<boolean> {
 
 async function main(): Promise<number> {
   console.log(`config dir: ${CONFIG_DIR}\n`);
+
+  /*
+   * The same gate smoke.ts opens with: everything below runs against whatever
+   * account CONFIG_DIR is signed into, and a machine that is not signed in
+   * anywhere should hear that, and the remedy, up front — not watch the SDK
+   * fail partway through generating a title.
+   */
+  const credentials = createDefaultProviderRegistry().require('claude').credentials;
+  const status = await checkAuthStatus({ credentials, configDir: CONFIG_DIR, hostEnv: process.env });
+  if (!status.loggedIn) {
+    console.error(
+      `Not signed in at ${CONFIG_DIR}.\n` +
+        `${status.error ?? ''}\n` +
+        'Artemis performs no login of its own — run the CLI’s, the way the app tells you to:\n\n' +
+        `  ${signInCommand({ credentials, configDir: CONFIG_DIR })}\n\n` +
+        'Or point this script at a directory that is already signed in:\n\n' +
+        '  export CLAUDE_CONFIG_DIR=/path/to/config/dir\n',
+    );
+    return 2;
+  }
 
   const generated = await checkGeneration();
   if (!generated.ok) return 1;
