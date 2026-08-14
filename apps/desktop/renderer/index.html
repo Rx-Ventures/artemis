@@ -1,9 +1,15 @@
 <!doctype html>
 <!--
-  `class="dark"` is set here rather than toggled at runtime. Artemis ships a
-  single dark theme, and `index.css` declares `@custom-variant dark` against
-  this class, so shadcn components' `dark:` variants resolve statically — no
-  flash of the wrong palette before React mounts, and no theme provider.
+  `class="dark"` is the fallback, not the answer. `index.css` declares
+  `@custom-variant dark` against this class and defines the dark palette on
+  `:root`, so a document that never runs a line of script still renders exactly
+  the app Artemis shipped as dark-only. The boot script in `<head>` replaces it
+  with the palette the user actually chose, before the first paint.
+
+  Keeping the attribute is what makes that script's failure survivable: if it is
+  ever blocked — a CSP whose hash has drifted is the realistic way — the app
+  comes up dark and correct rather than unstyled, and the store's own pass at
+  module load still corrects it a moment later.
 -->
 <html lang="en" class="dark">
   <head>
@@ -38,8 +44,60 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*; frame-src artemis-preview:"
+      content="default-src 'self'; script-src 'self' 'sha256-yRY6nRklLH9xjg6E1SchWH7UfjpaDTMnCFAe/HvBO/o='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*; frame-src artemis-preview:"
     />
+    <!--
+      Resolve the palette before anything paints.
+
+      This is deliberately inline, deliberately parser-blocking, and
+      deliberately *not* the module bundle. The store applies the same class at
+      module load (see `applyTheme` in `state/store.ts`), but `<script
+      type="module">` is deferred: it runs after the document is parsed, which
+      is after the stylesheet is ready and therefore potentially after Chromium
+      has painted a frame. Electron shows the window on `ready-to-show`, which
+      fires on that first paint — so "a frame or two of the wrong palette" is
+      precisely the frame the user is shown. A user who chose light on a
+      dark-mode machine would see a dark flash on every single launch, and they
+      are the exact person this feature is for.
+
+      It sits *after* the meta CSP on purpose: a policy delivered by meta only
+      governs what follows it, so putting the script above would exempt it from
+      the very policy this file exists to enforce. Both policies cover it, and
+      both name its hash — `'sha256-…'` in the meta tag above and in
+      `PRODUCTION_CSP` in `main/security.ts`. `renderer-csp.test.ts` recomputes
+      that hash from this script's bytes and asserts both copies still match, so
+      editing a character here fails a test rather than silently disabling the
+      script in packaged builds only.
+
+      The development header does NOT carry the hash, and must not: under CSP
+      level 3 a hash in `script-src` causes `'unsafe-inline'` to be ignored, and
+      dev needs `'unsafe-inline'` for Vite's Fast Refresh preamble. Dev is
+      covered because the meta tag is stripped by `stripDevCspMeta` and the dev
+      header still allows inline script.
+
+      The key must stay equal to `PREFS_KEY` in `state/store.ts`, and the
+      no-`matchMedia` fallback must stay equal to `prefersDark`'s. An HTML
+      document cannot import either; the same test asserts both.
+    -->
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var theme = 'system';
+        try {
+          var raw = localStorage.getItem('artemis.prefs.v1');
+          var stored = raw ? JSON.parse(raw).theme : null;
+          if (stored === 'light' || stored === 'dark' || stored === 'system') theme = stored;
+        } catch (error) {
+          /* An unreadable blob is not worth a failed launch. Fall through. */
+        }
+        var dark =
+          theme === 'system'
+            ? !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches
+            : theme === 'dark';
+        root.classList.toggle('dark', dark);
+        root.classList.toggle('light', !dark);
+      })();
+    </script>
     <title>Artemis</title>
   </head>
   <body>

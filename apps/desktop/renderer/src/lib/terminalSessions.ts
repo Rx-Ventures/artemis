@@ -81,6 +81,7 @@ function token(name: string, fallback: string): string {
  */
 function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>['theme'] {
   const ink = token('--ink', '#e6e4ea');
+  const abyss = token('--abyss', '#0d0b10');
   const mint = token('--mint', '#8fd9b6');
   const amber = token('--amber', '#e8c07d');
   const cyan = token('--cyan', '#8fbce8');
@@ -89,6 +90,25 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
   const signal = token('--signal', '#e89a9a');
   const faint = token('--ink-faint', '#8b8794');
 
+  /*
+   * ANSI 0 and 7 are the ends of the greyscale, and they do not follow the
+   * tokens across a palette swap.
+   *
+   * `--ink` and `--abyss` are always at opposite ends, so mapping black to
+   * `--abyss` and white to `--ink` is right in dark and exactly inverted in
+   * light: a program printing in ANSI black would get `--abyss`, which under
+   * the light palette is a near-white, on a near-white pane. Invisible output
+   * is a bad way to find out the terminal was not part of "light mode".
+   *
+   * So the two are picked by which end they need to be rather than by name.
+   * Read off the class on `<html>` rather than from the store, for the reason
+   * `token` reads the stylesheet: the document is the source of truth this
+   * module already trusts, and importing the store from here would close an
+   * import cycle — the store imports this file.
+   */
+  const isLight = document.documentElement.classList.contains('light');
+  const [ansiBlack, ansiWhite] = isLight ? [ink, abyss] : [abyss, ink];
+
   return {
     // Transparent, so the pane's own `bg-panel` shows through and a terminal
     // sits on the app's surface rather than punching a black rectangle in it.
@@ -96,15 +116,19 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     foreground: ink,
     cursor: lunar,
     cursorAccent: token('--panel', '#151318'),
-    selectionBackground: 'rgba(185,169,240,0.28)',
-    black: token('--abyss', '#0d0b10'),
+    // Mixed from the accent rather than the literal `rgba(185,169,240,0.28)`
+    // this was, which is the *dark* lunar frozen into a number — under the
+    // light palette it stayed a pale lavender while every other selection in
+    // the app moved. Same 28%, same source of truth as `::selection`.
+    selectionBackground: `color-mix(in oklch, ${lunar} 28%, transparent)`,
+    black: ansiBlack,
     red: signal,
     green: mint,
     yellow: amber,
     blue: cyan,
     magenta: lunar,
     cyan: cyan,
-    white: ink,
+    white: ansiWhite,
     brightBlack: faint,
     brightRed: signal,
     brightGreen: sage,
@@ -112,8 +136,32 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     brightBlue: cyan,
     brightMagenta: lunar,
     brightCyan: cyan,
-    brightWhite: ink,
+    brightWhite: ansiWhite,
   };
+}
+
+/**
+ * Repaint every live terminal in the current palette.
+ *
+ * xterm draws into a canvas and was handed literal colours when it was built,
+ * so it is the one surface in the app a stylesheet swap does not reach — a
+ * terminal left alone across a theme change keeps the palette it was born with
+ * until it is destroyed. Assigning `options.theme` is xterm's supported way to
+ * change it in place and forces a full repaint, so scrollback already on screen
+ * moves too rather than only new output.
+ *
+ * Called by `setTheme` in the store, and by the media-query listener behind
+ * "System". Terminals are rare and this is cheap; there is no attempt to skip
+ * the work when the resolved palette has not actually changed, because the
+ * callers only fire on a real change.
+ */
+export function retheme(): void {
+  // Nothing to repaint, and — since `artemisTheme` reads the document — nothing
+  // to read it from either. The store calls this on every theme change, and the
+  // store is imported by Node-environment tests that have no `document`.
+  if (sessions.size === 0) return;
+  const theme = artemisTheme();
+  for (const session of sessions.values()) session.term.options.theme = theme;
 }
 
 /**

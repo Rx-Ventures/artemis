@@ -5,11 +5,17 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
 /**
  * MODIFIED FROM THE REGISTRY.
  *
- * The registry version reads the active theme from `next-themes`. Artemis is an
- * Electron app with a single dark theme declared in `index.css`, so there is no
+ * The registry version reads the active theme from `next-themes`. Artemis keeps
+ * its palette in a zustand store and on a class on `<html>`, so there is no
  * theme provider to read from and pulling in a Next.js-oriented dependency to
- * learn a constant made no sense — `theme` is pinned to `"dark"` instead and
- * `next-themes` is not a dependency of this project.
+ * learn one value made no sense. `next-themes` is not a dependency of this
+ * project.
+ *
+ * `theme` is defaulted to `"dark"` here and overridden by the spread below, so
+ * the value that actually applies is the one `ArtemisProviders` passes from the
+ * store — see the note there for why sonner is told the palette at all when the
+ * variables below already carry it. The default is what a bare `<Toaster />`
+ * would get, and matches the palette this app renders without any script.
  *
  * The colour variables below still point at the shared tokens, so toasts
  * inherit the same floating surface as popovers and dropdown menus.

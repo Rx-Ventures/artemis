@@ -53,6 +53,7 @@ vi.mock('@/lib/terminalSessions', () => ({
   noteTerminalExit: vi.fn(),
   disposeTerminalSession: vi.fn(),
   setTerminalSessionHooks: vi.fn(),
+  retheme: vi.fn(),
 }));
 
 /** Terminals the fake main process is holding, and what was asked of them. */
