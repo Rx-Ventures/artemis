@@ -5,8 +5,8 @@ A desktop UI for agentic coding CLIs.
 Artemis is an open-source Electron app that puts a real interface in front of
 command-line coding agents: a readable transcript, an approval surface you can
 actually reason about, isolated accounts you can switch between, and session
-history you can browse. Claude is the first provider. The architecture is built
-around a provider seam so Codex and OpenCode can follow.
+history you can browse. Claude and Codex are the providers today. The
+architecture is built around a provider seam so OpenCode can follow.
 
 Powered by Claude.
 
@@ -14,58 +14,61 @@ Powered by Claude.
 
 ## Status
 
-Working end to end for Claude. You can create a profile, start a run, watch it
-stream, approve or deny tool calls, interrupt it, and browse past sessions.
+Working end to end for Claude and for Codex. You can create a profile, sign it
+in with the provider's own CLI, start a run, watch it stream, approve or deny
+tool calls, interrupt it, and browse past sessions.
 
-Not done yet: a native directory picker (the working directory is a text
-field), replaying a resumed session's earlier messages into the transcript, and
-more than one run rendered at a time. Codex and OpenCode are declared in the
-protocol and appear in the UI as unavailable; neither adapter exists.
+Codex shows as available whenever its CLI is on your `PATH`; when it is not,
+the profile screen greys the provider out and says so rather than hiding it.
+OpenCode is declared in the protocol and appears in the UI as unavailable;
+that adapter does not exist yet.
 
 ## Authentication
 
-**Artemis never performs a login.** It has no OAuth flow, opens no browser to sign
-you in, and refreshes no tokens. Every credential it uses is one you obtained
-yourself and pasted into a profile.
+**Artemis never performs a login, and stores no credential of any kind.** It
+has no OAuth flow, opens no browser to sign you in, refreshes no tokens — and
+it holds nothing you could paste into it. There is no key field anywhere in the
+app.
 
-Each Claude profile picks an **auth mode**, which decides what a run costs:
-
-| Mode | Credential | Billed as |
-| ---- | ---------- | --------- |
-| **API key** (default) | An API key from <https://console.anthropic.com/settings/keys>, starting with `sk-ant-` | Metered API usage, charged to that key's account |
-| **Claude subscription** | A token printed by `claude setup-token` | Your Claude Pro, Max, Team or Enterprise plan |
-
-Subscription mode is available only on the first-party Anthropic backend.
-Bedrock, Vertex and Foundry are billed by those clouds, so the combination is
-rejected rather than silently downgraded.
-
-To get a subscription token, run Anthropic's own CLI yourself:
+A profile is a label and a config directory. To sign one in, Artemis composes
+the provider CLI's own login command with the profile's directory set inline:
 
 ```bash
-claude setup-token     # opens a browser, then prints a long-lived token
+CLAUDE_CONFIG_DIR='…/Artemis/profiles/work' claude auth login
 ```
 
-Artemis does not run that command for you and does not know when the token
-expires; when it stops working, mint a new one and paste it in.
+You run that line in your own terminal. The CLI opens the browser, completes
+the login, and writes its credential into that directory; Artemis polls the
+CLI's status probe (`claude auth status`) and moves on by itself when the
+directory answers "signed in". The credential belongs to the provider's CLI,
+lives where that CLI keeps it, and never passes through Artemis in either
+direction.
 
-### Why the mode is stored on the profile
+### Why the account is a property of the directory
 
-`ANTHROPIC_API_KEY` **overrides** a subscription token when both are set — the
-run is billed as metered API usage even though you chose your plan. So a mode is
-not just a label for which box to type into. Artemis strips every Claude
-credential variable out of the environment it inherits from your shell and then
-writes back exactly the one your profile's mode names. Whichever mode you pick,
-the other credential cannot reach the agent, whether it came from your shell,
-another profile, or a hand-edited config file.
+The Claude CLI keys both its credential and its session history on
+`$CLAUDE_CONFIG_DIR` (Codex does the same with `CODEX_HOME`), so one profile,
+one directory, one account, one history. Two profiles pointed at the same
+directory are the same account, which is occasionally what someone means.
+
+An earlier design stored the credential itself, alongside an auth mode saying
+which environment variable to emit it as. That design had a defect it could not
+be rid of: `ANTHROPIC_API_KEY` silently outranks a subscription login, so a
+profile that said "bill my plan" could bill metered API usage instead. Artemis
+now emits no credential variable at all and strips every one of them —
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and the rest of the provider's
+credential surface — from the environment a run inherits. The only thing that
+can authenticate a run is the login inside the profile's own directory, which
+makes the billing trap structural rather than policed.
 
 ### If you are distributing Artemis
 
 Anthropic's Agent SDK documentation states that third-party developers may not
 offer claude.ai login or subscription rate limits for their products without
-prior approval from Anthropic. If you are shipping a build of Artemis to other
-people with subscription mode enabled, seek that approval first. Running your
-own build against your own subscription is a separate matter from distributing
-one.
+prior approval from Anthropic. Artemis's sign-in flow ends in exactly that
+login, so if you are shipping a build of Artemis to other people, seek that
+approval first. Running your own build against your own subscription is a
+separate matter from distributing one.
 
 ## Getting started
 
@@ -85,37 +88,28 @@ pnpm build       # production bundles into apps/desktop/out
 pnpm smoke       # headless end-to-end run, no Electron (see below)
 ```
 
-### Adding a credential
+### Adding an account
 
-Artemis has no credentials of its own and cannot do anything until you give it a
-profile.
+Artemis has no credentials of its own and cannot do anything until you give it
+a profile that is signed in.
 
 1. Launch the app (`pnpm dev`) and open **Profiles** — the "add one" link on the
    welcome screen, or <kbd>⌘</kbd><kbd>,</kbd>.
 2. **New profile**, then give it a label (for example `Work` or `Personal`).
-3. Leave the backend on **Anthropic** and choose an auth mode:
-   - **API key** — paste a key from
-     <https://console.anthropic.com/settings/keys>. It starts with `sk-ant-`.
-   - **Claude subscription** — run `claude setup-token` in Anthropic's CLI and
-     paste the token it prints. Runs are billed to your plan instead of API
-     credit.
-   - For **Bedrock**, **Vertex** or **Foundry**, pick that backend instead and
-     leave the credential blank — those authenticate from the ambient credential
-     chain of the platform's own SDK. Put region and project settings
-     (`AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, …) in the profile's extra
-     environment variables box.
-4. Save. The credential is encrypted through the OS keychain immediately. From
-   then on the interface only ever shows you a masked hint like
-   `sk-ant-...4f2a`.
-5. Set a working directory in the top bar, type a prompt, and send.
+   Artemis suggests a config directory under its own user-data directory; you
+   may replace it with any absolute path. Pointing it at the `~/.claude` you
+   are already signed in to is the usual shortcut, and makes that account this
+   profile's account with no login step at all.
+3. Sign in. Artemis shows the provider CLI's login command with the profile's
+   directory set inline; run it in your own terminal. The screen polls the
+   CLI's status probe and continues on its own when the login lands.
+4. Set a working directory in the top bar, type a prompt, and send.
 
-Each profile gets its own isolated `CLAUDE_CONFIG_DIR` under Artemis's user-data
-directory, so two profiles never share credentials *or* history. Switching
-between them is manual: Artemis does not pool accounts, does not fail over
-between them, and does not rotate them when one hits a rate limit.
-
-If your machine has no usable credential store, Artemis says so at startup and
-refuses to save a key rather than silently writing one in plaintext.
+Each profile's config directory isolates its credential *and* its history, so
+two profiles never share either unless you point them at the same directory on
+purpose. Artemis can recommend which account a fresh session starts on — each
+profile can opt out of being chosen — but a running conversation stays on the
+account it started with; nothing rotates accounts mid-run.
 
 ## Architecture
 
@@ -124,18 +118,19 @@ refuses to save a key rather than silently writing one in plaintext.
 The three providers Artemis targets have nothing in common at the transport
 layer:
 
-| Provider | Transport                            |
-| -------- | ------------------------------------ |
-| Claude   | in-process Node library              |
-| Codex    | subprocess speaking JSONL over stdio |
-| OpenCode | local HTTP server                    |
+| Provider | Transport                               |
+| -------- | --------------------------------------- |
+| Claude   | in-process Node library                 |
+| Codex    | subprocess speaking JSON-RPC over stdio |
+| OpenCode | local HTTP server                       |
 
 So the abstraction cannot be shaped like any one of them. Every adapter
-normalizes its native stream onto a single nine-variant event union —
+normalizes its native stream onto a single eleven-variant event union —
 
 ```
 session.started | text.delta | text.complete | thinking.delta | tool.start
-| tool.end | permission.request | usage | run.end
+| tool.end | permission.request | permission.resolved | usage
+| background.tasks | run.end
 ```
 
 — and publishes a capability descriptor up front:
@@ -148,7 +143,7 @@ interface Capabilities {
   forkSession: boolean
   listSessions: boolean
   subagents: boolean
-  // …plus permission modes, resume, usage and cost reporting
+  // …plus permission modes, resume, rename/delete, usage and cost reporting
 }
 ```
 
@@ -163,20 +158,26 @@ Registering a provider is one line, in
 export function createDefaultProviderRegistry(options?) {
   return createProviderRegistry([
     createClaudeAdapter(options?.claude),
-    // createCodexAdapter(options?.codex),
+    createCodexAdapter(options?.codex),
+    // createOpenCodeAdapter(options?.opencode),
   ])
 }
 ```
 
+That claim has been tested once now: adding Codex was this array plus an
+options field, with nothing changed elsewhere in the app.
+
 An adapter declares its own credential vocabulary alongside its capabilities —
-which variable carries the key, which one points at the isolated config
-directory, which hosting backends it offers, and which auth modes it supports
-(with the variable each mode's secret is emitted as, and the backends each mode
-is valid on). `resolveEnv` reads that spec rather than any provider's variable
-names, and the profile editor builds both its backend picker and its auth-mode
-picker from it, so a second provider does not need a change anywhere outside its
-own adapter. Nothing in `@rx-artemis/protocol` names a backend or a mode; it defines
-the shape and the adapter supplies the contents.
+which variable points the provider at the profile's isolated config directory
+(`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex), which credential
+variables could authenticate the provider some other way and must therefore be
+stripped, and the sign-in commands (login, status probe, logout) with a
+sentence of prose to show beside them. `resolveEnv` reads that spec rather
+than any provider's variable names, and the profile screen composes its
+sign-in instructions from it, so a second provider does not need a change
+anywhere outside its own adapter. Nothing in `@rx-artemis/protocol` names a
+variable or a command; it defines the shape and the adapter supplies the
+contents.
 
 ### The path a prompt takes
 
@@ -185,7 +186,7 @@ the shape and the adapter supplies the contents.
      │              and starts matching events before start() resolves
      ▼
   window.artemis      preload/index.ts — the whole attack surface.
-     │              12 fixed channels, no ipcRenderer passthrough,
+     │              48 fixed channels, no ipcRenderer passthrough,
      ▼              no channel name ever built from renderer input
   ipcMain           main/ipc.ts — verify sender, validate and rebuild the
      │              payload, dispatch, then scan the response for secrets
@@ -194,12 +195,11 @@ the shape and the adapter supplies the contents.
      │
      ▼
   RunRegistry       core/sessions — mints or accepts the run id, resolves
-     │              credentials via resolveRun, fans out events
+     │              the run's environment via resolveRun, fans out events
      ▼
-  resolveEnv        core/profiles — decrypt the credential, build the env
-     │              bundle using the provider's own credential spec (the auth
-     │              mode's variable + backend flag + isolated config dir), and
-     │              delete every competing credential variable
+  resolveEnv        core/profiles — build the env bundle from the provider's
+     │              credential spec: point its config-dir variable at the
+     │              profile's directory, delete every credential variable
      ▼
   ClaudeAdapter     core/adapters — merges the host env (scrubbing every
      │              inherited credential), calls the Agent SDK
@@ -207,46 +207,60 @@ the shape and the adapter supplies the contents.
   Agent SDK
 ```
 
-Events come back the other way on one push channel, and the renderer
+Agent events come back the other way on one push channel, and the renderer
 demultiplexes on `event.runId`. A channel per run would force the preload to
 build channel names out of renderer-supplied strings, which is exactly the
 pattern it is not allowed to have.
 
 ### Where secrets live
 
-Credentials live in the Electron main process, encrypted at rest by the OS
-keychain, and are referenced everywhere else by an opaque handle.
+Nowhere in Artemis, and that is the design rather than an oversight. The
+provider's own CLI login writes its token into the profile's config directory;
+Artemis's part is to set one environment variable pointing the provider there
+and to read a boolean back. `profiles.json` — the whole of what Artemis
+persists about an account — is labels and directory paths, readable plaintext
+by design, with nothing in it worth stealing.
 
-**No secret ever crosses the IPC boundary into the renderer.** The renderer
-sees `ProfileMetadata` — id, label, provider, backend, auth mode, and a masked
-hint — and nothing else. The auth mode is there on purpose: "am I about to spend
-API credit or my subscription allowance?" is a question you must be able to
-answer by looking at a profile, and a mode id is not a secret. The one exception
-runs the other way: when you type a credential into the profile editor it
-travels renderer → main, once, and goes straight into encrypted storage. It
-never comes back.
+**No secret crosses the IPC boundary into the renderer, because none exists to
+cross.** The renderer sees `ProfileMetadata` — id, label, provider, the
+config-directory path, an optional colour and plan pin — and nothing else.
+There is no channel in either direction that carries a credential: the `auth`
+namespace is a status read and a sign-out, and the profile editor submits a
+label and a path.
 
 Three things enforce that rather than merely documenting it:
 
-- Every IPC response is scanned on its way out (`main/redact.ts`). Returning a
-  `Profile` where the contract says `ProfileMetadata` throws in the main
-  process instead of shipping a key to the renderer.
-- The renderer reads a key straight out of an uncontrolled DOM input at submit
-  time and clears the field in the same block. The value never enters React
-  state.
-- `main/engine.ts` narrows `ProfileStore.create()`'s return type to `{ id }`, so
-  the secret-bearing fields are not visible to the compiler at that call site.
+- No credential channel exists to misuse. Of the 48 fixed channels the preload
+  exposes, none accepts or returns a token, `ipcRenderer` is never exposed or
+  wrapped, and no channel name is ever built from renderer input — so the
+  reachable surface is fixed at build time and readable in one screen.
+- Every `invoke` response is scanned on its way out (`main/redact.ts`): key
+  names that mean the wrong shape was returned (`publicEnv`, `secretRef`,
+  `apiKey`) and credential-shaped string values (`sk-ant-…`, AWS key ids, PEM
+  headers, bearer tokens) throw in the main process instead of shipping to the
+  renderer. The agent-event, terminal and plan-usage pushes are scanned the
+  same way before broadcast; the window-state, updater and menu pushes are
+  not, and carry nothing but booleans and version strings.
+- Core has no secret to leak. The profile store persists no credential and no
+  handle to one, and `resolveEnv` writes exactly one variable — the provider's
+  config-directory variable — while deleting every variable that could
+  authenticate the provider some other way.
+
+Model output is deliberately exempt from the value patterns: if a user pastes
+their own key into a prompt, the transcript legitimately contains it, and
+refusing to render the conversation would help nobody.
 
 ### Layout
 
 ```
 packages/protocol/     shared types only — zero runtime deps, imported by everything
 packages/core/         headless engine; never imports electron
-  src/adapters/        the provider seam: types.ts, claude.ts, registry.ts
+  src/adapters/        the provider seam: types.ts, claude.ts, codex.ts, registry.ts
   src/profiles/        profile storage and env resolution
   src/sessions/        live-run registry
+  src/workspace/       working-directory checks and naming
 apps/desktop/
-  main/                Electron main process — hosts core, owns all secrets
+  main/                Electron main process — hosts core, owns the IPC boundary
   preload/             contextBridge; the renderer's entire view of the outside
   renderer/            React + Vite + Tailwind
 scripts/smoke.ts       headless end-to-end run, no Electron
@@ -264,24 +278,30 @@ Three boundaries are enforced by the type system rather than by convention:
 
 ## Debugging without Electron
 
-`scripts/smoke.ts` runs the whole engine — profile store, credential
+`scripts/smoke.ts` runs the whole engine — profile store, environment
 resolution, run registry, Claude adapter, Agent SDK — in a plain Node process,
 and prints the normalized event stream:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-…              # or CLAUDE_CODE_OAUTH_TOKEN=…
 pnpm smoke
 pnpm smoke "list the files in this directory"   # custom prompt
 ```
 
-Whichever variable you set decides the smoke profile's auth mode, so this is
-also how you check that a subscription token actually works before wiring it
-into a profile.
+No environment variable authenticates it. The script runs against the config
+directory your CLI is already signed in to — `$CLAUDE_CONFIG_DIR` if set,
+`~/.claude` otherwise — exactly as a profile would, **and the run is billed to
+that account**. `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are
+deliberately ignored: Artemis strips both from every run, so a smoke test that
+authenticated with one would be exercising a path the product does not have.
+If the directory is not signed in, the script exits with the sign-in command
+instead of starting a run.
 
-Everything it writes lives in one `mkdtemp` directory that is deleted on exit;
-it never touches your real Artemis profiles. If the smoke test works and the app
-does not, the fault is in the Electron plumbing. If the smoke test fails, the
-fault is in core and you can attach a debugger to it.
+Everything it writes — a disposable profile record and the working directory
+the agent is pointed at — lives in one `mkdtemp` directory that is deleted on
+exit. The config directory it reads is never written to, and your real Artemis
+profiles are never touched. If the smoke test works and the app does not, the
+fault is in the Electron plumbing. If the smoke test fails, the fault is in
+core and you can attach a debugger to it.
 
 ## Naming
 
