@@ -72,7 +72,6 @@ import { shortenPath } from '../lib/paths';
 import {
   createProfile,
   deleteProfile,
-  focusedPane,
   readAuthStatus,
   signOutProfile,
   suggestConfigDir,
@@ -80,7 +79,6 @@ import {
   useApp,
 } from '../state/store';
 import { usePane } from '../state/paneContext';
-import { paneState } from '../state/pane';
 import { IconButton, ReasonButton } from './disabled-reason';
 import { ProfilePlanUsage } from './PlanUsageMeter';
 import { CodeBlock, ProfileSwatch, ToneBadge } from './primitives';
@@ -1117,12 +1115,12 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
     });
     setBusy(false);
-    // `createProfile` makes the new profile active, which is how the sign-in
-    // step below learns which id to poll.
-    if (created) {
-      const id = paneState(focusedPane()).activeProfileId;
-      if (id) onDone(id);
-    }
+    // The created id comes back from `createProfile` itself. It cannot be read
+    // off the focused pane: when that pane holds a conversation, the store
+    // deliberately leaves the old profile active — and the sign-in step below
+    // must poll the profile that was just created, not whichever one the pane
+    // kept.
+    if (created) onDone(created);
   }
 
   return (

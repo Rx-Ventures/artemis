@@ -412,15 +412,11 @@ export function Composer(): ReactElement {
           onDrop={(event: DragEvent<HTMLDivElement>) => {
             event.preventDefault();
             setDragging(false);
+            // A drop that carried no files — text, a URL — has nothing to
+            // attach. What *is* in the files is `attach`'s to judge: it takes
+            // every kind now, and rejects with a per-file reason of its own.
             const files = filesFrom(event.dataTransfer);
-            if (files.length === 0) {
-              // Dropped something, but nothing we can use. Silence here reads
-              // as a broken drop target.
-              if (event.dataTransfer.files.length > 0) {
-                pushBanner('warn', 'Only images can be attached to a prompt');
-              }
-              return;
-            }
+            if (files.length === 0) return;
             void attach(files);
           }}
         >

@@ -33,6 +33,7 @@ import {
   allPanes,
   bootstrap,
   closePane,
+  deleteSession,
   focusedPane,
   newSession,
   openSessionBeside,
@@ -97,6 +98,7 @@ function storedMessages(runId: string, limit?: number): readonly unknown[] {
   },
   sessions: {
     listAll: async () => ({ ok: true, value: { sessions: [], hasMore: false } }),
+    delete: async () => ({ ok: true, value: { deleted: true } }),
     messages: async (request: { sessionId: string; runId: string; limit?: number }) => {
       messagesFor(request.sessionId, request.limit);
       return {
@@ -305,6 +307,35 @@ describe('coming back to a session that never stopped', () => {
     await settled();
 
     expect(readHistoryFor('sess-old')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Deleting a session must unhook it from every conversation, and "every"
+ * includes the ones the user has navigated away from. The sweep used to walk
+ * the grid alone, so a backgrounded column kept its `resumeSessionId` — and
+ * coming back to that conversation aimed its next prompt at a transcript that
+ * had just been destroyed.
+ */
+describe('deleting a session some conversation still points at', () => {
+  it('clears the resume pointer of a backgrounded pane too', async () => {
+    const working = pane();
+    setPaneState(working, { run: liveRun('run-a', 'sess-a'), resumeSessionId: 'sess-a' });
+    newSession();
+    await settled();
+    expect(background().map((p) => p.id)).toEqual([working.id]);
+
+    // The visible column points at it as well, so the assertion below can tell
+    // "cleared everywhere" apart from "cleared whatever happened to be on
+    // screen" — the distinction the bug lived in.
+    setPaneState(focusedPane(), { resumeSessionId: 'sess-a' });
+
+    expect(await deleteSession(summary('sess-a'))).toBe(true);
+
+    expect(paneState(focusedPane()).resumeSessionId).toBeNull();
+    expect(paneState(working).resumeSessionId).toBeNull();
   });
 });
 

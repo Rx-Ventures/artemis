@@ -37,6 +37,7 @@ import type {
   PermissionRequest,
   QuestionAnswer,
   RunEndReason,
+  RunId,
   StopReason,
   ToolEndStatus,
   UsageSnapshot,
@@ -308,6 +309,28 @@ export const syncScheduler: Scheduler = (flush) => flush();
 type Listener = () => void;
 
 const EMPTY_IDS: readonly string[] = Object.freeze([]);
+
+/**
+ * Told when a run's stream turns out to have a hole in it.
+ *
+ * The transcript's own answer to a `seq` gap is a note and carrying on — for
+ * most events the loss is a few words of text, and the next flush corrects the
+ * screen. But one droppable event is load-bearing: a lost `run.end` leaves the
+ * *store* believing the run is live forever, and the store is the half that
+ * owns run state. So the drop is reported outward, to whoever registered.
+ *
+ * A module-level setter rather than an import of the store, because the
+ * dependency points the other way — `store.ts` (via `pane.ts`) imports this
+ * module, and the transcript reaching back into it would close the cycle. Same
+ * seam as `setHostPlatform` in `pane.ts`: the owner pushes a hook in, once.
+ */
+type EventsDroppedHook = (runId: RunId) => void;
+
+let onEventsDropped: EventsDroppedHook | null = null;
+
+export function setEventsDroppedHook(hook: EventsDroppedHook | null): void {
+  onEventsDropped = hook;
+}
 
 /* -------------------------------------------------------------------------- */
 /* Model                                                                      */
@@ -602,7 +625,7 @@ export class TranscriptModel {
    * stream is worse than one that shows an orphaned card.
    */
   apply(event: AgentEvent): void {
-    this.checkSequence(event.seq);
+    this.checkSequence(event.runId, event.seq);
 
     switch (event.type) {
       case 'session.started':
@@ -1197,10 +1220,13 @@ export class TranscriptModel {
   }
 
   /** `seq` is dense per run; a gap means the transport dropped something. */
-  private checkSequence(seq: number): void {
+  private checkSequence(runId: RunId, seq: number): void {
     if (this.lastSeq !== null && seq > this.lastSeq + 1) {
       const missing = seq - this.lastSeq - 1;
       this.note('warn', `${missing} event${missing === 1 ? '' : 's'} were dropped in transit`);
+      // The note is for the reader; this is for the store, which has to ask
+      // whether one of the missing events was the run's end. See the hook.
+      onEventsDropped?.(runId);
     }
     if (this.lastSeq === null || seq > this.lastSeq) this.lastSeq = seq;
   }
