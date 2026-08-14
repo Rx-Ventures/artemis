@@ -155,10 +155,18 @@
 
 /*
  * `dark:` resolves off the `.dark` class on <html>, not the OS media query.
- * The app is dark-only today, but registry components ship `dark:` variants
- * that carry real adjustments; without this variant they would silently never
- * apply. Matching `.dark` itself as well as its descendants means a portalled
- * overlay attached to <body> is still covered.
+ * Registry components ship `dark:` variants carrying real adjustments, and
+ * without this variant they would silently never apply. Matching `.dark`
+ * itself as well as its descendants means a portalled overlay attached to
+ * <body> is still covered.
+ *
+ * The class, not the media query, is also what makes "system" honest. Exactly
+ * one of `.dark` / `.light` is on <html> at any moment — resolved before first
+ * paint by the boot script in `index.html` and maintained afterwards by
+ * `applyTheme` in `state/store.ts` — so a user who has explicitly chosen light
+ * on a dark-mode machine gets the palette *and* the `dark:` variants agreeing
+ * with each other. Keying off `prefers-color-scheme` would put those two on
+ * different sources of truth and only misbehave for that user.
  */
 @custom-variant dark (&:is(.dark, .dark *));
 
@@ -301,6 +309,114 @@
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--lunar);
+}
+
+/* ==========================================================================
+   1b. THE LIGHT PALETTE
+   ========================================================================== */
+
+/*
+ * Light mode, written as an override of the raw tokens and nothing else.
+ *
+ * Everything above is either a raw token or a semantic token defined *only* in
+ * terms of one — `--card: var(--panel)`, never a literal — and every colour in
+ * the rest of this file goes through those same names, down to the
+ * `color-mix(in oklch, var(--lunar) 35%, transparent)` that draws a selection.
+ * That discipline is the whole reason this block is twenty values instead of
+ * two hundred: `var()` resolves against the element a declaration lands on, not
+ * the one it was written in, so redefining the raw tokens on `<html>` carries
+ * every semantic token, every utility and every mix with it.
+ *
+ * `.light` and `:root` have the same specificity, so this block has to stay
+ * *after* the one above. Moving it earlier silently restores the dark palette
+ * and nothing else changes, which is the kind of bug that costs an afternoon.
+ *
+ * ---------------------------------------------------------------------------
+ * ELEVATION DOES NOT INVERT
+ * ---------------------------------------------------------------------------
+ *
+ * The dark substrate climbs monotonically — abyss 14.5 → panel 18 → raised 22 →
+ * float 25 — because there "above" and "lighter" are the same direction. Light
+ * has no such luxury: `--panel` is already white and there is nothing above
+ * white. So this splits the difference the way light interfaces actually work.
+ * The window is a soft grey; chrome and cards are white and read as sitting on
+ * top of it; floating things stay white and are separated by the shadow and
+ * hairline ring the components already draw rather than by fill. The surfaces
+ * that have to be *seen* against white — inputs, hover, wells — go down.
+ *
+ * That is why `--raised` is darker than `--panel` here and lighter than it
+ * above. Both satisfy the same instruction, "a fill you can see against the
+ * surface it is on", and the direction that satisfies it is not the same one.
+ *
+ * ---------------------------------------------------------------------------
+ * THE NUMBERS ARE MEASURED, NOT CHOSEN
+ * ---------------------------------------------------------------------------
+ *
+ * Every accent here is the dark palette's hue held fixed and its lightness
+ * dropped until it clears 4.5:1 as text on `--panel`, then its chroma pulled
+ * back to the sRGB gamut ceiling at that lightness — which is a real constraint
+ * and not a rounding: cyan at hue 235 tops out at C 0.108 by L 50%, so it is
+ * the one accent that ends up *less* saturated than its dark counterpart. Hues
+ * never move, so a diff is the same green in both palettes and the semantic
+ * separations argued for above still hold.
+ *
+ * Ratios against `--panel`, which is the worst case for the greys and the best
+ * for nothing: ink 16.5, ink-muted 7.8, ink-faint 5.5, lunar 6.6, cyan 5.9,
+ * sage 6.3, mint 5.4, amber 5.1, signal 6.1. `--ink-faint` is the one to watch
+ * for the same reason it is above — it is what 11px chrome labels use — and it
+ * holds 4.6 even on `--raised`, the darkest surface it is ever set on.
+ */
+
+.light {
+  color-scheme: light;
+
+  /* ---- Substrate ------------------------------------------------------ */
+  --abyss: oklch(96.8% 0.003 285); /* window background                */
+  --panel: oklch(100% 0 285); /* chrome: bars, sidebars, cards           */
+  --raised: oklch(93.8% 0.005 285); /* inputs, secondary fills, hover   */
+  --float: oklch(100% 0 285); /* popovers, menus, tooltips               */
+  --inset: oklch(94.8% 0.004 285); /* code wells, scroll troughs        */
+  --line: oklch(89.5% 0.005 285); /* hairlines                          */
+  /* 66%, not the 76% this started at. `--line-strong` draws scrollbar
+     thumbs and the border of an unchecked radio, which are UI component
+     boundaries and owed 3:1 under WCAG 1.4.11 rather than the nothing a
+     decorative hairline is owed. 76% measured 2.11; this measures 3.12. */
+  --line-strong: oklch(66% 0.01 285); /* emphasised edges, thumbs       */
+
+  /* ---- Ink ------------------------------------------------------------
+     Chroma rises from the dark palette's 0.003–0.005 to about 0.011. The
+     same hue at the same chroma reads as a flat neutral grey once it is
+     dark text rather than light, and the point of hue 285 is that the greys
+     sit in the accent's family — which needs slightly more of it to survive
+     the inversion. Still far below anything that reads as coloured. */
+  --ink: oklch(24% 0.012 285);
+  --ink-muted: oklch(44% 0.011 285);
+  --ink-faint: oklch(52% 0.011 285);
+
+  /* ---- Accents --------------------------------------------------------
+     `--lunar-ink` and `--signal-ink` swap ends: the fills they sit on are
+     now dark, so the text on them is near-white rather than near-black. */
+  --lunar: oklch(50% 0.2 287);
+  --lunar-dim: oklch(43% 0.19 287);
+  --lunar-ink: oklch(98% 0.005 287);
+  --cyan: oklch(50% 0.1 235);
+  --sage: oklch(48% 0.07 195);
+  --mint: oklch(51% 0.115 155);
+  --amber: oklch(55% 0.125 55);
+  --signal: oklch(52% 0.19 10);
+  --signal-ink: oklch(98% 0.005 10);
+
+  /*
+   * The one semantic token this block has to restate.
+   *
+   * `--accent` is shadcn's hover surface and `--popover` is the surface it
+   * hovers on; both are mapped onto `--float` above. That survives while
+   * `--float` is a distinct grey. It does not survive here, where a popover
+   * and its hovered row would both be white and the hover would be invisible.
+   * Pointed at `--raised` instead — the token whose whole job is being a fill
+   * you can see against the surface it is on.
+   */
+  --accent: var(--raised);
 }
 
 /* ==========================================================================

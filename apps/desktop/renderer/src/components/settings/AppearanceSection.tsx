@@ -2,9 +2,11 @@
  * Appearance.
  * ============================================================================
  *
- * A small pane, on purpose. Artemis is a dark-only app with one palette, and
- * that is architecture rather than preference — a settings pane offering to
- * change it would be promising something the design system does not support.
+ * A small pane, on purpose — and notably it is not where the theme lives. That
+ * control is in the window header next to the settings button (see
+ * `ThemeToggle`), because the palette is the one appearance setting whose whole
+ * effect is the window itself: everything it changes is already on screen, and
+ * putting it behind this dialog would mean covering it up to reach it.
  *
  * Text size is the one that looks like the same kind of claim and is not, so it
  * is worth being precise about what became settable. The type *scale* is still
@@ -472,11 +474,12 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
-        Theme and density are not settings. Artemis is dark-only by design, and the transcript uses
-        one spacing scale so that message boundaries stay readable at a glance — text size moves
-        that whole scale at once rather than loosening it. There is no global motion switch either
-        — the only animations in the app are the ones that show something arriving, and the one
-        that runs continuously is the switch above.
+        The theme is not here — it is in the window header, next to the settings button, so you can
+        see the app change as you pick. Density is not a setting at all: the transcript uses one
+        spacing scale so that message boundaries stay readable at a glance, and text size moves that
+        whole scale at once rather than loosening it. There is no global motion switch either — the
+        only animations in the app are the ones that show something arriving, and the one that runs
+        continuously is the switch above.
       </p>
     </SettingsPane>
   );

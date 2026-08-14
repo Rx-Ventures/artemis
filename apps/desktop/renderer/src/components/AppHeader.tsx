@@ -103,6 +103,7 @@ import { cn } from '../lib/utils';
 import { openSettings, toggleTasks, toggleTerminal, toggleSidebar, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
+import { ThemeToggle } from './ThemeToggle';
 
 /**
  * Room reserved for the macOS traffic lights, in pixels.
@@ -315,6 +316,20 @@ export function AppHeader(): ReactElement {
       >
         <Settings2Icon />
       </IconButton>
+      {/*
+        Last in the row, and the only control here that is not a button.
+
+        It sits beside Settings rather than inside it because it is the one
+        preference whose whole effect is the window you are looking at — the
+        transcript, the sidebar, this header. Everything behind a modal would be
+        covered by the modal you opened to change it.
+
+        A separator ahead of it: the three to the left act on the *conversation*
+        (its shell, its delegated work, its settings) and this one acts on the
+        application. Without the rule they read as a row of four peers.
+      */}
+      <div className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden="true" />
+      <ThemeToggle />
 
       <WindowControls maximized={windowState.maximized} focused={windowState.focused} />
     </header>

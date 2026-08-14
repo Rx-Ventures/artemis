@@ -94,6 +94,7 @@ import {
   ensureTerminalSession,
   noteTerminalExit,
   requestTerminalFocus,
+  retheme,
   setTerminalSessionHooks,
   writeToTerminal,
 } from '../lib/terminalSessions';
@@ -178,6 +179,23 @@ export type ConversationWidth = 'comfortable' | 'wide' | 'full';
  * saying it failed is a bug report we would never receive.
  */
 export type RunSummary = 'always' | 'failures' | 'never';
+
+/**
+ * Which palette the app wears.
+ *
+ * Three values, and `'system'` is deliberately a value rather than the absence
+ * of one. "Follow the machine" is a standing instruction that has to survive
+ * the OS changing its mind at sunset, so it cannot be represented as "no
+ * preference stored" — that would be indistinguishable from a fresh install and
+ * would lose the difference between a user who never chose and one who chose to
+ * defer. It is also why {@link resolveTheme} exists: everything downstream of
+ * this wants the *resolved* palette, and only the settings control wants the
+ * instruction.
+ */
+export type Theme = 'system' | 'light' | 'dark';
+
+/** The resolved palette — what `<html>` actually wears. Never `'system'`. */
+export type ResolvedTheme = 'light' | 'dark';
 
 // Re-exported so a component reaches for the dock's vocabulary through the same
 // module it reaches for the state — `state/dock.ts` is the model, not a second
@@ -475,6 +493,14 @@ export interface AppState {
   /** Base text size in px — what `text-base` renders at. @see clampFontSize */
   readonly fontSize: number;
   /**
+   * The palette instruction, not the palette. @see resolveTheme
+   *
+   * `'system'` is stored as itself and resolved at the point of use, so the app
+   * keeps following the machine after the machine changes its mind — which it
+   * does, on a schedule, without anyone opening settings.
+   */
+  readonly theme: Theme;
+  /**
    * Whether streaming text fades in a word at a time.
    *
    * On by default, and off is a real answer rather than an accessibility
@@ -714,6 +740,68 @@ export const SIDEBAR_DEFAULT_WIDTH = 272;
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Theme                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Follow the machine, until told otherwise.
+ *
+ * The app shipped dark-only, so `'dark'` would be the compatible default — and
+ * it is the wrong one. A user on a light-mode machine who installs this build
+ * has already told their OS what they want, and defaulting to `'system'` is the
+ * only value that hears it. The two agree for everyone who was here before,
+ * because a dark-mode machine resolves to the palette they already had.
+ */
+export const DEFAULT_THEME: Theme = 'system';
+
+const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
+
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/**
+ * What the OS is asking for.
+ *
+ * Falls back to dark rather than light when there is no `matchMedia` at all —
+ * a Node-environment test, or jsdom, which does not implement it. Dark is what
+ * this app looked like before any of this existed, so the no-information answer
+ * is the historical one rather than a surprise. The boot script in `index.html`
+ * makes the same call for the same reason, and the two have to agree or the
+ * first paint and the first render disagree.
+ */
+function prefersDark(): boolean {
+  return globalThis.matchMedia?.(DARK_QUERY).matches ?? true;
+}
+
+/** Turn the stored instruction into the palette it currently means. */
+export function resolveTheme(theme: Theme): ResolvedTheme {
+  return theme === 'system' ? (prefersDark() ? 'dark' : 'light') : theme;
+}
+
+/**
+ * Put the resolved palette on `<html>`, where `index.css` reads it.
+ *
+ * Both classes are written every time, one on and one off, rather than only
+ * adding the one that applies. `index.html` ships `class="dark"` from its boot
+ * script and `@custom-variant dark` keys off exactly that class, so a pass that
+ * only ever *added* would leave `.dark` in place under the light palette and
+ * every registry component's `dark:` variant would fire against light tokens —
+ * a failure that looks like a handful of unrelated components being broken
+ * rather than like a theme bug.
+ *
+ * Called at module load as well as from {@link setTheme}, for the reason
+ * {@link applyFontScale} is: the first paint has to already be right.
+ */
+function applyTheme(theme: Theme): ResolvedTheme {
+  const resolved = resolveTheme(theme);
+  const root = globalThis.document?.documentElement;
+  if (root) {
+    root.classList.toggle('dark', resolved === 'dark');
+    root.classList.toggle('light', resolved === 'light');
+  }
+  return resolved;
 }
 
 /**
@@ -968,6 +1056,7 @@ interface Prefs {
   conversationWidth?: ConversationWidth;
   runSummary?: RunSummary;
   fontSize?: number;
+  theme?: Theme;
   streamingWordFade?: boolean;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
@@ -1062,6 +1151,12 @@ function loadPrefs(): Prefs {
     ultracode,
     conversationWidth: oneOf(raw['conversationWidth'], CONVERSATION_WIDTHS),
     runSummary: oneOf(raw['runSummary'], RUN_SUMMARIES),
+    // Guarded for the usual reason and one extra: this reaches `classList`, so
+    // a stray value out of the blob would put an unknown class on <html>,
+    // match no palette, and leave the app wearing whichever one the boot
+    // script had already resolved — visibly fine until the user tries to
+    // change it and nothing happens.
+    theme: oneOf(raw['theme'], THEMES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1144,6 +1239,7 @@ function savePrefs(): void {
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     fontSize: s.fontSize,
+    theme: s.theme,
     streamingWordFade: s.streamingWordFade,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1168,6 +1264,23 @@ const prefs = loadPrefs();
  */
 const initialFontSize = clampFontSize(prefs.fontSize ?? FONT_SIZE_DEFAULT);
 applyFontScale(initialFontSize);
+
+/*
+ * The same treatment for the palette, and it is deliberately a *second* pass
+ * over something the boot script in `index.html` has already done.
+ *
+ * That script runs before the stylesheet paints and reads the same key out of
+ * the same blob, so in the overwhelming case this changes nothing and is pure
+ * belt and braces. It earns its place in the two cases where the boot script is
+ * not enough: a build where the script failed to run at all (a CSP the hash no
+ * longer matches, say), and a `localStorage` that was written between the two —
+ * which is what a second window opening onto changed preferences looks like.
+ * Re-deriving here means the class on <html> and the value in the store cannot
+ * disagree, and disagreement is the one state with no visible symptom until
+ * something toggles.
+ */
+const initialTheme = prefs.theme ?? DEFAULT_THEME;
+applyTheme(initialTheme);
 
 /**
  * The state a brand-new column starts from.
@@ -1276,6 +1389,7 @@ export const useApp = create<AppState>(() => ({
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   fontSize: initialFontSize,
+  theme: initialTheme,
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
@@ -1656,6 +1770,50 @@ useApp.subscribe(mirrorToPanes);
  * second pass finds nothing changed and returns.
  */
 useApp.subscribe(syncFromPanes);
+
+/*
+ * `'system'` is a standing instruction, so something has to keep listening.
+ *
+ * Without this, "System" would mean "whatever the OS was set to when this
+ * window opened" — correct on launch and then quietly wrong at sunset on every
+ * machine with a schedule, which is most of them now. The listener is
+ * registered for the life of the renderer rather than mounted by a component:
+ * there is nothing to unsubscribe from because the page outlives any tree that
+ * could own it, and a `useEffect` in `App` would tie the palette to a component
+ * that a future refactor is entitled to move.
+ *
+ * The guard is on every event rather than on registration, because the
+ * instruction changes while the listener is alive — a user who picks Dark and
+ * later returns to System must not need a reload to be followed again.
+ *
+ * Registered after the store exists so the callback can read it. Nothing here
+ * fires during module evaluation.
+ */
+globalThis.matchMedia?.(DARK_QUERY).addEventListener('change', () => {
+  if (useApp.getState().theme !== 'system') return;
+  applyTheme('system');
+  // The document changed palette without anything re-rendering, so the one
+  // surface that cannot read CSS has to be told. See `setTheme`.
+  retheme();
+});
+
+/**
+ * Choose the palette.
+ *
+ * Writes the class before the store, so a component reading `theme` in the same
+ * tick is never a frame ahead of the document it is describing.
+ */
+export function setTheme(theme: Theme): void {
+  applyTheme(theme);
+  useApp.setState({ theme });
+  // xterm paints into a canvas and was handed literal colours at construction,
+  // so it is the one part of the app a stylesheet swap does not reach. Every
+  // live terminal is re-themed here rather than on next write, because a
+  // terminal the user is not typing into would otherwise keep the old palette
+  // until it happened to receive output.
+  retheme();
+  savePrefs();
+}
 
 /** Point the window-level surfaces at a pane. */
 export function focusPane(paneId: PaneId): void {

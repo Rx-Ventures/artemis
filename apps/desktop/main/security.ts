@@ -70,9 +70,26 @@ export interface SecurityPolicy {
  * apart is that it is a *separate response* with a *separate header*, so nothing
  * an artifact is allowed to do is anything this page is allowed to do.
  */
+/**
+ * The renderer's one inline script: the theme boot in `renderer/index.html`.
+ *
+ * It resolves the stored palette onto `<html>` before the first paint, which a
+ * deferred module bundle cannot do — see the comment above the script itself.
+ * Being inline, it needs either `'unsafe-inline'` (which would grant *every*
+ * inline script and is exactly what this policy exists to refuse) or its own
+ * hash. A hash grants that one script and nothing else, including a future
+ * edited version of the same script.
+ *
+ * Which is the drift hazard, and it is real: change a character of the script
+ * and packaged builds silently stop running it, while dev keeps working because
+ * dev is covered by `'unsafe-inline'` instead. `renderer-csp.test.ts` recomputes
+ * this from `index.html` and fails when the two disagree.
+ */
+const THEME_BOOT_HASH = "'sha256-yRY6nRklLH9xjg6E1SchWH7UfjpaDTMnCFAe/HvBO/o='";
+
 const PRODUCTION_CSP = [
   "default-src 'none'",
-  "script-src 'self'",
+  `script-src 'self' ${THEME_BOOT_HASH}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
@@ -94,6 +111,14 @@ const PRODUCTION_CSP = [
  *  - `'unsafe-inline'` in `script-src`, because `@vitejs/plugin-react` injects
  *    its Fast Refresh preamble as an inline module script.
  *  - the dev server origin in `connect-src`, for the HMR websocket.
+ *
+ * {@link THEME_BOOT_HASH} is deliberately absent, and adding it "for
+ * consistency" would break the dev server. Under CSP level 3 a `script-src`
+ * that carries any hash or nonce ignores `'unsafe-inline'` entirely — so
+ * naming the boot script here would revoke the grant the Fast Refresh preamble
+ * depends on, and the page would die on `$RefreshSig$ is not defined`. The boot
+ * script is covered in dev by `'unsafe-inline'` like every other inline script,
+ * which is the whole reason that relaxation is not shipped.
  */
 function developmentCsp(origin: string): string {
   const wsOrigin = origin.replace(/^http/, 'ws');

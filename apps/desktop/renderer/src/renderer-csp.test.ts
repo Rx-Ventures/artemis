@@ -24,6 +24,7 @@
  * drift.
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +36,7 @@ const read = (relative: string): string =>
 const INDEX_HTML = read('../index.html');
 const PREVIEW_TS = read('../../main/preview.ts');
 const SECURITY_TS = read('../../main/security.ts');
+const STORE_TS = read('./state/store.ts');
 
 /** The scheme name as `preview.ts` declares it — the one source of truth. */
 const scheme = (() => {
@@ -101,5 +103,108 @@ describe("the renderer's meta CSP", () => {
     // Inline style is the one thing xterm relies on, and it was already granted
     // for React — so the terminal added no new permission at all.
     expect(directive(metaCsp, 'style-src')).toContain("'unsafe-inline'");
+  });
+});
+
+/**
+ * The theme boot script, and the three things that can silently unhook it.
+ * ============================================================================
+ *
+ * `index.html` runs one inline script — it resolves the stored palette onto
+ * `<html>` before the first paint, which the deferred module bundle cannot do.
+ * Inline script is the thing this app's CSP exists to forbid, so it is granted
+ * by hash instead of by `'unsafe-inline'`.
+ *
+ * Every failure mode here is invisible in development, which is what makes the
+ * test worth its length. Dev strips the meta tag and serves a policy carrying
+ * `'unsafe-inline'`, so the script runs there no matter what these hashes say;
+ * the only place a stale hash shows up is a packaged build, as a flash of the
+ * wrong palette on launch that nobody can reproduce.
+ */
+describe('the theme boot script', () => {
+  /** The script's exact bytes — what a CSP hash is computed over. */
+  const bootScript = (() => {
+    const match = /<script>([\s\S]*?)<\/script>/.exec(INDEX_HTML);
+    if (!match?.[1]) throw new Error('index.html no longer carries an inline boot script.');
+    return match[1];
+  })();
+
+  const bootHash = `'sha256-${createHash('sha256').update(bootScript, 'utf8').digest('base64')}'`;
+
+  it('is granted by hash in the meta CSP', () => {
+    // Recomputed rather than compared to a constant: the point is that the
+    // hash in the file describes the script in the file, and a test holding
+    // its own copy of the expected value would drift in the same direction.
+    expect(directive(metaCsp, 'script-src')).toContain(bootHash);
+  });
+
+  it('is granted by the same hash in the production header', () => {
+    expect(SECURITY_TS).toContain(bootHash);
+  });
+
+  /*
+   * The relaxation that would quietly revoke the other one.
+   *
+   * Under CSP level 3, a `script-src` carrying any hash or nonce ignores
+   * `'unsafe-inline'`. The development policy needs `'unsafe-inline'` for
+   * Vite's Fast Refresh preamble, so naming the boot hash there would take
+   * Fast Refresh out — the failure being a dead page on `$RefreshSig$ is not
+   * defined`, which reads as a Vite problem rather than a CSP one.
+   */
+  it('is not named in the development policy, which would disable unsafe-inline', () => {
+    const developmentCsp = /function developmentCsp\([\s\S]*?\n}/.exec(SECURITY_TS)?.[0];
+    expect(developmentCsp).toBeDefined();
+    expect(developmentCsp).toContain("'unsafe-inline'");
+    expect(developmentCsp).not.toContain(bootHash);
+  });
+
+  /*
+   * The script reads preferences the store writes, and neither can import from
+   * the other — an HTML document cannot import a TypeScript constant, which is
+   * the same reason the tests above exist.
+   */
+  it('reads the key the store actually writes', () => {
+    const key = /const PREFS_KEY = '([^']+)'/.exec(STORE_TS)?.[1];
+    expect(key).toBeDefined();
+    expect(bootScript).toContain(`localStorage.getItem('${key ?? ''}')`);
+  });
+
+  it('accepts exactly the theme values the store will accept', () => {
+    // A value the script honours but the store coerces away — or the reverse —
+    // means the first paint and the first render disagree.
+    for (const theme of ['light', 'dark', 'system']) {
+      expect(bootScript).toContain(`'${theme}'`);
+    }
+    expect(STORE_TS).toContain("const THEMES: readonly Theme[] = ['system', 'light', 'dark']");
+  });
+
+  /*
+   * Both sides answer "no matchMedia" with dark. If they ever disagreed, the
+   * disagreement would only appear where `matchMedia` is missing — which is
+   * nowhere a user runs and everywhere the tests run.
+   */
+  it('falls back to dark without matchMedia, as the store does', () => {
+    expect(bootScript).toContain('!window.matchMedia ||');
+    expect(STORE_TS).toContain("globalThis.matchMedia?.(DARK_QUERY).matches ?? true");
+  });
+
+  /*
+   * Order matters for a policy delivered by meta: it governs only what follows
+   * it. A boot script above the tag would be exempt from the very policy this
+   * file is about, and every assertion above would still pass.
+   */
+  it('sits after the meta CSP, so the meta policy actually covers it', () => {
+    expect(INDEX_HTML.indexOf('<script>')).toBeGreaterThan(
+      INDEX_HTML.indexOf('http-equiv="Content-Security-Policy"'),
+    );
+  });
+
+  /*
+   * The static attribute is the failure mode's floor: a blocked or broken
+   * script leaves a document that still renders the dark palette correctly,
+   * rather than one with no palette class and every `dark:` variant inert.
+   */
+  it('leaves the static dark class in place as its fallback', () => {
+    expect(INDEX_HTML).toContain('<html lang="en" class="dark">');
   });
 });
