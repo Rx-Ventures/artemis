@@ -25,10 +25,12 @@
  * your work rather than a wall of the room it happens in.
  *
  * The `<aside>` still owns the full width, including the margin. The card is a
- * child inset by the aside's padding. Keeping the outer element the full width
- * means resizing, which measures the aside, is unchanged by the visual change —
- * and it puts the drag handle in the gutter between the card and the transcript
- * instead of on top of the card's rounded edge.
+ * child inset by the aside's padding — the same inset on all four sides, so the
+ * gap above it reads as the same gutter as the one below the bug report row
+ * rather than as the card hanging off the header's rule. Keeping the outer
+ * element the full width means resizing, which measures the aside, is unchanged
+ * by the visual change — and it puts the drag handle in the gutter between the
+ * card and the transcript instead of on top of the card's rounded edge.
  *
  * ## New Session is the first control, and now literally first
  *
@@ -134,7 +136,7 @@ export function Sidebar(): ReactElement | null {
       ref={asideRef}
       style={{ width }}
       aria-label="Sessions"
-      className="relative flex shrink-0 flex-col p-2 pt-0"
+      className="relative flex shrink-0 flex-col p-2"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5">
         <div className="flex flex-col gap-1.5 p-2.5">
