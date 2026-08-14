@@ -39,9 +39,11 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
+  CerebroCheck,
   CerebroDraftRequest,
   CerebroActionResponse,
   CerebroMemory,
+  CerebroPreflight,
   CerebroProfileState,
   CerebroRetireRequest,
   CerebroStatus,
@@ -201,6 +203,186 @@ function parseJson(text: string): unknown {
 /* The six operations                                                         */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/* Preflight — before assuming any of this can run                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `doctor --json` → the protocol's {@link CerebroPreflight}.
+ *
+ * Rebuilds each check rather than trusting the CLI's shape, and drops an entry
+ * whose `state` is not one the protocol names — a future CLI state must not
+ * arrive in the renderer as an unhandled string.
+ */
+export function parseCerebroDoctor(text: string): CerebroPreflight {
+  const data = asRecord(parseJson(text), 'doctor');
+  const raw = Array.isArray(data['checks']) ? data['checks'] : [];
+  const checks: CerebroCheck[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const item = entry as Record<string, unknown>;
+    const state = item['state'];
+    if (state !== 'ok' && state !== 'warn' && state !== 'fail') continue;
+    checks.push({
+      id: stringOr(item['id'], 'unknown'),
+      label: stringOr(item['label'], 'Check'),
+      state,
+      detail: stringOr(item['detail'], ''),
+      remedy: stringOrNull(item['remedy']),
+    });
+  }
+  return { ready: data['ready'] === true, checks };
+}
+
+/** Probe one binary: absent, present-but-broken, or a version string. */
+async function probeTool(binary: string, args: readonly string[]): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(binary, [...args], { timeout: 10_000, encoding: 'utf8' });
+    return stdout.trim().split('\n')[0] ?? '';
+  } catch {
+    return null;
+  }
+}
+
+function check(
+  id: string,
+  label: string,
+  state: CerebroCheck['state'],
+  detail: string,
+  remedy: string | null = null,
+): CerebroCheck {
+  return { id, label, state, detail, remedy };
+}
+
+/**
+ * The pre-clone probes, run by Artemis itself.
+ *
+ * Deliberately a *second* implementation of part of `cerebro doctor`, and only
+ * of the part that has to work when the CLI is not on disk yet. The moment a
+ * clone exists, {@link readCerebroPreflight} defers to the CLI instead — one
+ * source of truth wherever there can be one, and this fallback covers the gap
+ * where there cannot.
+ */
+async function probeMachine(root: string): Promise<CerebroCheck[]> {
+  const checks: CerebroCheck[] = [];
+
+  const gitVersion = await probeTool('git', ['--version']);
+  checks.push(
+    gitVersion === null
+      ? check('git', 'git', 'fail', 'not found on PATH', 'macOS: xcode-select --install')
+      : check('git', 'git', 'ok', gitVersion),
+  );
+
+  if (gitVersion !== null) {
+    const name = await probeTool('git', ['config', '--get', 'user.name']);
+    const email = await probeTool('git', ['config', '--get', 'user.email']);
+    checks.push(
+      name === null || email === null || name === '' || email === ''
+        ? check(
+            'git-identity',
+            'git identity',
+            'fail',
+            'user.name or user.email is unset — commits would be refused',
+            'git config --global user.name "Your Name" && git config --global user.email "you@example.com"',
+          )
+        : check('git-identity', 'git identity', 'ok', `${name} <${email}>`),
+    );
+  }
+
+  const python = await probeTool('python3', ['--version']);
+  checks.push(
+    python === null
+      ? check('python', 'Python 3.8+', 'fail', 'python3 not found on PATH', 'macOS: xcode-select --install')
+      : check('python', 'Python 3.8+', 'ok', python),
+  );
+
+  const gh = await probeTool('gh', ['--version']);
+  checks.push(
+    gh === null
+      ? check(
+          'gh',
+          'GitHub CLI (optional)',
+          'warn',
+          'not found — memory changes push a branch for you to open a PR from',
+          'brew install gh',
+        )
+      : check('gh', 'GitHub CLI (optional)', 'ok', gh),
+  );
+
+  checks.push(
+    existsSync(root)
+      ? check(
+          'repo',
+          'Bank checkout',
+          'fail',
+          `${root} exists but is not the Cerebro repo`,
+          'Move it aside, or set ARTEMIS_CEREBRO_ROOT to the real clone',
+        )
+      : check('repo', 'Bank checkout', 'warn', `not cloned yet — will be created at ${root}`, null),
+  );
+
+  // The real gate on a private repository: can this machine read it at all?
+  if (gitVersion !== null) {
+    try {
+      await execFileAsync('git', ['ls-remote', '--exit-code', CEREBRO_REPO_URL, 'HEAD'], {
+        timeout: 30_000,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      checks.push(check('remote', 'Bank access', 'ok', `${CEREBRO_REPO_URL} reachable`));
+    } catch (error) {
+      const said = (error as { stderr?: unknown }).stderr;
+      const detail =
+        typeof said === 'string' && said.trim().length > 0
+          ? (said.trim().split('\n').pop() ?? '')
+          : `cannot read ${CEREBRO_REPO_URL}`;
+      checks.push(
+        check(
+          'remote',
+          'Bank access',
+          'fail',
+          detail,
+          'Sign in to GitHub (gh auth login, or add an SSH key) and ask for access to Rx-Ventures/cerebro — it is private',
+        ),
+      );
+    }
+  }
+
+  return checks;
+}
+
+/**
+ * What this machine is missing, with the fix for each.
+ *
+ * Delegates to `cerebro doctor --json` once the bank is cloned — the CLI knows
+ * things Artemis does not, such as whether the checkout's own remote differs
+ * from the canonical one — and falls back to Artemis's own probes before that.
+ */
+export async function readCerebroPreflight(): Promise<CerebroPreflight> {
+  const root = cerebroRoot();
+  if (existsSync(cerebroCli(root))) {
+    try {
+      return parseCerebroDoctor(await runCerebro(root, ['doctor', '--json'], 60_000));
+    } catch (error) {
+      // `doctor` exits non-zero precisely when something failed, and execFile
+      // turns that into a throw with the JSON still on stdout. A real parse
+      // failure falls through to the probes below.
+      const stdout = (error as { stdout?: unknown }).stdout;
+      if (typeof stdout === 'string' && stdout.trim().startsWith('{')) {
+        try {
+          return parseCerebroDoctor(stdout);
+        } catch {
+          log.warn('cerebro doctor returned output that could not be parsed');
+        }
+      } else {
+        log.warn('cerebro doctor could not be run; falling back to Artemis probes', error);
+      }
+    }
+  }
+  const checks = await probeMachine(root);
+  return { ready: !checks.some((entry) => entry.state === 'fail'), checks };
+}
+
 /** The bank's condition. `installed: false` is a complete answer, not a fault. */
 export async function readCerebroStatus(): Promise<CerebroStatus> {
   const root = cerebroRoot();
@@ -234,6 +416,20 @@ export async function readCerebroList(): Promise<CerebroMemory[]> {
 export async function setupCerebro(): Promise<CerebroActionResponse> {
   const root = cerebroRoot();
   const steps: string[] = [];
+
+  // Check before assuming. Setup shells out to git and then to a Python CLI,
+  // and every one of its prerequisites has a specific fix — discovering them
+  // by failing halfway through a clone tells the user the least useful version
+  // of the truth.
+  const preflight = await readCerebroPreflight();
+  const blocking = preflight.checks.filter((entry) => entry.state === 'fail');
+  if (blocking.length > 0) {
+    throw new WorkspaceError(
+      `Cerebro cannot be set up on this machine yet — ${blocking
+        .map((entry) => `${entry.label}: ${entry.detail}${entry.remedy === null ? '' : ` (${entry.remedy})`}`)
+        .join('; ')}`,
+    );
+  }
 
   if (!existsSync(cerebroCli(root))) {
     if (existsSync(root)) {

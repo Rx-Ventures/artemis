@@ -236,6 +236,16 @@ export const IPC = {
    */
   cerebroStatus: 'artemis:cerebro:status',
   cerebroList: 'artemis:cerebro:list',
+  /**
+   * Can this machine run the bank at all?
+   *
+   * Separate from {@link cerebroStatus} because it has to answer *before*
+   * there is a bank: status shells out to a CLI that only exists once the
+   * repo is cloned, and the interesting failures — no git, no git identity,
+   * no access to a private repository — all happen before that. Setup used
+   * to discover them by failing halfway through a clone.
+   */
+  cerebroPreflight: 'artemis:cerebro:preflight',
   cerebroSetup: 'artemis:cerebro:setup',
   cerebroSync: 'artemis:cerebro:sync',
   cerebroDraft: 'artemis:cerebro:draft',
@@ -1289,6 +1299,32 @@ export type CerebroStatusResponse = CerebroStatus;
 /** Empty; see {@link CerebroStatusRequest}. */
 export type CerebroListRequest = Record<string, never>;
 
+/**
+ * One thing the bank needs, and whether this machine has it.
+ *
+ * `remedy` is the whole point: a check that says "git identity: missing" and
+ * stops has moved the user's problem, not solved it. Every non-`ok` state
+ * carries the command or the action that fixes it.
+ */
+export interface CerebroCheck {
+  readonly id: string;
+  readonly label: string;
+  /** `warn` is "works, but worse" (no `gh` → a branch to open by hand). `fail` blocks. */
+  readonly state: 'ok' | 'warn' | 'fail';
+  readonly detail: string;
+  readonly remedy: string | null;
+}
+
+export interface CerebroPreflight {
+  /** No check failed. Setup may proceed; warnings are informational. */
+  readonly ready: boolean;
+  readonly checks: readonly CerebroCheck[];
+}
+
+/** Empty; main probes the machine, the renderer does not aim it. */
+export type CerebroPreflightRequest = Record<string, never>;
+export type CerebroPreflightResponse = CerebroPreflight;
+
 export interface CerebroListResponse {
   readonly memories: readonly CerebroMemory[];
 }
@@ -1392,6 +1428,7 @@ export type IpcRequestMap = {
   [IPC.updatesDismiss]: UpdatesDismissRequest;
   [IPC.cerebroStatus]: CerebroStatusRequest;
   [IPC.cerebroList]: CerebroListRequest;
+  [IPC.cerebroPreflight]: CerebroPreflightRequest;
   [IPC.cerebroSetup]: CerebroSetupRequest;
   [IPC.cerebroSync]: CerebroSyncRequest;
   [IPC.cerebroDraft]: CerebroDraftRequest;
@@ -1444,6 +1481,7 @@ export type IpcResponseMap = {
   [IPC.updatesDismiss]: UpdatesStateResponse;
   [IPC.cerebroStatus]: CerebroStatusResponse;
   [IPC.cerebroList]: CerebroListResponse;
+  [IPC.cerebroPreflight]: CerebroPreflightResponse;
   [IPC.cerebroSetup]: CerebroSetupResponse;
   [IPC.cerebroSync]: CerebroSyncResponse;
   [IPC.cerebroDraft]: CerebroDraftResponse;
@@ -1659,6 +1697,8 @@ export interface ArtemisBridge {
     status(request: CerebroStatusRequest): Promise<IpcResult<CerebroStatusResponse>>;
     /** Every memory in the bank, bodies included. */
     list(request: CerebroListRequest): Promise<IpcResult<CerebroListResponse>>;
+    /** What this machine is missing, with the fix for each. Answers before the bank exists. */
+    preflight(request: CerebroPreflightRequest): Promise<IpcResult<CerebroPreflightResponse>>;
     /** Clone if missing, enable every profile, sync once. Idempotent. */
     setup(request: CerebroSetupRequest): Promise<IpcResult<CerebroSetupResponse>>;
     /** Promote queued drafts, fetch, re-install everywhere. Bypasses the throttle. */

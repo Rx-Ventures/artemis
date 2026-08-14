@@ -63,6 +63,7 @@ import { checkWorkingDirectory, describeWorkspace } from '@rx-artemis/core';
 import {
   draftCerebroMemory,
   readCerebroList,
+  readCerebroPreflight,
   readCerebroStatus,
   retireCerebroMemory,
   setupCerebro,
@@ -119,6 +120,7 @@ import {
   validateAuthStatus,
   validateCerebroDraft,
   validateCerebroList,
+  validateCerebroPreflight,
   validateCerebroRetire,
   validateCerebroSetup,
   validateCerebroStatus,
@@ -431,6 +433,11 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.cerebroList]: {
       validate: validateCerebroList,
       handle: async () => ({ memories: await readCerebroList() }),
+    },
+
+    [IPC.cerebroPreflight]: {
+      validate: validateCerebroPreflight,
+      handle: async () => readCerebroPreflight(),
     },
 
     [IPC.cerebroSetup]: {

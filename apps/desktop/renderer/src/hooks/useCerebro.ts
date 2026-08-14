@@ -26,6 +26,7 @@ import type {
   CerebroActionResponse,
   CerebroDraftRequest,
   CerebroMemory,
+  CerebroPreflight,
   CerebroRetireRequest,
   CerebroStatus,
   IpcResult,
@@ -46,6 +47,14 @@ export interface CerebroPane {
   readonly reading: boolean;
   /** The last successful status reading, or `null` if there has not been one. */
   readonly status: CerebroStatus | null;
+  /**
+   * What this machine is missing, with the fix for each.
+   *
+   * Read alongside status rather than on demand: the pane's primary action is
+   * "set up", and an enabled button that fails on click because `git` is not
+   * installed is the exact experience the check exists to prevent.
+   */
+  readonly preflight: CerebroPreflight | null;
   /** The bank's memories; empty until the bank is installed and read. */
   readonly memories: readonly CerebroMemory[];
   /** Why the read failed, already safe to show. Mutually exclusive with {@link status}. */
@@ -68,6 +77,7 @@ export function useCerebro(): CerebroPane {
   const [attempt, setAttempt] = useState(0);
   const [reading, setReading] = useState(true);
   const [status, setStatus] = useState<CerebroStatus | null>(null);
+  const [preflight, setPreflight] = useState<CerebroPreflight | null>(null);
   const [memories, setMemories] = useState<readonly CerebroMemory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<CerebroAction | null>(null);
@@ -95,12 +105,16 @@ export function useCerebro(): CerebroPane {
         return;
       }
       // The list is only worth asking for once the repo exists; before setup
-      // it would just be the same "not installed" fact wearing an error.
+      // it would just be the same "not installed" fact wearing an error. The
+      // preflight is the opposite — it matters most when nothing is installed.
       if (!statusResult.value.installed) {
+        const preflightResult = await call(() => channel.preflight({}));
+        if (cancelled) return;
         setReading(false);
         setStatus(statusResult.value);
+        setPreflight(preflightResult.ok ? preflightResult.value : null);
         setMemories([]);
-        setError(null);
+        setError(preflightResult.ok ? null : preflightResult.error.message);
         return;
       }
       const listResult = await call(() => channel.list({}));
@@ -148,5 +162,18 @@ export function useCerebro(): CerebroPane {
     [act],
   );
 
-  return { reading, status, memories, error, refresh, busy, lastAction, setup, sync, draft, retire };
+  return {
+    reading,
+    status,
+    preflight,
+    memories,
+    error,
+    refresh,
+    busy,
+    lastAction,
+    setup,
+    sync,
+    draft,
+    retire,
+  };
 }
