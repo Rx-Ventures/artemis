@@ -13,7 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { applyBump, classifyChanges, satisfies, type Change } from './nextVersion.js';
+import {
+  applyBump,
+  classifyChanges,
+  parseDiff,
+  parseLog,
+  satisfies,
+  type Change,
+} from './nextVersion.js';
 
 const change = (over: Partial<Change> = {}): Change => ({
   message: 'A change with a sentence for a subject',
@@ -188,5 +195,119 @@ describe('turning a verdict into a number', () => {
     expect(satisfies('v0.10.0', '0.11.0', 'patch')).toBe(true);
     expect(satisfies('v0.10.0', '0.10.1', 'minor')).toBe(false);
     expect(satisfies('v0.10.0', '0.10.0', 'patch')).toBe(false);
+  });
+});
+
+describe('attributing diff lines to files', () => {
+  it('credits a modification to its b-side path', () => {
+    const { added, removed } = parseDiff(
+      [
+        'diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts',
+        '--- a/packages/core/src/index.ts',
+        '+++ b/packages/core/src/index.ts',
+        '@@ -1 +1 @@',
+        '-export const old = 1;',
+        '+export const renamed = 1;',
+      ].join('\n'),
+    );
+
+    expect(added).toEqual(['packages/core/src/index.ts export const renamed = 1;']);
+    expect(removed).toEqual(['packages/core/src/index.ts export const old = 1;']);
+  });
+
+  /*
+   * A deletion's b-side header is `+++ /dev/null`, never `+++ b/…`. Reading
+   * only the b-side leaves the previous file's path in place, and the deleted
+   * file's removed lines land on it — a deleted package export slips past the
+   * "public API removed" rule, and a deleted renderer file can trip it.
+   */
+  it('credits a deleted file its own removed lines, not the previous file', () => {
+    const { removed } = parseDiff(
+      [
+        'diff --git a/README.md b/README.md',
+        '--- a/README.md',
+        '+++ b/README.md',
+        '@@ -1 +1 @@',
+        '-Old sentence.',
+        '+New sentence.',
+        'diff --git a/packages/core/src/gone.ts b/packages/core/src/gone.ts',
+        'deleted file mode 100644',
+        '--- a/packages/core/src/gone.ts',
+        '+++ /dev/null',
+        '@@ -1,2 +0,0 @@',
+        '-export function gone(): void {}',
+        '-export const alsoGone = 2;',
+      ].join('\n'),
+    );
+
+    expect(removed).toContain('packages/core/src/gone.ts export function gone(): void {}');
+    expect(removed).toContain('packages/core/src/gone.ts export const alsoGone = 2;');
+    expect(removed.filter((line) => line.startsWith('README.md'))).toEqual([
+      'README.md Old sentence.',
+    ]);
+  });
+
+  it('credits a new file its added lines and nothing to a phantom a-side', () => {
+    const { added, removed } = parseDiff(
+      [
+        'diff --git a/packages/core/src/born.ts b/packages/core/src/born.ts',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/packages/core/src/born.ts',
+        '@@ -0,0 +1 @@',
+        '+export const born = 1;',
+      ].join('\n'),
+    );
+
+    expect(added).toEqual(['packages/core/src/born.ts export const born = 1;']);
+    expect(removed).toEqual([]);
+  });
+});
+
+describe('telling paths from prose in the log', () => {
+  // The raw strings here are what `git log --format=%x00%B --name-only` prints:
+  // NUL, the message, a blank line, then the commit's paths one per line.
+
+  it('counts a root-level file, so a dependency-only release is not "none"', () => {
+    // The old shape-based rule required a `/`, which no root-level path has —
+    // so a release that only moved package.json and the lockfile classified as
+    // `none`, and release.ts refused to cut it with no override on offer.
+    const changes = parseLog('\0The dependencies move up a notch\n\n\npackage.json\npnpm-lock.yaml\n', [
+      'package.json',
+      'pnpm-lock.yaml',
+    ]);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.files).toEqual(['package.json', 'pnpm-lock.yaml']);
+    expect(classifyChanges(changes).bump).toBe('patch');
+  });
+
+  it('leaves a body line that merely looks like a path in the message', () => {
+    // `apps/desktop/main/engine.ts` below is prose — a bare path-shaped line in
+    // a commit body — and git's endpoint diff never mentions it. The old parse
+    // filed it as a touched file on shape alone.
+    const changes = parseLog(
+      '\0The adapter learns to retry\n\nBlame lands in\napps/desktop/main/engine.ts\notherwise.\n\n\npackages/core/src/adapters/claude.ts\n',
+      ['packages/core/src/adapters/claude.ts'],
+    );
+
+    expect(changes[0]?.files).toEqual(['packages/core/src/adapters/claude.ts']);
+    expect(changes[0]?.message).toContain('apps/desktop/main/engine.ts');
+  });
+
+  it('does not split on a body that contains the old separator', () => {
+    // The previous delimiter was the literal string ` COMMIT `, which any
+    // commit message may contain — this one does, twice. Git strips NUL from
+    // messages, so `%x00` is the one boundary a body cannot fake.
+    const changes = parseLog(
+      '\0The parser stops guessing\n\nSplitting on COMMIT broke a body saying COMMIT mid-sentence.\n\n\nscripts/nextVersion.ts\n' +
+        '\0The second commit survives intact\n\n\npackage.json\n',
+      ['scripts/nextVersion.ts', 'package.json'],
+    );
+
+    expect(changes).toHaveLength(2);
+    expect(changes[0]?.message).toContain(' COMMIT ');
+    expect(changes[0]?.files).toEqual(['scripts/nextVersion.ts']);
+    expect(changes[1]?.files).toEqual(['package.json']);
   });
 });

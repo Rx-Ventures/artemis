@@ -20,7 +20,16 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -106,7 +115,151 @@ function verifySpawnHelpers(): void {
   console.log(`verify-package: OK — ${String(helpers.length)} spawn-helper(s) executable.`);
 }
 
+/**
+ * Does the app archive contain this path?
+ *
+ * Answered by reading the asar header directly rather than depending on
+ * `@electron/asar`: the format is stable — a 16-byte preamble of little-endian
+ * u32s (pickle size-of-size, header pickle size, payload size, JSON length)
+ * followed by a JSON directory tree — and the question here is one lookup.
+ */
+function asarContains(archive: string, path: string): boolean {
+  const fd = openSync(archive, 'r');
+  try {
+    const preamble = Buffer.alloc(16);
+    readSync(fd, preamble, 0, 16, 0);
+    const json = Buffer.alloc(preamble.readUInt32LE(12));
+    readSync(fd, json, 0, json.length, 16);
+    let node: unknown = JSON.parse(json.toString('utf8'));
+    for (const segment of path.split('/')) {
+      const files = (node as { files?: Record<string, unknown> }).files;
+      if (files === undefined || files[segment] === undefined) return false;
+      node = files[segment];
+    }
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Fail unless the renderer's entry point actually shipped.
+ *
+ * Booting proves the main process and nothing else: the ready marker comes
+ * from the engine, so a BrowserWindow pointed at a missing file still prints
+ * "Engine started" and this script would pass a build whose window is a blank
+ * rectangle. The main process loads `out/renderer/index.html` out of app.asar
+ * (see `main/index.ts`), so that exact entry is what is asserted.
+ */
+function verifyRendererEntry(): void {
+  const resources = resourcesDir(APP_BINARY);
+  const entry = 'out/renderer/index.html';
+
+  if (!existsSync(resources)) {
+    // Skipped, with the reason said out loud: a platform whose bundle keeps
+    // resources elsewhere gives this check nothing to look inside, and the
+    // boot check below still stands between that layout and a release.
+    console.log(
+      `verify-package: SKIP renderer check — no resources directory at ${resources}; ` +
+        'unrecognized bundle layout, deferring to the boot check.',
+    );
+    return;
+  }
+
+  const archive = join(resources, 'app.asar');
+  if (existsSync(archive)) {
+    if (!asarContains(archive, entry)) {
+      console.error(
+        `verify-package: FAIL — app.asar ships no ${entry}, so every window in this build ` +
+          'is blank. The renderer build output went missing between electron-vite and ' +
+          "electron-builder; check `out/` and electron-builder.yml's `files` globs.",
+      );
+      process.exit(1);
+    }
+    console.log(`verify-package: OK — ${entry} is in app.asar.`);
+    return;
+  }
+
+  // No archive: a build with asar disabled ships the app directory plain.
+  if (existsSync(join(resources, 'app', 'out', 'renderer', 'index.html'))) {
+    console.log(`verify-package: OK — ${entry} shipped unpacked (asar disabled).`);
+    return;
+  }
+  console.error(
+    `verify-package: FAIL — neither app.asar nor an unpacked app/ under ${resources} ` +
+      `contains ${entry}. Nothing in this build can draw a window.`,
+  );
+  process.exit(1);
+}
+
+/**
+ * Fail unless the Agent SDK's platform binary shipped.
+ *
+ * The SDK is a JS package plus one optional dependency per platform —
+ * `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, holding the `claude`
+ * executable — and pnpm installs only the host's. That is exactly the
+ * wrong-arch trap release.yml's preamble warns about: a cross-built bundle
+ * packages cleanly and ships a binary the target CPU cannot exec. Runner
+ * choice defends it today; this is the assertion, made against the artifact
+ * itself, that the defense held. The script runs on the machine the build
+ * targets, so the host's platform/arch pair *is* the target's.
+ */
+function verifySdkBinary(): void {
+  const resources = resourcesDir(APP_BINARY);
+  if (!existsSync(resources)) {
+    console.log(
+      `verify-package: SKIP SDK-binary check — no resources directory at ${resources}; ` +
+        'unrecognized bundle layout, deferring to the boot check.',
+    );
+    return;
+  }
+
+  // The SDK spawns its binary from real files, so electron-builder unpacks it
+  // beside the archive; with asar disabled it would sit in the plain app dir.
+  const scope = [
+    join(resources, 'app.asar.unpacked', 'node_modules', '@anthropic-ai'),
+    join(resources, 'app', 'node_modules', '@anthropic-ai'),
+  ].find(existsSync);
+  if (scope === undefined) {
+    console.error(
+      'verify-package: FAIL — no @anthropic-ai packages outside the asar. The Agent SDK ' +
+        'cannot spawn a binary that lives inside an archive, so no run could ever start.',
+    );
+    process.exit(1);
+  }
+
+  const wanted = `claude-agent-sdk-${process.platform}-${process.arch}`;
+  const shipped = readdirSync(scope).filter((name) => name.startsWith('claude-agent-sdk-'));
+  // Linux publishes a musl variant per arch; either satisfies a Linux host.
+  const match = shipped.find((name) => name === wanted || name === `${wanted}-musl`);
+  if (match === undefined) {
+    console.error(
+      `verify-package: FAIL — the bundle ships no @anthropic-ai/${wanted}. ` +
+        (shipped.length > 0
+          ? `It ships ${shipped.join(', ')} instead — the wrong-arch build the release ` +
+            'workflow exists to prevent; this artifact was not built on its target.'
+          : 'It ships no platform package at all; pnpm never installed one, or the ' +
+            'packaging dropped it.'),
+    );
+    process.exit(1);
+  }
+
+  const binary = ['claude', 'claude.exe']
+    .map((name) => join(scope, match, name))
+    .find(existsSync);
+  if (binary === undefined) {
+    console.error(
+      `verify-package: FAIL — @anthropic-ai/${match} shipped without its claude binary, ` +
+        'so no run could ever start.',
+    );
+    process.exit(1);
+  }
+  console.log(`verify-package: OK — @anthropic-ai/${match} ships its binary.`);
+}
+
 verifySpawnHelpers();
+verifyRendererEntry();
+verifySdkBinary();
 
 /* -------------------------------------------------------------------------- */
 /* The boot check                                                             */

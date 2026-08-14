@@ -22,10 +22,17 @@
  * ## Usage
  *
  * ```sh
- * export ANTHROPIC_API_KEY=sk-ant-…
  * pnpm build:libs          # smoke.ts imports @rx-artemis/core's built output
  * pnpm smoke               # or: npx tsx scripts/smoke.ts "your prompt here"
  * ```
+ *
+ * No environment variable authenticates this. It runs against the config
+ * directory the CLI is already signed into — `$CLAUDE_CONFIG_DIR` if set,
+ * `~/.claude` otherwise — exactly as a profile would, and **the run is billed
+ * to that account**. `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are
+ * deliberately ignored: Artemis strips both from every run, so a smoke test
+ * that authenticated with one would be exercising a path the product does not
+ * have. Not signed in anywhere → exit 2 with the sign-in command.
  *
  * Everything it writes — the profile store, the credential, the isolated config
  * directory and the working directory the agent is pointed at — lives in one

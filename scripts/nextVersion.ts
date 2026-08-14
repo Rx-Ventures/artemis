@@ -142,29 +142,59 @@ const isShipped = (file: string): boolean => {
  *
  * `--no-merges`, because a merge commit's diff is the sum of what it brought in
  * and would count every change twice.
+ *
+ * Two answers are read and cross-checked. `git log --name-only` interleaves
+ * each message with the paths that commit touched, and `git diff --name-only`
+ * over the whole range says which files the *release* actually contains. The
+ * parse needs both: the log's blocks cannot be told apart from message text by
+ * their shape (see `parseLog`), and the endpoint list on its own has no
+ * messages, so no `Release:` trailer.
  */
 export function readChanges(from: string, to = 'HEAD'): readonly Change[] {
-  const separator = ' COMMIT ';
   const raw = execFileSync(
     'git',
-    ['log', '--no-merges', `--format=${separator}%B`, '--name-only', `${from}..${to}`],
+    // NUL before each message. A commit body can contain any printable
+    // sentinel someone invents — this parser's first separator was the literal
+    // string ` COMMIT `, which a commit quoting this very file would split on
+    // — but git strips NUL out of commit messages, so `%x00` is the one
+    // delimiter no message can carry.
+    ['log', '--no-merges', '--format=%x00%B', '--name-only', `${from}..${to}`],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
+  const touched = execFileSync('git', ['diff', '--name-only', `${from}..${to}`], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  })
+    .split('\n')
+    .filter((line) => line.length > 0);
+  return parseLog(raw, touched);
+}
 
+/**
+ * Split `git log --format=%x00%B --name-only` output into one `Change` per
+ * commit, counting a line as a file iff git's endpoint diff says that file was
+ * touched in the range.
+ *
+ * Telling paths from message text by *shape* is the mistake this replaces: the
+ * old rule ("contains `/`, contains no space") filed every root-level path as
+ * prose — so a release that only moved `package.json` and `pnpm-lock.yaml`
+ * classified as `none` and release.ts refused to cut it — and filed every
+ * message line that happened to look like a path as a file. Git already knows
+ * exactly which paths the range touched, so the parse asks it instead of
+ * guessing. A file changed and then fully reverted inside the range is absent
+ * from the endpoint diff, which is correct twice over: it is not in the
+ * release, and it must not argue for a phantom patch.
+ */
+export function parseLog(raw: string, touched: readonly string[]): readonly Change[] {
+  const inRange = new Set(touched);
   const changes: Change[] = [];
-  for (const block of raw.split(separator)) {
+  for (const block of raw.split('\0')) {
     if (block.trim().length === 0) continue;
-    const lines = block.split('\n');
     const files: string[] = [];
     const message: string[] = [];
-    for (const line of lines) {
-      // `--name-only` puts paths after a blank line at the end of the message,
-      // and a path is the only thing here that never contains a space.
-      if (line.length > 0 && !line.startsWith(' ') && line.includes('/') && !line.includes(' ')) {
-        files.push(line);
-      } else {
-        message.push(line);
-      }
+    for (const line of block.split('\n')) {
+      if (inRange.has(line)) files.push(line);
+      else message.push(line);
     }
     changes.push({ message: message.join('\n'), files, added: [], removed: [], newFiles: [] });
   }
@@ -187,13 +217,40 @@ export function readDiff(from: string, to = 'HEAD'): { added: string[]; removed:
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
   });
+  return parseDiff(raw);
+}
 
+/**
+ * Attribute a unified diff's added and removed lines to their files.
+ *
+ * The b-side header names the file — except for a deletion, whose b-side is
+ * `+++ /dev/null`. Its removed lines belong to the a-side path; forgetting
+ * that assigns them to whichever file the diff happened to print before it,
+ * which misclassifies releases in both directions (a deleted package export
+ * goes unnoticed, a deleted renderer file reads as one).
+ */
+export function parseDiff(raw: string): { added: string[]; removed: string[] } {
   const added: string[] = [];
   const removed: string[] = [];
   let file = '';
+  let aSide = '';
   for (const line of raw.split('\n')) {
+    if (line.startsWith('--- a/')) {
+      aSide = line.slice('--- a/'.length);
+      continue;
+    }
+    if (line.startsWith('--- ')) {
+      // `--- /dev/null`: a brand-new file has no a-side.
+      aSide = '';
+      continue;
+    }
     if (line.startsWith('+++ b/')) {
       file = line.slice('+++ b/'.length);
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      // `+++ /dev/null`: a deletion. Its removed lines are the a-side's.
+      file = aSide;
       continue;
     }
     if (line.startsWith('+') && !line.startsWith('+++')) added.push(`${file} ${line.slice(1)}`);
