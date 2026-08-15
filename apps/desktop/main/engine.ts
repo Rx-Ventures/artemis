@@ -67,6 +67,8 @@ import type {
   BuiltInPromptId,
 } from '@rx-artemis/protocol';
 
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+
 import {
   attributeSession,
   checkAuthStatus,
@@ -173,6 +175,18 @@ export interface EngineOptions {
    * and passes it here; in dev it stays unset and the SDK resolves itself.
    */
   readonly sdkExecutablePath?: string;
+  /**
+   * Tools that need Electron, built per run.
+   *
+   * The seam that lets an agent drive the browser in the dock. `packages/core`
+   * cannot import Electron — `no-electron.test.ts` enforces it — so a tool that
+   * touches a `WebContentsView` cannot be defined there. It is defined in
+   * `browserTools.ts`, which is Electron's side of the wall, and injected here.
+   *
+   * Optional so that a smoke script or a test gets an engine with no such
+   * tools, and every other capability unchanged.
+   */
+  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
 }
 
 /**
@@ -408,6 +422,9 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       ...(options.sdkExecutablePath === undefined
         ? {}
         : { sdkExecutablePath: options.sdkExecutablePath }),
+      ...(options.agentToolServers === undefined
+        ? {}
+        : { agentToolServers: options.agentToolServers }),
       /*
        * The provider started a turn nobody asked for — register it.
        *

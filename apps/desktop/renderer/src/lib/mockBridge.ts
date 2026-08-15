@@ -39,10 +39,14 @@ import type {
   WindowState,
 } from '@rx-artemis/protocol';
 import {
+  browserUrlFor,
   NO_CAPABILITIES,
   SHARED_ENTRIES,
   normalizeProfileColor,
   parseAgentPromptsDocument,
+  type BrowserEvent,
+  type BrowserInfo,
+  type BrowserState,
 } from '@rx-artemis/protocol';
 import { newId } from './id';
 
@@ -1509,6 +1513,85 @@ export function createMockBridge(): ArtemisBridge {
         return ok({ reachable: paths.filter((path) => !absent.test(path)) });
       },
     },
+
+    /*
+     * A browser, with no browser behind it.
+     *
+     * The mock cannot make a `WebContentsView` — that is a main-process object
+     * and there is no main process here — so what this fakes is the *chrome's*
+     * side of the contract: an id, a state that changes when you navigate, and
+     * the events that carry it. In dev the pane draws its address bar and its
+     * buttons over an empty rectangle, which is exactly the part of this
+     * feature that has any layout in it.
+     *
+     * `browserUrlFor` is the real one rather than a stand-in, so a query the
+     * dev app refuses is a query the packaged app refuses too.
+     */
+    browser: (() => {
+      const open = new Map<string, BrowserInfo>();
+      const listeners = new Set<(event: BrowserEvent) => void>();
+      let next = 0;
+
+      const emit = (id: string, state: BrowserState): void => {
+        const info = open.get(id);
+        if (info === undefined) return;
+        open.set(id, { ...info, state });
+        for (const listener of listeners) listener({ type: 'state', id, state });
+      };
+
+      const settle = (id: string, url: string): void => {
+        emit(id, { url, title: '', loading: true, canGoBack: false, canGoForward: false });
+        // A beat, so the loading state is reachable in dev rather than a frame
+        // nobody ever sees.
+        setTimeout(() => {
+          emit(id, {
+            url,
+            title: url.replace(/^https?:\/\//, '').split('/')[0] ?? url,
+            loading: false,
+            canGoBack: true,
+            canGoForward: false,
+          });
+        }, 400);
+      };
+
+      return {
+        open: async ({ query }) => {
+          const url = query === undefined ? null : browserUrlFor(query);
+          if (query !== undefined && url === null) {
+            return { ok: false, error: { code: 'invalid_request', message: `“${query}” is not an address.` } };
+          }
+          next += 1;
+          const id = `mock-browser-${String(next)}`;
+          const info: BrowserInfo = {
+            id,
+            openedAt: Date.now(),
+            state: { url: url ?? '', title: '', loading: url !== null, canGoBack: false, canGoForward: false },
+          };
+          open.set(id, info);
+          if (url !== null) settle(id, url);
+          return ok({ browser: info });
+        },
+        navigate: async ({ id, query }) => {
+          const url = browserUrlFor(query);
+          if (url === null) {
+            return { ok: false, error: { code: 'invalid_request', message: `“${query}” is not an address.` } };
+          }
+          settle(id, url);
+          return ok({ id, url });
+        },
+        command: async ({ id }) => ok({ id }),
+        layout: async ({ id }) => ok({ id }),
+        close: async ({ id }) => {
+          open.delete(id);
+          return ok({ id });
+        },
+        list: async () => ok({ browsers: [...open.values()] }),
+        onEvent: (listener: (event: BrowserEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+    })(),
 
     /*
      * Plan usage, faked with the stale-while-revalidate shape the real bridge

@@ -36,6 +36,7 @@ import { EngineHost } from './engine.js';
 import {
   broadcast,
   forwardAgentEvents,
+  forwardBrowserEvents,
   forwardTerminalEvents,
   registerIpcHandlers,
   type IpcLayer,
@@ -45,6 +46,8 @@ import { installApplicationMenu } from './menu.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
 import { clearPreviews, registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
+import { BrowserHost } from './browser.js';
+import { browserToolServer } from './browserTools.js';
 import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
 import {
@@ -146,9 +149,11 @@ const devServerUrl = process.env['ELECTRON_RENDERER_URL'] ?? null;
 let ipcLayer: IpcLayer | null = null;
 let stopEventForwarding: (() => void) | null = null;
 let stopTerminalForwarding: (() => void) | null = null;
+let stopBrowserForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
 let stopUpdater: (() => void) | null = null;
 let terminals: TerminalHost | null = null;
+const browsers = new BrowserHost();
 const engineHost = new EngineHost();
 
 /* -------------------------------------------------------------------------- */
@@ -309,6 +314,21 @@ async function bootstrap(): Promise<void> {
     userDataDir,
     appVersion: app.getVersion(),
     ...(sdkExecutablePath === undefined ? {} : { sdkExecutablePath }),
+    /*
+     * The agent's browser tools, built per run.
+     *
+     * This is the composition root doing the one thing only it can: `core` is
+     * forbidden from importing Electron, and a tool that drives a
+     * `WebContentsView` is Electron all the way down. So the factory is handed
+     * across the wall here, closing over the host that owns the views.
+     */
+    agentToolServers: (runId) => ({
+      artemisBrowser: browserToolServer(runId, {
+        ensure: (run, url) => browsers.openForAgent(run, url),
+        current: (run) => browsers.agentBrowserFor(run),
+        host: browsers,
+      }),
+    }),
   });
 
   // The updater exists before the IPC layer because the layer's handlers
@@ -335,9 +355,10 @@ async function bootstrap(): Promise<void> {
   // the same tools a terminal launch would.
   terminals = createTerminalHost();
 
-  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater, terminals });
+  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater, terminals, browsers });
   stopEventForwarding = forwardAgentEvents(engineHost);
   stopTerminalForwarding = forwardTerminalEvents(terminals);
+  stopBrowserForwarding = forwardBrowserEvents(browsers);
   // Reads every profile's plan limits on a timer, so the profile menu can say
   // which account has room. Started after IPC so its first push has somewhere
   // to land, and before the window so the schedule does not depend on how long
@@ -409,6 +430,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   stopEventForwarding?.();
   stopTerminalForwarding?.();
+  stopBrowserForwarding?.();
   stopPlanUsagePolling?.();
   stopUpdater?.();
   ipcLayer?.dispose();
@@ -418,6 +440,10 @@ app.on('before-quit', (event) => {
   // adapters there is nothing to shut down gracefully — the tab is already
   // gone — so this does not need a place in the timeout.
   terminals?.disposeAll();
+  // Same argument as the shells above, for a different reason: a browser view
+  // is a renderer process of this app's own, and one still attached to a window
+  // that is being torn down is a crash on the way out rather than a leak.
+  browsers.disposeAll();
   // Granted previews are byte snapshots held in this process's memory, and the
   // preview protocol handler stays registered for the up-to-three seconds the
   // engine gets below. Dropping the grants here makes "the app is quitting"

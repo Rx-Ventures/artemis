@@ -111,9 +111,16 @@ import {
   type DockTab,
   type ShownConversation,
   type TerminalRecord,
+  type BrowserRecord,
 } from './dock';
 import { resolveFilePath, type FileReference } from '../lib/filePaths';
-import { isTaskLive, type BackgroundTask } from '@rx-artemis/protocol';
+import {
+  isTaskLive,
+  type BackgroundTask,
+  type BrowserBounds,
+  type BrowserCommand,
+  type BrowserId,
+} from '@rx-artemis/protocol';
 import { setEventsDroppedHook, type PermissionItem, type TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
@@ -447,6 +454,15 @@ export interface AppState {
    * the main process instead, which is the only source that can be right.
    */
   readonly terminals: readonly TerminalRecord[];
+  /**
+   * Every page this window has open, in the order they were opened.
+   *
+   * Beside {@link terminals} rather than inside it, and holding no page content
+   * of any kind — a browser's *contents* live in the main process, and what is
+   * here is the id, the owner, and the address bar's worth of state. See
+   * `protocol/browser.ts` for why the renderer never holds the page.
+   */
+  readonly browsers: readonly BrowserRecord[];
   /**
    * Delegated agents the user has opened into tabs of their own.
    *
@@ -1424,6 +1440,7 @@ export const useApp = create<AppState>(() => ({
   preview: null,
   file: null,
   terminals: [],
+  browsers: [],
   agentViews: [],
   activeDockTab: null,
   visibleDockTabs: [],
@@ -2508,7 +2525,8 @@ function describeShown(): readonly ShownConversation[] {
  */
 function reconcileDock(): void {
   const state = useApp.getState();
-  const { preview, file, terminals, activeDockTab, visibleDockTabs, agentViews } = state;
+  const { preview, file, terminals, browsers, activeDockTab, visibleDockTabs, agentViews } =
+    state;
 
   /*
    * The overwhelmingly common case: an empty dock that was already empty. This
@@ -2526,6 +2544,7 @@ function reconcileDock(): void {
     preview === null &&
     file === null &&
     terminals.length === 0 &&
+    browsers.length === 0 &&
     visibleDockTabs.length === 0 &&
     agentViews.length === 0 &&
     !allPanes().some((pane) => showsTasks(paneState(pane)))
@@ -2539,6 +2558,7 @@ function reconcileDock(): void {
     preview?: PreviewState | null;
     file?: FileState | null;
     terminals?: readonly TerminalRecord[];
+    browsers?: readonly BrowserRecord[];
     activeDockTab?: DockTab | null;
     visibleDockTabs?: readonly DockTab[];
   } = {};
@@ -2580,12 +2600,28 @@ function reconcileDock(): void {
     : terminals;
   if (nextTerminals !== terminals) patch.terminals = nextTerminals;
 
+  // Browsers get the terminal's treatment exactly: re-owned when the run learns
+  // its session id, never dropped. A page whose conversation has left the
+  // screen stops being drawn — `BrowserPane` reports `visible: false` and main
+  // detaches the view — and goes on running.
+  const adoptedBrowsers = browsers.map((browser) => {
+    const learned = learnSessionId(browser.owner, shown);
+    return learned === null
+      ? browser
+      : { ...browser, owner: { ...browser.owner, sessionId: learned } };
+  });
+  const nextBrowsers = adoptedBrowsers.some((browser, index) => browser !== browsers[index])
+    ? adoptedBrowsers
+    : browsers;
+  if (nextBrowsers !== browsers) patch.browsers = nextBrowsers;
+
   const visible = visibleTabs(
     nextPreview?.owner ?? null,
     nextTerminals,
     shown,
     agentViews,
     nextFile?.owner ?? null,
+    nextBrowsers,
   );
   const moved =
     visible.length !== visibleDockTabs.length ||
@@ -2736,6 +2772,127 @@ export function closeTerminal(id: TerminalId): void {
 
   const { bridge } = resolveBridge();
   if (bridge) void call(() => bridge.terminal.close({ id }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Browsers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Open a page beside a conversation.
+ *
+ * Follows {@link openTerminal} beat for beat, including the one decision that
+ * looks incidental: ownership is stamped **after** the await, because between
+ * the click and the view existing the user may have resumed a different session
+ * into this column, and an owner that has already gone would have
+ * `reconcileDock` hide the tab the moment it appeared.
+ *
+ * Unlike a terminal it needs no `cwd` — a browser is not *of* anywhere — so this
+ * works in a pane that has never been pointed at a folder.
+ */
+export async function openBrowser(pane: Pane = focusedPane(), query?: string): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const res = await call(() => bridge.browser.open(query === undefined ? {} : { query }));
+  if (!res.ok) {
+    pane.transcript.note('warn', 'Could not open a browser', res.error.message);
+    return;
+  }
+
+  const record: BrowserRecord = { info: res.value.browser, owner: ownerFor(pane) };
+  useApp.setState((state) => ({
+    browsers: [...state.browsers, record],
+    activeDockTab: { kind: 'browser', id: record.info.id },
+  }));
+}
+
+/**
+ * Go somewhere, from the address bar.
+ *
+ * The refusal is reported into the pane's transcript rather than thrown away,
+ * because "that is not an address" is the single most likely outcome of typing
+ * into this box — there is no search engine behind it, deliberately, and a user
+ * who does not know that deserves to be told rather than left with a box that
+ * does nothing. See `browserUrlFor`.
+ */
+export async function navigateBrowser(id: BrowserId, query: string): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const res = await call(() => bridge.browser.navigate({ id, query }));
+  if (!res.ok) {
+    const pane = paneOwning(id) ?? focusedPane();
+    pane.transcript.note('warn', 'Could not open that address', res.error.message);
+  }
+}
+
+/** Back, forward, reload, stop. Fire and forget; the state arrives as an event. */
+export function commandBrowser(id: BrowserId, command: BrowserCommand): void {
+  const { bridge } = resolveBridge();
+  if (bridge) void call(() => bridge.browser.command({ id, command }));
+}
+
+/**
+ * Tell main where the page goes.
+ *
+ * Called from `BrowserPane` on every resize frame and on every tab change, so
+ * it is deliberately not a store write: nothing in the renderer depends on the
+ * rectangle, and putting it in state would re-render the transcript beside it
+ * sixty times a second during a drag.
+ */
+export function layoutBrowser(id: BrowserId, bounds: BrowserBounds, visible: boolean): void {
+  const { bridge } = resolveBridge();
+  if (bridge) void call(() => bridge.browser.layout({ id, bounds, visible }));
+}
+
+/**
+ * Destroy a page and drop its tab.
+ *
+ * The only thing that ends one — see `state/dock.ts`. The record goes
+ * immediately rather than after main confirms, for {@link closeTerminal}'s
+ * reason: a tab that lingers for a round trip after the ✕ was clicked reads as
+ * a broken button, and there is nothing useful to do with a failure.
+ */
+export function closeBrowser(id: BrowserId): void {
+  const state = useApp.getState();
+  if (!state.browsers.some((browser) => browser.info.id === id)) return;
+
+  // Which tab comes forward is `reconcileDock`'s, on this write.
+  useApp.setState({ browsers: state.browsers.filter((browser) => browser.info.id !== id) });
+
+  const { bridge } = resolveBridge();
+  if (bridge) void call(() => bridge.browser.close({ id }));
+}
+
+/**
+ * The focused conversation's browser — the existing one, or a new one.
+ *
+ * `toggleTerminal`'s twin, and the same argument: a key that opened a second
+ * page every time it was pressed would fill the strip, so it opens one and
+ * brings that one forward afterwards. The `+` menu is the deliberate way to get
+ * another.
+ */
+export function toggleBrowser(pane: Pane = focusedPane()): void {
+  const state = useApp.getState();
+  const shown = describeShown();
+  const mine = state.browsers.find(
+    (browser) => browser.owner.paneId === pane.id && ownerIsShown(browser.owner, shown),
+  );
+  if (mine === undefined) {
+    void openBrowser(pane);
+    return;
+  }
+
+  const tab: DockTab = { kind: 'browser', id: mine.info.id };
+  if (sameTab(state.activeDockTab, tab)) closeBrowser(mine.info.id);
+  else focusDockTab(tab);
+}
+
+/** Which pane a browser belongs to, for reporting a failure where it happened. */
+function paneOwning(id: BrowserId): Pane | null {
+  const owner = useApp.getState().browsers.find((browser) => browser.info.id === id)?.owner;
+  return owner === undefined ? null : (allPanes().find((pane) => pane.id === owner.paneId) ?? null);
 }
 
 /**
@@ -3658,6 +3815,71 @@ export function installEventBridge(): () => void {
  * push channels broadcast to every window, so a second window hears about the
  * first window's shells and has nowhere to put them.
  */
+/**
+ * Route browser events into the records that draw the chrome.
+ *
+ * The mirror of {@link installTerminalFeed}, and it drops unknown ids for the
+ * same reason: push channels broadcast to every window, so a second Artemis
+ * window hears about the first's pages and has nowhere to put them.
+ *
+ * A `gone` event removes the record outright. Main has already destroyed the
+ * view by the time it sends one, so there is nothing left to draw and no
+ * `browser.close` to send back — reloading it would put the reader back on the
+ * page that had just crashed, which is a loop rather than a recovery.
+ */
+export function installBrowserFeed(): () => void {
+  const { bridge } = resolveBridge();
+  if (!bridge) return () => undefined;
+
+  return bridge.browser.onEvent((event) => {
+    if (event.type === 'gone') {
+      const owner = useApp.getState().browsers.find((one) => one.info.id === event.id)?.owner;
+      useApp.setState((state) => ({
+        browsers: state.browsers.filter((browser) => browser.info.id !== event.id),
+      }));
+      const pane = owner === undefined ? null : (allPanes().find((one) => one.id === owner.paneId) ?? null);
+      pane?.transcript.note('warn', 'A browser stopped responding', `The page was closed (${event.reason}).`);
+      return;
+    }
+
+    if (event.type === 'opened') {
+      /*
+       * A browser the renderer did not ask for: an agent opened one with a
+       * tool. The tab it produces is the whole point — the user watches the
+       * agent browse rather than finding out afterwards.
+       *
+       * Attributed by run id to the pane running that run. A run this window
+       * has never heard of is dropped: push channels broadcast, so a second
+       * Artemis window hears about the first's agents.
+       */
+      const pane = allPanes().find((one) => paneState(one).run?.runId === event.runId);
+      if (pane === undefined) return;
+      useApp.setState((state) =>
+        state.browsers.some((browser) => browser.info.id === event.id)
+          ? {}
+          : {
+              browsers: [...state.browsers, { info: event.browser, owner: ownerFor(pane) }],
+              // Deliberately *not* brought to the front. The agent works while
+              // the user is reading something else, and stealing the dock out
+              // from under them mid-sentence is what makes a helpful feature
+              // feel like an interruption. The tab appears; clicking it is
+              // theirs.
+            },
+      );
+      return;
+    }
+
+    useApp.setState((state) => {
+      const index = state.browsers.findIndex((browser) => browser.info.id === event.id);
+      if (index === -1) return {};
+      const browser = state.browsers[index] as BrowserRecord;
+      const browsers = [...state.browsers];
+      browsers[index] = { ...browser, info: { ...browser.info, state: event.state } };
+      return { browsers };
+    });
+  });
+}
+
 export function installTerminalFeed(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
@@ -3689,6 +3911,29 @@ export function installTerminalFeed(): () => void {
  * rather than nowhere, which beats a shell that is running with no way to reach
  * it.
  */
+/**
+ * Re-adopt the pages the main process is still holding, after a reload.
+ *
+ * {@link adoptTerminals}'s twin, and simpler: the renderer's half of a browser
+ * is a rectangle and a subscription, both of which the reload destroyed, while
+ * the view itself never belonged to the renderer at all. Nothing has to be
+ * rebuilt — the records just have to exist again so the strip can draw tabs for
+ * views that are still very much alive behind it.
+ *
+ * Everything adopted is owned by the **focused pane**, which is a guess and the
+ * only one available, for the reason `adoptTerminals` writes out.
+ */
+async function adoptBrowsers(pane: Pane): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const listed = await call(() => bridge.browser.list({}));
+  if (!listed.ok || listed.value.browsers.length === 0) return;
+
+  const owner = ownerFor(pane);
+  useApp.setState({ browsers: listed.value.browsers.map((info) => ({ info, owner })) });
+}
+
 async function adoptTerminals(pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
@@ -3770,6 +4015,7 @@ export async function bootstrap(): Promise<void> {
   await Promise.all([refreshProviders(), refreshProfiles()]);
   await adoptLiveRuns(focusedPane());
   await adoptTerminals(focusedPane());
+  await adoptBrowsers(focusedPane());
   await refreshSessions();
   useApp.setState({ booted: true });
 

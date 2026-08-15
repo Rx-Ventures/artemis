@@ -23,6 +23,7 @@
  * | `session`       | `SessionSummary`                                           |
  * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
  * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
+ * | `browser`       | `BrowserInfo`, `browserUrlFor`, the `BrowserEvent` union   |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
  * | `agentPrompts`  | the standing-instruction library, and how it composes       |
  * | `ipc`           | channel constants, request/response maps, `ArtemisBridge`    |
@@ -46,6 +47,7 @@ export * from './run.js';
 export * from './session.js';
 export * from './profile.js';
 export * from './terminal.js';
+export * from './browser.js';
 export * from './sharedConfig.js';
 export * from './agentPrompts.js';
 export * from './ipc.js';
