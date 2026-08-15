@@ -78,6 +78,7 @@ const { DockPane } = await import('@/components/DockPane');
 const { groupByPhase } = await import('@/components/TasksPane');
 const { closePane, focusedPane, splitPane, toggleTasks, useApp } = await import('@/state/store');
 const { paneState, setPaneState } = await import('@/state/pane');
+const { forgetFolds } = await import('@/lib/foldMemory');
 
 const task = (over: Partial<BackgroundTask> = {}): BackgroundTask => ({
   id: 't1',
@@ -104,6 +105,9 @@ function renderDock(): void {
 }
 
 beforeEach(() => {
+  // A fold is remembered by key, and the keys are stable across cases in this
+  // file — so one test's click would leave the next test's section open.
+  forgetFolds();
   stopped = [];
   // Back to one column, whatever the previous test left: the split test below
   // makes a second one, and a survivor would double every tab query after it.
@@ -182,7 +186,12 @@ describe('the delegated-work pane', () => {
     expect(detail.textContent).toContain('24.1k tok');
   });
 
-  it('keeps a finished row, with where its output went', () => {
+  /*
+   * Finished work is kept, and kept *folded*. The pane is opened to answer "is
+   * it still going", and settled rows are the half that pushes the live ones off
+   * the bottom — so they are behind one click rather than gone.
+   */
+  it('keeps a finished row behind a fold, with where its output went', () => {
     renderDock();
     haveTasks(
       task({
@@ -194,8 +203,39 @@ describe('the delegated-work pane', () => {
     );
     fireEvent.click(screen.getByRole('tab', { name: /Delegated/ }));
 
+    // Shut by default: the count is on screen, the row is not.
+    expect(screen.getByText('1 finished')).not.toBeNull();
+    expect(screen.queryByText('Audit the mapper')).toBeNull();
+
+    fireEvent.click(screen.getByText('1 finished'));
+
     expect(screen.getByText('Audit the mapper')).not.toBeNull();
     expect(screen.getByText(/Found three seams/).textContent).toContain('/tmp/task-1.md');
+  });
+
+  /*
+   * The split itself, which is the point of the change: a settled task does not
+   * sit between two running ones.
+   */
+  it('puts live work above the fold and settled work inside it', () => {
+    renderDock();
+    haveTasks(
+      task({ id: 'task-live', description: 'Still running', status: 'running' }),
+      task({ id: 'task-done', description: 'All done', status: 'completed', endedAt: Date.now() }),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /running/ }));
+
+    expect(screen.getByText('Still running')).not.toBeNull();
+    expect(screen.queryByText('All done')).toBeNull();
+    expect(screen.getByText('1 finished')).not.toBeNull();
+  });
+
+  it('draws no finished section at all while everything is live', () => {
+    renderDock();
+    haveTasks(task({ status: 'running' }));
+    fireEvent.click(screen.getByRole('tab', { name: /running/ }));
+
+    expect(screen.queryByText(/finished/)).toBeNull();
   });
 
   it('offers a stop on live work and not on settled work', () => {
