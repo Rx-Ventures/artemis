@@ -145,6 +145,24 @@ export const IPC = {
   filesRead: 'artemis:files:read',
 
   /**
+   * Which of these paths are files that are actually there?
+   *
+   * {@link filesRead}'s scout, and the reason a path in an answer only becomes a
+   * link once there is something behind it. The renderer's rule for spotting a
+   * path is a judgement about *text* — see `lib/filePaths.ts` — and text is all
+   * it has, so it cannot tell `src/store.ts` from a file the agent has only
+   * proposed writing. This is the question it cannot answer itself.
+   *
+   * Batched because the caller is one answer's worth of them at once, and a
+   * round-trip per backticked fragment would be dozens of them for a paragraph.
+   *
+   * The reply is a subset rather than a parallel array of booleans: it is what
+   * the caller turns into a `Set` either way, and a subset cannot be read off by
+   * one when a request is deduplicated.
+   */
+  filesCheck: 'artemis:files:check',
+
+  /**
    * A shell in a pseudo-terminal, and the four things you can do to one.
    *
    * Six channels rather than the preview's one, because a terminal is the only
@@ -1080,6 +1098,38 @@ export interface FilesReadResponse {
   readonly truncated: boolean;
 }
 
+/**
+ * Are these paths there?
+ *
+ * Asked before anything is drawn as a link, so the answer decides how a piece of
+ * an answer *renders* rather than what happens when it is clicked. That is the
+ * whole reason the channel exists: the renderer can recognise the shape of a
+ * path but has no way to know whether one is a file, and a link that opens onto
+ * "there is no file at …" is worse than a word that was never a link.
+ */
+export interface FilesCheckRequest {
+  /**
+   * Absolute paths, deduplicated by the caller. Relative ones are resolved
+   * against a conversation's directory before they get here, exactly as
+   * {@link FilesReadRequest.path} is.
+   */
+  readonly paths: readonly string[];
+}
+
+/** The answer: which of them exist, and nothing else about them. */
+export interface FilesCheckResponse {
+  /**
+   * The subset of {@link FilesCheckRequest.paths} that are regular files right
+   * now. Order is not meaningful, and a path that vanished between this and a
+   * later read is a race nobody can close — the read says so plainly.
+   *
+   * Deliberately no size, no mode, no timestamp. The caller is deciding whether
+   * to underline a word, and every extra field would be a fact about the user's
+   * disk crossing a boundary for no one.
+   */
+  readonly reachable: readonly string[];
+}
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -1559,6 +1609,7 @@ export type IpcRequestMap = {
   [IPC.sharedConfigStatus]: SharedConfigStatusRequest;
   [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.filesRead]: FilesReadRequest;
+  [IPC.filesCheck]: FilesCheckRequest;
   [IPC.terminalStart]: TerminalStartRequest;
   [IPC.terminalWrite]: TerminalWriteRequest;
   [IPC.terminalResize]: TerminalResizeRequest;
@@ -1616,6 +1667,7 @@ export type IpcResponseMap = {
   [IPC.sharedConfigStatus]: SharedConfigStatusResponse;
   [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.filesRead]: FilesReadResponse;
+  [IPC.filesCheck]: FilesCheckResponse;
   [IPC.terminalStart]: TerminalStartResponse;
   [IPC.terminalWrite]: TerminalWriteResponse;
   [IPC.terminalResize]: TerminalResizeResponse;
@@ -1918,6 +1970,12 @@ export interface ArtemisBridge {
   readonly files: {
     /** The file at `path`, as text. Refuses anything that is not text. */
     read(request: FilesReadRequest): Promise<IpcResult<FilesReadResponse>>;
+    /**
+     * Which of these paths are files. Answers a `boolean`'s worth about each and
+     * nothing more — see {@link FilesCheckResponse} — because the caller is
+     * deciding whether a word in an answer is worth underlining.
+     */
+    check(request: FilesCheckRequest): Promise<IpcResult<FilesCheckResponse>>;
   };
 
   /**

@@ -606,13 +606,19 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
 
 function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement {
   const pane = usePaneRef();
+  const cwd = usePane((s) => s.cwd);
   /*
    * Stable across the row's life, so `Markdown`'s memo keeps holding: an
    * identity that changed every render would re-parse the answer on every
    * keystroke in the composer below it. `pane` is a handle rather than a value,
-   * so it does not change as the conversation does.
+   * so it does not change as the conversation does — and `cwd` moves only when
+   * the user points this column somewhere else, which is exactly when the paths
+   * in the answer above resolve to different files and *should* be re-checked.
    */
-  const openHere = useCallback((reference: FileReference) => void openFile(reference, pane), [pane]);
+  const files = useMemo(
+    () => ({ cwd, open: (reference: FileReference) => void openFile(reference, pane) }),
+    [cwd, pane],
+  );
 
   return (
     <Line
@@ -638,7 +644,7 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
             <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
-              <Markdown onOpenFile={openHere}>{item.text}</Markdown>
+              <Markdown files={files}>{item.text}</Markdown>
             </div>
           )}
         </BubbleContent>

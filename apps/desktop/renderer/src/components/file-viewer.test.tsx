@@ -7,9 +7,11 @@
  * two groups that meet there too:
  *
  *  - **The link half.** Which fragments of an answer become clickable, and what
- *    they hand over when clicked. `filePaths.test.ts` pins the rule itself; what
+ *    they hand over when clicked. `filePaths.test.ts` pins the shape rule; what
  *    is pinned here is that the rule is actually consulted, that a fenced block
- *    is exempt from it, and that a line number survives the trip.
+ *    is exempt from it, that a line number survives the trip — and that being
+ *    path-shaped is not enough. A fragment is only underlined once the main
+ *    process has said there is a file at the other end of it.
  *  - **The dock half.** That a click resolves the path against the *conversation's*
  *    directory, opens a tab in front, draws the file with numbered lines, and
  *    lives and dies by the same rules the preview does.
@@ -35,7 +37,11 @@ Element.prototype.scrollIntoView ??= function scrollIntoView(): void {};
 
 /** Paths the renderer actually asked the main process to read. */
 let asked: string[];
-/** What the fake main process answers with, per test. */
+/** Batches the renderer asked the main process to check, in the order sent. */
+let checked: string[][];
+/** Which paths the fake disk has a file at. Everything else is not there. */
+let onDisk: Set<string>;
+/** What the fake main process answers a read with, per test. */
 let answer: { ok: true; value: Record<string, unknown> } | { ok: false; error: { message: string } };
 
 Object.defineProperty(globalThis, 'artemis', {
@@ -54,6 +60,10 @@ Object.defineProperty(globalThis, 'artemis', {
         asked.push(path);
         return answer;
       },
+      check: async ({ paths }: { paths: string[] }) => {
+        checked.push([...paths]);
+        return { ok: true, value: { reachable: paths.filter((path) => onDisk.has(path)) } };
+      },
     },
   },
 });
@@ -62,6 +72,7 @@ const { DockPane } = await import('@/components/DockPane');
 const { Markdown } = await import('@/components/Markdown');
 const { closeFile, focusedPane, openFile, useApp } = await import('@/state/store');
 const { setPaneState } = await import('@/state/pane');
+const { resetFileReach } = await import('@/lib/fileReach');
 
 function fileAnswer(over: Record<string, unknown> = {}): typeof answer {
   return {
@@ -85,9 +96,27 @@ function renderDock(): ReturnType<typeof render> {
   );
 }
 
+/**
+ * Draw some markdown with links enabled, and let the reachability check land.
+ *
+ * The check is a round trip, so a link is never there on the first paint —
+ * which is the behaviour, not an artefact of the test. The extra macrotask is
+ * what `fileReach` coalesces a commit's worth of spans into.
+ */
+async function renderAnswer(text: string, open = vi.fn()): Promise<typeof open> {
+  render(<Markdown files={{ cwd: '/Users/me/project', open }}>{text}</Markdown>);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return open;
+}
+
 beforeEach(() => {
   asked = [];
+  checked = [];
+  onDisk = new Set(['/Users/me/project/src/store.ts']);
   answer = fileAnswer();
+  resetFileReach();
   useApp.setState({ preview: null, file: null, terminals: [], activeDockTab: null, visibleDockTabs: [] });
   setPaneState(focusedPane(), { cwd: '/Users/me/project', run: null, resumeSessionId: null });
 });
@@ -95,36 +124,81 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('a file reference in an answer', () => {
-  it('is a control, and hands over what it parsed', () => {
-    const opened = vi.fn();
-    render(<Markdown onOpenFile={opened}>{'I changed `src/store.ts:88` for it.'}</Markdown>);
+  it('is a control, and hands over what it parsed', async () => {
+    const opened = await renderAnswer('I changed `src/store.ts:88` for it.');
 
     fireEvent.click(screen.getByRole('button', { name: 'src/store.ts:88' }));
     expect(opened).toHaveBeenCalledWith({ path: 'src/store.ts', line: 88 });
   });
 
-  it('leaves a fragment that is not a path as plain code', () => {
-    const opened = vi.fn();
-    render(<Markdown onOpenFile={opened}>{'Call `useCopy` when you mean it.'}</Markdown>);
+  it('asks about the path resolved against the conversation’s directory', async () => {
+    await renderAnswer('I changed `src/store.ts:88` for it.');
 
-    expect(screen.queryByRole('button', { name: 'useCopy' })).toBeNull();
+    // The same resolution the click will do. Asking about the bare `src/store.ts`
+    // would be asking about a file in whatever directory main was launched from.
+    expect(checked).toEqual([['/Users/me/project/src/store.ts']]);
   });
 
-  it('leaves a path inside a fenced block alone', () => {
-    const opened = vi.fn();
+  it('leaves a fragment that is not a path as plain code', async () => {
+    await renderAnswer('Call `useCopy` when you mean it.');
+
+    expect(screen.queryByRole('button', { name: 'useCopy' })).toBeNull();
+    // And is not worth a round trip: the shape rule refuses it before the disk
+    // is ever consulted, which is what keeps a paragraph of prose from being a
+    // request.
+    expect(checked).toEqual([]);
+  });
+
+  /*
+   * The bug this whole channel exists for. Every fragment below is path-shaped,
+   * and `parseFileReference` says yes to all of them; only one is a file.
+   */
+  it('leaves a path-shaped fragment with no file behind it as plain code', async () => {
+    await renderAnswer('I read `src/store.ts`, and `e.g` I will add `src/dock.ts` next.');
+
+    expect(screen.getByRole('button', { name: 'src/store.ts' })).not.toBeNull();
+    // A Latin abbreviation the shape rule admits it gets wrong, and a file the
+    // agent has only said it is going to write. Neither is underlined.
+    expect(screen.queryByRole('button', { name: 'e.g' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'src/dock.ts' })).toBeNull();
+  });
+
+  it('asks once per answer rather than once per path', async () => {
+    await renderAnswer('Both `src/store.ts` and `src/dock.ts` moved, unlike `src/pane.ts`.');
+
+    expect(checked).toHaveLength(1);
+    expect(checked[0]).toHaveLength(3);
+  });
+
+  it('does not underline anything while it is still asking', async () => {
+    // The order matters: a link that appeared and then went away would be worse
+    // than one that arrived a frame late, because the reader may have clicked it.
+    render(<Markdown files={{ cwd: '/Users/me/project', open: vi.fn() }}>
+      {'I changed `src/store.ts` for it.'}
+    </Markdown>);
+
+    expect(screen.queryByRole('button', { name: 'src/store.ts' })).toBeNull();
+  });
+
+  it('leaves a path inside a fenced block alone', async () => {
     // The block is a snippet to be copied, not a set of links — and its `code`
     // element goes through the same component as an inline span.
-    render(<Markdown onOpenFile={opened}>{'```\nsrc/store.ts\n```'}</Markdown>);
+    await renderAnswer('```\nsrc/store.ts\n```');
 
     expect(screen.queryByRole('button', { name: 'src/store.ts' })).toBeNull();
     // The copy control is still there, so the fence is being rendered as a fence.
     expect(screen.getByRole('button', { name: 'Copy this code' })).not.toBeNull();
   });
 
-  it('is not offered at all where the caller wants no links', () => {
-    // The preview pane and the plan card both render markdown with no `onOpenFile`.
+  it('is not offered at all where the caller wants no links', async () => {
+    // The preview pane and the plan card both render markdown with no `files`.
     render(<Markdown>{'I changed `src/store.ts` for it.'}</Markdown>);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     expect(screen.queryByRole('button', { name: 'src/store.ts' })).toBeNull();
+    expect(checked).toEqual([]);
   });
 });
 

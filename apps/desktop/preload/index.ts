@@ -88,6 +88,7 @@ import {
   type UpdatesStateRequest,
   type UsagePlanRequest,
   type PreviewOpenRequest,
+  type FilesCheckRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalEvent,
@@ -529,6 +530,7 @@ const bridge: ArtemisBridge = Object.freeze({
 
   files: Object.freeze({
     read: (request: FilesReadRequest) => invoke(IPC.filesRead, request),
+    check: (request: FilesCheckRequest) => invoke(IPC.filesCheck, request),
   }),
 
   /**

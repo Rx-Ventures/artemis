@@ -77,7 +77,7 @@ import {
 } from './errors.js';
 import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
-import { readTextFile } from './files.js';
+import { checkFiles, readTextFile } from './files.js';
 import {
   assertNoSecrets,
   assertResponseSafe,
@@ -113,6 +113,7 @@ import {
   validateProfilesSuggestDir,
   validatePreviewOpen,
   validateFilesRead,
+  validateFilesCheck,
   validateTerminalClose,
   validateTerminalList,
   validateTerminalReplay,
@@ -520,6 +521,23 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.filesRead]: {
       validate: validateFilesRead,
       handle: async (request) => readTextFile(request.path),
+    },
+
+    /**
+     * Which of these paths are files.
+     *
+     * The read above with the file left out, asked before anything is drawn so
+     * that a path in an answer is only a link when there is something behind it.
+     * It tells the renderer strictly less than {@link IPC.filesRead} already
+     * does about the same paths, through the same boundary, which is why it adds
+     * nothing to what `files.ts` records about its own reach.
+     *
+     * Never fails for a path's sake. A missing file is an answer here, not an
+     * error — see `checkFiles`.
+     */
+    [IPC.filesCheck]: {
+      validate: validateFilesCheck,
+      handle: async (request) => checkFiles(request.paths),
     },
 
     /* ---------------------------------------------------------------- */

@@ -258,14 +258,22 @@ const TRANSCRIPT_ENVELOPE_POLICY: ScanPolicy = {
 };
 
 /**
- * Scan policy for {@link import('@rx-artemis/protocol').PreviewMarkdown}.
+ * Scan policy for {@link import('@rx-artemis/protocol').PreviewMarkdown} and for
+ * {@link import('@rx-artemis/protocol').FilesReadResponse}.
  *
  * `text` is a file off the user's own disk, read because the user clicked it.
  * Under the strict policy a README documenting `sk-ant-…`, or a checked-in
  * test fixture holding a PEM header, would refuse to open — Artemis declining
  * to show a person a file they already have.
+ *
+ * The two channels share it because they carry the same field for the same
+ * reason, and the file channel is the one that needs it more: a preview opens
+ * five renderable extensions, while `files.read` opens `.env`, `config.yml` and
+ * every fixture in a test directory. A named policy either channel can point at
+ * is what keeps the next reader of a file from meeting a credential-safety
+ * error about their own disk.
  */
-const PREVIEW_SCAN_POLICY: ScanPolicy = {
+const FILE_TEXT_SCAN_POLICY: ScanPolicy = {
   ...RESPONSE_SCAN_POLICY,
   contentKeys: new Set([...RESPONSE_SCAN_POLICY.contentKeys, 'text']),
 };
@@ -347,9 +355,11 @@ export function assertResponseSafe(value: unknown, channel: IpcChannel): void {
     case IPC.terminalReplay:
       return assertNoSecrets(value, channel, TERMINAL_SCAN_POLICY);
 
-    // A file the user asked to see.
+    // A file the user asked to see, rendered or as source. Both carry `text`
+    // off the user's own disk; see FILE_TEXT_SCAN_POLICY.
     case IPC.previewOpen:
-      return assertNoSecrets(value, channel, PREVIEW_SCAN_POLICY);
+    case IPC.filesRead:
+      return assertNoSecrets(value, channel, FILE_TEXT_SCAN_POLICY);
 
     // Team-authored memory bodies, already gated by the bank's own validator.
     case IPC.cerebroList:

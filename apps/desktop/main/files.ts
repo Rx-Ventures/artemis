@@ -58,12 +58,31 @@
  * reach, not a new class of exposure, and the fix for both is the same one
  * `preview.ts` names: main remembering which paths it has seen the agent touch.
  * Until that exists, this paragraph is the record that the gap is known.
+ *
+ * ## And {@link checkFiles}, which is the same read with the file left out
+ *
+ * The renderer draws a path in an answer as a link, and the rule it uses to
+ * spot one is a judgement about *text* — no whitespace, a filename-shaped tail.
+ * That rule cannot tell a file the agent edited from one it has only proposed
+ * writing, so before this existed every path-shaped fragment was underlined and
+ * a good half of them opened onto "there is no file at …".
+ *
+ * So: a batch of paths in, the ones that are files out. It answers strictly less
+ * than {@link readTextFile} about each path — a boolean where the other returns
+ * the contents — and is reachable by exactly the same caller, which is what
+ * makes it uninteresting from the threat model above. It is an existence oracle
+ * for a renderer that already has a read oracle.
+ *
+ * It is `stat` and nothing else. Not the binary sniff, which would mean opening
+ * and reading eight kilobytes of every path in a transcript to decide whether to
+ * underline a word — and would be answering the wrong question anyway. `logo.png`
+ * *is* there; the honest thing is to link it and let the read say what it is.
  */
 
 import { open, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import type { FilesReadResponse } from '@rx-artemis/protocol';
+import type { FilesCheckResponse, FilesReadResponse } from '@rx-artemis/protocol';
 
 /**
  * How much of a file is read.
@@ -151,4 +170,34 @@ export async function readTextFile(path: string): Promise<FilesReadResponse> {
     // process's table, which is exactly long enough to look like something else.
     await handle.close();
   }
+}
+
+/**
+ * Which of `paths` are files that exist.
+ *
+ * Never throws for a path's sake — a missing file, a folder, a directory
+ * component that is not one, a permission the user does not have: every one of
+ * those is an answer rather than a fault, and the answer is "not that one". The
+ * caller is deciding what to underline and has nothing to do with a reason.
+ *
+ * The whole batch is stat'd at once rather than in sequence. These are metadata
+ * reads against a page cache that a transcript's worth of them will already be
+ * warm in, and `Promise.all` over a few dozen of them is one tick; a loop with
+ * an `await` in it is a few dozen. The count is bounded by the validator rather
+ * than here, so this stays a function about the filesystem.
+ */
+export async function checkFiles(paths: readonly string[]): Promise<FilesCheckResponse> {
+  const results = await Promise.all(
+    paths.map(async (path) => {
+      const info = await stat(path).catch(() => null);
+      // `isFile`, not merely "the stat succeeded". A directory passes an
+      // existence check and then fails the read with `is a folder, not a file`,
+      // which is precisely the dead link this exists to prevent. `stat` follows
+      // symlinks, so a link to a real file answers yes — which is what the read
+      // will do with it too.
+      return info?.isFile() === true ? path : null;
+    }),
+  );
+
+  return { reachable: results.filter((path): path is string => path !== null) };
 }

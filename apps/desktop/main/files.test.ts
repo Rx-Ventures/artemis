@@ -1,9 +1,10 @@
 /**
  * `readTextFile`, which is the only thing that turns a path in an answer into
- * something on screen.
+ * something on screen — and `checkFiles`, which decides whether that path was
+ * ever drawn as something to click.
  *
- * Two of these are worth more than the rest. The **binary refusal** is what
- * keeps a click on `logo.png` from painting a pane with forty thousand
+ * Two of the read's cases are worth more than the rest. The **binary refusal**
+ * is what keeps a click on `logo.png` from painting a pane with forty thousand
  * replacement glyphs, and it is content-based rather than extension-based, so
  * the test that matters is a file with no extension at all. The **truncation**
  * case pins the difference between this and `grantPreview`: an oversized preview
@@ -11,17 +12,22 @@
  * clipped and *says so*, because the first part of a log is what someone opening
  * a log wants.
  *
- * Real temp files throughout — the module is thirty lines of `fs` and mocking it
+ * For the check, the case that earns its keep is the **folder**. A directory
+ * passes any test spelled "does this path exist" and then fails the read with
+ * `is a folder, not a file` — which is exactly the dead link the check exists to
+ * prevent, arrived at by the one route a careless implementation takes.
+ *
+ * Real temp files throughout — the module is fifty lines of `fs` and mocking it
  * would leave nothing under test.
  */
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { MAX_BYTES, readTextFile } from './files';
+import { checkFiles, MAX_BYTES, readTextFile } from './files';
 
 async function fileWith(name: string, content: string | Buffer): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'artemis-test-files-'));
@@ -98,5 +104,61 @@ describe('readTextFile', () => {
   it('reads an empty file as empty rather than failing', async () => {
     const path = await fileWith('empty.txt', '');
     await expect(readTextFile(path)).resolves.toMatchObject({ text: '', truncated: false });
+  });
+});
+
+describe('checkFiles', () => {
+  it('answers with the files that are there, and drops the ones that are not', async () => {
+    const real = await fileWith('store.ts', 'export const answer = 42;\n');
+    const absent = join(tmpdir(), 'artemis-not-a-real-file-4471.ts');
+
+    const { reachable } = await checkFiles([real, absent]);
+    expect(reachable).toEqual([real]);
+  });
+
+  it('says no to a folder, which a bare existence check would have said yes to', async () => {
+    // The case the whole channel turns on. `src/` exists, so anything asking
+    // "is this path there" links it — and the read then refuses it as a folder,
+    // which is the dead link this is meant to stop.
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-files-'));
+    const inner = join(dir, 'src');
+    await mkdir(inner);
+
+    await expect(checkFiles([inner])).resolves.toEqual({ reachable: [] });
+  });
+
+  it('follows a symlink to a real file, the way the read will', async () => {
+    const real = await fileWith('store.ts', 'export const answer = 42;\n');
+    const link = join(tmpdir(), `artemis-test-link-${String(process.pid)}.ts`);
+    await symlink(real, link);
+
+    // The two have to agree: a link that resolves is a file the read opens, so
+    // refusing it here would leave a readable file as plain text.
+    await expect(checkFiles([link])).resolves.toEqual({ reachable: [link] });
+    await expect(readTextFile(link)).resolves.toMatchObject({ text: 'export const answer = 42;\n' });
+  });
+
+  it('says no to a binary file’s absence and yes to its presence', async () => {
+    // Deliberately *not* the read's rule. `logo.png` is there, so it is a link,
+    // and clicking it gets the honest sentence about what it is. Sniffing every
+    // path in a transcript to decide whether to underline a word would be eight
+    // kilobytes of read per word to answer a question nobody asked.
+    const binary = await fileWith('logo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]));
+
+    await expect(checkFiles([binary])).resolves.toEqual({ reachable: [binary] });
+    await expect(readTextFile(binary)).rejects.toThrow(/binary file/);
+  });
+
+  it('takes an empty batch, which is what a deduplicated request can become', async () => {
+    await expect(checkFiles([])).resolves.toEqual({ reachable: [] });
+  });
+
+  it('answers about a whole batch rather than stopping at the first miss', async () => {
+    const one = await fileWith('one.ts', 'a');
+    const two = await fileWith('two.ts', 'b');
+    const gone = join(tmpdir(), 'artemis-not-a-real-file-4472.ts');
+
+    const { reachable } = await checkFiles([gone, one, gone, two]);
+    expect([...reachable].sort()).toEqual([one, two].sort());
   });
 });
