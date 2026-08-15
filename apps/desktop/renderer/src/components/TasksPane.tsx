@@ -114,6 +114,8 @@ const TaskRow = memo(function TaskRow({
       canOpenSubagents(paneState(pane)),
   );
 
+  const label = taskLabel(task);
+
   return (
     <li className="group flex items-start gap-2 px-2 py-1 hover:bg-raised/30">
       <StatusIcon task={task} />
@@ -131,17 +133,22 @@ const TaskRow = memo(function TaskRow({
             <button
               type="button"
               onClick={() => openAgentTab(pane.id, task.id)}
-              title={`Open ${task.description}`}
+              title={`Open ${label}${label === task.description ? '' : ` — ${task.description}`}`}
               className={cn(
                 'min-w-0 flex-1 truncate text-left text-2xs hover:underline focus-visible:underline focus-visible:outline-none',
                 !live && 'text-ink-faint',
               )}
             >
-              {task.description}
+              {label}
             </button>
           ) : (
-            <span className={cn('min-w-0 flex-1 truncate text-2xs', !live && 'text-ink-faint')}>
-              {task.description}
+            <span
+              // The description is the tooltip whenever it is not already the
+              // label — a workflow's is a paragraph, and the row has one line.
+              title={label === task.description ? undefined : task.description}
+              className={cn('min-w-0 flex-1 truncate text-2xs', !live && 'text-ink-faint')}
+            >
+              {label}
             </span>
           )}
           <span className="shrink-0 font-mono text-3xs text-ink-faint tabular-nums">
@@ -153,7 +160,7 @@ const TaskRow = memo(function TaskRow({
 
       {live ? (
         <IconButton
-          label={`Stop ${task.description}`}
+          label={`Stop ${label}`}
           size="icon-xs"
           // Shown on hover of the row, like the dock tab's ✕: a control that only
           // appears once the pointer is on the thing it acts on, and that stays
@@ -185,15 +192,63 @@ function StatusIcon({ task }: { readonly task: BackgroundTask }): ReactElement {
 }
 
 /**
- * The line under the description: what it is doing, or what it did.
+ * What to call this row.
+ *
+ * A workflow is named, and its name is what anyone recognises it by —
+ * `doctor-bug-fixes-build` is the thing you went looking for, while its
+ * `description` is the sentence the script was launched with and runs to a
+ * paragraph. So a workflow leads with its name and keeps the description as the
+ * row's tooltip; everything else is titled by its description, as before.
+ *
+ * The provider only sets `workflowName` when the task really is a workflow — see
+ * the SDK's `task_started` — so this needs no separate check on `kind`.
+ */
+function taskLabel(task: BackgroundTask): string {
+  return task.workflowName ?? task.description;
+}
+
+/**
+ * Friendly names for the task kinds we know, and the raw value for the rest.
+ *
+ * The protocol is explicit that {@link BackgroundTask.kind} is an open string
+ * and that a UI should "map the ones it knows and show the raw value for the
+ * rest" — a closed union here would either drop a kind the CLI added last week
+ * or bucket it into `other` and lose the name. Which is also why the fallback
+ * prints the raw discriminant rather than something reassuring: a row reading
+ * `local_sandbox` is a fact, and one reading "Task" is a shrug.
+ */
+const KIND_LABELS: Readonly<Record<string, string>> = {
+  local_bash: 'Shell',
+  local_workflow: 'Workflow',
+  local_subagent: 'Subagent',
+  monitor: 'Monitor',
+};
+
+function kindLabel(task: BackgroundTask): string | undefined {
+  // A subagent's *type* is the more specific fact and occupies the same slot:
+  // "Explore" says everything "Subagent" does and more.
+  if (task.subagentType !== undefined) return task.subagentType;
+  if (task.kind.length === 0) return undefined;
+  return KIND_LABELS[task.kind] ?? task.kind;
+}
+
+/**
+ * The line under the label: what kind of thing this is, and how it is going.
  *
  * Built from whatever has arrived rather than from a fixed set of fields, since
  * a workflow reports none of the same things a backgrounded `sleep` does. What
  * it must never do is render an empty line — a row with a blank second line
  * reads as broken rather than as quiet.
+ *
+ * The kind comes first because it is the one part that is always true and never
+ * changes, so the eye can find it in the same place down a list of rows whose
+ * middles are all different lengths.
  */
 function secondLine(task: BackgroundTask): string {
   const parts: string[] = [];
+
+  const kind = kindLabel(task);
+  if (kind !== undefined) parts.push(kind);
 
   if (isTaskLive(task)) {
     if (task.lastToolName !== undefined) parts.push(task.lastToolName);
@@ -202,10 +257,16 @@ function secondLine(task: BackgroundTask): string {
     parts.push(task.error ?? task.summary ?? task.status);
   }
 
-  if (task.workflowName !== undefined) parts.push(task.workflowName);
-  else if (task.subagentType !== undefined) parts.push(task.subagentType);
-
   if (task.totalTokens !== undefined) parts.push(`${formatTokens(task.totalTokens)} tok`);
+  /*
+   * Carried by the protocol since the ledger was written and never drawn until
+   * now. For a workflow it is the closest thing available to "how much work was
+   * this" — the SDK reports no agent count, so tool calls are the measure of
+   * size that actually arrives.
+   */
+  if (task.toolUses !== undefined && task.toolUses > 0) {
+    parts.push(`${String(task.toolUses)} ${task.toolUses === 1 ? 'tool' : 'tools'}`);
+  }
   if (task.outputFile !== undefined && !isTaskLive(task)) parts.push(task.outputFile);
 
   // The status is the one thing always knowable, so it is the fallback rather

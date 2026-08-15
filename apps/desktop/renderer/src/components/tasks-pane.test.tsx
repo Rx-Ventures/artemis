@@ -347,3 +347,94 @@ describe('the delegated-work pane', () => {
     expect(screen.getByRole('tab', { name: /1 running/ })).not.toBeNull();
   });
 });
+
+/**
+ * What a row says it is.
+ *
+ * The issue behind these asked for Claude's phase-grouped workflow panel. The
+ * Agent SDK reports no phases and no per-agent rows — see the PR — so what is
+ * pinned here is the part that *is* answerable from the task stream: a workflow
+ * is recognisable as one, and named the way its author named it.
+ */
+describe('a row', () => {
+  it('leads with a workflow’s name rather than its launch sentence', () => {
+    renderDock();
+    haveTasks(
+      task({
+        kind: 'local_workflow',
+        workflowName: 'doctor-bug-fixes-build',
+        description: 'Build the four fix packages for the doctor-reported bugs, back to back',
+      }),
+    );
+
+    // The name is what you went looking for; the description runs to a paragraph.
+    expect(screen.getByText('doctor-bug-fixes-build')).not.toBeNull();
+  });
+
+  it('keeps the description reachable as the row’s tooltip', () => {
+    renderDock();
+    haveTasks(
+      task({
+        kind: 'local_workflow',
+        workflowName: 'doctor-bug-fixes-build',
+        description: 'Build the four fix packages',
+      }),
+    );
+
+    expect(screen.getByTitle('Build the four fix packages')).not.toBeNull();
+  });
+
+  it('says what kind of thing it is', () => {
+    renderDock();
+    haveTasks(task({ kind: 'local_workflow', workflowName: 'spec' }));
+
+    // Without this a workflow and a backgrounded shell are the same row.
+    expect(screen.getByText(/Workflow/)).not.toBeNull();
+  });
+
+  it('prints an unknown kind raw rather than bucketing it', () => {
+    renderDock();
+    haveTasks(task({ kind: 'local_sandbox' }));
+
+    // The protocol calls `kind` an open string for exactly this reason: a row
+    // reading `local_sandbox` is a fact, one reading "Task" is a shrug.
+    expect(screen.getByText(/local_sandbox/)).not.toBeNull();
+  });
+
+  it('prefers a subagent’s type over the generic kind', () => {
+    renderDock();
+    haveTasks(task({ kind: 'local_subagent', subagentType: 'Explore' }));
+
+    expect(screen.getByText(/Explore/)).not.toBeNull();
+    expect(screen.queryByText(/Subagent/)).toBeNull();
+  });
+
+  it('counts the tool calls, which is the only size the SDK reports', () => {
+    renderDock();
+    haveTasks(task({ kind: 'local_workflow', workflowName: 'spec', toolUses: 47 }));
+
+    expect(screen.getByText(/47 tools/)).not.toBeNull();
+  });
+
+  it('says “1 tool”, not “1 tools”', () => {
+    renderDock();
+    haveTasks(task({ toolUses: 1 }));
+
+    expect(screen.getByText(/1 tool(?!s)/)).not.toBeNull();
+  });
+
+  it('draws no tool count before any tool has run', () => {
+    renderDock();
+    haveTasks(task({ toolUses: 0 }));
+
+    // A row that says "0 tools" the instant work starts reads as a stall.
+    expect(screen.queryByText(/0 tools/)).toBeNull();
+  });
+
+  it('still titles an ordinary task by its description', () => {
+    renderDock();
+    haveTasks(task({ description: 'Audit the mapper' }));
+
+    expect(screen.getByText('Audit the mapper')).not.toBeNull();
+  });
+});
