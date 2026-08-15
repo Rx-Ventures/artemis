@@ -130,6 +130,21 @@ export const IPC = {
   previewOpen: 'artemis:preview:open',
 
   /**
+   * Read a text file, so the dock can show it.
+   *
+   * The sibling of {@link previewOpen}, and separate from it because the two
+   * answer different questions. A preview asks "render this the way a browser
+   * would"; this asks "show me what is in it". So a preview is gated on being
+   * one of five renderable extensions, while this one takes any file that turns
+   * out to hold text — which is most of a repository, and none of which a
+   * preview has ever been able to open.
+   *
+   * One channel, and no `close`, for {@link previewOpen}'s reason: the answer is
+   * a string the renderer then owns, and main retains nothing to release.
+   */
+  filesRead: 'artemis:files:read',
+
+  /**
    * A shell in a pseudo-terminal, and the four things you can do to one.
    *
    * Six channels rather than the preview's one, because a terminal is the only
@@ -1028,6 +1043,43 @@ export interface PreviewMarkdown extends PreviewBase {
  */
 export type PreviewOpenResponse = PreviewFrame | PreviewMarkdown;
 
+/* -------------------------------------------------------------------------- */
+/* Files                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Show me what is in this file.
+ *
+ * The renderer has no filesystem — see `lib/bridge.ts` — so a path named in a
+ * transcript is a string until main agrees to read it. What comes back is text
+ * and nothing else: no URL, no frame, nothing that executes. That is the whole
+ * reason this channel can be pointed at any file while {@link PreviewOpenRequest}
+ * cannot, and it is worth stating in both directions — a `.html` file read
+ * through *this* channel is source code to be looked at, not a page to be run.
+ */
+export interface FilesReadRequest {
+  /** Absolute path. Relative ones are resolved by the caller, against a cwd. */
+  readonly path: string;
+}
+
+/** A file, as text, with enough about it to caption the view. */
+export interface FilesReadResponse {
+  /** The path as asked about, echoed for the caption. */
+  readonly path: string;
+  /** The file's own name. What the tab is titled. */
+  readonly title: string;
+  /**
+   * The file's size on disk, which is **not** the length of {@link text} when
+   * {@link truncated} is set. Reported separately so the caption can say "the
+   * first 2 MB of 47 MB" rather than quietly implying the file is 2 MB.
+   */
+  readonly bytes: number;
+  /** The text, decoded as UTF-8. */
+  readonly text: string;
+  /** Whether {@link text} is only the head of the file. See `main/files.ts`. */
+  readonly truncated: boolean;
+}
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -1506,6 +1558,7 @@ export type IpcRequestMap = {
   [IPC.workspaceDescribe]: WorkspaceDescribeRequest;
   [IPC.sharedConfigStatus]: SharedConfigStatusRequest;
   [IPC.previewOpen]: PreviewOpenRequest;
+  [IPC.filesRead]: FilesReadRequest;
   [IPC.terminalStart]: TerminalStartRequest;
   [IPC.terminalWrite]: TerminalWriteRequest;
   [IPC.terminalResize]: TerminalResizeRequest;
@@ -1562,6 +1615,7 @@ export type IpcResponseMap = {
   [IPC.workspaceDescribe]: WorkspaceDescribeResponse;
   [IPC.sharedConfigStatus]: SharedConfigStatusResponse;
   [IPC.previewOpen]: PreviewOpenResponse;
+  [IPC.filesRead]: FilesReadResponse;
   [IPC.terminalStart]: TerminalStartResponse;
   [IPC.terminalWrite]: TerminalWriteResponse;
   [IPC.terminalResize]: TerminalResizeResponse;
@@ -1850,6 +1904,20 @@ export interface ArtemisBridge {
   readonly preview: {
     /** Snapshot the file at `path` and return the URL that serves it. */
     open(request: PreviewOpenRequest): Promise<IpcResult<PreviewOpenResponse>>;
+  };
+
+  /**
+   * Reading a file the conversation mentioned.
+   *
+   * Separate from {@link preview} rather than a third `kind` on it, because the
+   * two make opposite promises about what the renderer receives. A preview may
+   * hand back a URL for a document that *executes*; this hands back text, always,
+   * and there is no shape of response here that could be framed. Keeping them
+   * apart is what lets this one be pointed at any file at all.
+   */
+  readonly files: {
+    /** The file at `path`, as text. Refuses anything that is not text. */
+    read(request: FilesReadRequest): Promise<IpcResult<FilesReadResponse>>;
   };
 
   /**

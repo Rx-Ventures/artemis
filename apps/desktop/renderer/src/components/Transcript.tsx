@@ -163,7 +163,14 @@ import { formatBytes } from '../lib/attachments';
 import { detectArtifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
 import { previewablePath } from '../lib/preview';
-import { activeCapabilities, openPreview, useApp, type ConversationWidth } from '../state/store';
+import {
+  activeCapabilities,
+  openFile,
+  openPreview,
+  useApp,
+  type ConversationWidth,
+} from '../state/store';
+import type { FileReference } from '../lib/filePaths';
 import { usePane, usePaneRef } from '../state/paneContext';
 import {
   formatClock,
@@ -598,6 +605,15 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
 }
 
 function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement {
+  const pane = usePaneRef();
+  /*
+   * Stable across the row's life, so `Markdown`'s memo keeps holding: an
+   * identity that changed every render would re-parse the answer on every
+   * keystroke in the composer below it. `pane` is a handle rather than a value,
+   * so it does not change as the conversation does.
+   */
+  const openHere = useCallback((reference: FileReference) => void openFile(reference, pane), [pane]);
+
   return (
     <Line
       // No word for the main agent — the mark above says it, and see the header
@@ -622,7 +638,7 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
             <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
-              <Markdown>{item.text}</Markdown>
+              <Markdown onOpenFile={openHere}>{item.text}</Markdown>
             </div>
           )}
         </BubbleContent>

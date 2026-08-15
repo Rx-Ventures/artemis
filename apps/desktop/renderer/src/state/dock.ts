@@ -68,6 +68,21 @@ import type { PaneId } from './pane';
  */
 export type DockTab =
   | { readonly kind: 'preview' }
+  /**
+   * A file the conversation named, shown as text.
+   *
+   * Keyed by nothing, exactly like {@link PREVIEW_TAB} and for the same three
+   * reasons: it is a snapshot rather than a process, reopening it is one click
+   * on the link that is still in the transcript, and one at a time is what keeps
+   * the affordance safe to put on *every* path in an answer. A tab per file
+   * would let a reader skimming one paragraph fill the strip with eight of them.
+   *
+   * The consequence to be aware of is that following a second link replaces the
+   * first, so two files cannot be read side by side. That is the same limitation
+   * the preview has always had, it is the reason the link stays live in the
+   * transcript, and it is the thing to revisit first if this surface grows.
+   */
+  | { readonly kind: 'file' }
   | { readonly kind: 'terminal'; readonly id: TerminalId }
   /**
    * What one conversation has delegated. One tab, however many tasks — the list
@@ -101,11 +116,16 @@ export type DockTab =
 /** The preview tab. A constant, because there is only ever one. */
 export const PREVIEW_TAB: DockTab = { kind: 'preview' };
 
+/** The file tab. A constant, for {@link PREVIEW_TAB}'s reason. */
+export const FILE_TAB: DockTab = { kind: 'file' };
+
 /** A stable string for one tab. For React keys and set membership only. */
 export function tabKey(tab: DockTab): string {
   switch (tab.kind) {
     case 'preview':
       return 'preview';
+    case 'file':
+      return 'file';
     case 'terminal':
       return `terminal:${tab.id}`;
     case 'tasks':
@@ -273,9 +293,19 @@ export function visibleTabs(
    * agent produced.
    */
   agents: readonly { readonly paneId: PaneId; readonly taskId: string }[] = [],
+  /**
+   * Whose file view is open, if one is. Follows the preview's rules exactly —
+   * it is drawn while its conversation is on screen and destroyed when that
+   * conversation leaves, because it is a snapshot and the link is the way back.
+   */
+  fileOwner: DockOwner | null = null,
 ): readonly DockTab[] {
   const tabs: DockTab[] = [];
   if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
+  // Beside the preview rather than at the end: both are "a file this
+  // conversation put on screen", and the two arriving in different places would
+  // make the strip's order look arbitrary.
+  if (fileOwner !== null && ownerIsShown(fileOwner, shown)) tabs.push(FILE_TAB);
   for (const terminal of terminals) {
     if (ownerIsShown(terminal.owner, shown)) tabs.push({ kind: 'terminal', id: terminal.info.id });
   }

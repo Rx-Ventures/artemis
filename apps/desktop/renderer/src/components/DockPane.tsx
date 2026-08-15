@@ -50,6 +50,7 @@
 import { useCallback, useRef, type KeyboardEvent, type ReactElement } from 'react';
 import {
   BotIcon,
+  FileCodeIcon,
   FileTextIcon,
   PlusIcon,
   SquareArrowOutUpRightIcon,
@@ -61,6 +62,7 @@ import {
 import {
   agentViewIsLive,
   closeAgentTab,
+  closeFile,
   closePreview,
   closeTasks,
   closeTerminal,
@@ -75,6 +77,7 @@ import {
   type TerminalRecord,
 } from '../state/store';
 import { AgentPane } from './AgentPane';
+import { FileViewer } from './FileViewer';
 import { PreviewPane } from './PreviewPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
@@ -172,6 +175,7 @@ function DockTabButton({
   readonly active: boolean;
 }): ReactElement | null {
   if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
+  if (tab.kind === 'file') return <FileTabButton active={active} />;
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
   if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
   return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
@@ -277,6 +281,33 @@ function PreviewTabButton({ active }: { readonly active: boolean }): ReactElemen
       onSelect={() => focusDockTab({ kind: 'preview' })}
       onClose={closePreview}
       closeLabel={`Close ${preview.title}`}
+    />
+  );
+}
+
+/**
+ * The file a link in the transcript opened.
+ *
+ * Titled with the file's own name and captioned with its path, which is the same
+ * pairing the preview tab uses — a strip full of `index.ts` is what you get from
+ * titling these with anything longer, and the path is one hover away.
+ *
+ * Its ✕ is the preview's, not the terminal's: it drops a snapshot the renderer
+ * is holding, and the link that opened it is still in the transcript.
+ */
+function FileTabButton({ active }: { readonly active: boolean }): ReactElement | null {
+  const file = useApp((s) => s.file);
+  if (file === null) return null;
+
+  return (
+    <TabShell
+      active={active}
+      label={file.title}
+      title={file.path}
+      icon={<FileCodeIcon className="size-3 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'file' })}
+      onClose={closeFile}
+      closeLabel={`Close ${file.title}`}
     />
   );
 }
@@ -414,11 +445,18 @@ function DockBody({
   readonly active: DockTab | null;
 }): ReactElement {
   const terminals = useApp((s) => s.terminals);
+  const file = useApp((s) => s.file);
   const showPreview = active?.kind === 'preview';
 
   return (
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showPreview ? <PreviewPane /> : null}
+      {/*
+       * Keyed by path, so following a second link scrolls the new file from its
+       * own top rather than inheriting where the reader had got to in the last
+       * one — and so the jump to a `:line` runs again for the new file.
+       */}
+      {active?.kind === 'file' ? <FileViewer key={file?.path ?? ''} /> : null}
       {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
       {/*
        * Only the active one, unlike the terminals below. An agent tab holds no

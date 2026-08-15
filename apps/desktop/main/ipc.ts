@@ -77,6 +77,7 @@ import {
 } from './errors.js';
 import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
+import { readTextFile } from './files.js';
 import {
   assertNoSecrets,
   assertResponseSafe,
@@ -111,6 +112,7 @@ import {
   validateSharedConfigStatus,
   validateProfilesSuggestDir,
   validatePreviewOpen,
+  validateFilesRead,
   validateTerminalClose,
   validateTerminalList,
   validateTerminalReplay,
@@ -503,6 +505,21 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.previewOpen]: {
       validate: validatePreviewOpen,
       handle: async (request) => grantPreview(request.path),
+    },
+
+    /**
+     * Read a file as text.
+     *
+     * The path arrives from the same untrusted place the preview's does — a
+     * transcript, which is model output — and the answer is deliberately duller:
+     * a string. There is no URL here, no scheme, and nothing the renderer could
+     * frame, which is what allows this channel to accept the extensions the
+     * preview refuses. `files.ts` holds every rule about what may be read and
+     * how much of it.
+     */
+    [IPC.filesRead]: {
+      validate: validateFilesRead,
+      handle: async (request) => readTextFile(request.path),
     },
 
     /* ---------------------------------------------------------------- */

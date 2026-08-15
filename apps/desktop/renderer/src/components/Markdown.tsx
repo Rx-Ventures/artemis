@@ -55,10 +55,18 @@
  * what gets copied.
  */
 
-import { memo, type ComponentPropsWithoutRef, type ReactElement } from 'react';
+import {
+  createContext,
+  memo,
+  useContext,
+  useMemo,
+  type ComponentPropsWithoutRef,
+  type ReactElement,
+} from 'react';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { parseFileReference, type FileReference } from '../lib/filePaths';
 import { CopyButton } from './primitives';
 
 /**
@@ -101,30 +109,110 @@ function CopyablePre({
   const text = textOf(node).replace(/\n$/, '');
   return (
     <div className="group/copy relative">
-      <pre {...rest}>{children}</pre>
+      {/*
+        The fence is announced to the `code` below it, which is the same
+        component that renders a backticked word mid-sentence and has no other
+        way to tell the two apart. Context rather than a parser detail — a fenced
+        block's text happens to end in a newline and an inline span's does not,
+        which is true today and is not a thing to build on.
+      */}
+      <pre {...rest}>
+        <Fenced.Provider value={true}>{children}</Fenced.Provider>
+      </pre>
       <CopyButton text={text} label="Copy this code" className="absolute top-1.5 right-1.5" />
     </div>
   );
 }
 
-const COMPONENTS: Components = { pre: CopyablePre };
+/* -------------------------------------------------------------------------- */
+/* File references                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** True inside a fenced block. See {@link CopyablePre}. */
+const Fenced = createContext(false);
+
+/** How to act on a path the reader clicked, or `null` to render paths as text. */
+const OpenFile = createContext<((reference: FileReference) => void) | null>(null);
+
+/**
+ * A backticked fragment, which is sometimes a file.
+ *
+ * Most of them are not — `useCopy`, `--force`, `pnpm test` — so the great
+ * majority of what this renders is the plain `<code>` it always was.
+ * `parseFileReference` holds the judgement and the argument for where it draws
+ * the line.
+ *
+ * A **button**, not an anchor. There is no URL here and nothing to put in an
+ * `href`: the path is resolved against a conversation's directory and read over
+ * IPC, so an anchor would be a link that cannot be opened in a new window,
+ * copied as a location, or followed by anything but this handler. The `<code>`
+ * stays inside it, which keeps `.md code`'s well and lets the button supply only
+ * what it adds — a colour, an underline, and a focus ring.
+ */
+function CodeSpan({
+  node,
+  children,
+  ...rest
+}: ComponentPropsWithoutRef<'code'> & ExtraProps): ReactElement {
+  const fenced = useContext(Fenced);
+  const open = useContext(OpenFile);
+  const reference = fenced || open === null ? null : parseFileReference(textOf(node));
+
+  if (reference === null || open === null) return <code {...rest}>{children}</code>;
+
+  return (
+    <button
+      type="button"
+      onClick={() => open(reference)}
+      title={reference.line === undefined ? reference.path : `${reference.path}, line ${String(reference.line)}`}
+      className="cursor-pointer rounded-sm text-lunar underline decoration-lunar/40 underline-offset-2 outline-none hover:decoration-lunar focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      <code {...rest}>{children}</code>
+    </button>
+  );
+}
+
+const COMPONENTS: Components = { pre: CopyablePre, code: CodeSpan };
 const REMARK_PLUGINS = [remarkGfm];
 
 export interface MarkdownProps {
   readonly children: string;
+  /**
+   * What to do when the reader clicks a path.
+   *
+   * Absent — the default, and what the preview pane and the plan card both
+   * use — means paths render as ordinary code. Passing it is what turns them
+   * into links, and the caller supplies it rather than this component reaching
+   * for the store because the *conversation* is what a relative path resolves
+   * against, and only the caller knows which one it is drawing.
+   */
+  readonly onOpenFile?: (reference: FileReference) => void;
 }
 
 /**
  * Markdown, the way Artemis renders it.
  *
- * Memoised on the source string. The transcript re-renders a settled answer
- * whenever anything else in the pane moves, and re-parsing a long answer to
- * produce the identical tree is the most expensive thing on that path.
+ * Memoised on its props. The transcript re-renders a settled answer whenever
+ * anything else in the pane moves, and re-parsing a long answer to produce the
+ * identical tree is the most expensive thing on that path — so a caller passing
+ * `onOpenFile` should pass a stable one, which `AssistantRow` does.
  */
-export const Markdown = memo(function Markdown({ children }: MarkdownProps): ReactElement {
+export const Markdown = memo(function Markdown({
+  children,
+  onOpenFile,
+}: MarkdownProps): ReactElement {
+  /*
+   * One context for the whole block rather than a hook in every span. A long
+   * answer holds a hundred `<code>` elements, and this is the difference between
+   * one subscription and a hundred of them.
+   */
+  const open = useMemo(() => onOpenFile ?? null, [onOpenFile]);
+
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
-      {children}
-    </ReactMarkdown>
+    <OpenFile.Provider value={open}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
+        {children}
+      </ReactMarkdown>
+    </OpenFile.Provider>
   );
 });

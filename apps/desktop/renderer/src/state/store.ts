@@ -56,6 +56,7 @@ import type {
   PlanRecommendation,
   PlanUsage,
   PreviewOpenResponse,
+  FilesReadResponse,
   ProfileDraft,
   ProfileId,
   ProfileMetadata,
@@ -99,6 +100,7 @@ import {
   writeToTerminal,
 } from '../lib/terminalSessions';
 import {
+  FILE_TAB,
   learnSessionId,
   nextActiveTab,
   ownerIsShown,
@@ -110,6 +112,7 @@ import {
   type ShownConversation,
   type TerminalRecord,
 } from './dock';
+import { resolveFilePath, type FileReference } from '../lib/filePaths';
 import { isTaskLive, type BackgroundTask } from '@rx-artemis/protocol';
 import { setEventsDroppedHook, type PermissionItem, type TranscriptModel } from './transcript';
 import {
@@ -233,6 +236,22 @@ export type PreviewOwner = DockOwner;
  * frame or text it can render itself.
  */
 export type PreviewState = PreviewOpenResponse & { readonly owner: PreviewOwner };
+
+/**
+ * The file the dock is showing, as the viewer needs it.
+ *
+ * The same construction as {@link PreviewState} — the main process's answer plus
+ * the owner only the renderer knows — with one field neither side sent: the line
+ * the reference pointed at. `main/files.ts` returns a file, not a location, and
+ * `foo.ts:88` means "this file, at 88" to the person who clicked it. Keeping the
+ * number here rather than in the response is what stops the same file opened
+ * from two different links being two different reads.
+ */
+export type FileState = FilesReadResponse & {
+  readonly owner: DockOwner;
+  /** 1-based, from a `path:line` reference. Absent when the link named no line. */
+  readonly line?: number;
+};
 
 /** A dismissible message on the error surface. */
 export interface Banner {
@@ -396,6 +415,21 @@ export interface AppState {
    * it, and restoring one would reopen the pane onto a 404.
    */
   readonly preview: PreviewState | null;
+  /**
+   * The file the dock is showing as text, or `null` when it is showing none.
+   *
+   * Window-owned and one at a time, for every reason {@link preview} is — see
+   * the `file` variant of `DockTab`, which is where that argument is written
+   * out. The pair are siblings: one is "the page the agent wrote", the other is
+   * "the file the agent mentioned", and neither is part of the conversation in
+   * the way a transcript is.
+   *
+   * Deliberately not persisted, and here the reason is the plainest of the
+   * three: this is a copy of some bytes that were on disk at the moment someone
+   * clicked. Restoring it after a restart would show a file as it was last
+   * week under a caption implying it is current.
+   */
+  readonly file: FileState | null;
   /**
    * Every terminal this window is holding, oldest first.
    *
@@ -1388,6 +1422,7 @@ export const useApp = create<AppState>(() => ({
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
   preview: null,
+  file: null,
   terminals: [],
   agentViews: [],
   activeDockTab: null,
@@ -1935,6 +1970,71 @@ export function closePreview(): void {
   useApp.setState({ preview: null });
 }
 
+/* -------------------------------------------------------------------------- */
+/* Files                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Show a file the conversation mentioned, in the dock.
+ *
+ * `reference` is what `parseFileReference` made of a fragment of an answer,
+ * which is to say it came from model output and is not to be trusted for
+ * anything. It is resolved here rather than at the link, because the base is the
+ * *conversation's* directory and this is the layer that holds one: the same
+ * relative path clicked in the other column means a different file, and a
+ * component reaching for `focusedPane()` to find that out would get the wrong
+ * answer in a split whose other column is focused.
+ *
+ * Everything else follows {@link openPreview} deliberately, including the two
+ * decisions that look incidental. Ownership is read *after* the await, because
+ * between the click and the bytes the user may have resumed a different session
+ * into this column, and stamping the view with a conversation that has already
+ * gone would have `reconcileDock` close it on arrival — which looks exactly like
+ * the link not working. And a failure lands in the pane's transcript rather than
+ * on the error surface: a file that could not be read is a fact about the thing
+ * the reader just clicked, not a fault in the app, and it belongs where they are
+ * already looking.
+ */
+export async function openFile(
+  reference: FileReference,
+  pane: Pane = focusedPane(),
+): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const path = resolveFilePath(reference.path, paneState(pane).cwd, useApp.getState().platform);
+
+  const res = await call(() => bridge.files.read({ path }));
+  if (!res.ok) {
+    pane.transcript.note('warn', 'Could not open this file', res.error.message);
+    return;
+  }
+
+  useApp.setState({
+    file: {
+      ...res.value,
+      owner: ownerFor(pane),
+      ...(reference.line === undefined ? {} : { line: reference.line }),
+    },
+    // Clicking a path is a request to look at it. With a terminal already in the
+    // rail the tab would otherwise open behind the one in front, and the click
+    // would read as having done nothing.
+    activeDockTab: FILE_TAB,
+  });
+}
+
+/**
+ * Close the file tab. Nothing to tell the main process — it kept nothing.
+ *
+ * Which tab comes forward is not decided here, for the reason {@link closePreview}
+ * gives: dropping the file is enough, and {@link reconcileDock} settles the strip
+ * on the write.
+ */
+export function closeFile(): void {
+  if (useApp.getState().file === null) return;
+  useApp.setState({ file: null });
+}
+
 /**
  * Shut one column's delegated tab, without touching what it was showing.
  *
@@ -2408,7 +2508,7 @@ function describeShown(): readonly ShownConversation[] {
  */
 function reconcileDock(): void {
   const state = useApp.getState();
-  const { preview, terminals, activeDockTab, visibleDockTabs, agentViews } = state;
+  const { preview, file, terminals, activeDockTab, visibleDockTabs, agentViews } = state;
 
   /*
    * The overwhelmingly common case: an empty dock that was already empty. This
@@ -2424,6 +2524,7 @@ function reconcileDock(): void {
    */
   if (
     preview === null &&
+    file === null &&
     terminals.length === 0 &&
     visibleDockTabs.length === 0 &&
     agentViews.length === 0 &&
@@ -2436,6 +2537,7 @@ function reconcileDock(): void {
 
   const patch: {
     preview?: PreviewState | null;
+    file?: FileState | null;
     terminals?: readonly TerminalRecord[];
     activeDockTab?: DockTab | null;
     visibleDockTabs?: readonly DockTab[];
@@ -2452,6 +2554,19 @@ function reconcileDock(): void {
     if (nextPreview !== preview) patch.preview = nextPreview;
   }
 
+  // The same two moves, for the same reasons: adopt the session id once the run
+  // learns it, and destroy the view when its conversation leaves the screen. The
+  // link in the transcript is the way back, exactly as the tile is for a preview.
+  let nextFile = file;
+  if (nextFile !== null) {
+    const learned = learnSessionId(nextFile.owner, shown);
+    if (learned !== null) {
+      nextFile = { ...nextFile, owner: { ...nextFile.owner, sessionId: learned } };
+    }
+    if (!ownerIsShown(nextFile.owner, shown)) nextFile = null;
+    if (nextFile !== file) patch.file = nextFile;
+  }
+
   // Terminals are only ever *re-owned* here, never dropped: a shell whose
   // conversation has left the screen stops being drawn and goes on running.
   const adopted = terminals.map((terminal) => {
@@ -2465,7 +2580,13 @@ function reconcileDock(): void {
     : terminals;
   if (nextTerminals !== terminals) patch.terminals = nextTerminals;
 
-  const visible = visibleTabs(nextPreview?.owner ?? null, nextTerminals, shown, agentViews);
+  const visible = visibleTabs(
+    nextPreview?.owner ?? null,
+    nextTerminals,
+    shown,
+    agentViews,
+    nextFile?.owner ?? null,
+  );
   const moved =
     visible.length !== visibleDockTabs.length ||
     visible.some((tab, index) => !sameTab(tab, visibleDockTabs[index] as DockTab));
