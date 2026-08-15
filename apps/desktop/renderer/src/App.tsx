@@ -120,6 +120,7 @@ import {
   splitPane,
   toggleSidebar,
   togglePalette,
+  toggleBrowser,
   toggleTerminal,
   useApp,
 } from './state/store';
@@ -236,6 +237,22 @@ export function App(): ReactElement {
      * and reaches the shell untouched.
      */
     '!mod+j': () => toggleTerminal(focusedPane()),
+    /*
+     * ⌘⇧B for the browser. `⌘B` is the sidebar and stays that way — this is the
+     * shifted neighbour, which is the pattern `⌘\` and `⌘⇧\` already set.
+     *
+     * `!` for `mod+j`'s reason, aimed at a different text field: the address bar
+     * is an `<input>`, so a plain binding would fail exactly while the reader
+     * was looking at the browser it toggles.
+     *
+     * One thing it genuinely cannot do, and it is worth writing down rather than
+     * leaving to be discovered: while the *page itself* has focus, the keystroke
+     * goes to the page. A `WebContentsView` is a separate renderer, not an
+     * element in this document, so nothing here sees the event. Click the app's
+     * chrome first — which is what a browser's own shortcuts do too when focus
+     * is inside a plugin.
+     */
+    '!mod+shift+b': () => toggleBrowser(focusedPane()),
     /*
      * `⌘\` splits to the right, `⌘⇧\` splits downwards.
      *
