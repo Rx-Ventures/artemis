@@ -74,7 +74,6 @@ import {
   closeTasks,
   closeTerminal,
   closeBrowser,
-  openBrowser,
   focusDockTab,
   liveTaskCount,
   openTerminal,
@@ -91,12 +90,6 @@ import { PreviewPane } from './PreviewPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
 import { BrowserPane } from './BrowserPane';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from './ui/dropdown-menu';
 import { IconButton } from './disabled-reason';
 import { cn } from '@/lib/utils';
 
@@ -172,32 +165,23 @@ function DockStrip({
         <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
       ))}
       {/*
-        A menu now that the rail holds two kinds of live thing. It stayed a
-        single button for as long as a terminal was the only thing `+` could
-        mean; a second entry is the point at which guessing becomes wrong half
-        the time, and two buttons would spend a permanent slot on the rarer one.
+        Still one button, and still a terminal.
+
+        This was briefly a menu when the rail grew a second kind of live thing,
+        and a menu is the wrong shape for it: two items behind a click is more
+        work than the one action it replaced, and `+` on a strip of tabs already
+        means "another of these" everywhere else. The browser has its own
+        control in the header beside the terminal's, which is where a reader
+        looks for "open a thing" — see `AppHeader`.
       */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <IconButton
-            label="Open a terminal or a browser"
-            size="icon-xs"
-            className="my-0.5 ml-0.5 shrink-0 self-center text-ink-faint"
-          >
-            <PlusIcon />
-          </IconButton>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => void openTerminal()}>
-            <TerminalIcon className="size-3.5" aria-hidden="true" />
-            New terminal
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void openBrowser()}>
-            <GlobeIcon className="size-3.5" aria-hidden="true" />
-            New browser
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <IconButton
+        label="Open another terminal"
+        size="icon-xs"
+        onClick={() => void openTerminal()}
+        className="my-0.5 ml-0.5 shrink-0 self-center text-ink-faint"
+      >
+        <PlusIcon />
+      </IconButton>
     </div>
   );
 }

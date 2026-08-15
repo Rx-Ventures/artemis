@@ -90,6 +90,7 @@ import {
   PanelLeftIcon,
   Settings2Icon,
   SquareIcon,
+  GlobeIcon,
   SquareTerminalIcon,
   UsersIcon,
   XIcon,
@@ -100,7 +101,14 @@ import { useWindowState } from '../hooks/useWindowState';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import { openSettings, toggleTasks, toggleTerminal, toggleSidebar, useApp } from '../state/store';
+import {
+  openSettings,
+  toggleBrowser,
+  toggleTasks,
+  toggleTerminal,
+  toggleSidebar,
+  useApp,
+} from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
 import { ThemeToggle } from './ThemeToggle';
@@ -289,6 +297,20 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <SquareTerminalIcon />
+      </IconButton>
+      {/*
+        Beside the terminal, because it is the same kind of control: a live
+        thing this conversation can put in the rail, opened or brought forward
+        by pressing the same button twice. `toggleBrowser` is `toggleTerminal`'s
+        twin down in the store, including the part that keeps a second press
+        from stacking up pages nobody asked for.
+      */}
+      <IconButton
+        label={`Browser (${keyLabel('mod+shift+b')})`}
+        onClick={() => toggleBrowser(pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <GlobeIcon />
       </IconButton>
       {/*
         After the terminal rather than before it, because that is the order the

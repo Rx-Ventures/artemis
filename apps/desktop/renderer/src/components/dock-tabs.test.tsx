@@ -270,9 +270,12 @@ describe('the dock', () => {
   });
 
   /*
-   * The `+` became a menu when the rail grew a second kind of live thing to
-   * open. What is pinned here is that the terminal entry still reaches
-   * `openTerminal` — the menu is a route to it, not a replacement for it.
+   * One button, one action.
+   *
+   * This was briefly a menu when the rail grew a second kind of live thing, and
+   * a menu is the wrong shape for `+` on a tab strip: two items behind a click
+   * is more work than the action it replaced, and `+` already means "another of
+   * these" everywhere else. The browser is reached from the header instead.
    */
   it('offers a way to open another one', async () => {
     await act(async () => {
@@ -281,14 +284,7 @@ describe('the dock', () => {
     renderDock();
 
     await act(async () => {
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'Open a terminal or a browser' }), {
-        button: 0,
-        ctrlKey: false,
-        pointerType: 'mouse',
-      });
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('menuitem', { name: 'New terminal' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open another terminal' }));
     });
 
     expect(started).toHaveLength(2);
