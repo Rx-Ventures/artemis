@@ -66,7 +66,9 @@ import {
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { parseFileReference, type FileReference } from '../lib/filePaths';
+import { useReachableFile } from '../lib/fileReach';
+import { parseFileReference, resolveFilePath, type FileReference } from '../lib/filePaths';
+import { hostPlatform } from '../state/pane';
 import { CopyButton } from './primitives';
 
 /**
@@ -131,8 +133,22 @@ function CopyablePre({
 /** True inside a fenced block. See {@link CopyablePre}. */
 const Fenced = createContext(false);
 
-/** How to act on a path the reader clicked, or `null` to render paths as text. */
-const OpenFile = createContext<((reference: FileReference) => void) | null>(null);
+/** What a caller supplies to turn paths in its text into links. */
+export interface FileLinks {
+  /**
+   * The directory a relative path in this text is relative to.
+   *
+   * The conversation's own, and the reason this is a prop rather than something
+   * the component reaches for: the same `src/store.ts` means a different file in
+   * the column next door, and only the caller knows which column it is drawing.
+   */
+  readonly cwd: string;
+  /** What to do when the reader clicks one. */
+  readonly open: (reference: FileReference) => void;
+}
+
+/** How to act on paths, or `null` to render them as ordinary code. */
+const Links = createContext<FileLinks | null>(null);
 
 /**
  * A backticked fragment, which is sometimes a file.
@@ -141,6 +157,13 @@ const OpenFile = createContext<((reference: FileReference) => void) | null>(null
  * majority of what this renders is the plain `<code>` it always was.
  * `parseFileReference` holds the judgement and the argument for where it draws
  * the line.
+ *
+ * Being path-*shaped* is necessary and not sufficient. `useReachableFile` asks
+ * the main process whether there is a file at the resolved path, and until the
+ * answer is yes this renders as text — so an agent's `apps/desktop/main/files.ts`
+ * is a link and the `foo.ts` it says it is *about to* write is not, which is a
+ * distinction no amount of looking at the string could have made. The two rules
+ * fail the same way round, which is the point: where either is unsure, no link.
  *
  * A **button**, not an anchor. There is no URL here and nothing to put in an
  * `href`: the path is resolved against a conversation's directory and read over
@@ -155,15 +178,28 @@ function CodeSpan({
   ...rest
 }: ComponentPropsWithoutRef<'code'> & ExtraProps): ReactElement {
   const fenced = useContext(Fenced);
-  const open = useContext(OpenFile);
-  const reference = fenced || open === null ? null : parseFileReference(textOf(node));
+  const links = useContext(Links);
+  const reference = fenced || links === null ? null : parseFileReference(textOf(node));
 
-  if (reference === null || open === null) return <code {...rest}>{children}</code>;
+  /*
+   * Resolved here rather than at the click, because this is the layer that has
+   * to ask about it — and asking about `src/store.ts` without saying which
+   * conversation's `src` would be asking about nothing. `openFile` resolves it
+   * again from the store for the click itself; the two agree because they use
+   * the same function against the same pane's directory.
+   */
+  const path =
+    reference === null || links === null
+      ? null
+      : resolveFilePath(reference.path, links.cwd, hostPlatform());
+  const reachable = useReachableFile(path);
+
+  if (reference === null || links === null || !reachable) return <code {...rest}>{children}</code>;
 
   return (
     <button
       type="button"
-      onClick={() => open(reference)}
+      onClick={() => links.open(reference)}
       title={reference.line === undefined ? reference.path : `${reference.path}, line ${String(reference.line)}`}
       className="cursor-pointer rounded-sm text-lunar underline decoration-lunar/40 underline-offset-2 outline-none hover:decoration-lunar focus-visible:ring-2 focus-visible:ring-ring/50"
     >
@@ -178,15 +214,18 @@ const REMARK_PLUGINS = [remarkGfm];
 export interface MarkdownProps {
   readonly children: string;
   /**
-   * What to do when the reader clicks a path.
+   * Where paths in this text point, and what to do when one is clicked.
    *
    * Absent — the default, and what the preview pane and the plan card both
    * use — means paths render as ordinary code. Passing it is what turns them
-   * into links, and the caller supplies it rather than this component reaching
-   * for the store because the *conversation* is what a relative path resolves
-   * against, and only the caller knows which one it is drawing.
+   * into links.
+   *
+   * One object rather than two props because neither half is any use alone: a
+   * handler with no directory cannot say which file `src/store.ts` is, and a
+   * directory with no handler describes links that do nothing. Making them
+   * inseparable in the type is cheaper than a comment asking for both.
    */
-  readonly onOpenFile?: (reference: FileReference) => void;
+  readonly files?: FileLinks;
 }
 
 /**
@@ -195,24 +234,22 @@ export interface MarkdownProps {
  * Memoised on its props. The transcript re-renders a settled answer whenever
  * anything else in the pane moves, and re-parsing a long answer to produce the
  * identical tree is the most expensive thing on that path — so a caller passing
- * `onOpenFile` should pass a stable one, which `AssistantRow` does.
+ * `files` should pass a stable object, which `AssistantRow` does.
  */
-export const Markdown = memo(function Markdown({
-  children,
-  onOpenFile,
-}: MarkdownProps): ReactElement {
+export const Markdown = memo(function Markdown({ children, files }: MarkdownProps): ReactElement {
   /*
-   * One context for the whole block rather than a hook in every span. A long
-   * answer holds a hundred `<code>` elements, and this is the difference between
-   * one subscription and a hundred of them.
+   * One context for the whole block rather than a prop threaded through every
+   * span. Note that the *reachability* subscription below it is per span and is
+   * not the same trade: it is keyed by path, so an answer about one file wakes
+   * only the spans naming that file — see `fileReach.ts`.
    */
-  const open = useMemo(() => onOpenFile ?? null, [onOpenFile]);
+  const links = useMemo(() => files ?? null, [files]);
 
   return (
-    <OpenFile.Provider value={open}>
+    <Links.Provider value={links}>
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
         {children}
       </ReactMarkdown>
-    </OpenFile.Provider>
+    </Links.Provider>
   );
 });

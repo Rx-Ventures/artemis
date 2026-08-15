@@ -1489,6 +1489,25 @@ export function createMockBridge(): ArtemisBridge {
           truncated: huge,
         });
       },
+
+      /*
+       * Which paths "exist".
+       *
+       * There is no disk here, so the rule is by name — and the names it says no
+       * to are chosen to make the *interesting* state reachable in dev. `e.g` is
+       * the fragment the linking rule admits it gets wrong (a two-letter
+       * extension on a Latin abbreviation), and it is the one this whole channel
+       * exists to stop underlining. Anything called `missing` or `todo` stands in
+       * for the other half: a file the agent has said it will write and has not.
+       *
+       * Everything else answers yes, which matches `read` above — a mock that
+       * refused paths `read` would happily synthesise would make the dev app
+       * quietly unable to open anything.
+       */
+      check: async ({ paths }) => {
+        const absent = /(^|\/)(e\.g|i\.e|missing[^/]*|todo[^/]*)$/i;
+        return ok({ reachable: paths.filter((path) => !absent.test(path)) });
+      },
     },
 
     /*

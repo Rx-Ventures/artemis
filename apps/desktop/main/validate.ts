@@ -105,6 +105,7 @@ import {
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
   type PreviewOpenRequest,
+  type FilesCheckRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalListRequest,
@@ -224,6 +225,16 @@ const LIMITS = {
    * some shells hang on it.
    */
   terminalDimension: 1_000,
+  /**
+   * Paths one `files.check` may ask about.
+   *
+   * Sized to a long answer rather than to a repository: the renderer batches the
+   * path-shaped fragments of what is on screen, and two hundred of those in one
+   * message is already an answer nobody is reading. It is a bound on work — each
+   * entry costs a `stat` — and not on reach, since the same caller may send a
+   * second request. See {@link validateFilesCheck}.
+   */
+  checkPaths: 256,
 } as const;
 
 /**
@@ -1278,6 +1289,33 @@ export function validatePreviewOpen(raw: unknown): PreviewOpenRequest {
 export function validateFilesRead(raw: unknown): FilesReadRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
+/**
+ * Asking which of a batch of paths are files.
+ *
+ * Every path gets exactly the treatment {@link validateFilesRead} gives its one,
+ * because the two channels are pointed at the same disk by the same caller and a
+ * looser gate on the cheaper question would be the interesting one to find.
+ *
+ * {@link LIMITS.checkPaths} is the only rule that is new here, and it is a bound
+ * on work rather than on reach: the renderer batches one screenful of an answer
+ * into a request, and a cap keeps a loop in a compromised one from asking for a
+ * hundred thousand `stat`s in a single call. An honest caller with more than a
+ * batch's worth sends a second request, which is what the renderer does.
+ *
+ * An empty list is accepted and answers with an empty list. It is what a caller
+ * that deduplicated its way down to nothing sends, and refusing it would mean
+ * the renderer having to know not to.
+ */
+export function validateFilesCheck(raw: unknown): FilesCheckRequest {
+  const request = requireRequest(raw);
+  const paths = request['paths'];
+  if (!Array.isArray(paths)) throw new ValidationError('paths', 'must be an array');
+  if (paths.length > LIMITS.checkPaths) {
+    throw new ValidationError('paths', `must have at most ${LIMITS.checkPaths} entries`);
+  }
+  return { paths: paths.map((entry, index) => requireAbsolutePath(entry, `paths[${index}]`)) };
 }
 
 /* -------------------------------------------------------------------------- */

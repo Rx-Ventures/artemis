@@ -269,7 +269,9 @@ let nextPaneId = 0;
 let nextRowId = 0;
 
 /**
- * The host platform, for the path arithmetic in {@link detectArtifact}.
+ * The host platform, for the path arithmetic in {@link detectArtifact} — and,
+ * through {@link hostPlatform}, for anyone else resolving a path outside a
+ * component's render.
  *
  * Held here rather than read from the app store because that store imports
  * *this* module, and a pane reaching back into it for one scalar would close the
@@ -277,11 +279,23 @@ let nextRowId = 0;
  * until then this is the same `darwin` the store itself defaults to, and the
  * only thing it could get wrong is a path separator in an empty transcript.
  */
-let hostPlatform: Platform = 'darwin';
+let platformOfHost: Platform = 'darwin';
 
 /** Tell the pane layer what it is running on. Called once, from `bootstrap`. */
 export function setHostPlatform(platform: Platform): void {
-  hostPlatform = platform;
+  platformOfHost = platform;
+}
+
+/**
+ * What Artemis is running on.
+ *
+ * A plain read rather than a hook or a selector, because it is settled before
+ * the first transcript draws and never moves again — subscribing to it would be
+ * a subscription that can never fire. Callers who want a *reactive* platform
+ * want the app store's copy; there is none, because there is no such thing.
+ */
+export function hostPlatform(): Platform {
+  return platformOfHost;
 }
 
 /**
@@ -293,7 +307,7 @@ export function setHostPlatform(platform: Platform): void {
  */
 function installArtifactTest(pane: Pane): void {
   const cwd = pane.store.getState().cwd;
-  const platform = hostPlatform;
+  const platform = hostPlatform();
   pane.transcript.setArtifactTest(
     (item) =>
       item.status === 'ok' &&
