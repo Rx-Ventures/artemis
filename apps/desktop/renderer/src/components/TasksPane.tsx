@@ -2,12 +2,37 @@
  * What this conversation has delegated, and how it is going.
  * ============================================================================
  *
- *     ⏵ Explore   auth call sites          1m12s  ⏹
- *       Grep · 24.1k tok · 7 tools
- *     ⏵ review-changes (workflow)          3m40s  ⏹
- *       running · 310k tok
- *     ⏹ code-review                        2m01s
- *       completed · /tmp/task-4.md
+ *     ╭────────────────────────────────────────────╮
+ *     │ ⏵ Explore  auth call sites   1m12s  ⏹      │
+ *     │   Grep · 24.1k tok · 7 tools               │
+ *     ╰────────────────────────────────────────────╯
+ *     ╭────────────────────────────────────────────╮
+ *     │ ⏵ review-changes (workflow)  3m40s  ⏹      │
+ *     │   running · 310k tok                       │
+ *     │ ⌄ Review 3/3 · Verify 1/4                  │
+ *     ╰────────────────────────────────────────────╯
+ *     › 4 finished
+ *
+ * ## Live on top, finished folded under it
+ *
+ * The pane answers one question — *is it still going* — and a flat list answers
+ * it worst exactly when it matters most: a workflow that has settled thirty
+ * agents pushes the two still running off the bottom. So the split is by
+ * liveness rather than by arrival, and the settled half is behind one click
+ * that is shut by default.
+ *
+ * Order is preserved *inside* each half. Rows arrive in the order they were
+ * delegated, and one that reordered itself as it settled would be one the eye
+ * has to find again — the same argument `visibleTabs` makes about the dock.
+ *
+ * ## Each item is a card
+ *
+ * The pane holds things of wildly different heights: a one-line `Bash` beside a
+ * workflow with four phases and twenty agents folded under it. Run flat, the
+ * phase tree of one reads as though it belonged to the next. A border is the
+ * cheapest thing that says where one piece of work stops. A settled card is
+ * recessed rather than raised, which does some of the same work as the heading
+ * it sits under.
  *
  * The surface the transcript could not be. A turn that spawns three agents draws
  * as one folded line reading "delegated to 3 agents" — past tense, while they
@@ -74,12 +99,62 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
     );
   }
 
+  /*
+   * Live work on top, finished work folded underneath.
+   *
+   * The pane is opened to answer "is it still going", and a flat list answers
+   * that worst exactly when it matters most: a workflow that has finished
+   * thirty agents pushes the two that are still running off the bottom. So the
+   * split is by liveness rather than by arrival, and only the live half is
+   * unconditionally on screen.
+   *
+   * Order is preserved inside each half. The tasks arrive in the order they
+   * were delegated and a row that moved as it settled would be a row the eye
+   * has to re-find — the same reason `visibleTabs` refuses to reorder the dock.
+   */
+  const live = tasks.filter(isTaskLive);
+  const finished = tasks.filter((task) => !isTaskLive(task));
+
   return (
-    <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Delegated work">
-      {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} now={now} pane={pane} />
-      ))}
-    </ul>
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
+      {live.length > 0 ? (
+        <ul className="flex flex-col gap-1.5" aria-label="Delegated work">
+          {live.map((task) => (
+            <TaskRow key={task.id} task={task} now={now} pane={pane} />
+          ))}
+        </ul>
+      ) : null}
+
+      {finished.length > 0 ? (
+        <Fold
+          /*
+           * Shut by default, and *not* remembered per task.
+           *
+           * `rememberAs` is keyed on the pane rather than on anything that
+           * changes, because the section itself is stable while its contents
+           * are not: a task settling moves it into here, and a key that
+           * included the set of finished tasks would spring the section open
+           * again every time one arrived — which is precisely the moment the
+           * user is least likely to want the pane to jump.
+           */
+          defaultOpen={false}
+          rememberAs={`tasks-finished:${paneId}`}
+          className={cn(live.length > 0 && 'mt-2')}
+          triggerClassName="px-1 text-3xs"
+          summary={
+            <span className="text-3xs text-ink-faint">
+              {finished.length} finished
+            </span>
+          }
+        >
+          <ul className="flex flex-col gap-1.5" aria-label="Finished work">
+            {finished.map((task) => (
+              <TaskRow key={task.id} task={task} now={now} pane={pane} />
+            ))}
+          </ul>
+        </Fold>
+      ) : null}
+    </div>
   );
 }
 
@@ -119,9 +194,26 @@ const TaskRow = memo(function TaskRow({
 
   const phases = groupByPhase(task.workflowProgress);
 
+  /*
+   * A card, rather than a row in a run of rows.
+   *
+   * The pane holds items of wildly different heights — a one-line `Bash` beside
+   * a workflow with four phases and twenty agents under it — and in a flat list
+   * the phase tree of one item reads as if it belonged to the next. A border is
+   * the cheapest thing that says where one piece of work stops.
+   *
+   * A settled card is recessed rather than raised: it is still readable, and
+   * the contrast between the two halves does the work the "finished" heading
+   * above it is also doing.
+   */
   return (
-    <li className="flex flex-col">
-      <div className="group flex items-start gap-2 px-2 py-1 hover:bg-raised/30">
+    <li
+      className={cn(
+        'flex flex-col overflow-hidden rounded-md border',
+        live ? 'border-line-strong bg-raised/40' : 'border-line bg-inset/40',
+      )}
+    >
+      <div className="group flex items-start gap-2 px-2 py-1.5 hover:bg-raised/40">
         <StatusIcon task={task} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -185,7 +277,7 @@ const TaskRow = memo(function TaskRow({
           // the next progress message — of which there is one every few seconds.
           defaultOpen={live}
           rememberAs={`workflow:${task.id}`}
-          className="px-2 pb-1"
+          className="border-t border-line/60 px-2 py-1"
           triggerClassName="pl-3 text-3xs"
           contentClassName="mt-0.5"
           summary={<span className="text-3xs">{summarizePhases(phases)}</span>}
