@@ -1,39 +1,41 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
-## What's new in 0.13.0
+## What's new in 0.14.0
 
-- **A file the conversation mentioned opens beside it.** The transcript was full
-  of paths and none of them did anything: the preview could open five
-  extensions, all chosen for being *renderable*, so the `.ts` file the whole
-  conversation was about had nowhere to be read. Paths in an answer are now
-  links, and clicking one opens the file as text in the dock, next to the
-  terminal — numbered lines, and a `:88` in the reference scrolls to line 88 and
-  marks it. What may be read is decided by **content, not extension**: a NUL
-  byte in the first 8000 bytes means binary, so `Makefile`, `.env` and
-  `justfile` open and `logo.png` is declined. A file too large to hold is
-  clipped rather than refused — the first part of a log is what someone opening
-  a log wants — and the caption says so rather than implying the file ends
-  there.
+- **A browser in the dock, and the agent can drive it.** The rail held a file
+  and a shell; it now holds a page. Open one from the `+` menu, type an address,
+  and it renders beside the conversation — a dev server on `localhost:5173`, a
+  vendor's documentation, a staging environment you have signed into, since the
+  session persists across restarts. The agent gets tools for the *same* page, so
+  when it navigates or fills a form you watch it happen rather than reading
+  about it afterwards; a browser it opens appears as a tab without stealing the
+  one you were looking at. Every tool call goes through the ordinary permission
+  prompt, because an MCP tool is a tool.
 
-- **A workflow opens into its phases.** A workflow was one opaque row: a name, a
-  token total, and no way to tell a run stuck on its third agent from one nearly
-  finished. It now opens into the phases the script declared, each with a count
-  and a dot per agent, and under them the agents themselves with the model they
-  ran on, what they spent, and how long they took. The dots say what `3/3`
-  cannot: *which* one failed. A skip draws amber rather than red, because a
-  workflow asking and the user declining is an ordinary outcome, not a fault.
+  A page runs with **no preload script**, on its own session, as a sibling of
+  the app rather than a frame inside it — so there is no `window.artemis` to
+  find and nothing for it to call. Only `http` and `https` load: `javascript:`
+  is code, `data:` is a page with no origin, and `file:` is your disk. There is
+  no search box, deliberately — an address bar in a coding tool sees internal
+  hostnames and the occasional mis-pasted token, and a typo should not become a
+  request to somebody else's server.
 
-- **Code blocks carry the button that copies them.** Getting a SQL query out of
-  an answer meant dragging a selection across it and hoping the drag stopped
-  where you did. The control appears on hover — and on keyboard focus, which is
-  the half that usually gets left out.
+- **A path is a link only where there is a file.** Last release made every path
+  in an answer clickable, and it was too eager: the rule for spotting one only
+  ever had a string to look at, so `e.g` became a link and so did the file an
+  agent had merely *said* it would write. Clicking either opened a pane saying
+  there was nothing there. Artemis now asks first, in one batched question per
+  answer, and a fragment stays plain text until the answer comes back. A *yes*
+  is remembered; a *no* is re-asked when the next answer arrives, so the file
+  the agent promised in one turn is a link by the next — and a window nobody is
+  typing into does no work at all.
 
-- **A delegated row says what kind of thing it is.** A workflow and a
-  backgrounded `sleep` used to be the same row with different words in it. Rows
-  now name their kind, a workflow leads with its own name, and the tool count —
-  carried in the protocol since the pane was written — finally reaches the
-  screen.
+- **A file full of secrets opens.** Reading a `.env`, a README documenting an
+  `sk-ant-…`, or a checked-in PEM fixture failed outright with a
+  credential-safety error: the channel that reads a file as text was never given
+  the policy its sibling has, so Artemis refused to show you a file already on
+  your disk. Both now share one policy, named for what it is.
 
 ## Install
 
