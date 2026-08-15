@@ -105,6 +105,7 @@ import {
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
   type PreviewOpenRequest,
+  type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalListRequest,
   type TerminalReplayRequest,
@@ -1254,6 +1255,27 @@ export function validateSharedConfigStatus(raw: unknown): SharedConfigStatusRequ
  * with a different error.
  */
 export function validatePreviewOpen(raw: unknown): PreviewOpenRequest {
+  const request = requireRequest(raw);
+  return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
+/**
+ * Reading a file as text.
+ *
+ * The same one check as {@link validatePreviewOpen}, and for the same reason: a
+ * relative path would resolve against the main process's `process.cwd()`, which
+ * is wherever Artemis happened to be launched from. Resolving a transcript's
+ * relative path against the *conversation's* directory is the renderer's job,
+ * because the renderer is the only side that knows which conversation the click
+ * came from.
+ *
+ * Nothing here decides what may be read. Whether a file is text, how much of it
+ * comes back, and what to say when it is a folder all belong to `files.ts`,
+ * which is the layer that has the bytes — see {@link validatePreviewOpen} for
+ * the argument that a validator and a handler holding two copies of one rule
+ * will eventually disagree about it.
+ */
+export function validateFilesRead(raw: unknown): FilesReadRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };
 }

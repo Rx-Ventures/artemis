@@ -1446,6 +1446,52 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     /*
+     * Reading a file, with the three answers the viewer has to draw.
+     *
+     * The mock cannot read a disk, so it synthesises text from the path — which
+     * is enough, because what the pane is being exercised on is the *shape* of
+     * the response: a body with line numbers, a truncation notice, and a
+     * refusal. A path that looks binary and one that looks huge are recognised
+     * by name so both of those states are reachable in dev without finding a
+     * real file that produces them.
+     */
+    files: {
+      read: async ({ path }) => {
+        const name = path.split('/').at(-1) ?? path;
+
+        if (/\.(png|jpe?g|gif|pdf|zip|woff2?|ico)$/i.test(name)) {
+          return {
+            ok: false,
+            error: {
+              code: 'invalid_request',
+              message: `${name} is a binary file, so there is nothing to show as text.`,
+            },
+          };
+        }
+
+        const text = [
+          `// ${path}`,
+          '//',
+          '// Mock file contents — there is no main process to read the real one.',
+          '',
+          'export function answer(): number {',
+          '  return 42;',
+          '}',
+          '',
+        ].join('\n');
+
+        const huge = /\.log$/i.test(name);
+        return ok({
+          path,
+          title: name,
+          bytes: huge ? 47 * 1024 * 1024 : text.length,
+          text,
+          truncated: huge,
+        });
+      },
+    },
+
+    /*
      * Plan usage, faked with the stale-while-revalidate shape the real bridge
      * has: `cached` answers instantly with a slightly stale reading, `refresh`
      * takes a beat and comes back with fresher numbers. That delay is the
