@@ -1,6 +1,20 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.14.2
+
+- **Delegated work splits live from finished.** The pane answers one question —
+  is it still going — and a flat list answered it worst exactly when it mattered
+  most: a workflow that had settled thirty agents pushed the two still running
+  off the bottom. Running work is now on top and always visible; finished work
+  is under a heading that says how much of it there is and starts shut. Closing
+  it sticks, so a task settling does not make the pane jump.
+
+- **Each item is a card.** The pane holds a one-line `Bash` next to a workflow
+  with four phases and twenty agents folded underneath, and run flat the phase
+  tree of one item read as though it belonged to the next. Settled cards are
+  recessed rather than raised.
+
 ## What's new in 0.14.1
 
 - **The browser has a button, next to the terminal's.** 0.14.0 hid it behind a
