@@ -77,10 +77,9 @@
  */
 
 import { type ReactElement } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { useApp } from '../state/store';
+import { Markdown } from './Markdown';
 
 export function PreviewPane(): ReactElement | null {
   const preview = useApp((s) => s.preview);
@@ -119,7 +118,7 @@ export function PreviewPane(): ReactElement | null {
         */
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           <div className="md mx-auto max-w-3xl text-ink">
-            <Markdown remarkPlugins={[remarkGfm]}>{preview.text}</Markdown>
+            <Markdown>{preview.text}</Markdown>
           </div>
         </div>
       )}

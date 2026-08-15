@@ -71,12 +71,12 @@
  * "cover all five again".
  */
 
-import { useCallback, useMemo, useState, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { CheckIcon, CopyIcon, KeyRoundIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
-import { toast } from 'sonner';
 
 import type { SharedConfigDirStatus, SharedConfigStatus } from '@rx-artemis/protocol';
 
+import { useCopy } from '@/hooks/useCopy';
 import { CodeBlock, StatusDot, toneClasses, type Tone } from '../primitives';
 import { ChoiceList, SettingsGroup, SettingsPane } from './pane';
 import { setSharedClaudeConfig, useApp } from '../../state/store';
@@ -524,7 +524,6 @@ function ScriptBlock({
   /** The reading, or `null` while it is in flight or after it failed. */
   readonly status: SharedConfigStatus | null;
 }): ReactElement {
-  const [copied, setCopied] = useState(false);
   /*
    * Defaults to the narrow script, and falls back to all of them whenever there
    * is no narrower set to offer — which is the state before the reading lands, so
@@ -544,22 +543,12 @@ function ScriptBlock({
 
   const script = useMemo(() => buildSharedConfigScript(covered, mode), [covered, mode]);
 
-  const copy = useCallback(async (): Promise<void> => {
-    // The tick waits for the write to resolve. Reporting success first is what
-    // hid a denied clipboard permission the last time this pattern was written
-    // — the button ticked, the paste that followed was whatever the user had
-    // copied before, and the two were far enough apart to never be connected.
-    try {
-      await navigator.clipboard.writeText(script);
-    } catch {
-      toast('Could not copy the script', {
-        description: 'Select the text above and copy it by hand.',
-      });
-      return;
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1_500);
-  }, [script]);
+  // The tick waits for the write to resolve, and a refusal says so rather than
+  // ticking anyway — see `useCopy`, which is where that rule now lives.
+  const [copied, copy] = useCopy(script, {
+    title: 'Could not copy the script',
+    description: 'Select the text above and copy it by hand.',
+  });
 
   const sharing = mode === 'share';
 
@@ -583,7 +572,7 @@ function ScriptBlock({
           size="xs"
           variant="outline"
           className="shrink-0"
-          onClick={() => void copy()}
+          onClick={copy}
           aria-label={sharing ? 'Copy the sharing script' : 'Copy the undo script'}
         >
           {copied ? <CheckIcon /> : <CopyIcon />}

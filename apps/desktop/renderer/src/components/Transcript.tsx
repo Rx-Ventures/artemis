@@ -133,8 +133,6 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   AppWindowIcon,
   ArrowDownIcon,
@@ -196,6 +194,7 @@ import {
 import { DiffView } from './DiffView';
 import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
+import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
 import { ProviderLogo } from './provider-mark';
 import { StreamingText } from './StreamingText';
@@ -623,7 +622,7 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
             <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
-              <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
+              <Markdown>{item.text}</Markdown>
             </div>
           )}
         </BubbleContent>

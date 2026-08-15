@@ -11,7 +11,8 @@
  */
 
 import { type ReactElement, type ReactNode } from 'react';
-import { ChevronRightIcon } from 'lucide-react';
+import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react';
+import { useCopy } from '@/hooks/useCopy';
 import { useFold } from '@/hooks/useFold';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -325,5 +326,68 @@ export function CodeBlock({ text, tone = 'neutral', className }: CodeBlockProps)
     >
       {text}
     </pre>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* CopyButton                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export interface CopyButtonProps {
+  /** What lands on the clipboard. Empty renders nothing at all. */
+  readonly text: string;
+  /** The accessible name, for when a block has a better word than "Copy". */
+  readonly label?: string;
+  readonly className?: string;
+}
+
+/**
+ * The small square that copies the block it is sitting on.
+ *
+ * **Deliberately not an `IconButton`.** That component's whole subject is
+ * explaining why a control cannot be used, and it mounts a Radix tooltip to do
+ * it. This control is never unavailable, and one answer can hold thirty code
+ * blocks — thirty tooltip instances to caption an icon that already reads as
+ * "copy", and whose outcome is announced by the tick that replaces it. So it is
+ * a plain button with an accessible name, and the name changes to "Copied" so
+ * that a screen reader hears the same confirmation the tick gives everyone else.
+ *
+ * ## It reveals on focus, not only on hover
+ *
+ * `opacity-0` hides a button without taking it out of the tab order, so a
+ * keyboard user reaches it while it is invisible. `focus-visible:opacity-100` is
+ * therefore not polish — without it the control is reachable and unfindable, and
+ * the tab stop is worse than no button at all. The tick keeps it visible for its
+ * moment too: a copy confirmed only while the pointer stays put is a
+ * confirmation half the people who click it never see.
+ *
+ * Positioning is the caller's, through `className`. This knows how it looks, not
+ * where it goes.
+ */
+export function CopyButton({
+  text,
+  label = 'Copy',
+  className,
+}: CopyButtonProps): ReactElement | null {
+  const [copied, copy] = useCopy(text);
+  if (text.length === 0) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'Copied' : label}
+      className={cn(
+        'grid size-6 place-items-center rounded-sm border border-line bg-panel/85 text-ink-faint opacity-0 backdrop-blur-[2px] transition hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+        copied ? 'text-mint opacity-100' : 'group-hover/copy:opacity-100',
+        className,
+      )}
+    >
+      {copied ? (
+        <CheckIcon className="size-3" aria-hidden="true" />
+      ) : (
+        <CopyIcon className="size-3" aria-hidden="true" />
+      )}
+    </button>
   );
 }
