@@ -53,7 +53,7 @@
  * reader is looking at, not for the ninety before it.
  */
 
-import type { BackgroundTask, BackgroundTaskStatus } from '@rx-artemis/protocol';
+import type { BackgroundTask, BackgroundTaskStatus, WorkflowAgent } from '@rx-artemis/protocol';
 
 /**
  * How many settled rows to keep.
@@ -112,6 +112,79 @@ function usageOf(value: unknown): Partial<BackgroundTask> {
     ...(num(usage.tool_uses) === undefined ? {} : { toolUses: num(usage.tool_uses) }),
     ...(num(usage.duration_ms) === undefined ? {} : { durationMs: num(usage.duration_ms) }),
   };
+}
+
+/**
+ * A workflow's own account of its agents, off `task_progress`.
+ *
+ * Returns `undefined` — meaning "say nothing, keep what you had" — rather than
+ * an empty patch, so the caller can spread the result and have absence retain.
+ * That distinction is the whole point of this function and is why it is not
+ * written in the shape of {@link usageOf} beside it: for usage, a missing field
+ * and an unchanged field are the same thing; here they are opposites.
+ *
+ * ## What is dropped, and why it is dropped here
+ *
+ * The array also carries `workflow_log` entries, which are the script's own
+ * `log()` output. The CLI filters them out of the SDK payload already, so this
+ * is belt and braces — but it is cheap, and a log line rendered as an agent row
+ * with no label and no state would be a puzzle rather than a bug report.
+ *
+ * An entry with no `label`, or no numeric `index`, is dropped too. Both are
+ * what the pane keys and groups by, and a row that cannot be keyed cannot be
+ * drawn stably next to its siblings.
+ */
+function workflowProgressOf(value: unknown): Partial<BackgroundTask> | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const agents: WorkflowAgent[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const entry = raw as Record<string, unknown>;
+    if (entry['type'] !== 'workflow_agent') continue;
+
+    const index = num(entry['index']);
+    const label = str(entry['label']);
+    const state = str(entry['state']);
+    if (index === undefined || label === undefined || state === undefined) continue;
+
+    agents.push({
+      index,
+      label,
+      state,
+      ...(num(entry['phaseIndex']) === undefined ? {} : { phaseIndex: num(entry['phaseIndex']) }),
+      ...(str(entry['phaseTitle']) === undefined ? {} : { phaseTitle: str(entry['phaseTitle']) }),
+      ...(str(entry['agentId']) === undefined ? {} : { agentId: str(entry['agentId']) }),
+      ...(str(entry['agentType']) === undefined ? {} : { agentType: str(entry['agentType']) }),
+      ...(str(entry['model']) === undefined ? {} : { model: str(entry['model']) }),
+      ...(str(entry['isolation']) === undefined ? {} : { isolation: str(entry['isolation']) }),
+      ...(entry['cached'] === true ? { cached: true } : {}),
+      ...(entry['blocked'] === true ? { blocked: true } : {}),
+      ...(str(entry['error']) === undefined ? {} : { error: str(entry['error']) }),
+      ...(num(entry['tokens']) === undefined ? {} : { tokens: num(entry['tokens']) }),
+      ...(num(entry['toolCalls']) === undefined ? {} : { toolCalls: num(entry['toolCalls']) }),
+      ...(num(entry['durationMs']) === undefined ? {} : { durationMs: num(entry['durationMs']) }),
+      ...(num(entry['queuedAt']) === undefined ? {} : { queuedAt: num(entry['queuedAt']) }),
+      ...(num(entry['startedAt']) === undefined ? {} : { startedAt: num(entry['startedAt']) }),
+      ...(num(entry['lastProgressAt']) === undefined
+        ? {}
+        : { lastProgressAt: num(entry['lastProgressAt']) }),
+      ...(str(entry['promptPreview']) === undefined
+        ? {}
+        : { promptPreview: str(entry['promptPreview']) }),
+      ...(str(entry['resultPreview']) === undefined
+        ? {}
+        : { resultPreview: str(entry['resultPreview']) }),
+    });
+  }
+
+  /*
+   * An array that held only logs is still an answer: the workflow said "here is
+   * everything", and everything was nothing an agent row could be made of. That
+   * is a genuine empty rather than silence, so it is written through — a
+   * workflow with no agents yet should not inherit the last one's.
+   */
+  return { workflowProgress: agents };
 }
 
 /**
@@ -308,6 +381,7 @@ export class TaskLedger {
       usage?: unknown;
       last_tool_name?: unknown;
       summary?: unknown;
+      workflow_progress?: unknown;
     };
     const id = str(task.task_id);
     if (id === undefined) return false;
@@ -326,6 +400,14 @@ export class TaskLedger {
       ...(str(task.subagent_type) === undefined ? {} : { subagentType: str(task.subagent_type) }),
       ...(str(task.last_tool_name) === undefined ? {} : { lastToolName: str(task.last_tool_name) }),
       ...(str(task.summary) === undefined ? {} : { summary: str(task.summary) }),
+      /*
+       * Absent means "unchanged", not "empty" — the one field on this message
+       * where those differ. The provider sends the whole array on a state change
+       * and at most every ten seconds during steady progress, omitting it in
+       * between, so writing `undefined` through would blank the pane several
+       * times a minute and refill it. Spreading nothing is what retains it.
+       */
+      ...(workflowProgressOf(task.workflow_progress) ?? {}),
     });
     this.#dirty = true;
     return true;
