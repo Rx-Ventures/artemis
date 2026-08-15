@@ -10,9 +10,9 @@
  *     │   ▸ ready in 412ms                          │
  *     ╰─────────────────────────────────────────────╯
  *
- * Two unlike things share this rail — a file the agent wrote, and a shell the
- * user asked for — and `state/dock.ts` explains why that is one surface rather
- * than two. This is the drawing half of it.
+ * Unlike things share this rail — a file the agent wrote, a shell the user asked
+ * for, a page either of them opened — and `state/dock.ts` explains why that is
+ * one surface rather than several. This is the drawing half of it.
  *
  * ## The strip is hand-rolled, and `ui/tabs.tsx` is right there
  *
@@ -36,15 +36,21 @@
  * Middle-click closes, because it does everywhere else. And the strip never
  * reorders itself: see {@link visibleTabs}.
  *
- * ## Every terminal stays mounted
+ * ## Every terminal and every browser stays mounted
  *
- * The panel below renders **all** visible terminals and hides the inactive ones
- * with `hidden`, rather than rendering only the active one. That is not a
+ * The panel below renders **all** visible terminals and browsers and hides the
+ * inactive ones, rather than rendering only the active one. That is not a
  * performance choice — it is what keeps `TerminalView`'s attach/detach cycle
  * from running on every tab click, which would move the live element back to the
  * parking lot and refit it twice per switch. The preview is the opposite: it is
  * cheap to rebuild and expensive to keep, since a hidden `<iframe>` goes on
  * running whatever script it was given.
+ *
+ * A browser is mounted for a sharper version of the same reason, and hidden a
+ * *different* way. Its page is a native view composited above this document, so
+ * `hidden` on the element would leave the page painted over an empty pane —
+ * the hiding has to happen in the main process, which is why `BrowserPane`
+ * takes `visible` rather than reading the active tab itself.
  */
 
 import { useCallback, useRef, type KeyboardEvent, type ReactElement } from 'react';
@@ -52,6 +58,7 @@ import {
   BotIcon,
   FileCodeIcon,
   FileTextIcon,
+  GlobeIcon,
   PlusIcon,
   SquareArrowOutUpRightIcon,
   TerminalIcon,
@@ -66,6 +73,8 @@ import {
   closePreview,
   closeTasks,
   closeTerminal,
+  closeBrowser,
+  openBrowser,
   focusDockTab,
   liveTaskCount,
   openTerminal,
@@ -81,6 +90,13 @@ import { FileViewer } from './FileViewer';
 import { PreviewPane } from './PreviewPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
+import { BrowserPane } from './BrowserPane';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import { IconButton } from './disabled-reason';
 import { cn } from '@/lib/utils';
 
@@ -155,14 +171,33 @@ function DockStrip({
       {tabs.map((tab) => (
         <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
       ))}
-      <IconButton
-        label="Open another terminal"
-        size="icon-xs"
-        onClick={() => void openTerminal()}
-        className="my-0.5 ml-0.5 shrink-0 self-center text-ink-faint"
-      >
-        <PlusIcon />
-      </IconButton>
+      {/*
+        A menu now that the rail holds two kinds of live thing. It stayed a
+        single button for as long as a terminal was the only thing `+` could
+        mean; a second entry is the point at which guessing becomes wrong half
+        the time, and two buttons would spend a permanent slot on the rarer one.
+      */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <IconButton
+            label="Open a terminal or a browser"
+            size="icon-xs"
+            className="my-0.5 ml-0.5 shrink-0 self-center text-ink-faint"
+          >
+            <PlusIcon />
+          </IconButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => void openTerminal()}>
+            <TerminalIcon className="size-3.5" aria-hidden="true" />
+            New terminal
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void openBrowser()}>
+            <GlobeIcon className="size-3.5" aria-hidden="true" />
+            New browser
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -177,6 +212,7 @@ function DockTabButton({
   if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
   if (tab.kind === 'file') return <FileTabButton active={active} />;
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
+  if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} />;
   if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
   return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
 }
@@ -339,6 +375,45 @@ function TerminalTabButton({
 }
 
 /**
+ * A page's tab.
+ *
+ * Labelled by the page's title, which main falls back to the host for — so a
+ * tab says `example.com` while a document is loading and its own name once it
+ * has one, which is what a browser does and what keeps two of these apart.
+ *
+ * The title is page-authored text. It is capped in `main/browser.ts` and
+ * rendered here as text, never as markup.
+ */
+function BrowserTabButton({
+  id,
+  active,
+}: {
+  readonly id: string;
+  readonly active: boolean;
+}): ReactElement | null {
+  const record = useApp((s) => s.browsers.find((browser) => browser.info.id === id));
+  if (record === undefined) return null;
+
+  const { title, url, loading } = record.info.state;
+  const label = title.length > 0 ? title : 'New browser';
+
+  return (
+    <TabShell
+      active={active}
+      label={label}
+      title={url.length > 0 ? url : 'No address yet'}
+      icon={<GlobeIcon className="size-3 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'browser', id })}
+      onClose={() => closeBrowser(id)}
+      closeLabel={`Close ${label}`}
+      // Dimmed while the page is on its way, which is the one piece of progress
+      // this strip has room for — the address bar has the stop button.
+      muted={loading}
+    />
+  );
+}
+
+/**
  * The one tab nobody opens, and the one whose ✕ costs nothing.
  *
  * Its label is the count, so the strip answers "is anything still running" while
@@ -482,6 +557,29 @@ function DockBody({
             className={cn('min-h-0 min-w-0 flex-1 flex-col', shown ? 'flex' : 'hidden')}
           >
             <TerminalView id={record.info.id} />
+          </div>
+        );
+      })}
+      {/*
+       * Mounted for every browser, like the terminals above, and for a stronger
+       * version of the same reason. A terminal that unmounted would re-parent a
+       * live xterm; a browser that unmounted would tell main to detach the view
+       * and lose the rectangle, so the page would vanish on every tab switch
+       * and come back a frame late at the wrong size.
+       *
+       * `visible` is what does the hiding, and it goes to main rather than to
+       * CSS: a native view is composited above this document, so `hidden` on
+       * this element would leave the page painted over an empty pane.
+       */}
+      {tabs.map((tab) => {
+        if (tab.kind !== 'browser') return null;
+        const shown = active?.kind === 'browser' && active.id === tab.id;
+        return (
+          <div
+            key={tab.id}
+            className={cn('min-h-0 min-w-0 flex-1 flex-col', shown ? 'flex' : 'hidden')}
+          >
+            <BrowserPane id={tab.id} visible={shown} />
           </div>
         );
       })}

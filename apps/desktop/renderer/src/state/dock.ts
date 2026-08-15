@@ -9,12 +9,13 @@
  *     │  COMPOSER · STATUS   ││   ~/libra ❯ pnpm dev      │
  *     ╰──────────────────────╯╰───────────────────────────╯
  *
- * Two kinds of thing live in the right-hand rail: a **preview**, which is a file
- * the agent wrote, and a **terminal**, which is a shell the user asked for. They
- * have almost nothing in common as objects — one is a snapshot of some bytes,
- * the other is a running process — and exactly one thing in common as *UI*:
- * both belong to a conversation, and neither makes any sense next to a different
- * one. This module is that one thing, factored out.
+ * Several kinds of thing live in the right-hand rail: a **preview**, which is a
+ * file the agent wrote; a **terminal**, which is a shell the user asked for; and
+ * a **browser**, which is a page. They have almost nothing in common as objects
+ * — one is a snapshot of some bytes, one is a running process, one is a native
+ * view the main process draws — and exactly one thing in common as *UI*: each
+ * belongs to a conversation, and none makes any sense next to a different one.
+ * This module is that one thing, factored out.
  *
  * ## Ownership, and why it needs two ids
  *
@@ -37,6 +38,8 @@
  *  - **its preview is destroyed.** It was a snapshot; reopening it is one click
  *    on the tile that is still in the transcript.
  *  - **its terminal is only hidden.** The shell keeps running.
+ *  - **its browser is only hidden**, on the terminal's side of the line and for
+ *    the terminal's reason.
  *
  * That asymmetry is the single most important decision in this feature, so it is
  * worth stating why rather than leaving it to be discovered. A preview costs
@@ -47,6 +50,11 @@
  * disappears with its conversation, comes back with it, and only the ✕ ends the
  * process — which is exactly what a tab's ✕ means everywhere else.
  *
+ * A browser sorts with the terminal because the test is "could this be rebuilt
+ * from what is still on screen", and a page cannot: it has a scroll position, a
+ * session cookie, and quite possibly a half-filled form. Reloading it is not
+ * reopening it.
+ *
  * ## Everything here is pure
  *
  * No store, no `Pane`, no bridge. The functions take a description of what the
@@ -55,7 +63,14 @@
  * edge cases — be tested without building a window.
  */
 
-import type { RunId, SessionId, TerminalId, TerminalInfo } from '@rx-artemis/protocol';
+import type {
+  BrowserId,
+  BrowserInfo,
+  RunId,
+  SessionId,
+  TerminalId,
+  TerminalInfo,
+} from '@rx-artemis/protocol';
 import type { PaneId } from './pane';
 
 /**
@@ -84,6 +99,17 @@ export type DockTab =
    */
   | { readonly kind: 'file' }
   | { readonly kind: 'terminal'; readonly id: TerminalId }
+  /**
+   * A page the user opened, drawn by the main process behind this pane.
+   *
+   * Keyed by id and owned exactly like a terminal, because it is the same kind
+   * of object: a *live* thing with state nobody can reconstruct. A page has a
+   * scroll position, a session cookie and possibly a half-filled form, so it is
+   * hidden when its conversation leaves the screen and destroyed only by the ✕.
+   * The preview and file tabs go the other way for the opposite reason — they
+   * are snapshots, and the link that made one is still in the transcript.
+   */
+  | { readonly kind: 'browser'; readonly id: BrowserId }
   /**
    * What one conversation has delegated. One tab, however many tasks — the list
    * is the pane's content, not the strip's.
@@ -128,6 +154,8 @@ export function tabKey(tab: DockTab): string {
       return 'file';
     case 'terminal':
       return `terminal:${tab.id}`;
+    case 'browser':
+      return `browser:${tab.id}`;
     case 'tasks':
       return `tasks:${tab.paneId}`;
     default:
@@ -173,6 +201,19 @@ export interface ShownConversation {
    * rows through here would make every progress message rebuild the strip.
    */
   readonly hasTasks?: boolean;
+}
+
+/**
+ * One browser, as the window holds it.
+ *
+ * `title` follows the page rather than the address for the reason a terminal's
+ * follows the running program: a strip of tabs all saying `https` would be
+ * useless the moment there were two of them. It is page-authored text, so it is
+ * capped by main and rendered as text.
+ */
+export interface BrowserRecord {
+  readonly info: BrowserInfo;
+  readonly owner: DockOwner;
 }
 
 /**
@@ -299,6 +340,15 @@ export function visibleTabs(
    * conversation leaves, because it is a snapshot and the link is the way back.
    */
   fileOwner: DockOwner | null = null,
+  /**
+   * Pages this window has open, in the order they were opened.
+   *
+   * Ordered and placed exactly like {@link terminals}, and for the reason the
+   * strip never reorders itself: a browser and a shell are both things the user
+   * asked for, and interleaving them by recency would move the ✕ somebody was
+   * aiming at.
+   */
+  browsers: readonly BrowserRecord[] = [],
 ): readonly DockTab[] {
   const tabs: DockTab[] = [];
   if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
@@ -308,6 +358,11 @@ export function visibleTabs(
   if (fileOwner !== null && ownerIsShown(fileOwner, shown)) tabs.push(FILE_TAB);
   for (const terminal of terminals) {
     if (ownerIsShown(terminal.owner, shown)) tabs.push({ kind: 'terminal', id: terminal.info.id });
+  }
+  // After the shells rather than before them, which is only a convention — but
+  // a fixed one, so that opening a browser never shifts a terminal's ✕.
+  for (const browser of browsers) {
+    if (ownerIsShown(browser.owner, shown)) tabs.push({ kind: 'browser', id: browser.info.id });
   }
   for (const one of shown) {
     if (one.hasTasks === true) tabs.push({ kind: 'tasks', paneId: one.paneId });

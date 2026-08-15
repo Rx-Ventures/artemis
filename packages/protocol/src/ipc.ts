@@ -37,6 +37,21 @@ import type { RunHandle, RunInput } from './run.js';
 import type { SessionSummary } from './session.js';
 import type { SharedConfigStatus } from './sharedConfig.js';
 import type {
+  BrowserCloseRequest,
+  BrowserCloseResponse,
+  BrowserCommandRequest,
+  BrowserCommandResponse,
+  BrowserEvent,
+  BrowserLayoutRequest,
+  BrowserLayoutResponse,
+  BrowserListRequest,
+  BrowserListResponse,
+  BrowserNavigateRequest,
+  BrowserNavigateResponse,
+  BrowserOpenRequest,
+  BrowserOpenResponse,
+} from './browser.js';
+import type {
   TerminalCloseRequest,
   TerminalCloseResponse,
   TerminalEvent,
@@ -174,6 +189,31 @@ export const IPC = {
    * resolves that id against its own registry before doing anything — see
    * `./terminal.js`.
    */
+  /**
+   * A page, in the dock, that the user can see.
+   *
+   * Six channels, and the shape is the terminal's rather than the preview's,
+   * because a page is a live thing rather than a snapshot — see `./browser.js`.
+   * Two of them have no terminal counterpart and are worth naming:
+   *
+   *  - {@link browserLayout} exists because a `WebContentsView` is not a DOM
+   *    element. Nothing else in this contract carries geometry, and nothing
+   *    else has to: CSS lays out every other surface in the app.
+   *  - {@link browserNavigate} takes what a person *typed*, not a URL. The rule
+   *    that turns one into the other lives in `browserUrlFor` and main applies
+   *    it authoritatively, so the renderer cannot name a scheme main refuses.
+   *
+   * Everything but `open` names a browser by an id main issued, and main
+   * resolves it against its own registry before acting.
+   */
+  browserOpen: 'artemis:browser:open',
+  browserNavigate: 'artemis:browser:navigate',
+  browserCommand: 'artemis:browser:command',
+  browserLayout: 'artemis:browser:layout',
+  /** Destroy the view. The only thing that does; see `BrowserCloseRequest`. */
+  browserClose: 'artemis:browser:close',
+  browserList: 'artemis:browser:list',
+
   terminalStart: 'artemis:terminal:start',
   terminalWrite: 'artemis:terminal:write',
   terminalResize: 'artemis:terminal:resize',
@@ -375,6 +415,15 @@ export const IPC_PUSH = {
    * decides to print, not when a component renders.
    */
   terminalEvent: 'artemis:push:terminal-event',
+  /**
+   * Carries a {@link BrowserEvent}: where a page went, and whether it died.
+   *
+   * Pushed for the reason the terminal's stream is: navigation happens when a
+   * page decides to navigate — a redirect, a meta refresh, a link the user
+   * clicked *inside* the view — and none of those are moments the renderer
+   * could have known to ask about.
+   */
+  browserEvent: 'artemis:push:browser-event',
   /**
    * Asks the renderer to open Settings, because the macOS menu bar was clicked.
    *
@@ -1610,6 +1659,12 @@ export type IpcRequestMap = {
   [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.filesRead]: FilesReadRequest;
   [IPC.filesCheck]: FilesCheckRequest;
+  [IPC.browserOpen]: BrowserOpenRequest;
+  [IPC.browserNavigate]: BrowserNavigateRequest;
+  [IPC.browserCommand]: BrowserCommandRequest;
+  [IPC.browserLayout]: BrowserLayoutRequest;
+  [IPC.browserClose]: BrowserCloseRequest;
+  [IPC.browserList]: BrowserListRequest;
   [IPC.terminalStart]: TerminalStartRequest;
   [IPC.terminalWrite]: TerminalWriteRequest;
   [IPC.terminalResize]: TerminalResizeRequest;
@@ -1668,6 +1723,12 @@ export type IpcResponseMap = {
   [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.filesRead]: FilesReadResponse;
   [IPC.filesCheck]: FilesCheckResponse;
+  [IPC.browserOpen]: BrowserOpenResponse;
+  [IPC.browserNavigate]: BrowserNavigateResponse;
+  [IPC.browserCommand]: BrowserCommandResponse;
+  [IPC.browserLayout]: BrowserLayoutResponse;
+  [IPC.browserClose]: BrowserCloseResponse;
+  [IPC.browserList]: BrowserListResponse;
   [IPC.terminalStart]: TerminalStartResponse;
   [IPC.terminalWrite]: TerminalWriteResponse;
   [IPC.terminalResize]: TerminalResizeResponse;
@@ -1731,6 +1792,7 @@ export type IpcPushMap = {
   [IPC_PUSH.planUsage]: PlanUsagePush;
   [IPC_PUSH.updateState]: UpdateState;
   [IPC_PUSH.terminalEvent]: TerminalEvent;
+  [IPC_PUSH.browserEvent]: BrowserEvent;
   [IPC_PUSH.menuOpenSettings]: MenuOpenSettings;
 };
 
@@ -2017,6 +2079,38 @@ export interface ArtemisBridge {
      * routes on it.
      */
     onEvent(listener: (event: TerminalEvent) => void): Unsubscribe;
+  };
+
+  /**
+   * A page in the dock.
+   *
+   * The widest content surface in the app — it renders the open web — and the
+   * one whose containment is easiest to state: the page is a `WebContentsView`
+   * that main owns, running in its own session with **no preload**. It is not a
+   * frame inside the renderer and it holds no bridge, so nothing on this
+   * interface is reachable *from* a browsed page. What the renderer can do to a
+   * browser is on this list, and a page can do none of it.
+   *
+   * Note what is absent, and stays absent: no channel returns a page's DOM, its
+   * text, or a screenshot. The user reads the page by looking at it. The
+   * *agent* reads it through tools that run in main and go through the same
+   * permission prompt as every other tool — see `main/browserTools.ts`.
+   */
+  readonly browser: {
+    /** Open one, optionally at an address. The id comes back with it. */
+    open(request: BrowserOpenRequest): Promise<IpcResult<BrowserOpenResponse>>;
+    /** Go to what somebody typed. Main decides what that resolves to. */
+    navigate(request: BrowserNavigateRequest): Promise<IpcResult<BrowserNavigateResponse>>;
+    /** Back, forward, reload, stop. */
+    command(request: BrowserCommandRequest): Promise<IpcResult<BrowserCommandResponse>>;
+    /** Where the page goes, and whether it is on screen. See the request type. */
+    layout(request: BrowserLayoutRequest): Promise<IpcResult<BrowserLayoutResponse>>;
+    /** Destroy the view. Nothing else ends one. */
+    close(request: BrowserCloseRequest): Promise<IpcResult<BrowserCloseResponse>>;
+    /** Every browser main is holding — for a renderer that has just reloaded. */
+    list(request: BrowserListRequest): Promise<IpcResult<BrowserListResponse>>;
+    /** Navigation and death, for every browser at once. See {@link terminal.onEvent}. */
+    onEvent(listener: (event: BrowserEvent) => void): Unsubscribe;
   };
 
   /**

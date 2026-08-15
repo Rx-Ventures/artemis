@@ -108,6 +108,7 @@ import {
   installEventBridge,
   installPlanUsageFeed,
   installSettingsMenuFeed,
+  installBrowserFeed,
   installTerminalFeed,
   startSessionFeed,
   interruptRun,
@@ -150,6 +151,10 @@ export function App(): ReactElement {
     // them arrives on this channel. Subscribing afterwards would drop whatever a
     // busy terminal printed during the adoption.
     const stopTerminalFeed = installTerminalFeed();
+    // Beside the terminal feed and for its reason: `bootstrap` re-adopts the
+    // pages main is still holding, and a page that navigates during that
+    // adoption pushes its state on this channel.
+    const stopBrowserFeed = installBrowserFeed();
     // The macOS menu bar's Settings… item. Nothing races here — the click can
     // only arrive after the app is up — but it is torn down with the rest.
     const stopSettingsMenuFeed = installSettingsMenuFeed();
@@ -162,6 +167,7 @@ export function App(): ReactElement {
       stopFeed();
       stopUsageFeed();
       stopTerminalFeed();
+      stopBrowserFeed();
       stopSettingsMenuFeed();
     };
   }, []);

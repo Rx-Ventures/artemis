@@ -77,6 +77,7 @@ import {
 } from './errors.js';
 import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
+import type { BrowserHost } from './browser.js';
 import { checkFiles, readTextFile } from './files.js';
 import {
   assertNoSecrets,
@@ -114,6 +115,12 @@ import {
   validatePreviewOpen,
   validateFilesRead,
   validateFilesCheck,
+  validateBrowserOpen,
+  validateBrowserNavigate,
+  validateBrowserCommand,
+  validateBrowserLayout,
+  validateBrowserClose,
+  validateBrowserList,
   validateTerminalClose,
   validateTerminalList,
   validateTerminalReplay,
@@ -184,6 +191,7 @@ export interface IpcLayerOptions {
   readonly policy: SecurityPolicy;
   readonly updater: Updater;
   readonly terminals: TerminalHost;
+  readonly browsers: BrowserHost;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -198,7 +206,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy, updater, terminals } = options;
+  const { engine, policy, updater, terminals, browsers } = options;
 
   const handlers: ChannelHandlers = {
     /* ---------------------------------------------------------------- */
@@ -538,6 +546,87 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.filesCheck]: {
       validate: validateFilesCheck,
       handle: async (request) => checkFiles(request.paths),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Browsers                                                         */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Open a page.
+     *
+     * The window comes from `context`, not from the request — the same rule the
+     * window-chrome channels keep, and for the same reason: the renderer says
+     * "a browser" and main decides which window that means, so a second Artemis
+     * window cannot be handed a view by the first.
+     *
+     * A window that has already gone is an ordinary failure rather than a
+     * crash; there is nothing to stack a view on.
+     */
+    [IPC.browserOpen]: {
+      validate: validateBrowserOpen,
+      handle: async (request, context) => {
+        const window = context.window;
+        if (window === null || window.isDestroyed()) {
+          throw new WorkspaceError('There is no window to open a browser in.');
+        }
+        return { browser: browsers.open(window, request.query) };
+      },
+    },
+
+    /**
+     * Go somewhere.
+     *
+     * Note what this handler does *not* do: resolve the query. `browser.ts`
+     * runs `browserUrlFor` and refuses anything that is not `http(s)`, so the
+     * rule lives in one place and this layer cannot widen it — see
+     * `validateBrowserOpen` for why that is deliberate rather than a gap.
+     */
+    [IPC.browserNavigate]: {
+      validate: validateBrowserNavigate,
+      handle: async (request) => ({
+        id: request.id,
+        url: browsers.navigate(request.id, request.query),
+      }),
+    },
+
+    [IPC.browserCommand]: {
+      validate: validateBrowserCommand,
+      handle: async (request) => {
+        browsers.command(request.id, request.command);
+        return { id: request.id };
+      },
+    },
+
+    /**
+     * Where the page goes, and whether it is on screen.
+     *
+     * The only channel in the app that carries geometry, and the only one
+     * called on every frame of a drag-resize. It stays a round trip rather than
+     * a push because the renderer is the side that knows when it has moved, and
+     * because a dropped layout leaves a page in the wrong place — which is
+     * visible, unlike a dropped notification.
+     */
+    [IPC.browserLayout]: {
+      validate: validateBrowserLayout,
+      handle: async (request) => {
+        browsers.layout(request.id, request.bounds, request.visible);
+        return { id: request.id };
+      },
+    },
+
+    /** The one thing that destroys a view. See `BrowserCloseRequest`. */
+    [IPC.browserClose]: {
+      validate: validateBrowserClose,
+      handle: async (request) => {
+        browsers.close(request.id);
+        return { id: request.id };
+      },
+    },
+
+    [IPC.browserList]: {
+      validate: validateBrowserList,
+      handle: async () => ({ browsers: browsers.list() }),
     },
 
     /* ---------------------------------------------------------------- */
@@ -1019,6 +1108,35 @@ export function forwardAgentEvents(engine: EngineHost): Unsubscribe {
  * that is the same way `agentEvent` behaves for a run it did not start, and it
  * keeps the preload's rule that a channel name is never built from a target.
  */
+/**
+ * Push navigation and death at every open window.
+ *
+ * The same shape as {@link forwardTerminalEvents}, under the *strict* response
+ * policy rather than a loosened one — and that difference is worth stating,
+ * because a browser event carries page-authored text (a title) and a URL, which
+ * sounds like exactly the content the terminal's policy is relaxed for.
+ *
+ * It is not. A title is a short string a page chose, and nothing in it is a
+ * credential Artemis holds; the reason `TERMINAL_SCAN_POLICY` exists is that a
+ * shell's output is *the user's own screen* and redacting it would corrupt the
+ * output of a program Artemis did not run. There is no equivalent here, so the
+ * default applies — and if a page ever does title itself `sk-ant-…`, having the
+ * event dropped and logged is a better outcome than establishing a precedent
+ * that page-authored text is exempt from the scanner.
+ */
+export function forwardBrowserEvents(browsers: BrowserHost): Unsubscribe {
+  return browsers.subscribe((event) => {
+    try {
+      assertNoSecrets(event, IPC_PUSH.browserEvent);
+    } catch (error) {
+      log.error(`Dropped a browser ${event.type} event that failed its safety check`, error);
+      return;
+    }
+
+    broadcast(IPC_PUSH.browserEvent, event);
+  });
+}
+
 export function forwardTerminalEvents(terminals: TerminalHost): Unsubscribe {
   return terminals.subscribe((event) => {
     try {

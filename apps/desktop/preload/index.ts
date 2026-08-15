@@ -88,6 +88,14 @@ import {
   type UpdatesStateRequest,
   type UsagePlanRequest,
   type PreviewOpenRequest,
+  type BrowserCloseRequest,
+  type BrowserCommandRequest,
+  type BrowserEvent,
+  type BrowserLayoutRequest,
+  type BrowserListRequest,
+  type BrowserNavigateRequest,
+  type BrowserOpenRequest,
+  BROWSER_EVENT_TYPES,
   type FilesCheckRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
@@ -173,6 +181,7 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 }
 
 const TERMINAL_EVENT_TYPE_SET = new Set<string>(TERMINAL_EVENT_TYPES);
+const BROWSER_EVENT_TYPE_SET = new Set<string>(BROWSER_EVENT_TYPES);
 
 /**
  * Minimal shape check on a pushed terminal event. Same standard as
@@ -191,6 +200,24 @@ function isTerminalEvent(value: unknown): value is TerminalEvent {
   }
   if (typeof candidate.id !== 'string' || candidate.id === '') return false;
   return candidate.type !== 'data' || typeof candidate.data === 'string';
+}
+
+/**
+ * Minimal shape check on a pushed browser event.
+ *
+ * Same standard as {@link isTerminalEvent}: enough that a `switch (event.type)`
+ * in the renderer never meets a branch it does not have, and deliberately not a
+ * re-validation of the payload — this arrives from main, which is the trusted
+ * side of this boundary.
+ */
+function isBrowserEvent(value: unknown): value is BrowserEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { type?: unknown; id?: unknown; state?: unknown };
+  if (typeof candidate.type !== 'string' || !BROWSER_EVENT_TYPE_SET.has(candidate.type)) {
+    return false;
+  }
+  if (typeof candidate.id !== 'string' || candidate.id === '') return false;
+  return candidate.type !== 'state' || (typeof candidate.state === 'object' && candidate.state !== null);
 }
 
 /**
@@ -363,6 +390,12 @@ const terminalEvents = createPushChannel<TerminalEvent>({
   isValid: isTerminalEvent,
 });
 
+const browserEvents = createPushChannel<BrowserEvent>({
+  channel: IPC_PUSH.browserEvent,
+  label: 'artemis.browser.onEvent',
+  isValid: isBrowserEvent,
+});
+
 const windowStates = createPushChannel<WindowState>({
   channel: IPC_PUSH.windowState,
   label: 'artemis.window.onStateChange',
@@ -531,6 +564,30 @@ const bridge: ArtemisBridge = Object.freeze({
   files: Object.freeze({
     read: (request: FilesReadRequest) => invoke(IPC.filesRead, request),
     check: (request: FilesCheckRequest) => invoke(IPC.filesCheck, request),
+  }),
+
+  /**
+   * A page in the dock.
+   *
+   * Six literal channels and one subscription, and — like the terminal
+   * namespace above it — nothing that lets the caller name what runs. `open`
+   * says "a browser"; main picks the window, the session and the preferences.
+   * `navigate` carries what a person *typed*, and main decides what that
+   * resolves to, so a renderer cannot name a scheme main refuses.
+   *
+   * Worth being explicit about what this namespace is *not*: it is the
+   * renderer's control over a page, and no part of it is reachable **from** one.
+   * A browsed page is constructed with no preload at all, so it has no
+   * `window.artemis` and none of this exists in its world.
+   */
+  browser: Object.freeze({
+    open: (request: BrowserOpenRequest) => invoke(IPC.browserOpen, request),
+    navigate: (request: BrowserNavigateRequest) => invoke(IPC.browserNavigate, request),
+    command: (request: BrowserCommandRequest) => invoke(IPC.browserCommand, request),
+    layout: (request: BrowserLayoutRequest) => invoke(IPC.browserLayout, request),
+    close: (request: BrowserCloseRequest) => invoke(IPC.browserClose, request),
+    list: (request: BrowserListRequest) => invoke(IPC.browserList, request),
+    onEvent: browserEvents.subscribe,
   }),
 
   /**

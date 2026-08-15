@@ -58,3 +58,12 @@ export type AgentId = string;
  * `./terminal.js`.
  */
 export type TerminalId = string;
+
+/**
+ * Identifies one embedded browser and the page loaded in it.
+ *
+ * Minted by the main process and only ever echoed back by the renderer, on the
+ * same terms as {@link TerminalId}: every request naming one is resolved against
+ * main's own registry before anything happens. See `./browser.js`.
+ */
+export type BrowserId = string;

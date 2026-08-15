@@ -105,6 +105,12 @@ import {
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
   type PreviewOpenRequest,
+  type BrowserCloseRequest,
+  type BrowserCommandRequest,
+  type BrowserLayoutRequest,
+  type BrowserListRequest,
+  type BrowserNavigateRequest,
+  type BrowserOpenRequest,
   type FilesCheckRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
@@ -235,6 +241,23 @@ const LIMITS = {
    * second request. See {@link validateFilesCheck}.
    */
   checkPaths: 256,
+  /**
+   * Longest address or query one browser request may carry.
+   *
+   * Matches the protocol's own `MAX_URL_LENGTH`, so a query this boundary
+   * accepts is one `browserUrlFor` will at least attempt rather than refuse on
+   * a length rule the caller never saw.
+   */
+  url: 4_096,
+  /**
+   * Envelope for a browser view's rectangle, in device-independent pixels.
+   *
+   * Far larger than any display, because it is not a statement about screens —
+   * it is what keeps `Infinity`, `NaN` and `1e308` out of a native `setBounds`,
+   * where they are a crash rather than a misdraw. The real bound on where a
+   * page can be drawn is the window, and the window enforces it by clipping.
+   */
+  coordinate: 1_000_000,
 } as const;
 
 /**
@@ -335,6 +358,12 @@ function optionalFiniteNumber(value: unknown, field: string, min: number, max: n
   }
   if (value < min || value > max) throw new ValidationError(field, `must be between ${min} and ${max}`);
   return value;
+}
+
+function requireFiniteNumber(value: unknown, field: string, min: number, max: number): number {
+  const parsed = optionalFiniteNumber(value, field, min, max);
+  if (parsed === undefined) throw new ValidationError(field, 'is required');
+  return parsed;
 }
 
 function requireId(value: unknown, field: string): string {
@@ -1317,6 +1346,91 @@ export function validateFilesCheck(raw: unknown): FilesCheckRequest {
   }
   return { paths: paths.map((entry, index) => requireAbsolutePath(entry, `paths[${index}]`)) };
 }
+
+/* -------------------------------------------------------------------------- */
+/* Browsers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Open a page.
+ *
+ * `query` is what somebody typed and is **not** validated as a URL here, which
+ * looks like a gap and is the opposite of one. `browser.ts` runs `browserUrlFor`
+ * over it and refuses anything that is not `http(s)` — so there is exactly one
+ * copy of that rule, in the layer that acts on it. A second copy here could
+ * only ever disagree with the first, and the failure mode of disagreement is a
+ * scheme this boundary permits and the loader does not, or worse the reverse.
+ *
+ * What is checked is what this layer is for: that it is a bounded string. The
+ * length cap matches the protocol's own so a query that could never resolve is
+ * refused before it reaches a regular expression.
+ */
+export function validateBrowserOpen(raw: unknown): BrowserOpenRequest {
+  const request = requireRequest(raw);
+  return compact<BrowserOpenRequest>({
+    query: optionalString(request['query'], 'query', LIMITS.url),
+  });
+}
+
+export function validateBrowserNavigate(raw: unknown): BrowserNavigateRequest {
+  const request = requireRequest(raw);
+  return {
+    id: requireId(request['id'], 'id'),
+    query: requireString(request['query'], 'query', LIMITS.url),
+  };
+}
+
+export function validateBrowserCommand(raw: unknown): BrowserCommandRequest {
+  const request = requireRequest(raw);
+  const command = requireString(request['command'], 'command', 16);
+  if (!BROWSER_COMMANDS.has(command)) {
+    throw new ValidationError('command', 'must be "back", "forward", "reload" or "stop"');
+  }
+  return { id: requireId(request['id'], 'id'), command: command as BrowserCommandRequest['command'] };
+}
+
+/**
+ * Where a page goes.
+ *
+ * The one channel in this file that carries geometry, and the only one that is
+ * called on every frame of a drag — so the checks are the cheap kind. Bounds
+ * are finite numbers within a window-sized envelope: {@link LIMITS.coordinate}
+ * is far larger than any display and exists to keep an `Infinity` or a `1e308`
+ * out of a native `setBounds`, which is a crash rather than a misdraw.
+ *
+ * Negative `x`/`y` are legal and load-bearing: a pane scrolled under the header
+ * genuinely has a negative offset, and clamping it to zero would slide the page
+ * down instead of clipping it.
+ */
+export function validateBrowserLayout(raw: unknown): BrowserLayoutRequest {
+  const request = requireRequest(raw);
+  const bounds = requireObject(request['bounds'], 'bounds');
+  const at = (field: string, min: number): number =>
+    requireFiniteNumber(bounds[field], `bounds.${field}`, min, LIMITS.coordinate);
+
+  return {
+    id: requireId(request['id'], 'id'),
+    bounds: {
+      x: at('x', -LIMITS.coordinate),
+      y: at('y', -LIMITS.coordinate),
+      width: at('width', 0),
+      height: at('height', 0),
+    },
+    visible: optionalBoolean(request['visible'], 'visible') ?? false,
+  };
+}
+
+export function validateBrowserClose(raw: unknown): BrowserCloseRequest {
+  const request = requireRequest(raw);
+  return { id: requireId(request['id'], 'id') };
+}
+
+export function validateBrowserList(raw: unknown): BrowserListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+const BROWSER_COMMANDS = new Set(['back', 'forward', 'reload', 'stop']);
 
 /* -------------------------------------------------------------------------- */
 /* Terminals                                                                  */

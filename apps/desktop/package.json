@@ -2,7 +2,7 @@
   "name": "@rx-artemis/desktop",
   "version": "0.13.0",
   "private": true,
-  "description": "Artemis desktop application — Electron main, preload bridge and React renderer.",
+  "description": "Artemis desktop application \u2014 Electron main, preload bridge and React renderer.",
   "author": "Seth Torrence",
   "license": "MIT",
   "type": "module",
@@ -22,7 +22,8 @@
     "@rx-artemis/core": "workspace:*",
     "@rx-artemis/protocol": "workspace:*",
     "electron-store": "^11.0.2",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",

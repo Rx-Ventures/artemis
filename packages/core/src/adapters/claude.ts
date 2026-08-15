@@ -57,6 +57,7 @@ import {
 import type {
   CanUseTool,
   EffortLevel,
+  McpServerConfig,
   ModelInfo,
   Options,
   PermissionResult,
@@ -730,6 +731,25 @@ export interface ClaudeAdapterOptions {
   readonly onContinuation?: (run: Run, context: ContinuationContext) => void;
   /** Ids for those turns. Defaults to `randomUUID`; injected by tests. */
   readonly newRunId?: () => RunId;
+  /**
+   * Extra MCP servers to give a run's agent, built per run by the host.
+   *
+   * The seam that lets Artemis hand the agent tools it could not define here.
+   * `packages/core` must never import `electron` — see `no-electron.test.ts` —
+   * so a tool that drives a `WebContentsView` cannot live in this package at
+   * all. What lives here is the shape of the hole: the composition root in
+   * `apps/desktop/main` builds an in-process MCP server whose handlers close
+   * over the browser host, and this forwards it into the SDK's `mcpServers`.
+   *
+   * Per **run**, not per adapter, because that is what makes an agent's tools
+   * act on *its own* conversation's browser rather than on whichever page
+   * happened to be open. The factory closes over the run id; nothing about the
+   * targeting travels through the model.
+   *
+   * Absent — the default, and what a smoke script or a test gets — means the
+   * agent has no such tools, and every other capability is unchanged.
+   */
+  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
 }
 
 /**
@@ -863,6 +883,9 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             ...(options?.sdkExecutablePath === undefined
               ? {}
               : { sdkExecutablePath: options.sdkExecutablePath }),
+            ...(options?.agentToolServers === undefined
+              ? {}
+              : { agentToolServers: options.agentToolServers }),
             // The pool is keyed on the one fact the process discovers rather
             // than is given. A stale entry is worse than none — it would attach
             // the next message to a CLI that has stopped reading — so the
@@ -1585,6 +1608,12 @@ export interface BuildClaudeOptionsContext {
   readonly hostEnv?: EnvBundle;
   /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
   readonly sdkExecutablePath?: string;
+  /**
+   * Host-supplied MCP servers for this run. See
+   * {@link ClaudeAdapterOptions.agentToolServers} — already resolved for the
+   * run by the time it reaches here, so this function stays pure.
+   */
+  readonly mcpServers?: Record<string, McpServerConfig>;
 }
 
 /**
@@ -1660,6 +1689,14 @@ export function buildClaudeOptions(
     disallowedTools: input.disallowedTools === undefined ? undefined : [...input.disallowedTools],
     additionalDirectories:
       input.additionalDirectories === undefined ? undefined : [...input.additionalDirectories],
+
+    /*
+     * Host tools, when the host supplied any. Spread as `undefined` otherwise
+     * rather than as `{}`: an empty `mcpServers` still establishes the MCP
+     * plumbing in the SDK, and a run that asked for no tools should be
+     * byte-identical to one from before this option existed.
+     */
+    mcpServers: context.mcpServers,
 
     maxTurns: input.maxTurns,
     maxBudgetUsd: input.maxBudgetUsd,
@@ -1796,6 +1833,8 @@ interface ClaudeRunDeps {
   readonly diagnostic?: (message: string, detail?: unknown) => void;
   /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
   readonly sdkExecutablePath?: string;
+  /** See {@link ClaudeAdapterOptions.agentToolServers}. */
+  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
   /**
    * Called the first time the process learns which provider session it is
    * writing to, and again when it goes away.
@@ -2373,6 +2412,11 @@ class ClaudeProcess {
       };
     }
 
+    // Resolved once per launch rather than per turn: the server instance holds
+    // the handlers, and rebuilding it mid-conversation would hand the SDK a
+    // different tool set for the same run.
+    const hostServers = this.#deps.agentToolServers?.(this.#state.runId);
+
     let sdkQuery: Query;
     try {
       sdkQuery = query({
@@ -2385,6 +2429,7 @@ class ClaudeProcess {
           ...(this.#deps.sdkExecutablePath === undefined
             ? {}
             : { sdkExecutablePath: this.#deps.sdkExecutablePath }),
+          ...(hostServers === undefined ? {} : { mcpServers: hostServers }),
         }),
       });
     } catch (error) {
