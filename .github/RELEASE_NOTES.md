@@ -1,6 +1,19 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.14.1
+
+- **The browser has a button, next to the terminal's.** 0.14.0 hid it behind a
+  menu on the dock's `+`, which was worse than the button it replaced: `+` on a
+  tab strip already means "another of these", and putting two one-line choices
+  behind a click cost everyone a step to reach what used to be direct. `+` opens
+  a terminal again, and the browser sits in the header beside the terminal —
+  which is where you look for "open a thing" — on **⌘⇧B**.
+
+  One limit worth knowing: the shortcut cannot fire while the *page itself* has
+  focus, because the page is a separate renderer and the app never sees the
+  keystroke. It works from the address bar and anywhere in the app's own chrome.
+
 ## What's new in 0.14.0
 
 - **A browser in the dock, and the agent can drive it.** The rail held a file
