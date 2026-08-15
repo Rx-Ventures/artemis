@@ -26,7 +26,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { BackgroundTask } from '@rx-artemis/protocol';
+import type { BackgroundTask, WorkflowAgent } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -75,6 +75,7 @@ Object.defineProperty(globalThis, 'artemis', {
 });
 
 const { DockPane } = await import('@/components/DockPane');
+const { groupByPhase } = await import('@/components/TasksPane');
 const { closePane, focusedPane, splitPane, toggleTasks, useApp } = await import('@/state/store');
 const { paneState, setPaneState } = await import('@/state/pane');
 
@@ -436,5 +437,174 @@ describe('a row', () => {
     haveTasks(task({ description: 'Audit the mapper' }));
 
     expect(screen.getByText('Audit the mapper')).not.toBeNull();
+  });
+});
+
+/**
+ * A workflow's phases, which is what issue #125 was actually about.
+ *
+ * The data arrives nested inside the workflow task's own progress message —
+ * `workflow_progress`, one entry per agent, each tagged with its phase — so the
+ * grouping is a reading of one flat array rather than a correlation across
+ * messages. `groupByPhase` is that reading, and it is exported and tested
+ * directly because it is the whole of the feature's logic.
+ */
+describe('grouping a workflow’s agents', () => {
+  const agent = (over: Partial<WorkflowAgent> = {}): WorkflowAgent => ({
+    index: 1,
+    label: 'build',
+    state: 'done',
+    ...over,
+  });
+
+  it('puts phases in declaration order, not start order', () => {
+    // Two phases whose agents interleaved as they ran.
+    const groups = groupByPhase([
+      agent({ index: 3, phaseIndex: 1, phaseTitle: 'Approvals' }),
+      agent({ index: 1, phaseIndex: 0, phaseTitle: 'Chat reliability' }),
+      agent({ index: 2, phaseIndex: 1, phaseTitle: 'Approvals' }),
+    ]);
+
+    expect(groups.map((g) => g.title)).toEqual(['Chat reliability', 'Approvals']);
+  });
+
+  it('puts agents in index order inside a phase', () => {
+    const groups = groupByPhase([
+      agent({ index: 9, phaseIndex: 0, phaseTitle: 'P', label: 'late' }),
+      agent({ index: 2, phaseIndex: 0, phaseTitle: 'P', label: 'early' }),
+    ]);
+
+    // A row that reorders as it settles moves under the pointer aiming at it.
+    expect(groups[0]?.agents.map((a) => a.label)).toEqual(['early', 'late']);
+  });
+
+  it('keeps the phase title an earlier entry established', () => {
+    const groups = groupByPhase([
+      agent({ index: 1, phaseIndex: 0, phaseTitle: 'Check-ins' }),
+      agent({ index: 2, phaseIndex: 0 }),
+    ]);
+
+    expect(groups[0]?.title).toBe('Check-ins');
+  });
+
+  it('collects unphased agents into one trailing group', () => {
+    const groups = groupByPhase([
+      agent({ index: 1, label: 'loose' }),
+      agent({ index: 2, phaseIndex: 0, phaseTitle: 'Named' }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[1]?.title).toBeUndefined();
+    expect(groups[1]?.agents.map((a) => a.label)).toEqual(['loose']);
+  });
+
+  it('is empty for a task that is not a workflow', () => {
+    expect(groupByPhase(undefined)).toEqual([]);
+    expect(groupByPhase([])).toEqual([]);
+  });
+});
+
+describe('the workflow panel', () => {
+  const wf = (agents: readonly Partial<WorkflowAgent>[]): BackgroundTask =>
+    task({
+      kind: 'local_workflow',
+      workflowName: 'doctor-bug-fixes-build',
+      workflowProgress: agents.map((a, i) => ({
+        index: i + 1,
+        label: `agent-${String(i + 1)}`,
+        state: 'done',
+        ...a,
+      })) as WorkflowAgent[],
+    });
+
+  it('draws a phase heading and its agents', () => {
+    renderDock();
+    haveTasks(
+      wf([
+        { label: 'build:chat-reliability', phaseIndex: 0, phaseTitle: 'Chat reliability' },
+        { label: 'review:chat-reliability', phaseIndex: 0, phaseTitle: 'Chat reliability' },
+      ]),
+    );
+
+    expect(screen.getByText('Chat reliability')).not.toBeNull();
+    expect(screen.getByText('build:chat-reliability')).not.toBeNull();
+    expect(screen.getByText('review:chat-reliability')).not.toBeNull();
+  });
+
+  it('counts how far through a phase is', () => {
+    renderDock();
+    haveTasks(
+      wf([
+        { phaseIndex: 0, phaseTitle: 'Check-ins', state: 'done' },
+        { phaseIndex: 0, phaseTitle: 'Check-ins', state: 'progress' },
+      ]),
+    );
+
+    expect(screen.getByText('1/2')).not.toBeNull();
+  });
+
+  it('counts a failed agent as settled, not as still running', () => {
+    renderDock();
+    haveTasks(
+      wf([
+        { phaseIndex: 0, phaseTitle: 'P', state: 'done' },
+        { phaseIndex: 0, phaseTitle: 'P', state: 'error', error: 'boom' },
+      ]),
+    );
+
+    // A phase where everything has stopped is finished, however it finished.
+    expect(screen.getByText('2/2')).not.toBeNull();
+  });
+
+  it('shortens the model to what distinguishes it', () => {
+    renderDock();
+    haveTasks(wf([{ phaseIndex: 0, phaseTitle: 'P', model: 'claude-opus-5[1m]' }]));
+
+    expect(screen.getByText('Opus 5 1M')).not.toBeNull();
+  });
+
+  it('passes an unrecognised model through whole', () => {
+    renderDock();
+    haveTasks(wf([{ phaseIndex: 0, phaseTitle: 'P', model: 'some-future-model' }]));
+
+    // Better a long string than a confident mis-parse of a model nobody has
+    // taught this table about yet.
+    expect(screen.getByText('some-future-model')).not.toBeNull();
+  });
+
+  it('draws each agent’s tokens and time', () => {
+    renderDock();
+    haveTasks(wf([{ phaseIndex: 0, phaseTitle: 'P', tokens: 196_900, durationMs: 936_000 }]));
+
+    expect(screen.getByText('196.9k')).not.toBeNull();
+    expect(screen.getByText('15m36s')).not.toBeNull();
+  });
+
+  it('summarises what is inside before it is opened', () => {
+    renderDock();
+    haveTasks(
+      wf([
+        { phaseIndex: 0, phaseTitle: 'One' },
+        { phaseIndex: 1, phaseTitle: 'Two' },
+      ]),
+    );
+
+    expect(screen.getByText('2 phases · 2 agents')).not.toBeNull();
+  });
+
+  it('says only the agent count for a workflow with no phases', () => {
+    renderDock();
+    haveTasks(wf([{}]));
+
+    // A script that never calls phase() has none, which is ordinary — and a
+    // heading reading "undefined" would be the alternative.
+    expect(screen.getByText('1 agent')).not.toBeNull();
+  });
+
+  it('draws nothing extra for a task that is not a workflow', () => {
+    renderDock();
+    haveTasks(task());
+
+    expect(screen.queryByText(/agents?$/)).toBeNull();
   });
 });

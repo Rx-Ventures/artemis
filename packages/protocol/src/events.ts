@@ -449,6 +449,75 @@ export function isTaskLive(task: BackgroundTask): boolean {
   return task.status === 'pending' || task.status === 'running' || task.status === 'paused';
 }
 
+/**
+ * One agent inside a running workflow, as the workflow itself reports it.
+ *
+ * The reason this type exists — and the reason it is worth reading the header of
+ * `taskLedger.ts` before changing it — is that a workflow is the one kind of
+ * task whose *interior* is visible. Everything else in {@link BackgroundTask} is
+ * a fact about one opaque unit of work; this is the unit of work describing its
+ * own parts, and it arrives nested inside that task's progress message rather
+ * than as tasks of its own.
+ *
+ * That nesting is what makes the grouping possible at all. There is no
+ * parent-task field anywhere in the provider's task surface, so agents that
+ * arrived as siblings could never be re-associated with the workflow that
+ * spawned them. These do not have to be: they are inside it.
+ */
+export interface WorkflowAgent {
+  /** The agent's ordinal within the workflow. Unique, and stable across updates. */
+  readonly index: number;
+  /** What the script called it — `build:chat-reliability`, `verify:auth`. */
+  readonly label: string;
+  /**
+   * How far along this agent is.
+   *
+   * An open string for {@link BackgroundTask.kind}'s reason: the four values
+   * seen are `start`, `progress`, `done` and `error`, and a UI should map those
+   * and pass anything else through rather than collapsing it into a bucket.
+   */
+  readonly state: string;
+  /**
+   * Which phase it belongs to, and what that phase is called.
+   *
+   * Both absent together on a workflow whose script never calls `phase()` —
+   * which is legal, and which a consumer must draw as a flat list rather than
+   * as a phase named `undefined`.
+   */
+  readonly phaseIndex?: number;
+  readonly phaseTitle?: string;
+  /**
+   * The agent's own id, once it has been spawned.
+   *
+   * The same identity a subagent's transcript is filed under, which is what
+   * makes a row here openable into the conversation it names — see
+   * `openAgentTab`. Absent while the agent is still queued, and for one that was
+   * answered from the workflow's journal without ever running ({@link cached}).
+   */
+  readonly agentId?: string;
+  /** The agent type, when the script named one — `Explore`, a custom type. */
+  readonly agentType?: string;
+  /** The model this agent ran on, resolved against the workflow's default. */
+  readonly model?: string;
+  /** `worktree` when the agent was given a git worktree of its own. */
+  readonly isolation?: string;
+  /** Answered from the workflow's journal on a resume, rather than re-run. */
+  readonly cached?: boolean;
+  /** Refused by a safety classifier before it ran. `error` says why. */
+  readonly blocked?: boolean;
+  /** Why it failed — or `skipped by user`, which is a skip rather than a fault. */
+  readonly error?: string;
+  readonly tokens?: number;
+  readonly toolCalls?: number;
+  readonly durationMs?: number;
+  readonly queuedAt?: number;
+  readonly startedAt?: number;
+  readonly lastProgressAt?: number;
+  /** The opening of what it was asked, and of what it answered. */
+  readonly promptPreview?: string;
+  readonly resultPreview?: string;
+}
+
 export interface BackgroundTask {
   /** The provider's task id. Stable for the life of the task. */
   readonly id: string;
@@ -483,6 +552,18 @@ export interface BackgroundTask {
   readonly subagentType?: string;
   /** `meta.name` from the workflow script, when this is a workflow. */
   readonly workflowName?: string;
+  /**
+   * What a workflow's agents are doing, when this task is one.
+   *
+   * **Retained, not replaced-or-cleared.** The provider sends the whole array on
+   * any state change and at most every ten seconds during steady progress, and
+   * omits the field entirely on the messages in between — so a consumer that
+   * writes `undefined` through on every progress message empties the list
+   * several times a minute. `taskLedger.ts` is where that rule is enforced; this
+   * is the note explaining why the field looks optional but never goes back to
+   * being absent once it has arrived.
+   */
+  readonly workflowProgress?: readonly WorkflowAgent[];
   /** What the task was actually asked to do, in full. */
   readonly prompt?: string;
   /** The tool it was using when it last said anything. */

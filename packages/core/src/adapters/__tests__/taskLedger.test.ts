@@ -315,3 +315,161 @@ describe('the task ledger', () => {
     expect(ledger.snapshot()[0]).toMatchObject({ description: 'unnamed task', kind: 'task' });
   });
 });
+
+/**
+ * A workflow's own account of its agents.
+ *
+ * This arrives nested inside the workflow task's `task_progress`, which is what
+ * makes the phase grouping possible at all — there is no parent-task field
+ * anywhere in the task surface, so agents that arrived as siblings could never
+ * be re-associated with the workflow that spawned them.
+ *
+ * The rule worth defending here is the retain: the provider sends the whole
+ * array on a state change and at most every ten seconds during steady progress,
+ * omitting the field on the messages in between. A ledger that wrote `undefined`
+ * through would empty the pane several times a minute.
+ */
+const agent = (over: Record<string, unknown> = {}) => ({
+  type: 'workflow_agent',
+  index: 1,
+  label: 'build:chat-reliability',
+  state: 'progress',
+  phaseIndex: 0,
+  phaseTitle: 'Chat reliability',
+  model: 'claude-opus-5[1m]',
+  ...over,
+});
+
+describe('a workflow’s agents', () => {
+  it('are read off the progress message', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow', workflow_name: 'doctor' }));
+    ledger.observe(progress('w1', { workflow_progress: [agent()] }));
+
+    expect(ledger.snapshot()[0]?.workflowProgress).toEqual([
+      {
+        index: 1,
+        label: 'build:chat-reliability',
+        state: 'progress',
+        phaseIndex: 0,
+        phaseTitle: 'Chat reliability',
+        model: 'claude-opus-5[1m]',
+      },
+    ]);
+  });
+
+  it('are retained when the next message omits them', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(progress('w1', { workflow_progress: [agent()] }));
+    // The throttled message: same task, no `workflow_progress` at all.
+    ledger.observe(progress('w1', { usage: { total_tokens: 30_000, tool_uses: 9 } }));
+
+    expect(ledger.snapshot()[0]?.workflowProgress).toHaveLength(1);
+    // …and the rest of the message still applied.
+    expect(ledger.snapshot()[0]?.totalTokens).toBe(30_000);
+  });
+
+  it('are replaced, not merged, when a new array arrives', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(progress('w1', { workflow_progress: [agent({ index: 1 })] }));
+    ledger.observe(
+      progress('w1', {
+        workflow_progress: [agent({ index: 1, state: 'done' }), agent({ index: 2, label: 'review' })],
+      }),
+    );
+
+    const agents = ledger.snapshot()[0]?.workflowProgress ?? [];
+    expect(agents).toHaveLength(2);
+    expect(agents[0]?.state).toBe('done');
+  });
+
+  it('go genuinely empty when the array holds no agents', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(progress('w1', { workflow_progress: [agent()] }));
+    // An array that said "here is everything" and listed nothing is an answer,
+    // unlike an absent field — so this one is written through.
+    ledger.observe(progress('w1', { workflow_progress: [] }));
+
+    expect(ledger.snapshot()[0]?.workflowProgress).toEqual([]);
+  });
+
+  it('drop the script’s own log lines', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(
+      progress('w1', {
+        workflow_progress: [{ type: 'workflow_log', message: '3/10 found' }, agent()],
+      }),
+    );
+
+    // A log line drawn as an agent row would have no label and no state.
+    expect(ledger.snapshot()[0]?.workflowProgress).toHaveLength(1);
+  });
+
+  it('drop an entry that cannot be keyed', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(
+      progress('w1', {
+        workflow_progress: [
+          agent({ index: undefined }),
+          agent({ index: 2, label: undefined }),
+          agent({ index: 3, state: undefined }),
+          agent({ index: 4 }),
+        ],
+      }),
+    );
+
+    // `index` and `label` are what the pane keys and groups by.
+    expect(ledger.snapshot()[0]?.workflowProgress).toHaveLength(1);
+    expect(ledger.snapshot()[0]?.workflowProgress?.[0]?.index).toBe(4);
+  });
+
+  it('survives a garbage payload without losing the row', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(progress('w1', { workflow_progress: 'not an array' }));
+
+    // Not an array is not an answer — it retains, like an absent field.
+    expect(ledger.snapshot()[0]?.workflowProgress).toBeUndefined();
+    expect(ledger.snapshot()).toHaveLength(1);
+  });
+
+  it('carries the whole entry through, not just what the pane draws today', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('w1', { task_type: 'local_workflow' }));
+    ledger.observe(
+      progress('w1', {
+        workflow_progress: [
+          agent({
+            state: 'error',
+            agentId: 'agent_01',
+            agentType: 'Explore',
+            isolation: 'worktree',
+            cached: true,
+            blocked: true,
+            error: 'skipped by user',
+            tokens: 196_900,
+            toolCalls: 31,
+            durationMs: 936_000,
+          }),
+        ],
+      }),
+    );
+
+    expect(ledger.snapshot()[0]?.workflowProgress?.[0]).toMatchObject({
+      agentId: 'agent_01',
+      agentType: 'Explore',
+      isolation: 'worktree',
+      cached: true,
+      blocked: true,
+      error: 'skipped by user',
+      tokens: 196_900,
+      toolCalls: 31,
+      durationMs: 936_000,
+    });
+  });
+});

@@ -36,7 +36,7 @@
  */
 
 import { memo, useEffect, useState, type ReactElement } from 'react';
-import type { BackgroundTask } from '@rx-artemis/protocol';
+import type { BackgroundTask, WorkflowAgent } from '@rx-artemis/protocol';
 import { isTaskLive } from '@rx-artemis/protocol';
 import { CheckIcon, ClockIcon, CircleStopIcon, PauseIcon, PlayIcon, XIcon } from 'lucide-react';
 
@@ -50,6 +50,7 @@ import {
 } from '../state/store';
 import { paneState, type Pane, type PaneId } from '../state/pane';
 import { IconButton } from './disabled-reason';
+import { Fold, StatusDot } from './primitives';
 import { cn } from '@/lib/utils';
 
 /** How often the elapsed clocks move. One second: they are shown to that. */
@@ -116,9 +117,12 @@ const TaskRow = memo(function TaskRow({
 
   const label = taskLabel(task);
 
+  const phases = groupByPhase(task.workflowProgress);
+
   return (
-    <li className="group flex items-start gap-2 px-2 py-1 hover:bg-raised/30">
-      <StatusIcon task={task} />
+    <li className="flex flex-col">
+      <div className="group flex items-start gap-2 px-2 py-1 hover:bg-raised/30">
+        <StatusIcon task={task} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-baseline gap-2">
@@ -158,22 +162,260 @@ const TaskRow = memo(function TaskRow({
         <span className="truncate text-3xs text-ink-faint">{secondLine(task)}</span>
       </div>
 
-      {live ? (
-        <IconButton
-          label={`Stop ${label}`}
-          size="icon-xs"
-          // Shown on hover of the row, like the dock tab's ✕: a control that only
-          // appears once the pointer is on the thing it acts on, and that stays
-          // reachable from the keyboard throughout.
-          className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => void stopTask(task.id, pane)}
+        {live ? (
+          <IconButton
+            label={`Stop ${label}`}
+            size="icon-xs"
+            // Shown on hover of the row, like the dock tab's ✕: a control that only
+            // appears once the pointer is on the thing it acts on, and that stays
+            // reachable from the keyboard throughout.
+            className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={() => void stopTask(task.id, pane)}
+          >
+            <CircleStopIcon />
+          </IconButton>
+        ) : null}
+      </div>
+
+      {phases.length > 0 ? (
+        <Fold
+          // Open while it is running, because a pane you opened to watch a
+          // workflow should not need a click to show you the workflow. A close
+          // is remembered against the task, so shutting one does not reopen on
+          // the next progress message — of which there is one every few seconds.
+          defaultOpen={live}
+          rememberAs={`workflow:${task.id}`}
+          className="px-2 pb-1"
+          triggerClassName="pl-3 text-3xs"
+          contentClassName="mt-0.5"
+          summary={<span className="text-3xs">{summarizePhases(phases)}</span>}
         >
-          <CircleStopIcon />
-        </IconButton>
+          <WorkflowPhases phases={phases} />
+        </Fold>
       ) : null}
     </li>
   );
 });
+
+/* -------------------------------------------------------------------------- */
+/* Workflow phases                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One phase's agents, in the order the script declared them.
+ *
+ * `index` and `title` are both absent for the agents of a workflow whose script
+ * never called `phase()`. That is an ordinary shape rather than an error — a
+ * small workflow has no phases — and it is drawn as a flat list, so the pane
+ * never renders a heading for a phase that was never named.
+ */
+interface WorkflowPhaseGroup {
+  readonly index: number | undefined;
+  readonly title: string | undefined;
+  readonly agents: readonly WorkflowAgent[];
+}
+
+/** An agent that will not change again. What the `n/m` on a phase counts. */
+function isSettled(agent: WorkflowAgent): boolean {
+  return agent.state === 'done' || agent.state === 'error';
+}
+
+/**
+ * Group a workflow's agents under their phases.
+ *
+ * Pure, exported, and tested on its own, because this is the whole of the
+ * feature's logic: the provider sends one flat array and the shape the mockup
+ * asks for is entirely a reading of it.
+ *
+ * Two orderings, both deliberate. **Phases go in `phaseIndex` order**, which is
+ * declaration order, so the column reads top to bottom the way the script does —
+ * not in the order agents happened to start, which interleaves as soon as two
+ * phases overlap. **Agents go in `index` order** within a phase, for the same
+ * reason and so that a row never moves under a pointer as it settles.
+ *
+ * Unphased agents collect into a single trailing group. Trailing rather than
+ * leading because a script that phases *some* of its work is nearly always
+ * phasing the front of it.
+ */
+export function groupByPhase(
+  agents: readonly WorkflowAgent[] | undefined,
+): readonly WorkflowPhaseGroup[] {
+  if (agents === undefined || agents.length === 0) return [];
+
+  const phased = new Map<number, WorkflowAgent[]>();
+  const titles = new Map<number, string>();
+  const loose: WorkflowAgent[] = [];
+
+  for (const agent of agents) {
+    if (agent.phaseIndex === undefined) {
+      loose.push(agent);
+      continue;
+    }
+    const bucket = phased.get(agent.phaseIndex);
+    if (bucket === undefined) phased.set(agent.phaseIndex, [agent]);
+    else bucket.push(agent);
+    // First title wins: every agent in a phase carries the same one, and a
+    // later blank must not erase what an earlier entry established.
+    if (agent.phaseTitle !== undefined && !titles.has(agent.phaseIndex)) {
+      titles.set(agent.phaseIndex, agent.phaseTitle);
+    }
+  }
+
+  const byIndex = (a: WorkflowAgent, b: WorkflowAgent): number => a.index - b.index;
+
+  const groups: WorkflowPhaseGroup[] = [...phased.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, list]) => ({
+      index,
+      title: titles.get(index),
+      agents: [...list].sort(byIndex),
+    }));
+
+  if (loose.length > 0) {
+    groups.push({ index: undefined, title: undefined, agents: [...loose].sort(byIndex) });
+  }
+  return groups;
+}
+
+/** The collapsed line: enough to know whether opening it is worth it. */
+function summarizePhases(phases: readonly WorkflowPhaseGroup[]): string {
+  const agents = phases.reduce((total, phase) => total + phase.agents.length, 0);
+  const named = phases.filter((phase) => phase.title !== undefined).length;
+  const agentPart = `${String(agents)} ${agents === 1 ? 'agent' : 'agents'}`;
+  if (named === 0) return agentPart;
+  return `${String(named)} ${named === 1 ? 'phase' : 'phases'} · ${agentPart}`;
+}
+
+function WorkflowPhases({ phases }: { readonly phases: readonly WorkflowPhaseGroup[] }): ReactElement {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {phases.map((phase) => (
+        <div key={phase.index ?? 'unphased'} className="flex flex-col">
+          {phase.title === undefined ? null : <PhaseHeader phase={phase} />}
+          <ul className="flex flex-col">
+            {phase.agents.map((agent) => (
+              <AgentRow key={agent.index} agent={agent} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A phase's name, how far through it is, and a dot per agent.
+ *
+ * The dots are the mockup's own device and they earn their place: `3/3` says how
+ * many are done and the strip says *which*, so a phase with one failure among
+ * eight reads as a failure at a glance rather than as `7/8`.
+ */
+function PhaseHeader({ phase }: { readonly phase: WorkflowPhaseGroup }): ReactElement {
+  const settled = phase.agents.filter(isSettled).length;
+
+  return (
+    <div className="flex items-center gap-2 rounded-sm bg-raised/40 px-1.5 py-0.5">
+      <span className="min-w-0 flex-1 truncate text-3xs text-ink-muted">{phase.title}</span>
+      <span className="flex shrink-0 items-center gap-0.5" aria-hidden="true">
+        {phase.agents.map((agent) => (
+          <StatusDot
+            key={agent.index}
+            tone={agentTone(agent)}
+            pulse={agent.state === 'progress'}
+            className="size-1"
+          />
+        ))}
+      </span>
+      <span className="shrink-0 font-mono text-3xs text-ink-faint tabular-nums">
+        {settled}/{phase.agents.length}
+      </span>
+    </div>
+  );
+}
+
+/** The hue an agent's state maps to. Shared by the dot strip and the row. */
+function agentTone(agent: WorkflowAgent): 'mint' | 'signal' | 'amber' | 'cyan' | 'neutral' {
+  if (agent.state === 'error') {
+    // A skip is not a fault. The workflow asked and the user declined, which is
+    // an ordinary outcome wearing the same state as a crash.
+    return agent.error === 'skipped by user' ? 'amber' : 'signal';
+  }
+  if (agent.state === 'done') return 'mint';
+  if (agent.state === 'progress') return 'cyan';
+  return 'neutral';
+}
+
+/**
+ * One agent: what it was called, what it ran on, what it cost.
+ *
+ * The label takes the flexible width and everything else is `shrink-0`, so a
+ * narrow rail eats into the label rather than dropping the numbers — the label
+ * is the one part a reader can usually infer from its neighbours.
+ */
+function AgentRow({ agent }: { readonly agent: WorkflowAgent }): ReactElement {
+  const model = agent.model === undefined ? undefined : modelLabel(agent.model);
+
+  return (
+    <li className="flex items-center gap-2 py-px pl-1.5" title={agentTitle(agent)}>
+      <StatusDot tone={agentTone(agent)} pulse={agent.state === 'progress'} className="size-1" />
+      <span
+        className={cn(
+          'min-w-0 flex-1 truncate font-mono text-3xs',
+          agent.state === 'error' ? 'text-signal/80' : 'text-ink-faint',
+        )}
+      >
+        {agent.label}
+      </span>
+      {model === undefined ? null : (
+        <span className="shrink-0 text-3xs text-ink-faint/70">{model}</span>
+      )}
+      {agent.tokens === undefined ? null : (
+        <span className="shrink-0 font-mono text-3xs text-ink-faint tabular-nums">
+          {formatTokens(agent.tokens)}
+        </span>
+      )}
+      {agent.durationMs === undefined ? null : (
+        <span className="w-12 shrink-0 text-right font-mono text-3xs text-ink-faint tabular-nums">
+          {formatDuration(agent.durationMs)}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/** Everything about an agent that will not fit on its line. */
+function agentTitle(agent: WorkflowAgent): string {
+  const parts: string[] = [agent.label];
+  if (agent.agentType !== undefined) parts.push(agent.agentType);
+  if (agent.model !== undefined) parts.push(agent.model);
+  if (agent.isolation !== undefined) parts.push(agent.isolation);
+  if (agent.cached === true) parts.push('reused from the workflow’s journal');
+  if (agent.blocked === true) parts.push('blocked by a safety classifier');
+  if (agent.error !== undefined) parts.push(agent.error);
+  else if (agent.resultPreview !== undefined) parts.push(agent.resultPreview);
+  else if (agent.promptPreview !== undefined) parts.push(agent.promptPreview);
+  return parts.join(' · ');
+}
+
+/**
+ * A model id, shortened to what distinguishes it.
+ *
+ * `claude-opus-5[1m]` in a column this narrow is a smear; `Opus 5 1M` is the
+ * same fact. Unknown ids pass through whole rather than being forced through a
+ * pattern that might be wrong about them — the provider adds models faster than
+ * anyone updates a table, which is the argument the transcript's own provider
+ * labels already make.
+ */
+function modelLabel(model: string): string {
+  const match = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?(?:\[(\w+)\])?$/.exec(
+    model,
+  );
+  if (match === null) return model;
+  const [, family, major, minor, window] = match;
+  const name = `${(family as string)[0]?.toUpperCase() ?? ''}${(family as string).slice(1)}`;
+  const version = minor === undefined ? major : `${major}.${minor}`;
+  return `${name} ${version}${window === undefined ? '' : ` ${window.toUpperCase()}`}`;
+}
 
 function StatusIcon({ task }: { readonly task: BackgroundTask }): ReactElement {
   const className = 'mt-0.5 size-3 shrink-0';
@@ -293,6 +535,11 @@ function formatElapsed(task: BackgroundTask, now: number): string {
     ? Math.max(task.durationMs ?? 0, now - task.startedAt)
     : (task.durationMs ?? (task.endedAt ?? now) - task.startedAt);
 
+  return formatDuration(ms);
+}
+
+/** A span of milliseconds, in the pane's own shorthand. */
+function formatDuration(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1_000));
   if (seconds < 60) return `${String(seconds)}s`;
   const minutes = Math.floor(seconds / 60);
