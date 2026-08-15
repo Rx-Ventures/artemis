@@ -44,7 +44,7 @@
  *    what someone means.
  */
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import {
   CheckIcon,
   CopyIcon,
@@ -55,7 +55,6 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import {
   configDirProblem,
   isProfileAutoSelectable,
@@ -81,6 +80,7 @@ import {
 import { usePane } from '../state/paneContext';
 import { IconButton, ReasonButton } from './disabled-reason';
 import { ProfilePlanUsage } from './PlanUsageMeter';
+import { useCopy } from '@/hooks/useCopy';
 import { CodeBlock, ProfileSwatch, ToneBadge } from './primitives';
 import { SettingsPane } from './settings/pane';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -536,27 +536,14 @@ function SignInStep({
     const owner = s.profiles.find((p) => p.id === profileId)?.providerId;
     return s.providers.find((p) => p.id === (owner ?? fallback));
   });
-  const [copied, setCopied] = useState(false);
   const signedIn = status?.loggedIn === true;
 
-  const copy = useCallback(async (): Promise<void> => {
-    if (command.length === 0) return;
-    // The tick is set only once the write has resolved, and a failure says so.
-    // Reporting success before the clipboard confirmed it is what hid a denied
-    // permission here: the button gave its tick, the paste that followed was
-    // whatever the user had copied last, and the two were far enough apart that
-    // the button was never the suspect.
-    try {
-      await navigator.clipboard.writeText(command);
-    } catch {
-      toast('Could not copy the command', {
-        description: 'Select the line above and copy it by hand.',
-      });
-      return;
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1_500);
-  }, [command]);
+  // The tick is set only once the write has resolved, and a failure says so —
+  // see `useCopy` for why that ordering is load-bearing rather than fussy.
+  const [copied, copy] = useCopy(command, {
+    title: 'Could not copy the command',
+    description: 'Select the line above and copy it by hand.',
+  });
 
   if (signedIn) {
     return (
@@ -589,7 +576,7 @@ function SignInStep({
         <Button
           size="xs"
           variant="outline"
-          onClick={() => void copy()}
+          onClick={copy}
           disabled={command.length === 0}
           aria-label="Copy the sign-in command"
         >
