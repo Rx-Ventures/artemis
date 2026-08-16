@@ -5849,17 +5849,36 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
    *
    * Normally `session.profileId`, because a transcript lives in exactly one
    * profile's config directory and no other profile can reach it. When profiles
-   * share a store — see `alsoInProfiles` — several can, and the one that read it
-   * first is an arbitrary winner of a sort, not a fact about the conversation.
-   * Switching the user onto it would change which account the next prompt bills
-   * for no reason they could name.
+   * share a store — see `alsoInProfiles` — several can, and `profileId` is then
+   * one of two very different things. The flag says which.
    *
-   * So an active profile that can reach the session keeps it. That makes the
-   * common gesture — click a row while working on an account that shares the
-   * store — a resume with nothing switched at all.
+   * **`profileIsUnknown` set** — the adapter had to put *some* id on the row and
+   * used the first sharer. It is an arbitrary winner, not a fact about the
+   * conversation, and switching the user onto it would change which account the
+   * next prompt bills for no reason they could name. So an active profile that
+   * can reach the session keeps it, and the common gesture — click a row while
+   * working on an account that shares the store — resumes with nothing switched.
+   *
+   * **Flag absent** — `profileId` is an answer. Either the store has exactly one
+   * reader, or the ledger recorded the account this session actually ran under
+   * and `attributeSession` wrote it back. Both are facts, and the sidebar prints
+   * this one on the row.
+   *
+   * Preferring the active profile over a *fact* is what made the bar disagree
+   * with the row that was just clicked: the sidebar said "Claude 5x", the status
+   * line went on saying "Claude 3x", and the next prompt billed 3x. The ledger
+   * then recorded 3x as the owner, so the row's badge changed to match on the
+   * following listing — a conversation that appeared to wander between accounts
+   * on its own.
+   *
+   * Both symptoms scale with the number of sharing accounts, because the chance
+   * that the account you are on is the one the row names falls as accounts are
+   * added. At eight or ten profiles sharing one `~/.claude` it is the normal
+   * case rather than the edge.
    */
+  const attributed = session.profileIsUnknown !== true;
   const resumeProfileId =
-    state.activeProfileId !== null && canReachSession(session, state.activeProfileId)
+    !attributed && state.activeProfileId !== null && canReachSession(session, state.activeProfileId)
       ? state.activeProfileId
       : session.profileId;
 
@@ -5945,13 +5964,30 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   ].filter(Boolean);
 
   if (moved.length > 0) {
+    /*
+     * Why the account moved, in the words that are true of *this* resume.
+     *
+     * An attributed session names the account it ran under, so that is the
+     * reason and it is the same sentence the sidebar's badge is making. An
+     * unattributed one moved only because the account in use cannot read the
+     * store at all — nothing recorded who ran it, so claiming otherwise here
+     * would be the guess the whole attribution path exists to refuse.
+     */
+    const because = [
+      switchedProfile
+        ? attributed
+          ? 'under the account it last ran on'
+          : 'under a profile that can reach it'
+        : '',
+      switchedCwd ? 'in the directory it was created in' : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+
     target.transcript.note(
       'info',
       `Continuing "${session.title}"`,
-      // Not "the profile it was created in" any more: with a shared store the
-      // session resumes under whichever of several profiles reaches it, and
-      // this note fires only when something actually moved.
-      `Switched ${moved.join(' and ')}, because a session resumes under a profile that can reach it, in the directory it was created in.`,
+      `Switched ${moved.join(' and ')}, because a session resumes ${because}.`,
     );
   }
 
