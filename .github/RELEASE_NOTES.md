@@ -1,6 +1,45 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.15.0
+
+A release about running several accounts at once. Every item below was reported
+by someone working across eight profiles, and all four turned out to be the same
+thing seen from different sides: the app knew which accounts existed and not
+which ones were *in use*.
+
+- **A new session stops piling onto the account the last one is draining.** The
+  chooser ranked accounts on a polled reading, and the poll lags its own
+  consequences — start a session, it takes the emptiest account and begins
+  draining it; start another a minute later and nothing has re-polled, so the
+  same account still reads emptiest and wins again. Four or five sessions landed
+  on one profile while the rest sat idle. It got *worse* the more accounts you
+  had, because the poll walks them one at a time and a longer cycle is a longer
+  blind window. The ranking now subtracts what the runs already on an account
+  are committed to spending, weighted by model and effort — a Fable ultracode
+  session counts several times what an Opus max one does, because ultracode
+  multiplies how many turns there are rather than how long one takes.
+
+- **A session resumes on the account it last ran on.** With `projects/` shared
+  across profiles, clicking a row labelled "Claude 5x" while working on "Claude
+  3x" left the status line saying 3x, billed 3x, and then quietly relabelled the
+  row 3x on the next listing — a conversation that appeared to wander between
+  accounts on its own. The row, the status line and the account billed now
+  agree. The odds of hitting this fell to nothing with two accounts and to
+  almost certain with ten, which is why it went unnoticed for so long.
+
+- **Every account in the picker shows how full it is.** The menu answered "which
+  accounts do I have" and the rings answered "how full is the one I'm in".
+  Neither answered the question that arrives with a fistful of accounts. Each row
+  now carries the window that will actually stop that account first — the
+  tightest one, not an average — in the same colours the rings use, read straight
+  off the poll so opening the menu starts no work.
+
+- **A GitHub PR link says where it stands.** Hover one in a transcript for its
+  state, whether checks are green, and the size of the diff. The reading comes
+  from your own `gh`; Artemis stores no GitHub token and has nowhere to put one,
+  so with no CLI or no login the link stays exactly the link it was.
+
 ## What's new in 0.14.2
 
 - **Delegated work splits live from finished.** The pane answers one question —
