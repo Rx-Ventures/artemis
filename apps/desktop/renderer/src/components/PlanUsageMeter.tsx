@@ -61,8 +61,14 @@ import { cn } from '../lib/utils';
  * The thresholds are deliberately pessimistic: a window at 75% during a long
  * session is worth noticing *before* it stops you, because the reset can be
  * hours away.
+ *
+ * Exported because the profile picker colours its per-account cap with it. Two
+ * copies of these thresholds would drift, and the drift would be the worst kind
+ * — an account showing amber in the menu and red in the meter is the same
+ * account described two ways on one bar, which is precisely the disagreement
+ * this status line exists to avoid.
  */
-function toneFor(utilization: number | null): string {
+export function toneFor(utilization: number | null): string {
   if (utilization === null) return 'text-ink-faint';
   if (utilization >= 90) return 'text-signal';
   if (utilization >= 75) return 'text-amber';
