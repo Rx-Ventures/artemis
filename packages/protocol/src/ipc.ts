@@ -26,6 +26,7 @@
  */
 
 import type { AgentPromptsDocument } from './agentPrompts.js';
+import type { PullRequestRef, PullRequestResult } from './github.js';
 import type { AgentEvent } from './events.js';
 import type { AgentError } from './errors.js';
 import type { Attachment } from './attachment.js';
@@ -176,6 +177,23 @@ export const IPC = {
    * one when a request is deduplicated.
    */
   filesCheck: 'artemis:files:check',
+
+  /**
+   * Where do these pull requests stand?
+   *
+   * {@link filesCheck}'s twin for GitHub links, and the same shape for the same
+   * reasons: the renderer can tell a PR-shaped URL from any other link (see
+   * `parsePullRequestUrl`) and can tell nothing else about it, so it batches one
+   * answer's worth of refs and asks once.
+   *
+   * Answered by shelling out to the user's own `gh`, which is where the
+   * credential is. Artemis holds no GitHub token and has nowhere to put one —
+   * the same arrangement, and the same reasoning, as the provider logins the
+   * README describes. A machine with no `gh`, or a `gh` that has never been
+   * signed in, gets a `problem` back rather than an error, and the link stays a
+   * link.
+   */
+  githubPullRequests: 'artemis:github:pull-requests',
 
   /**
    * A shell in a pseudo-terminal, and the four things you can do to one.
@@ -1179,6 +1197,34 @@ export interface FilesCheckResponse {
   readonly reachable: readonly string[];
 }
 
+/** Ask where a batch of pull requests stands. */
+export interface GithubPullRequestsRequest {
+  /**
+   * The refs to read, deduplicated by the caller.
+   *
+   * Refs rather than URLs, because the parse already happened in the renderer
+   * and re-parsing here would be a second copy of `parsePullRequestUrl` that
+   * could disagree with the first about what counts as a pull request. The
+   * validator re-checks the *shape* of each field — that is not the same thing,
+   * and it has to, because a renderer is untrusted by construction.
+   */
+  readonly refs: readonly PullRequestRef[];
+}
+
+/** What came back, one entry per ref asked about. */
+export interface GithubPullRequestsResponse {
+  /**
+   * One result per requested ref, keyed by {@link pullRequestKey}.
+   *
+   * A parallel list rather than a subset — the opposite of {@link
+   * FilesCheckResponse} — because "no answer" here is several different
+   * answers. A path is there or it is not; a pull request can be missing
+   * because `gh` is absent, because nobody is signed in, or because it does not
+   * exist, and the popover says something different for each.
+   */
+  readonly results: readonly PullRequestResult[];
+}
+
 /** Open one stored session. */
 export interface SessionsMessagesRequest {
   readonly profileId: ProfileId;
@@ -1659,6 +1705,7 @@ export type IpcRequestMap = {
   [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.filesRead]: FilesReadRequest;
   [IPC.filesCheck]: FilesCheckRequest;
+  [IPC.githubPullRequests]: GithubPullRequestsRequest;
   [IPC.browserOpen]: BrowserOpenRequest;
   [IPC.browserNavigate]: BrowserNavigateRequest;
   [IPC.browserCommand]: BrowserCommandRequest;
@@ -1723,6 +1770,7 @@ export type IpcResponseMap = {
   [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.filesRead]: FilesReadResponse;
   [IPC.filesCheck]: FilesCheckResponse;
+  [IPC.githubPullRequests]: GithubPullRequestsResponse;
   [IPC.browserOpen]: BrowserOpenResponse;
   [IPC.browserNavigate]: BrowserNavigateResponse;
   [IPC.browserCommand]: BrowserCommandResponse;
@@ -2038,6 +2086,29 @@ export interface ArtemisBridge {
      * deciding whether a word in an answer is worth underlining.
      */
     check(request: FilesCheckRequest): Promise<IpcResult<FilesCheckResponse>>;
+  };
+
+  /**
+   * What GitHub says about a link in a transcript.
+   *
+   * One method, and it reads. Nothing here can comment, merge, close or open
+   * anything: the surface is deliberately the smallest thing that answers "where
+   * does this PR stand", because it is driven by URLs that *an agent wrote*, and
+   * a write path reachable from model output is a write path an injected
+   * instruction can reach.
+   */
+  readonly github: {
+    /**
+     * Where a batch of pull requests stands, via the user's own `gh`.
+     *
+     * Never rejects for a pull request's sake. A missing CLI, a signed-out CLI
+     * and a PR that does not exist are all answers — see {@link
+     * PullRequestProblem} — because each one means something different on screen
+     * and none of them is a failure of the call.
+     */
+    pullRequests(
+      request: GithubPullRequestsRequest,
+    ): Promise<IpcResult<GithubPullRequestsResponse>>;
   };
 
   /**

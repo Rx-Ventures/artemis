@@ -112,6 +112,8 @@ import {
   type BrowserNavigateRequest,
   type BrowserOpenRequest,
   type FilesCheckRequest,
+  type GithubPullRequestsRequest,
+  type PullRequestRef,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalListRequest,
@@ -155,6 +157,15 @@ const LIMITS = {
   envValue: 8_192,
   ruleUpdates: 64,
   rulesPerUpdate: 256,
+  /** Bound on one `owner` or `repo` segment. GitHub's own cap is 39/100. */
+  repoSegment: 200,
+  /**
+   * Pull requests one request may ask about.
+   *
+   * A screenful of a transcript's links with room to spare. `github.ts` reads
+   * them serially, so this also bounds how long one call holds that queue.
+   */
+  pullRequests: 64,
   /**
    * Profile ids one prompt's scope may name.
    *
@@ -1345,6 +1356,74 @@ export function validateFilesCheck(raw: unknown): FilesCheckRequest {
     throw new ValidationError('paths', `must have at most ${LIMITS.checkPaths} entries`);
   }
   return { paths: paths.map((entry, index) => requireAbsolutePath(entry, `paths[${index}]`)) };
+}
+
+/* -------------------------------------------------------------------------- */
+/* GitHub                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One `owner` or `repo` on its way to becoming a subprocess argument.
+ *
+ * This is the validator that matters most in this file's terms, because these
+ * two strings come from a URL that an *agent* wrote. Prompt injection reaches
+ * exactly this far: text in a tool result becomes a link in a transcript becomes
+ * an argument to `execFile`.
+ *
+ * The character classes are GitHub's own and are the same ones
+ * `parsePullRequestUrl` applies in the renderer. That duplication is deliberate
+ * and is this file's whole thesis — the renderer's parse is a *convenience* that
+ * decides whether to draw a link, and it runs in the process that is untrusted
+ * by construction. This copy is the gate.
+ *
+ * `github.ts` never uses a shell, so there is no metacharacter to escape and
+ * this is not the only thing standing between a crafted name and execution. It
+ * is the one that means a name which could not be a repository never becomes an
+ * argument at all — including a leading `-`, which is an option rather than a
+ * value to every CLI ever written.
+ */
+function requireRepoSegment(value: unknown, field: string, pattern: RegExp): string {
+  const text = requireString(value, field, LIMITS.repoSegment);
+  if (!pattern.test(text)) throw new ValidationError(field, 'is not a GitHub name');
+  return text;
+}
+
+const GITHUB_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Asking where a batch of pull requests stands.
+ *
+ * The shape of {@link validateFilesCheck}, and the cap does the same job: one
+ * screenful of a transcript's links, and a bound so a loop in a compromised
+ * renderer cannot ask for ten thousand subprocesses in a single call. `github.ts`
+ * walks the batch serially, so the cap is also a bound on how long one call can
+ * occupy the queue.
+ *
+ * An empty list is accepted and answers with an empty list, for the reason the
+ * channel above gives.
+ */
+export function validateGithubPullRequests(raw: unknown): GithubPullRequestsRequest {
+  const request = requireRequest(raw);
+  const refs = request['refs'];
+  if (!Array.isArray(refs)) throw new ValidationError('refs', 'must be an array');
+  if (refs.length > LIMITS.pullRequests) {
+    throw new ValidationError('refs', `must have at most ${LIMITS.pullRequests} entries`);
+  }
+
+  return {
+    refs: refs.map((entry, index): PullRequestRef => {
+      const ref = requireObject(entry, `refs[${index}]`);
+      return {
+        owner: requireRepoSegment(ref['owner'], `refs[${index}].owner`, GITHUB_OWNER),
+        repo: requireRepoSegment(ref['repo'], `refs[${index}].repo`, GITHUB_REPO),
+        // Upper bound is a sanity rail rather than a real limit — the busiest
+        // repository on GitHub has not passed a quarter of a million PRs — and
+        // the lower one refuses `0`, which is not a pull request anywhere.
+        number: requireInteger(ref['number'], `refs[${index}].number`, 1, 10_000_000),
+      };
+    }),
+  };
 }
 
 /* -------------------------------------------------------------------------- */

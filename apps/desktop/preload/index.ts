@@ -97,6 +97,7 @@ import {
   type BrowserOpenRequest,
   BROWSER_EVENT_TYPES,
   type FilesCheckRequest,
+  type GithubPullRequestsRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalEvent,
@@ -564,6 +565,12 @@ const bridge: ArtemisBridge = Object.freeze({
   files: Object.freeze({
     read: (request: FilesReadRequest) => invoke(IPC.filesRead, request),
     check: (request: FilesCheckRequest) => invoke(IPC.filesCheck, request),
+  }),
+
+  /** Where a link in a transcript stands. Reads; there is no write here. */
+  github: Object.freeze({
+    pullRequests: (request: GithubPullRequestsRequest) =>
+      invoke(IPC.githubPullRequests, request),
   }),
 
   /**
