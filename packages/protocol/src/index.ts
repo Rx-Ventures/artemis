@@ -24,6 +24,7 @@
  * | `profile`       | `Profile`, `ProfileMetadata`, `configDirProblem`           |
  * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
  * | `browser`       | `BrowserInfo`, `browserUrlFor`, the `BrowserEvent` union   |
+ * | `planLoad`      | what live runs reserve, so the chooser is not blind to them |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
  * | `github`        | `parsePullRequestUrl`, `PullRequestSummary`                 |
  * | `agentPrompts`  | the standing-instruction library, and how it composes       |
@@ -41,6 +42,7 @@ export * from './provider.js';
 export * from './permissions.js';
 export * from './usage.js';
 export * from './planCapacity.js';
+export * from './planLoad.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './attachment.js';
