@@ -689,7 +689,26 @@ function ProfileItem({
   if (!profile) return null;
 
   const path = shortenPath(profile.configDir, { platform, max: 60 });
-  const tier = status?.loggedIn === true ? (status.subscriptionType ?? polledTier) : undefined;
+  /*
+   * The plan tier, from whichever source has it.
+   *
+   * Gated on *not having been checked and found signed out*, rather than on
+   * having been checked and found signed in — which is the same rule the amber
+   * state above follows, and this line used to have it backwards.
+   *
+   * The difference is the whole of the bug. `authByProfile` is filled by exactly
+   * one thing, a card mounting on the profiles screen, so it is empty until that
+   * screen has been opened and empty again after every reload. Requiring
+   * `loggedIn === true` therefore threw away `polledTier` — which the plan poll
+   * already knows, for every account, without a subprocess — and left every row
+   * in the picker unlabelled on a fresh launch.
+   *
+   * A polled `subscriptionType` is not a guess, either: it comes back on a plan
+   * reading that only a signed-in account can produce. The auth probe's own
+   * answer still wins where there is one, because it is the more direct read.
+   */
+  const tier =
+    status?.loggedIn === false ? undefined : (status?.subscriptionType ?? polledTier);
 
   /*
    * How full this account is, as the window that will actually stop you.

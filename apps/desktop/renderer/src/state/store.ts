@@ -4090,6 +4090,9 @@ export async function bootstrap(): Promise<void> {
   // Same reasoning, cheaper call: the sidebar header renders the directory's
   // own name until this lands, which is a correct label either way.
   void refreshWorkspace(focusedPane());
+  // One account, not all of them — see `refreshAuth`. After `booted` and not
+  // awaited, for the same reason the two reads above are.
+  refreshAuth(focusedPane());
   // Cache reads, so this contacts no provider — see `seedPlanUsage`. It is what
   // makes the profile menu's recommendation available immediately in a window
   // opened into an app that has been running for hours.
@@ -4317,6 +4320,68 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
     // stop the indicator for a fetch that is still running.
     if (token === modelsRequestToken.get(pane.id)) setPaneState(pane, { modelsLoading: false });
   }
+}
+
+/**
+ * When each profile's sign-in state was last read. See {@link refreshAuth}.
+ */
+const authReadAt = new Map<ProfileId, number>();
+
+/**
+ * How long a sign-in reading is treated as current.
+ *
+ * A bound on repeats rather than a staleness rule. Switching account is a
+ * deliberate act and re-reading on each one is in line with what `refreshModels`
+ * beside it already costs — but `applyProfile` also fires from `newSession`'s
+ * automatic adoption, which is *not* deliberate, so somebody starting several
+ * sessions in a row would otherwise spawn a probe per session.
+ */
+const AUTH_FRESH_MS = 60_000;
+
+/**
+ * Read the sign-in state of the account this column is pointed at.
+ *
+ * ## Why only the active one
+ *
+ * `authByProfile` was written by exactly one thing — a card mounting on the
+ * profiles screen — so until that screen had been opened it was empty, and it
+ * was empty again after every reload because it is renderer state. The status
+ * line's amber "signed out" therefore could not appear for an account nobody had
+ * gone looking at, which is the wrong way round: the warning exists for the
+ * person who has *not* been looking.
+ *
+ * The obvious repair is to read every profile at startup, and it is the wrong
+ * one. Each read spawns the provider's CLI, so on the machine this was reported
+ * from that is eight subprocesses during boot — the busiest moment in the
+ * process — to colour seven rows nobody is about to run on. `seedPlanUsage`
+ * declines the same trade for the same reason.
+ *
+ * So this reads *one* account: the one this column will bill next, at the
+ * moments that answer can have changed. That is the only profile whose sign-in
+ * state changes what the next prompt does, and it is one subprocess beside the
+ * `refreshModels` this is called next to.
+ *
+ * The other rows in the picker keep saying nothing about sign-in, which stays
+ * correct: unchecked is not evidence, and the bar's standing rule is that amber
+ * means *checked and signed out*.
+ */
+function refreshAuth(pane: Pane = focusedPane()): void {
+  const profileId = paneState(pane).activeProfileId;
+  if (profileId === null) return;
+
+  const last = authReadAt.get(profileId);
+  if (last !== undefined && Date.now() - last < AUTH_FRESH_MS) return;
+  authReadAt.set(profileId, Date.now());
+
+  // `readAuthStatus` writes the result into `authByProfile` and is silent on
+  // failure, which is what this wants: an unreadable profile is not a banner,
+  // it is an account the bar goes on saying nothing about.
+  void readAuthStatus(profileId);
+}
+
+/** Forget when each profile was last probed. For tests. */
+export function resetAuthFreshness(): void {
+  authReadAt.clear();
 }
 
 /**
@@ -4590,6 +4655,8 @@ export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()):
   invalidateSessions();
   void refreshSessions();
   void refreshModels(pane);
+  // The account moved, so "is it signed in" is a different question now.
+  refreshAuth(pane);
 }
 
 /**
@@ -4629,6 +4696,8 @@ function applyProfile(pane: Pane, profile: ProfileMetadata): void {
   invalidateSessions();
   void refreshSessions();
   void refreshModels(pane);
+  // The account moved, so "is it signed in" is a different question now.
+  refreshAuth(pane);
 }
 
 /**
@@ -6058,6 +6127,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   invalidateSessions();
   void refreshSessions();
   void refreshModels(target);
+  refreshAuth(target);
   // This function writes `cwd` itself rather than going through `setCwd`, and
   // must keep doing so: `setCwd` clears `resumeSessionId` on the way past,
   // which is the one piece of state this function exists to set. Routing this
