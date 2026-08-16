@@ -1442,7 +1442,7 @@ const BROWSER_COMMANDS = new Set(['back', 'forward', 'reload', 'stop']);
  * Deliberately **not** {@link requireString}, and the two differences are both
  * the point:
  *
- *  - **NUL is legal here.** `requireString` rejects ` ` because everywhere
+ *  - **NUL is legal here.** `requireString` rejects `\0` because everywhere
  *    else in this file a NUL is a truncation attack on something that will
  *    become a path or a record. In a terminal it is `Ctrl-@`, a key people
  *    genuinely press — it is how you set the mark in Emacs and readline — and
