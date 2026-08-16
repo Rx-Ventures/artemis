@@ -104,7 +104,7 @@ import {
   ShieldIcon,
   ZapIcon,
 } from 'lucide-react';
-import { isProfileEnabled } from '@rx-artemis/protocol';
+import { bindingWindow, isProfileEnabled } from '@rx-artemis/protocol';
 import type {
   PermissionMode,
   PlanRecommendation,
@@ -143,7 +143,7 @@ import {
 } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton, WithReason } from './disabled-reason';
-import { PlanUsageMeter } from './PlanUsageMeter';
+import { PlanUsageMeter, toneFor } from './PlanUsageMeter';
 import { ProfileSwatch, StatusDot } from './primitives';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
@@ -683,19 +683,51 @@ function ProfileItem({
 }): ReactElement | null {
   const profile = useApp((s) => s.profiles.find((p) => p.id === id));
   const status = useApp((s) => s.authByProfile[id]);
-  const polledTier = useApp((s) => s.planUsageByProfile[id]?.subscriptionType);
+  const usage = useApp((s) => s.planUsageByProfile[id]);
+  const polledTier = usage?.subscriptionType;
   const platform = useApp((s) => s.platform);
   if (!profile) return null;
 
   const path = shortenPath(profile.configDir, { platform, max: 60 });
   const tier = status?.loggedIn === true ? (status.subscriptionType ?? polledTier) : undefined;
 
+  /*
+   * How full this account is, as the window that will actually stop you.
+   *
+   * `bindingWindow` rather than a particular one or an average, for the reason
+   * it documents: a plan is as full as its tightest limit, and an account at 5%
+   * weekly and 98% five-hourly has no room whatever the average says.
+   *
+   * Read straight off the polled map — no fetch is started here. That is not an
+   * optimisation, it is the constraint: this component renders once per account
+   * and a cache-miss escalation per row would spawn one CLI subprocess per
+   * profile every time the menu opened. `ProfilePlanUsage` keeps a queue for
+   * exactly that hazard on the settings page, where the cards are few and the
+   * wait is affordable; a menu opened off a 20px bar is neither.
+   *
+   * Absent until the poll has been round, and absent forever on metered billing
+   * where `available` is false. Both render nothing rather than a zero — the
+   * same rule the row's account label follows, and for the same reason.
+   */
+  const binding = bindingWindow(usage);
+  const capacity = binding?.utilization ?? null;
+
   return (
     <DropdownMenuRadioItem
       value={profile.id}
       disabled={locked}
       className="gap-2 text-2xs"
-      title={status?.email ? `${status.email} — ${path}` : path}
+      title={
+        [
+          status?.email,
+          capacity === null
+            ? undefined
+            : `${String(Math.round(capacity))}% of its ${binding?.label ?? ''} limit used`,
+          path,
+        ]
+          .filter(Boolean)
+          .join(' — ') || path
+      }
     >
       {/*
        * The name is the only flexible thing on the row: `min-w-0`+`truncate` on
@@ -715,6 +747,29 @@ function ProfileItem({
           <span className="shrink-0 text-amber">signed out</span>
         ) : null}
       </span>
+      {/*
+       * The cap, at the end of the row rather than beside the name.
+       *
+       * Every other text on this row describes what the account *is* — its
+       * tier, whether it is disabled, whether it is signed out — and belongs
+       * next to the name it qualifies. This one is a reading that changes every
+       * few minutes, and it is read *down the column*: with eight or ten
+       * accounts in the menu the question is "which of these has room", which is
+       * a comparison between rows, and a number that starts at a different x
+       * position on every row cannot be compared without reading each one.
+       *
+       * `tabular-nums` for the same reason — proportional digits make 11% and
+       * 88% different widths and put the column back out of line.
+       *
+       * It lands just inside the `pr-8` the radio item reserves for its check,
+       * so the selected row's tick sits outside the column rather than shoving
+       * one number out of alignment with the rest.
+       */}
+      {capacity === null ? null : (
+        <span className={cn('shrink-0 tabular-nums', toneFor(capacity))}>
+          {Math.round(capacity)}%
+        </span>
+      )}
     </DropdownMenuRadioItem>
   );
 }
