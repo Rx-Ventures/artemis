@@ -9,6 +9,7 @@
 
 import type { ProfileId } from './ids.js';
 import type { PlanCapacity, ResolvedPlanWeight } from './planCapacity.js';
+import { reservationFor, type LiveRunLoad } from './planLoad.js';
 import type { ProviderId } from './provider.js';
 
 /**
@@ -271,6 +272,14 @@ export interface ProfilePlanUsage {
    * contract pool and are not sold as a multiple of anything.
    */
   readonly capacity?: ResolvedPlanWeight | null;
+  /**
+   * Runs already going on this account, which its reading does not yet show.
+   *
+   * The correction for a chooser reading a lagging measurement — see
+   * `planLoad.ts` for the herd this exists to break. Absent or empty means an
+   * idle account, which is the ordinary case and reserves nothing.
+   */
+  readonly liveRuns?: readonly LiveRunLoad[];
 }
 
 /**
@@ -436,13 +445,49 @@ export function recommendProfile(
   };
 }
 
-/** Headroom scaled by plan size, or plain headroom when that is not available. */
+/**
+ * Headroom, scaled by plan size, less what the live runs have already claimed.
+ *
+ * ## Why the reservation is subtracted in the *weighted* space
+ *
+ * `reservationFor` answers in percentage points of a **baseline** plan's window,
+ * and headroom is a percentage of *this* account's. Those are different units
+ * the moment two plans differ in size: one Fable/ultracode session eats a
+ * quarter as much of a Max 20x window as it does of a Max 5x one.
+ *
+ * Multiplying headroom by the plan weight converts it to baseline points, which
+ * is exactly the space the reservation is already in — so the subtraction is a
+ * subtraction of like from like, and no per-account division is needed.
+ *
+ * This is why `same-plan` now scales too, where it previously returned raw
+ * headroom. Every candidate shares one plan there, so a common multiplier
+ * changes no ordering between them; what it changes is that the reservation
+ * lands on the right scale instead of being over-subtracted by the plan's own
+ * weight. A Max 20x account would otherwise have one live session wipe out
+ * twenty times more headroom than that session actually costs it.
+ *
+ * Under `percentage` the weights are not trusted *between* accounts — that is
+ * what the basis means — so the ranking stays on raw shares. The reservation is
+ * still divided by the account's own weight where it has one, which is a
+ * correction within a single account rather than a comparison across two, and
+ * makes each number less wrong without claiming the set is comparable.
+ *
+ * ## Nothing is clamped
+ *
+ * A score may go negative, and that is deliberate. Clamping at zero would tie
+ * every over-committed account at "no room", and the winner among them would
+ * fall to list order — quite possibly the most loaded one. Letting them go
+ * negative keeps the *least* over-committed account on top, which is the honest
+ * answer to "where should this go" when the true answer is "nowhere good".
+ */
 function scoreOf(
   candidate: { readonly entry: ProfilePlanUsage; readonly headroom: number },
   basis: PlanRecommendationBasis,
 ): number {
-  if (basis !== 'weighted') return candidate.headroom;
-  return candidate.headroom * (candidate.entry.capacity?.weight ?? 1);
+  const weight = candidate.entry.capacity?.weight ?? 1;
+  const reserved = reservationFor(candidate.entry.liveRuns);
+  if (basis === 'percentage') return candidate.headroom - reserved / weight;
+  return candidate.headroom * weight - reserved;
 }
 
 /**

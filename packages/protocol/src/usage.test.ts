@@ -438,4 +438,187 @@ describe('recommendProfile', () => {
       expect(result?.basis).toBe('same-plan');
     });
   });
+  /*
+    The herd, and what stops it.
+
+    `recommendProfile` reads a poll that lags its own consequences: start a
+    session, it takes the emptiest account and begins draining it, and for the
+    next several minutes that account still *reads* as the emptiest. So it wins
+    again, and again, and four sessions land on one profile while the rest sit
+    idle. It gets worse with more accounts, because the poll walks them serially
+    and a longer cycle is a longer blind window (#146).
+
+    The fix is to subtract what the runs already on an account are committed to
+    spending, before ranking. These assert the decision that comes out, not the
+    constants it comes out of — see `planLoad.test.ts`.
+  */
+  describe('with work already running', () => {
+    const heavy = { model: 'fable', effort: 'xhigh', ultracode: true };
+
+    it('sends the next session elsewhere rather than onto the account it just filled', () => {
+      // The bug, in two lines. Both accounts read identically because the poll
+      // has not caught up with the run on `busy`; only the live run tells them
+      // apart, and without it the tie would hand this to `busy` on list order.
+      const result = recommendProfile(
+        [
+          { profileId: 'busy', usage: usage([{ id: 'five_hour', utilization: 20 }]), liveRuns: [heavy] },
+          { profileId: 'idle', usage: usage([{ id: 'five_hour', utilization: 20 }]) },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('idle');
+    });
+
+    it('still prefers a busy account that is genuinely much emptier', () => {
+      // The reservation is a thumb on the scale, not a veto. An account with
+      // 95% free and one run on it is a better destination than one at 10% free,
+      // and a correction that overrode that would just invert the original bug.
+      const result = recommendProfile(
+        [
+          { profileId: 'busy', usage: usage([{ id: 'five_hour', utilization: 5 }]), liveRuns: [heavy] },
+          { profileId: 'idle', usage: usage([{ id: 'five_hour', utilization: 90 }]) },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('busy');
+    });
+
+    it('weighs a heavy run more than a light one', () => {
+      // Two accounts, both busy, both reading the same. The one running Haiku on
+      // low is the better destination than the one running Fable on ultracode.
+      const result = recommendProfile(
+        [
+          { profileId: 'fable', usage: usage([{ id: 'five_hour', utilization: 20 }]), liveRuns: [heavy] },
+          {
+            profileId: 'haiku',
+            usage: usage([{ id: 'five_hour', utilization: 20 }]),
+            liveRuns: [{ model: 'haiku', effort: 'low' }],
+          },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('haiku');
+    });
+
+    it('counts sessions, so the fourth lands somewhere new', () => {
+      const result = recommendProfile(
+        [
+          {
+            profileId: 'three',
+            usage: usage([{ id: 'five_hour', utilization: 20 }]),
+            liveRuns: [heavy, heavy, heavy],
+          },
+          {
+            profileId: 'one',
+            usage: usage([{ id: 'five_hour', utilization: 20 }]),
+            liveRuns: [heavy],
+          },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('one');
+    });
+
+    it('picks the least over-committed when every account is loaded', () => {
+      // Nothing is clamped at zero, deliberately. Clamping would tie both at
+      // "no room" and hand the answer to list order — quite possibly the more
+      // loaded one, which is the worst available answer to "where should this
+      // go".
+      const result = recommendProfile(
+        [
+          {
+            profileId: 'worse',
+            usage: usage([{ id: 'five_hour', utilization: 80 }]),
+            liveRuns: [heavy, heavy, heavy, heavy],
+          },
+          {
+            profileId: 'bad',
+            usage: usage([{ id: 'five_hour', utilization: 80 }]),
+            liveRuns: [heavy, heavy],
+          },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('bad');
+    });
+
+    it('does not let one run wipe out a large plan', () => {
+      /*
+        The units question, and the one arrangement that catches getting it
+        wrong.
+
+        A reservation is denominated in points of a *baseline* window, and
+        headroom is a percentage of *this* account's. Multiplying headroom by the
+        plan weight converts it into baseline points, so the subtraction is like
+        from like and the reservation stays an absolute amount.
+
+        Subtract before weighting instead — `(headroom - reserved) * weight` —
+        and the penalty gets multiplied by the plan size, so one Fable ultracode
+        run costs a Max 20x account twenty times what it actually costs it. The
+        numbers below are chosen so that mistake flips the answer: Pro is at 100%
+        free and Max 20x at 20%, both carrying one identical run, and Max 20x is
+        still by far the better destination because a fifth of its window is four
+        Pro windows.
+      */
+      const result = recommendProfile(
+        [
+          {
+            profileId: 'pro',
+            usage: usage([{ id: 'five_hour', utilization: 0 }], { subscriptionType: 'pro' }),
+            providerId: 'claude',
+            capacity: resolvePlanWeight({ providerId: 'claude', pinned: 'claude:pro' }),
+            liveRuns: [heavy],
+          },
+          {
+            profileId: 'max20',
+            usage: usage([{ id: 'five_hour', utilization: 80 }], { subscriptionType: 'max' }),
+            providerId: 'claude',
+            capacity: resolvePlanWeight({ providerId: 'claude', pinned: 'claude:max-20x' }),
+            liveRuns: [heavy],
+          },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('max20');
+      expect(result?.basis).toBe('weighted');
+    });
+
+    it('changes nothing when nothing is running', () => {
+      // The regression guard. An install where no run is live must rank exactly
+      // as it did before any of this existed.
+      const idle = recommendProfile(
+        [
+          { profileId: 'a', usage: usage([{ id: 'five_hour', utilization: 70 }]) },
+          { profileId: 'b', usage: usage([{ id: 'five_hour', utilization: 20 }]) },
+        ],
+        { now: NOW },
+      );
+      const empty = recommendProfile(
+        [
+          { profileId: 'a', usage: usage([{ id: 'five_hour', utilization: 70 }]), liveRuns: [] },
+          { profileId: 'b', usage: usage([{ id: 'five_hour', utilization: 20 }]), liveRuns: [] },
+        ],
+        { now: NOW },
+      );
+      expect(idle?.profileId).toBe('b');
+      expect(empty?.profileId).toBe('b');
+      expect(empty?.headroom).toBe(idle?.headroom);
+    });
+
+    it('reports the account\'s real headroom, not the reserved figure', () => {
+      // The reservation decides *where to go*; it is not a claim about the
+      // meter. A row reading "12% free" for an account the provider says is 80%
+      // free would be this correction leaking into a reading it has no business
+      // restating.
+      const result = recommendProfile(
+        [
+          { profileId: 'busy', usage: usage([{ id: 'five_hour', utilization: 20 }]), liveRuns: [heavy] },
+          { profileId: 'idle', usage: usage([{ id: 'five_hour', utilization: 25 }]) },
+        ],
+        { now: NOW },
+      );
+      expect(result?.profileId).toBe('idle');
+      expect(result?.headroom).toBe(75);
+    });
+  });
 });

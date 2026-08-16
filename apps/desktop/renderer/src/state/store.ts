@@ -54,6 +54,7 @@ import type {
   PermissionRequest,
   PermissionScope,
   PlanRecommendation,
+  LiveRunLoad,
   PlanUsage,
   PreviewOpenResponse,
   FilesReadResponse,
@@ -3296,13 +3297,64 @@ export function activeProfile(state: SessionState): ProfileMetadata | undefined 
 }
 
 /**
- * Which account has the most plan capacity left, from the polled readings.
+ * What is running right now, gathered per account.
+ *
+ * Over `allLivePanes` rather than `allPanes`, and that is the load-bearing
+ * choice: a backgrounded conversation is consuming its account's window exactly
+ * as hard as a visible one, and counting only the columns on screen would leave
+ * the recommender blind to work the user deliberately walked away from — which
+ * is most of it, for anyone running several sessions at once.
+ *
+ * Billed to `run.profileId` rather than the pane's current `activeProfileId`,
+ * because a run belongs to the account it *started* on for its whole life.
+ *
+ * The model comes off the run where the provider has reported one and falls back
+ * to what the pane asked for, since the two can differ — a provider may
+ * substitute — and the run's own answer is the one actually being billed. Effort
+ * and ultracode are the pane's: they are properties of the request rather than
+ * facts the run reports back.
+ */
+function liveRunsByProfile(state: AppState = useApp.getState()): Map<ProfileId, LiveRunLoad[]> {
+  const byProfile = new Map<ProfileId, LiveRunLoad[]>();
+  for (const pane of allLivePanes(state)) {
+    const s = paneState(pane);
+    if (!isLive(s) || s.run === null) continue;
+    const load: LiveRunLoad = {
+      model: s.run.model ?? s.model,
+      effort: s.effort,
+      ultracode: s.ultracode,
+    };
+    const existing = byProfile.get(s.run.profileId);
+    if (existing === undefined) byProfile.set(s.run.profileId, [load]);
+    else existing.push(load);
+  }
+  return byProfile;
+}
+
+/**
+ * Which account the next session should start on.
+ *
+ * Was "which account has the most plan capacity left, from the polled
+ * readings", and the change of wording is the change of behaviour: the polled
+ * reading alone answered a *different* question from the one being asked, and
+ * answering it put every session started inside one poll cycle onto the same
+ * account. What the ranking now weighs is headroom **less what the runs already
+ * on that account are committed to spending** — see `planLoad.ts`.
  *
  * **Not a `useApp` selector**, deliberately — `recommendProfile` returns a
  * fresh object every call, and a selector whose result is never identical to
  * its predecessor re-renders on every store read until React gives up (see
  * `NO_OPTIONS` above for the same trap). Components subscribe to the two
  * *stable* inputs and call this inside a `useMemo`.
+ *
+ * **It reads the pane grid**, via {@link liveRunsByProfile}, and so is not a
+ * pure function of its arguments. That is a real constraint on callers rather
+ * than an oversight: the answer must be computed at the moment it is acted on,
+ * because a run that started a second ago changes it. Both callers already do —
+ * `newSession` computes it as the session is created, and the profile menu's
+ * content is mounted fresh by Radix on every open, which is what re-runs its
+ * `useMemo`. A cached recommendation held across either would be exactly the
+ * stale answer this change exists to stop.
  *
  * `now` is a parameter rather than read here so the caller decides when
  * staleness is re-judged — the profile menu computes it as the menu opens,
@@ -3324,6 +3376,10 @@ export function planRecommendation(
   usageByProfile: Readonly<Record<ProfileId, PlanUsage>>,
   now: number,
 ): PlanRecommendation | null {
+  // Read once for the whole ranking rather than per profile, so a window with
+  // six open conversations walks its panes once instead of once per account.
+  const running = liveRunsByProfile();
+
   return recommendProfile(
     profiles.filter(isProfileAutoSelectable).map((profile) => {
       const usage = usageByProfile[profile.id];
@@ -3343,6 +3399,13 @@ export function planRecommendation(
         usage,
         providerId: profile.providerId,
         capacity,
+        /*
+          What this account has already been committed to, which its polled
+          reading cannot yet show. Without it the ranking hands every session
+          started inside one poll cycle to the same account — see
+          `planLoad.ts`, which is the whole reason this argument exists.
+        */
+        ...(running.has(profile.id) ? { liveRuns: running.get(profile.id) } : {}),
       };
     }),
     { now },
