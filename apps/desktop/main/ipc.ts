@@ -79,6 +79,7 @@ import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
 import type { BrowserHost } from './browser.js';
 import { checkFiles, readTextFile } from './files.js';
+import { readPullRequests } from './github.js';
 import {
   assertNoSecrets,
   assertResponseSafe,
@@ -115,6 +116,7 @@ import {
   validatePreviewOpen,
   validateFilesRead,
   validateFilesCheck,
+  validateGithubPullRequests,
   validateBrowserOpen,
   validateBrowserNavigate,
   validateBrowserCommand,
@@ -546,6 +548,28 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.filesCheck]: {
       validate: validateFilesCheck,
       handle: async (request) => checkFiles(request.paths),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* GitHub                                                           */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Where a batch of pull requests stands.
+     *
+     * Reads only, and there is no companion channel that writes — see the
+     * `github` namespace on `ArtemisBridge`. The URLs behind this come from
+     * text an agent produced, so anything reachable from here is reachable
+     * from a prompt injection, and "read the state of a public fact" is a
+     * blast radius worth keeping at exactly that.
+     *
+     * Never fails for a pull request's sake. A missing `gh`, a signed-out one
+     * and a PR nobody can see are answers rather than errors — the popover
+     * says something different for each.
+     */
+    [IPC.githubPullRequests]: {
+      validate: validateGithubPullRequests,
+      handle: async (request) => ({ results: await readPullRequests(request.refs) }),
     },
 
     /* ---------------------------------------------------------------- */

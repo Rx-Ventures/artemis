@@ -70,6 +70,7 @@ import { useReachableFile } from '../lib/fileReach';
 import { parseFileReference, resolveFilePath, type FileReference } from '../lib/filePaths';
 import { hostPlatform } from '../state/pane';
 import { CopyButton } from './primitives';
+import { PullRequestLink } from './PullRequestLink';
 
 /**
  * A hast node, named without importing `hast`.
@@ -208,7 +209,19 @@ function CodeSpan({
   );
 }
 
-const COMPONENTS: Components = { pre: CopyablePre, code: CodeSpan };
+/*
+ * `a` is overridden for one reason and changes nothing about the rest.
+ *
+ * `PullRequestLink` renders the anchor react-markdown would have rendered
+ * unless the href is a GitHub pull request, in which case it adds a hover card
+ * saying where that PR stands. Every other link — and that is nearly all of
+ * them — comes out of it byte-identical.
+ *
+ * It goes here rather than at the call sites because a PR link is worth
+ * explaining wherever one appears, and this is the single place every rendered
+ * link in the app passes through.
+ */
+const COMPONENTS: Components = { pre: CopyablePre, code: CodeSpan, a: PullRequestLink };
 const REMARK_PLUGINS = [remarkGfm];
 
 export interface MarkdownProps {

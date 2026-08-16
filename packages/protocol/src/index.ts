@@ -25,6 +25,7 @@
  * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
  * | `browser`       | `BrowserInfo`, `browserUrlFor`, the `BrowserEvent` union   |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
+ * | `github`        | `parsePullRequestUrl`, `PullRequestSummary`                 |
  * | `agentPrompts`  | the standing-instruction library, and how it composes       |
  * | `ipc`           | channel constants, request/response maps, `ArtemisBridge`    |
  *
@@ -49,5 +50,6 @@ export * from './profile.js';
 export * from './terminal.js';
 export * from './browser.js';
 export * from './sharedConfig.js';
+export * from './github.js';
 export * from './agentPrompts.js';
 export * from './ipc.js';

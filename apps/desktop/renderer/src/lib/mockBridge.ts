@@ -1515,6 +1515,59 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     /*
+     * Pull requests, with no GitHub behind them.
+     *
+     * There is no `gh` here, so the answer is derived from the number — chosen
+     * so every state the popover can draw is reachable in dev without a network
+     * or a login, which is the whole job of this file. The cycle is by `number %
+     * 6`, and the two problem rows are in it deliberately: a signed-out `gh` and
+     * a PR nobody can see are states the real app spends most of its time in on
+     * a fresh machine, and a mock that only ever produced happy readings would
+     * let their layouts rot unseen.
+     */
+    github: {
+      pullRequests: async ({ refs }) =>
+        ok({
+          results: refs.map((ref) => {
+            const key = `${ref.owner}/${ref.repo}#${String(ref.number)}`;
+            if (ref.number % 6 === 4) return { key, problem: 'not-found' as const };
+            if (ref.number % 6 === 5) return { key, problem: 'not-signed-in' as const };
+
+            const state =
+              ref.number % 6 === 1
+                ? ('merged' as const)
+                : ref.number % 6 === 2
+                  ? ('draft' as const)
+                  : ref.number % 6 === 3
+                    ? ('closed' as const)
+                    : ('open' as const);
+            const checks =
+              ref.number % 3 === 0
+                ? ('passing' as const)
+                : ref.number % 3 === 1
+                  ? ('failing' as const)
+                  : ('pending' as const);
+
+            return {
+              key,
+              summary: {
+                owner: ref.owner,
+                repo: ref.repo,
+                number: ref.number,
+                state,
+                title: 'Delegated work splits live from finished',
+                author: 'seth-torrence',
+                additions: 128 + ref.number * 7,
+                deletions: 34 + ref.number * 3,
+                changedFiles: 4 + (ref.number % 9),
+                checks,
+              },
+            };
+          }),
+        }),
+    },
+
+    /*
      * A browser, with no browser behind it.
      *
      * The mock cannot make a `WebContentsView` — that is a main-process object
