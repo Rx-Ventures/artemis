@@ -3,7 +3,7 @@
  *
  * A hook for the same reason `useSharedConfigStatus` is one: the reading has a
  * lifecycle (in flight, landed, failed) plus a re-read, and the pane also has
- * four *actions* whose in-flight state has to dim the right button. Threading
+ * three *actions* whose in-flight state has to dim the right button. Threading
  * that through a component body is how a pane ends up showing a stale bank
  * next to a fresh receipt.
  *
@@ -24,7 +24,6 @@ import { useCallback, useEffect, useState } from 'react';
 import type {
   ArtemisBridge,
   CerebroActionResponse,
-  CerebroDraftRequest,
   CerebroMemory,
   CerebroPreflight,
   CerebroRetireRequest,
@@ -34,7 +33,7 @@ import type {
 
 import { call, resolveBridge } from '../lib/bridge';
 
-export type CerebroAction = 'setup' | 'sync' | 'draft' | 'retire';
+export type CerebroAction = 'setup' | 'sync' | 'retire';
 
 /** What the last click came to — the CLI's own words, kept until the next click. */
 export interface CerebroReceipt {
@@ -65,7 +64,6 @@ export interface CerebroPane {
   readonly lastAction: CerebroReceipt | null;
   readonly setup: () => void;
   readonly sync: () => void;
-  readonly draft: (request: CerebroDraftRequest) => Promise<boolean>;
   readonly retire: (request: CerebroRetireRequest) => void;
 }
 
@@ -153,10 +151,6 @@ export function useCerebro(): CerebroPane {
 
   const setup = useCallback(() => void act('setup', (c) => c.setup({})), [act]);
   const sync = useCallback(() => void act('sync', (c) => c.sync({})), [act]);
-  const draft = useCallback(
-    (request: CerebroDraftRequest) => act('draft', (c) => c.draft(request)),
-    [act],
-  );
   const retire = useCallback(
     (request: CerebroRetireRequest) => void act('retire', (c) => c.retire(request)),
     [act],
@@ -173,7 +167,6 @@ export function useCerebro(): CerebroPane {
     lastAction,
     setup,
     sync,
-    draft,
     retire,
   };
 }

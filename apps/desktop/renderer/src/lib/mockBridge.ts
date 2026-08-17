@@ -296,7 +296,7 @@ const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
 const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
 
-/** The Cerebro "clone": drafts upsert here, retire deletes. See the bridge entry. */
+/** The Cerebro "clone": agents write to the real one; here, retire deletes. */
 let mockCerebroInstalled = true;
 let mockCerebroMemories: CerebroMemory[] = [
   {
@@ -1256,20 +1256,6 @@ export function createMockBridge(): ArtemisBridge {
         return ok({ message: 'Cloned the bank. Enabled every profile. cerebro@52a0a32: 3 memories -> 27 project(s).' });
       },
       sync: async () => ok({ message: 'cerebro@52a0a32: 3 memories -> 27 project(s) across 3 profile(s)' }),
-      draft: async (request) => {
-        const memory = {
-          name: request.name,
-          type: request.type,
-          description: request.description,
-          body: request.body,
-          added: '2026-08-14',
-          author: 'demo@example.com',
-        };
-        const index = mockCerebroMemories.findIndex((m) => m.name === request.name);
-        if (index === -1) mockCerebroMemories.push(memory);
-        else mockCerebroMemories[index] = memory;
-        return ok({ message: `cerebro: opened PR for memory-20260814-${request.name}` });
-      },
       retire: async (request) => {
         mockCerebroMemories = mockCerebroMemories.filter((m) => m.name !== request.name);
         return ok({ message: `cerebro: opened PR for memory-20260814-retire-${request.name}` });
