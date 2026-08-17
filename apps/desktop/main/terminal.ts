@@ -304,11 +304,21 @@ const KNOWN_SHELLS = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh']);
  * every `node` the user runs behaves as a bare Node process. `NODE_OPTIONS`
  * leaks Artemis's own flags into anything the user starts.
  *
- * The two config-directory variables are defensive rather than observed:
- * Artemis composes a provider's environment per spawn and does not put these on
- * `process.env`, but if that ever changed, a user's own `claude` in their own
- * shell would silently start reading a profile's isolated config directory —
- * a confusing failure and a small privacy surprise, for no benefit.
+ * The two config-directory variables are **load-bearing, not defensive**, and
+ * the comment here used to say the opposite. A run's environment is composed per
+ * spawn and never reaches `process.env` — that part is still true — but it is
+ * not the only writer. The Claude adapter's standalone session functions take no
+ * environment and resolve their store from `process.env`, so reading history
+ * sets `CLAUDE_CONFIG_DIR` on this process for the duration of the call and puts
+ * it back afterwards (`withClaudeConfigDir`). That window is short and it is
+ * real: a terminal opened while the sidebar happens to be reading a profile's
+ * history would inherit that profile's config directory, and the user's own
+ * `claude` in their own shell would silently run as another account — reading
+ * its history, and billing it.
+ *
+ * So this strip is what makes the terminal's environment independent of whatever
+ * the rest of the app is doing at the instant it spawns, and it must not be
+ * removed on the grounds that nothing sets these. Something does.
  */
 const STRIPPED_ENV = [
   'ELECTRON_RUN_AS_NODE',
