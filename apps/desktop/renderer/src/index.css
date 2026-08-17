@@ -899,18 +899,46 @@
     animation: artemis-turn-in 160ms ease-out both;
   }
 
-  /* Indeterminate progress hairline, used on the run status strip. */
-  .runbar::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      color-mix(in oklch, var(--lunar) 70%, transparent),
-      transparent
-    );
-    animation: artemis-sweep 1.5s linear infinite;
+  /*
+   * The hunt — Artemis' bow at the seam where the conversation ends, loosing
+   * an arrow across the pane for as long as a run is going. `HuntBar.tsx` owns
+   * the geometry and the poses; what lives here is the choreography.
+   *
+   * (`.runbar`, the anonymous lunar sweep, lived here. The strip it decorated
+   * is now the hunt bar, and the arrow is the progress it was sweeping about.)
+   *
+   * One 2400ms cycle shared by all four classes, and the sharing is the
+   * mechanism: the string, the nocked arrow, the recoil and the flight are
+   * separate elements with separate animations, kept in step by nothing more
+   * than running the same clock from the same commit — the keyframe
+   * percentages are the whole synchronisation story. Draw to 40%, hold the
+   * aim, loose at ~55%, and the flight carries the arrow off the pane while
+   * the bow re-nocks behind it.
+   *
+   * `d: path(…)` is what bends the string, and leaning on it is safe for the
+   * reason `field-sizing` was: this app renders in exactly one engine, and
+   * Chromium interpolates `d` between structurally identical paths. If that
+   * ever regressed the string would simply stay straight — the draw still
+   * reads from the arrow sliding back.
+   *
+   * Transforms and opacity only, nothing that changes a box: the strip sits
+   * directly above the composer, and a layout-animating mascot would move the
+   * input under the user's caret for the whole run.
+   */
+  .hunt-string {
+    animation: artemis-bow-string 2400ms ease-in-out infinite;
+  }
+  .hunt-nock {
+    animation: artemis-bow-nock 2400ms ease-in-out infinite;
+  }
+  .hunt-recoil {
+    animation: artemis-bow-recoil 2400ms ease-out infinite;
+  }
+  /* Linear, deliberately: an arrow does not accelerate mid-flight, and the
+     ease every other segment wants would read as it braking to admire the far
+     edge of the pane. */
+  .hunt-flight {
+    animation: artemis-bow-flight 2400ms linear infinite;
   }
 
   /*
@@ -962,11 +990,94 @@
   }
 }
 
-@keyframes artemis-sweep {
-  from {
-    transform: translateX(-100%);
+/*
+ * The bow's cycle. All four run the same 2400ms clock, so a percentage here is
+ * a moment there: the string reaches full draw at 40% exactly as the nocked
+ * arrow does, and the flight appears in the frame after both let go. The
+ * near-adjacent stops (54→58, 55→56, 79→80) are the loose — the one moment of
+ * the cycle that should be violent.
+ *
+ * Path coordinates are the bow's own 16×16 viewBox (see `HuntBar.tsx` for the
+ * geometry); both string poses keep the same M-L-L structure, which is what
+ * makes the `d` interpolation legal.
+ */
+@keyframes artemis-bow-string {
+  0%,
+  10% {
+    d: path('M5 2 L5 8 L5 14');
   }
-  to {
+  40%,
+  54% {
+    d: path('M5 2 L2 8 L5 14');
+  }
+  58%,
+  100% {
+    d: path('M5 2 L5 8 L5 14');
+  }
+}
+
+/* The arrow rides the string back, vanishes on the loose (the flight takes
+   over in that frame), and fades back in nocked for the next cycle. */
+@keyframes artemis-bow-nock {
+  0%,
+  10% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  40%,
+  54% {
+    transform: translateX(-3px);
+    opacity: 1;
+  }
+  55%,
+  90% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  97%,
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Under a pixel, and only after the loose. Any more and the bow reads as
+   walking along the strip rather than kicking. */
+@keyframes artemis-bow-recoil {
+  0%,
+  54% {
+    transform: translateX(0);
+  }
+  58% {
+    transform: translateX(0.8px);
+  }
+  64%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/*
+ * `translateX(100%)` is the flight span's own width, and the span is the whole
+ * strip — the trick the old runbar's sweep used, kept because it is what lets
+ * the arrow cross whatever the pane happens to measure without a script ever
+ * reading a width. 10px parks the hidden glyph at the bow until the loose.
+ */
+@keyframes artemis-bow-flight {
+  0%,
+  55% {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  56% {
+    opacity: 1;
+  }
+  79% {
+    opacity: 1;
+  }
+  80%,
+  100% {
+    opacity: 0;
     transform: translateX(100%);
   }
 }
@@ -989,10 +1100,20 @@
  * 160ms fade is mild: reduced motion is a request, not a severity threshold.
  * `animation: none` on a `both`-filled animation leaves the element in its
  * natural state, which is the finished state — so the turn simply appears.
+ *
+ * The hunt degrades to a still: the string's attribute pose is straight, the
+ * nocked arrow's is visible, and the flight span carries `opacity-0` in its
+ * markup precisely so that losing its animation hides it rather than parking
+ * a loose arrow over the bow. A motionless nocked bow still says "a run is
+ * here" — the same information the strip's presence always carried — without
+ * a single moving part.
  */
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
-  .runbar::after,
+  .hunt-flight,
+  .hunt-nock,
+  .hunt-recoil,
+  .hunt-string,
   .turn-in,
   .word-in {
     animation: none;
