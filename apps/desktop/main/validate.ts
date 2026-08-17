@@ -84,6 +84,7 @@ import {
   type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
+  type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
   type RunsStartRequest,
@@ -1197,6 +1198,19 @@ export function validateRunsDispose(raw: unknown): RunsDisposeRequest {
 export function validateRunsList(raw: unknown): RunsListRequest {
   const request = requireRequest(raw);
   return compact<RunsListRequest>({ cwd: optionalAbsolutePath(request['cwd'], 'cwd') });
+}
+
+/**
+ * A request with no fields, still validated for shape.
+ *
+ * `requireRequest` is the whole check and it is not a formality: it rejects a
+ * non-object, which is what stops a malformed payload reaching the handler and
+ * failing there instead. Whatever else the caller sent is dropped rather than
+ * forwarded — the empty object is the contract.
+ */
+export function validateRunsLiveWork(raw: unknown): RunsLiveWorkRequest {
+  requireRequest(raw);
+  return {};
 }
 
 /**

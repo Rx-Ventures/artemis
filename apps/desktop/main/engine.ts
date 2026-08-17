@@ -259,6 +259,20 @@ export interface ArtemisEngine {
   listRuns(options: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
 
   /**
+   * Conversations still holding background work, across every provider.
+   *
+   * Separate from {@link listRuns} because it answers about work that outlives
+   * the run that started it — a workflow, a backgrounded subagent, a registered
+   * schedule — which by definition appears in no live run. Adapters that have no
+   * such notion contribute nothing, so this is "known to be working" and never
+   * the complement of an idle set.
+   *
+   * Synchronous, like {@link runEvents} and for the same reason: it reads
+   * in-memory pools and sits on a poll.
+   */
+  liveWorkSessions(): readonly SessionId[];
+
+  /**
    * A run's retained events, for a window that reloaded out from under it.
    *
    * Synchronous in the registry and kept synchronous here: it is a read of an
@@ -829,6 +843,16 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await runs.dispose(runId);
     },
     listRuns: (query) => Promise.resolve(runs.list(query.cwd)),
+    liveWorkSessions: () => {
+      // Deduplicated across providers: one conversation belongs to exactly one
+      // adapter, but nothing in the registry enforces that, and a session named
+      // twice would make a window's "keep this" set quietly depend on ordering.
+      const holding = new Set<SessionId>();
+      for (const adapter of providers.list()) {
+        for (const sessionId of adapter.sessionsHoldingWork?.() ?? []) holding.add(sessionId);
+      }
+      return [...holding];
+    },
 
     runEvents: (query) => {
       const afterSeq = query.afterSeq ?? -1;

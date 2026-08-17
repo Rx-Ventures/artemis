@@ -821,6 +821,33 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       );
     },
 
+    /**
+     * Which conversations still have background work in them, right now.
+     *
+     * Read straight off the process pool, which is the only place the answer
+     * exists: a process is kept past its turn precisely when it is holding a
+     * backgrounded subagent, a workflow or a registered schedule, and
+     * {@link ClaudeProcess.holdsWork} is that decision.
+     *
+     * Why a window needs to be told rather than working it out: `background.tasks`
+     * is run-scoped and is not emitted once the turn has ended, so a window's
+     * delegated rows stop being updated at exactly the moment the work outlives
+     * the turn that launched it. Everything a window then decides from those rows
+     * — whether the sidebar marks the session, whether the column may be
+     * destroyed — is a guess about the interval it cannot see into. This closes
+     * that interval.
+     *
+     * Synchronous and allocation-light: it walks a map that holds one entry per
+     * conversation with a live process, and it is polled.
+     */
+    sessionsHoldingWork(): readonly SessionId[] {
+      const holding: SessionId[] = [];
+      for (const [sessionId, process] of live) {
+        if (!process.closed && process.holdsWork) holding.push(sessionId);
+      }
+      return holding;
+    },
+
     async createRun(input: ResolvedRunInput): Promise<Run> {
       validateRunInput(input);
 
@@ -2103,6 +2130,25 @@ class ClaudeProcess {
   /** The conversation this process is writing to, once its first `init` said so. */
   get sessionId(): SessionId | undefined {
     return this.#sessionId;
+  }
+
+  /**
+   * Is this process holding work a turn boundary must not kill?
+   *
+   * The public reading of {@link #holdsWork}, and the only thing outside this
+   * class that can answer it. It exists because the renderer cannot: the rows a
+   * window draws come from `background.tasks`, which is run-scoped and which
+   * {@link #flushTasks} refuses to emit once the turn has ended — while this
+   * stays true for exactly the work those rows describe. Between one turn
+   * ending and the next opening, a window's list is a snapshot and this is the
+   * fact.
+   *
+   * Reported rather than acted on: the adapter publishes it through
+   * `sessionsHoldingWork` so a window can be told which conversations are still
+   * working, and nothing about retention changes on the strength of who asked.
+   */
+  get holdsWork(): boolean {
+    return this.#holdsWork();
   }
 
   /** True once the transport is gone. A closed process must never be attached to. */

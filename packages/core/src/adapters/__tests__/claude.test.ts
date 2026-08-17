@@ -1605,6 +1605,69 @@ describe('a turn that ends while work is still running', () => {
     expect(fake.closed).toBe(true);
   });
 
+  it('reports the conversation as holding work, so a window can be told', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    /*
+     * The turn is over and the work is not. This is the interval a window
+     * cannot see into: `background.tasks` is run-scoped, so nothing more will be
+     * emitted about `t1` until some turn opens, while the process is kept alive
+     * for exactly it. Everything a window decides from its own rows in here —
+     * the sidebar's marker, and whether the column may be destroyed — is a guess
+     * unless it can ask this.
+     */
+    expect(run.status).toBe('ended');
+    expect(adapter.sessionsHoldingWork?.()).toEqual(['sess-abc']);
+  });
+
+  it('goes on reporting it through the settle grace, deliberately', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    // The empty set is the authoritative "nothing is running any more" — see
+    // `BackgroundTasksEvent` — but it lands about a tenth of a second *before*
+    // the provider's own turn about the work that finished, so the process is
+    // held for a beat rather than released under that turn. See
+    // `SETTLE_GRACE_MS`.
+    fake.messages.push(tasksChanged([]));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    /*
+     * Still reported, and that is the right answer rather than a lag to be
+     * corrected. The settle turn is the single most valuable thing the user is
+     * waiting for — it is the message that says what the work came to — and a
+     * window told "finished" here could retire the column it is about to land
+     * in. Erring towards "still working" costs a pane held two seconds longer.
+     */
+    expect(adapter.sessionsHoldingWork?.()).toEqual(['sess-abc']);
+  });
+
+  it('reports nothing for a conversation that never delegated anything', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    expect(adapter.sessionsHoldingWork?.()).toEqual([]);
+  });
+
   it('keeps it open while a background task is live', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
