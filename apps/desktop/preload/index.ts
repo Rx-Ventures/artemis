@@ -67,6 +67,7 @@ import {
   type CerebroListRequest,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
+  type CerebroSetEnabledRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
   type CerebroSyncRequest,
@@ -548,6 +549,7 @@ const bridge: ArtemisBridge = Object.freeze({
     setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
     sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
     retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
+    setEnabled: (request: CerebroSetEnabledRequest) => invoke(IPC.cerebroSetEnabled, request),
   }),
 
   /** The standing-instruction library. Read and replaced whole; see {@link IPC}. */

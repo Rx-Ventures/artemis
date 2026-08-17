@@ -65,6 +65,7 @@ import {
   readCerebroPreflight,
   readCerebroStatus,
   retireCerebroMemory,
+  setCerebroEnabled,
   setupCerebro,
   syncCerebro,
 } from './cerebro.js';
@@ -137,6 +138,7 @@ import {
   validateCerebroRetire,
   validateCerebroSetup,
   validateCerebroStatus,
+  validateCerebroSetEnabled,
   validateCerebroSync,
   validateUsagePlan,
   validateUpdatesDismiss,
@@ -468,6 +470,11 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.cerebroRetire]: {
       validate: validateCerebroRetire,
       handle: async (request) => retireCerebroMemory(request),
+    },
+
+    [IPC.cerebroSetEnabled]: {
+      validate: validateCerebroSetEnabled,
+      handle: async (request) => setCerebroEnabled(request),
     },
 
     /* ---------------------------------------------------------------- */

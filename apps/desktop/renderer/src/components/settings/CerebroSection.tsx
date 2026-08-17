@@ -66,7 +66,9 @@ export function CerebroSection(): ReactElement {
       title="Cerebro"
       description="The team's shared memory bank — agent-maintained, reviewed like code, installed into every session's memory."
       actions={
-        pane.status?.installed === true ? (
+        // Only while it is on. A sync button on a bank the user has switched off
+        // offers to do the one thing they just said to stop doing.
+        pane.status?.installed === true && pane.status.enabled ? (
           <Button
             size="sm"
             variant="outline"
@@ -87,6 +89,7 @@ export function CerebroSection(): ReactElement {
       ) : null}
 
       {pane.status !== null && !pane.status.installed ? <SetupGroup pane={pane} /> : null}
+      {pane.status !== null && pane.status.installed ? <SwitchGroup pane={pane} /> : null}
       {pane.status !== null && pane.status.installed ? <ConnectionGroup pane={pane} /> : null}
       {pane.status !== null && pane.status.installed ? <MemoriesGroup pane={pane} /> : null}
 
@@ -172,6 +175,53 @@ function RequirementList({ pane }: { readonly pane: CerebroPane }): ReactElement
         </div>
       ))}
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The master switch                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * On or off, for the whole feature, on the pane named after it.
+ *
+ * Off is the default and the reason is consent rather than caution: the bank
+ * writes to a repository the team shares, and its prompt spends context on
+ * every run. Finding the CLI cloned on disk is evidence that somebody once
+ * tried it, which is not the same as this machine agreeing to sync and to brief
+ * every agent about it today.
+ *
+ * A `Button` and not a `Switch`, which is the one design choice here worth
+ * defending. A switch promises an instant, local flip; this spawns `cerebro
+ * enable` or `disable`, re-wires every profile, forces a sync on the way in,
+ * takes seconds and can fail. Rendering that as a toggle would mean animating
+ * to the new position and then silently animating back — so it reads as what it
+ * is, an action with a receipt, sharing `busy` and `lastAction` with the
+ * buttons beside it.
+ */
+function SwitchGroup({ pane }: { readonly pane: CerebroPane }): ReactElement {
+  const on = pane.status?.enabled === true;
+  const working = pane.busy === 'switch';
+
+  return (
+    <SettingsGroup label={on ? 'On' : 'Off'}>
+      <div className="flex items-start gap-3 rounded-md border border-line bg-panel px-3 py-2.5">
+        <StatusDot tone={on ? 'mint' : 'amber'} />
+        <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-muted">
+          {on
+            ? 'Every run syncs the bank before it starts, and agents are told to consult it and to record what they learn. Turning this off unwires every profile — the instruction block, the /cerebro command and the session-start hook all come out — and stops the prompt being sent.'
+            : 'The bank is cloned but nothing is using it: no sync runs, no agent is told about it, and no profile is wired up. Turning it on re-runs the same wiring set-up does, then syncs once.'}
+        </p>
+        <Button
+          size="sm"
+          variant={on ? 'outline' : 'default'}
+          disabled={pane.busy !== null || pane.reading}
+          onClick={() => pane.setEnabled(!on)}
+        >
+          {working ? (on ? 'Turning off…' : 'Turning on…') : on ? 'Turn off' : 'Turn on'}
+        </Button>
+      </div>
+    </SettingsGroup>
   );
 }
 

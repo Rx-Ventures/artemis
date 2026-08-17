@@ -289,7 +289,7 @@ export const BUILT_IN_AGENT_PROMPTS: Readonly<Record<BuiltInPromptId, BuiltInAge
     id: 'builtin:cerebro',
     name: 'Use Cerebro',
     summary: "Consult and maintain the team's shared memory bank.",
-    requires: 'Cerebro is set up on this machine',
+    requires: 'Cerebro is set up and switched on in Settings → Cerebro',
     markdown: CEREBRO_PROMPT,
   },
 };
@@ -300,7 +300,10 @@ export const BUILT_IN_AGENT_PROMPTS: Readonly<Record<BuiltInPromptId, BuiltInAge
  * On by default, and scoped to `all`. A prompt the user has to go and find
  * before it does anything is one most users never get the benefit of, and the
  * cost of getting this wrong stays bounded: it only lands when the tool it
- * describes is actually installed, and one switch turns it off.
+ * describes is *available*, which for Cerebro means installed **and** switched
+ * on — so this row being on is a preference about the prompt, never the thing
+ * that opts a machine into the bank. That consent lives on one switch, in the
+ * pane named after the tool; see `IPC.cerebroSetEnabled`.
  */
 export function defaultBuiltInPrompt(id: BuiltInPromptId): AgentPrompt {
   return {

@@ -33,9 +33,9 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type {
@@ -45,6 +45,7 @@ import type {
   CerebroPreflight,
   CerebroProfileState,
   CerebroRetireRequest,
+  CerebroSetEnabledRequest,
   CerebroStatus,
 } from '@rx-artemis/protocol';
 
@@ -133,7 +134,16 @@ function numberOr(value: unknown, fallback: number): number {
 }
 
 /** `status --json` → the protocol's {@link CerebroStatus}. Rebuilds; never passes through. */
-export function parseCerebroStatus(text: string, repoPath: string): CerebroStatus {
+/**
+ * `status --json` → the protocol's {@link CerebroStatus}.
+ *
+ * `enabled` is passed in rather than read from the CLI's output, because it is
+ * not the CLI's to answer: the bank reports whether each *profile* carries its
+ * managed block, and this is Artemis's own record of whether the user switched
+ * the whole thing on. Keeping it a parameter is also what keeps this function
+ * pure, which is what makes it the unit under test.
+ */
+export function parseCerebroStatus(text: string, repoPath: string, enabled: boolean): CerebroStatus {
   const data = asRecord(parseJson(text), 'status');
   const bank = asRecord(data['bank'] ?? {}, 'status.bank');
   const rawProfiles = Array.isArray(data['profiles']) ? data['profiles'] : [];
@@ -154,6 +164,7 @@ export function parseCerebroStatus(text: string, repoPath: string): CerebroStatu
 
   return {
     installed: true,
+    enabled,
     repoPath,
     remote: stringOrNull(data['remote']),
     source: stringOrNull(data['source']),
@@ -402,6 +413,149 @@ export function isCerebroInstalled(): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
+/* The master switch                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Artemis's own answer to "does this machine use the bank", under `userData`.
+ *
+ * Its own file rather than a key in the prompt library, because it is not a
+ * fact about prompts: it gates the background sync too, and a machine with the
+ * library never opened still has to have an answer.
+ */
+const CEREBRO_SWITCH_FILE = 'cerebro.json';
+
+/**
+ * Set once, from the composition root that knows where `userData` is.
+ *
+ * Module-level rather than injected, which is the shape the rest of this file
+ * already has — `cerebroRoot()` resolves ambiently too, and the IPC layer calls
+ * these as module functions rather than through the engine. Null until
+ * configured, which {@link isCerebroEnabled} reads as **off**: a process that
+ * has not been told where its state lives must not guess that the user said
+ * yes.
+ */
+let switchFile: string | null = null;
+let cachedEnabled: boolean | null = null;
+
+/** Tell this module where Artemis keeps its own state. Called once, at startup. */
+export function configureCerebro(userDataDir: string): void {
+  switchFile = join(userDataDir, CEREBRO_SWITCH_FILE);
+  cachedEnabled = null;
+}
+
+/**
+ * Has the user switched the bank on?
+ *
+ * **Off unless told otherwise**, and that default is the whole point. Cerebro
+ * being cloned is not consent to it: the bank writes to a repository the team
+ * shares and its prompt spends context on every run, so finding the CLI on disk
+ * is evidence that someone once tried it, not that this machine should be
+ * syncing and briefing agents about it today.
+ *
+ * Read on the path of every run, so it is synchronous and cached. That is
+ * affordable at the rate {@link isCerebroInstalled}'s `existsSync` already is,
+ * and the cache is dropped by the one writer below.
+ */
+export function isCerebroEnabled(): boolean {
+  if (cachedEnabled !== null) return cachedEnabled;
+  if (switchFile === null) return false;
+
+  let enabled = false;
+  try {
+    const parsed = JSON.parse(readFileSync(switchFile, 'utf8')) as unknown;
+    enabled =
+      typeof parsed === 'object' && parsed !== null && (parsed as Record<string, unknown>)['enabled'] === true;
+  } catch (error) {
+    // ENOENT is the ordinary case — nobody has thrown the switch yet. Anything
+    // else is a file we cannot read, which reads as off for the same reason the
+    // unconfigured case does.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn(`Could not read ${switchFile}; treating Cerebro as off`, error);
+    }
+  }
+  cachedEnabled = enabled;
+  return enabled;
+}
+
+function writeSwitch(enabled: boolean): void {
+  if (switchFile === null) {
+    throw new WorkspaceError('Cerebro is not configured in this process.');
+  }
+  const body = `${JSON.stringify({ version: 1, enabled }, null, 2)}\n`;
+  const tmp = `${switchFile}.tmp`;
+  mkdirSync(dirname(switchFile), { recursive: true, mode: 0o700 });
+  writeFileSync(tmp, body, { encoding: 'utf8', mode: 0o600 });
+  try {
+    renameSync(tmp, switchFile);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The rename is what mattered; a stray temp file is not worth a second error.
+    }
+    throw new WorkspaceError(
+      `Could not write ${switchFile}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  cachedEnabled = enabled;
+}
+
+/**
+ * Throw the switch, in both senses — Artemis's gate and the machine's wiring.
+ *
+ * Symmetric by request: on runs `cerebro enable` and a forced sync, so the
+ * machine comes back exactly as {@link setupCerebro} left it; off runs `cerebro
+ * disable`, so the managed `CLAUDE.md` block, the `/cerebro` command and the
+ * session-start hook come out of every profile. A switch that governed only
+ * Artemis would leave a stock Claude Code on the same machine still wired to
+ * the bank, which is off in one window and on in the next.
+ *
+ * The two directions order their writes differently, and deliberately:
+ *
+ *  - **On** runs the CLI first and records the flag only if it succeeded. A
+ *    failed `enable` should leave the machine as it was rather than claiming an
+ *    opt-in whose wiring never landed.
+ *  - **Off** records the flag first. The user asked for it off; Artemis's own
+ *    half of that — no sync, no prompt — should hold even if `cerebro disable`
+ *    then fails, and the error says what is left behind.
+ */
+export async function setCerebroEnabled(
+  request: CerebroSetEnabledRequest,
+): Promise<CerebroActionResponse> {
+  const root = cerebroRoot();
+
+  if (!request.enabled) {
+    writeSwitch(false);
+    if (!existsSync(cerebroCli(root))) {
+      return { message: 'Cerebro is off. Nothing was wired up on this machine to undo.' };
+    }
+    const said = (await runCerebro(root, ['disable'], 30_000)).trim();
+    return {
+      message:
+        said.length > 0
+          ? said
+          : 'Cerebro is off. The instruction block, /cerebro command and sync hook are out of every profile.',
+    };
+  }
+
+  if (!existsSync(cerebroCli(root))) {
+    throw new WorkspaceError(
+      `The bank is not on this machine yet — set Cerebro up first (expected ${cerebroCli(root)}).`,
+    );
+  }
+
+  await runCerebro(root, ['enable'], 30_000);
+  const synced = (await runCerebro(root, ['sync', '--force'], 120_000)).trim();
+  writeSwitch(true);
+  return {
+    message: `Cerebro is on. Every profile is wired up again. ${
+      synced.length > 0 ? synced : 'Bank installed into project memory.'
+    }`,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Keeping the bank turning                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -451,6 +605,11 @@ let syncInFlight = false;
  */
 export function syncCerebroInBackground(): void {
   if (syncInFlight) return;
+  // The switch before the disk check, because it is the cheaper question and
+  // the more important one. A machine that has the bank cloned but has never
+  // said yes must not have its drafts promoted or its remote written to by the
+  // mere act of starting a run — that is the thing the default protects.
+  if (!isCerebroEnabled()) return;
   if (!isCerebroInstalled()) return;
 
   const now = Date.now();
@@ -482,6 +641,7 @@ export async function readCerebroStatus(): Promise<CerebroStatus> {
   if (!existsSync(cerebroCli(root))) {
     return {
       installed: false,
+      enabled: isCerebroEnabled(),
       repoPath: root,
       remote: null,
       source: null,
@@ -491,7 +651,11 @@ export async function readCerebroStatus(): Promise<CerebroStatus> {
       profiles: [],
     };
   }
-  return parseCerebroStatus(await runCerebro(root, ['status', '--json'], 15_000), root);
+  return parseCerebroStatus(
+    await runCerebro(root, ['status', '--json'], 15_000),
+    root,
+    isCerebroEnabled(),
+  );
 }
 
 export async function readCerebroList(): Promise<CerebroMemory[]> {
@@ -547,6 +711,11 @@ export async function setupCerebro(): Promise<CerebroActionResponse> {
 
   const synced = (await runCerebro(root, ['sync', '--force'], 120_000)).trim();
   steps.push(synced.length > 0 ? synced : 'Bank installed into project memory.');
+
+  // Setting it up *is* the yes. Leaving the switch off here would mean a user
+  // who just clicked through onboarding watched it clone, wire and sync — and
+  // then got nothing until they found a second control saying the same thing.
+  writeSwitch(true);
 
   return { message: steps.join(' ') };
 }
