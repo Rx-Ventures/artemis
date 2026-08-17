@@ -266,6 +266,8 @@ cerebro promote --quiet
 
 Re-use an existing slug to update a stale memory, and \`cerebro retire <slug>\` to remove one that has stopped being true. If \`cerebro\` is not on PATH, the CLI is \`bin/cerebro\` inside the bank checkout (by default \`~/Documents/cerebro/bin/cerebro\`).
 
+**Scope repo-specific facts** with \`--applies-to <repo-dir-name>\` (repeatable, full directory names). Every memory is installed in every project, but only the repos it names index it into session context — so a fact about one repo does not dilute every other repo's index. Leave the flag off only when the fact holds across the team's repos.
+
 **Which memory system gets it.** A fact a teammate would need goes to Cerebro. Your own per-project memory is for what is true only of this user or this machine. When both would fit, choose Cerebro — it is the copy another person can read. Skip anything that only matters to this conversation.
 
 **House style**: one fact per memory, absolute dates rather than relative ones ("2026-08-17", never "last week" or "recently"), repos and systems named explicitly, and a description written as a retrieval hook — "when is this relevant?", not a title. \`feedback\` and \`project\` memories also need \`**Why:**\` and \`**How to apply:**\` lines. Never draft secrets, credentials, or PII.

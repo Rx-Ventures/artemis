@@ -160,6 +160,13 @@ describe('the Cerebro built-in', () => {
     // personal ones.
     expect(markdown).toMatch(/\bCerebro\b[^.]*\bteammate\b|\bteammate\b[^.]*\bCerebro\b/i);
   });
+
+  it('teaches scoping, so repo facts do not spread to every index', () => {
+    // Without this the bank converges on every memory in every project's
+    // context — the "out of control" direction. The flag is the mechanism;
+    // naming it is what makes an agent reach for it.
+    expect(markdown).toContain('--applies-to');
+  });
 });
 
 describe('scopeCovers', () => {
