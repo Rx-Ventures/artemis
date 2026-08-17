@@ -1,6 +1,23 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.18.0
+
+- **Cerebro waits to be asked.** Having the bank cloned on this machine was
+  being read as consent to it: every run start synced it — promoting drafts and
+  opening pull requests against a repository the whole team shares — and its
+  prompt spent context on every run of every profile. There is a switch now, at
+  the top of Settings → Cerebro, and it is **off**. Turning it on wires every
+  profile back up and syncs once; turning it off unwires them, so the
+  instruction block, the `/cerebro` command and the session-start hook come out
+  rather than staying live for a stock Claude Code on the same machine. The
+  built-in Cerebro prompt follows the switch instead of carrying one of its own
+  — your preference on that row is kept, it simply is not sent while the bank
+  is off.
+
+  **If you already had Cerebro working, it goes quiet until you throw the
+  switch.** That is the point of the default, not a migration gap.
+
 ## What's new in 0.17.1
 
 - **The Delegated pane opens when you ask for it.** Turning off *Open on its
