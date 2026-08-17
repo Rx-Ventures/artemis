@@ -1,6 +1,31 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.17.0
+
+- **The team memory bank starts pulling its weight.** Cerebro's sync now runs
+  from Artemis itself at every run start — the SessionStart hook it used to
+  rely on lives in settings files Artemis deliberately never loads, so for its
+  first three days the bank never synced and no agent ever wrote to it.
+  Drafts promote, teammates' memories arrive, and new projects get the bank,
+  all without a hook.
+
+- **Agents are actually briefed on the bank.** The built-in Cerebro prompt was
+  four bullets naming a command that wasn't on anyone's PATH. It now carries
+  what the managed CLAUDE.md block was never able to deliver: maintaining the
+  bank is the agent's job, the command resolves (with a fallback path), team
+  facts route to the bank rather than personal memory, and repo-specific
+  facts are scoped with `--applies-to` so one repo's conventions stop
+  spending every other repo's context. Three prose assertions in the test
+  suite keep those sentences from silently vanishing.
+
+- **Memories enter through agents, and only agents.** The Cerebro pane's
+  draft form is gone, along with its whole IPC channel: a human-facing form
+  was a second authoring path that knew none of the house style agents are
+  prompted to apply. State the fact to an agent instead — cheaper, and it
+  lands scoped and styled. The pane keeps what a window should have: setup,
+  sync, the memory list, and retire.
+
 ## What's new in 0.16.2
 
 - **The hunt has a quarry, and it rides with the text.** The bow scene moves
