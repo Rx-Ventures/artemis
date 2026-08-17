@@ -43,16 +43,18 @@ import {
   isNewSessionResponse,
   isPromptResponse,
   isRequestPermissionRequest,
+  isSessionListResponse,
   isSessionNotification,
 } from './protocol.js';
 import type {
   AcpAgentCapabilities,
   AcpAuthMethod,
   AcpContentBlock,
+  AcpPromptResponse,
   AcpRequestPermissionRequest,
   AcpRequestPermissionResponse,
+  AcpSessionListEntry,
   AcpSessionNotification,
-  AcpStopReason,
 } from './protocol.js';
 
 /* -------------------------------------------------------------------------- */
@@ -168,6 +170,15 @@ export class AcpClient {
 
   #sessionId: string | undefined;
   #disposed = false;
+  /**
+   * The raw answer to the last session-opening call.
+   *
+   * Kept because that answer carries the account's model list and the session's
+   * available modes, which is how a live catalogue is published without a
+   * second call and without spending a token — the obligation
+   * `ProviderAdapter.listModels` puts on every implementation.
+   */
+  #sessionConfig: JsonValue | undefined;
 
   /** @internal Use {@link connectAcpAgent}. */
   constructor(process: JsonRpcSubprocess, options: AcpClientOptions, handshake: AcpHandshake) {
@@ -184,6 +195,11 @@ export class AcpClient {
   /** The session this client is working in, once one has been created or loaded. */
   get sessionId(): string | undefined {
     return this.#sessionId;
+  }
+
+  /** The last session-opening answer, for reading `configOptions` out of. */
+  get sessionConfig(): JsonValue | undefined {
+    return this.#sessionConfig;
   }
 
   /** True until the process exits or {@link dispose} is called. */
@@ -217,6 +233,7 @@ export class AcpClient {
       throw adapterError('transport', 'The agent did not return a session id.');
     }
     this.#sessionId = result.sessionId;
+    this.#sessionConfig = result as unknown as JsonValue;
     return result.sessionId;
   }
 
@@ -233,23 +250,24 @@ export class AcpClient {
    * history intact rather than empty.
    */
   async loadSession(sessionId: string, cwd?: string): Promise<void> {
-    await this.#request(ACP_METHOD.sessionLoad, {
+    const result = await this.#request(ACP_METHOD.sessionLoad, {
       sessionId,
       cwd: cwd ?? this.#options.cwd,
       mcpServers: [],
     });
     this.#sessionId = sessionId;
+    this.#sessionConfig = result;
   }
 
   /**
    * Run one turn and wait for it to finish.
    *
-   * Resolves with the reason the agent stopped. Does **not** reject on
-   * `refusal` or `max_tokens`: those are outcomes of a turn that ran, not
-   * failures of the transport, and the adapter renders them as an ended run
-   * with something to say.
+   * Resolves with the stop reason and, on agents that report it, the turn's
+   * token usage. Does **not** reject on `refusal` or `max_tokens`: those are
+   * outcomes of a turn that ran, not failures of the transport, and the adapter
+   * renders them as an ended run with something to say.
    */
-  async prompt(content: readonly AcpContentBlock[]): Promise<AcpStopReason> {
+  async prompt(content: readonly AcpContentBlock[]): Promise<AcpPromptResponse> {
     const sessionId = this.#requireSession();
     const result = await this.#request(ACP_METHOD.sessionPrompt, {
       sessionId,
@@ -259,7 +277,60 @@ export class AcpClient {
     if (!isPromptResponse(result)) {
       throw adapterError('transport', 'The agent ended the turn without a stop reason.');
     }
-    return result.stopReason;
+    return result;
+  }
+
+  /**
+   * Branch a stored conversation into a new one.
+   *
+   * Gated on {@link AcpHandshake.canFork}. The `cwd` is required by the agent,
+   * not optional as the sibling calls make it look — OpenCode rejects a fork
+   * without one.
+   */
+  async forkSession(sessionId: string, cwd?: string): Promise<string> {
+    const result = await this.#request(ACP_METHOD.sessionFork, {
+      sessionId,
+      cwd: cwd ?? this.#options.cwd,
+    });
+    if (!isNewSessionResponse(result)) {
+      throw adapterError('transport', 'The agent forked the session without returning an id.');
+    }
+    this.#sessionId = result.sessionId;
+    return result.sessionId;
+  }
+
+  /**
+   * Enumerate stored conversations.
+   *
+   * Gated on {@link AcpHandshake.canList}. Returns entries verbatim; deciding
+   * which belong to a given working directory is the adapter's job, since the
+   * agent lists everything the account can see.
+   */
+  async listSessions(): Promise<readonly AcpSessionListEntry[]> {
+    const result = await this.#request(ACP_METHOD.sessionList, {});
+    return isSessionListResponse(result) ? result.sessions : [];
+  }
+
+  /**
+   * Switch the session's mode — OpenCode's `build` and `plan`.
+   *
+   * Answers `{}` on success. Failure is reported rather than swallowed: a mode
+   * that silently did not take would leave a run more permissive than the user
+   * asked for, which is the one class of error this seam refuses to degrade.
+   */
+  async setMode(modeId: string): Promise<void> {
+    await this.#request(ACP_METHOD.sessionSetMode, {
+      sessionId: this.#requireSession(),
+      modeId,
+    });
+  }
+
+  /** Point the session at a different model. Marked UNSTABLE in the schema. */
+  async setModel(modelId: string): Promise<void> {
+    await this.#request(ACP_METHOD.sessionSetModel, {
+      sessionId: this.#requireSession(),
+      modelId,
+    });
   }
 
   /**

@@ -338,18 +338,108 @@ describe('AcpClient: sessions', () => {
     await expect(client.prompt([{ type: 'text', text: 'hi' }])).rejects.toThrow(/No ACP session/);
   });
 
-  it('returns the stop reason a turn ended with', async () => {
+  it('returns the stop reason and the turn’s token usage', async () => {
     const agent = fakeAgent({
       results: {
         initialize: OPENCODE_INITIALIZE_RESULT,
         'session/new': { sessionId: 'ses_abc' },
-        'session/prompt': { stopReason: 'end_turn' },
+        // Verbatim from a live turn: the authoritative token counts arrive on
+        // the result, not in the stream.
+        'session/prompt': {
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 7970,
+            outputTokens: 4,
+            totalTokens: 9013,
+            thoughtTokens: 15,
+            cachedReadTokens: 1024,
+          },
+        },
       },
     });
     const client = await connectAcpAgent(baseOptions(agent));
     await client.newSession();
 
-    await expect(client.prompt([{ type: 'text', text: 'hello' }])).resolves.toBe('end_turn');
+    const response = await client.prompt([{ type: 'text', text: 'hello' }]);
+    expect(response.stopReason).toBe('end_turn');
+    expect(response.usage).toMatchObject({ inputTokens: 7970, outputTokens: 4 });
+  });
+
+  it('forks a session and works in the branch', async () => {
+    const agent = fakeAgent({
+      results: {
+        initialize: OPENCODE_INITIALIZE_RESULT,
+        'session/fork': { sessionId: 'ses_fork' },
+      },
+    });
+    const client = await connectAcpAgent(baseOptions(agent));
+
+    await expect(client.forkSession('ses_old', '/tmp/project')).resolves.toBe('ses_fork');
+    // The agent rejects a fork without a cwd, so one is always sent.
+    expect(agent.frames('session/fork')[0]?.['params']).toEqual({
+      sessionId: 'ses_old',
+      cwd: '/tmp/project',
+    });
+    expect(client.sessionId).toBe('ses_fork');
+  });
+
+  it('lists sessions, and answers empty when the agent sends nothing usable', async () => {
+    const agent = fakeAgent({
+      results: {
+        initialize: OPENCODE_INITIALIZE_RESULT,
+        'session/list': {
+          sessions: [{ sessionId: 'ses_1', cwd: '/tmp/a', title: 'One', updatedAt: '2026-08-17T08:00:00.000Z' }],
+        },
+      },
+    });
+    const client = await connectAcpAgent(baseOptions(agent));
+
+    await expect(client.listSessions()).resolves.toEqual([
+      { sessionId: 'ses_1', cwd: '/tmp/a', title: 'One', updatedAt: '2026-08-17T08:00:00.000Z' },
+    ]);
+  });
+
+  it('sets the session mode and model by id', async () => {
+    const agent = fakeAgent({
+      results: {
+        initialize: OPENCODE_INITIALIZE_RESULT,
+        'session/new': { sessionId: 'ses_abc' },
+        'session/set_mode': {},
+        'session/set_model': {},
+      },
+    });
+    const client = await connectAcpAgent(baseOptions(agent));
+    await client.newSession();
+
+    await client.setMode('plan');
+    await client.setModel('opencode/hy3-free');
+
+    expect(agent.frames('session/set_mode')[0]?.['params']).toEqual({
+      sessionId: 'ses_abc',
+      modeId: 'plan',
+    });
+    expect(agent.frames('session/set_model')[0]?.['params']).toEqual({
+      sessionId: 'ses_abc',
+      modelId: 'opencode/hy3-free',
+    });
+  });
+
+  it('keeps the session-opening answer so a catalogue can be read from it', async () => {
+    const agent = fakeAgent({
+      results: {
+        initialize: OPENCODE_INITIALIZE_RESULT,
+        'session/new': {
+          sessionId: 'ses_abc',
+          configOptions: [
+            { id: 'model', type: 'select', currentValue: 'opencode/big-pickle', options: [] },
+          ],
+        },
+      },
+    });
+    const client = await connectAcpAgent(baseOptions(agent));
+    await client.newSession();
+
+    expect(client.sessionConfig).toMatchObject({ sessionId: 'ses_abc' });
   });
 
   it('sends session/cancel for the live session, and stays quiet when there is none', async () => {

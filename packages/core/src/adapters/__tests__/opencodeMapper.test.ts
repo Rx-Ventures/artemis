@@ -15,6 +15,7 @@ import type { AgentEvent } from '@rx-artemis/protocol';
 
 import type { AcpSessionNotification } from '../acp/protocol.js';
 import {
+  applyPromptUsage,
   createOpencodeMapperState,
   finishOpencodeRun,
   flushOpencodeToolCalls,
@@ -360,6 +361,42 @@ describe('usage', () => {
     ]);
 
     expect((event as { usage: { costUsd?: number } }).usage.costUsd).toBeUndefined();
+  });
+
+  it('merges the turn’s real token counts with the streamed context reading', () => {
+    const s = state();
+    // The notification says how full the window is...
+    drive(s, [
+      { sessionUpdate: 'usage_update', used: 9002, size: 200000, cost: { amount: 0.02, currency: 'USD' } },
+    ]);
+    // ...and the turn's result says what it actually spent. Both are wanted:
+    // one drives the context meter, the other drives usage reporting.
+    const events = applyPromptUsage(s, {
+      inputTokens: 7970,
+      outputTokens: 4,
+      totalTokens: 9013,
+      thoughtTokens: 15,
+      cachedReadTokens: 1024,
+    });
+
+    expect(events[0]).toMatchObject({
+      type: 'usage',
+      usage: {
+        tokens: { inputTokens: 7970, outputTokens: 4, cacheReadInputTokens: 1024 },
+        contextTokens: 9002,
+        contextWindow: 200000,
+        costUsd: 0.02,
+      },
+    });
+  });
+
+  it('ignores an empty token report rather than overwriting a good reading', () => {
+    const s = state();
+    drive(s, [{ sessionUpdate: 'usage_update', used: 500, size: 200000 }]);
+
+    expect(applyPromptUsage(s, { inputTokens: 0, outputTokens: 0 })).toEqual([]);
+    expect(applyPromptUsage(s, undefined)).toEqual([]);
+    expect(s.usage).toMatchObject({ contextTokens: 500 });
   });
 
   it('republishes the last reading as the run total', () => {

@@ -39,11 +39,13 @@
 
 import type {
   AdapterAvailability,
+  ModelCatalogue,
   ProviderAdapter,
   ProviderCredentialSpec,
   ResolvedRunInput,
   Run,
   SendResult,
+  SessionListPage,
   InterruptResult,
 } from './types.js';
 import type {
@@ -52,22 +54,27 @@ import type {
   Capabilities,
   JsonObject,
   PermissionDecision,
+  PermissionMode,
   PermissionRequestId,
   ProviderId,
+  ProviderModelOption,
   RunStatus,
   SessionId,
+  SessionSummary,
 } from '@rx-artemis/protocol';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { connectAcpAgent, isAcpAuthRequiredError } from './acp/client.js';
-import type { AcpClient } from './acp/client.js';
+import type { AcpClient, AcpClientOptions } from './acp/client.js';
 import type {
   AcpPermissionOption,
   AcpRequestPermissionRequest,
   AcpRequestPermissionResponse,
+  AcpSessionListEntry,
 } from './acp/protocol.js';
 import { composeProviderEnv } from './env.js';
 import {
+  applyPromptUsage,
   createOpencodeMapperState,
   finishOpencodeRun,
   flushOpencodeToolCalls,
@@ -180,13 +187,13 @@ export const OPENCODE_CREDENTIALS: ProviderCredentialSpec = {
  * handshake, even though the handshake reports the same territory per
  * connection.
  *
- * Everything below is set from behaviour verified live. The flags left `false`
- * are the honest ones: OpenCode *advertises* `fork`, `list` and `resume` in
- * `sessionCapabilities`, but the wire shapes behind them have not been driven
- * yet, and a capability declared before it is verified is a UI affordance that
- * fails in the user's hands. They are the next increment; until then the
- * pickers render disabled with a reason, which is what the capability system is
- * for.
+ * Everything below is set from behaviour driven live against the binary, not
+ * from what the handshake advertises. The distinction earned its keep: the
+ * handshake announces `close`, `fork`, `list` and `resume`, but only four of
+ * those turned out to be methods that exist — `session/info`, `session/status`
+ * and `session/message` all answer `METHOD_NOT_FOUND` despite appearing in the
+ * binary's strings. A capability declared from an advertisement is an
+ * affordance that fails in the user's hands.
  */
 export const OPENCODE_CAPABILITIES: Capabilities = {
   ...NO_CAPABILITIES,
@@ -196,7 +203,14 @@ export const OPENCODE_CAPABILITIES: Capabilities = {
   partialMessages: true,
   // ACP has no steering method — a turn is one `session/prompt` request.
   midRunSteering: false,
-  // Verified: `usage_update` carries context occupancy and cost.
+  // Verified: `session/fork` branches a conversation and returns the new id.
+  forkSession: true,
+  // Verified: `session/list` answers with id, cwd, title and updatedAt.
+  listSessions: true,
+  // Verified: `session/load` replays the stored conversation as updates.
+  resumeSession: true,
+  // Verified: real token counts on the `session/prompt` result, context
+  // occupancy and cost on the `usage_update` notification.
   usageReporting: true,
   costReporting: true,
   // Metered credits, not a subscription with rate-limit windows.
@@ -205,10 +219,21 @@ export const OPENCODE_CAPABILITIES: Capabilities = {
   imageInput: true,
   // ACP exposes no system-prompt append; OpenCode owns its own instructions.
   systemPromptAppend: false,
-  // Artemis's modes have no ACP equivalent. OpenCode governs approvals with its
-  // own configuration and asks over the transport, which is the mode Artemis
-  // calls `default`.
-  permissionModes: ['default'],
+  /**
+   * Verified: `session/set_mode` accepts OpenCode's two modes, and `plan`
+   * "disallows all edit tools" — which is what Artemis means by plan mode.
+   * `build` is Artemis's `default`. The more permissive rungs have no
+   * equivalent and are deliberately absent rather than mapped onto `build`,
+   * since silently granting `bypassPermissions` is the exact failure the strict
+   * check in `createRun` exists to prevent.
+   */
+  permissionModes: ['plan', 'default'],
+};
+
+/** Artemis's permission modes in OpenCode's vocabulary. */
+const OPENCODE_MODE_IDS: Partial<Record<PermissionMode, string>> = {
+  plan: 'plan',
+  default: 'build',
 };
 
 /* -------------------------------------------------------------------------- */
@@ -225,6 +250,15 @@ export interface OpencodeAdapterOptions {
   readonly now?: () => number;
   /** The environment to inherit from. Defaults to `process.env`. */
   readonly hostEnv?: NodeJS.ProcessEnv;
+  /**
+   * Launch the ACP transport. Defaults to spawning a real subprocess.
+   *
+   * Forwarded to {@link connectAcpAgent} so the adapter's own decisions — which
+   * session call a resume makes, how a permission verdict becomes an option id,
+   * which cwd a listing reports — are testable without a binary. Production
+   * code never passes it.
+   */
+  readonly spawn?: AcpClientOptions['spawn'];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -439,6 +473,7 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
   const acpArgs = options?.acpArgs ?? ['acp'];
   const now = options?.now ?? Date.now;
   const hostEnv = options?.hostEnv ?? process.env;
+  const spawn = options?.spawn;
 
   return {
     id: PROVIDER_ID,
@@ -457,11 +492,81 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
           };
     },
 
+    /**
+     * The account's model list, read from the CLI rather than the transport.
+     *
+     * `session/new` answers with the same catalogue in its `configOptions`, and
+     * using it would mean creating a throwaway conversation every time the
+     * settings screen refreshes — junk in the user's history as a side effect
+     * of looking at a list. `opencode models` prints one id per line, costs no
+     * tokens, and leaves nothing behind.
+     *
+     * Resolves rather than rejects, per the seam's contract: a machine with no
+     * CLI answers with the built-in list marked `live: false`, and the settings
+     * screen says so instead of rendering empty.
+     */
+    async listModels(query): Promise<ModelCatalogue> {
+      const env = composeProviderEnv(query.env, {
+        inheritHostEnv: query.inheritHostEnv !== false,
+        hostEnv,
+        scrubKeys: OPENCODE_ENV_SCRUB_KEYS,
+      });
+
+      try {
+        const { stdout } = await runCommand(executable, ['models'], query.cwd, env);
+        const models = stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line !== '' && !line.startsWith('┌') && line.includes('/'))
+          .map(toModelOption);
+
+        return models.length === 0
+          ? { models: OPENCODE_FALLBACK_MODELS, live: false }
+          : { models, live: true };
+      } catch {
+        return { models: OPENCODE_FALLBACK_MODELS, live: false };
+      }
+    },
+
+    /**
+     * Stored conversations for one profile and working directory.
+     *
+     * Opens a short-lived ACP connection, asks, and tears it down — the same
+     * shape as any other control-channel read, and the reason it costs no
+     * tokens. `session/list` reports every conversation the account can see, so
+     * the cwd filter is applied here rather than asked for: the agent has no
+     * per-directory query.
+     *
+     * The `cwd` on each entry comes from the session's own record, which is what
+     * the seam requires. Nothing decodes a directory name.
+     */
+    async listSessions(query): Promise<SessionListPage> {
+      const entries = await readSessions(
+        executable,
+        acpArgs,
+        query.cwd,
+        composeProviderEnv(query.env, { hostEnv, scrubKeys: OPENCODE_ENV_SCRUB_KEYS }),
+        spawn,
+      );
+
+      const matching = entries.filter((entry) => entry.cwd === undefined || sameDir(entry.cwd, query.cwd));
+      const offset = query.offset ?? 0;
+      const limit = query.limit ?? matching.length;
+      const page = matching.slice(offset, offset + limit);
+
+      return {
+        sessions: page.map((entry) => toSessionSummary(entry, query.profileId, query.cwd)),
+        hasMore: offset + page.length < matching.length,
+      };
+    },
+
     async createRun(input: ResolvedRunInput): Promise<Run> {
       if (!input.cwd.startsWith('/')) {
         throw adapterError('invalid_request', 'The working directory must be an absolute path.');
       }
-      if (input.permissionMode !== undefined && input.permissionMode !== 'default') {
+      const modeId =
+        input.permissionMode === undefined ? undefined : OPENCODE_MODE_IDS[input.permissionMode];
+      if (input.permissionMode !== undefined && modeId === undefined) {
         // Silently downgrading a permission mode is how a run ends up more
         // permissive than the user asked for.
         throw adapterError(
@@ -469,14 +574,12 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
           `OpenCode does not support the "${input.permissionMode}" permission mode.`,
         );
       }
-      if (input.resumeSessionId !== undefined) {
-        throw adapterError(
-          'invalid_request',
-          'Resuming an OpenCode session is not supported in this version of Artemis yet.',
-        );
-      }
 
-      const state = createOpencodeMapperState(input.runId, { now });
+      const state = createOpencodeMapperState(input.runId, {
+        now,
+        ...(input.resumeSessionId === undefined ? {} : { resumedFrom: input.resumeSessionId }),
+        ...(input.forkSession === true ? { forked: true } : {}),
+      });
       const run = new OpencodeRun(input.runId, state, now());
 
       const env = composeProviderEnv(input.env, {
@@ -496,6 +599,7 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
             run.emit(mapOpencodeUpdate(state, notification));
           },
           onPermissionRequest: (request) => run.requestPermission(request),
+          ...(spawn === undefined ? {} : { spawn }),
           onExit: (reason) => {
             // The process dying mid-turn is the one path where nothing else
             // will emit `run.end`.
@@ -517,7 +621,27 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
 
       let sessionId: string;
       try {
-        sessionId = await client.newSession(input.cwd);
+        if (input.resumeSessionId === undefined) {
+          sessionId = await client.newSession(input.cwd);
+        } else if (input.forkSession === true) {
+          // Branch first, then work in the branch: the original conversation is
+          // left exactly as it was, which is the whole point of forking.
+          sessionId = await client.forkSession(input.resumeSessionId, input.cwd);
+        } else {
+          // Loading replays the stored conversation as `session/update`
+          // notifications, so the transcript arrives before the new turn does.
+          await client.loadSession(input.resumeSessionId, input.cwd);
+          sessionId = input.resumeSessionId;
+        }
+
+        if (modeId !== undefined) {
+          // After the session exists and before the turn starts — the only
+          // window in which the mode governs everything this run does.
+          await client.setMode(modeId);
+        }
+        if (input.model !== undefined) {
+          await client.setModel(input.model);
+        }
       } catch (error) {
         await client.dispose();
         throw asAdapterFailure(error);
@@ -539,8 +663,12 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
       // mean the provider has finished — the seam says so explicitly.
       void (async () => {
         try {
-          const stopReason = await client.prompt([{ type: 'text', text: input.prompt }]);
-          run.finish({ reason: mapStopReason(stopReason) });
+          const response = await client.prompt([{ type: 'text', text: input.prompt }]);
+          // The authoritative token reading arrives here, on the turn's result,
+          // rather than in the stream. Emitted before `run.end` so the run's
+          // totals are the ones the agent actually billed.
+          run.emit(applyPromptUsage(state, response.usage));
+          run.finish({ reason: mapStopReason(response.stopReason) });
         } catch (error) {
           if (state.ended) return;
           run.emit(flushOpencodeToolCalls(state, 'cancelled'));
@@ -580,6 +708,131 @@ function asAdapterFailure(error: unknown): unknown {
     );
   }
   return error;
+}
+
+/**
+ * The catalogue used when the CLI cannot be reached.
+ *
+ * Deliberately short and generic: OpenCode's real lineup depends on which
+ * providers the profile has credentials for, so a long hard-coded list would be
+ * wrong for almost every account. These are the ids OpenCode Zen serves without
+ * any credential at all, verified live, which makes them the only models a
+ * fresh profile is guaranteed to have.
+ */
+const OPENCODE_FALLBACK_MODELS: readonly ProviderModelOption[] = [
+  toModelOption('opencode/big-pickle'),
+  toModelOption('opencode/deepseek-v4-flash-free'),
+  toModelOption('opencode/hy3-free'),
+];
+
+/**
+ * Describe a model from its id alone.
+ *
+ * `opencode models` prints ids and nothing else, so the label and the note are
+ * derived rather than reported. That is a deliberate limit: inventing a
+ * capability summary ("best for reasoning") from a string would be a guess
+ * presented as a fact, so the note says only what the id genuinely tells us —
+ * who serves it, and whether it is free.
+ */
+function toModelOption(id: string): ProviderModelOption {
+  const slash = id.lastIndexOf('/');
+  const vendor = slash === -1 ? 'opencode' : id.slice(0, slash);
+  const tail = id.slice(slash + 1);
+  const free = tail.endsWith('-free');
+
+  const label = tail
+    .replace(/-free$/, '')
+    .split('-')
+    .map((word) => (/^v?\d/.test(word) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(' ');
+
+  return {
+    id,
+    label,
+    note: free ? `Served free by ${vendor}.` : `Served by ${vendor}.`,
+  };
+}
+
+/** Run a one-shot CLI command and capture its output. */
+async function runCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+): Promise<{ stdout: string; stderr: string }> {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  return await promisify(execFile)(executable, [...args], {
+    cwd,
+    env,
+    timeout: 20_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+}
+
+/** Open a short-lived ACP connection purely to read the session list. */
+async function readSessions(
+  executable: string,
+  acpArgs: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+  spawn: AcpClientOptions['spawn'],
+): Promise<readonly AcpSessionListEntry[]> {
+  const client = await connectAcpAgent({
+    executable,
+    args: acpArgs,
+    cwd,
+    env,
+    // Nothing streams during a listing, and nothing may be approved by a read.
+    onUpdate: () => {},
+    ...(spawn === undefined ? {} : { spawn }),
+  });
+  try {
+    return client.handshake.canList ? await client.listSessions() : [];
+  } finally {
+    await client.dispose();
+  }
+}
+
+/** Compare two directories without tripping over a trailing slash. */
+function sameDir(a: string, b: string): boolean {
+  const trim = (value: string): string => (value.endsWith('/') ? value.slice(0, -1) : value);
+  // macOS hands back `/private/var/…` for `/var/…`; treat one as the other so a
+  // session listed under the resolved path still matches the requested one.
+  const normalize = (value: string): string => trim(value).replace(/^\/private\//, '/');
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * Turn a listing entry into the summary the sidebar renders.
+ *
+ * The cwd comes from the session's own record, per the seam's rule — with one
+ * narrowing. macOS resolves `/var` to `/private/var`, so a session started in
+ * the directory the caller just asked about comes back spelled differently.
+ * Passing that spelling through would give the sidebar two project groups for
+ * one directory, so when the two denote the same place the *caller's* spelling
+ * wins. This is not decoding a path out of storage layout: both strings are
+ * real, and the choice is only which of two names for one directory to show.
+ */
+function toSessionSummary(
+  entry: AcpSessionListEntry,
+  profileId: string,
+  requestedCwd: string,
+): SessionSummary {
+  const updatedAt = Date.parse(entry.updatedAt ?? '');
+  const createdAt = Date.parse(entry.createdAt ?? '');
+  const cwd =
+    entry.cwd === undefined || sameDir(entry.cwd, requestedCwd) ? requestedCwd : entry.cwd;
+
+  return {
+    id: entry.sessionId,
+    providerId: PROVIDER_ID,
+    profileId,
+    cwd,
+    title: entry.title ?? 'Untitled session',
+    updatedAt: Number.isNaN(updatedAt) ? 0 : updatedAt,
+    ...(Number.isNaN(createdAt) ? {} : { createdAt }),
+  };
 }
 
 /** Is the executable on `PATH`? */

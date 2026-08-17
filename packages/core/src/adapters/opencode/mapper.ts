@@ -71,6 +71,7 @@ import type {
 } from '@rx-artemis/protocol';
 
 import type {
+  AcpPromptUsage,
   AcpSessionNotification,
   AcpStopReason,
   AcpToolCallContent,
@@ -574,6 +575,52 @@ function mapUsageUpdate(
   state.usage = usage;
 
   return [stampOpencodeEvent(state, { type: 'usage', usage })];
+}
+
+/**
+ * Record the token accounting a finished turn reported.
+ *
+ * This is the *authoritative* reading, and it arrives on the `session/prompt`
+ * result rather than in the stream. It measures a different quantity from
+ * `usage_update`: that one says how full the context window is, this one says
+ * what the turn spent. Both are wanted — the window drives the context meter,
+ * the tokens drive usage reporting — so the two are merged rather than one
+ * overwriting the other.
+ */
+export function applyPromptUsage(
+  state: OpencodeMapperState,
+  usage: AcpPromptUsage | undefined,
+): readonly AgentEvent[] {
+  if (state.ended || usage === undefined) return [];
+
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  if (inputTokens === 0 && outputTokens === 0) return [];
+
+  const merged: UsageSnapshot = {
+    scope: 'cumulative',
+    tokens: {
+      inputTokens,
+      outputTokens,
+      ...(usage.cachedReadTokens === undefined
+        ? {}
+        : { cacheReadInputTokens: usage.cachedReadTokens }),
+      ...(usage.cachedWriteTokens === undefined
+        ? {}
+        : { cacheCreationInputTokens: usage.cachedWriteTokens }),
+    },
+    // Carried over from the streamed reading, which is the only source for them.
+    ...(state.usage?.costUsd === undefined ? {} : { costUsd: state.usage.costUsd }),
+    ...(state.usage?.contextTokens === undefined
+      ? {}
+      : { contextTokens: state.usage.contextTokens }),
+    ...(state.usage?.contextWindow === undefined
+      ? {}
+      : { contextWindow: state.usage.contextWindow }),
+  };
+  state.usage = merged;
+
+  return [stampOpencodeEvent(state, { type: 'usage', usage: merged })];
 }
 
 /* -------------------------------------------------------------------------- */

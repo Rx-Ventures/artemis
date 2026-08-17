@@ -61,7 +61,7 @@ function describe(event: AgentEvent): string {
     case 'permission.request':
       return `permission.req   ${event.request.toolName}`;
     case 'usage':
-      return `usage            ctx ${String(event.usage.contextTokens ?? 0)}/${String(event.usage.contextWindow ?? 0)} $${String(event.usage.costUsd ?? 0)}`;
+      return `usage            in ${String(event.usage.tokens.inputTokens)} out ${String(event.usage.tokens.outputTokens)} · ctx ${String(event.usage.contextTokens ?? 0)}/${String(event.usage.contextWindow ?? 0)} · $${String(event.usage.costUsd ?? 0)}`;
     case 'run.end':
       return `run.end          ${event.reason}${event.error === undefined ? '' : ` — ${event.error.message}`}`;
     default:
@@ -116,6 +116,66 @@ async function main(): Promise<number> {
     return 1;
   }
   console.log('✓ stream is well-formed');
+
+  const sessionId = seen.find((e) => e.type === 'session.started')?.sessionId;
+  const env = { XDG_DATA_HOME: profileDir };
+
+  // The catalogue, which must cost no tokens and say whether the account
+  // confirmed it.
+  const catalogue = await adapter.listModels?.({ env, cwd: workdir });
+  if (catalogue !== undefined) {
+    console.log(
+      `\n✓ listModels     ${String(catalogue.models.length)} models, live=${String(catalogue.live)}`,
+    );
+    for (const model of catalogue.models.slice(0, 3)) {
+      console.log(`    ${model.id} — ${model.label} (${model.note})`);
+    }
+  }
+
+  // The history this run just wrote, read back through the seam.
+  const page = await adapter.listSessions?.({ profileId: 'smoke-profile', cwd: workdir, env });
+  if (page !== undefined) {
+    console.log(`\n✓ listSessions   ${String(page.sessions.length)} session(s) for this cwd`);
+    for (const summary of page.sessions) {
+      console.log(`    ${summary.id} — ${summary.title}`);
+      if (summary.cwd !== workdir) console.error(`✗ cwd mismatch: ${summary.cwd}`);
+    }
+    if (!page.sessions.some((s) => s.id === sessionId)) {
+      console.error('✗ the session this run created was not listed');
+      return 1;
+    }
+  }
+
+  // Resume: the stored conversation must replay before the new turn starts.
+  if (sessionId !== undefined) {
+    console.log(`\n→ resuming ${sessionId}`);
+    const resumed = await adapter.createRun({
+      runId: 'smoke-2',
+      providerId: 'opencode',
+      profileId: 'smoke-profile',
+      prompt: 'In one word, what did you just say?',
+      cwd: workdir,
+      env,
+      resumeSessionId: sessionId,
+    });
+
+    const replayed: AgentEvent[] = [];
+    for await (const event of resumed.events) {
+      replayed.push(event);
+      if (event.type === 'text.complete' || event.type === 'run.end') {
+        console.log(`  ${describe(event)}`);
+      }
+    }
+    // A resumed run that replayed nothing is one where the agent silently
+    // started fresh, which would lose the conversation.
+    const history = replayed.filter((e) => e.type === 'text.complete' && e.replay === true);
+    console.log(`\n✓ resume         ${String(history.length)} replayed message(s)`);
+    if (history.length === 0) {
+      console.error('✗ resume replayed no history');
+      return 1;
+    }
+  }
+
   return 0;
 }
 

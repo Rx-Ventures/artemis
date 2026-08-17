@@ -66,6 +66,23 @@ export const ACP_METHOD = {
   sessionSetMode: 'session/set_mode',
   /** Marked UNSTABLE in the schema; only sent when an agent advertised models. */
   sessionSetModel: 'session/set_model',
+
+  /**
+   * Beyond the 0.4.5 schema, and gated on {@link AcpAgentCapabilities.sessionCapabilities}.
+   *
+   * `sessionCapabilities` is itself a spec field, and agents use it to advertise
+   * history operations the schema does not yet name: OpenCode 1.18.18 answers
+   * `{ close, fork, list, resume }`, and Moonshot's Kimi Code was recorded
+   * advertising the same family in the previous research round. So the
+   * *capability* is a shared convention while the *method names* below are
+   * verified against OpenCode only.
+   *
+   * Anything here must be called behind its capability flag. An agent that
+   * advertises nothing gets asked nothing, and the UI degrades on the flag
+   * rather than on a `METHOD_NOT_FOUND` the user would see as a crash.
+   */
+  sessionList: 'session/list',
+  sessionFork: 'session/fork',
 } as const;
 
 /** Client → agent notifications. */
@@ -337,14 +354,15 @@ export interface AcpNewSessionRequest {
 export interface AcpNewSessionResponse {
   readonly sessionId: string;
   /**
-   * Spec-defined model state. OpenCode 1.18.18 instead answers with a
-   * `configOptions` array carrying the same information — an extension, not a
+   * Spec-defined model and mode state. OpenCode 1.18.18 instead answers with
+   * {@link configOptions} carrying the same information — an extension, not a
    * violation, since ACP allows unknown fields. An adapter reads whichever its
-   * agent sends and treats both as absent-able; this is the field the *spec*
-   * defines, so it is the one declared here.
+   * agent sends and treats both as absent-able.
    */
   readonly models?: JsonValue | null;
   readonly modes?: JsonValue | null;
+  /** OpenCode's form of the above. See {@link AcpConfigOption}. */
+  readonly configOptions?: readonly AcpConfigOption[];
 }
 
 /** `session/load` params — same shape as `session/new` plus the id to reopen. */
@@ -368,6 +386,26 @@ export interface AcpPromptRequest {
 export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
 
 /**
+ * Token accounting for a finished turn.
+ *
+ * Not in the 0.4.5 schema — OpenCode attaches it to the `session/prompt`
+ * result, and it is strictly better than what the streamed `usage_update`
+ * carries: that one reports how full the context window is, which is a
+ * different quantity from what the turn actually spent. A turn that reads a
+ * large file has high occupancy and modest output, and reporting the former as
+ * the latter would overstate consumption on every subsequent turn.
+ */
+export interface AcpPromptUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  /** Reasoning tokens. Billed inside `outputTokens`, reported separately. */
+  readonly thoughtTokens?: number;
+  readonly cachedReadTokens?: number;
+  readonly cachedWriteTokens?: number;
+}
+
+/**
  * `session/prompt` result.
  *
  * The request resolves **when the whole turn is over**, not when the prompt is
@@ -376,6 +414,66 @@ export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'r
  */
 export interface AcpPromptResponse {
   readonly stopReason: AcpStopReason;
+  /** Present on agents that report it; see {@link AcpPromptUsage}. */
+  readonly usage?: AcpPromptUsage;
+}
+
+/* -------------------------------------------------------------------------- */
+/* History                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One stored conversation, as `session/list` reports it.
+ *
+ * `cwd` is the load-bearing field: the seam requires a session's working
+ * directory to come from session *data* and never from the storage layout,
+ * because decoding a directory name is lossy and would confidently resume into
+ * the wrong folder. This answer carries it, so nothing has to be decoded.
+ */
+export interface AcpSessionListEntry {
+  readonly sessionId: string;
+  readonly cwd?: string;
+  readonly title?: string;
+  /** ISO-8601 in OpenCode; parsed defensively rather than assumed. */
+  readonly updatedAt?: string;
+  readonly createdAt?: string;
+}
+
+/** `session/list` result. */
+export interface AcpSessionListResponse {
+  readonly sessions: readonly AcpSessionListEntry[];
+}
+
+/** `session/fork` params. The cwd is required, as the agent's own error says. */
+export interface AcpForkSessionRequest {
+  readonly sessionId: string;
+  readonly cwd: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Configuration options                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One knob an agent offers for a session, from `session/new`, `session/load`
+ * and `session/fork`.
+ *
+ * OpenCode's answer to "what models does this account have" and "what modes can
+ * this session run in", delivered as a side effect of opening a session rather
+ * than through a catalogue endpoint. That is why the adapter can publish a live
+ * model list without spending a token: it already opened a session.
+ */
+export interface AcpConfigOption {
+  readonly id: string;
+  readonly name?: string;
+  readonly category?: string;
+  readonly type?: string;
+  readonly currentValue?: string;
+  readonly options?: readonly {
+    readonly value: string;
+    readonly name?: string;
+    readonly description?: string;
+  }[];
 }
 
 /** `session/cancel` params. A notification: there is no answer to wait for. */
@@ -515,4 +613,30 @@ export function isAuthRequiredError(error: unknown): boolean {
 /** Terminal statuses, where a tool row stops being live. */
 export function isTerminalToolStatus(status: AcpToolCallStatus | null | undefined): boolean {
   return status === 'completed' || status === 'failed';
+}
+
+/** Narrow a `session/list` result. */
+export function isSessionListResponse(value: unknown): value is AcpSessionListResponse {
+  return isRecord(value) && Array.isArray(value['sessions']);
+}
+
+/**
+ * Pull one config option out of whatever a session-opening call answered with.
+ *
+ * Tolerant by design: the same information arrives as `configOptions` from
+ * OpenCode and as `models`/`modes` from a spec-conformant agent, and an adapter
+ * that demanded either shape would break on the other.
+ */
+export function readConfigOption(
+  value: unknown,
+  id: string,
+): AcpConfigOption | undefined {
+  if (!isRecord(value)) return undefined;
+  const options = value['configOptions'];
+  if (!Array.isArray(options)) return undefined;
+
+  for (const entry of options) {
+    if (isRecord(entry) && entry['id'] === id) return entry as unknown as AcpConfigOption;
+  }
+  return undefined;
 }
