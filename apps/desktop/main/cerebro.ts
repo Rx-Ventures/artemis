@@ -402,6 +402,81 @@ export function isCerebroInstalled(): boolean {
   return existsSync(cerebroCli(cerebroRoot()));
 }
 
+/* -------------------------------------------------------------------------- */
+/* Keeping the bank turning                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How long a sync stands for. The CLI throttles the expensive half itself (a
+ * lock directory, a fifteen-minute fetch stamp, and a no-op when `HEAD` has not
+ * moved), so this exists only to keep a burst of runs from paying the process
+ * spawn several times over.
+ */
+const SYNC_THROTTLE_MS = 60_000;
+
+let lastSyncAt = 0;
+let syncInFlight = false;
+
+/**
+ * Run the bank's own sync cycle, in the background, at most once a minute.
+ *
+ * ## Why the main process does this
+ *
+ * `cerebro enable` installs a `SessionStart` hook into each profile's
+ * `settings.json`, and on a stock Claude Code that is the whole mechanism: the
+ * hook promotes queued drafts, fast-forwards from GitHub, and re-installs the
+ * bank into every project's memory. Under Artemis that hook has never once
+ * fired. Every query runs with `settingSources: []` — the deliberate isolation
+ * described in the Claude adapter, which keeps a third-party desktop app from
+ * silently adopting the user's hooks, MCP servers and permission rules — and a
+ * hook Artemis never loads is a hook that never runs. The bank went stale in
+ * exactly the way it was designed not to, while `cerebro status` went on
+ * reporting `enabled + sync hook`, because the file it checks did contain one.
+ *
+ * Opening `settingSources` to fix this would trade a stale bank for the whole
+ * class of problem that setting exists to prevent, and it would import every
+ * *other* hook in the file to fix the one Artemis put there. So the sync moves
+ * to the side of the boundary that provisioned it. Artemis clones the bank,
+ * writes the hook and shows the pane; running the cycle is its own housekeeping,
+ * not an instruction for the model to carry.
+ *
+ * ## Why a run is the trigger
+ *
+ * A run start is Artemis's nearest thing to the `SessionStart` the bank was
+ * written against, and it is the moment the freshness actually matters: what a
+ * sync does is promote what the last session drafted and pull what teammates
+ * landed, and both are only interesting to a session that is about to begin.
+ *
+ * Fire-and-forget, and silent unless it fails. A run must never wait on the
+ * memory bank, and must never fail because of it.
+ */
+export function syncCerebroInBackground(): void {
+  if (syncInFlight) return;
+  if (!isCerebroInstalled()) return;
+
+  const now = Date.now();
+  if (now - lastSyncAt < SYNC_THROTTLE_MS) return;
+  lastSyncAt = now;
+  syncInFlight = true;
+
+  // 120s: a sync that has to fetch is bounded by the network, and the CLI's own
+  // lock means a slow one cannot overlap the next.
+  void runCerebro(cerebroRoot(), ['sync', '--quiet'], 120_000)
+    .then((output) => {
+      const said = output.trim();
+      if (said.length > 0) log.info(`cerebro sync: ${said}`);
+    })
+    .catch((error: unknown) => {
+      // Warn rather than throw. A bank that cannot sync — no network, a clone
+      // mid-rebase, a validator refusing a queued draft — is a degraded
+      // enhancement, and the run it rode in on has nothing to do with it.
+      log.warn('cerebro sync did not complete; the bank may be stale', error);
+    })
+    .finally(() => {
+      syncInFlight = false;
+    });
+}
+
 /** The bank's condition. `installed: false` is a complete answer, not a fault. */
 export async function readCerebroStatus(): Promise<CerebroStatus> {
   const root = cerebroRoot();

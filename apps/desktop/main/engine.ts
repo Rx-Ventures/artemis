@@ -92,7 +92,7 @@ import {
 import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
-import { isCerebroInstalled } from './cerebro.js';
+import { isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
@@ -793,6 +793,12 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     writeAgentPrompts: (document) => agentPrompts.write(document),
 
     startRun: async (input) => {
+      // Cerebro's own `SessionStart` hook cannot run under `settingSources: []`,
+      // so Artemis runs the bank's sync cycle itself. Started before the run and
+      // never awaited: it promotes what the last session drafted and pulls what
+      // teammates landed, neither of which this run may wait on.
+      syncCerebroInBackground();
+
       // The library is attached here and not in the renderer, so that every
       // path that will ever start a run gets it without having to remember to.
       // `namer` and `owners` are told about the *original* input on purpose:

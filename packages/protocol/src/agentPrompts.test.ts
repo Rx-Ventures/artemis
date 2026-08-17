@@ -118,6 +118,50 @@ describe('composeAgentPrompts', () => {
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* What the shipped prompts have to say                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Assertions about prose, which is unusual and deliberate.
+ *
+ * The Cerebro prompt spent its first three days naming a command that was not
+ * on PATH and saying nothing about how it related to the per-project memory the
+ * agent was already writing to. Nothing was broken in any sense a type or a
+ * parse test could reach: the text composed, the run carried it, and the bank
+ * stayed empty because the only instruction that arrived could not be acted on
+ * and lost every write to the system that had described itself in more detail.
+ *
+ * These are the two sentences that failure came down to. They are asserted
+ * loosely — the wording is free to change — but their absence should fail a
+ * build rather than be discovered a week later in an empty bank.
+ */
+describe('the Cerebro built-in', () => {
+  const markdown = BUILT_IN_AGENT_PROMPTS[CEREBRO].markdown;
+
+  it('names the verbs an agent has to run to write to the bank', () => {
+    expect(markdown).toContain('cerebro draft');
+    expect(markdown).toContain('cerebro promote');
+    expect(markdown).toContain('cerebro retire');
+  });
+
+  it('gives a way to reach the CLI when the PATH shim is missing', () => {
+    // `cerebro enable` installs the shim, so the bare verb is what this teaches
+    // — but a machine enabled before the shim existed has a working bank and no
+    // `cerebro` on PATH, and an agent that meets that state should not have to
+    // guess where the checkout lives.
+    expect(markdown).toContain('bin/cerebro');
+  });
+
+  it('says which memory system a fact belongs in', () => {
+    // The routing rule. Cerebro and the per-project memory compete for exactly
+    // the same writes, and an agent given both and told nothing picks the one
+    // that explained itself — which is how four team facts ended up filed as
+    // personal ones.
+    expect(markdown).toMatch(/\bCerebro\b[^.]*\bteammate\b|\bteammate\b[^.]*\bCerebro\b/i);
+  });
+});
+
 describe('scopeCovers', () => {
   it('separates "everything" from "everything that exists today"', () => {
     // The distinction is the whole reason `all` is a variant rather than a list
