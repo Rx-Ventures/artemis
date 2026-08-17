@@ -1,6 +1,36 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.15.1
+
+The rest of 0.15.0's account work. That release stopped new sessions piling onto
+one account; this one closes the gap right after a run ends, and makes the two
+places you would go to check any of it tell the truth.
+
+- **A finished run re-reads the account it just spent.** While a run is live,
+  0.15.0's reservation covers it — the ranking knows work is committed to that
+  account even though the polled reading does not show it yet. The moment it ends
+  that cover is withdrawn, correctly, and the account falls back to a reading
+  taken *before any of the work happened*. So it read emptiest at exactly the
+  moment it had just been drained, and won the next session. One targeted read,
+  four seconds after the end, closes it — collapsed to one read per account when
+  a burst of work settles at once.
+
+- **The usage rings follow the poll.** They rendered a copy of the reading loaded
+  when the meter mounted, and never saw the readings the background poll had been
+  collecting since. Sit on one account through a long job and the 5-hour ring
+  would not move, though the true figure was already in memory. Reloading the
+  window fixed it — which is what "sometimes I have to refresh" turned out to
+  mean. They now take whichever reading is newer, so the manual refresh button
+  under them still wins when it is.
+
+- **Account rows show their plan again.** The tier was hidden unless a sign-in
+  probe had confirmed the account, and nothing ran that probe until you opened
+  Settings → Profiles — so on a fresh launch every row in the picker came up
+  unlabelled, despite the plan poll already knowing. The tier now hides only for
+  an account actually checked and found signed out, and the account you are about
+  to run on gets its sign-in state read at the three moments it can change.
+
 ## What's new in 0.15.0
 
 A release about running several accounts at once. Every item below was reported
