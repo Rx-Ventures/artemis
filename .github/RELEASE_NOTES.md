@@ -1,6 +1,20 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.16.0
+
+- **Artemis draws her bow.** The hairline that swept the seam between the
+  transcript and the composer is now a bow — the app's namesake, on screen at
+  last. It fires for as long as a run is going: draw, hold, loose, a cyan arrow
+  flying the width of the pane. A run parked on a permission holds at full draw
+  — aimed, dead still, waiting on you — and a finished run rests it: string
+  straight, arrow gone, dimmed to faint. The animation stopping rather than
+  vanishing is the point; a resting bow under an answer is what a completed run
+  looks like now. A pane that has never run shows nothing at all,
+  `prefers-reduced-motion` gets a still nocked bow instead of the loop, and
+  none of it goes near the per-token path — three poses driven by the run's own
+  status, four CSS animations sharing one 2.4-second clock.
+
 ## What's new in 0.15.1
 
 The rest of 0.15.0's account work. That release stopped new sessions piling onto
