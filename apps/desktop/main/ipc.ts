@@ -102,6 +102,7 @@ import {
   validateRunsStopTask,
   validateRunsEvents,
   validateRunsList,
+  validateRunsLiveWork,
   validateRunsRespondPermission,
   validateRunsSend,
   validateRunsStart,
@@ -348,6 +349,11 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.runsList]: {
       validate: validateRunsList,
       handle: async (request) => ({ runs: await engine.require().listRuns({ cwd: request.cwd }) }),
+    },
+
+    [IPC.runsLiveWork]: {
+      validate: validateRunsLiveWork,
+      handle: () => Promise.resolve({ sessionIds: engine.require().liveWorkSessions() }),
     },
 
     [IPC.runsEvents]: {

@@ -974,6 +974,15 @@ export function createMockBridge(): ArtemisBridge {
       stopTask: async ({ runId, taskId }) => ok({ runId, taskId }),
       list: async () => ok({ runs: [...handles.values()] }),
       /*
+       * Empty, deliberately. The mock has no process pool and so no work that
+       * outlives a turn — the one thing this channel exists to report. An
+       * invented set would make the preview exercise a path the real bridge
+       * reaches only when a workflow is mid-flight, and "known to be working"
+       * is a set callers must already handle being empty (see
+       * `RunsLiveWorkResponse`).
+       */
+      liveWork: async () => ok({ sessionIds: [] }),
+      /*
         Always empty, and never `truncated`.
 
         The mock keeps no event history — a run here is a script that emits and

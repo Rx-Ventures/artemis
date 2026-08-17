@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
   shell: { openExternal: () => Promise.resolve() },
 }));
 
-const { applySessionPolicy, isTrustedFrame } = await import('./security');
+const { applySessionPolicy, isTrustedFrame, windowSecurityPreferences } = await import('./security');
 
 const RENDERER_FILE_URL =
   'file:///Applications/Artemis.app/Contents/Resources/app.asar/out/renderer/index.html';
@@ -172,5 +172,52 @@ describe('the file: allowlist', () => {
 
   it('rejects any file outside the bundle directory', () => {
     expect(isTrustedFrame('file:///etc/passwd', true, policy)).toBe(false);
+  });
+});
+
+/**
+ * The window preferences, pinned.
+ *
+ * `windowSecurityPreferences` says in its own comment that it writes out values
+ * which are already Electron's defaults, because a default that flips during a
+ * routine dependency bump is how a hardened app quietly stops being one. Nothing
+ * enforced that until this: the file was a statement of intent with no way to
+ * fail. These assertions are the failure.
+ *
+ * `backgroundThrottling` sits with them and is not a security value. It is here
+ * for the same structural reason — it is a Chromium default this app
+ * deliberately overturns, and reverting it would be silent and would look like
+ * agents dying rather than like a preference changing.
+ */
+describe('window preferences', () => {
+  const preferences = windowSecurityPreferences('/tmp/preload.cjs', ['--artemis-version=0.0.0']);
+
+  it('keeps the renderer sandboxed and off Node', () => {
+    expect(preferences.sandbox).toBe(true);
+    expect(preferences.contextIsolation).toBe(true);
+    expect(preferences.nodeIntegration).toBe(false);
+    expect(preferences.nodeIntegrationInWorker).toBe(false);
+    expect(preferences.nodeIntegrationInSubFrames).toBe(false);
+  });
+
+  it('keeps web security on and the weaker embedders off', () => {
+    expect(preferences.webSecurity).toBe(true);
+    expect(preferences.allowRunningInsecureContent).toBe(false);
+    expect(preferences.experimentalFeatures).toBe(false);
+    expect(preferences.webviewTag).toBe(false);
+  });
+
+  it('does not let Chromium throttle a backgrounded window', () => {
+    // The polls that keep a delegated agent's tab and the session feed moving
+    // are ordinary timers. Throttled to once a minute — Chromium's default for a
+    // window that is not in front — they stop while the user is in another
+    // window, which is exactly when an agent is working unobserved, and the
+    // window reads as dead on return.
+    expect(preferences.backgroundThrottling).toBe(false);
+  });
+
+  it('passes the preload path and its arguments through', () => {
+    expect(preferences.preload).toBe('/tmp/preload.cjs');
+    expect(preferences.additionalArguments).toEqual(['--artemis-version=0.0.0']);
   });
 });

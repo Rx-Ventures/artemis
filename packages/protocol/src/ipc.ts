@@ -110,6 +110,8 @@ export const IPC = {
   runsDispose: 'artemis:runs:dispose',
   /** Re-sync live runs after a renderer reload. */
   runsList: 'artemis:runs:list',
+  /** Which conversations still have background work, including between turns. */
+  runsLiveWork: 'artemis:runs:live-work',
   /** Replay one run's retained events, for a window that was not there to hear them. */
   runsEvents: 'artemis:runs:events',
 
@@ -744,6 +746,47 @@ export interface RunsListRequest {
 export interface RunsListResponse {
   /** Runs the main process still considers live. */
   readonly runs: readonly RunHandle[];
+}
+
+/**
+ * Ask which conversations still have background work in them.
+ *
+ * No fields, and that is the shape rather than an oversight: the answer is a
+ * property of the main process's own pool, not of any window's view of it, so
+ * there is nothing a caller could narrow it by that would not be the caller
+ * asking for its own guess back.
+ */
+export type RunsLiveWorkRequest = Record<string, never>;
+
+/**
+ * The conversations the main process is still holding work for.
+ *
+ * ## Why {@link RunsListResponse} cannot answer this
+ *
+ * `list` reports *runs*, and the defining property of delegated work is that it
+ * outlives the run that launched it. A workflow twenty minutes in, whose
+ * launching turn ended nineteen minutes ago, appears in no live run — but its
+ * provider process is very much alive and is kept alive precisely because of it.
+ * Between one turn ending and the next opening there is no run to hang the fact
+ * on, so it needs a channel of its own.
+ *
+ * ## What a window does with it
+ *
+ * Two things, and the second is why this exists. It marks the session as working
+ * in the sidebar, which is cosmetic and was already approximately right. And it
+ * decides whether a column may be **destroyed** — which is not cosmetic, because
+ * retiring a pane closes its agent tabs and resets its transcript, and nothing
+ * can reach a conversation that is gone. A window that guessed from its own
+ * frozen rows threw away running workflows.
+ *
+ * A session absent from this set is not necessarily idle: a provider whose
+ * adapter cannot answer contributes nothing, so this is a set of conversations
+ * *known* to be working rather than the complement of the idle ones. Callers
+ * must treat it as "keep these", never as "the rest are finished".
+ */
+export interface RunsLiveWorkResponse {
+  /** Sessions known to still be working. Never a complete idle-set complement. */
+  readonly sessionIds: readonly SessionId[];
 }
 
 /**
@@ -1710,6 +1753,7 @@ export type IpcRequestMap = {
   [IPC.runsRespondPermission]: RunsRespondPermissionRequest;
   [IPC.runsDispose]: RunsDisposeRequest;
   [IPC.runsList]: RunsListRequest;
+  [IPC.runsLiveWork]: RunsLiveWorkRequest;
   [IPC.runsEvents]: RunsEventsRequest;
   [IPC.sessionsList]: SessionsListRequest;
   [IPC.sessionsListAll]: SessionsListAllRequest;
@@ -1775,6 +1819,7 @@ export type IpcResponseMap = {
   [IPC.runsRespondPermission]: RunsRespondPermissionResponse;
   [IPC.runsDispose]: RunsDisposeResponse;
   [IPC.runsList]: RunsListResponse;
+  [IPC.runsLiveWork]: RunsLiveWorkResponse;
   [IPC.runsEvents]: RunsEventsResponse;
   [IPC.sessionsList]: SessionsListResponse;
   [IPC.sessionsListAll]: SessionsListAllResponse;
@@ -1934,6 +1979,15 @@ export interface ArtemisBridge {
     ): Promise<IpcResult<RunsRespondPermissionResponse>>;
     dispose(request: RunsDisposeRequest): Promise<IpcResult<RunsDisposeResponse>>;
     list(request: RunsListRequest): Promise<IpcResult<RunsListResponse>>;
+    /**
+     * Which conversations are still working, including between turns.
+     *
+     * The companion to {@link list} for work that outlives its run. `list` finds
+     * runs; a workflow whose launching turn ended an hour ago is in none of them
+     * and is still going. Poll this before deciding a conversation is finished —
+     * and never read a session's absence as proof that it is.
+     */
+    liveWork(request: RunsLiveWorkRequest): Promise<IpcResult<RunsLiveWorkResponse>>;
     /**
      * What a run has already said, for a window that was not listening.
      *

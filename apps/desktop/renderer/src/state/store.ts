@@ -322,6 +322,26 @@ export interface AppState {
    */
   readonly runningSessions: readonly SessionId[];
   /**
+   * Sessions the **main process** says are still working, as of the last poll.
+   *
+   * The one fact in this store that is not a projection of the panes, and it is
+   * here because the panes cannot know it. Delegated work outlives the run that
+   * launched it, and `background.tasks` is a run event — the adapter stops
+   * emitting it at `run.end` while keeping the provider process alive for
+   * exactly that work. So between one turn ending and the next opening, a
+   * column's rows are frozen and this is the only thing that moves.
+   *
+   * Read as **"keep these"**, never as "the rest are finished". A provider whose
+   * adapter cannot answer contributes nothing, so absence from this set means
+   * "not known to be working" — see `RunsLiveWorkResponse`. Everything that
+   * consumes it therefore widens what counts as live ({@link isWorking}) rather
+   * than narrowing it.
+   *
+   * An array rather than a `Set`, for the reason {@link runningSessions} gives:
+   * it is compared element-wise so the value stays stable between real changes.
+   */
+  readonly sessionsHoldingWork: readonly SessionId[];
+  /**
    * Sessions a column is showing right now — what the sidebar marks as open.
    *
    * The same projection {@link runningSessions} is, maintained by the same
@@ -1452,6 +1472,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  sessionsHoldingWork: [],
   openSessions: [],
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
@@ -1696,16 +1717,23 @@ function paneForSession(
  */
 function syncRunningSessions(): void {
   const ids: SessionId[] = [];
+  // The window value, read once for the whole walk — see `pruneBackground`.
+  const holding = useApp.getState().sessionsHoldingWork;
   for (const pane of allLivePanes()) {
     const state = paneState(pane);
     /*
-     * `hasLiveWork`, not `isLive`: a session whose agents are still going,
-     * marked idle the moment its launching turn ended, is exactly the "nothing
-     * tells me anything is running" hole the delegated pane was built to close.
-     * The pane's tab only exists while its conversation is on screen; this
-     * marker is what says so from the sidebar when it is not.
+     * `isWorking`, not `isLive`: a session whose agents are still going, marked
+     * idle the moment its launching turn ended, is exactly the "nothing tells me
+     * anything is running" hole the delegated pane was built to close. The
+     * pane's tab only exists while its conversation is on screen; this marker is
+     * what says so from the sidebar when it is not.
+     *
+     * And not `hasLiveWork` either, which closed that hole only as far as the
+     * last rows this window was sent. Between turns those stop arriving, so a
+     * workflow that settled a row and carried on went unmarked — the sidebar
+     * fell quiet while the work ran on. The main process is asked as well.
      */
-    if (!hasLiveWork(state)) continue;
+    if (!isWorking(state, holding)) continue;
     /*
      * Both ids, not the better of the two.
      *
@@ -3175,9 +3203,19 @@ function retirePane(pane: Pane): void {
 /** Evict finished conversations past {@link MAX_BACKGROUND_ENDED}, oldest first. */
 function pruneBackground(): void {
   const { background } = useApp.getState();
-  // `hasLiveWork`: a pane whose run ended but whose workflow has not is not
-  // "finished" — evicting it would orphan the settle turn. See `hasLiveWork`.
-  const ended = background.filter((pane) => !hasLiveWork(paneState(pane)));
+  /*
+   * `isWorking`, not `hasLiveWork`: a pane whose run ended but whose workflow
+   * has not is not "finished" — evicting it would orphan the settle turn — and
+   * between turns this window's rows are the wrong place to ask. This is the
+   * last path that still destroys a conversation, so it asks both sides.
+   *
+   * Read once and threaded through, rather than per pane: the set is a window
+   * value, the walk is over at most a handful of panes, and re-reading the store
+   * inside a filter would be a store read per element for an answer that cannot
+   * change during the loop.
+   */
+  const holding = useApp.getState().sessionsHoldingWork;
+  const ended = background.filter((pane) => !isWorking(paneState(pane), holding));
   if (ended.length <= MAX_BACKGROUND_ENDED) return;
 
   const evicted = new Set(ended.slice(0, ended.length - MAX_BACKGROUND_ENDED).map((p) => p.id));
@@ -3208,7 +3246,10 @@ function handOver(outgoing: Pane, incoming: Pane): void {
   const at = locate(state.grid, outgoing.id);
   if (!at) return;
 
-  const keep = hasLiveWork(paneState(outgoing));
+  // `isDisposable`, not `hasLiveWork`: this decides whether the conversation is
+  // destroyed, and this window cannot see far enough to make that call. See
+  // `isDisposable`.
+  const keep = !isDisposable(paneState(outgoing));
   const grid = state.grid.map((row, index) =>
     index === at.row
       ? { ...row, panes: row.panes.map((p) => (p.id === outgoing.id ? incoming : p)) }
@@ -3272,7 +3313,10 @@ export function closePane(paneId: PaneId): void {
   if (!at) return;
   const pane = (state.grid[at.row] as PaneRow).panes[at.column] as Pane;
 
-  const keep = hasLiveWork(paneState(pane));
+  // Same rule as `handOver`, and for the same reason: closing a column is a
+  // statement about the layout, so it must not be the thing that destroys a
+  // conversation this window only *believes* has finished.
+  const keep = !isDisposable(paneState(pane));
   if (!keep) retirePane(pane);
 
   const grid: PaneRow[] = [];
@@ -3352,6 +3396,105 @@ export function isLive(state: SessionState): boolean {
  */
 export function hasLiveWork(state: SessionState): boolean {
   return isLive(state) || state.tasks.some(isTaskLive);
+}
+
+/**
+ * Both ids a conversation can be known by, for matching against a session set.
+ *
+ * The pair {@link syncRunningSessions} already explains at length: they are
+ * usually the same, and they diverge before `session.started` lands and after a
+ * fork. Matching on either is what stops a conversation being missed under
+ * whichever id the other side happened to use.
+ */
+function sessionIdsOf(state: SessionState): readonly SessionId[] {
+  const ids: SessionId[] = [];
+  if (state.run?.sessionId) ids.push(state.run.sessionId);
+  if (state.resumeSessionId && state.resumeSessionId !== state.run?.sessionId) {
+    ids.push(state.resumeSessionId);
+  }
+  return ids;
+}
+
+/**
+ * True when the main process says this conversation is still working.
+ *
+ * The half of the answer this window cannot see for itself — see
+ * {@link AppState.sessionsHoldingWork}. Kept separate from {@link hasLiveWork}
+ * rather than folded into it so that one stays a pure function of a pane, which
+ * is what its callers in tests rely on.
+ */
+function mainHoldsWork(
+  state: SessionState,
+  holding: readonly SessionId[] = useApp.getState().sessionsHoldingWork,
+): boolean {
+  if (holding.length === 0) return false;
+  return sessionIdsOf(state).some((id) => holding.includes(id));
+}
+
+/**
+ * Is anything about this conversation still going — by either account?
+ *
+ * The union of what this window can see ({@link hasLiveWork}) and what the main
+ * process reports ({@link mainHoldsWork}), and a union rather than a preference
+ * because the two are authoritative about different intervals. This window is
+ * right *during* a turn, where it has the rows as they arrive and main's poll is
+ * up to a few seconds stale. Main is right *between* turns, where the rows have
+ * stopped being sent and this window's copy is frozen. Neither dominates, and
+ * either saying "working" is enough.
+ *
+ * This is what every question about whether a conversation is finished should
+ * ask. `hasLiveWork` remains for the one thing it is exactly right about: what
+ * this window has been told.
+ */
+export function isWorking(
+  state: SessionState,
+  holding?: readonly SessionId[],
+): boolean {
+  return hasLiveWork(state) || mainHoldsWork(state, holding);
+}
+
+/**
+ * True when a conversation can be destroyed outright rather than set aside.
+ *
+ * Deliberately **not** the negation of {@link hasLiveWork}, and the difference
+ * is what this answers for. `hasLiveWork` asks "is something running", from this
+ * window's own bookkeeping, and it is the right question for everything whose
+ * worst outcome is a wrong pixel: the sidebar's working marker, which dock tab
+ * comes forward, how fast the session feed polls. Destruction is not one of
+ * those. {@link retirePane} resets the transcript and closes every agent tab the
+ * conversation opened, and nothing can reach a pane that is gone —
+ * `openAgentTab` resolves its owner through `allLivePanes`, and the delegated
+ * button is disabled with no rows to show. There is no way back.
+ *
+ * ## Why this window's answer is not good enough to destroy on
+ *
+ * `tasks` holds whatever the last `background.tasks` event said, and that event
+ * is run-scoped: the adapter refuses to emit one once the turn has ended (see
+ * `#flushTasks`), while the very same process is kept alive by `#holdsWork` for
+ * exactly the work those rows describe. Between a turn ending and the next one
+ * opening there is nowhere to put an update, so this window's rows are a
+ * snapshot of the last moment a turn was open and the main process is the only
+ * thing that knows what has happened since. A workflow that settled a row and
+ * carried on reads here as finished.
+ *
+ * Retiring on that snapshot is the defect this exists to close: clicking away
+ * from a running workflow and back left the bow at rest, the workflow tab shut,
+ * and the button that reopens it disabled — while the run went on untouched in
+ * main, which is why sending a message brought it all back.
+ *
+ * So the rule is inverted. A conversation is destroyed only when there was never
+ * anything in it to lose; anything that has run, or names a session it could
+ * resume, is set aside instead. Backgrounding is cheap and already bounded by
+ * {@link pruneBackground}, and being wrong in this direction costs a retained
+ * transcript rather than work the user cannot get back to.
+ */
+function isDisposable(state: SessionState): boolean {
+  // Belt and braces. A conversation main is still working on necessarily has a
+  // session id, so the check below already keeps it — but this is the one
+  // predicate whose wrong answer is unrecoverable, and saying so explicitly
+  // means a later narrowing of the rule cannot quietly take the guard with it.
+  if (mainHoldsWork(state)) return false;
+  return state.run === null && state.resumeSessionId === null;
 }
 
 export function activeProfile(state: SessionState): ProfileMetadata | undefined {
@@ -4633,6 +4776,28 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
 
+  const previous = paneState(pane);
+  /*
+   * Delegated rows survive a re-attach onto the same conversation.
+   *
+   * `background.tasks` is run-scoped, and the run being attached here is
+   * routinely not the one that delegated the work: a workflow outlives the turn
+   * that launched it, and the turn that reports it finished is a continuation
+   * with an id of its own. That run's retained events carry no rows at all, so
+   * clearing unconditionally drops a live workflow's list on every adoption and
+   * leaves the delegated button disabled with nothing left to reopen — the same
+   * loss `isDisposable` describes, arriving by the other door.
+   *
+   * Cleared when the pane is being pointed at a *different* conversation, where
+   * the rows on it genuinely belong to someone else. `permissionQueue` is
+   * cleared either way: a parked request belongs to the run that opened it, and
+   * that run is over.
+   */
+  const sameSession =
+    handle.sessionId !== undefined &&
+    (previous.resumeSessionId === handle.sessionId ||
+      previous.run?.sessionId === handle.sessionId);
+
   replayBuffers.set(handle.runId, []);
   pane.transcript.reset();
   setPaneState(pane, {
@@ -4641,9 +4806,7 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     activeProfileId: handle.profileId,
     cwd: handle.cwd,
     permissionQueue: [],
-    tasks: [],
-    dismissedTasks: [],
-    tasksRequested: false,
+    ...(sameSession ? {} : { tasks: [], dismissedTasks: [], tasksRequested: false }),
     // The session the next prompt continues is this run's own. Set now rather
     // than waiting for `run.end`, because until it is set the sidebar cannot
     // mark the row the user needs in order to find this conversation again.
@@ -5995,12 +6158,14 @@ export function startSessionFeed(): () => void {
   const tick = (): void => {
     if (stopped) return;
     void refreshSessions();
+    void refreshLiveWork();
     schedule();
   };
 
   const onWake = (): void => {
     if (stopped) return;
     void refreshSessions();
+    void refreshLiveWork();
     schedule();
   };
 
@@ -6014,6 +6179,45 @@ export function startSessionFeed(): () => void {
     window.removeEventListener('focus', onWake);
     document.removeEventListener('visibilitychange', onWake);
   };
+}
+
+/**
+ * Re-read which conversations the main process is still working on.
+ *
+ * Rides the session feed's timer rather than owning one: it is wanted at exactly
+ * the moments a listing is — on a tick, on focus, on returning to a window that
+ * has sat in the background — and a second timer would be a second thing to
+ * reason about for one in-memory read.
+ *
+ * ## Failure leaves the set alone
+ *
+ * A failed read keeps the previous answer instead of clearing it, and that
+ * direction is chosen rather than incidental: this set only ever *widens* what
+ * counts as working ({@link isWorking}), so a stale entry costs a pane held a
+ * little longer than needed, while an empty one on a dropped call would put
+ * every backgrounded workflow back in reach of `pruneBackground`. The engine
+ * being briefly unavailable must not be the thing that decides a conversation is
+ * over.
+ *
+ * Written only on a real change, for the reason {@link syncRunningSessions}
+ * gives: this lands every few seconds and an unconditional write would re-render
+ * every consumer of the store on each one.
+ */
+async function refreshLiveWork(): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const result = await call(() => bridge.runs.liveWork({}));
+  if (!result.ok) return;
+
+  const next = result.value.sessionIds;
+  const current = useApp.getState().sessionsHoldingWork;
+  if (current.length === next.length && current.every((id, at) => id === next[at])) return;
+  useApp.setState({ sessionsHoldingWork: next });
+  // The marker is computed from this set as well as from the panes, and nothing
+  // else will recompute it: the pane subscription that normally drives it fires
+  // on pane writes, and this is a window write.
+  syncRunningSessions();
 }
 
 /** Re-read history once the provider has had a moment to flush its own writes. */
@@ -6064,8 +6268,11 @@ export function newSession(
   // A working conversation moves aside intact; an idle one is simply cleared,
   // which avoids remounting the column — and the composer the user is typing in
   // — for what is, in that case, nothing more than an erase.
+  // `isWorking`: the clear below wipes `tasks`, and between turns this window's
+  // rows cannot say whether a workflow is still going. Handing off costs a
+  // remount; clearing in place costs the rows and the tab they feed.
   let target = pane;
-  if (hasLiveWork(paneState(pane))) {
+  if (isWorking(paneState(pane))) {
     target = handOffToBlank(pane);
   } else {
     pane.transcript.reset();
