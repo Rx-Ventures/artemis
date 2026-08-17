@@ -1,6 +1,18 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.17.1
+
+- **The Delegated pane opens when you ask for it.** Turning off *Open on its
+  own* was taking the header's Delegated button with it: with agents working,
+  the button lit up and pressing it did nothing at all — and since a subagent's
+  transcript is reachable only from those rows, nothing delegated could be
+  watched at all while the setting was off. The rows were never lost, only
+  undrawable. The delegated tab is the one surface in the dock with two
+  origins — it arrives with the work, and it opens on a press — and the strip
+  now tells the two apart. Delegated work still opens nothing by itself; a
+  press opens it, and its ✕ hands the setting back.
+
 ## What's new in 0.17.0
 
 - **The team memory bank starts pulling its weight.** Cerebro's sync now runs
