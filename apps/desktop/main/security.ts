@@ -169,6 +169,29 @@ export function windowSecurityPreferences(preloadPath: string, extraArguments: r
     webSecurity: true,
     allowRunningInsecureContent: false,
     experimentalFeatures: false,
+    /*
+     * Timers keep their resolution while the window is not in front.
+     *
+     * Chromium's default is to throttle a backgrounded or occluded window's
+     * timers to about once a minute, which is the right trade for a browser tab
+     * full of advertising and the wrong one here. Artemis's window is a view of
+     * work happening somewhere else: the delegated-agent tab re-reads its
+     * transcript every 2.5s (`AgentPane`), and the session feed polls history on
+     * a 4s/20s timer. Throttled, both stop moving for a minute at a time —
+     * precisely while the user is in another window watching something else,
+     * which is when an agent is most likely to be working unobserved.
+     *
+     * The symptom is a window that looks dead on return: a status indicator
+     * frozen mid-animation and a tab that has not updated since you left. That
+     * is a lie about the agent, and the one thing this app must not do is make
+     * running work look stopped.
+     *
+     * What it costs is a renderer that goes on ticking a handful of timers in
+     * the background. They are polls of in-memory state and small file reads,
+     * not animation, and the app is already keeping provider subprocesses alive
+     * next to them.
+     */
+    backgroundThrottling: false,
     // Values passed to the preload through `process.argv`. The preload reads
     // them instead of asking main over IPC, which keeps `ArtemisBridge.version`
     // and `.platform` synchronous.
