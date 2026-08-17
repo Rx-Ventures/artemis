@@ -108,7 +108,6 @@ import { PaneProvider, usePane } from '../state/paneContext';
 import type { Pane, PaneRow } from '../state/pane';
 import { Composer } from './Composer';
 import { DockPane } from './DockPane';
-import { HuntBar } from './HuntBar';
 import { StatusLine } from './StatusLine';
 import { Transcript } from './Transcript';
 import { IconButton } from './disabled-reason';
@@ -499,13 +498,12 @@ function PaneCell({
 }
 
 /**
- * A pane: caption, transcript, the hunt bar, composer, status line.
+ * A pane: caption, transcript, composer, status line.
  *
- * The hunt bar sits between the transcript and the composer — pinned to the
- * conversation's bottom edge in every scroll position, outside the scroller so
- * it can never drift up with the content or float over it. It is a row of this
- * column rather than a detail of the composer's, because it belongs to the
- * conversation above it, not to the prompt below it; see `HuntBar.tsx`.
+ * (The hunt bar lived between the transcript and the composer for one
+ * release. It rides inside the transcript's own content column now — the ask
+ * was the bottom of the *text*, not of the pane — so this column is back to
+ * its original four rows. See `HuntBar.tsx` for the placement's history.)
  *
  * `PaneProvider` is the whole reason this component exists as a wrapper. Every
  * descendant — down to a permission card six levels into the transcript — reads
@@ -539,7 +537,6 @@ function PaneColumn({
       >
         {alone ? null : <PaneCaption pane={pane} focused={focused} />}
         <Transcript />
-        <HuntBar />
         <Composer />
         <StatusLine />
       </section>

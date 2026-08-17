@@ -101,16 +101,18 @@ describe('the hunt bar', () => {
     expect(strip?.querySelector('.hunt-nock')).toBeNull();
   });
 
-  it('fires while the run is live', () => {
+  it('fires while the run is live, at a stingray that is swimming', () => {
     setUp('running');
     render(<HuntBar />);
 
     const strip = bar();
     expect(strip?.getAttribute('data-pose')).toBe('firing');
-    // The two moving parts the CSS animates: an arrow on the string and an
-    // arrow in flight. Either missing and the loop is a bow waving at nothing.
+    // The moving parts the CSS animates: an arrow on the string, an arrow in
+    // flight, and the quarry idling at the far side. Any missing and the loop
+    // is a bow waving at nothing.
     expect(strip?.querySelector('.hunt-nock')).not.toBeNull();
     expect(strip?.querySelector('.hunt-flight')).not.toBeNull();
+    expect(strip?.querySelector('[data-part="quarry"] .hunt-quarry')).not.toBeNull();
   });
 
   it('fires from the very start of the run, before the first event', () => {
@@ -128,10 +130,13 @@ describe('the hunt bar', () => {
     expect(strip?.getAttribute('data-pose')).toBe('holding');
     // Drawn as an attribute, not an animation: the string is bent…
     expect(strip?.querySelector('path[d="M5 2 L2 8 L5 14"]')).not.toBeNull();
-    // …and nothing loops. A flying arrow here would claim progress the run
-    // is not making.
+    // …and nothing loops — not the arrow, and not the quarry, which is still
+    // there but frozen mid-swim. A flying arrow here would claim progress the
+    // run is not making.
     expect(strip?.querySelector('.hunt-flight')).toBeNull();
     expect(strip?.querySelector('.hunt-nock')).toBeNull();
+    expect(strip?.querySelector('[data-part="quarry"]')).not.toBeNull();
+    expect(strip?.querySelector('.hunt-quarry')).toBeNull();
   });
 
   it('comes to rest — still on screen, nothing moving — when the run ends', () => {
@@ -141,11 +146,14 @@ describe('the hunt bar', () => {
     const strip = bar();
     expect(strip).not.toBeNull();
     expect(strip?.getAttribute('data-pose')).toBe('rest');
-    // String straight, arrow loosed and gone, no animation classes anywhere.
+    // String straight, arrow loosed and gone, no animation classes anywhere —
+    // and the stingray still swimming-still at the far side, plainly unstruck.
     expect(strip?.querySelector('path[d="M5 2 L5 8 L5 14"]')).not.toBeNull();
     expect(strip?.querySelector('.hunt-flight')).toBeNull();
     expect(strip?.querySelector('.hunt-nock')).toBeNull();
     expect(strip?.querySelector('.hunt-string')).toBeNull();
     expect(strip?.querySelector('.hunt-recoil')).toBeNull();
+    expect(strip?.querySelector('[data-part="quarry"]')).not.toBeNull();
+    expect(strip?.querySelector('.hunt-quarry')).toBeNull();
   });
 });
