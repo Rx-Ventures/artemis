@@ -1,64 +1,69 @@
 /**
- * The hunt bar: Artemis' bow, a constant at the foot of the conversation.
+ * The hunt bar: Artemis' bow, her arrow, and the stingray she is after —
+ * riding the tail of the conversation.
  * ============================================================================
  *
  * The app is named for the goddess of the hunt, and this is the one place it
- * says so: a small bow pinned directly under the transcript, loosing an arrow
- * across the pane for as long as a run is going. It is a *fixture*, not a
- * status row — present from the moment a pane exists, at rest before the first
- * prompt and after the last answer, firing in between. The transient report of
- * "a run is live" belongs to the runbar, the hairline lunar sweep above the
- * composer; the bow is the secondary telling of the same fact, and the one
- * with a resting state.
+ * says so: a small bow at the left of a one-line scene, a stingray idling at
+ * the right, and — for as long as a run is going — an arrow loosed across the
+ * width of the text toward it. The quarry being a *stingray* is not mythology,
+ * it is the commission; Artemis hunts what she is asked to hunt.
  *
- * ## Why under the transcript, outside the scroller
+ * ## Inline with the text, third placement of three
  *
- * "Pinned to the bottom of the conversation" rules out both obvious homes. A
- * row *inside* the scroller scrolls away mid-run — not pinned. An overlay
- * floated over the scroller stays put but paints over the text the reader is
- * trying to read, and fights the Jump-to-latest button for the same corner.
- * A strip of the pane column between the two — below the scroller, above the
- * composer — is the conversation's actual bottom edge, visible in every scroll
- * position, and a row of its own: the arrow crosses empty range, never
- * someone's diff. It renders from `PaneColumn` rather than inside `Composer`
- * because it belongs to the conversation above it, not to the prompt below.
+ * This strip has lived in two other homes, each rejected by use:
  *
- * ## The three poses are the run's own states, nothing invented
+ *  - **In the composer's seam** it read as chrome about the *input*, and the
+ *    hairline runbar was the thing that belonged there (it is back there now).
+ *  - **Between the scroller and the composer** it was always on screen, but
+ *    that is exactly what was wrong with it: it sat fixed under a conversation
+ *    that scrolls, belonging to neither the text nor the input.
  *
- *  - **firing** (`starting` / `running`): the full cycle — draw, hold, loose,
- *    arrow away across the strip's whole width.
- *  - **holding** (`awaiting_permission`): drawn and dead still. The run is
- *    paused on the user, and an archer holding at full draw *is* that state —
- *    aimed, waiting, going nowhere until someone says so.
- *  - **rest** (everything else — before the first run and after `ended`):
- *    string straight, arrow gone, dimmed. The animation stopping rather than
- *    the element vanishing is what says "complete"; the fixture staying is
- *    what makes it a fixture.
+ * It renders *inside the transcript's content column*, after the last row —
+ * the `Working` indicator's neighbourhood. That is what "pinned to the bottom
+ * of the text" turns out to mean: it rides the conversation's tail, pushed
+ * down by each row that streams in, scrolling away with the text when the
+ * reader scrolls up and coming back with the tail-follower. It shares the
+ * column's width and margins, so the scene plays out exactly across the
+ * measure of the prose above it.
+ *
+ * One rule inherited from the scroller: the strip's height never animates.
+ * The tail-follower is a `ResizeObserver` on this very content box, and a
+ * scene that breathed vertically would have it recomputing `scrollTop` for as
+ * long as the run lived. Every motion here is transform and opacity.
+ *
+ * ## The scene's states are the run's own, nothing invented
+ *
+ *  - **firing** (`starting` / `running`): draw, hold, loose; the arrow
+ *    crosses to the stingray, which swims in place all cycle and flinches as
+ *    the arrow arrives — then the bow re-nocks and the hunt resumes. A run in
+ *    progress is a hunt that has not landed yet.
+ *  - **holding** (`awaiting_permission`): drawn and dead still, the ray
+ *    frozen mid-swim. Everyone is waiting on you.
+ *  - **rest** (before the first run, and after `ended`): string straight,
+ *    arrow gone, both figures dimmed to faint ink. The animation stopping —
+ *    not the scene vanishing — is what says "complete".
  *
  * ## Moonlight, not machine-cyan
  *
- * The bow draws in `lunar` while it works and fades to `ink-faint` at rest.
- * An earlier cut coloured the arrow `cyan` to match the transcript's
- * work-in-progress tone, and that was the wrong instinct: the tone system
- * grades *rows* — badges, dots, labels — and this is not a row, it is the
- * app's own mark. Artemis is the moon as much as the hunt; the accent is
- * literally named for her light, it is the colour the runbar above already
- * sweeps in, and the two indicators reading as one system matters more than
- * the bow participating in a taxonomy it is not part of.
+ * The whole scene draws in `lunar` while anything is happening and `ink-faint`
+ * at rest. The tone system (cyan for work, amber for approvals) grades rows —
+ * badges, dots, labels — and this is not a row, it is the app's own mark;
+ * `lunar` is the accent named for Artemis' light and the colour the runbar
+ * sweeps in, and the two reading as one system matters more than the scene
+ * joining a taxonomy it is not part of.
  *
  * ## All CSS, no clock
  *
- * The poses are attribute swaps; the firing loop is four CSS animations (see
- * `index.css`, `artemis-bow-*`) sharing one 2400ms duration, synchronised by
- * mounting in the same commit. Nothing here ticks, subscribes to tokens, or
- * measures the pane — the flight crosses "however wide the strip is" by
- * translating a full-width span 100% of itself, which is the runbar's own
- * trick. The single subscription is `run?.status`, which changes a handful of
- * times per run.
+ * Five animations (see `index.css`, `artemis-bow-*`) share one 2400ms
+ * duration and are synchronised by mounting in the same commit — the keyframe
+ * percentages are the whole choreography, including the hit: the flight ends
+ * at `calc(100% - 40px)` (the ray's flank, however wide the column is) in the
+ * same frames the quarry's flinch begins. Nothing here ticks or measures; the
+ * single subscription is `run?.status`.
  *
- * `aria-hidden`, whole strip: the status line's run segment already reports
- * this state as text, and a screen reader announcing an SVG archery loop would
- * be noise on top of it.
+ * `aria-hidden`, whole strip: the status line already reports this state as
+ * text, and a screen reader announcing an archery loop would be noise on top.
  */
 
 import type { ReactElement } from 'react';
@@ -76,7 +81,7 @@ const STRING_DRAWN = 'M5 2 L2 8 L5 14';
 export function HuntBar(): ReactElement {
   const status = usePane((s) => s.run?.status ?? null);
 
-  // No run yet reads as `rest`, deliberately — the fixture is constant, and a
+  // No run yet reads as `rest`, deliberately — the scene is constant, and a
   // fresh pane's quiet bow is the same statement as a finished run's: nothing
   // is in flight here.
   const pose: Pose =
@@ -96,7 +101,7 @@ export function HuntBar(): ReactElement {
       {/*
         The arrow in flight. A span the width of the whole strip with the glyph
         at its left edge, translated by percentages of itself — see the flight
-        keyframes for why that is the only way to cross an unmeasured pane.
+        keyframes for why that is the only way to cross an unmeasured column.
         `opacity-0` in the markup is load-bearing: it is the element's state
         whenever its animation is not running, which is what keeps a loose
         arrow from parking over the bow under `prefers-reduced-motion`.
@@ -108,6 +113,7 @@ export function HuntBar(): ReactElement {
         </span>
       ) : null}
       <Bow pose={pose} />
+      <Stingray pose={pose} />
     </div>
   );
 }
@@ -167,6 +173,53 @@ function Bow({ pose }: { readonly pose: Pose }): ReactElement {
             <path d="M12 6.2 L14 8 L12 9.8" />
           </g>
         )}
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * The quarry: a stingray at the far edge, facing the archer.
+ *
+ * A filled diamond rather than an outline — at 16px a stroked ray reads as a
+ * kite — with the whip tail and its barb doing the species work: the barb is
+ * the one mark that says *stingray* rather than fish. It swims in place while
+ * the hunt is on (`hunt-quarry` is the same 2400ms clock as everything else,
+ * with the flinch keyed to the frames the flight ends in), holds still while
+ * a permission does, and dims with the bow at rest — unbothered, alive, and
+ * plainly never actually struck, because the hunt is the run and the run
+ * always comes back for another pass.
+ */
+function Stingray({ pose }: { readonly pose: Pose }): ReactElement {
+  return (
+    <svg
+      data-part="quarry"
+      viewBox="0 0 24 16"
+      className={cn(
+        'absolute top-0 right-1 h-4 w-6',
+        pose === 'rest' ? 'text-ink-faint' : 'text-lunar',
+      )}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <g className={pose === 'firing' ? 'hunt-quarry' : undefined}>
+        {/* The disc: snout left toward the incoming arrow, wings swept back to
+            points. Filled, because at 16px a stroked ray reads as a kite. */}
+        <path
+          fill="currentColor"
+          stroke="none"
+          d="M1.8 8 C 4 5.6 7 3.3 10.5 2.7 C 11.4 4.8 12.2 6 13 7 Q 14 7.6 14 8 Q 14 8.4 13 9 C 12.2 10 11.4 11.2 10.5 13.3 C 7 12.7 4 10.4 1.8 8 Z"
+        />
+        {/* The whip tail, and the barb that makes it a stingray. */}
+        <path strokeWidth="0.9" d="M14 8 C 16.5 8.15 18.5 9.3 22 12.8" />
+        <path strokeWidth="0.9" d="M18 9.35 L 19.3 8.15" />
+        {/* Eyes, punched in the window's own background so they read as cut
+            through the disc — and follow the theme with it. */}
+        <circle cx="5.4" cy="7" r="0.55" className="fill-abyss" stroke="none" />
+        <circle cx="5.4" cy="9" r="0.55" className="fill-abyss" stroke="none" />
       </g>
     </svg>
   );

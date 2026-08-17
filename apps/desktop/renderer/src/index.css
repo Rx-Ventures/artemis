@@ -914,9 +914,10 @@
   }
 
   /*
-   * The hunt — Artemis' bow under the transcript, loosing an arrow across the
-   * pane for as long as a run is going. `HuntBar.tsx` owns the geometry and
-   * the poses; what lives here is the choreography.
+   * The hunt — Artemis' bow at the foot of the conversation's text, loosing
+   * an arrow across the column at the stingray on the far side for as long as
+   * a run is going. `HuntBar.tsx` owns the geometry and the poses; what lives
+   * here is the choreography.
    *
    * It rides *with* the runbar above, not instead of it: the hairline is the
    * transient report (present only while a run is live), the bow is the
@@ -955,6 +956,11 @@
      edge of the pane. */
   .hunt-flight {
     animation: artemis-bow-flight 2400ms linear infinite;
+  }
+  /* The stingray at the far side — swimming in place on the same clock, with
+     its flinch keyed to the frames the flight lands in. */
+  .hunt-quarry {
+    animation: artemis-bow-quarry 2400ms ease-in-out infinite;
   }
 
   /*
@@ -1083,10 +1089,14 @@
 }
 
 /*
- * `translateX(100%)` is the flight span's own width, and the span is the whole
- * strip — the trick the old runbar's sweep used, kept because it is what lets
- * the arrow cross whatever the pane happens to measure without a script ever
- * reading a width. 10px parks the hidden glyph at the bow until the loose.
+ * `translateX(…)` is against the flight span's own width, and the span is the
+ * whole strip — the trick the old runbar's sweep used, kept because it is what
+ * lets the arrow cross whatever the column happens to measure without a script
+ * ever reading a width. 10px parks the hidden glyph at the bow until the
+ * loose; the `- 40px` is where the flight now *ends* — at the stingray's
+ * flank rather than off the edge, vanishing in the same frames the quarry's
+ * flinch begins. The two are on the same clock, which is the whole of how the
+ * hit lands.
  */
 @keyframes artemis-bow-flight {
   0%,
@@ -1103,7 +1113,38 @@
   80%,
   100% {
     opacity: 0;
-    transform: translateX(100%);
+    transform: translateX(calc(100% - 40px));
+  }
+}
+
+/*
+ * The stingray's cycle: a slow swim all the way round — small drifts, eased,
+ * so it reads as idling rather than twitching — and then the flinch at 83%,
+ * three frames after the arrow lands at 80%. It settles back by the time the
+ * bow has re-nocked. Sub-2px throughout: the quarry is sixteen pixels tall,
+ * and any more motion than this reads as the whole strip shaking.
+ */
+@keyframes artemis-bow-quarry {
+  0% {
+    transform: translate(0, 0);
+  }
+  30% {
+    transform: translate(-0.6px, 0.6px);
+  }
+  60% {
+    transform: translate(0, -0.5px);
+  }
+  79% {
+    transform: translate(0, 0);
+  }
+  83% {
+    transform: translate(1.6px, -1.2px);
+  }
+  90% {
+    transform: translate(0.4px, -0.3px);
+  }
+  100% {
+    transform: translate(0, 0);
   }
 }
 
@@ -1137,6 +1178,7 @@
   .caret::after,
   .hunt-flight,
   .hunt-nock,
+  .hunt-quarry,
   .hunt-recoil,
   .hunt-string,
   .runbar::after,

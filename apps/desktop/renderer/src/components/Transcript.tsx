@@ -200,6 +200,7 @@ import {
 } from '../state/transcript';
 import { DiffView } from './DiffView';
 import { EmptyState } from './EmptyState';
+import { HuntBar } from './HuntBar';
 import { InlinePermission } from './InlinePermission';
 import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
@@ -318,6 +319,13 @@ export function Transcript(): ReactElement {
         >
           {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
           <Working />
+          {/* The hunt, riding the conversation's tail: inside the content
+              column so it sits at the bottom of the text itself — pushed down
+              by every row that streams in, scrolling with the transcript, and
+              sharing the column's measure so the arrow crosses exactly the
+              width the prose does. Static height, transforms-only inside, so
+              it never trips the tail-follower above. See `HuntBar.tsx`. */}
+          <HuntBar />
         </div>
       </div>
 
