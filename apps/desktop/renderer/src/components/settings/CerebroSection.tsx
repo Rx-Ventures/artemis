@@ -11,16 +11,21 @@
  * is deliberately a window, not a control surface.
  *
  * ---------------------------------------------------------------------------
- * EVERY WRITE GOES THROUGH THE BANK'S OWN GATES
+ * ADDING A MEMORY IS NOT A PANE ACTION
  * ---------------------------------------------------------------------------
  *
- * "Add" here is `draft` + `promote`, and "remove" is `retire` — the same CLI
- * verbs the agents use, with the same validator and the same PR path once a
- * remote exists. This pane never edits a file in the bank directly, which is
- * why its write buttons answer with a receipt (the CLI's own words) rather
- * than optimistically mutating the list: the honest outcome of a write is "a
- * commit landed" or "a pull request is open", and the list only changes when
- * a re-read says it did.
+ * There used to be a draft form here, and it was removed on purpose (Seth,
+ * 2026-08-17): memories enter the bank through agents, who are prompted to
+ * write them in house style — scoped to their repos, description as a
+ * retrieval hook, absolute dates — and to route team facts here rather than
+ * to personal memory. A human-facing form was a second authoring path that
+ * knew none of that. The human way to add a fact is to state it to an agent,
+ * which is also the cheaper way. What remains human is *pruning*: `retire`
+ * stays, because deciding a fact no longer holds is exactly the judgment the
+ * inspection moment exists for. It runs through the bank's own gates and
+ * answers with a receipt (the CLI's own words) rather than optimistically
+ * mutating the list — the honest outcome is "a commit landed" or "a pull
+ * request is open", and the list only changes when a re-read says it did.
  *
  * ---------------------------------------------------------------------------
  * WHY THE BODIES ARE FOLDED, NOT TRUNCATED
@@ -34,8 +39,7 @@
 
 import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-import type { CerebroMemory, CerebroMemoryType } from '@rx-artemis/protocol';
-import { CEREBRO_MEMORY_TYPES } from '@rx-artemis/protocol';
+import type { CerebroMemory } from '@rx-artemis/protocol';
 
 import { useCerebro, type CerebroPane } from '../../hooks/useCerebro';
 import { CodeBlock, Fold, Row, StatusDot, ToneBadge } from '../primitives';
@@ -52,17 +56,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-
-/** One line per type, for the draft form. The bank's docs say the rest. */
-const TYPE_NOTES: Record<CerebroMemoryType, string> = {
-  reference: 'A pointer or fact: what something is, where it lives.',
-  feedback: 'Guidance on how to work, with the why attached.',
-  project: 'Ongoing work or constraints the code does not record.',
-  user: 'Who someone is — role, expertise, preferences.',
-};
 
 export function CerebroSection(): ReactElement {
   const pane = useCerebro();
@@ -95,7 +89,6 @@ export function CerebroSection(): ReactElement {
       {pane.status !== null && !pane.status.installed ? <SetupGroup pane={pane} /> : null}
       {pane.status !== null && pane.status.installed ? <ConnectionGroup pane={pane} /> : null}
       {pane.status !== null && pane.status.installed ? <MemoriesGroup pane={pane} /> : null}
-      {pane.status !== null && pane.status.installed ? <DraftGroup pane={pane} /> : null}
 
       {pane.lastAction !== null ? (
         <CodeBlock
@@ -332,101 +325,3 @@ function RetireButton({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* New memory                                                                 */
-/* -------------------------------------------------------------------------- */
-
-function DraftGroup({ pane }: { readonly pane: CerebroPane }): ReactElement {
-  const [name, setName] = useState('');
-  const [type, setType] = useState<CerebroMemoryType>('reference');
-  const [description, setDescription] = useState('');
-  const [body, setBody] = useState('');
-
-  const ready = name.length > 0 && description.length > 0 && body.length > 0;
-
-  const submit = async (): Promise<void> => {
-    const landed = await pane.draft({ name, type, description, body });
-    if (landed) {
-      setName('');
-      setDescription('');
-      setBody('');
-    }
-  };
-
-  return (
-    <SettingsGroup label="New memory">
-      <p className="text-2xs leading-relaxed text-ink-faint">
-        Agents record most memories on their own; this form is for the fact you want to state
-        yourself. It goes through the same validation and review gates either way. Re-using an
-        existing name updates that memory.
-      </p>
-      <div className="flex gap-2">
-        <Field className="flex-1">
-          <FieldLabel htmlFor="cerebro-draft-name" className="text-2xs text-ink-faint uppercase">
-            Name
-          </FieldLabel>
-          <Input
-            id="cerebro-draft-name"
-            value={name}
-            onChange={(event) => setName(event.target.value.toLowerCase())}
-            placeholder="deploy-approval-flow"
-            spellCheck={false}
-            className="font-mono text-xs md:text-xs"
-          />
-          <FieldDescription className="text-2xs">Kebab-case slug; becomes the filename.</FieldDescription>
-        </Field>
-        <Field className="flex-1">
-          <FieldLabel className="text-2xs text-ink-faint uppercase">Type</FieldLabel>
-          <div className="flex flex-wrap gap-1">
-            {CEREBRO_MEMORY_TYPES.map((option) => (
-              <Button
-                key={option}
-                size="sm"
-                variant={option === type ? 'secondary' : 'ghost'}
-                aria-pressed={option === type}
-                className="text-2xs"
-                onClick={() => setType(option)}
-              >
-                {option}
-              </Button>
-            ))}
-          </div>
-          <FieldDescription className="text-2xs">{TYPE_NOTES[type]}</FieldDescription>
-        </Field>
-      </div>
-      <Field>
-        <FieldLabel htmlFor="cerebro-draft-description" className="text-2xs text-ink-faint uppercase">
-          Description
-        </FieldLabel>
-        <Input
-          id="cerebro-draft-description"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          placeholder="When is this relevant?"
-          className="text-xs md:text-xs"
-        />
-        <FieldDescription className="text-2xs">
-          One line — it is the retrieval hook agents decide by.
-        </FieldDescription>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="cerebro-draft-body" className="text-2xs text-ink-faint uppercase">
-          Body
-        </FieldLabel>
-        <Textarea
-          id="cerebro-draft-body"
-          rows={4}
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-          placeholder="The fact, stated plainly. Absolute dates. No secrets — the validator refuses them."
-          className="text-xs md:text-xs"
-        />
-      </Field>
-      <div>
-        <Button size="sm" disabled={!ready || pane.busy !== null} onClick={() => void submit()}>
-          {pane.busy === 'draft' ? 'Landing…' : 'Draft & land'}
-        </Button>
-      </div>
-    </SettingsGroup>
-  );
-}

@@ -33,7 +33,6 @@ import {
   ATTACHMENT_LIMITS,
   attachmentBytes,
   base64Bytes,
-  CEREBRO_MEMORY_TYPES,
   configDirProblem,
   isBuiltInPromptId,
   IMAGE_MEDIA_TYPES,
@@ -54,9 +53,7 @@ import {
   type AgentPromptsSaveRequest,
   type Attachment,
   type BuiltInPromptId,
-  type CerebroDraftRequest,
   type CerebroListRequest,
-  type CerebroMemoryType,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
   type CerebroSetupRequest,
@@ -1776,30 +1773,6 @@ export function validateCerebroSetup(raw: unknown): CerebroSetupRequest {
 export function validateCerebroSync(raw: unknown): CerebroSyncRequest {
   requireRequest(raw);
   return {};
-}
-
-/**
- * The limits mirror the bank's validator (name 60, description 160, body
- * 6000) so nothing that passes here is later refused by the CLI for size —
- * the CLI still re-checks everything, including what these bounds cannot see
- * (secret shapes, injection phrasing).
- */
-export function validateCerebroDraft(raw: unknown): CerebroDraftRequest {
-  const request = requireRequest(raw);
-  const name = requireString(request['name'], 'name', 60);
-  if (!CEREBRO_SLUG_PATTERN.test(name)) {
-    throw new ValidationError('name', 'must be a kebab-case slug, such as deploy-approval-flow');
-  }
-  const type = requireString(request['type'], 'type', 20);
-  if (!(CEREBRO_MEMORY_TYPES as readonly string[]).includes(type)) {
-    throw new ValidationError('type', `must be one of ${CEREBRO_MEMORY_TYPES.join(', ')}`);
-  }
-  return {
-    name,
-    type: type as CerebroMemoryType,
-    description: requireString(request['description'], 'description', 160),
-    body: requireString(request['body'], 'body', 6_000),
-  };
 }
 
 /** Retirement names a slug; the CLI answers "no memory named …" for one that does not exist. */

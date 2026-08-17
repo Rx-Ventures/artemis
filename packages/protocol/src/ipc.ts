@@ -352,7 +352,6 @@ export const IPC = {
   cerebroPreflight: 'artemis:cerebro:preflight',
   cerebroSetup: 'artemis:cerebro:setup',
   cerebroSync: 'artemis:cerebro:sync',
-  cerebroDraft: 'artemis:cerebro:draft',
   cerebroRetire: 'artemis:cerebro:retire',
   /**
    * The standing-instruction library.
@@ -1500,19 +1499,15 @@ export interface UpdatesStateResponse {
 /* Cerebro                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** The four kinds of memory the bank's own schema accepts. */
-export const CEREBRO_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'] as const;
-
-export type CerebroMemoryType = (typeof CEREBRO_MEMORY_TYPES)[number];
-
 /**
  * One memory, as the bank's CLI reports it.
  *
- * `type` is a plain string rather than {@link CerebroMemoryType} on purpose:
- * this is a *reading* of files the bank validates on its own side, and a pane
- * that refused to list a memory because a future bank added a fifth type would
- * be hiding data to satisfy a stale union. The union constrains what Artemis
- * *writes* (see {@link CerebroDraftRequest}), not what it is willing to show.
+ * `type` is a plain string rather than a union of the bank's four kinds on
+ * purpose: this is a *reading* of files the bank validates on its own side,
+ * and a pane that refused to list a memory because a future bank added a
+ * fifth type would be hiding data to satisfy a stale union. Artemis does not
+ * write memories at all — agents do, through the CLI — so nothing here needs
+ * the constraining form.
  */
 export interface CerebroMemory {
   readonly name: string;
@@ -1615,25 +1610,6 @@ export type CerebroSetupResponse = CerebroActionResponse;
 /** Empty; syncing takes no aim. */
 export type CerebroSyncRequest = Record<string, never>;
 export type CerebroSyncResponse = CerebroActionResponse;
-
-/**
- * A memory to queue and land through the bank's own gates.
- *
- * The one place the renderer supplies bank content — and it still lands
- * nothing itself: the CLI validates the draft (schema, secret scan, injection
- * lint) and then commits or opens a PR exactly as it does for an agent.
- * Re-using an existing name is the update path, by the bank's design.
- */
-export interface CerebroDraftRequest {
-  /** Kebab-case slug; becomes the filename. */
-  readonly name: string;
-  readonly type: CerebroMemoryType;
-  /** One line answering "when is this relevant?". */
-  readonly description: string;
-  readonly body: string;
-}
-
-export type CerebroDraftResponse = CerebroActionResponse;
 
 /** Remove a memory through the same gates a promotion goes through. */
 export interface CerebroRetireRequest {
@@ -1739,7 +1715,6 @@ export type IpcRequestMap = {
   [IPC.cerebroPreflight]: CerebroPreflightRequest;
   [IPC.cerebroSetup]: CerebroSetupRequest;
   [IPC.cerebroSync]: CerebroSyncRequest;
-  [IPC.cerebroDraft]: CerebroDraftRequest;
   [IPC.cerebroRetire]: CerebroRetireRequest;
   [IPC.agentPromptsList]: AgentPromptsListRequest;
   [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
@@ -1804,7 +1779,6 @@ export type IpcResponseMap = {
   [IPC.cerebroPreflight]: CerebroPreflightResponse;
   [IPC.cerebroSetup]: CerebroSetupResponse;
   [IPC.cerebroSync]: CerebroSyncResponse;
-  [IPC.cerebroDraft]: CerebroDraftResponse;
   [IPC.cerebroRetire]: CerebroRetireResponse;
   [IPC.agentPromptsList]: AgentPromptsListResponse;
   [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
@@ -2036,8 +2010,6 @@ export interface ArtemisBridge {
     setup(request: CerebroSetupRequest): Promise<IpcResult<CerebroSetupResponse>>;
     /** Promote queued drafts, fetch, re-install everywhere. Bypasses the throttle. */
     sync(request: CerebroSyncRequest): Promise<IpcResult<CerebroSyncResponse>>;
-    /** Queue a memory and land it through the bank's gates. */
-    draft(request: CerebroDraftRequest): Promise<IpcResult<CerebroDraftResponse>>;
     /** Remove a memory through the same gates. */
     retire(request: CerebroRetireRequest): Promise<IpcResult<CerebroRetireResponse>>;
   };

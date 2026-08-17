@@ -40,7 +40,6 @@ import { promisify } from 'node:util';
 
 import type {
   CerebroCheck,
-  CerebroDraftRequest,
   CerebroActionResponse,
   CerebroMemory,
   CerebroPreflight,
@@ -555,27 +554,6 @@ export async function setupCerebro(): Promise<CerebroActionResponse> {
 export async function syncCerebro(): Promise<CerebroActionResponse> {
   const output = (await runCerebro(cerebroRoot(), ['sync', '--force'], 120_000)).trim();
   return { message: output.length > 0 ? output : 'Already up to date.' };
-}
-
-/** Queue a memory, then land it through the bank's gates (commit or PR). */
-export async function draftCerebroMemory(request: CerebroDraftRequest): Promise<CerebroActionResponse> {
-  const root = cerebroRoot();
-  const drafted = await runCerebro(
-    root,
-    [
-      'draft',
-      request.name,
-      '--type',
-      request.type,
-      '--description',
-      request.description,
-      '--body',
-      request.body,
-    ],
-    30_000,
-  );
-  const landed = await runCerebro(root, ['promote'], 120_000);
-  return { message: `${drafted.trim()} ${landed.trim()}`.trim() };
 }
 
 export async function retireCerebroMemory(request: CerebroRetireRequest): Promise<CerebroActionResponse> {

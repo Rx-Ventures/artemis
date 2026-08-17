@@ -64,7 +64,6 @@ import {
   type SessionsListRequest,
   type AgentPromptsListRequest,
   type AgentPromptsSaveRequest,
-  type CerebroDraftRequest,
   type CerebroListRequest,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
@@ -548,7 +547,6 @@ const bridge: ArtemisBridge = Object.freeze({
     preflight: (request: CerebroPreflightRequest) => invoke(IPC.cerebroPreflight, request),
     setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
     sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
-    draft: (request: CerebroDraftRequest) => invoke(IPC.cerebroDraft, request),
     retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
   }),
 
