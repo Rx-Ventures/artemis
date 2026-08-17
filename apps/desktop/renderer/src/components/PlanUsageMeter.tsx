@@ -47,7 +47,7 @@ import {
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
-import { activeCapabilities, activeProviderLabel } from '../state/store';
+import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { paneState } from '../state/pane';
 import { WithReason } from './disabled-reason';
@@ -399,7 +399,20 @@ function ageHint(fetchedAt: number, now: number): string {
 }
 
 /**
- * One profile's plan usage, cached-then-fresh.
+ * The newer of two readings of the same account, or whichever one exists.
+ *
+ * `fetchedAt` rather than a preference for either source, because neither
+ * subsumes the other and which is fresher genuinely alternates — see
+ * {@link usePlanUsage}.
+ */
+function newerReading(a: PlanUsage | null, b: PlanUsage | null): PlanUsage | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return b.fetchedAt > a.fetchedAt ? b : a;
+}
+
+/**
+ * One profile's plan usage, cached-then-fresh, and never behind the poll.
  *
  * A hook rather than a prop drilled down from one owner, because two unrelated
  * places ask this question about two different profiles: the status bar asks
@@ -411,6 +424,28 @@ function ageHint(fetchedAt: number, now: number): string {
  * profile can change while a read is in flight — the user switches accounts —
  * and attributing one account's limits to another is a worse answer than none.
  * A card's profile cannot change, so it passes nothing.
+ *
+ * ## Two sources, and the rings used to see only one
+ *
+ * Artemis holds this fact in two places, and for a while they were not
+ * connected:
+ *
+ *  - **This hook's own state**, filled by {@link load} — on mount, on a profile
+ *    change, and when the popover opens.
+ *  - **`planUsageByProfile`** in the app store, which the main process's poll
+ *    pushes into every few minutes for *every* account.
+ *
+ * The rings rendered the first and never read the second. So the three numbers
+ * on the status bar were frozen at whatever the last `load` returned: sit on one
+ * account while an agent works through a long job and the 5-hour ring would not
+ * move, though the true figure was in the store the whole time, one selector
+ * away. Reloading the window fixed it, because that remounts the meter — which
+ * is exactly the "I have to refresh to see changes" this was reported as.
+ *
+ * Neither source subsumes the other, which is why this takes the newer of the
+ * two rather than preferring one. The poll is the only thing that keeps an idle
+ * account current; the local read is the only thing current in the instant after
+ * a profile switch or a manual refresh, before the next cycle comes round.
  */
 function usePlanUsage(
   profileId: string | null,
@@ -429,7 +464,15 @@ function usePlanUsage(
   */
   const [held, setHeld] = useState<{ readonly of: string; readonly usage: PlanUsage } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const usage = held !== null && held.of === profileId ? held.usage : null;
+  const local = held !== null && held.of === profileId ? held.usage : null;
+  /*
+    The poll's copy of the same account. Selected by id rather than taking the
+    whole map, so a cycle that re-reads seven *other* profiles does not re-render
+    this meter seven times — the entries are replaced individually, so the one
+    this subscribes to keeps its identity until it is the one that moved.
+  */
+  const polled = useApp((s) => (profileId === null ? null : (s.planUsageByProfile[profileId] ?? null)));
+  const usage = newerReading(local, polled);
 
   /** Resolves true when a reading actually landed, so a caller can escalate. */
   const load = useCallback(
