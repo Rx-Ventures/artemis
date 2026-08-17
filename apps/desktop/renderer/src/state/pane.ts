@@ -210,6 +210,24 @@ export interface SessionState extends MirroredState {
    * everything the session ever ran.
    */
   readonly dismissedTasks: readonly string[];
+  /**
+   * Whether the delegated tab on screen is one the user opened by hand.
+   *
+   * The mirror of {@link dismissedTasks}, and it exists for the setting that
+   * record cannot answer for. With "the dock never opens on its own" turned off
+   * the tab may not arrive by itself — but the header's Delegated button is a
+   * press, not an arrival, and without somewhere to record that press the strip
+   * has no way to tell the two apart. See `ShownConversation.tasksRequested`.
+   *
+   * A flag rather than ids, which is the opposite of the choice next door and
+   * for the same reason: `dismissedTasks` has to survive `tasks` being replaced
+   * several times a second, whereas this is a statement about the tab and not
+   * about any row in it. New work arriving under an open tab belongs in it.
+   *
+   * Cleared by that tab's ✕ and at every conversation boundary, so it never
+   * authorises the *next* column's uninvited tab.
+   */
+  readonly tasksRequested: boolean;
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**

@@ -216,6 +216,25 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
     expect(visibleTabs(null, [], busy).map(tabKey)).toEqual(['tasks:pane1']);
   });
 
+  it('lets the tasks tab in when the user asked for it', () => {
+    const asked: readonly ShownConversation[] = [
+      { paneId: 'pane1', hasTasks: true, tasksRequested: true },
+    ];
+    // The delegated tab is the one surface here with two origins, and only the
+    // uninvited one is what this setting is about. Suppressing the press too
+    // leaves the header's Delegated button enabled and inert.
+    expect(visibleTabs(null, [], asked, [], null, [], false).map(tabKey)).toEqual(['tasks:pane1']);
+  });
+
+  it('will not let it in on the flag alone', () => {
+    // `hasTasks` still decides whether a tab is warranted at all — a column
+    // whose rows were dismissed answers no, and a stale request must not
+    // resurrect it. The two are read in that order, never as alternatives.
+    const stale: readonly ShownConversation[] = [{ paneId: 'pane1', tasksRequested: true }];
+    expect(visibleTabs(null, [], stale, [], null, [], false)).toEqual([]);
+    expect(visibleTabs(null, [], stale, [], null, [], true)).toEqual([]);
+  });
+
   it('keeps an agent-opened page out, and leaves the user’s own alone', () => {
     const tabs = visibleTabs(
       null,

@@ -201,6 +201,21 @@ export interface ShownConversation {
    * rows through here would make every progress message rebuild the strip.
    */
   readonly hasTasks?: boolean;
+  /**
+   * Whether the user asked for that tab by hand, rather than it arriving.
+   *
+   * The one thing separating a delegated tab from every other surface the agent
+   * puts in the dock: it has two origins. It appears on its own when work is
+   * delegated, and it opens on a press of the header's Delegated button. Only
+   * the first is an agent surface, so only the first is what "the dock never
+   * opens on its own" is about — and without this flag that setting takes the
+   * button with it, leaving an enabled control that does nothing at all.
+   *
+   * Written while the tab is open and cleared by its ✕, so it authorises *this*
+   * tab rather than every future one. Work delegated after the user shut it
+   * stays out of the strip, which is the promise the setting makes.
+   */
+  readonly tasksRequested?: boolean;
 }
 
 /**
@@ -361,13 +376,14 @@ export function visibleTabs(
   /**
    * Whether surfaces the *agent* put here may claim a tab.
    *
-   * False is the appearance option "the dock never opens on its own": the
-   * tasks tab (the one tab nobody opens — it arrives with delegated work) and
-   * agent-opened pages stay out of the strip entirely, because any tab in an
-   * empty strip is what opens the dock. Everything the user opened — preview,
-   * file, shells, their own pages, agent transcripts they clicked into — is
-   * user input and stays. The suppressed records still exist; flipping the
-   * setting back on reveals them on the next reconcile.
+   * False is the appearance option "the dock never opens on its own": a tasks
+   * tab that *arrived* with delegated work, and agent-opened pages, stay out of
+   * the strip entirely, because any tab in an empty strip is what opens the
+   * dock. Everything the user opened — preview, file, shells, their own pages,
+   * agent transcripts they clicked into, and a delegated tab they asked for by
+   * hand, which is {@link ShownConversation.tasksRequested} — is user input and
+   * stays. The suppressed records still exist; flipping the setting back on
+   * reveals them on the next reconcile.
    */
   agentSurfaces: boolean = true,
 ): readonly DockTab[] {
@@ -387,7 +403,9 @@ export function visibleTabs(
     if (ownerIsShown(browser.owner, shown)) tabs.push({ kind: 'browser', id: browser.info.id });
   }
   for (const one of shown) {
-    if (one.hasTasks === true && agentSurfaces) tabs.push({ kind: 'tasks', paneId: one.paneId });
+    if (one.hasTasks === true && (agentSurfaces || one.tasksRequested === true)) {
+      tabs.push({ kind: 'tasks', paneId: one.paneId });
+    }
     // A column's open agents sit directly after its own list, so the thing a
     // tab was opened *from* stays beside it rather than at the far end of a
     // split's strip.

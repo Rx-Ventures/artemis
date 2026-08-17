@@ -1395,6 +1395,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     promptHistory: [],
     draft: '',
     ...overrides,
@@ -2085,14 +2086,21 @@ export function closeFile(): void {
  * What is written is the ids that were on screen, which is what makes the tab
  * stay shut through the progress messages that follow. Work delegated *after*
  * this is not in that set, so the tab comes back for it in the same way it
- * arrived the first time — which is the only way back, since these rows are not
- * something anyone can reopen by hand.
+ * arrived the first time — or, with the dock forbidden to open on its own, on
+ * the next press of the header's button; see {@link toggleTasks}.
+ *
+ * `tasksRequested` goes with it, and that is the half that matters under the
+ * setting: shutting the tab has to withdraw the permission the press granted,
+ * or the next thing delegated would open a pane the user has just closed.
  */
 export function closeTasks(paneId: PaneId): void {
   const pane = allLivePanes().find((one) => one.id === paneId);
   if (pane === undefined) return;
   // Which tab comes forward is `reconcileDock`'s, on this write.
-  setPaneState(pane, { dismissedTasks: paneState(pane).tasks.map((task) => task.id) });
+  setPaneState(pane, {
+    dismissedTasks: paneState(pane).tasks.map((task) => task.id),
+    tasksRequested: false,
+  });
 }
 
 /**
@@ -2109,6 +2117,13 @@ export function closeTasks(paneId: PaneId): void {
  * reopened it" flag: the record exists to keep the tab shut through the progress
  * messages that follow, and once the user has asked for it back there is nothing
  * left for it to suppress.
+ *
+ * `tasksRequested` is written all the same, and is not that flag. It answers a
+ * different question — not "is this tab shut" but "is this tab the user's
+ * doing" — and only the strip asks it, when the dock is forbidden to open on
+ * its own and has to tell an arrival from a press. Without it this function
+ * still runs, still clears the dismissal, and still focuses a tab that
+ * `visibleTabs` then declines to draw: an enabled button that does nothing.
  *
  * Shaped as a toggle for the same reason {@link toggleTerminal} is — a button
  * that opens something and then does nothing on the second press reads as
@@ -2127,7 +2142,12 @@ export function toggleTasks(pane: Pane = focusedPane()): void {
     return;
   }
 
-  if (state.dismissedTasks.length > 0) setPaneState(pane, { dismissedTasks: [] });
+  // Guarded so that a press which only brings an already-open tab forward
+  // writes nothing: this runs on a strip that rebuilds on every progress
+  // message, and a needless write here would rebuild it again.
+  if (state.dismissedTasks.length > 0 || !state.tasksRequested) {
+    setPaneState(pane, { dismissedTasks: [], tasksRequested: true });
+  }
   focusDockTab(tab);
 }
 
@@ -2290,6 +2310,7 @@ export function openAgentTab(paneId: PaneId, taskId: string): void {
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     draft: '',
   });
 
@@ -2501,6 +2522,11 @@ function describeShown(): readonly ShownConversation[] {
       // and carrying the set through here would make every progress message
       // rebuild the strip.
       ...(showsTasks(state) ? { hasTasks: true } : {}),
+      // Reported beside it rather than folded into it, because the two are read
+      // by different rules: `hasTasks` says a tab is warranted, this says who
+      // warranted it. Only the second survives the dock being told never to
+      // open on its own.
+      ...(state.tasksRequested ? { tasksRequested: true } : {}),
     };
   });
 
@@ -2512,7 +2538,8 @@ function describeShown(): readonly ShownConversation[] {
         one.paneId === before.paneId &&
         one.runId === before.runId &&
         one.sessionId === before.sessionId &&
-        one.hasTasks === before.hasTasks
+        one.hasTasks === before.hasTasks &&
+        one.tasksRequested === before.tasksRequested
       );
     });
 
@@ -2567,10 +2594,16 @@ function reconcileDock(): void {
     browsers.length === 0 &&
     visibleDockTabs.length === 0 &&
     agentViews.length === 0 &&
-    // With auto-open off, tasks cannot surface a tab, so they cannot be the
-    // reason the strip needs rebuilding — and this early return is back on
-    // the fast path it was written for.
-    (!state.dockAutoOpen || !allPanes().some((pane) => showsTasks(paneState(pane))))
+    // Delegated work still cannot be the reason the strip needs rebuilding
+    // when no column may claim a tab for it — but "may" is no longer the
+    // setting alone. A column whose tab the user opened by hand claims one
+    // with the setting off, and returning early on it would leave the strip
+    // empty, the dock shut, and that press looking like it did nothing. The
+    // condition is `visibleTabs`', which the two have to agree on exactly.
+    !allPanes().some((pane) => {
+      const one = paneState(pane);
+      return showsTasks(one) && (state.dockAutoOpen || one.tasksRequested);
+    })
   ) {
     return;
   }
@@ -4610,6 +4643,7 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     // The session the next prompt continues is this run's own. Set now rather
     // than waiting for `run.end`, because until it is set the sidebar cannot
     // mark the row the user needs in order to find this conversation again.
@@ -6044,6 +6078,7 @@ export function newSession(
       permissionQueue: [],
       tasks: [],
       dismissedTasks: [],
+      tasksRequested: false,
     });
   }
 
@@ -6198,6 +6233,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
