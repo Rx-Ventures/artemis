@@ -214,6 +214,15 @@ export interface ShownConversation {
 export interface BrowserRecord {
   readonly info: BrowserInfo;
   readonly owner: DockOwner;
+  /**
+   * True for a page an agent opened with a tool, absent for one the user asked
+   * for. The record is kept either way — main is driving the page and it must
+   * stay closeable and re-ownable — but `visibleTabs` only surfaces an
+   * agent-opened page while the dock is allowed to open on its own. Marked on
+   * the record rather than resolved at arrival so that turning the setting on
+   * later reveals the pages that arrived while it was off.
+   */
+  readonly agentOpened?: boolean;
 }
 
 /**
@@ -349,6 +358,18 @@ export function visibleTabs(
    * aiming at.
    */
   browsers: readonly BrowserRecord[] = [],
+  /**
+   * Whether surfaces the *agent* put here may claim a tab.
+   *
+   * False is the appearance option "the dock never opens on its own": the
+   * tasks tab (the one tab nobody opens — it arrives with delegated work) and
+   * agent-opened pages stay out of the strip entirely, because any tab in an
+   * empty strip is what opens the dock. Everything the user opened — preview,
+   * file, shells, their own pages, agent transcripts they clicked into — is
+   * user input and stays. The suppressed records still exist; flipping the
+   * setting back on reveals them on the next reconcile.
+   */
+  agentSurfaces: boolean = true,
 ): readonly DockTab[] {
   const tabs: DockTab[] = [];
   if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
@@ -362,10 +383,11 @@ export function visibleTabs(
   // After the shells rather than before them, which is only a convention — but
   // a fixed one, so that opening a browser never shifts a terminal's ✕.
   for (const browser of browsers) {
+    if (browser.agentOpened === true && !agentSurfaces) continue;
     if (ownerIsShown(browser.owner, shown)) tabs.push({ kind: 'browser', id: browser.info.id });
   }
   for (const one of shown) {
-    if (one.hasTasks === true) tabs.push({ kind: 'tasks', paneId: one.paneId });
+    if (one.hasTasks === true && agentSurfaces) tabs.push({ kind: 'tasks', paneId: one.paneId });
     // A column's open agents sit directly after its own list, so the thing a
     // tab was opened *from* stays beside it rather than at the far end of a
     // split's strip.

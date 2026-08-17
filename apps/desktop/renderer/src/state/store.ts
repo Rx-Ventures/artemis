@@ -574,6 +574,20 @@ export interface AppState {
   readonly streamingWordFade: boolean;
 
   /**
+   * Whether the dock may open, or grow a tab, without the user asking.
+   *
+   * On by default, which is every behaviour the app has always had: the first
+   * artifact of a conversation opens the preview pane by itself, delegated
+   * work surfaces the tasks tab mid-turn, and a page an agent opens appears in
+   * the strip. Off is one sentence with no exceptions: nothing the *agent*
+   * does may open the side pane — only clicks do. The suppressed things stay
+   * reachable through their own affordances (the artifact tile's Open, a
+   * browser or task revealed by turning this back on), so off hides arrivals
+   * rather than destroying them.
+   */
+  readonly dockAutoOpen: boolean;
+
+  /**
    * Whether the user has taken up the shared-`~/.claude` arrangement.
    *
    * A record of intent, not a switch that does anything. Artemis never links
@@ -1121,6 +1135,7 @@ interface Prefs {
   fontSize?: number;
   theme?: Theme;
   streamingWordFade?: boolean;
+  dockAutoOpen?: boolean;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
   /**
@@ -1221,6 +1236,7 @@ function loadPrefs(): Prefs {
     // change it and nothing happens.
     theme: oneOf(raw['theme'], THEMES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
+    dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
     contextWindows: numberMap(raw['contextWindows']),
@@ -1304,6 +1320,7 @@ function savePrefs(): void {
     fontSize: s.fontSize,
     theme: s.theme,
     streamingWordFade: s.streamingWordFade,
+    dockAutoOpen: s.dockAutoOpen,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
@@ -1459,6 +1476,8 @@ export const useApp = create<AppState>(() => ({
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
+  // Same rule: `false` is the deliberate state this pref exists to keep.
+  dockAutoOpen: prefs.dockAutoOpen ?? true,
 
   // Both default to false, and the second is what keeps a fresh install from
   // being offered an undo for something it never did.
@@ -2548,7 +2567,10 @@ function reconcileDock(): void {
     browsers.length === 0 &&
     visibleDockTabs.length === 0 &&
     agentViews.length === 0 &&
-    !allPanes().some((pane) => showsTasks(paneState(pane)))
+    // With auto-open off, tasks cannot surface a tab, so they cannot be the
+    // reason the strip needs rebuilding — and this early return is back on
+    // the fast path it was written for.
+    (!state.dockAutoOpen || !allPanes().some((pane) => showsTasks(paneState(pane))))
   ) {
     return;
   }
@@ -2623,6 +2645,7 @@ function reconcileDock(): void {
     agentViews,
     nextFile?.owner ?? null,
     nextBrowsers,
+    state.dockAutoOpen,
   );
   const moved =
     visible.length !== visibleDockTabs.length ||
@@ -2975,6 +2998,12 @@ function maybeAutoOpen(pane: Pane, artifact: Artifact): void {
     void openPreview(artifact.path, pane);
     return;
   }
+
+  // The user has said the dock never opens on its own. Above this line rather
+  // than first, deliberately: refreshing the file already on screen is not an
+  // opening, and suppressing it would leave the reader looking at a stale page
+  // the transcript says was just rewritten.
+  if (!state.dockAutoOpen) return;
 
   if (!artifact.fresh) return;
   if (pane.id !== state.focusedPaneId) return;
@@ -3921,12 +3950,15 @@ export function installBrowserFeed(): () => void {
         state.browsers.some((browser) => browser.info.id === event.id)
           ? {}
           : {
-              browsers: [...state.browsers, { info: event.browser, owner: ownerFor(pane) }],
               // Deliberately *not* brought to the front. The agent works while
               // the user is reading something else, and stealing the dock out
               // from under them mid-sentence is what makes a helpful feature
               // feel like an interruption. The tab appears; clicking it is
-              // theirs.
+              // theirs. `agentOpened` is what lets the dock-auto-open setting
+              // go one further and keep the tab out of the strip entirely —
+              // the record stays either way, because main is driving the page
+              // and it must remain closeable, re-ownable, and revealable.
+              browsers: [...state.browsers, { info: event.browser, owner: ownerFor(pane), agentOpened: true }],
             },
       );
       return;
@@ -5408,6 +5440,20 @@ export function setFontSize(size: number): void {
 export function setStreamingWordFade(on: boolean): void {
   useApp.setState({ streamingWordFade: on });
   savePrefs();
+}
+
+/**
+ * Decide whether the dock may open, or grow a tab, without being asked.
+ *
+ * `reconcileDock` runs on the write, which is what makes the switch take
+ * effect immediately in both directions: turning it off retracts the tabs the
+ * agent put up (their records survive — see `visibleTabs`), and turning it on
+ * reveals whatever arrived while it was off.
+ */
+export function setDockAutoOpen(on: boolean): void {
+  useApp.setState({ dockAutoOpen: on });
+  savePrefs();
+  reconcileDock();
 }
 
 /**
