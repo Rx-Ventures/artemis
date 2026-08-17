@@ -1,6 +1,26 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.19.0
+
+- **A conversation that is still working keeps its column.** Leaving one —
+  clicking another session, closing a pane — could throw it away outright: the
+  bow went to rest, the workflow tab shut, and the button that reopens it sat
+  disabled with nothing to show. The agent never stopped; sending it any
+  message brought the whole thing back. The cause was that a window decided
+  "finished" from its own delegated rows, and those rows stop arriving the
+  moment the launching turn ends — which is exactly when a workflow starts
+  outliving it. The main process always knew, and can now be asked, so the
+  sidebar keeps marking work that has outlived its turn and a column is set
+  aside rather than destroyed. Anyone running several accounts at once hit this
+  hardest, because switching between them is all navigation.
+
+- **A window in the background keeps its clocks running.** Timers were being
+  throttled to roughly once a minute whenever Artemis was not the front window,
+  which stalled the delegated-agent view and the history feed for precisely as
+  long as you were looking at something else. Coming back showed a frozen
+  indicator over an agent that had been working the whole time.
+
 ## What's new in 0.18.0
 
 - **Cerebro waits to be asked.** Having the bank cloned on this machine was
