@@ -68,7 +68,6 @@ import {
   type AttachmentRejection,
 } from '../lib/attachments';
 import { ReasonButton, WithReason } from './disabled-reason';
-import { HuntBar } from './HuntBar';
 import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -348,14 +347,19 @@ export function Composer(): ReactElement {
    * on the window background, with the status line under it — nothing boxes
    * either of them in.
    *
-   * The seam above still reports the run, but it is the hunt bar now — the
-   * bow that fires while a run is live and rests when it ends — rather than
-   * the hairline sweep. It renders itself (and nothing at all before the
-   * pane's first run), so it takes no gating here; see `HuntBar.tsx`.
+   * The run bar stays, but hairline-thin and only while a run is live. It is
+   * the one piece of chrome here that reports something — the transient
+   * report, beside the constant one: Artemis' bow sits above this seam, under
+   * the transcript, firing for the same span this line sweeps. See
+   * `HuntBar.tsx` for why the two coexist.
    */
   return (
     <div className="shrink-0">
-      <HuntBar />
+      {live ? (
+        <div className="relative h-px overflow-hidden bg-line">
+          <span className="runbar absolute inset-0 block" />
+        </div>
+      ) : null}
 
       {/*
         The directory, above the input and aligned to its left edge.

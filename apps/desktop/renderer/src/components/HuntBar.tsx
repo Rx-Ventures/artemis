@@ -1,49 +1,50 @@
 /**
- * The hunt bar: Artemis' bow, pinned at the foot of the conversation.
+ * The hunt bar: Artemis' bow, a constant at the foot of the conversation.
  * ============================================================================
  *
  * The app is named for the goddess of the hunt, and this is the one place it
- * says so: a small bow at the seam where the transcript ends, loosing an arrow
- * across the pane for as long as a run is going. It replaced the anonymous
- * lunar sweep that used to hairline this seam — same position, same meaning,
- * but now the progress chrome is the app's own mark instead of a gradient any
- * toolkit could have shipped.
+ * says so: a small bow pinned directly under the transcript, loosing an arrow
+ * across the pane for as long as a run is going. It is a *fixture*, not a
+ * status row — present from the moment a pane exists, at rest before the first
+ * prompt and after the last answer, firing in between. The transient report of
+ * "a run is live" belongs to the runbar, the hairline lunar sweep above the
+ * composer; the bow is the secondary telling of the same fact, and the one
+ * with a resting state.
  *
- * ## Why this seam, and not a float over the transcript
+ * ## Why under the transcript, outside the scroller
  *
- * "Pinned to the bottom of the conversation" had two candidate readings. An
- * overlay inside the transcript's scroller stays at the visual bottom only
- * while the tail-follower holds; scroll up mid-run and it either scrolls away
- * (not pinned) or floats over text the user is trying to read (occlusion, and
- * a fight with the Jump-to-latest button for the same corner). The seam above
- * the composer is the conversation's actual bottom edge, is visible in every
- * scroll position, and is a row of its own — the arrow crosses empty range,
- * never someone's diff.
+ * "Pinned to the bottom of the conversation" rules out both obvious homes. A
+ * row *inside* the scroller scrolls away mid-run — not pinned. An overlay
+ * floated over the scroller stays put but paints over the text the reader is
+ * trying to read, and fights the Jump-to-latest button for the same corner.
+ * A strip of the pane column between the two — below the scroller, above the
+ * composer — is the conversation's actual bottom edge, visible in every scroll
+ * position, and a row of its own: the arrow crosses empty range, never
+ * someone's diff. It renders from `PaneColumn` rather than inside `Composer`
+ * because it belongs to the conversation above it, not to the prompt below.
  *
  * ## The three poses are the run's own states, nothing invented
  *
  *  - **firing** (`starting` / `running`): the full cycle — draw, hold, loose,
- *    arrow away. The flight is the strip's whole width, which is what makes it
- *    legible as "in progress" rather than as a decoration that happens to move.
+ *    arrow away across the strip's whole width.
  *  - **holding** (`awaiting_permission`): drawn and dead still. The run is
  *    paused on the user, and an archer holding at full draw *is* that state —
- *    aimed, waiting, going nowhere until someone says so. Deliberately not
- *    tinted amber: the status line already grades what is owed (amber for an
- *    approval, cyan for a question), and a mascot repainting that distinction
- *    in one colour would blur it, not restate it.
- *  - **rest** (`ended`): string straight, arrow gone — it was loosed; the
- *    answer above is where it landed. This is the "animation stops when the
- *    run completes" state, and it *stays on screen* rather than unmounting:
- *    a bow that vanished the instant the run ended would read as chrome
- *    breaking, and the resting pose is what makes the firing one mean
- *    something.
+ *    aimed, waiting, going nowhere until someone says so.
+ *  - **rest** (everything else — before the first run and after `ended`):
+ *    string straight, arrow gone, dimmed. The animation stopping rather than
+ *    the element vanishing is what says "complete"; the fixture staying is
+ *    what makes it a fixture.
  *
- * The strip exists only once the pane has a run at all (`run` survives its own
- * end — see `RunStatus`), so a fresh pane pays no height for it. The 16px it
- * does cost after the first prompt is the one deliberate trade here: this app
- * strips permanent chrome on sight, and this row is decoration by any honest
- * accounting — but it is *asked-for* decoration, it is the only piece in the
- * window, and at rest it is a dim glyph in an otherwise empty seam.
+ * ## Moonlight, not machine-cyan
+ *
+ * The bow draws in `lunar` while it works and fades to `ink-faint` at rest.
+ * An earlier cut coloured the arrow `cyan` to match the transcript's
+ * work-in-progress tone, and that was the wrong instinct: the tone system
+ * grades *rows* — badges, dots, labels — and this is not a row, it is the
+ * app's own mark. Artemis is the moon as much as the hunt; the accent is
+ * literally named for her light, it is the colour the runbar above already
+ * sweeps in, and the two indicators reading as one system matters more than
+ * the bow participating in a taxonomy it is not part of.
  *
  * ## All CSS, no clock
  *
@@ -51,7 +52,7 @@
  * `index.css`, `artemis-bow-*`) sharing one 2400ms duration, synchronised by
  * mounting in the same commit. Nothing here ticks, subscribes to tokens, or
  * measures the pane — the flight crosses "however wide the strip is" by
- * translating a full-width span 100% of itself, which is the old runbar's own
+ * translating a full-width span 100% of itself, which is the runbar's own
  * trick. The single subscription is `run?.status`, which changes a handful of
  * times per run.
  *
@@ -72,12 +73,18 @@ type Pose = 'firing' | 'holding' | 'rest';
 const STRING_REST = 'M5 2 L5 8 L5 14';
 const STRING_DRAWN = 'M5 2 L2 8 L5 14';
 
-export function HuntBar(): ReactElement | null {
+export function HuntBar(): ReactElement {
   const status = usePane((s) => s.run?.status ?? null);
-  if (status === null) return null;
 
+  // No run yet reads as `rest`, deliberately — the fixture is constant, and a
+  // fresh pane's quiet bow is the same statement as a finished run's: nothing
+  // is in flight here.
   const pose: Pose =
-    status === 'ended' ? 'rest' : status === 'awaiting_permission' ? 'holding' : 'firing';
+    status === 'starting' || status === 'running'
+      ? 'firing'
+      : status === 'awaiting_permission'
+        ? 'holding'
+        : 'rest';
 
   return (
     <div
@@ -96,7 +103,7 @@ export function HuntBar(): ReactElement | null {
         Mounted only while firing, so the other poses hold no invisible DOM.
       */}
       {pose === 'firing' ? (
-        <span className="hunt-flight absolute inset-0 text-cyan opacity-0">
+        <span className="hunt-flight absolute inset-0 text-lunar opacity-0">
           <ArrowInFlight />
         </span>
       ) : null}
@@ -125,8 +132,10 @@ function Bow({ pose }: { readonly pose: Pose }): ReactElement {
       viewBox="0 0 16 16"
       className={cn(
         'absolute top-0 left-1 size-4',
-        // Rest dims to faint — present, finished, not asking for the eye.
-        pose === 'rest' ? 'text-ink-faint' : 'text-ink-muted',
+        // Lunar while anything is happening; faint ink at rest. A constant
+        // fixture has to earn its permanence by being quiet when idle, and
+        // has room to be the accent when it is the thing reporting.
+        pose === 'rest' ? 'text-ink-faint' : 'text-lunar',
       )}
       fill="none"
       stroke="currentColor"
@@ -146,14 +155,12 @@ function Bow({ pose }: { readonly pose: Pose }): ReactElement {
           d={holding ? STRING_DRAWN : STRING_REST}
         />
         {/* The nocked arrow: shaft and head only — fletch ticks at this size
-            read as a second head and turn the arrow into ⟷. Cyan while firing
-            — the app's "work in progress" tone, matching the flight it becomes
-            — and the bow's own ink while merely held. Gone at rest: it was
-            loosed, and a re-nocked arrow under a finished answer would claim
-            work is still coming. */}
+            read as a second head and turn the arrow into ⟷. Gone at rest: it
+            was loosed (or never drawn), and a nocked arrow under a finished
+            answer would claim work is still coming. */}
         {pose === 'rest' ? null : (
           <g
-            className={cn(firing && 'hunt-nock text-cyan')}
+            className={cn(firing && 'hunt-nock')}
             style={holding ? { transform: 'translateX(-3px)' } : undefined}
           >
             <path d="M5 8 L14 8" />

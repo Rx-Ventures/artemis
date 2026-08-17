@@ -899,13 +899,29 @@
     animation: artemis-turn-in 160ms ease-out both;
   }
 
+  /* Indeterminate progress hairline, used on the run status strip. */
+  .runbar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, var(--lunar) 70%, transparent),
+      transparent
+    );
+    animation: artemis-sweep 1.5s linear infinite;
+  }
+
   /*
-   * The hunt — Artemis' bow at the seam where the conversation ends, loosing
-   * an arrow across the pane for as long as a run is going. `HuntBar.tsx` owns
-   * the geometry and the poses; what lives here is the choreography.
+   * The hunt — Artemis' bow under the transcript, loosing an arrow across the
+   * pane for as long as a run is going. `HuntBar.tsx` owns the geometry and
+   * the poses; what lives here is the choreography.
    *
-   * (`.runbar`, the anonymous lunar sweep, lived here. The strip it decorated
-   * is now the hunt bar, and the arrow is the progress it was sweeping about.)
+   * It rides *with* the runbar above, not instead of it: the hairline is the
+   * transient report (present only while a run is live), the bow is the
+   * constant fixture at the conversation's foot. The two share the lunar
+   * accent so they read as one system saying one thing.
    *
    * One 2400ms cycle shared by all four classes, and the sharing is the
    * mechanism: the string, the nocked arrow, the recoil and the flight are
@@ -987,6 +1003,15 @@
   to {
     opacity: 1;
     filter: blur(0);
+  }
+}
+
+@keyframes artemis-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
   }
 }
 
@@ -1114,6 +1139,7 @@
   .hunt-nock,
   .hunt-recoil,
   .hunt-string,
+  .runbar::after,
   .turn-in,
   .word-in {
     animation: none;
