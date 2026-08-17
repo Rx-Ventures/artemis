@@ -29,6 +29,7 @@ import {
   sameTab,
   tabKey,
   visibleTabs,
+  type BrowserRecord,
   type DockOwner,
   type DockTab,
   type ShownConversation,
@@ -182,6 +183,74 @@ describe('visibleTabs', () => {
       here,
     );
     expect(tabs.map(tabKey)).toEqual(['terminal:mine']);
+  });
+});
+
+/*
+ * The "open on its own" appearance option, at the layer where it bites: a tab
+ * in an empty strip is what opens the dock, so keeping agent arrivals out of
+ * `visibleTabs` is the entire mechanism. What must never be caught in it is
+ * anything the user opened themselves — that is the difference between an
+ * option that quiets the window and one that loses people's shells.
+ */
+describe('visibleTabs with the dock forbidden to open on its own', () => {
+  const here: readonly ShownConversation[] = [{ paneId: 'pane1' }];
+  const busy: readonly ShownConversation[] = [{ paneId: 'pane1', hasTasks: true }];
+
+  function browser(id: string, agentOpened: boolean): BrowserRecord {
+    return {
+      info: {
+        id,
+        openedAt: 0,
+        state: { url: 'about:blank', title: '', loading: false, canGoBack: false, canGoForward: false },
+      },
+      owner: { paneId: 'pane1' },
+      ...(agentOpened ? { agentOpened: true } : {}),
+    } as BrowserRecord;
+  }
+
+  it('keeps the tasks tab out of the strip', () => {
+    expect(visibleTabs(null, [], busy, [], null, [], false)).toEqual([]);
+    // And the flag defaulting to true is every release before it: same state,
+    // tab present.
+    expect(visibleTabs(null, [], busy).map(tabKey)).toEqual(['tasks:pane1']);
+  });
+
+  it('keeps an agent-opened page out, and leaves the user’s own alone', () => {
+    const tabs = visibleTabs(
+      null,
+      [],
+      here,
+      [],
+      null,
+      [browser('mine', false), browser('theirs', true)],
+      false,
+    );
+    expect(tabs.map(tabKey)).toEqual(['browser:mine']);
+  });
+
+  it('reveals what arrived while it was off, the moment it is back on', () => {
+    const records = [browser('hidden', true)];
+    expect(visibleTabs(null, [], busy, [], null, records, false)).toEqual([]);
+    // Same records, same conversations — only the permission changed. This is
+    // `setDockAutoOpen`'s reveal: nothing was destroyed by being suppressed.
+    expect(visibleTabs(null, [], busy, [], null, records, true).map(tabKey)).toEqual([
+      'browser:hidden',
+      'tasks:pane1',
+    ]);
+  });
+
+  it('touches nothing the user opened: preview, file, shells, agent tabs', () => {
+    const tabs = visibleTabs(
+      { paneId: 'pane1' },
+      [terminal('t1', { paneId: 'pane1' })],
+      here,
+      [{ paneId: 'pane1', taskId: 'task9' }],
+      { paneId: 'pane1' },
+      [],
+      false,
+    );
+    expect(tabs.map(tabKey)).toEqual(['preview', 'file', 'terminal:t1', 'agent:pane1:task9']);
   });
 });
 

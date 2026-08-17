@@ -55,6 +55,7 @@ import {
   SIDEBAR_DEFAULT_WIDTH,
   forgetFolders,
   setConversationWidth,
+  setDockAutoOpen,
   setFontSize,
   setRunSummary,
   setSidebarCollapsed,
@@ -365,11 +366,12 @@ export function AppearanceSection(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const wordFade = useApp((s) => s.streamingWordFade);
+  const dockAutoOpen = useApp((s) => s.dockAutoOpen);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -413,6 +415,30 @@ export function AppearanceSection(): ReactElement {
                 aria-label="Fade in each word"
                 checked={wordFade}
                 onCheckedChange={setStreamingWordFade}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
+      <SettingsGroup label="Side pane">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Open on its own</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                The side pane opens itself when the agent produces something to look at: the first
+                artifact of a conversation, delegated work, a page the agent is browsing. Turn this
+                off and none of that appears without a click — an artifact waits behind its tile's
+                Open button, and anything that arrived unseen is revealed by turning this back on.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-dock-auto-open"
+                aria-label="Open the side pane on its own"
+                checked={dockAutoOpen}
+                onCheckedChange={setDockAutoOpen}
               />
             </ItemActions>
           </Item>
