@@ -5,12 +5,12 @@
  *
  * The hunt bar is decoration, but it is decoration that *reports*: firing
  * means a run is going, holding means the run is parked on the user, rest
- * means it finished. Each assertion here is about a state where the wrong
- * pose is a small lie:
+ * means nothing is in flight. Each assertion here is about a state where the
+ * wrong pose is a small lie:
  *
- *  - **A pane that has never run shows no bow at all.** The strip buys its
- *    16px only once there is a run to report; a mascot on an empty pane is
- *    chrome with nothing to say.
+ *  - **The fixture is constant.** A pane that has never run still carries the
+ *    bow, at rest — it is the conversation's foot, not a status row, and a
+ *    fixture that appears and disappears is a status row wearing a costume.
  *  - **A live run fires; a parked run holds.** The drawn-and-motionless pose
  *    is the one that earns the animation its keep — if `awaiting_permission`
  *    kept looping arrows, the bar would say "working" about a run that is
@@ -88,11 +88,17 @@ function bar(): HTMLElement | null {
 afterEach(cleanup);
 
 describe('the hunt bar', () => {
-  it('does not exist before the pane has ever run', () => {
+  it('stands at rest before the pane has ever run', () => {
     setUp(null);
     render(<HuntBar />);
 
-    expect(bar()).toBeNull();
+    const strip = bar();
+    expect(strip).not.toBeNull();
+    expect(strip?.getAttribute('data-pose')).toBe('rest');
+    // Quiet means quiet: string straight, no arrow, nothing animating.
+    expect(strip?.querySelector('path[d="M5 2 L5 8 L5 14"]')).not.toBeNull();
+    expect(strip?.querySelector('.hunt-flight')).toBeNull();
+    expect(strip?.querySelector('.hunt-nock')).toBeNull();
   });
 
   it('fires while the run is live', () => {
