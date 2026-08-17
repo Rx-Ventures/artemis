@@ -1,6 +1,17 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.16.2
+
+- **The hunt has a quarry, and it rides with the text.** The bow scene moves
+  inside the conversation itself — at the bottom of the text, pushed down by
+  each line as it streams in, scrolling with the transcript, spanning exactly
+  the width of the prose. And the bow finally shoots at something: a stingray
+  idles at the far side, swimming in place while the run works, flinching in
+  the exact frames the arrow lands, frozen mid-swim while a permission waits
+  on you, and dimming with the bow when the run ends — plainly never struck,
+  because the hunt is the run and the run always comes back for another pass.
+
 ## What's new in 0.16.1
 
 - **The bow answers its first day of feedback.** The hairline sweep above the
