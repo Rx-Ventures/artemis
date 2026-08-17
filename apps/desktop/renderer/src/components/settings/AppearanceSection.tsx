@@ -430,7 +430,8 @@ export function AppearanceSection(): ReactElement {
                 The side pane opens itself when the agent produces something to look at: the first
                 artifact of a conversation, delegated work, a page the agent is browsing. Turn this
                 off and none of that appears without a click — an artifact waits behind its tile's
-                Open button, and anything that arrived unseen is revealed by turning this back on.
+                Open button, delegated work behind the header's Delegated button, and anything that
+                arrived unseen is revealed by turning this back on.
               </ItemDescription>
             </ItemContent>
             <ItemActions>
