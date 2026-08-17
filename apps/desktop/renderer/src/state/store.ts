@@ -4039,6 +4039,86 @@ export function installPlanUsageFeed(): () => void {
 }
 
 /**
+ * How long after a run ends before its account is re-read.
+ *
+ * The same reasoning as {@link SESSION_SETTLE_MS} and a longer number: the turn
+ * that just finished is still being accounted for on the provider's side when
+ * `run.end` arrives, so a read taken immediately returns the figure from
+ * *before* the work — the exact staleness this exists to remove, bought at the
+ * price of a subprocess.
+ */
+const PLAN_USAGE_SETTLE_MS = 4_000;
+
+/** Profiles with a settle timer already running, so a burst re-reads once. */
+const planUsageSoon = new Map<ProfileId, ReturnType<typeof setTimeout>>();
+
+/**
+ * Re-read one account, because a run on it just finished.
+ *
+ * ## Why a finished run is the moment that matters
+ *
+ * The poll walks every profile serially — one CLI at a time, deliberately — so
+ * with eight accounts any given one is re-read about every six minutes. A run
+ * that just ended spent real budget that stays unmeasured for that whole window.
+ *
+ * While it was running, `planLoad`'s reservation covered it: the ranking knew
+ * work was committed to that account even though the reading did not show it.
+ * The moment it ends that cover is withdrawn — correctly, because the run is no
+ * longer committing anything — and the account goes back to being ranked on a
+ * reading taken before any of the work happened. It therefore reads emptiest at
+ * precisely the moment it has just been drained, and wins the next session.
+ *
+ * That is the residual half of #146, and this closes it: one targeted read of
+ * one profile, on the one event that made its number wrong.
+ *
+ * ## Once per burst
+ *
+ * Several runs on one account can finish within a second of each other —
+ * a split view, or an ultracode fan-out settling. Each would otherwise spawn its
+ * own CLI to ask the same question. The timer is keyed by profile and is *not*
+ * restarted by a later end, so a burst is one read a fixed moment after the
+ * first of them rather than a read that recedes for as long as work keeps
+ * landing.
+ *
+ * Failures are silent by design. This is a background correction to a number
+ * that a poll will fix on its own within minutes; a banner for it would be an
+ * error message about something nobody asked for.
+ */
+function refreshPlanUsageSoon(profileId: ProfileId): void {
+  if (planUsageSoon.has(profileId)) return;
+
+  const timer = setTimeout(() => {
+    planUsageSoon.delete(profileId);
+    const { bridge } = resolveBridge();
+    if (!bridge) return;
+    void (async () => {
+      const result = await call(() => bridge.usagePlan.refresh({ profileId }));
+      // `null` is "nothing was learned", which is not the same as "nothing is
+      // used" — writing it in would replace a good reading with an absence and
+      // drop the account out of the ranking entirely. Leave what is there and
+      // let the poll try again.
+      if (!result.ok || result.value.usage === null) return;
+      const usage = result.value.usage;
+      // Written straight in rather than waited for on the push channel: the
+      // push is what the *poll* broadcasts, and this read was asked for by this
+      // window. Both land in the same map, and the later write wins — which is
+      // this one, since it is the newer reading.
+      useApp.setState((s) => ({
+        planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
+      }));
+    })();
+  }, PLAN_USAGE_SETTLE_MS);
+
+  planUsageSoon.set(profileId, timer);
+}
+
+/** Drop every pending settle timer. For tests. */
+export function resetPlanUsageSoon(): void {
+  for (const timer of planUsageSoon.values()) clearTimeout(timer);
+  planUsageSoon.clear();
+}
+
+/**
  * Prime the map from main's cache, one profile at a time.
  *
  * Cache reads only — `cached` never contacts a provider, so this is a handful
@@ -7238,6 +7318,10 @@ function applyAgentEvent(event: AgentEvent): void {
       // still writing this session's file as the event arrives, so reading now
       // reliably returns the previous turn's title.
       refreshSessionsSoon();
+      // And re-read what the turn cost the account. `run.profileId` rather than
+      // the pane's current selection: a run bills the account it started on for
+      // its whole life, and the pane may well have moved on by now.
+      refreshPlanUsageSoon(run.profileId);
       break;
     }
 
