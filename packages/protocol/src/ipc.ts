@@ -322,7 +322,7 @@ export const IPC = {
   /**
    * Cerebro — the team's shared, agent-maintained memory bank.
    *
-   * Six channels and not one of them names a path or a binary: main owns the
+   * Seven channels and not one of them names a path or a binary: main owns the
    * repo location and the CLI inside it, so the renderer can no more aim these
    * at the filesystem than it can pick the program a terminal runs. Everything
    * here is a thin seam over `bin/cerebro`, the single-file CLI that lives *in*
@@ -332,11 +332,11 @@ export const IPC = {
    *
    * `setup` is the whole onboarding story: clone if missing, `enable` the
    * profiles, `sync` once. Idempotent, so the pane can offer it without
-   * tracking state of its own. The write channels (`draft`, `retire`) do not
-   * write to the bank directly — they queue and land changes through the same
-   * validated, PR-gated path the agents use, which is why their response is a
-   * message rather than data: the outcome is a commit or a pull request, not
-   * a mutation the renderer should pretend it can see.
+   * tracking state of its own. The write channels (`retire`, `setEnabled`) do
+   * not write to the bank directly — they queue and land changes through the
+   * same validated, PR-gated path the agents use, which is why their response
+   * is a message rather than data: the outcome is a commit or a pull request,
+   * not a mutation the renderer should pretend it can see.
    */
   cerebroStatus: 'artemis:cerebro:status',
   cerebroList: 'artemis:cerebro:list',
@@ -353,6 +353,23 @@ export const IPC = {
   cerebroSetup: 'artemis:cerebro:setup',
   cerebroSync: 'artemis:cerebro:sync',
   cerebroRetire: 'artemis:cerebro:retire',
+  /**
+   * The master switch: does this machine use the bank at all?
+   *
+   * Artemis's own answer, not the CLI's. Cerebro being *cloned* is not consent
+   * to it — the bank writes to a shared repository and its prompt spends every
+   * run's context, so both wait on a deliberate yes. Off is the default, and
+   * off means off in both directions: no sync at run start, and
+   * `builtin:cerebro` unavailable however enabled its row is.
+   *
+   * Symmetric on purpose. Turning it on runs `cerebro enable` and a forced
+   * sync, so the machine comes back exactly as `setup` left it; turning it off
+   * runs `cerebro disable`, so the managed `CLAUDE.md` block, the `/cerebro`
+   * command and the session-start hook come out of every profile. A switch that
+   * only governed Artemis would leave a stock Claude Code on the same machine
+   * still wired to the bank — off in one window and on in the next.
+   */
+  cerebroSetEnabled: 'artemis:cerebro:set-enabled',
   /**
    * The standing-instruction library.
    *
@@ -1538,6 +1555,15 @@ export interface CerebroProfileState {
  */
 export interface CerebroStatus {
   readonly installed: boolean;
+  /**
+   * Whether the user has switched the bank on for this machine.
+   *
+   * Independent of {@link installed}, and the two are read together: a cloned
+   * bank nobody has said yes to is `installed: true, enabled: false`, which is
+   * the state a fresh upgrade lands in. Nothing syncs and no prompt is
+   * injected until this is true — see `IPC.cerebroSetEnabled`.
+   */
+  readonly enabled: boolean;
   readonly repoPath: string;
   readonly remote: string | null;
   /** Provenance stamp of the working tree, e.g. `cerebro@52a0a32`. */
@@ -1619,6 +1645,18 @@ export interface CerebroRetireRequest {
 }
 
 export type CerebroRetireResponse = CerebroActionResponse;
+
+/**
+ * Throw the master switch. See `IPC.cerebroSetEnabled`.
+ *
+ * The desired state rather than a toggle, so that two windows pressing at once
+ * agree about where they landed instead of cancelling each other out.
+ */
+export interface CerebroSetEnabledRequest {
+  readonly enabled: boolean;
+}
+
+export type CerebroSetEnabledResponse = CerebroActionResponse;
 
 /* -------------------------------------------------------------------------- */
 /* Agent prompts                                                              */
@@ -1716,6 +1754,7 @@ export type IpcRequestMap = {
   [IPC.cerebroSetup]: CerebroSetupRequest;
   [IPC.cerebroSync]: CerebroSyncRequest;
   [IPC.cerebroRetire]: CerebroRetireRequest;
+  [IPC.cerebroSetEnabled]: CerebroSetEnabledRequest;
   [IPC.agentPromptsList]: AgentPromptsListRequest;
   [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
 };
@@ -1780,6 +1819,7 @@ export type IpcResponseMap = {
   [IPC.cerebroSetup]: CerebroSetupResponse;
   [IPC.cerebroSync]: CerebroSyncResponse;
   [IPC.cerebroRetire]: CerebroRetireResponse;
+  [IPC.cerebroSetEnabled]: CerebroSetEnabledResponse;
   [IPC.agentPromptsList]: AgentPromptsListResponse;
   [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
 };
@@ -2012,6 +2052,8 @@ export interface ArtemisBridge {
     sync(request: CerebroSyncRequest): Promise<IpcResult<CerebroSyncResponse>>;
     /** Remove a memory through the same gates. */
     retire(request: CerebroRetireRequest): Promise<IpcResult<CerebroRetireResponse>>;
+    /** The master switch: Artemis's gate and the machine's wiring, together. */
+    setEnabled(request: CerebroSetEnabledRequest): Promise<IpcResult<CerebroSetEnabledResponse>>;
   };
   /**
    * Standing instructions, attached to runs by the main process.

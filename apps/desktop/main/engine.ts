@@ -92,7 +92,7 @@ import {
 import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
-import { isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
+import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
@@ -471,19 +471,28 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
+  // Where Cerebro's master switch is kept. Told once, here, because this is the
+  // only place that knows `userData`; until it is told, the switch reads as off.
+  configureCerebro(userDataDir);
+
   /**
    * Which built-in prompts have the thing they talk about.
    *
    * Read per run rather than cached at startup, because the precondition can
    * change while the app is open — setting Cerebro up is a button in the
    * settings dialog, and a user who clicks it should not have to restart before
-   * the prompt that describes it starts arriving. `isCerebroInstalled` is one
-   * `existsSync`, which is affordable at that rate; the full status probe,
+   * the prompt that describes it starts arriving. Both halves are cheap at that
+   * rate: one `existsSync` and one cached file read. The full status probe,
    * which spawns the CLI, is not.
+   *
+   * Installed **and** switched on. The bank being cloned is not consent to
+   * spending every run's context describing it, so a machine that has it but
+   * has not said yes gets the prompt withheld however enabled its row is —
+   * which is exactly what `BuiltInAgentPrompt.requires` exists to explain.
    */
   const availableBuiltIns = (): ReadonlySet<BuiltInPromptId> => {
     const available = new Set<BuiltInPromptId>();
-    if (isCerebroInstalled()) available.add('builtin:cerebro');
+    if (isCerebroEnabled() && isCerebroInstalled()) available.add('builtin:cerebro');
     return available;
   };
 

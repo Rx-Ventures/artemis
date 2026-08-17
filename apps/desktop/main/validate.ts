@@ -56,6 +56,7 @@ import {
   type CerebroListRequest,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
+  type CerebroSetEnabledRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
   type CerebroSyncRequest,
@@ -1784,6 +1785,22 @@ export function validateCerebroRetire(raw: unknown): CerebroRetireRequest {
   }
   const reason = optionalString(request['reason'], 'reason', 200);
   return { name, ...(reason === undefined ? {} : { reason }) };
+}
+
+/**
+ * The master switch, as a state rather than a toggle.
+ *
+ * Required rather than defaulted, and that is the one thing worth being strict
+ * about here: a missing field defaulting to `true` would let a malformed call
+ * opt the machine into writing to a shared repository, and defaulting to
+ * `false` would silently undo an opt-in. Neither is a decision this layer gets
+ * to make on the user's behalf.
+ */
+export function validateCerebroSetEnabled(raw: unknown): CerebroSetEnabledRequest {
+  const request = requireRequest(raw);
+  const enabled = optionalBoolean(request['enabled'], 'enabled');
+  if (enabled === undefined) throw new ValidationError('enabled', 'is required');
+  return { enabled };
 }
 
 /* -------------------------------------------------------------------------- */
