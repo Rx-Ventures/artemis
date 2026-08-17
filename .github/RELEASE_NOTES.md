@@ -1,6 +1,25 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.16.1
+
+- **The bow answers its first day of feedback.** The hairline sweep above the
+  input is back — trading it away in 0.16.0 was a misread — and the bow moves
+  to its own strip directly under the transcript, where it now stands
+  *constant*: at rest before the first run and after the last answer, firing
+  in between, holding at full draw while a run waits on you. And it draws in
+  moonlight rather than machine-cyan — `lunar` is the accent named for
+  Artemis' own light, and it is the colour the runbar already sweeps in, so
+  the two indicators finally read as one system.
+
+- **The side pane can be told to wait.** A new Appearance option, on by
+  default: the dock opens itself when the agent produces something to look at
+  — the first artifact of a conversation, delegated work, a page the agent is
+  browsing. Turn it off and none of that appears without a click. An artifact
+  waits behind its tile's Open button, anything that arrived unseen is
+  revealed by turning the option back on, and nothing you opened yourself —
+  shells, pages, previews — is ever touched.
+
 ## What's new in 0.16.0
 
 - **Artemis draws her bow.** The hairline that swept the seam between the
