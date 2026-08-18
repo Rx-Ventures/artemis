@@ -146,6 +146,18 @@ describe('declarations', () => {
     // OPENCODE_CONFIG_DIR relocates configuration while the credential stays
     // put, so two profiles set up that way would share one account.
     expect(OPENCODE_CREDENTIALS.configDirVar).toBe('XDG_DATA_HOME');
+  });
+
+  it('stands in for both XDG roots rather than overriding them', () => {
+    // `opencode debug paths` showed every path comes from an XDG root and that
+    // OPENCODE_CONFIG_DIR moves none of them. Data carries the credential;
+    // config carries the providers and endpoints two profiles were sharing.
+    const roots = OPENCODE_CREDENTIALS.xdgRoots ?? [];
+    expect(roots.map((r) => r.variable)).toEqual(['XDG_DATA_HOME', 'XDG_CONFIG_HOME']);
+    expect(roots.every((r) => r.ownedEntry === 'opencode')).toBe(true);
+    // The data root is the profile directory itself, or `auth.json` would move
+    // out from under existing profiles and the sign-in command would desync.
+    expect(roots[0]?.farmSubpath).toBe('.');
     expect(OPENCODE_CREDENTIALS.credentialEnvKeys).toContain('OPENCODE_CONFIG_DIR');
   });
 

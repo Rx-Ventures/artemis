@@ -34,14 +34,26 @@
  *     would be honoured, which is a different reason and gets a different
  *     sentence.
  *
- * The quick-access checkboxes edit `quickModelIds`, which the status-line
- * picker narrows itself to. An empty set is not "show nothing" — see
- * `quickModels` — so the empty case is labelled rather than left to look like
- * a broken picker.
+ * The quick-access checkboxes edit this profile's entry in
+ * `quickModelIdsByProfile`, which the status-line picker narrows itself to. An
+ * empty set is not "show nothing" — see `quickModels` — so the empty case is
+ * labelled rather than left to look like a broken picker.
+ *
+ * The shortlist is per *profile* rather than per window because catalogues are
+ * not comparable. Claude ships a handful of models; an OpenCode account reaches
+ * hundreds across twenty providers. One shared shortlist is either swamped by
+ * the large catalogue or empty for it, and since "pinned nothing" renders as
+ * the whole catalogue, the swamped case degrades into no shortlist at all —
+ * which is precisely the state the pins exist to rescue the user from.
+ *
+ * That size difference is also why the filter appears above `SEARCH_THRESHOLD`
+ * rows and not below it. Nothing in this file asks which provider is active:
+ * a pane that can be read at a glance gets no search box, and one that cannot
+ * gets one, which happens to sort the providers correctly without naming them.
  */
 
-import type { ReactElement } from 'react';
-import { BoxesIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
+import { useMemo, useState, type ReactElement } from 'react';
+import { BoxesIcon, RefreshCwIcon, SearchIcon, TriangleAlertIcon } from 'lucide-react';
 import type { ProviderModelOption } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
@@ -53,6 +65,7 @@ import {
   activeProviderLabel,
   providerOffersFastMode,
   providerOffersUltracode,
+  paneQuickModelIds,
   refreshModels,
   selectedModelOption,
   setFastMode,
@@ -65,6 +78,7 @@ import {
 import { usePane } from '../../state/paneContext';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { Input } from '@/components/ui/input';
 import {
   Item,
   ItemActions,
@@ -307,6 +321,36 @@ function FlagRow({
 /* Catalogue                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The size past which a flat list stops being a list and becomes a wall.
+ *
+ * Claude and Codex ship single figures, so the search box would be furniture
+ * over a list you can already see all of. OpenCode reaches hundreds across
+ * twenty providers, where scrolling to find one model is the whole problem.
+ * The threshold is what lets one pane serve both without a provider check —
+ * nothing here asks *which* provider, only how much there is to show.
+ */
+const SEARCH_THRESHOLD = 12;
+
+/**
+ * Match a model against a typed query.
+ *
+ * Searches the id as well as the names, because with a large catalogue the id
+ * is what carries the vendor — `anthropic/…`, `openai/…` — and typing a vendor
+ * to see its lineup is the most useful thing the box does. Case-insensitive and
+ * substring rather than fuzzy: a user typing "gpt" wants the gpt models, not a
+ * ranked guess that also matches something else.
+ */
+function matches(model: ProviderModelOption, query: string): boolean {
+  if (query === '') return true;
+  const needle = query.toLowerCase();
+  return (
+    model.id.toLowerCase().includes(needle) ||
+    model.label.toLowerCase().includes(needle) ||
+    (model.displayName?.toLowerCase().includes(needle) ?? false)
+  );
+}
+
 function Catalogue({
   catalogue,
   efforts,
@@ -314,25 +358,40 @@ function Catalogue({
   readonly catalogue: readonly ProviderModelOption[];
   readonly efforts: ReturnType<typeof activeEffortLevels>;
 }): ReactElement {
-  const quickIds = useApp((s) => s.quickModelIds);
+  // Per profile, resolved through this pane — two columns on two accounts pin
+  // separately, and the settings pane edits the one it is looking at.
+  const quickIds = usePane(paneQuickModelIds);
   const selectedId = usePane((s) => s.model);
   const curated = quickIds.length > 0;
+
+  const [query, setQuery] = useState('');
+  const searchable = catalogue.length > SEARCH_THRESHOLD;
+  const shown = useMemo(
+    () => (searchable ? catalogue.filter((model) => matches(model, query)) : catalogue),
+    [catalogue, query, searchable],
+  );
 
   return (
     <SettingsGroup label="Quick access">
       <div className="flex items-start gap-3">
         <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-faint">
           {curated
-            ? 'The picker under the composer shows only the models ticked here, in this order.'
+            ? `The picker under the composer shows only the ${quickIds.length} models ticked here, in catalogue order.`
             : 'Nothing is pinned, so the picker shows the whole catalogue. Tick a few to narrow it down to the ones you actually switch between.'}
         </p>
         <div className="flex shrink-0 items-center gap-1.5">
           <ReasonButton
             size="xs"
             variant="ghost"
-            onClick={() => setQuickModels(catalogue.map((model) => model.id))}
+            disabled={shown.length === 0}
+            disabledReason="Nothing matches the search."
+            // Scoped to what is on screen, not to the catalogue. With a search
+            // active, "pin all" meaning "pin all four hundred" would be a
+            // destructive misread of a button the user pressed while looking at
+            // six rows — so the label counts, and the count is the filtered one.
+            onClick={() => setQuickModels([...new Set([...quickIds, ...shown.map((m) => m.id)])])}
           >
-            Pin all
+            {query === '' ? 'Pin all' : `Pin these ${shown.length}`}
           </ReasonButton>
           <ReasonButton
             size="xs"
@@ -346,8 +405,32 @@ function Catalogue({
         </div>
       </div>
 
+      {searchable ? (
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <SearchIcon
+              className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-ink-faint"
+              aria-hidden="true"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter by name, id or vendor…"
+              aria-label="Filter models"
+              spellCheck={false}
+              className="h-6 rounded-md pl-6.5 text-2xs md:text-2xs"
+            />
+          </div>
+          <span className="shrink-0 font-mono text-2xs text-ink-faint">
+            {shown.length === catalogue.length
+              ? `${catalogue.length} models`
+              : `${shown.length} of ${catalogue.length}`}
+          </span>
+        </div>
+      ) : null}
+
       <ItemGroup className="gap-2">
-        {catalogue.map((model) => (
+        {shown.map((model) => (
           <ModelRow
             key={model.id}
             model={model}
@@ -357,6 +440,15 @@ function Catalogue({
           />
         ))}
       </ItemGroup>
+
+      {/* A search that matches nothing is the one case where the list below is
+          legitimately empty, and it needs saying — an empty ItemGroup under a
+          populated search box reads as a broken pane rather than as no hits. */}
+      {shown.length === 0 ? (
+        <p className="py-4 text-center text-2xs text-ink-faint">
+          No model matches “{query}”.
+        </p>
+      ) : null}
 
       {/* `null` is a real, reachable state — "send no model at all and let the
           CLI decide" — and it is not one of the rows, so it needs its own way

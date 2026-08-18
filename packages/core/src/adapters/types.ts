@@ -61,6 +61,9 @@ import type {
   SessionSummary,
 } from '@rx-artemis/protocol';
 
+import type { XdgRootSpec } from '../profiles/xdgFarm.js';
+export type { XdgRootSpec };
+
 /* -------------------------------------------------------------------------- */
 /* Environment                                                                */
 /* -------------------------------------------------------------------------- */
@@ -814,6 +817,29 @@ export interface ProviderCredentialSpec {
    */
   readonly credentialEnvKeys: readonly string[];
 
+  /**
+   * Generic XDG roots this provider resolves from, which must be stood in for
+   * rather than simply overridden.
+   *
+   * Absent for a provider that names its own directory variable, which is the
+   * happy case: pointing `CLAUDE_CONFIG_DIR` at a profile affects Claude and
+   * nothing else on the machine.
+   *
+   * OpenCode is why this exists. It has no variable of its own — verified
+   * against `opencode debug paths`, its data, config, state and cache come
+   * purely from `XDG_*`, and `OPENCODE_CONFIG_DIR` moves none of them. So
+   * isolating a profile means overriding a variable belonging to the whole
+   * desktop, on a process that exists to spawn other programs: every tool the
+   * agent runs would inherit it and look for *its* state inside Artemis's
+   * profile directory.
+   *
+   * Each entry is built into a stand-in directory — the provider's own entry
+   * real, every other entry a symlink back to where it actually lives — so one
+   * variable answers differently for the provider than for everything else.
+   * See `buildXdgFarm`.
+   */
+  readonly xdgRoots?: readonly XdgRootSpec[];
+
   /** How the user authenticates a profile against {@link configDirVar}. */
   readonly signIn: ProviderSignInSpec;
 }
@@ -825,12 +851,17 @@ export interface ProviderCredentialSpec {
  * both to scrub the inherited environment and to reject `publicEnv` entries
  * that would override Artemis's own choices.
  *
- * Note that Artemis writes exactly one of these — the config directory — and
- * strips the rest unconditionally. There is no case in which a credential
+ * Note that Artemis writes only the directory variables — the config directory
+ * and any {@link ProviderCredentialSpec.xdgRoots} — and strips every
+ * credential variable unconditionally. There is no case in which a credential
  * variable is stripped and then written back.
  */
 export function managedEnvKeys(spec: ProviderCredentialSpec): readonly string[] {
-  return [spec.configDirVar, ...spec.credentialEnvKeys];
+  return [
+    spec.configDirVar,
+    ...(spec.xdgRoots ?? []).map((root) => root.variable),
+    ...spec.credentialEnvKeys,
+  ];
 }
 
 /**
