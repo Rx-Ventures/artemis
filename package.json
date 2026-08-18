@@ -25,7 +25,8 @@
     "test": "pnpm -r --if-present test && vitest run --root scripts --passWithNoTests",
     "test:watch": "pnpm -r --if-present --parallel test:watch",
     "clean": "tsc -b --clean && rimraf --glob \"**/dist\" \"**/out\" \"**/.tsbuild\" \"**/*.tsbuildinfo\"",
-    "local:smoke": "tsx scripts/local-smoke.ts"
+    "local:smoke": "tsx scripts/local-smoke.ts",
+    "sandbox:check": "tsx scripts/sandbox-check.ts"
   },
   "devDependencies": {
     "@rx-artemis/core": "workspace:*",

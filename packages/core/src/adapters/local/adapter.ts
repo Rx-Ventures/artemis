@@ -46,7 +46,8 @@ import type {
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -71,7 +72,8 @@ import { runAgentLoop } from './loop.js';
 import type { ChatMessage, CompletionResult } from './loop.js';
 import { toolsForRisk, toWireTools } from './tools.js';
 import type { ToolSpec } from './tools.js';
-import { confinedArgv, DEFAULT_SANDBOX_MODE } from './seatbelt.js';
+import { describeConfinement, resolveSandbox, wrapCommand } from './commandSandbox.js';
+import type { ResolvedSandbox } from './commandSandbox.js';
 import { sandboxEnv } from './sandbox.js';
 import type { StreamUsage, ToolCall } from './stream.js';
 
@@ -230,8 +232,10 @@ class LocalRun implements Run {
   #usage: UsageSnapshot | undefined;
   /** Approvals the loop is parked on, keyed by the id the renderer answers. */
   readonly #pending = new Map<PermissionRequestId, Deferred<'allow' | 'deny'>>();
-  /** Seatbelt profiles written for this run, removed when it ends. */
-  readonly #profiles: string[] = [];
+  /** What this machine can enforce. Resolved once; see `#sandbox`. */
+  #resolvedSandbox: ResolvedSandbox | undefined;
+  /** The run's own writable scratch, made on first use and removed at the end. */
+  #scratch: string | undefined;
   readonly #queue = new AsyncQueue<AgentEvent>();
   readonly #abort = new AbortController();
   readonly #input: ResolvedRunInput;
@@ -326,31 +330,48 @@ class LocalRun implements Run {
     return decision;
   }
 
-  /** Run a shell command under whatever confinement the mode allows. */
-  async #shell(command: string, signal: AbortSignal): Promise<{ output: string; failed?: boolean }> {
-    const argv = await confinedArgv(DEFAULT_SANDBOX_MODE, command, this.#input.cwd, async (profile) => {
-      const at = path.join(await mkdtemp(path.join(tmpdir(), 'artemis-sb-')), 'run.sb');
-      await writeFile(at, profile, 'utf8');
-      this.#profiles.push(at);
-      return at;
+  /**
+   * What this machine can enforce, resolved once per run.
+   *
+   * Once rather than per command, because it cannot change mid-run and because
+   * the answer is what `session.started` tells the user — they should learn
+   * that commands will be refused before the model tries one, not after.
+   */
+  async #sandbox(): Promise<ResolvedSandbox> {
+    this.#resolvedSandbox ??= await resolveSandbox(process.platform, async (binary) => {
+      if (binary.startsWith('/')) return existsSync(binary);
+      // A bare name has to be found on PATH, which is what `which` is for.
+      try {
+        await execFileAsync('which', [binary]);
+        return true;
+      } catch {
+        return false;
+      }
     });
+    return this.#resolvedSandbox;
+  }
 
-    // `null` means nothing confined it — an unsupported platform, or the
-    // unconfined mode. Refused rather than run, because the alternative is a
-    // silent downgrade from "sandboxed" to "not", which is exactly the failure
-    // a security boundary must not have.
+  /** Run a shell command, or refuse when nothing on this machine can confine it. */
+  async #shell(command: string, signal: AbortSignal): Promise<{ output: string; failed?: boolean }> {
+    const sandbox = await this.#sandbox();
+    // A scratch directory of the run's own, because the profile no longer
+    // opens the system temp area — see `seatbeltProfile` for what that granted.
+    this.#scratch ??= await mkdtemp(path.join(tmpdir(), 'artemis-run-'));
+    const argv = await wrapCommand(sandbox, command, this.#input.cwd, this.#scratch);
+
+    // `null` means nothing confined it. Refused rather than run: the
+    // alternative is a silent downgrade from sandboxed to not, on whichever
+    // platform is least able to notice.
     if (argv === null) {
-      return {
-        output:
-          'Refused: no sandbox is available on this platform, and commands are not run unconfined.',
-        failed: true,
-      };
+      return { output: `Refused: ${describeConfinement(sandbox)}`, failed: true };
     }
 
     try {
       const { stdout, stderr } = await execFileAsync(argv[0] as string, argv.slice(1), {
         cwd: this.#input.cwd,
-        env: sandboxEnv(this.#input.env, []),
+        // Pointed at the run's own scratch, so a toolchain writing "to /tmp"
+        // lands somewhere the sandbox actually permits.
+        env: { ...sandboxEnv(this.#input.env, []), TMPDIR: this.#scratch, TMP: this.#scratch, TEMP: this.#scratch },
         signal,
         maxBuffer: 4_000_000,
       });
@@ -496,7 +517,7 @@ class LocalRun implements Run {
       // waiting on a promise nobody will ever settle.
       for (const pending of this.#pending.values()) pending.resolve('deny');
       this.#pending.clear();
-      for (const profile of this.#profiles) void rm(path.dirname(profile), { recursive: true, force: true });
+      if (this.#scratch !== undefined) void rm(this.#scratch, { recursive: true, force: true });
       this.#queue.close();
     }
   }
