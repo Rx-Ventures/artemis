@@ -90,7 +90,7 @@ import { detectArtifact, type Artifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
 import { isAbsolutePath, lastSegment } from '../lib/paths';
 import { newId } from '../lib/id';
-import { sessionKey, sessionKeyAliases } from '../lib/sessionGroups';
+import { entriesFiling, sessionKey } from '../lib/sessionGroups';
 import {
   disposeTerminalSession,
   ensureTerminalSession,
@@ -6089,16 +6089,23 @@ export async function renameSession(session: SessionSummary, title: string): Pro
  */
 export function toggleSessionArchived(session: SessionSummary): void {
   const key = sessionKey(session);
-  // Read against every key the entry may be filed under and write back only the
-  // canonical one, so an entry stored before this session's owner was recorded
-  // converges the first time it is toggled. See `sessionKeyAliases`.
-  const aliases = new Set(sessionKeyAliases(session));
-  useApp.setState((s) => ({
-    archivedSessions: s.archivedSessions.some((entry) => aliases.has(entry))
-      ? s.archivedSessions.filter((entry) => !aliases.has(entry))
-      : [...s.archivedSessions.filter((entry) => !aliases.has(entry)), key],
-    pinnedSessions: s.pinnedSessions.filter((entry) => !aliases.has(entry)),
-  }));
+  useApp.setState((s) => {
+    // Read against every entry that files this session — its current keys, and
+    // for a shared row any profile's key on the same id — and write back only
+    // the canonical one, so an entry stored under a since-changed owner
+    // converges the first time it is toggled. See `entriesFiling` for why the
+    // stale ones must be removed too: an unarchive that left one behind would
+    // look done and be undone at the next listing.
+    const archivedHits = new Set(entriesFiling(session, s.archivedSessions));
+    const pinnedHits = new Set(entriesFiling(session, s.pinnedSessions));
+    return {
+      archivedSessions:
+        archivedHits.size > 0
+          ? s.archivedSessions.filter((entry) => !archivedHits.has(entry))
+          : [...s.archivedSessions, key],
+      pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
+    };
+  });
   savePrefs();
 }
 
@@ -6112,14 +6119,18 @@ export function toggleSessionArchived(session: SessionSummary): void {
  */
 export function toggleSessionPinned(session: SessionSummary): void {
   const key = sessionKey(session);
-  // See the note in `toggleSessionArchived`.
-  const aliases = new Set(sessionKeyAliases(session));
-  useApp.setState((s) => ({
-    pinnedSessions: s.pinnedSessions.some((entry) => aliases.has(entry))
-      ? s.pinnedSessions.filter((entry) => !aliases.has(entry))
-      : [...s.pinnedSessions.filter((entry) => !aliases.has(entry)), key],
-    archivedSessions: s.archivedSessions.filter((entry) => !aliases.has(entry)),
-  }));
+  useApp.setState((s) => {
+    // See the note in `toggleSessionArchived`.
+    const pinnedHits = new Set(entriesFiling(session, s.pinnedSessions));
+    const archivedHits = new Set(entriesFiling(session, s.archivedSessions));
+    return {
+      pinnedSessions:
+        pinnedHits.size > 0
+          ? s.pinnedSessions.filter((entry) => !pinnedHits.has(entry))
+          : [...s.pinnedSessions, key],
+      archivedSessions: s.archivedSessions.filter((entry) => !archivedHits.has(entry)),
+    };
+  });
   savePrefs();
 }
 
@@ -6152,22 +6163,27 @@ export async function deleteSession(session: SessionSummary): Promise<boolean> {
   }
 
   const key = sessionKey(session);
-  // Every alias, for the sweeps. A shared transcript is one file, so deleting it
-  // deletes it for all the sharers, and an entry filed under any of their keys
-  // is now stale — including the one written before the owner was recorded,
-  // which is exactly the entry the canonical key would miss.
-  const aliases = new Set(sessionKeyAliases(session));
-  useApp.setState((s) => ({
-    sessions: s.sessions.filter((entry) => sessionKey(entry) !== key),
-    // Swept together with the row. An archive key for a session that no longer
-    // exists is inert, but it would accumulate in the persisted preferences
-    // forever, and a session id that came round again would arrive pre-hidden.
-    archivedSessions: s.archivedSessions.filter((entry) => !aliases.has(entry)),
-    // Same for the pin, where the stale entry is louder: a recycled id would
-    // arrive at the very top of the sidebar under a heading the user did not
-    // put it in.
-    pinnedSessions: s.pinnedSessions.filter((entry) => !aliases.has(entry)),
-  }));
+  useApp.setState((s) => {
+    // Every entry that filed this session, for the sweeps. A shared transcript
+    // is one file, so deleting it deletes it for all the sharers, and an entry
+    // filed under any of their keys is now stale — including one written under
+    // a profile that has since left the arrangement, which is exactly the
+    // entry the canonical key would miss. See `entriesFiling`.
+    const archivedHits = new Set(entriesFiling(session, s.archivedSessions));
+    const pinnedHits = new Set(entriesFiling(session, s.pinnedSessions));
+    return {
+      sessions: s.sessions.filter((entry) => sessionKey(entry) !== key),
+      // Swept together with the row. An archive key for a session that no
+      // longer exists is inert, but it would accumulate in the persisted
+      // preferences forever, and a session id that came round again would
+      // arrive pre-hidden.
+      archivedSessions: s.archivedSessions.filter((entry) => !archivedHits.has(entry)),
+      // Same for the pin, where the stale entry is louder: a recycled id would
+      // arrive at the very top of the sidebar under a heading the user did not
+      // put it in.
+      pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
+    };
+  });
   // A deleted session cannot be resumed, and leaving it selected would aim the
   // next prompt at a transcript that is gone.
   //

@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 import {
+  entriesFiling,
   flattenGroups,
   groupSessionsByProject,
   matchesQuery,
@@ -514,6 +515,149 @@ describe('partitionSessions', () => {
     });
 
     expect(groupSessionsByProject(split.active).map((g) => g.project)).toEqual(['/code/api']);
+  });
+
+  it('keeps a shared session archived when its entry names a profile that left', () => {
+    // The mass-unarchive this guards against: five hundred sessions were
+    // archived while `prof_old` owned the shared store's rows, then the
+    // arrangement changed — a profile deleted, the share script re-run — and
+    // `prof_old` is no longer among the sharers. The id never changed and the
+    // transcript never moved, so the filing must hold.
+    const row = session({
+      id: 'sess-1',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_a' as ProfileId,
+      alsoInProfiles: ['prof_b' as ProfileId],
+      profileIsUnknown: true,
+    });
+
+    const split = partitionSessions([row], {
+      pinned: NOTHING,
+      archived: new Set(['prof_old:sess-1']),
+    });
+
+    expect(split.archived.map((s) => s.id)).toEqual(['sess-1']);
+    expect(split.active).toEqual([]);
+  });
+
+  it('keeps a shared session pinned across the same profile change', () => {
+    const row = session({
+      id: 'sess-1',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_a' as ProfileId,
+      profileIsUnknown: true,
+    });
+
+    const split = partitionSessions([row], {
+      pinned: new Set(['prof_old:sess-1']),
+      archived: NOTHING,
+    });
+
+    expect(split.pinned.map((s) => s.id)).toEqual(['sess-1']);
+  });
+
+  it('does not extend the id match to an unshared row', () => {
+    // The old guarantee, restated against the new matching: for a row only one
+    // profile reaches, an entry under some other profile is about some other
+    // profile's session, and must not put this one away.
+    const mine = session({
+      id: 'dup',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_work' as ProfileId,
+    });
+
+    const split = partitionSessions([mine], {
+      pinned: NOTHING,
+      archived: new Set(['prof_personal:dup']),
+    });
+
+    expect(split.active.map((s) => s.id)).toEqual(['dup']);
+    expect(split.archived).toEqual([]);
+  });
+
+  it('files a scheduler firing under Archived with no entry at all', () => {
+    // The rule, not a key: firings arrive on a schedule under fresh ids, so a
+    // list of the ones already put away is wrong again by the next firing.
+    const fired = session({ id: 'a', cwd: '/code/api', updatedAt: 2, spawnedBy: 'scheduled-task' });
+    const talked = session({ id: 'b', cwd: '/code/api', updatedAt: 1 });
+
+    const split = partitionSessions([fired, talked], { pinned: NOTHING, archived: NOTHING });
+
+    expect(split.archived.map((s) => s.id)).toEqual(['a']);
+    expect(split.active.map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('lets a pin lift a firing back into view', () => {
+    // The one explicit "keep this in view" a user can put on a firing they
+    // want to watch; it outranks the rule exactly as it outranks an entry.
+    const fired = session({ id: 'a', cwd: '/code/api', updatedAt: 1, spawnedBy: 'scheduled-task' });
+
+    const split = partitionSessions([fired], {
+      pinned: new Set([sessionKey(fired)]),
+      archived: NOTHING,
+    });
+
+    expect(split.pinned.map((s) => s.id)).toEqual(['a']);
+    expect(split.archived).toEqual([]);
+  });
+
+  it('archiving a firing by hand changes nothing it would not already do', () => {
+    // The entry a user added before the rule existed — five hundred of them,
+    // in the store this was built against — is redundant, not conflicting.
+    const fired = session({ id: 'a', cwd: '/code/api', updatedAt: 1, spawnedBy: 'scheduled-task' });
+
+    const split = partitionSessions([fired], {
+      pinned: NOTHING,
+      archived: new Set([sessionKey(fired)]),
+    });
+
+    expect(split.archived.map((s) => s.id)).toEqual(['a']);
+  });
+});
+
+describe('entriesFiling', () => {
+  it('finds the entry under any current sharer', () => {
+    const row = session({
+      id: 'sess-1',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_a' as ProfileId,
+      alsoInProfiles: ['prof_b' as ProfileId],
+    });
+
+    expect(entriesFiling(row, ['prof_b:sess-1', 'prof_b:other'])).toEqual(['prof_b:sess-1']);
+  });
+
+  it('finds the stale entry a profile change left behind, for a shared row', () => {
+    // What the toggles must remove on unarchive: an entry the current keys no
+    // longer predict. Leaving it behind would look done and be undone at the
+    // next listing.
+    const row = session({
+      id: 'sess-1',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_a' as ProfileId,
+      profileIsUnknown: true,
+    });
+
+    expect(entriesFiling(row, ['prof_old:sess-1', 'prof_a:sess-1'])).toEqual([
+      'prof_old:sess-1',
+      'prof_a:sess-1',
+    ]);
+  });
+
+  it('matches only exact keys for an unshared row', () => {
+    const row = session({
+      id: 'dup',
+      cwd: '/code/api',
+      updatedAt: 1,
+      profileId: 'prof_work' as ProfileId,
+    });
+
+    expect(entriesFiling(row, ['prof_personal:dup', 'prof_work:dup'])).toEqual(['prof_work:dup']);
   });
 });
 

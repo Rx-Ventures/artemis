@@ -140,6 +140,7 @@ import {
 } from './mapper.js';
 import type { ClaudeMapperState } from './mapper.js';
 import { recoverSessionCwds } from './claudeSessionCwd.js';
+import { findScheduledSpawns } from './claudeSessionSpawn.js';
 import { replayStoredSession } from './history.js';
 import type { StoredMessage } from './history.js';
 import { readPlanUsage } from './planUsage.js';
@@ -787,6 +788,45 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
    */
   const live = new Map<SessionId, ClaudeProcess>();
 
+  /**
+   * Which sessions are scheduler firings, learned once per session.
+   *
+   * A verdict is a fact about a transcript's opening record, which is written
+   * once and never rewritten — so this never invalidates, and the first
+   * listing after launch is the only one that reads a whole store. Keyed on
+   * the session id alone for the same reason {@link live} is: the id is minted
+   * per conversation, and the one way a second store can hold the same id is a
+   * copied transcript, whose head — and therefore verdict — is identical.
+   */
+  const scheduledSpawnVerdicts = new Map<string, boolean>();
+
+  /**
+   * Stamp `spawnedBy` onto every summary whose transcript the scheduler
+   * opened. In place, index by index, because both listings have already
+   * pushed their summaries into an accumulating array by the time the whole
+   * batch is known.
+   */
+  const stampScheduledSpawns = async (
+    summaries: SessionSummary[],
+    configDir: string | undefined,
+    from = 0,
+  ): Promise<void> => {
+    const candidates = summaries.slice(from);
+    if (candidates.length === 0) return;
+    const spawned = await findScheduledSpawns({
+      configDir,
+      sessions: candidates.map((summary) => ({ id: summary.id, cwd: summary.cwd })),
+      cache: scheduledSpawnVerdicts,
+    });
+    if (spawned.size === 0) return;
+    for (let index = from; index < summaries.length; index += 1) {
+      const summary = summaries[index];
+      if (summary !== undefined && spawned.has(summary.id)) {
+        summaries[index] = { ...summary, spawnedBy: 'scheduled-task' };
+      }
+    }
+  };
+
   return {
     id: CLAUDE_PROVIDER_ID,
     label: 'Claude',
@@ -970,12 +1010,12 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       const hasMore = limit !== undefined && infos.length > limit;
       const page = limit === undefined ? infos : infos.slice(0, limit);
 
-      return {
-        sessions: page.map((info) =>
-          mapSessionInfo(info, { profileId: request.profileId, fallbackCwd: request.cwd }),
-        ),
-        hasMore,
-      };
+      const sessions = page.map((info) =>
+        mapSessionInfo(info, { profileId: request.profileId, fallbackCwd: request.cwd }),
+      );
+      await stampScheduledSpawns(sessions, configDir);
+
+      return { sessions, hasMore };
     },
 
     /**
@@ -1078,6 +1118,9 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             : { ...summary, alsoInProfiles, profileIsUnknown: true };
 
         const withoutCwd: SDKSessionInfo[] = [];
+        // Where this store's summaries begin, for the classification pass
+        // below — everything pushed from here on belongs to this group.
+        const groupStart = sessions.length;
 
         for (const info of infos) {
           const summary = mapAggregatedSessionInfo(info, { profileId: owner.profileId });
@@ -1119,6 +1162,18 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             recoveredWithoutCwd += 1;
           }
         }
+
+        /*
+         * Third pass: which of this store's sessions did the scheduler open?
+         *
+         * After the recovery pass so that recovered rows are classified too,
+         * and per group rather than at the end so the read uses the config
+         * directory the sessions actually came from. The first listing after
+         * launch reads every transcript's head once; every listing after that
+         * touches only sessions the cache has not met — see
+         * `claudeSessionSpawn.ts` for why a verdict never goes stale.
+         */
+        await stampScheduledSpawns(sessions, group.configDir, groupStart);
       }
 
       if (recoveredWithoutCwd > 0) {

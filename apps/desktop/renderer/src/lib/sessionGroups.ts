@@ -135,7 +135,25 @@ export interface SessionGroup {
  * preferences file does, and of the two answers, showing the row is the one the
  * user can act on.
  *
+ * ## Scheduler firings are archived by rule, not by entry
+ *
+ * A row carrying `SessionSummary.spawnedBy` is a transcript a machine opened —
+ * a scheduled task or routine firing — and it files under Archived without any
+ * entry saying so. An entry could not do this job: firings arrive on a
+ * schedule, each under a fresh id, so a list of the ones already put away is a
+ * list that is wrong again by the next firing. The rule is what lets the store
+ * a scheduler has been writing to for a month merge into the sidebar without
+ * burying the conversations, and it is why archiving them by hand once —
+ * which is how this feature was discovered missing — never needs doing again.
+ *
+ * Pinning still wins, deliberately: it is the one explicit "keep this in view"
+ * a user can put on a firing they actually want to watch, and it already
+ * outranks the archive for the same reason in the hand-edited-prefs case above.
+ *
  * Keys are `sessionKey` values, not ids: see the note at the top of this file.
+ * Membership, though, is tested more broadly than the keys are written — see
+ * {@link entriesFiling} for how a shared row keeps its filing when the profile
+ * half of a stored key goes stale.
  */
 export function partitionSessions(
   sessions: readonly SessionSummary[],
@@ -145,11 +163,21 @@ export function partitionSessions(
   readonly active: readonly SessionSummary[];
   readonly archived: readonly SessionSummary[];
 } {
-  // The overwhelmingly common case is that neither set has anything in it, and
-  // walking the list to discover that is waste on the sidebar's hot path.
-  if (sets.pinned.size === 0 && sets.archived.size === 0) {
+  // The overwhelmingly common case is that neither set has anything in it and
+  // no scheduler has written to the store, and walking the list to discover
+  // that is waste on the sidebar's hot path.
+  if (
+    sets.pinned.size === 0 &&
+    sets.archived.size === 0 &&
+    !sessions.some((session) => session.spawnedBy !== undefined)
+  ) {
     return { pinned: [], active: sessions, archived: [] };
   }
+
+  // Ids the stored entries name, for the shared-row matching described on
+  // `entriesFiling`. Built once per call, not once per row.
+  const pinnedIds = entryIds(sets.pinned);
+  const archivedIds = entryIds(sets.archived);
 
   const pinned: SessionSummary[] = [];
   const active: SessionSummary[] = [];
@@ -158,11 +186,81 @@ export function partitionSessions(
     // Aliases, not the one key: a shared session's key moves when its owner is
     // recorded, and the filing must survive that. See `sessionKeyAliases`.
     const keys = sessionKeyAliases(session);
-    if (keys.some((key) => sets.pinned.has(key))) pinned.push(session);
-    else if (keys.some((key) => sets.archived.has(key))) put.push(session);
-    else active.push(session);
+    const shared = isSharedRow(session);
+    if (keys.some((key) => sets.pinned.has(key)) || (shared && pinnedIds.has(session.id))) {
+      pinned.push(session);
+    } else if (
+      session.spawnedBy !== undefined ||
+      keys.some((key) => sets.archived.has(key)) ||
+      (shared && archivedIds.has(session.id))
+    ) {
+      put.push(session);
+    } else {
+      active.push(session);
+    }
   }
   return { pinned, active, archived: put };
+}
+
+/**
+ * Does more than one profile reach this row's transcript?
+ *
+ * True for a row in a shared store — `alsoInProfiles` names the other sharers,
+ * or `profileIsUnknown` says the owner on the row is a pick. Either flag means
+ * the profile half of this session's key is unstable, which is what the
+ * broader matching in {@link entriesFiling} exists for.
+ */
+function isSharedRow(session: SessionSummary): boolean {
+  return (
+    session.profileIsUnknown === true ||
+    (session.alsoInProfiles !== undefined && session.alsoInProfiles.length > 0)
+  );
+}
+
+/** The id half of a stored `profileId:id` entry. */
+function entryId(entry: string): string {
+  return entry.slice(entry.indexOf(':') + 1);
+}
+
+/** Every id the stored entries name. */
+function entryIds(entries: Iterable<string>): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) ids.add(entryId(entry));
+  return ids;
+}
+
+/**
+ * Every stored entry that files this session — for the store's toggles, which
+ * must remove all of them, not just the ones the current keys predict.
+ *
+ * Two kinds of match:
+ *
+ *  - **An alias hit**: the entry is one of {@link sessionKeyAliases}' keys.
+ *    The ordinary case, and the only one an unshared row gets.
+ *  - **An id hit, for shared rows only**: the entry names this session's id
+ *    under a profile that is not currently a sharer. That is what a stale key
+ *    looks like from the other side of a profile change — the entry was
+ *    written when some since-removed or since-relinked profile owned the row,
+ *    the id never changed, and the transcript never moved. Honouring it is
+ *    what keeps five hundred archived sessions archived across the exact
+ *    re-arrangements that shared stores exist for: profiles added and removed,
+ *    the share script re-run, a store merged in from the CLI. Refusing it is
+ *    how all five hundred came back at once.
+ *
+ * The id match is deliberately *not* extended to unshared rows. For those the
+ * old guarantee stands — one profile's entry must not hide another profile's
+ * session — and nothing about an unshared store makes its keys go stale, so
+ * the broader match would buy nothing and cost the guarantee.
+ */
+export function entriesFiling(
+  session: SessionSummary,
+  entries: readonly string[],
+): readonly string[] {
+  const aliases = new Set(sessionKeyAliases(session));
+  const shared = isSharedRow(session);
+  return entries.filter(
+    (entry) => aliases.has(entry) || (shared && entryId(entry) === session.id),
+  );
 }
 
 /**

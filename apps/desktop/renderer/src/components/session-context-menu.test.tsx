@@ -259,6 +259,47 @@ describe('session context menu', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* A scheduled run's menu                                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('a scheduled run’s menu', () => {
+  /** The same row, opened by a scheduler rather than a person. */
+  function seedFiring(): void {
+    seedStore([{ ...SESSION, spawnedBy: 'scheduled-task' }, OTHER]);
+    // The row files under Archived by rule — see `partitionSessions` — so the
+    // section has to be open before there is anything to right-click.
+    useApp.setState({ archivedExpanded: true });
+  }
+
+  it('disables unarchive and says why, leaving pin as the way back', async () => {
+    seedFiring();
+    mount(<SessionList />);
+    await openMenu();
+
+    // The row is archived by rule, not by entry, so "Unarchive" would remove
+    // nothing and change nothing. Disabled with the reason, like a capability
+    // gap — and the pin, which outranks the rule, stays live.
+    const unarchive = screen.getByRole('menuitem', { name: 'Unarchive' });
+    expect(unarchive.getAttribute('data-disabled')).not.toBeNull();
+    expect(unarchive.getAttribute('title')).toContain('pin');
+    expect(screen.getByRole('menuitem', { name: 'Pin' }).getAttribute('data-disabled')).toBeNull();
+  });
+
+  it('ignores the letter A on it, same as any disabled item', async () => {
+    seedFiring();
+    mount(<SessionList />);
+    const menu = await openMenu();
+
+    press(menu, 'a');
+
+    // A fired toggle would have written the canonical key into the archive
+    // list — a redundant entry today, and a stale one the day the rule learns
+    // exceptions.
+    expect(useApp.getState().archivedSessions).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Hotkeys                                                                    */
 /* -------------------------------------------------------------------------- */
 
