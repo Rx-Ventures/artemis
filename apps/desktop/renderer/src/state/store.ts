@@ -4741,8 +4741,6 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   const [first, ...rest] = live;
   if (first === undefined) return;
 
-  await attachRun(pane, first);
-
   /*
    * Backgrounded *before* they are attached, which is not a tidiness point.
    *
@@ -4782,8 +4780,70 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   if (adopted.length > 0) {
     useApp.setState((s) => ({ background: [...s.background, ...adopted.map((a) => a.pane)] }));
   }
-  for (const { pane: extra, handle } of adopted) {
-    await attachRun(extra, handle);
+  /*
+   * Every run at once, which is not a speed optimisation — it is what stops one
+   * conversation's reload from silencing another's.
+   *
+   * `attachRun` holds every live event for the run it is attaching (see
+   * `replayBuffers`), and it holds them across two IPC round trips, one of which
+   * reads a whole stored transcript through a lock the main process shares with
+   * the sidebar's four-second poll and every other profile's history read. Run
+   * *n* awaited behind runs 1…n-1 therefore held its stream for the sum of all
+   * of their reads, and released the backlog in one burst when its turn finally
+   * came. With several conversations live — the case this function exists for —
+   * the last one adopted was frozen for as long as the whole queue took, and the
+   * user watched an agent that was working the whole time appear to do nothing
+   * and then finish instantly.
+   *
+   * The column's own run is in here rather than awaited above it, for the same
+   * reason: it is the slowest one to replay (it has the most history) and it was
+   * in front of all the others.
+   *
+   * Each attach touches only its own pane and its own buffer, so there is
+   * nothing here for them to race over.
+   */
+  await Promise.all([
+    attachRun(pane, first),
+    ...adopted.map(({ pane: extra, handle }) => attachRun(extra, handle)),
+  ]);
+}
+
+/**
+ * Longest a re-attaching pane will hold its live stream back for a replay.
+ *
+ * The hold is correct — see {@link attachRun} — but it must be finite, because
+ * what it is waiting on is not. `call` has no timeout, the reads behind it are
+ * serialised process-wide in main, and a renderer that waits forever does not
+ * degrade gracefully: it shows a conversation that has visibly stopped while the
+ * agent goes on working into a buffer nobody drains.
+ *
+ * Generous, because expiring is the worse outcome of the two: it costs the
+ * scrollback above the run. Eight seconds is far longer than the read takes when
+ * nothing is contending, and short enough that a wedged one is a pause rather
+ * than the rest of the session.
+ */
+const REPLAY_HOLD_MS = 8_000;
+
+/** Returned by {@link withDeadline} when the work did not finish in time. */
+const TIMED_OUT = Symbol('timed out');
+
+async function withDeadline<T>(ms: number, work: () => Promise<T>): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+
+  const running = work();
+  // A rejection that lands *after* the deadline has no caller left to receive
+  // it, and an unhandled one is a console error in a window that has already
+  // recovered. This marks it handled without swallowing the early case, which
+  // still rejects through the race below.
+  running.catch(() => undefined);
+
+  try {
+    return await Promise.race([running, expiry]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -4852,9 +4912,30 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
   });
 
   let lastSeq = -1;
+  /*
+   * Cleared when the hold expires, so a read that lands afterwards knows not to
+   * write. Without it a slow `replayEarlierTurns` would apply the conversation's
+   * *history* underneath the live events that were released while it was still
+   * in flight — the transcript out of order, which is the one thing the hold
+   * exists to prevent.
+   */
+  let wanted = true;
   try {
-    await replayEarlierTurns(pane, handle);
-    const replay = await call(() => bridge.runs.events({ runId: handle.runId }));
+    const replay = await withDeadline(REPLAY_HOLD_MS, async () => {
+      await replayEarlierTurns(pane, handle, () => wanted);
+      return call(() => bridge.runs.events({ runId: handle.runId }));
+    });
+
+    if (replay === TIMED_OUT) {
+      wanted = false;
+      pane.transcript.note(
+        'warn',
+        'Could not replay what this run has already done',
+        'Reading it back took too long. It is still running, and everything from here on will appear normally.',
+      );
+      return;
+    }
+
     if (!replay.ok) {
       pane.transcript.note(
         'warn',
@@ -4901,7 +4982,19 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
  * same reason — this is history, and stamping it with the live run's id would
  * make the two indistinguishable inside the transcript.
  */
-async function replayEarlierTurns(pane: Pane, handle: RunHandle): Promise<void> {
+async function replayEarlierTurns(
+  pane: Pane,
+  handle: RunHandle,
+  /**
+   * Whether the answer is still wanted by the time it arrives.
+   *
+   * Read *after* the await, because that is the only place it can have changed:
+   * {@link attachRun} gives up on a read that outruns its hold, and history
+   * applied after the live stream has been released would land below the turn it
+   * came before.
+   */
+  stillWanted: () => boolean = () => true,
+): Promise<void> {
   const { bridge } = resolveBridge();
   const { sessionId, historyOffset } = handle;
   if (!bridge || sessionId === undefined || historyOffset === undefined || historyOffset <= 0) {
@@ -4917,6 +5010,8 @@ async function replayEarlierTurns(pane: Pane, handle: RunHandle): Promise<void> 
       limit: historyOffset,
     }),
   );
+
+  if (!stillWanted()) return;
 
   if (!result.ok) {
     pane.transcript.note(

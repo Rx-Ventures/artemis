@@ -428,6 +428,12 @@ const menuOpenSettings = createPushChannel<MenuOpenSettings>({
 window.addEventListener('beforeunload', () => {
   agentEvents.reset();
   terminalEvents.reset();
+  // `browserEvents` was missed here, which left it the one channel whose
+  // subscribers outlive a reload: every ⌘R adds another callback from a dead
+  // world to the set, and `deliver` goes on calling all of them. They are
+  // individually harmless — `deliver` catches what they throw — but the set only
+  // grows, and the `ipcRenderer` listener it keeps attached is never detached.
+  browserEvents.reset();
   windowStates.reset();
   planUsages.reset();
   updateStates.reset();
