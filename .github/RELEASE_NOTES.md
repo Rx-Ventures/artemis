@@ -1,6 +1,35 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.20.0
+
+- **Watch the model think, if that is what you came for.** Thinking folds into
+  the activity marker with the calls it was reasoning about, which is right when
+  reasoning is context for the answer and wrong when it is the thing you have
+  the app open to see — it put the interesting part behind two clicks. There is
+  a switch in Appearance now, off by default. On, a burst becomes reasoning in
+  the thread with markers between the paragraphs for the work, and the blocks
+  render open as muted prose, growing as the model writes them. It applies to
+  the conversation already on screen, so you can flip it and look rather than
+  flip it and wonder. A single block you would rather not read still collapses
+  on its own, and stays that way.
+
+- **A conversation no longer stops dead while you look at something else.** With
+  Artemis behind another window — minimised, covered, on another Space — the
+  transcript could freeze while the agent carried on working, and then deliver
+  everything in one burst when you came back, reloaded, or stopped and started
+  the session. The moment you most needed to follow was the moment all of it
+  arrived at once.
+
+  Two separate causes, both now fixed. The transcript batched its updates onto
+  an animation frame, and a window that is not being drawn is never given one —
+  so the batch was never applied and every later update queued behind it. And
+  re-attaching after a reload held each conversation's live events while it read
+  that conversation's history back, one after another, with no time limit: the
+  more sessions you had running, the longer the last of them stayed silent.
+  Anyone working across several accounts saw this most, because switching
+  between them is what triggers the heavy history reads.
+
 ## What's new in 0.19.0
 
 - **A conversation that is still working keeps its column.** Leaving one —
