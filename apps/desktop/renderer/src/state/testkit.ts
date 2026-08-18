@@ -37,7 +37,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   profiles: true,
   sessions: true,
   contextWindows: true,
-  quickModelIds: true,
+  quickModelIdsByProfile: true,
   activeProviderId: true,
   activeProfileId: true,
   cwd: true,
@@ -74,7 +74,7 @@ const WINDOW_OWNED = new Set<keyof SessionState>([
   'profiles',
   'sessions',
   'contextWindows',
-  'quickModelIds',
+  'quickModelIdsByProfile',
 ]);
 
 /**

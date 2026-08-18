@@ -564,11 +564,23 @@ export interface AppState {
    * opened settings must still get a usable picker, so there is no way to
    * express an intentionally empty quick list and no need for one.
    *
-   * A shortlist is a statement about which models the *user* likes, not about
-   * an account, so it stays here and is mirrored into every pane rather than
-   * kept per column.
+   * Keyed by profile, because catalogues are not comparable. A Claude account
+   * offers a handful of models and an OpenCode one reaches hundreds across
+   * twenty providers, so a single shared shortlist is either swamped by the
+   * large catalogue or empty for it — and "pinned nothing" reads as the whole
+   * catalogue, which turns the swamped case into no shortlist at all.
+   *
+   * This was once one array for the window, on the reasoning that a shortlist
+   * states which models the *user* likes rather than anything about an account.
+   * That holds only while every account offers roughly the same lineup. It
+   * stopped holding when a provider arrived whose catalogue is two orders of
+   * magnitude larger, which is the situation the pins exist to make bearable.
+   *
+   * Still window-owned and mirrored into every pane: the map is the same for
+   * both columns, and each pane resolves its own entry through its
+   * `activeProfileId`. See `quickModels`.
    */
-  readonly quickModelIds: readonly string[];
+  readonly quickModelIdsByProfile: Readonly<Record<ProfileId, readonly string[]>>;
   /** How wide the transcript column may grow. */
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
@@ -1165,7 +1177,7 @@ interface Prefs {
   pinnedSessions?: readonly string[];
   pinnedCollapsed?: boolean;
   settingsSection?: SettingsSection;
-  quickModelIds?: readonly string[];
+  quickModelIdsByProfile?: Readonly<Record<string, readonly string[]>>;
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
@@ -1216,6 +1228,82 @@ function stringList(value: unknown): readonly string[] | undefined {
 }
 
 /**
+ * The pinned shortlists, per profile — and the migration off the flat one.
+ *
+ * Builds before this stored a single window-wide `quickModelIds`, which cannot
+ * be attributed to a profile after the fact: the array says which models the
+ * user pinned and nothing about which account they were looking at.
+ *
+ * So it is seeded into *every* profile rather than dropped or guessed at. That
+ * reads reckless and is not, because a pin is already filtered against the live
+ * catalogue at read time — see `computeQuickModels`. A Claude profile keeps the
+ * Claude ids and an OpenCode profile matches none of them, which falls back to
+ * the whole catalogue: exactly the state that profile was in before. Nothing is
+ * lost, nothing is invented, and the first edit to any profile replaces its
+ * seeded copy.
+ *
+ * The seed is keyed by profile id, which `loadPrefs` does not have — so it is
+ * carried under a reserved key and resolved by {@link seedQuickModels} once the
+ * profile list arrives.
+ */
+function quickModelMap(raw: Record<string, unknown>): Record<string, readonly string[]> {
+  const value = raw['quickModelIdsByProfile'];
+  const map: Record<string, readonly string[]> = {};
+
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    for (const [profileId, entry] of Object.entries(value as Record<string, unknown>)) {
+      const ids = stringList(entry);
+      if (ids !== undefined && ids.length > 0) map[profileId] = ids;
+    }
+  }
+
+  // Only when the new shape is absent entirely. A file carrying both is one
+  // this build already wrote, and the legacy key is then a leftover rather than
+  // an instruction.
+  if (Object.keys(map).length === 0) {
+    const legacy = stringList(raw['quickModelIds']);
+    if (legacy !== undefined && legacy.length > 0) map[LEGACY_PINS_KEY] = legacy;
+  }
+
+  return map;
+}
+
+/**
+ * Where a pre-migration shortlist waits for the profile list to arrive.
+ *
+ * Not a profile id and deliberately unable to collide with one — profile ids
+ * are generated, this is a sentinel. {@link seedQuickModels} consumes it.
+ */
+const LEGACY_PINS_KEY = ' legacy';
+
+/**
+ * Spread a migrated shortlist across the profiles, once they are known.
+ *
+ * Called from the same place the profile list is stored. A no-op in every run
+ * after the first, because consuming the sentinel is what removes it.
+ */
+function seedQuickModels(profiles: readonly ProfileMetadata[]): void {
+  const state = useApp.getState();
+  const legacy = state.quickModelIdsByProfile[LEGACY_PINS_KEY];
+  if (legacy === undefined || profiles.length === 0) return;
+
+  const seeded: Record<string, readonly string[]> = {};
+  for (const profile of profiles) seeded[profile.id] = legacy;
+  useApp.setState({
+    quickModelIdsByProfile: { ...seeded, ...withoutLegacy(state.quickModelIdsByProfile) },
+  });
+  savePrefs();
+}
+
+function withoutLegacy(
+  map: Readonly<Record<string, readonly string[]>>,
+): Record<string, readonly string[]> {
+  const next = { ...map };
+  delete next[LEGACY_PINS_KEY];
+  return next;
+}
+
+/**
  * Keep only the entries whose value is a usable positive number.
  *
  * `contextWindows` becomes the denominator of the context readout, so a
@@ -1256,7 +1344,7 @@ function loadPrefs(): Prefs {
   return {
     ...(raw as Prefs),
     settingsSection: oneOf(raw['settingsSection'], SETTINGS_SECTIONS),
-    quickModelIds: stringList(raw['quickModelIds']),
+    quickModelIdsByProfile: quickModelMap(raw),
     // `setFastMode` / `setUltracode` keep these mutually exclusive, but that
     // only governs values this build writes. A file left behind by a build
     // whose exclusion lived in the controls, or one edited by hand, can carry
@@ -1354,7 +1442,7 @@ function savePrefs(): void {
     pinnedSessions: s.pinnedSessions,
     pinnedCollapsed: s.pinnedCollapsed,
     settingsSection: s.settingsSection,
-    quickModelIds: s.quickModelIds,
+    quickModelIdsByProfile: s.quickModelIdsByProfile,
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     fontSize: s.fontSize,
@@ -1429,7 +1517,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     profiles: [],
     sessions: [],
     contextWindows: prefs.contextWindows ?? {},
-    quickModelIds: prefs.quickModelIds ?? [],
+    quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
 
     activeProviderId: prefs.activeProviderId ?? 'claude',
     activeProfileId: (prefs.activeProfileId ?? null) as ProfileId | null,
@@ -1524,7 +1612,7 @@ export const useApp = create<AppState>(() => ({
   authByProfile: {},
   planUsageByProfile: {},
 
-  quickModelIds: prefs.quickModelIds ?? [],
+  quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   fontSize: initialFontSize,
@@ -1899,7 +1987,7 @@ function mirrorToPanes(state: AppState): void {
     profiles: state.profiles,
     sessions: state.sessions,
     contextWindows: state.contextWindows,
-    quickModelIds: state.quickModelIds,
+    quickModelIdsByProfile: state.quickModelIdsByProfile,
   };
   // Backgrounded conversations included: one comes home the moment the user
   // clicks its row, and a pane that had been out of the mirror would arrive
@@ -3156,7 +3244,7 @@ function seedBeside(source: Pane, state: AppState = useApp.getState()): SessionS
     profiles: state.profiles,
     sessions: state.sessions,
     contextWindows: state.contextWindows,
-    quickModelIds: state.quickModelIds,
+    quickModelIdsByProfile: state.quickModelIdsByProfile,
     activeProviderId: from.activeProviderId,
     activeProfileId: from.activeProfileId,
     cwd: from.cwd,
@@ -3769,8 +3857,29 @@ const computeQuickModels = memoisePerPane(
   },
 );
 
+/**
+ * The pins that apply to *this* pane — its profile's entry, or none.
+ *
+ * A pane with no profile has no entry and gets the uncurated whole catalogue,
+ * which is the same answer an unpinned profile gets and for the same reason:
+ * a picker that shows nothing is broken, and there is no way to express an
+ * intentionally empty shortlist.
+ *
+ * `NO_PINS` is a module constant rather than a fresh `[]` so the identity is
+ * stable across reads — `computeQuickModels` memoises on it, and a new array
+ * per call would defeat the memo on every store read. Same hazard the
+ * `NO_OPTIONS` note describes.
+ */
+export function paneQuickModelIds(state: SessionState): readonly string[] {
+  const profileId = state.activeProfileId;
+  if (profileId === null) return NO_PINS;
+  return state.quickModelIdsByProfile[profileId] ?? NO_PINS;
+}
+
+const NO_PINS: readonly string[] = [];
+
 export function quickModels(state: SessionState): readonly ProviderModelOption[] {
-  return computeQuickModels(activeModels(state), state.quickModelIds);
+  return computeQuickModels(activeModels(state), paneQuickModelIds(state));
 }
 
 /**
@@ -4423,6 +4532,9 @@ export async function bootstrap(): Promise<void> {
   // makes the profile menu's recommendation available immediately in a window
   // opened into an app that has been running for hours.
   void seedPlanUsage(useApp.getState().profiles);
+  // The first boot after the shortlist became per-profile. A no-op every time
+  // after that, because consuming the sentinel is what removes it.
+  seedQuickModels(useApp.getState().profiles);
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -4624,19 +4736,22 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
       const before = paneState(pane);
       const outgoing = activeModels(before);
       const models = result.value.models;
-      // The shortlist is the window's, so its migration is written to the window
-      // store — from where the mirror puts the carried ids in front of *both*
-      // columns' pickers, which is right: the pins did not move, the catalogue
-      // renaming them did.
-      const quickModelIds = carryModelIds(useApp.getState().quickModelIds, outgoing, models);
+      // Only this profile's shortlist migrates. The catalogue that just arrived
+      // belongs to one account, and renaming another account's pins against it
+      // would be the old window-wide behaviour reintroduced through the back
+      // door — `opus` in a Claude profile is not a stale id just because an
+      // OpenCode catalogue has never heard of it.
+      const pins = useApp.getState().quickModelIdsByProfile;
+      const carried = carryModelIds(pins[profileId] ?? [], outgoing, models);
       const model = before.model === null ? null : carryModelId(before.model, outgoing, models);
 
       setPaneState(pane, { models, modelsError: null, model });
-      if (quickModelIds !== useApp.getState().quickModelIds) useApp.setState({ quickModelIds });
+      const moved = carried !== (pins[profileId] ?? undefined) && carried.length > 0;
+      if (moved) useApp.setState({ quickModelIdsByProfile: { ...pins, [profileId]: carried } });
       // Only when something actually moved. Persisting the carried ids is what
       // stops the migration from running again on every launch, and skipping the
       // write in the common case keeps a background refresh silent.
-      if (quickModelIds !== before.quickModelIds || model !== before.model) savePrefs();
+      if (moved || model !== before.model) savePrefs();
     } else {
       setPaneState(pane, { modelsError: null });
     }
@@ -5678,18 +5793,41 @@ export function setSettingsSection(section: SettingsSection): void {
  * are simply filtered out at read time — see {@link quickModels} — so there is
  * no cleanup pass and no way for a stale pin to break the picker.
  */
-export function toggleQuickModel(id: string): void {
-  useApp.setState((s) => ({
-    quickModelIds: s.quickModelIds.includes(id)
-      ? s.quickModelIds.filter((existing) => existing !== id)
-      : [...s.quickModelIds, id],
-  }));
-  savePrefs();
+export function toggleQuickModel(id: string, pane: Pane = focusedPane()): void {
+  const profileId = paneState(pane).activeProfileId;
+  // No profile means no catalogue was ever fetched and no entry to key. Storing
+  // pins under a null profile would strand them: nothing reads that key back.
+  if (profileId === null) return;
+
+  const current = useApp.getState().quickModelIdsByProfile[profileId] ?? [];
+  writeQuickModels(
+    profileId,
+    current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id],
+  );
 }
 
-/** Replace the whole pinned set — for a settings pane that edits it as a list. */
-export function setQuickModels(ids: readonly string[]): void {
-  useApp.setState({ quickModelIds: [...ids] });
+/** Replace one profile's pinned set — for a settings pane that edits it as a list. */
+export function setQuickModels(ids: readonly string[], pane: Pane = focusedPane()): void {
+  const profileId = paneState(pane).activeProfileId;
+  if (profileId === null) return;
+  writeQuickModels(profileId, [...ids]);
+}
+
+/**
+ * Write one profile's entry, dropping it entirely when it empties.
+ *
+ * Deleting rather than storing `[]` keeps the two indistinguishable states from
+ * both existing on disk: an empty array and an absent key both mean "not
+ * curated", and a prefs file that carried empty arrays for every profile ever
+ * opened would grow without ever saying anything.
+ */
+function writeQuickModels(profileId: ProfileId, ids: readonly string[]): void {
+  useApp.setState((s) => {
+    const next = { ...s.quickModelIdsByProfile };
+    if (ids.length === 0) delete next[profileId];
+    else next[profileId] = ids;
+    return { quickModelIdsByProfile: next };
+  });
   savePrefs();
 }
 
