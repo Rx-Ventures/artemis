@@ -3,6 +3,7 @@ import type { AgentEvent, ToolEndStatus } from '@rx-artemis/protocol';
 import {
   TranscriptModel,
   isGroupId,
+  frameScheduler,
   syncScheduler,
   type AssistantItem,
   type ToolItem,
@@ -714,5 +715,71 @@ describe('TranscriptModel artifacts', () => {
     }
 
     expect(model.getRowsSnapshot()).toEqual(['g:t:c1']);
+  });
+});
+
+/*
+ * The stall this suite exists to prevent.
+ *
+ * `markPending` latches on a single deferred flush, so whatever the scheduler
+ * is must be *guaranteed* to run it. A window that stops producing frames —
+ * occluded behind another Artemis window, minimised, on another Space — stops
+ * running `requestAnimationFrame` callbacks, and a latch that is never cleared
+ * silences the model permanently: every later event short-circuits, nothing is
+ * notified, and the agent's work piles up invisibly until a reload dumps it in
+ * one go. `startSessionFeed` already refuses to gate on visibility for exactly
+ * this reason; the transcript has to hold the same line.
+ */
+describe('flush scheduling', () => {
+  it('keeps notifying when animation frames stop arriving', () => {
+    // Stands in for the timer half of the scheduler: the frame half never runs.
+    const timers: Array<() => void> = [];
+    const model = new TranscriptModel((flush) => timers.push(flush));
+
+    const onList = vi.fn();
+    model.subscribeList(onList);
+
+    const [first, second] = stream(
+      { type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'one' },
+      { type: 'text.delta', messageId: 'm2', blockIndex: 0, text: 'two' },
+    );
+
+    model.apply(first as AgentEvent);
+    expect(timers).toHaveLength(1);
+    (timers.shift() as () => void)();
+    expect(onList).toHaveBeenCalledTimes(1);
+
+    // And the model is unlatched, so the next event schedules again rather than
+    // being swallowed by a `pending` flag nothing will ever clear.
+    model.apply(second as AgentEvent);
+    expect(timers).toHaveLength(1);
+    (timers.shift() as () => void)();
+    expect(onList).toHaveBeenCalledTimes(2);
+  });
+
+  it('frameScheduler runs the flush even when no frame is ever produced', async () => {
+    const realRaf = globalThis.requestAnimationFrame;
+    const realCancel = globalThis.cancelAnimationFrame;
+    // A window that is not being composited: the callback is accepted and
+    // dropped, which is what Chromium does for an occluded or minimised window.
+    globalThis.requestAnimationFrame = (() => 1) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => undefined) as typeof globalThis.cancelAnimationFrame;
+
+    try {
+      const flush = vi.fn();
+      frameScheduler(flush);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(flush).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.requestAnimationFrame = realRaf;
+      globalThis.cancelAnimationFrame = realCancel;
+    }
+  });
+
+  it('flushes once when the frame arrives first, and does not flush twice', async () => {
+    const flush = vi.fn();
+    frameScheduler(flush);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(flush).toHaveBeenCalledTimes(1);
   });
 });

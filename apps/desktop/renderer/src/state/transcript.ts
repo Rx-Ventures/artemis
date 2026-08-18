@@ -313,10 +313,84 @@ export type ArtifactTest = (item: ToolItem) => boolean;
 /** How a coalesced flush gets deferred. Injectable so tests can run it now. */
 export type Scheduler = (flush: () => void) => void;
 
-/** One flush per animation frame — the display cannot show more than that. */
+/**
+ * One frame, for the hosts that have no frames to offer.
+ *
+ * Node and jsdom have no `requestAnimationFrame`, so there the timer is not a
+ * backstop but the whole scheduler, and it should approximate the display clock
+ * it stands in for. `cwd.test.ts` waits two of these for a flush.
+ */
+const FRAME_MS = 16;
+
+/**
+ * How long to wait for a frame that was asked for before flushing without it.
+ *
+ * Comfortably longer than a frame at any refresh rate a display has, so that a
+ * window which *is* being composited always flushes on its own frame and the
+ * paragraph below keeps holding — this must not become the thing that drives a
+ * healthy window. Short enough that a window which is not being composited
+ * stays legible: ten flushes a second is far more than a reader can follow and
+ * far fewer than a token stream produces.
+ */
+const FLUSH_FALLBACK_MS = 100;
+
+/**
+ * One flush per animation frame — the display cannot show more than that —
+ * with a timer underneath for the windows that never get one.
+ *
+ * ## Why the timer is not belt-and-braces
+ *
+ * {@link TranscriptModel.markPending} latches: it sets `pending` and hands the
+ * flush to this function, and every event that arrives before that flush runs
+ * short-circuits on the flag. So the scheduler's contract is not "soon" but
+ * *"eventually, always"* — a deferred flush that never runs does not delay the
+ * transcript, it silences the model permanently. Nothing is notified again for
+ * the life of the page, while `dirty` and the text buffers go on filling up
+ * behind it.
+ *
+ * `requestAnimationFrame` alone cannot meet that contract, because a frame is
+ * not something a window is entitled to. Chromium stops compositing a window
+ * with no visible surface — minimised, fully covered by another application, on
+ * a Space the user has switched away from, behind a sleeping display — and the
+ * queued callback is then simply never run. That is not an edge case here; it is
+ * the ordinary shape of using this app, which exists to be left alone while an
+ * agent works and looked at again afterwards.
+ *
+ * The symptom is the worst one this app has. The transcript stops dead while the
+ * agent carries on; the buffered work then lands in a single burst when frames
+ * resume or the page is reloaded, so the one moment the user cannot follow what
+ * happened is the moment all of it appears.
+ * `windowSecurityPreferences` sets `backgroundThrottling: false` against
+ * exactly this failure and it does not reach here — that keeps *timers* honest
+ * while the window is in the background, which is what makes the fallback below
+ * work, but it does not buy frames for a window that is not being drawn.
+ * `startSessionFeed` refuses to gate on visibility for the same reason, in the
+ * same words.
+ *
+ * So the two race and the first to arrive wins, once. A composited window is
+ * unaffected: its frame lands inside 17ms and cancels the timer, so the flush
+ * stays on the display's own clock.
+ */
 export const frameScheduler: Scheduler = (flush) => {
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => flush());
-  else setTimeout(flush, 16);
+  if (typeof requestAnimationFrame !== 'function') {
+    setTimeout(flush, FRAME_MS);
+    return;
+  }
+
+  let done = false;
+  let frame = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const once = (): void => {
+    if (done) return;
+    done = true;
+    if (timer !== undefined) clearTimeout(timer);
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+    flush();
+  };
+
+  frame = requestAnimationFrame(once);
+  timer = setTimeout(once, FLUSH_FALLBACK_MS);
 };
 
 /** Flush immediately. Used by tests. */
