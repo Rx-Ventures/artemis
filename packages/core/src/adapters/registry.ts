@@ -46,6 +46,8 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   lmstudio: 'LM Studio',
+  ollama: 'Ollama',
+  llamacpp: 'llama.cpp',
 };
 
 /** Why a known provider is missing from this build. */

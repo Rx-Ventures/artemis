@@ -110,6 +110,8 @@ const MARKS: Readonly<Record<ProviderId, (props: ProviderMarkProps) => ReactElem
   // sets for exactly this situation. The generic terminal mark is the fallback
   // every unbranded provider gets.
   lmstudio: TerminalMark,
+  ollama: TerminalMark,
+  llamacpp: TerminalMark,
 };
 
 export interface ProviderLogoProps extends ProviderMarkProps {

@@ -23,7 +23,7 @@ import type { PermissionMode } from './permissions.js';
  * Only `claude` is implemented today; the other two are declared here so the
  * seam is designed against three transports rather than retrofitted to them.
  */
-export type ProviderId = 'claude' | 'codex' | 'opencode' | 'lmstudio';
+export type ProviderId = 'claude' | 'codex' | 'opencode' | 'lmstudio' | 'ollama' | 'llamacpp';
 
 /** Every {@link ProviderId}, in display order. */
 export const PROVIDER_IDS = [
@@ -31,6 +31,8 @@ export const PROVIDER_IDS = [
   'codex',
   'opencode',
   'lmstudio',
+  'ollama',
+  'llamacpp',
 ] as const satisfies readonly ProviderId[];
 
 /** Runtime type guard for {@link ProviderId}. */
@@ -467,8 +469,31 @@ export interface ProviderEffortOption {
  *
  * Returned by the `providers:list` IPC call. Carries no secrets and no paths.
  */
+/**
+ * Which half of the picker a provider belongs to.
+ *
+ * `hosted` providers reach a service over the network and are entered through
+ * an account: the profile names a credential directory, and what the account is
+ * entitled to decides what runs. `local` providers reach a server on this
+ * machine and are entered through an *endpoint*: there is no account, no
+ * billing and no plan, and the models on offer are whichever files happen to be
+ * on the disk.
+ *
+ * Kept as a property of the provider rather than a list in the renderer so that
+ * adding one does not mean editing a UI file to say where it goes — the same
+ * reason `PROVIDER_LABELS` exists.
+ */
+export type ProviderKind = 'hosted' | 'local';
+
 export interface ProviderDescriptor {
   readonly id: ProviderId;
+  /**
+   * Which half of the picker this belongs to. See {@link ProviderKind}.
+   *
+   * Absent means `hosted`, so a descriptor written before this existed still
+   * lands where it always did.
+   */
+  readonly kind?: ProviderKind;
   /** Human-readable name for menus, e.g. "Claude". */
   readonly label: string;
   readonly capabilities: Capabilities;

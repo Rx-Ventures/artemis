@@ -146,6 +146,8 @@ const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
    * be inventing a convention rather than reporting one.
    */
   lmstudio: '',
+  ollama: '',
+  llamacpp: '',
 };
 
 export function ProfilesSection(): ReactElement {
