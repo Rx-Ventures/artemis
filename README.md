@@ -208,15 +208,28 @@ environment, and every one of those outranks the profile's own login.
 
 ### Local models
 
-OpenCode reaches any OpenAI-compatible endpoint through its own configuration,
-which is how Artemis runs local models without knowing anything about them.
-Point it at Ollama, LM Studio or `llama-server` in that profile's config
-directory and the models appear in Artemis's picker like any others.
+Local models are their own provider, not a way of configuring another one.
 
-The seam requires a *local agent runtime* — something that runs the turn and
-the tools while Artemis renders it — so a bare model endpoint is not a provider
-on its own. OpenCode is the runtime; the endpoint is its configuration. That is
-the sanctioned shape, and it is why Artemis needs no adapter per model server.
+The route through OpenCode looks obvious and was tried first: point its config
+at an OpenAI-compatible endpoint and the models appear. It gets as far as
+*listing* them. A real turn against a local model hung for five minutes and
+emitted nothing, while a direct request to the same endpoint answered in 1.16
+seconds — so inference was healthy and the agent path was not. Reusing
+OpenCode's own provider id made it worse: its catalogue merged in three models
+that were not downloaded on the machine, so the picker offered work that would
+fail on selection.
+
+So the seam gains a fourth adapter instead. The honest cost is that a bare
+endpoint is not an agent runtime — Claude, Codex and OpenCode each ship
+something that owns the tool loop, and an inference server does not. **For local
+models the loop is Artemis's**: the tool schemas, the execution, the permission
+gate and the result-feedback cycle. The transport is the easy half.
+
+That is a real expense and it buys something the other three cannot offer: every
+`false` in this provider's capability descriptor is a *not yet* rather than a
+*cannot*, because nothing upstream is imposing the limit.
+
+See [docs/research/LMSTUDIO-ADAPTER-RESEARCH.md](docs/research/LMSTUDIO-ADAPTER-RESEARCH.md).
 
 ### The path a prompt takes
 

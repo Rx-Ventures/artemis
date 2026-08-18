@@ -136,6 +136,16 @@ const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
   claude: '.claude',
   codex: '.codex',
   opencode: '.config/opencode',
+  /**
+   * The odd one out, and deliberately empty.
+   *
+   * The other three name a directory a CLI already keeps its account in, which
+   * is what makes "point it at your existing one" a useful hint. A local
+   * inference server has no such directory — a profile here is defined by an
+   * *endpoint*, not by an account on disk — so offering a path to reuse would
+   * be inventing a convention rather than reporting one.
+   */
+  lmstudio: '',
 };
 
 export function ProfilesSection(): ReactElement {

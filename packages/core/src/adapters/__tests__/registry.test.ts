@@ -94,7 +94,10 @@ describe('describe()', () => {
     const registry = createProviderRegistry([fakeAdapter({ id: 'claude' })]);
     const descriptors = await registry.describe();
 
-    expect(descriptors.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode']);
+    // Every declared provider appears, registered or not — `lmstudio` is here
+    // and greyed out precisely because its adapter does not exist yet, which is
+    // the behaviour this test is named for.
+    expect(descriptors.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode', 'lmstudio']);
     expect(descriptors[1]).toMatchObject({
       id: 'codex',
       label: 'Codex',

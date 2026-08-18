@@ -76,8 +76,16 @@ export function OpenAiMark({ title, ...props }: ProviderMarkProps): ReactElement
   );
 }
 
-/** Stand-in for `opencode`, which publishes no mark. See the file header. */
-export function OpencodeMark({ size = 14, title, ...props }: ProviderMarkProps): ReactElement {
+/**
+ * The mark for a provider that publishes none.
+ *
+ * Two providers need it and neither has a logo to borrow: OpenCode ships no
+ * mark, and a local inference server is a program on your machine rather than
+ * a company with an identity. Taking a vendor's visual identity for either
+ * would breach the rule the README sets in Naming, so both get the same
+ * deliberately generic glyph.
+ */
+export function TerminalMark({ size = 14, title, ...props }: ProviderMarkProps): ReactElement {
   return (
     <SquareTerminalIcon
       width={size}
@@ -90,10 +98,18 @@ export function OpencodeMark({ size = 14, title, ...props }: ProviderMarkProps):
   );
 }
 
+/** Kept as a name so existing imports keep reading naturally. */
+export const OpencodeMark = TerminalMark;
+
 const MARKS: Readonly<Record<ProviderId, (props: ProviderMarkProps) => ReactElement>> = {
   claude: AnthropicMark,
   codex: OpenAiMark,
   opencode: OpencodeMark,
+  // No vendor mark: the provider is a local server rather than a company, and
+  // borrowing LM Studio's identity would breach the Naming rule the README
+  // sets for exactly this situation. The generic terminal mark is the fallback
+  // every unbranded provider gets.
+  lmstudio: TerminalMark,
 };
 
 export interface ProviderLogoProps extends ProviderMarkProps {

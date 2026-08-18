@@ -23,10 +23,15 @@ import type { PermissionMode } from './permissions.js';
  * Only `claude` is implemented today; the other two are declared here so the
  * seam is designed against three transports rather than retrofitted to them.
  */
-export type ProviderId = 'claude' | 'codex' | 'opencode';
+export type ProviderId = 'claude' | 'codex' | 'opencode' | 'lmstudio';
 
 /** Every {@link ProviderId}, in display order. */
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode'] as const satisfies readonly ProviderId[];
+export const PROVIDER_IDS = [
+  'claude',
+  'codex',
+  'opencode',
+  'lmstudio',
+] as const satisfies readonly ProviderId[];
 
 /** Runtime type guard for {@link ProviderId}. */
 export function isProviderId(value: unknown): value is ProviderId {

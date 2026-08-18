@@ -45,6 +45,7 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  lmstudio: 'LM Studio',
 };
 
 /** Why a known provider is missing from this build. */
