@@ -141,6 +141,19 @@ const OPENCODE_ENV_SCRUB_KEYS: readonly string[] = [
 export const OPENCODE_CREDENTIALS: ProviderCredentialSpec = {
   // Not `OPENCODE_CONFIG_DIR` — see the module header.
   configDirVar: 'XDG_DATA_HOME',
+  /**
+   * OpenCode splits what every other provider keeps together: `XDG_DATA_HOME`
+   * moves the credential, and configuration answers to its own variable. Set
+   * both, or profiles end up isolated by account and shared by config — every
+   * profile editing one set of providers, endpoints and model settings, which
+   * a user reads as Artemis losing a setting rather than as two profiles
+   * agreeing with each other.
+   *
+   * Pointed inside the profile's own directory, alongside the state
+   * `XDG_DATA_HOME` puts at `<profileDir>/opencode/`, so everything one
+   * profile owns is under one path that can be listed, backed up or deleted.
+   */
+  profileDirVars: { OPENCODE_CONFIG_DIR: 'opencode-config' },
   credentialEnvKeys: OPENCODE_ENV_SCRUB_KEYS,
   signIn: {
     executable: DEFAULT_EXECUTABLE,

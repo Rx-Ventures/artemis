@@ -146,6 +146,14 @@ describe('declarations', () => {
     // OPENCODE_CONFIG_DIR relocates configuration while the credential stays
     // put, so two profiles set up that way would share one account.
     expect(OPENCODE_CREDENTIALS.configDirVar).toBe('XDG_DATA_HOME');
+  });
+
+  it('isolates configuration too, because XDG_DATA_HOME moves only the credential', () => {
+    // Driving the binary showed the two live apart: the credential under
+    // XDG_DATA_HOME, the configuration behind its own variable. Setting only
+    // the first gives isolated accounts sharing one config, which a user reads
+    // as Artemis losing a setting rather than as two profiles agreeing.
+    expect(OPENCODE_CREDENTIALS.profileDirVars).toEqual({ OPENCODE_CONFIG_DIR: 'opencode-config' });
     expect(OPENCODE_CREDENTIALS.credentialEnvKeys).toContain('OPENCODE_CONFIG_DIR');
   });
 

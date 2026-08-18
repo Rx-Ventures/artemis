@@ -487,3 +487,82 @@ describe('toMetadata', () => {
     expect(toMetadata(makeProfile()).configDir).toBe(configDir);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Extra profile directories                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A provider that keeps its configuration somewhere other than the directory
+ * holding its credential — OpenCode's shape, written as a fake so these tests
+ * stay about `resolveEnv` rather than about OpenCode.
+ */
+const SPLIT_DIRS: ProviderCredentialSpec = {
+  configDirVar: 'FAKE_DATA_HOME',
+  profileDirVars: { FAKE_CONFIG_DIR: 'fake-config' },
+  credentialEnvKeys: ['FAKE_API_KEY', 'FAKE_CONFIG_DIR'],
+  signIn: {
+    executable: 'fake',
+    loginArgs: ['login'],
+    statusArgs: ['status'],
+    logoutArgs: ['logout'],
+    howTo: 'Run it.',
+    parseStatus: () => ({ loggedIn: true }),
+  },
+};
+
+describe('resolveEnv — providers that split config from credential', () => {
+  it('sets every profile directory the provider names, not just the credential one', async () => {
+    const env = await resolveEnv(makeProfile(), { credentials: SPLIT_DIRS });
+
+    expect(env['FAKE_DATA_HOME']).toBe(configDir);
+    expect(env['FAKE_CONFIG_DIR']).toBe(path.join(configDir, 'fake-config'));
+  });
+
+  it('ISOLATION: an inherited config dir is scrubbed and replaced, not honoured', async () => {
+    // The whole point. Without this, two profiles are isolated by account and
+    // share one configuration — which reads as Artemis losing a setting rather
+    // than as two profiles agreeing with each other.
+    const env = await resolveEnv(makeProfile(), {
+      credentials: SPLIT_DIRS,
+      baseEnv: { FAKE_CONFIG_DIR: '/somewhere/the/user/exported', PATH: '/usr/bin' },
+    });
+
+    expect(env['FAKE_CONFIG_DIR']).toBe(path.join(configDir, 'fake-config'));
+    expect(env['PATH']).toBe('/usr/bin');
+  });
+
+  it('refuses a publicEnv override of an extra directory', async () => {
+    const env = await resolveEnv(makeProfile({ publicEnv: { FAKE_CONFIG_DIR: '/hand/edited' } }), {
+      credentials: SPLIT_DIRS,
+    });
+
+    expect(env['FAKE_CONFIG_DIR']).toBe(path.join(configDir, 'fake-config'));
+  });
+
+  it('two profiles get two config directories', async () => {
+    const other = path.join(userDataDir, 'profiles', 'personal');
+    const a = await resolveEnv(makeProfile(), { credentials: SPLIT_DIRS });
+    const b = await resolveEnv(makeProfile({ id: 'p2', configDir: other }), {
+      credentials: SPLIT_DIRS,
+    });
+
+    expect(a['FAKE_CONFIG_DIR']).not.toBe(b['FAKE_CONFIG_DIR']);
+  });
+
+  it('resolveStoreEnv carries them too, so history reads see the same config', async () => {
+    const env = await resolveStoreEnv(makeProfile(), { credentials: SPLIT_DIRS });
+
+    expect(env['FAKE_CONFIG_DIR']).toBe(path.join(configDir, 'fake-config'));
+  });
+
+  it('managedEnvKeys covers the extra names, which is what makes the scrub work', () => {
+    expect(managedEnvKeys(SPLIT_DIRS)).toContain('FAKE_CONFIG_DIR');
+  });
+
+  it('a provider with one variable is unchanged — no empty entries appear', async () => {
+    const env = await resolveEnv(makeProfile(), ENV_OPTS);
+
+    expect(Object.keys(env)).toEqual(MANAGED_ENV_KEYS.slice(0, 1));
+  });
+});

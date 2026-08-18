@@ -814,6 +814,29 @@ export interface ProviderCredentialSpec {
    */
   readonly credentialEnvKeys: readonly string[];
 
+  /**
+   * Further directories this provider keeps *outside* {@link configDirVar},
+   * as variable name → subpath beneath the profile directory.
+   *
+   * Empty for a provider whose one variable moves everything, which is the
+   * happy case and the reason this is optional: `CLAUDE_CONFIG_DIR` and
+   * `CODEX_HOME` each relocate credential, config and history together, so
+   * there is nothing left over to name.
+   *
+   * OpenCode is why this exists. `XDG_DATA_HOME` moves the credential and
+   * `OPENCODE_CONFIG_DIR` moves the configuration, and a profile needs *both*
+   * or it gets isolated accounts sharing one config — every profile editing
+   * the same providers, endpoints and model settings, which reads as Artemis
+   * losing a setting rather than as two profiles agreeing.
+   *
+   * These are set exactly like {@link configDirVar}: stripped from the
+   * inherited environment first, then written from the profile's own path. A
+   * variable listed here must therefore also appear in
+   * {@link credentialEnvKeys} if an inherited value would be harmful — being
+   * set here does not imply being scrubbed.
+   */
+  readonly profileDirVars?: Readonly<Record<string, string>>;
+
   /** How the user authenticates a profile against {@link configDirVar}. */
   readonly signIn: ProviderSignInSpec;
 }
@@ -825,12 +848,17 @@ export interface ProviderCredentialSpec {
  * both to scrub the inherited environment and to reject `publicEnv` entries
  * that would override Artemis's own choices.
  *
- * Note that Artemis writes exactly one of these — the config directory — and
- * strips the rest unconditionally. There is no case in which a credential
+ * Note that Artemis writes only the directory variables — the config directory
+ * and any {@link ProviderCredentialSpec.profileDirVars} — and strips every
+ * credential variable unconditionally. There is no case in which a credential
  * variable is stripped and then written back.
  */
 export function managedEnvKeys(spec: ProviderCredentialSpec): readonly string[] {
-  return [spec.configDirVar, ...spec.credentialEnvKeys];
+  return [
+    spec.configDirVar,
+    ...Object.keys(spec.profileDirVars ?? {}),
+    ...spec.credentialEnvKeys,
+  ];
 }
 
 /**

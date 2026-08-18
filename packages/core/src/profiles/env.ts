@@ -277,7 +277,30 @@ export async function resolveStoreEnv(
   if (options.ensureConfigDir === true) {
     await mkdir(configDir, { recursive: true, mode: 0o700 });
   }
-  return { [options.credentials.configDirVar]: configDir };
+  return { [options.credentials.configDirVar]: configDir, ...profileDirEnv(options.credentials, configDir) };
+}
+
+/**
+ * The provider's extra profile directories, as environment.
+ *
+ * Separate from the config-directory variable only because that one is
+ * mandatory and these are not — they are the same idea and are set the same
+ * way. See {@link ProviderCredentialSpec.profileDirVars} for why a provider
+ * would need a second one at all.
+ *
+ * Deliberately does not create the directories. The provider makes its own on
+ * first write, and a config directory Artemis pre-created would be an empty
+ * one the CLI then has to distinguish from a configured one.
+ */
+function profileDirEnv(
+  credentials: ProviderCredentialSpec,
+  configDir: string,
+): Record<string, string> {
+  const extra: Record<string, string> = {};
+  for (const [name, subpath] of Object.entries(credentials.profileDirVars ?? {})) {
+    extra[name] = path.join(configDir, subpath);
+  }
+  return extra;
 }
 
 /**
@@ -346,6 +369,11 @@ export async function resolveEnv(
     await mkdir(configDir, { recursive: true, mode: 0o700 });
   }
   env[credentials.configDirVar] = configDir;
+  // Providers that keep configuration somewhere other than the directory that
+  // holds the credential. Written after the scrub loops above, and their names
+  // are in `managedEnvKeys`, so an inherited value is removed before this sets
+  // the profile's own — the same scrub-then-set order the config directory gets.
+  Object.assign(env, profileDirEnv(credentials, configDir));
 
   return env;
 }
