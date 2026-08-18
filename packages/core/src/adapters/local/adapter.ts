@@ -10,17 +10,17 @@
  * ## What is different about this provider
  *
  * The other three wrap something that owns the agent loop. This one wraps an
- * inference server, which does not. **Phase 1 therefore ships no tools at all**:
- * the run sends a prompt, streams the reply, and ends. That is a real product —
- * a conversation with a model on your own machine, costing nothing and leaving
- * the machine never — and the capability descriptor says plainly that it is not
- * yet more than that.
+ * inference server, which does not — so the loop is ours, and lives in
+ * `loop.ts`. What this file adds around it is everything that loop needs from
+ * the outside world: a streamed completion, an approval that parks the turn,
+ * and a shell that the operating system confines.
  *
- * This is deliberate rather than unfinished. Owning the loop means Artemis
- * executing tools in its own process, which is a materially different security
- * posture from every other provider, where tools run inside the provider's
- * process. Shipping the conversation first keeps that decision separate from
- * the transport work instead of smuggling it in.
+ * Because Artemis executes the tools rather than a vendor's process, the
+ * defences are its own too, and they are not one thing. `sandbox.ts` confines
+ * paths for the tools Artemis performs itself; `seatbelt.ts` confines the shell,
+ * which no path check can reach. A command that cannot be confined is refused
+ * rather than run, because a silent downgrade from sandboxed to not is exactly
+ * the failure a boundary must not have.
  *
  * ## No credential, an endpoint instead
  *
@@ -45,7 +45,16 @@ import type {
 } from '@rx-artemis/protocol';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
-import { AsyncQueue } from '../stream.js';
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+
+import { AsyncQueue, createDeferred } from '../stream.js';
+import type { Deferred } from '../stream.js';
+
+const execFileAsync = promisify(execFile);
 import { AdapterError, adapterError } from '../types.js';
 import type {
   InterruptResult,
@@ -57,8 +66,14 @@ import type {
 } from '../types.js';
 import { parseLlamaServerModels, parseOllamaTags } from './catalogues.js';
 import { parseNativeCatalogue, parseOpenAiCatalogue } from '../lmstudio/catalogue.js';
-import { readEventLine, splitEvents } from './stream.js';
-import type { StreamUsage } from './stream.js';
+import { readEventLine, splitEvents, ToolCallAccumulator } from './stream.js';
+import { runAgentLoop } from './loop.js';
+import type { ChatMessage, CompletionResult } from './loop.js';
+import { toolsForRisk, toWireTools } from './tools.js';
+import type { ToolSpec } from './tools.js';
+import { confinedArgv, DEFAULT_SANDBOX_MODE } from './seatbelt.js';
+import { sandboxEnv } from './sandbox.js';
+import type { StreamUsage, ToolCall } from './stream.js';
 
 /**
  * What one local server does differently: its name, its default port, and how
@@ -136,15 +151,25 @@ export const LOCAL_CAPABILITIES: Capabilities = {
   // We build the message array ourselves, so a system prompt is just its first
   // element. The cheapest `true` in the file.
   systemPromptAppend: true,
-  // Phase 2. No tools means nothing to approve, and an approval surface over an
-  // empty tool set would be a control that never appears.
-  interactivePermissions: false,
+  // We own the loop, so we can park it — and must. Every tool call is offered
+  // to the user before it runs, under the modes below.
+  interactivePermissions: true,
   // Phase 3. The server stores no conversation, so sessions would mean Artemis
   // persisting transcripts itself.
   listSessions: false,
   resumeSession: false,
   forkSession: false,
-  permissionModes: [],
+  /**
+   * Enforced by our own loop rather than by a provider, which is why the list
+   * is short: each of these has to mean something here, and inventing a rung
+   * the loop does not honour would be worse than omitting it.
+   *
+   * `plan` withholds the tools that change anything, so the model can look and
+   * propose without being able to act. `bypassPermissions` stops asking but
+   * does *not* widen the sandbox — the OS boundary is a separate axis, and
+   * conflating them is the mistake Codex's two flags exist to avoid.
+   */
+  permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],
 };
 
 /** No account to sign in to. See the module header. */
@@ -200,6 +225,13 @@ class LocalRun implements Run {
 
   #status: RunStatus = 'running';
   #seq = 0;
+  #messageSeq = 0;
+  #permissionSeq = 0;
+  #usage: UsageSnapshot | undefined;
+  /** Approvals the loop is parked on, keyed by the id the renderer answers. */
+  readonly #pending = new Map<PermissionRequestId, Deferred<'allow' | 'deny'>>();
+  /** Seatbelt profiles written for this run, removed when it ends. */
+  readonly #profiles: string[] = [];
   readonly #queue = new AsyncQueue<AgentEvent>();
   readonly #abort = new AbortController();
   readonly #input: ResolvedRunInput;
@@ -237,85 +269,220 @@ class LocalRun implements Run {
     } as AgentEvent);
   }
 
-  async #drive(): Promise<void> {
-    const messageId = `${this.runId}-0` as MessageId;
-    let text = '';
+  /**
+   * Which tools this run may offer, from its permission mode.
+   *
+   * `plan` is the interesting one: it withholds every tool that changes
+   * something, so the model can read, search and propose but cannot act. That
+   * is enforced by not *offering* the tools rather than by refusing them later
+   * — a model that is never told about `write_file` does not spend a turn
+   * trying it and being denied.
+   */
+  #toolsForMode(): readonly ToolSpec[] {
+    const mode = this.#input.permissionMode ?? 'default';
+    if (mode === 'plan') return toolsForRisk(false, false);
+    return toolsForRisk(true, true);
+  }
+
+  /**
+   * Ask the user about one call — or answer for them when the mode says to.
+   *
+   * `acceptEdits` and `bypassPermissions` skip the prompt. Neither widens the
+   * OS sandbox: approval and confinement are separate axes, and a mode that
+   * quietly did both would make "stop asking me" mean "and also let it out".
+   */
+  async #approve(call: ToolCall, tool: ToolSpec): Promise<'allow' | 'deny'> {
+    const mode = this.#input.permissionMode ?? 'default';
+    if (mode === 'bypassPermissions') return 'allow';
+    if (mode === 'acceptEdits' && tool.risk !== 'execute') return 'allow';
+
+    const requestId = `${this.runId}-perm-${this.#permissionSeq++}` as PermissionRequestId;
+    let input: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(call.argumentsJson);
+      if (typeof parsed === 'object' && parsed !== null) input = parsed as Record<string, unknown>;
+    } catch {
+      /* the loop reports the parse failure; the prompt shows what it can */
+    }
+
+    const decided = createDeferred<'allow' | 'deny'>();
+    this.#pending.set(requestId, decided);
+    this.#status = 'awaiting_permission';
+    this.#emit({
+      type: 'permission.request',
+      requestId,
+      request: {
+        id: requestId,
+        runId: this.runId,
+        toolName: tool.name,
+        input,
+        toolCallId: call.id,
+        title: tool.description,
+      },
+    } as never);
+
+    const decision = await decided.promise;
+    this.#status = 'running';
+    return decision;
+  }
+
+  /** Run a shell command under whatever confinement the mode allows. */
+  async #shell(command: string, signal: AbortSignal): Promise<{ output: string; failed?: boolean }> {
+    const argv = await confinedArgv(DEFAULT_SANDBOX_MODE, command, this.#input.cwd, async (profile) => {
+      const at = path.join(await mkdtemp(path.join(tmpdir(), 'artemis-sb-')), 'run.sb');
+      await writeFile(at, profile, 'utf8');
+      this.#profiles.push(at);
+      return at;
+    });
+
+    // `null` means nothing confined it — an unsupported platform, or the
+    // unconfined mode. Refused rather than run, because the alternative is a
+    // silent downgrade from "sandboxed" to "not", which is exactly the failure
+    // a security boundary must not have.
+    if (argv === null) {
+      return {
+        output:
+          'Refused: no sandbox is available on this platform, and commands are not run unconfined.',
+        failed: true,
+      };
+    }
 
     try {
-      const url = `${baseUrl(this.#flavour, this.#input.env)}/v1/chat/completions`;
-      const messages: { role: string; content: string }[] = [];
-      // A spec rather than a string: `append` and `replace` mean the same thing
-      // here, because there is no preset of ours for an append to sit on top of.
-      const system = this.#input.systemPrompt;
-      if (system !== undefined && system.kind !== 'default' && system.text !== '') {
-        messages.push({ role: 'system', content: system.text });
-      }
-      messages.push({ role: 'user', content: this.#input.prompt });
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: this.#abort.signal,
-        body: JSON.stringify({
-          ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
-          messages,
-          stream: true,
-          // Servers differ on whether usage arrives during a stream; asking for
-          // it is honoured where supported and ignored where not.
-          stream_options: { include_usage: true },
-        }),
+      const { stdout, stderr } = await execFileAsync(argv[0] as string, argv.slice(1), {
+        cwd: this.#input.cwd,
+        env: sandboxEnv(this.#input.env, []),
+        signal,
+        maxBuffer: 4_000_000,
       });
+      const output = `${stdout}${stderr}`.trim();
+      return { output: output === '' ? '(no output)' : output };
+    } catch (error) {
+      // A non-zero exit is information the model needs, not a run-ending fault:
+      // a failing test suite is the normal case for a coding agent.
+      const failure = error as { stdout?: string; stderr?: string; message?: string };
+      const detail = `${failure.stdout ?? ''}${failure.stderr ?? ''}`.trim();
+      return { output: detail === '' ? (failure.message ?? 'The command failed.') : detail, failed: true };
+    }
+  }
 
-      if (!response.ok || response.body === null) {
-        throw adapterError(
-          'provider_unavailable',
-          `The ${this.#flavour.label} server answered ${response.status}. Is it running, and is a model loaded?`,
-        );
+  /** One streamed completion, in the shape the loop asks for. */
+  async #complete(messages: readonly ChatMessage[], tools: readonly ToolSpec[]): Promise<CompletionResult> {
+    const url = `${baseUrl(this.#flavour, this.#input.env)}/v1/chat/completions`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: this.#abort.signal,
+      body: JSON.stringify({
+        ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(tools.length === 0 ? {} : { tools: toWireTools(tools) }),
+      }),
+    });
+
+    if (!response.ok || response.body === null) {
+      throw adapterError(
+        'provider_unavailable',
+        `The ${this.#flavour.label} server answered ${response.status}. Is it running, and is a model loaded?`,
+      );
+    }
+
+    const messageId = `${this.runId}-${this.#messageSeq}` as MessageId;
+    const calls = new ToolCallAccumulator();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let finishReason: string | undefined;
+
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const { lines, rest } = splitEvents(buffer);
+      buffer = rest;
+
+      for (const line of lines) {
+        const delta = readEventLine(line);
+        if (delta === null) continue;
+        if (delta === 'done') break;
+
+        if (delta.error !== undefined) throw adapterError('provider_unavailable', delta.error);
+        if (delta.usage !== undefined) this.#usage = toUsage(delta.usage);
+        if (delta.finishReason !== undefined) finishReason = delta.finishReason;
+        if (delta.toolCalls !== undefined) calls.add(delta.toolCalls);
+        if (delta.thinking !== undefined) {
+          this.#emit({ type: 'thinking.delta', messageId, blockIndex: 0, text: delta.thinking } as never);
+        }
+        if (delta.text !== undefined) {
+          text += delta.text;
+          this.#emit({ type: 'text.delta', messageId, blockIndex: 0, text: delta.text } as never);
+        }
       }
+    }
 
+    if (text !== '') {
+      this.#emit({ type: 'text.complete', messageId, role: 'assistant', text } as never);
+    }
+    this.#messageSeq += 1;
+    return { text, toolCalls: calls.take(), ...(finishReason === undefined ? {} : { finishReason }) };
+  }
+
+  async #drive(): Promise<void> {
+    try {
       this.#emit({
         type: 'session.started',
         sessionId: this.runId as unknown as SessionId,
         providerId: this.#flavour.id,
         cwd: this.#input.cwd,
         ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
+        tools: this.#toolsForMode().map((tool) => tool.name),
+        ...(this.#input.permissionMode === undefined ? {} : { permissionMode: this.#input.permissionMode }),
       } as never);
 
-      let buffer = '';
-      let usage: UsageSnapshot | undefined;
-      const decoder = new TextDecoder();
-
-      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-        buffer += decoder.decode(chunk, { stream: true });
-        const { lines, rest } = splitEvents(buffer);
-        buffer = rest;
-
-        for (const line of lines) {
-          const delta = readEventLine(line);
-          if (delta === null) continue;
-          if (delta === 'done') break;
-
-          if (delta.error !== undefined) throw adapterError('provider_unavailable', delta.error);
-          if (delta.usage !== undefined) usage = toUsage(delta.usage);
-          if (delta.thinking !== undefined) {
-            this.#emit({
-              type: 'thinking.delta',
-              messageId,
-              blockIndex: 0,
-              text: delta.thinking,
-            } as never);
-          }
-          if (delta.text !== undefined) {
-            text += delta.text;
-            this.#emit({ type: 'text.delta', messageId, blockIndex: 0, text: delta.text } as never);
-          }
-        }
+      const initial: ChatMessage[] = [];
+      const system = this.#input.systemPrompt;
+      if (system !== undefined && system.kind !== 'default' && system.text !== '') {
+        initial.push({ role: 'system', content: system.text });
       }
+      initial.push({ role: 'user', content: this.#input.prompt });
 
-      this.#emit({ type: 'text.complete', messageId, role: 'assistant', text } as never);
-      if (usage !== undefined) this.#emit({ type: 'usage', usage } as never);
+      await runAgentLoop({
+        initialMessages: initial,
+        tools: this.#toolsForMode(),
+        complete: (request) => this.#complete(request.messages, request.tools),
+        context: {
+          root: this.#input.cwd,
+          env: sandboxEnv(this.#input.env, []),
+          signal: this.#abort.signal,
+          shell: (command, signal) => this.#shell(command, signal),
+        },
+        approve: (call, tool) => this.#approve(call, tool),
+        onToolStart: (call) => {
+          let input: Record<string, unknown> = {};
+          try {
+            const parsed: unknown = JSON.parse(call.argumentsJson);
+            if (typeof parsed === 'object' && parsed !== null) input = parsed as Record<string, unknown>;
+          } catch {
+            /* reported to the model by executeTool; the row shows the raw text */
+          }
+          this.#emit({ type: 'tool.start', toolCallId: call.id, name: call.name, input } as never);
+        },
+        onToolEnd: (call, output, failed) => {
+          this.#emit({
+            type: 'tool.end',
+            toolCallId: call.id,
+            name: call.name,
+            status: failed ? 'error' : 'ok',
+            resultText: output,
+          } as never);
+        },
+      });
+
       this.#status = 'ended';
-      this.#emit({ type: 'run.end', reason: 'completed', ...(usage === undefined ? {} : { usage }) } as never);
+      this.#emit({
+        type: 'run.end',
+        reason: 'completed',
+        ...(this.#usage === undefined ? {} : { usage: this.#usage }),
+      } as never);
     } catch (error) {
       const aborted = this.#abort.signal.aborted;
       this.#status = 'ended';
@@ -325,6 +492,11 @@ class LocalRun implements Run {
         ...(aborted ? {} : { error: toError(error, this.#flavour) }),
       } as never);
     } finally {
+      // Every parked approval is released, or a disposed run leaves the loop
+      // waiting on a promise nobody will ever settle.
+      for (const pending of this.#pending.values()) pending.resolve('deny');
+      this.#pending.clear();
+      for (const profile of this.#profiles) void rm(path.dirname(profile), { recursive: true, force: true });
       this.#queue.close();
     }
   }
@@ -343,11 +515,17 @@ class LocalRun implements Run {
     return Promise.resolve({ stillQueued: [] });
   }
 
-  respondToPermission(_id: PermissionRequestId, _decision: PermissionDecision): Promise<void> {
-    // Unreachable while `interactivePermissions` is false — nothing emits a
-    // request — and rejecting is more honest than pretending it landed.
-    return Promise.reject(adapterError('invalid_request', 'This provider asks for no permissions yet.'));
+  respondToPermission(id: PermissionRequestId, decision: PermissionDecision): Promise<void> {
+    const pending = this.#pending.get(id);
+    // An unknown id is not an error: a request already settled by a dispose, or
+    // answered twice by an impatient click, has nothing left to decide.
+    if (pending === undefined) return Promise.resolve();
+    this.#pending.delete(id);
+    pending.resolve(decision.behavior === 'allow' ? 'allow' : 'deny');
+    this.#emit({ type: 'permission.resolved', requestId: id, decision } as never);
+    return Promise.resolve();
   }
+
 
   dispose(): Promise<void> {
     this.#abort.abort();

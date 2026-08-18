@@ -29,10 +29,11 @@ async function main(): Promise<void> {
   console.log(`\n  → turn against ${model}`);
   const run = await adapter.createRun({
     runId: 'local-smoke' as never,
-    prompt: 'Reply with exactly: ARTEMIS_LOCAL_OK',
+    prompt: process.argv[4] ?? 'Reply with exactly: ARTEMIS_LOCAL_OK',
     cwd: process.cwd(),
     model,
     env: {},
+    permissionMode: 'bypassPermissions',
   } as never);
 
   let text = '';
@@ -40,6 +41,14 @@ async function main(): Promise<void> {
   for await (const ev of run.events) {
     seen.push(ev.type);
     if (ev.type === 'text.delta') text += (ev as unknown as { text: string }).text;
+    if (ev.type === 'tool.start') {
+      const t = ev as unknown as { name: string; input: unknown };
+      console.log(`  tool.start     ${t.name} ${JSON.stringify(t.input)}`);
+    }
+    if (ev.type === 'tool.end') {
+      const t = ev as unknown as { name: string; status: string; resultText?: string };
+      console.log(`  tool.end       ${t.name} ${t.status} — ${(t.resultText ?? '').slice(0, 90).replace(/\n/g, ' ')}`);
+    }
     if (ev.type === 'run.end') {
       const end = ev as unknown as { reason: string; error?: { message: string } };
       console.log(`  run.end        ${end.reason}${end.error ? ' — ' + end.error.message : ''}`);
