@@ -43,6 +43,29 @@ export interface StreamDelta {
   readonly usage?: StreamUsage;
   /** The server reporting a failed generation. */
   readonly error?: string;
+  /**
+   * Tool-call fragments. Arrive split across chunks like everything else — the
+   * name in one, the arguments a character at a time after it — so they are
+   * accumulated by index rather than used as they land.
+   */
+  readonly toolCalls?: readonly ToolCallDelta[];
+}
+
+/** One fragment of a tool call, identified by its position in the array. */
+export interface ToolCallDelta {
+  readonly index: number;
+  readonly id?: string;
+  readonly name?: string;
+  /** A slice of the JSON arguments, which are streamed as text. */
+  readonly argumentsFragment?: string;
+}
+
+/** A tool call once every fragment has arrived. */
+export interface ToolCall {
+  readonly id: string;
+  readonly name: string;
+  /** Raw JSON text. Parsed by the caller, which knows what shape to expect. */
+  readonly argumentsJson: string;
 }
 
 export interface StreamUsage {
@@ -109,10 +132,82 @@ export function readChunk(chunk: unknown): StreamDelta | undefined {
       // Two spellings, both in the wild. See the module header.
       const thinking = asString(body['reasoning_content']) ?? asString(body['reasoning']);
       if (thinking !== undefined) delta.thinking = thinking;
+
+      const calls = body['tool_calls'];
+      if (Array.isArray(calls)) {
+        const fragments: ToolCallDelta[] = [];
+        for (const raw of calls) {
+          const call = asRecord(raw);
+          if (call === undefined) continue;
+          const fn = asRecord(call['function']);
+          // Index is how fragments are matched to each other. Servers that omit
+          // it are sending one call at a time, so zero is the honest default.
+          const index = typeof call['index'] === 'number' ? call['index'] : 0;
+          fragments.push({
+            index,
+            ...(asString(call['id']) === undefined ? {} : { id: asString(call['id']) as string }),
+            ...(fn === undefined || asString(fn['name']) === undefined
+              ? {}
+              : { name: asString(fn['name']) as string }),
+            ...(fn === undefined || typeof fn['arguments'] !== 'string'
+              ? {}
+              : { argumentsFragment: fn['arguments'] }),
+          });
+        }
+        if (fragments.length > 0) delta.toolCalls = fragments;
+      }
     }
   }
 
   return Object.keys(delta).length > 0 ? delta : undefined;
+}
+
+/**
+ * Accumulate tool-call fragments into whole calls.
+ *
+ * Stateful because the wire format is: a chunk carries a name, later chunks
+ * carry slices of the arguments, and only the finish reason says they are
+ * complete. Nothing can be executed until then, so this collects rather than
+ * emits.
+ */
+export class ToolCallAccumulator {
+  readonly #calls = new Map<number, { id: string; name: string; args: string }>();
+
+  add(fragments: readonly ToolCallDelta[]): void {
+    for (const fragment of fragments) {
+      const existing = this.#calls.get(fragment.index) ?? { id: '', name: '', args: '' };
+      this.#calls.set(fragment.index, {
+        id: fragment.id ?? existing.id,
+        name: fragment.name ?? existing.name,
+        args: existing.args + (fragment.argumentsFragment ?? ''),
+      });
+    }
+  }
+
+  /**
+   * The completed calls, in the order the server indexed them.
+   *
+   * A call with no name is dropped: it is a fragment that never completed, and
+   * executing something unnamed is not a recoverable state.
+   */
+  take(): readonly ToolCall[] {
+    const calls = [...this.#calls.entries()]
+      .sort(([a], [b]) => a - b)
+      .filter(([, call]) => call.name !== '')
+      .map(([index, call]) => ({
+        // Some servers omit the id entirely; the protocol needs one to match
+        // the result back, so the index stands in.
+        id: call.id === '' ? `call_${index}` : call.id,
+        name: call.name,
+        argumentsJson: call.args === '' ? '{}' : call.args,
+      }));
+    this.#calls.clear();
+    return calls;
+  }
+
+  get size(): number {
+    return this.#calls.size;
+  }
 }
 
 /**

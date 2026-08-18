@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { readChunk, readEventLine, splitEvents } from '../stream.js';
+import { readChunk, readEventLine, splitEvents, ToolCallAccumulator } from '../stream.js';
 
 describe('readChunk', () => {
   it('reads visible text', () => {
@@ -106,5 +106,98 @@ describe('readEventLine', () => {
     expect(readEventLine('data: {"choices":[{"delta":{"content":"still here"}}]}')).toEqual({
       text: 'still here',
     });
+  });
+});
+
+describe('tool calls', () => {
+  it('reads a call that arrives whole', () => {
+    const delta = readChunk({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id: 'call_a', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(delta?.toolCalls).toEqual([
+      { index: 0, id: 'call_a', name: 'read_file', argumentsFragment: '{"path":"a.ts"}' },
+    ]);
+  });
+
+  it('defaults a missing index to zero, for servers that send one at a time', () => {
+    const delta = readChunk({
+      choices: [{ delta: { tool_calls: [{ function: { name: 'ls' } }] } }],
+    });
+
+    expect(delta?.toolCalls?.[0]?.index).toBe(0);
+  });
+});
+
+describe('ToolCallAccumulator', () => {
+  it('STREAMING: assembles arguments arriving a fragment at a time', () => {
+    // The actual wire behaviour: the name lands once, then the JSON arrives in
+    // slices that are not individually parseable.
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 0, id: 'call_a', name: 'read_file' }]);
+    acc.add([{ index: 0, argumentsFragment: '{"pa' }]);
+    acc.add([{ index: 0, argumentsFragment: 'th":"src/a.ts"}' }]);
+
+    expect(acc.take()).toEqual([
+      { id: 'call_a', name: 'read_file', argumentsJson: '{"path":"src/a.ts"}' },
+    ]);
+  });
+
+  it('keeps two parallel calls apart by index', () => {
+    const acc = new ToolCallAccumulator();
+    acc.add([
+      { index: 0, id: 'a', name: 'read_file', argumentsFragment: '{"path":"one"}' },
+      { index: 1, id: 'b', name: 'grep', argumentsFragment: '{"pattern":"x"}' },
+    ]);
+
+    expect(acc.take().map((c) => c.name)).toEqual(['read_file', 'grep']);
+  });
+
+  it('returns them in the order the server indexed them', () => {
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 2, name: 'third' }, { index: 0, name: 'first' }, { index: 1, name: 'second' }]);
+
+    expect(acc.take().map((c) => c.name)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('substitutes an id for a server that omits one', () => {
+    // The protocol needs an id to match the result back to the call.
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 0, name: 'ls' }]);
+
+    expect(acc.take()[0]?.id).toBe('call_0');
+  });
+
+  it('defaults empty arguments to an object, not an empty string', () => {
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 0, id: 'a', name: 'ls' }]);
+
+    // `JSON.parse('')` throws; `{}` is what a no-argument call means.
+    expect(acc.take()[0]?.argumentsJson).toBe('{}');
+  });
+
+  it('drops a fragment that never received a name', () => {
+    // Executing something unnamed is not a recoverable state.
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 0, argumentsFragment: '{"path":"a"}' }]);
+
+    expect(acc.take()).toEqual([]);
+  });
+
+  it('empties itself once taken, so a second turn starts clean', () => {
+    const acc = new ToolCallAccumulator();
+    acc.add([{ index: 0, id: 'a', name: 'ls' }]);
+    acc.take();
+
+    expect(acc.size).toBe(0);
+    expect(acc.take()).toEqual([]);
   });
 });
