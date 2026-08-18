@@ -4,146 +4,144 @@
 <meta charset="utf-8">
 <title>Artemis — design</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&display=swap');
 :root {
-  --abyss: oklch(12.5% 0.008 265);
-  --panel: oklch(16.5% 0.010 265);
-  --raised: oklch(21% 0.012 265);
-  --inset: oklch(9.5% 0.007 265);
-  --line: oklch(32% 0.014 265);
-  --line-strong: oklch(45% 0.018 265);
-  --ink: oklch(96% 0.004 265);
-  --ink-muted: oklch(78% 0.008 265);
-  --ink-faint: oklch(63% 0.010 265);
-  --accent: oklch(78% 0.16 265);
-  --cyan: oklch(80% 0.12 215);
-  --mint: oklch(84% 0.16 155);
-  --amber: oklch(82% 0.15 75);
-  --signal: oklch(72% 0.19 18);
-  --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --bg: oklch(11% 0.006 265); --panel: oklch(15.5% 0.008 265); --well: oklch(9% 0.005 265);
+  --line: oklch(30% 0.012 265); --line-2: oklch(44% 0.016 265);
+  --ink: oklch(96% 0.004 265); --ink-2: oklch(78% 0.008 265); --ink-3: oklch(62% 0.010 265);
+  --accent: oklch(80% 0.16 250); --ok: oklch(84% 0.16 155); --warn: oklch(84% 0.15 78); --err: oklch(72% 0.19 18);
+  --sans: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: var(--abyss); color: var(--ink); font: 14px/1.62 var(--sans); padding: 46px 24px 80px; -webkit-font-smoothing: antialiased; }
-.wrap { max-width: 940px; margin: 0 auto; }
-h1 { font-size: 25px; font-weight: 600; letter-spacing: -0.018em; margin-bottom: 9px; }
-.lede { color: var(--ink-muted); margin-bottom: 9px; max-width: 74ch; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.62 var(--sans); padding: 46px 24px 80px; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 950px; margin: 0 auto; }
+h1 { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 9px; }
+.lede { color: var(--ink-2); margin-bottom: 9px; max-width: 76ch; }
 .lede b { color: var(--ink); font-weight: 550; }
-.meta { font: 11px var(--mono); color: var(--ink-faint); margin: 22px 0 12px; letter-spacing: 0.04em; }
+.meta { font: 11px var(--mono); color: var(--ink-3); margin: 26px 0 12px; letter-spacing: 0.05em; }
 
-.wrong { border: 1px solid var(--line); border-left: 3px solid var(--signal); border-radius: 5px; padding: 15px 18px; margin: 22px 0 10px; background: var(--panel); }
-.wrong h3 { font-size: 13px; color: var(--signal); margin-bottom: 7px; font-weight: 600; letter-spacing: 0.01em; }
-.wrong p { color: var(--ink-muted); font-size: 13.5px; max-width: 78ch; }
-.wrong p + p { margin-top: 8px; }
-.wrong b { color: var(--ink); font-weight: 550; }
-.kept { display: flex; flex-wrap: wrap; gap: 6px; margin: 11px 0 3px; font: 11px var(--mono); }
-.kept i { font-style: normal; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; color: var(--ink-muted); }
-.kept i.no { border-color: oklch(72% 0.19 18 / 0.5); color: var(--signal); text-decoration: line-through; }
+.settled { border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 5px; padding: 14px 17px; margin: 20px 0 10px; background: var(--panel); }
+.settled h3 { font-size: 12px; color: var(--ok); margin-bottom: 7px; font-weight: 600; letter-spacing: 0.05em; }
+.settled p { color: var(--ink-2); font-size: 13.5px; max-width: 80ch; }
+.settled p + p { margin-top: 7px; }
+.settled b { color: var(--ink); font-weight: 550; }
+
+table { border-collapse: collapse; width: 100%; margin: 14px 0 6px; font-size: 12.5px; }
+th { text-align: left; font: 9.5px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); padding: 0 12px 7px 0; font-weight: 400; border-bottom: 1px solid var(--line); }
+td { padding: 8px 12px 8px 0; color: var(--ink-2); border-bottom: 1px solid var(--line); vertical-align: top; }
+td b { color: var(--ink); font-weight: 550; }
+td.q { color: var(--ink-3); }
 
 a.card { display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px 19px; margin-bottom: 11px; }
-a.card:hover { border-color: var(--line-strong); }
-a.card.ctrl { border-left: 3px solid var(--accent); }
+a.card:hover { border-color: var(--line-2); }
 .hd { display: flex; align-items: baseline; gap: 10px; }
-.n { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-faint); }
-h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
-.bet-tag { margin-left: auto; font: 10px var(--mono); letter-spacing: 0.1em; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 3px; padding: 1px 7px; }
-.bet { color: var(--ink-muted); margin: 6px 0 9px; max-width: 80ch; font-size: 13.5px; }
+.n { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-3); }
+h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; }
+.tag { margin-left: auto; font: 10px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); border: 1px solid var(--line); border-radius: 3px; padding: 1px 7px; }
+.sw { display: flex; gap: 3px; margin: 9px 0 8px; }
+.sw i { width: 30px; height: 13px; display: block; border-radius: 2px; }
+.bet { color: var(--ink-2); margin-bottom: 9px; max-width: 80ch; font-size: 13.5px; }
 .bet b { color: var(--ink); font-weight: 550; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; font-size: 12.5px; }
-.pair div { color: var(--ink-muted); }
+.pair div { color: var(--ink-2); }
 .pair .lab { font: 9.5px var(--mono); letter-spacing: 0.12em; display: block; margin-bottom: 2px; }
-.pair .win .lab { color: var(--mint); }
-.pair .cost .lab { color: var(--amber); }
+.pair .win .lab { color: var(--ok); }
+.pair .cost .lab { color: var(--warn); }
 
-.foot { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 13.5px; max-width: 80ch; }
+.foot { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 13.5px; max-width: 80ch; }
 .foot h3 { font-size: 13px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
 .foot ul { margin: 0 0 16px 18px; }
 .foot li { margin-bottom: 6px; }
 .foot b { color: var(--ink); font-weight: 550; }
-.old { margin-top: 26px; opacity: 0.72; }
-.old a { color: var(--ink-faint); text-decoration: none; font: 11.5px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; margin-right: 6px; display: inline-block; margin-bottom: 6px; }
-.old a:hover { color: var(--ink-muted); }
-code { font: 12px var(--mono); color: var(--cyan); }
+.old { margin-top: 26px; opacity: 0.7; }
+.old a { color: var(--ink-3); text-decoration: none; font: 11.5px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; margin-right: 6px; display: inline-block; margin-bottom: 6px; }
+.old a:hover { color: var(--ink-2); }
+code { font: 12px var(--mono); color: var(--accent); }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <h1>Design</h1>
-  <p class="lede">Five layouts for Artemis. <b>Round two</b> — the first five were judged as usability regressions, and they were.</p>
+  <p class="lede"><b>Round three.</b> The layout is settled — keep it. What restarts is the design language laid over it.</p>
 
-  <div class="wrong">
-    <h3>WHY ROUND ONE WAS ALL LOSS</h3>
-    <p>Not taste. They <b>mocked up a simpler application than the one that exists.</b> Artemis already has a grid of up to sixteen live conversations — each pane owning its own directory, account, model, run and permission queue — plus a dock, a floating sidebar and a per-pane status line describing what the <i>next</i> prompt will do.</p>
-    <p>Round one variously deleted the grid (all five rendered one conversation), the dock, the sidebar, the status line, and the ability to see run state at all. "Yard" proposed a board of cards as home, which is a worse version of the grid Artemis already has: cards you open one at a time versus panes that are all live at once. A design that removes an affordance is not bolder. It is smaller.</p>
+  <div class="settled">
+    <h3>SETTLED IN ROUND TWO</h3>
+    <p><b>The layout stays.</b> The 4×4 grid of live conversations, the dock, the floating sidebar, the pane header, the composer and the status line are right. Four attempts to improve on them each cost more than they returned, and the control — which changed no layout at all — won.</p>
+    <p>Round one's mistake is worth keeping in view: it rendered a <b>simpler application than the one that exists</b>, deleting the grid, the dock, the sidebar and the ability to see run state. A design that removes an affordance is not bolder, it is smaller.</p>
   </div>
 
-  <p class="lede"><b>The rule this round is additive only.</b> Every one of these keeps everything the app has today, and may merge chrome but never remove information or add a step to anything you do now. The <b>palette is held constant across all five</b> — new, higher contrast than today, same OKLCH structure and same colour roles — so layout is the only variable. Round one varied both, which is why nothing could be compared.</p>
-  <div class="kept">
-    <i>4×4 pane grid</i><i>dock</i><i>floating sidebar</i><i>per-pane composer</i><i>status line</i><i>window header</i>
-    <i class="no">nothing removed</i>
-  </div>
-  <p class="lede" style="margin-top:12px">Each makes <b>exactly one bet</b> against a cost you can name in the app today, and each file ends with what its bet costs. Every one renders the same real session — the sandbox escape, the failing check, the diagnosis, the fix — now in a <b>two-pane grid with the dock open</b>, because that is the shape of the real thing and the reason round one was easy. See <code>_brief-2.md</code> and <code>_session.md</code>.</p>
+  <p class="lede">What has <b>never been chosen from scratch</b> is the visual system. It grew one decision at a time, each defensible on its own, and the result reads like a stock dark developer app because most of those decisions are the stock answer. Everything below is real, in <code>index.css</code>, and well argued there — which is the point. They are good answers to questions nobody re-asked.</p>
 
-  <div class="meta">ROUND TWO</div>
+  <table>
+    <tr><th>CHOICE TODAY</th><th>WHY IT IS WORTH RE-OPENING</th></tr>
+    <tr><td><b>Geist &amp; Geist Mono</b></td><td class="q">It is Vercel's typeface. Shipping it means wearing another company's identity — the single largest reason the app reads as a clone of things built by that company's users.</td></tr>
+    <tr><td><b>Six elevation steps, by fill</b></td><td class="q">Stacked greys are <i>the</i> shadcn-era idiom, and at six steps two adjacent ones are indistinguishable at 13px.</td></tr>
+    <tr><td><b>Violet accent</b> (hue 287)</td><td class="q">The default accent of this generation of AI tools — the least ownable hue currently available.</td></tr>
+    <tr><td><b>Greys pulled into the accent's hue</b></td><td class="q">Sound rule, but it means the accent choice silently determines the entire substrate.</td></tr>
+    <tr><td><b>Colour is semantic, never decorative</b></td><td class="q">Genuinely good discipline — but it is a choice, and it means the transcript can say how badly something went, never <i>who</i> did it.</td></tr>
+    <tr><td><b>One radius, 7px, everywhere</b></td><td class="q">A default, not a decision. Radius could carry meaning instead: machine surfaces square, human surfaces soft.</td></tr>
+  </table>
 
-  <a class="card ctrl" href="a-recut.html">
-    <div class="hd"><span class="n">A</span><h2>Recut</h2><span class="bet-tag">THE CONTROL</span></div>
-    <p class="bet">Zero layout change — every control stays exactly where it is, at the same size. Only <b>palette, type, density and how tool output is drawn</b> move: a deeper ground, hairlines light enough to actually divide, and results readable straight off a collapsed tool bar (<code>exit 1 · 4.2s</code>, <code>40 hits</code>, <code>+6 −3</code>) without opening anything.</p>
+  <p class="lede" style="margin-top:16px"><b>All four are generated from one shared layout</b> by <code>_build.py</code> — same markup, same structural CSS, byte-identical. Only the language block differs: tokens, type, surface model, radius, and the transcript grammar drawn on top. Round two varied palette and layout together and nothing could be compared; here the layout is identical <i>by construction</i>, so anything you see differing is the language and nothing else. Each renders the same session and ends with what it costs. See <code>_language.md</code>.</p>
+
+  <div class="meta">FOUR LANGUAGES · ONE LAYOUT</div>
+
+  <a class="card" href="1-sheet.html">
+    <div class="hd"><span class="n">1</span><h2>Sheet</h2><span class="tag">DEPTH: NONE</span></div>
+    <div class="sw"><i style="background:oklch(13% 0.003 250)"></i><i style="background:oklch(10.5% 0.003 250)"></i><i style="background:oklch(27% 0.004 250)"></i><i style="background:oklch(86% 0.17 192)"></i><i style="background:oklch(86% 0.17 145)"></i><i style="background:oklch(85% 0.16 85)"></i><i style="background:oklch(72% 0.19 22)"></i></div>
+    <p class="bet"><b>Elevation is deleted</b> — not reduced, removed. One ground, one well for machine text, and every boundary is a hairline. Type and space carry all hierarchy; radius is <b>zero on anything the machine produced</b> and soft on anything human. Colour appears about eight times on the whole screen. Archivo + JetBrains Mono, near-neutral grey, teal-cyan accent.</p>
     <div class="pair">
-      <div class="win"><span class="lab">WIN</span>Legibility and tool density, at zero risk. Truncation that says what it hid. Sidebar state you can read across the room.</div>
-      <div class="cost"><span class="lab">COST</span>Nothing — which is the point, and also the limit. It is the floor the other four have to beat.</div>
+      <div class="win"><span class="lab">BUYS</span>Two surface decisions instead of six. Structurally cannot look like a shadcn app. Colour recovers its force. Radius finally means something.</div>
+      <div class="cost"><span class="lab">COSTS</span>Hairlines vanish on a bad panel with no fill to fall back on. Popovers must break the rule to float. Coldest of the four.</div>
     </div>
   </a>
 
-  <a class="card" href="b-onebar.html">
-    <div class="hd"><span class="n">B</span><h2>One Bar</h2><span class="bet-tag">BET: CHROME</span></div>
-    <p class="bet">The pane header is deleted and <b>the status line absorbs it</b>. Name, state, close, profile, model, effort, mode, directory and backend on one line at the bottom — beside the composer, where you already look. Same nine facts, one bar instead of two, <b>28px back per pane</b>.</p>
+  <a class="card" href="2-slab.html">
+    <div class="hd"><span class="n">2</span><h2>Slab</h2><span class="tag">DEPTH: WEIGHT</span></div>
+    <div class="sw"><i style="background:oklch(17.5% 0.006 95)"></i><i style="background:oklch(11% 0.005 95)"></i><i style="background:oklch(48% 0.012 95)"></i><i style="background:oklch(88% 0.20 122)"></i><i style="background:oklch(84% 0.17 140)"></i><i style="background:oklch(84% 0.16 70)"></i><i style="background:oklch(70% 0.20 25)"></i></div>
+    <p class="bet">Depth as <b>weight rather than lightness</b>. A hard 2px edge means "this is an object", 1px means "this is a division inside one". The loudest type ramp of the four — 700 for structure, uppercase mono for every label — on graphite, with <b>hi-vis yellow-green</b>: a machine-shop palette, not a software one. Instrument Sans + IBM Plex Mono.</p>
     <div class="pair">
-      <div class="win"><span class="lab">WIN</span>56px of transcript back in a 2×2, 112px in a 4×4. Identity sits against the input it describes.</div>
-      <div class="cost"><span class="lab">COST</span>Titles move to the floor of each pane. Long names fight five status segments for one line. Drag-to-rearrange loses its handle. Nothing gained with a single pane.</div>
+      <div class="win"><span class="lab">BUYS</span>Scales best to a full grid — pane boundaries are unmistakable, and focus is an accent edge rather than a 10% lighter border. Nobody else's palette.</div>
+      <div class="cost"><span class="lab">COSTS</span>2px edges eat real estate across a 4×4. It is loud. The accent sits only 18° from the success green.</div>
     </div>
   </a>
 
-  <a class="card" href="c-spine.html">
-    <div class="hd"><span class="n">C</span><h2>Spine</h2><span class="bet-tag">BET: WAYFINDING</span></div>
-    <p class="bet">17px down the left of every transcript, replacing the scrollbar. <b>One tick per event, the whole session compressed to the column</b> — your turns long, tools cyan, truncated output hatched, failures red, gates amber — with an outlined block for where you are looking. A gate or failure that scrolled off <b>pins to the near edge with a count</b>.</p>
+  <a class="card" href="3-ink.html">
+    <div class="hd"><span class="n">3</span><h2>Ink</h2><span class="tag">HIERARCHY: TYPE</span></div>
+    <div class="sw"><i style="background:oklch(16.5% 0.006 70)"></i><i style="background:oklch(12% 0.005 70)"></i><i style="background:oklch(28% 0.007 70)"></i><i style="background:oklch(74% 0.15 252)"></i><i style="background:oklch(78% 0.13 150)"></i><i style="background:oklch(80% 0.13 65)"></i><i style="background:oklch(69% 0.17 20)"></i></div>
+    <p class="bet">The one thing the agent produces that is genuinely <i>prose</i> gets set as prose: <b>Newsreader at 14.5px with real leading, in a 62-character column</b>. Everything mechanical stays small and mechanical, so size alone tells you what kind of text you are looking at. Surfaces recede almost to nothing. The calmest of the four.</p>
     <div class="pair">
-      <div class="win"><span class="lab">WIN</span>The only one that answers "what shape is this session and what did I scroll past". Nothing important can vanish silently. Jump by <i>kind</i>, not by guessing a scroll offset.</div>
-      <div class="cost"><span class="lab">COST</span>17px per pane forever, including panes you are not reading. A six-colour vocabulary to learn. Looks broken in a three-turn session. Needs a real rule for what wins when two events share a pixel.</div>
+      <div class="win"><span class="lab">BUYS</span>The agent's explanation stops being chrome. Kind-of-text is legible before you read a word, with no colour spent on it. A thing you can sit in all day.</div>
+      <div class="cost"><span class="lab">COSTS</span>A serif in a developer tool is a real risk and the likeliest of the four to be wrong. Three faces. Mixed baselines. Big prose costs vertical space.</div>
     </div>
   </a>
 
-  <a class="card" href="d-muster.html">
-    <div class="hd"><span class="n">D</span><h2>Muster</h2><span class="bet-tag">BET: ATTENTION</span></div>
-    <p class="bet">The app stops making you find the pane that needs you. The sidebar sorts by state — <b>a "wants you" block carrying the reason</b> ("permission · rm -rf /tmp/artemis-…", "failed 6m ago · acp handshake"), then running, then idle by project — and the header gets one control: <b>1 waiting ⌥⏎</b>, which focuses the next blocked pane and lands the cursor on its answer.</p>
+  <a class="card" href="4-signal.html">
+    <div class="hd"><span class="n">4</span><h2>Signal</h2><span class="tag">COLOUR: ACTOR</span></div>
+    <div class="sw"><i style="background:oklch(17% 0.016 265)"></i><i style="background:oklch(11% 0.012 265)"></i><i style="background:oklch(80% 0.16 250)"></i><i style="background:oklch(84% 0.16 165)"></i><i style="background:oklch(78% 0.17 310)"></i><i style="background:oklch(84% 0.16 78)"></i><i style="background:oklch(72% 0.19 15)"></i></div>
+    <p class="bet">Overturns the rule that colour is semantic only. Here colour says <b>who</b>: you are blue, the agent is plain ink, the machine is green, a delegated agent is violet — and severity rides on top as amber and rose, <b>the only thing allowed to fill a surface</b>. The claim: in a transcript the first question is not how bad this is, it is who did it. Space Grotesk + JetBrains Mono.</p>
     <div class="pair">
-      <div class="win"><span class="lab">WIN</span>Answer, ⌥⏎, answer — you never hunt across sixteen panes. The reason is in the list, so you can decide without going. Blocked panes are visible in peripheral vision.</div>
-      <div class="cost"><span class="lab">COST</span>The list moves under you — spatial memory of the sidebar dies, and moving targets get misclicked. Deferring is not modelled, so it keeps shouting. Two surfaces claim to be the way in.</div>
-    </div>
-  </a>
-
-  <a class="card" href="e-catch.html">
-    <div class="hd"><span class="n">E</span><h2>Catch</h2><span class="bet-tag">BET: OUTPUT</span></div>
-    <p class="bet">Output too long to belong in a conversation stops being pasted into one. A 218-line test run becomes a result line, <b>the two lines that actually matter</b>, and a note that the dock caught it — full text in a transient dock tab, scrollable and still there twelve turns later. Diffs stay inline: the artifact you asked for stays in the conversation, the evidence about it does not.</p>
-    <div class="pair">
-      <div class="win"><span class="lab">WIN</span>240 lines become twelve, so the gate and the diff fit on one screen. The peek is chosen, not head -3. Output outlives its turn.</div>
-      <div class="cost"><span class="lab">COST</span>Reading output becomes a hop. <b>The dock is the window's but panes are many</b> — four running panes throwing output at one dock is unsolved. With the dock closed it either opens itself or hides things. The threshold is a guess, and export gets harder.</div>
+      <div class="win"><span class="lab">BUYS</span>Who did what is answerable without reading. Delegated agents finally have an identity. Severity keeps its force by being the only filler.</div>
+      <div class="cost"><span class="lab">COSTS</span>Spends the best rule the current system has. Seven meanings in colour — and green/rose is exactly the pair that collapses for red-green deficiency. Busiest of the four.</div>
     </div>
   </a>
 
   <div class="foot">
-    <h3>How to read them</h3>
+    <h3>What to look for</h3>
     <ul>
-      <li><b>Open A first.</b> It is the free win. Everything B–E adds has to be worth more than the cost printed at the bottom of its own page, or the answer is just A.</li>
-      <li><b>They compose.</b> A+C+E is a coherent app and none of the three fight. A+B+D is a different, denser one. Nothing here is exclusive except that B and C both want the same edge of the pane.</li>
-      <li><b>The costs are the honest part.</b> Every page ends with what its bet takes away, in the file, including the ones I would ship.</li>
+      <li><b>The layout is identical in all four.</b> If one feels clearer, that is the language doing it — there is no layout variable left to confound it.</li>
+      <li><b>They are separable.</b> Sheet's surface model works under Signal's colour rule; Ink's prose treatment drops into any of the other three. The four axes — depth, colour meaning, hierarchy, type — can be mixed, and probably should be.</li>
+      <li><b>Every one drops Geist and violet</b>, because those are the two choices most responsible for the clone problem.</li>
     </ul>
     <h3>If you want one answer</h3>
-    <p><b>A, then E, then C.</b> A because it cannot lose. E because a flooded transcript is the loudest daily problem and it is the only bet that fixes it — but it is also the one with real design left, and the per-pane dock question has to be answered before any of it is built. C because wayfinding gets worse with every turn and nothing today addresses it at all. B is close to neutral unless you truly live in a 2×2. D is the right idea with a sorting problem that has to be solved first.</p>
+    <p><b>Sheet's surface model, Ink's treatment of prose, Slab's focus edge.</b> Sheet is the strongest single answer — deleting elevation removes the exact thing that makes dark developer apps interchangeable, and it costs the least. Ink's prose column is the best individual idea here and does not need Ink's serif to work. Signal is the most interesting and the most dangerous: worth trying the actor rule on <i>delegated agents only</i>, where the need is real, before spending it on everything.</p>
     <h3>Not decided here</h3>
-    <p>These are single states of one screen. Settings, profiles, first run, light mode, the permission modes and empty states all still need designing, and whatever wins needs a written token layer before any of the components are converted — which is where this stops being mockups and starts being work.</p>
+    <p>Light mode, which for Signal is not an inversion and needs its own tint scale. Motion and streaming. Focus rings. Empty and first-run states. And the token layer itself — whichever wins needs writing properly before any component is converted, which is where this stops being mockups and starts being work.</p>
     <div class="old">
-      <div class="meta" style="margin-top:0">ROUND ONE · KEPT FOR THE RECORD</div>
+      <div class="meta" style="margin-top:0">EARLIER ROUNDS · KEPT FOR THE RECORD</div>
+      <a href="a-recut.html">A · Recut</a><a href="b-onebar.html">B · One Bar</a><a href="c-spine.html">C · Spine</a><a href="d-muster.html">D · Muster</a><a href="e-catch.html">E · Catch</a><br>
       <a href="1-instrument.html">1 · Instrument</a><a href="2-ledger.html">2 · Ledger</a><a href="3-yard.html">3 · Yard</a><a href="4-rail.html">4 · Rail</a><a href="5-quiet.html">5 · Quiet</a>
     </div>
   </div>
