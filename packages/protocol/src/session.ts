@@ -117,6 +117,27 @@ export interface SessionSummary {
   /** Creation time, ms since epoch, when the provider records one. */
   readonly createdAt?: number;
 
+  /**
+   * Set when a machine opened this conversation, not a person.
+   *
+   * `'scheduled-task'` covers every firing of Claude's scheduler — cron jobs
+   * and cloud routines both open their transcript with a `<scheduled-task …>`
+   * turn, and that is the marker the adapter classifies on. One value rather
+   * than two because the transcript does not distinguish them, and nothing a
+   * consumer does differs between them.
+   *
+   * Why it is worth a field at all: firings arrive on a schedule, so a store
+   * that has been running one for a month holds hundreds of transcripts nobody
+   * ever opened. Listed as ordinary rows they bury the conversations the user
+   * actually had — the sidebar files rows carrying this under Archived instead,
+   * and every *future* firing arrives already filed, which no per-session
+   * bookkeeping could do.
+   *
+   * Omitted, never `false`, for a conversation a person began — matching
+   * {@link alsoInProfiles}'s convention that the ordinary case is absent.
+   */
+  readonly spawnedBy?: 'scheduled-task';
+
   /** Number of messages, when cheaply available. */
   readonly messageCount?: number;
   /** Transcript size in bytes, when the provider stores it as a file. */

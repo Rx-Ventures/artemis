@@ -1073,7 +1073,25 @@ const Row = memo(function Row({
             )}
           </MenuAction>
 
-          <MenuAction hotkey="a" onSelect={() => toggleSessionArchived(session)}>
+          {/*
+           * A scheduler's firing is archived by rule, not by entry — see
+           * `partitionSessions` — so "Unarchive" on one would remove nothing
+           * and change nothing. Disabled with the reason rather than hidden,
+           * matching how capability gaps read above; the way to keep a firing
+           * in view is the pin, which outranks the rule. Archiving a *pinned*
+           * firing still works (it clears the pin and the rule refiles it), so
+           * the item is only inert in the direction that would lie.
+           */}
+          <MenuAction
+            hotkey="a"
+            disabled={archived && session.spawnedBy !== undefined}
+            title={
+              archived && session.spawnedBy !== undefined
+                ? 'Scheduled runs stay archived — pin one to keep it in view'
+                : undefined
+            }
+            onSelect={() => toggleSessionArchived(session)}
+          >
             {archived ? (
               <>
                 <ArchiveRestoreIcon aria-hidden="true" />
