@@ -3,7 +3,7 @@
   "version": "0.16.2",
   "private": true,
   "description": "Artemis \u2014 a desktop UI for agentic coding CLIs.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "engines": {

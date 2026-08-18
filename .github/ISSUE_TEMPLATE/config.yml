@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Rx-Ventures/artemis/security/advisories/new
+    about: Report privately. Please do not open a public issue for a vulnerability.
+  - name: Why Artemis is not taking pull requests yet
+    url: https://github.com/Rx-Ventures/artemis/blob/main/CONTRIBUTING.md
+    about: Issues are open and read. Pull requests are paused until the provider seam stops moving.

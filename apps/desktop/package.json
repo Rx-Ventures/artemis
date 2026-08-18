@@ -4,7 +4,7 @@
   "private": true,
   "description": "Artemis desktop application \u2014 Electron main, preload bridge and React renderer.",
   "author": "Seth Torrence",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {

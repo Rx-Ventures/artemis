@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in Artemis behaves differently than it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Artemis works end to end for Claude and Codex, which means it now fails
+        in ways only other people's machines will find. These reports are the
+        most useful thing you can send.
+
+        **Not here:** security vulnerabilities. Use
+        [private reporting](https://github.com/Rx-Ventures/artemis/security/advisories/new)
+        instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what Artemis did instead of what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows it. "It happens sometimes" is still worth filing — say so here.
+      placeholder: |
+        1. Open Profiles and …
+        2. Send the prompt …
+        3. The transcript …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - Claude
+        - Codex
+        - Both
+        - Not provider-specific / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Artemis version
+      description: From the app's About window, or the `version` in `apps/desktop/package.json` if you build from source.
+      placeholder: "0.20.0"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS 15.5 (Apple silicon) · Node 22.14 · pnpm 10.4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: smoke
+    attributes:
+      label: Does `pnpm smoke` reproduce it?
+      description: |
+        Only if you run from source. `pnpm smoke` runs the whole engine without Electron,
+        which separates a plumbing fault from a core one. **It bills the account your CLI
+        is signed in to.** Skip this if that is not something you want to spend.
+      placeholder: "Not tried / reproduces / does not reproduce"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste anything relevant. Please check it for tokens before posting — Artemis redacts its own IPC, not your clipboard.
+      render: shell

@@ -3,7 +3,7 @@
   "version": "0.14.2",
   "private": true,
   "description": "Shared contract for Artemis: normalized agent events, provider capabilities, profiles and the typed IPC surface. Zero runtime dependencies.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

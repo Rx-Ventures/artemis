@@ -311,6 +311,27 @@ reimplementation of one's interface. "Powered by Claude" is the extent of the
 attribution. Contributions must not introduce another product's branding,
 visual identity, or ASCII art.
 
+## Contributing
+
+**Artemis is not accepting pull requests yet. Issues are open, and they are
+read.** The provider seam has been tested once, with Codex; until the OpenCode
+adapter lands, the interfaces a contribution would build on are still allowed to
+move, and a pull request against them could be invalidated by the very change
+that proves them. [CONTRIBUTING.md](CONTRIBUTING.md) gives the full reasoning,
+says what is welcome now — bug reports, ideas, design disagreement — and
+documents the conventions. When the third adapter lands, that file changes.
+
+Security reports go through [private disclosure](SECURITY.md), never the issue
+tracker.
+
 ## License
 
-MIT
+[Apache 2.0](LICENSE).
+
+Apache rather than MIT for one reason that matters here: the [NOTICE](NOTICE)
+file propagates. If you redistribute Artemis, the warning about shipping a build
+whose sign-in ends in a claude.ai login travels with the code, instead of staying
+behind in a README you rewrote. Read it before you ship a build to other people.
+
+The Artemis name and visual identity are not licensed under it — section 6 of
+the license grants no trademark rights.
