@@ -129,6 +129,19 @@ export interface JsonRpcConnectionOptions {
   readonly send: (line: string) => void;
 
   /**
+   * Emit `"jsonrpc": "<value>"` on every outbound frame. Absent means omit the
+   * field entirely, which is the default because Codex's app-server omits it.
+   *
+   * ACP does not: it is standard JSON-RPC 2.0 and its schema requires the
+   * field. OpenCode 1.18.18 happens to accept frames without it — verified
+   * live — but a lenient agent is not a contract, and the same module drives
+   * Kimi and Grok, either of which may validate. Passing `'2.0'` costs one
+   * field and buys spec-correctness for every ACP agent; leaving it unset
+   * preserves the Codex dialect exactly as it was.
+   */
+  readonly jsonRpcVersion?: string;
+
+  /**
    * Handle a server-initiated request.
    *
    * Resolving sends a `result`; rejecting sends an `error`. **A handler that
@@ -365,7 +378,13 @@ export class JsonRpcConnection {
   }
 
   #write(frame: Record<string, unknown>): void {
-    this.#options.send(JSON.stringify(frame));
+    const version = this.#options.jsonRpcVersion;
+    // Spread first so `jsonrpc` leads the object, which is what every ACP
+    // implementation's own output looks like and what a human reading a
+    // protocol log expects.
+    this.#options.send(
+      JSON.stringify(version === undefined ? frame : { jsonrpc: version, ...frame }),
+    );
   }
 
   /**
@@ -517,6 +536,8 @@ export interface SpawnJsonRpcOptions {
   readonly onRequest?: JsonRpcConnectionOptions['onRequest'];
   readonly onNotification?: JsonRpcConnectionOptions['onNotification'];
   readonly onDiagnostic?: JsonRpcConnectionOptions['onDiagnostic'];
+  /** See {@link JsonRpcConnectionOptions.jsonRpcVersion}. */
+  readonly jsonRpcVersion?: JsonRpcConnectionOptions['jsonRpcVersion'];
   /**
    * Called when the process exits for any reason, with a message naming the
    * cause. Fires exactly once, after the connection has been failed, so a
@@ -576,6 +597,7 @@ export function spawnJsonRpcSubprocess(options: SpawnJsonRpcOptions): JsonRpcSub
     ...(options.onRequest === undefined ? {} : { onRequest: options.onRequest }),
     ...(options.onNotification === undefined ? {} : { onNotification: options.onNotification }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+    ...(options.jsonRpcVersion === undefined ? {} : { jsonRpcVersion: options.jsonRpcVersion }),
   });
 
   const splitter = new LineSplitter(

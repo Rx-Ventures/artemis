@@ -165,9 +165,11 @@ describe('describe()', () => {
 });
 
 describe('createDefaultProviderRegistry', () => {
-  it('ships with Claude and Codex registered, in PROVIDER_IDS order', () => {
+  it('ships with every declared provider registered, in PROVIDER_IDS order', () => {
     const registry = createDefaultProviderRegistry();
-    expect(registry.list().map((a) => a.id)).toEqual(['claude', 'codex']);
+    // OpenCode was the last id declared but unimplemented. With its adapter
+    // landed, `ProviderId` and the registry finally describe the same set.
+    expect(registry.list().map((a) => a.id)).toEqual(['claude', 'codex', 'opencode']);
   });
 
   it('gives Claude its real capability set', async () => {
@@ -217,14 +219,18 @@ describe('createDefaultProviderRegistry', () => {
   });
 
   it('offers no sign-in instructions for a provider that is not registered', async () => {
-    const descriptors = await createDefaultProviderRegistry().describe();
+    // Every declared provider now ships with an adapter, so this case can no
+    // longer be reached through the default registry — it is built by hand
+    // rather than deleted, because the rule it guards outlives the provider
+    // that used to illustrate it: an unregistered id must render silent, never
+    // wearing another adapter's command under its own name.
+    const registry = createProviderRegistry([]);
+    const descriptors = await registry.describe();
     const opencode = descriptors.find((d) => d.id === 'opencode');
 
-    // Silence rather than another adapter's command rendered under OpenCode's
-    // name. Codex used to be the example here; it is registered now, so the
-    // still-unimplemented provider carries the case.
     expect(opencode?.signInHowTo).toBeUndefined();
     expect(opencode?.available).toBe(false);
+    expect(opencode?.unavailableReason).toBeTruthy();
   });
 
   it('gives Codex a capability set that differs from Claude’s', async () => {

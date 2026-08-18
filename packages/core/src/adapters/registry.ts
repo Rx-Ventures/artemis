@@ -35,6 +35,8 @@ import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';
 import { createCodexAdapter } from './codex.js';
 import type { CodexAdapterOptions } from './codex.js';
+import { createOpencodeAdapter } from './opencode.js';
+import type { OpencodeAdapterOptions } from './opencode.js';
 import { adapterError } from './types.js';
 import type { AdapterAvailability, ProviderAdapter, ProviderRegistry } from './types.js';
 
@@ -187,6 +189,8 @@ export interface DefaultProviderRegistryOptions {
   readonly claude?: ClaudeAdapterOptions;
   /** Forwarded to the Codex adapter. */
   readonly codex?: CodexAdapterOptions;
+  /** Forwarded to the OpenCode adapter. */
+  readonly opencode?: OpencodeAdapterOptions;
 }
 
 /**
@@ -204,6 +208,6 @@ export function createDefaultProviderRegistry(
   return createProviderRegistry([
     createClaudeAdapter(options?.claude),
     createCodexAdapter(options?.codex),
-    // createOpenCodeAdapter(options?.opencode),
+    createOpencodeAdapter(options?.opencode),
   ]);
 }
