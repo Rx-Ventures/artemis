@@ -1,0 +1,45 @@
+name: Idea or design disagreement
+description: Propose something, or argue against a decision Artemis has already made.
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pull requests are paused, but ideas are not. Nothing about the roadmap is
+        secret, and an argument against a decision is worth more **before** the
+        third adapter lands than after — the interfaces are still allowed to move
+        right now. See [CONTRIBUTING.md](https://github.com/Rx-Ventures/artemis/blob/main/CONTRIBUTING.md).
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should be different
+      description: The change you want, described from the user's side rather than as an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What is hard or impossible today. Concrete beats general.
+    validations:
+      required: true
+
+  - type: textarea
+    id: existing
+    attributes:
+      label: What Artemis does today, and why you think it is wrong
+      description: |
+        If you are arguing against an existing decision, say which one. Much of the
+        reasoning is written down in the README — the provider seam, the credential
+        design, where secrets live. Disagreeing with a documented reason is more
+        useful than disagreeing with the behaviour.
+
+  - type: checkboxes
+    id: seam
+    attributes:
+      label: Scope
+      options:
+        - label: This would need a change to the provider seam (the event union, the capability descriptor, or the credential spec)
+        - label: I have read the Naming section and this introduces no other product's branding or visual identity
