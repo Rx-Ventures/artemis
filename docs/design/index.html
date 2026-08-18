@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Artemis — five ways to look at it</title>
+<style>
+:root {
+  --bg: oklch(13% 0.006 280); --panel: oklch(17% 0.008 280); --rule: oklch(28% 0.010 280);
+  --ink: oklch(95% 0.005 280); --mid: oklch(72% 0.012 280); --dim: oklch(52% 0.014 280);
+  --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.65 var(--sans); padding: 46px 24px 70px; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 8px; }
+.lede { color: var(--mid); margin-bottom: 8px; max-width: 68ch; }
+.lede b { color: var(--ink); font-weight: 550; }
+.meta { font: 11px var(--mono); color: var(--dim); margin-bottom: 34px; }
+
+a.card { display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 18px 20px; margin-bottom: 12px; }
+a.card:hover { border-color: var(--mid); }
+.n { font: 10px var(--mono); letter-spacing: 0.16em; color: var(--dim); }
+h2 { font-size: 17px; font-weight: 600; margin: 3px 0 7px; letter-spacing: -0.01em; }
+.bet { color: var(--mid); margin-bottom: 10px; max-width: 74ch; }
+.bet b { color: var(--ink); font-weight: 550; }
+.tags { display: flex; gap: 8px; flex-wrap: wrap; font: 10.5px var(--mono); color: var(--dim); }
+.tag { border: 1px solid var(--rule); border-radius: 999px; padding: 2px 9px; }
+.sw { display: inline-flex; gap: 4px; vertical-align: -2px; margin-left: 6px; }
+.sw i { width: 11px; height: 11px; border-radius: 2px; display: block; }
+
+.foot { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--rule); color: var(--mid); font-size: 13px; max-width: 74ch; }
+.foot h3 { font-size: 13px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
+.foot ul { margin: 0 0 14px 18px; }
+.foot li { margin-bottom: 5px; }
+code { font: 12px var(--mono); color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Five ways to look at it</h1>
+  <p class="lede">Five <b>different layouts</b>, not five palettes on the same frame. The brief was that Artemis currently reads as a Claude Code / T3 / Codex clone, so each of these changes the <b>information architecture</b> first and the colour second. New palette in every one, higher contrast throughout, OKLCH structure kept.</p>
+  <p class="lede">Nothing here is locked, and they are not meant to be ranked. The useful outcome is <b>which bets you like</b> — they can be mixed.</p>
+  <div class="meta">open each file directly · ~/artemis/docs/design/</div>
+
+  <a class="card" href="1-instrument.html">
+    <div class="n">01</div>
+    <h2>Instrument
+      <span class="sw"><i style="background:oklch(11% 0.008 250)"></i><i style="background:oklch(84% 0.19 152)"></i><i style="background:oklch(94% 0.005 250)"></i></span>
+    </h2>
+    <p class="bet">Artemis as lab equipment. <b>No cards, no shadows, no rounding</b> — one plane divided by hairlines, meaning carried by position and a single acid signal. Monospace throughout. The status rail moves to the <b>top</b>, because "which account is this billing" is the first question, not the last.</p>
+    <div class="tags"><span class="tag">densest</span><span class="tag">mono-only</span><span class="tag">3 columns</span><span class="tag">terminal-native</span></div>
+  </a>
+
+  <a class="card" href="2-ledger.html">
+    <div class="n">02</div>
+    <h2>Ledger
+      <span class="sw"><i style="background:oklch(15% 0.012 65)"></i><i style="background:oklch(74% 0.15 275)"></i><i style="background:oklch(80% 0.13 45)"></i></span>
+    </h2>
+    <p class="bet">The session as an engineering logbook. Serif prose in a measured column, a margin carrying time and cost, tool calls set as <b>citations</b> rather than interruptions. <b>No sidebar at all</b> — sessions live behind ⌘K — and files open <b>inline where they were mentioned</b> instead of in a dock.</p>
+    <div class="tags"><span class="tag">serif</span><span class="tag">no sidebar</span><span class="tag">no dock</span><span class="tag">reads as a record</span></div>
+  </a>
+
+  <a class="card" href="3-yard.html">
+    <div class="n">03</div>
+    <h2>Yard
+      <span class="sw"><i style="background:oklch(13% 0.016 200)"></i><i style="background:oklch(82% 0.17 175)"></i><i style="background:oklch(83% 0.16 85)"></i></span>
+    </h2>
+    <p class="bet">Stop pretending there is one conversation. The <b>board is home</b> — lanes by state (wants you / working / settled), conversations as cards, delegated agents nested visibly inside their parent. Opening one is a <b>zoom</b>, not a navigation: it peeks up from the bottom with the board still behind it.</p>
+    <div class="tags"><span class="tag">biggest departure</span><span class="tag">multi-session first</span><span class="tag">board</span><span class="tag">shows delegation</span></div>
+  </a>
+
+  <a class="card" href="4-rail.html">
+    <div class="n">04</div>
+    <h2>Rail
+      <span class="sw"><i style="background:oklch(12% 0.020 300)"></i><i style="background:oklch(76% 0.22 330)"></i><i style="background:oklch(84% 0.15 200)"></i></span>
+    </h2>
+    <p class="bet">Two things happen at once, so show two. Talk on the left, <b>consequence on the right</b> — the files, commands and pages it touched — with a <b>shared timeline spine</b> down the middle that both halves hang off. The dock stops being a drawer you open and becomes permanent and equal.</p>
+    <div class="tags"><span class="tag">loudest</span><span class="tag">magenta</span><span class="tag">dock is half the screen</span><span class="tag">shared spine</span></div>
+  </a>
+
+  <a class="card" href="5-quiet.html">
+    <div class="n">05</div>
+    <h2>Quiet
+      <span class="sw"><i style="background:oklch(12% 0.004 60)"></i><i style="background:oklch(80% 0.16 55)"></i><i style="background:oklch(96% 0.004 60)"></i></span>
+    </h2>
+    <p class="bet">Almost nothing until you ask. <b>No sidebar, no tab strip, no status bar</b> — the entire persistent UI is a <b>3px strip</b> whose colour is state and whose width is context used. Everything else — sessions, files, terminals, settings — arrives through one overlay and leaves again. Type does the work boxes do elsewhere.</p>
+    <div class="tags"><span class="tag">most restrained</span><span class="tag">keyboard-first</span><span class="tag">largest type</span><span class="tag">3px of chrome</span></div>
+  </a>
+
+  <div class="foot">
+    <h3>What I would ask yourself while clicking</h3>
+    <ul>
+      <li><b>How many sessions do you really run at once?</b> If it is usually four, <b>Yard</b> is the only one designed for that and the rest are wrong. If it is usually one, Yard is overhead.</li>
+      <li><b>Do you read the transcript, or watch it?</b> <b>Ledger</b> and <b>Quiet</b> assume reading; <b>Instrument</b> and <b>Rail</b> assume watching something happen.</li>
+      <li><b>Is the dock essential or occasional?</b> <b>Rail</b> makes it permanent, <b>Ledger</b> deletes it, the rest keep it as tabs.</li>
+      <li><b>Monospace everywhere, or only for code?</b> Instrument says everywhere; Ledger says almost nowhere.</li>
+    </ul>
+    <h3>Not decided here</h3>
+    <p>These are single states of a single screen. Settings, profiles, first run, split panes, light mode and the permission modes all still need designing, and the winner will need a written token layer before any of the 52 components are converted — which is where this stops being mockups and starts being work.</p>
+  </div>
+
+</div>
+</body>
+</html>

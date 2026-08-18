@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-design="quiet">
+<head>
+<meta charset="utf-8">
+<title>5 · Quiet — Artemis design exploration</title>
+<style>
+/* ==========================================================================
+   5 · QUIET
+   --------------------------------------------------------------------------
+   Almost nothing on screen until you ask for it.
+
+   The premise: every chat UI is 30% chrome — a sidebar you read twice a day, a
+   status bar you read never, tab strips for things you are not looking at. If
+   the product is keyboard-first, the chrome is a permanent tax on the one
+   surface that matters.
+
+   So: no sidebar, no tab strip, no status bar. One column of text, a hairline
+   of state at the very top, and everything else summoned — sessions, files,
+   terminals and settings all arrive through the same overlay and leave again.
+   The screenshot looks empty. That is the point; it is full when you are
+   working and empty when you are reading.
+
+   Palette: near-black, one warm signal, and *type* doing the work that boxes
+   do elsewhere. High contrast, very few colours, generous size.
+   ========================================================================== */
+:root {
+  --bg:      oklch(12% 0.004 60);
+  --ink:     oklch(96% 0.004 60);
+  --ink-mid: oklch(70% 0.010 60);
+  --ink-dim: oklch(50% 0.012 60);
+  --rule:    oklch(26% 0.008 60);
+  --sig:     oklch(80% 0.16 55);    /* amber — the only colour that speaks */
+  --you:     oklch(92% 0.02 60);
+  --ok:      oklch(76% 0.14 155);
+  --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.72 var(--sans); height: 100vh; display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+
+/* --- The entire persistent UI: one 3px strip ----------------------------
+   Colour is state (running / waiting / idle). Width is context used. That is
+   the whole status bar, and it costs three pixels instead of twenty-two. */
+.state { height: 3px; background: var(--rule); flex-shrink: 0; }
+.state .fill { height: 100%; width: 21%; background: var(--sig); }
+
+/* --- Reading column ----------------------------------------------------- */
+.page { flex: 1; overflow: auto; }
+.col { max-width: 700px; margin: 0 auto; padding: 60px 24px 40px; }
+
+/* Hover-revealed header: the only place the session names itself. */
+.head { opacity: 0.4; transition: opacity 0.18s; margin-bottom: 44px; }
+.head:hover { opacity: 1; }
+.head h1 { font-size: 17px; font-weight: 550; letter-spacing: -0.01em; margin-bottom: 3px; }
+.head .m { font: 11px var(--mono); color: var(--ink-dim); display: flex; gap: 14px; }
+
+/* --- Turns: separated by space, not by rules or bubbles ----------------- */
+.turn { margin-bottom: 38px; }
+.you { color: var(--you); font-weight: 500; }
+.you::before { content: "❯ "; color: var(--sig); font-weight: 400; }
+.said { color: var(--ink); }
+.said b { font-weight: 600; }
+
+/* Reasoning is smaller and quieter, and folds. */
+.reason { font-size: 13.5px; color: var(--ink-dim); margin: 12px 0; line-height: 1.62; }
+.reason::before { content: "thinking · "; font: 10px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim); }
+
+/* --- Tool calls: one dim line each, no boxes ---------------------------- */
+.did { font: 11.5px/2.05 var(--mono); color: var(--ink-dim); margin: 14px 0; }
+.did div { display: flex; gap: 9px; }
+.did .v { color: var(--ok); }
+.did .r { margin-left: auto; }
+.did .more { color: var(--ink-dim); opacity: 0.6; }
+
+/* --- The gate: the one moment the UI raises its voice ------------------- */
+.gate { margin: 20px 0; padding-left: 16px; border-left: 3px solid var(--sig); }
+.gate .h { font: 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--sig); margin-bottom: 8px; }
+.gate code { font: 12.5px var(--mono); color: var(--ink); }
+.gate .why { font: 11px var(--mono); color: var(--ink-dim); margin-top: 8px; }
+.keys { margin-top: 14px; font: 11.5px var(--mono); color: var(--ink-dim); display: flex; gap: 18px; }
+.keys b { color: var(--ink); font-weight: 400; }
+kbd { font: 10.5px var(--mono); border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; color: var(--ink-mid); }
+
+/* --- Composer: no box, no border, just the caret ------------------------ */
+.composer { max-width: 700px; margin: 0 auto; padding: 0 24px 34px; display: flex; gap: 10px; align-items: baseline; }
+.composer .p { color: var(--sig); font: 15px var(--sans); }
+.composer .t { color: var(--ink-mid); }
+.caret { display: inline-block; width: 2px; height: 18px; background: var(--sig); vertical-align: -3px; animation: b 1.1s steps(1) infinite; }
+@keyframes b { 50% { opacity: 0; } }
+
+/* --- Everything else lives here, and is not here now -------------------
+   Sessions, files, terminals, settings: one overlay, one keystroke, gone
+   again. Shown at 50% to say "this is summoned, not resident". */
+.summon { position: fixed; inset: 0; background: oklch(8% 0.004 60 / 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; opacity: 0.55; pointer-events: none; }
+.palette { width: 560px; background: oklch(16% 0.006 60); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 24px 60px oklch(6% 0 0 / 0.6); overflow: hidden; }
+.palette .q { padding: 13px 16px; font: 14px var(--mono); color: var(--ink-mid); border-bottom: 1px solid var(--rule); }
+.palette .q .c { color: var(--sig); }
+.palette .grp { font: 9.5px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-dim); padding: 9px 16px 4px; }
+.palette .it { padding: 6px 16px; display: flex; gap: 12px; font: 12.5px var(--mono); color: var(--ink-mid); }
+.palette .it.on { background: oklch(22% 0.02 55); color: var(--ink); }
+.palette .it .k { margin-left: auto; color: var(--ink-dim); font-size: 11px; }
+.palette .it .d { color: var(--ok); }
+.note { position: fixed; bottom: 12px; right: 18px; font: 10px var(--mono); color: var(--ink-dim); z-index: 5; }
+</style>
+</head>
+<body>
+
+<div class="state"><div class="fill"></div></div>
+
+<div class="page">
+  <div class="col">
+
+    <div class="head">
+      <h1>Wire the ACP seam</h1>
+      <div class="m"><span>~/artemis</span><span>work · claude · sonnet-5</span><span>41.2k / 200k</span><span>$0.14</span><span style="color:var(--sig)">running</span></div>
+    </div>
+
+    <div class="turn">
+      <div class="you">Read the ACP client and tell me whether session/rename exists.</div>
+    </div>
+
+    <div class="turn">
+      <div class="reason">The handshake advertises sessionCapabilities. Worth checking what it actually lists rather than what the documentation claims — those have disagreed before.</div>
+      <div class="did">
+        <div><span class="v">read</span> adapters/acp/client.ts <span class="r">0.3s</span></div>
+        <div><span class="v">search</span> "session/rename" <span class="r">0 matches</span></div>
+      </div>
+      <div class="said">It does not exist. The handshake lists <b>close</b>, <b>fork</b>, <b>list</b> and <b>resume</b>, and nothing else — so <b>renameSession</b> is an upstream limit rather than something we failed to wire.</div>
+    </div>
+
+    <div class="turn">
+      <div class="you">Confirm it against the running agent rather than the source.</div>
+    </div>
+
+    <div class="turn">
+      <div class="gate">
+        <div class="h">Waiting on you</div>
+        <code>opencode acp &lt;&lt;&lt; '{"method":"session/rename"}'</code>
+        <div class="why">Seatbelt · writes limited to ~/artemis · network blocked</div>
+        <div class="keys">
+          <span><kbd>⏎</kbd> <b>run once</b></span>
+          <span><kbd>⇧⏎</kbd> always</span>
+          <span><kbd>⎋</kbd> deny</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="composer">
+  <span class="p">❯</span>
+  <span class="t">now check whether deleteSession exists too</span><span class="caret"></span>
+</div>
+
+<div class="summon">
+  <div class="palette">
+    <div class="q"><span class="c">⌘K</span> &nbsp;acp</div>
+    <div class="grp">Sessions</div>
+    <div class="it on"><span>Wire the ACP seam</span><span class="k">now</span></div>
+    <div class="it"><span>ACP transport research</span><span class="k">3h</span></div>
+    <div class="grp">Files</div>
+    <div class="it"><span class="d">▤</span><span>adapters/acp/client.ts</span><span class="k">open ⏎</span></div>
+    <div class="it"><span class="d">▤</span><span>adapters/acp/protocol.ts</span></div>
+    <div class="grp">Do</div>
+    <div class="it"><span class="d">▸</span><span>New terminal here</span><span class="k">⌃`</span></div>
+    <div class="it"><span class="d">◱</span><span>Open localhost:5173</span><span class="k">⌘B</span></div>
+  </div>
+</div>
+
+<div class="note">5 · QUIET — no sidebar, no tabs, no status bar. Everything summoned.</div>
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en" data-design="ledger">
+<head>
+<meta charset="utf-8">
+<title>2 · Ledger — Artemis design exploration</title>
+<style>
+/* ==========================================================================
+   2 · LEDGER
+   --------------------------------------------------------------------------
+   The session as an engineering logbook.
+
+   The premise: what an agent did is a *record*, and the thing you do with a
+   record is scan it, cite it and come back to it. So the transcript is set
+   like a document — a wide margin carrying time and cost, a measured column
+   of prose, and tool calls as marginalia rather than as interruptions.
+
+   The one structural bet: no sidebar. Sessions live behind a command bar,
+   because a list you look at twice a day should not cost 190px forever.
+
+   Palette: warm paper-dark, ink-brown neutrals, indigo for the machine's
+   voice. Higher contrast than the current build, and deliberately not the
+   blue-grey every agent tool ships with.
+   ========================================================================== */
+:root {
+  --bg:      oklch(15% 0.012 65);
+  --bg-2:    oklch(19% 0.014 65);
+  --rule:    oklch(28% 0.014 65);
+  --ink:     oklch(93% 0.012 80);
+  --ink-mid: oklch(72% 0.018 75);
+  --ink-dim: oklch(54% 0.018 70);
+  --accent:  oklch(74% 0.15 275);   /* the machine's voice */
+  --you:     oklch(80% 0.13 45);    /* yours               */
+  --ok:      oklch(78% 0.15 155);
+  --warn:    oklch(80% 0.15 85);
+  --serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.7 var(--serif); height: 100vh; display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+
+/* --- Command bar: the only chrome ---------------------------------------
+   Everything that would be a sidebar lives behind this. It is always here,
+   always the same shape, and it is where you go for anything you do not do
+   constantly. */
+.cmd { display: flex; align-items: center; gap: 12px; padding: 9px 20px; border-bottom: 1px solid var(--rule); font: 12px var(--mono); color: var(--ink-dim); background: var(--bg-2); }
+.cmd .slash { color: var(--accent); }
+.cmd .sep { color: var(--rule); }
+.cmd .right { margin-left: auto; display: flex; gap: 16px; }
+.cmd b { color: var(--ink-mid); font-weight: 400; }
+
+/* --- The page ------------------------------------------------------------ */
+.page { flex: 1; overflow: auto; }
+.doc { max-width: 940px; margin: 0 auto; padding: 34px 20px 80px; }
+.title { font-size: 26px; line-height: 1.25; margin-bottom: 4px; }
+.sub { font: 11px var(--mono); color: var(--ink-dim); letter-spacing: 0.04em; margin-bottom: 30px; }
+
+/* --- An entry: margin, then column --------------------------------------- */
+.entry { display: grid; grid-template-columns: 96px 1fr; gap: 22px; padding: 16px 0; border-top: 1px solid var(--rule); }
+.margin { font: 10px/1.6 var(--mono); color: var(--ink-dim); text-align: right; letter-spacing: 0.03em; }
+.margin .big { display: block; font-size: 14px; color: var(--ink-mid); }
+.body { min-width: 0; }
+.speaker { font: 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 7px; }
+.speaker.you { color: var(--you); }
+.speaker.machine { color: var(--accent); }
+p { margin-bottom: 12px; }
+p:last-child { margin-bottom: 0; }
+
+/* --- Reasoning: set smaller, indented, like a footnote in place ---------- */
+.reason { font-size: 13.5px; color: var(--ink-dim); font-style: italic; border-left: 2px solid var(--rule); padding-left: 14px; margin: 0 0 14px; }
+
+/* --- Tool calls as marginalia -------------------------------------------
+   A tool call is evidence for the sentence beside it, so it is set as a
+   citation would be: small, monospace, dimmed, and not competing with prose. */
+.cite { font: 11px/1.9 var(--mono); color: var(--ink-mid); margin: 10px 0; padding-left: 14px; border-left: 2px solid var(--rule); }
+.cite div { display: flex; gap: 8px; }
+.cite .g { color: var(--ok); }
+.cite .r { color: var(--ink-dim); margin-left: auto; }
+
+/* --- The one thing that stops you --------------------------------------- */
+.gate { border: 1px solid var(--warn); border-left-width: 3px; padding: 14px 16px; margin: 14px 0; background: oklch(20% 0.03 85); }
+.gate h4 { font: 10px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--warn); margin-bottom: 8px; }
+.gate code { font: 12px var(--mono); background: oklch(24% 0.02 85); padding: 2px 6px; color: var(--ink); }
+.gate .why { font-size: 13px; color: var(--ink-dim); margin-top: 10px; }
+.acts { display: flex; gap: 8px; margin-top: 14px; }
+button { font: 12px var(--mono); padding: 5px 14px; background: transparent; color: var(--ink-mid); border: 1px solid var(--rule); cursor: pointer; }
+button.go { background: var(--warn); border-color: var(--warn); color: oklch(20% 0.03 85); }
+
+/* --- Artifacts open inline, not in a dock -------------------------------
+   The bet: a file you are discussing belongs *in* the discussion, at the
+   point it was mentioned, and collapses when you are done with it. */
+.artifact { border: 1px solid var(--rule); margin: 14px 0; }
+.artifact .h { display: flex; gap: 10px; padding: 6px 12px; background: var(--bg-2); font: 11px var(--mono); color: var(--ink-mid); border-bottom: 1px solid var(--rule); }
+.artifact .h .x { margin-left: auto; color: var(--ink-dim); }
+.artifact pre { padding: 12px; font: 11.5px/1.7 var(--mono); overflow-x: auto; color: var(--ink-mid); }
+.kw { color: var(--accent); } .str { color: var(--ok); } .cm { color: var(--ink-dim); font-style: italic; }
+
+/* --- Composer: the next entry, already begun ---------------------------- */
+.next { display: grid; grid-template-columns: 96px 1fr; gap: 22px; padding: 16px 0; border-top: 1px solid var(--rule); }
+.next .speaker { color: var(--you); }
+.field { font: 15px var(--serif); color: var(--ink-mid); }
+.bar { display: inline-block; width: 2px; height: 17px; background: var(--you); vertical-align: -3px; animation: bl 1.1s steps(1) infinite; }
+@keyframes bl { 50% { opacity: 0; } }
+.note { position: fixed; bottom: 12px; right: 18px; font: 10px var(--mono); color: var(--ink-dim); }
+</style>
+</head>
+<body>
+
+<div class="cmd">
+  <span class="slash">⌘K</span> <span>sessions, files, providers…</span>
+  <span class="sep">│</span> <b>work · claude</b>
+  <span class="sep">│</span> <b>sonnet-5</b>
+  <div class="right">
+    <span>41.2k / 200k</span>
+    <span>$0.14</span>
+    <span style="color:var(--ok)">● running</span>
+  </div>
+</div>
+
+<div class="page">
+<div class="doc">
+
+  <h1 class="title">Wire the ACP seam</h1>
+  <div class="sub">~/artemis · started 14:02 · 4 entries · 2 delegated</div>
+
+  <div class="entry">
+    <div class="margin"><span class="big">01</span>14:02:11</div>
+    <div class="body">
+      <div class="speaker you">You</div>
+      <p>Read the ACP client and tell me whether <code style="font:13px var(--mono)">session/rename</code> exists.</p>
+    </div>
+  </div>
+
+  <div class="entry">
+    <div class="margin"><span class="big">02</span>14:02:14<br>2.9s<br>1,204 tok</div>
+    <div class="body">
+      <div class="speaker machine">Claude</div>
+      <div class="reason">The handshake advertises sessionCapabilities. Worth checking what it actually lists rather than what the documentation claims — those have disagreed before.</div>
+      <div class="cite">
+        <div><span class="g">read</span> packages/core/src/adapters/acp/client.ts <span class="r">0.3s</span></div>
+        <div><span class="g">search</span> "session/rename" <span class="r">0 matches</span></div>
+      </div>
+      <p>It does not exist. The handshake lists <b>close</b>, <b>fork</b>, <b>list</b> and <b>resume</b>, and nothing else — so <b>renameSession</b> is an upstream limit rather than something we have failed to wire.</p>
+      <div class="artifact">
+        <div class="h"><span>▤</span><span>client.ts</span><span>128–132</span><span class="x">collapse ⌥C</span></div>
+        <pre><span class="cm">/** The agent takes a resource block carrying content inline. */</span>
+<span class="kw">readonly</span> acceptsEmbeddedContext: <span class="kw">boolean</span>;
+
+  acceptsImages: caps.<span class="str">promptCapabilities</span>?.image === <span class="kw">true</span>,
+  acceptsEmbeddedContext: caps?.<span class="str">embeddedContext</span> === <span class="kw">true</span>,</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="entry">
+    <div class="margin"><span class="big">03</span>14:03:40</div>
+    <div class="body">
+      <div class="speaker you">You</div>
+      <p>Confirm it against the running agent rather than the source.</p>
+    </div>
+  </div>
+
+  <div class="entry">
+    <div class="margin"><span class="big">04</span>14:03:44<br>live</div>
+    <div class="body">
+      <div class="speaker machine">Claude</div>
+      <div class="gate">
+        <h4>Waiting on you · shell</h4>
+        <code>opencode acp &lt;&lt;&lt; '{"method":"session/rename"}'</code>
+        <div class="why">Confined by Seatbelt — writes limited to <b>~/artemis</b>, network blocked.</div>
+        <div class="acts">
+          <button class="go">Run once ⏎</button>
+          <button>Always allow shell</button>
+          <button>Deny ⎋</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="next">
+    <div class="margin"><span class="big">05</span>—</div>
+    <div class="body">
+      <div class="speaker">You</div>
+      <div class="field">now check whether deleteSession exists too<span class="bar"></span></div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="note">2 · LEDGER — a record you scan and cite. No sidebar; artifacts inline.</div>
+</body>
+</html>
