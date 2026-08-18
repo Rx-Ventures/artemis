@@ -5,184 +5,235 @@
 <title>1 · Instrument — Artemis design exploration</title>
 <style>
 /* ==========================================================================
-   1 · INSTRUMENT
-   --------------------------------------------------------------------------
-   Artemis as a piece of lab equipment rather than a chat app.
-
-   The premise: this drives coding agents, and the closest honest ancestor is
-   an oscilloscope or a mixing desk — a dense readout you learn once and then
-   read at a glance. No cards. No shadows. Everything on one plane, divided by
-   hairlines, with meaning carried by position and a signal colour rather than
-   by boxes.
-
-   Palette: near-black with a single acid signal. Contrast is deliberately
-   high — the complaint about the current build was visibility.
+   1 · INSTRUMENT — Artemis as lab equipment, not a chat app.
+   One plane, hairlines, no cards or shadows, one acid signal.
+   Rendering the real session: see _session.md.
    ========================================================================== */
 :root {
-  --bg:        oklch(11% 0.008 250);
-  --rule:      oklch(24% 0.010 250);
-  --rule-lit:  oklch(34% 0.014 250);
-  --ink:       oklch(94% 0.005 250);
-  --ink-mid:   oklch(68% 0.012 250);
-  --ink-dim:   oklch(48% 0.012 250);
-  --signal:    oklch(84% 0.19 152);   /* acid green — the one loud colour  */
-  --warn:      oklch(80% 0.16 75);
-  --stop:      oklch(70% 0.19 25);
-  --user:      oklch(78% 0.14 250);
+  --bg: oklch(11% 0.008 250); --bg2: oklch(14% 0.009 250);
+  --rule: oklch(24% 0.010 250); --rule-lit: oklch(34% 0.014 250);
+  --ink: oklch(95% 0.005 250); --ink-mid: oklch(70% 0.012 250); --ink-dim: oklch(50% 0.012 250);
+  --signal: oklch(84% 0.19 152); --warn: oklch(82% 0.16 75); --stop: oklch(72% 0.20 25);
+  --user: oklch(80% 0.14 250); --add: oklch(78% 0.15 152); --del: oklch(72% 0.17 20);
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  background: var(--bg); color: var(--ink);
-  font: 12px/1.55 var(--mono);
-  height: 100vh; display: grid;
-  grid-template-rows: 22px 1fr 22px;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* --- Top rail: everything about the run, in one line ---------------------
-   The status line is usually at the bottom and half-ignored. Here it leads,
-   because "which account is this billing and what is it doing" is the first
-   question, not the last. */
-.rail {
-  display: flex; align-items: center; gap: 0;
-  border-bottom: 1px solid var(--rule);
-  font-size: 11px; letter-spacing: 0.02em;
-}
+body { background: var(--bg); color: var(--ink); font: 12px/1.5 var(--mono); height: 100vh; display: grid; grid-template-rows: 22px 1fr 24px; -webkit-font-smoothing: antialiased; }
+.rail { display: flex; align-items: center; border-bottom: 1px solid var(--rule); font-size: 11px; }
 .cell { padding: 0 10px; border-right: 1px solid var(--rule); height: 100%; display: flex; align-items: center; gap: 6px; }
-.cell:last-child { border: 0; margin-left: auto; border-left: 1px solid var(--rule); }
-.k { color: var(--ink-dim); }
-.v { color: var(--ink); }
-.live { color: var(--signal); }
+.cell.end { margin-left: auto; border: 0; border-left: 1px solid var(--rule); }
+.k { color: var(--ink-dim); } .v { color: var(--ink); } .live { color: var(--signal); }
 .dot { width: 5px; height: 5px; background: var(--signal); }
-
-/* --- Body: three columns, no gaps, no rounding -------------------------- */
-main { display: grid; grid-template-columns: 190px 1fr 340px; overflow: hidden; }
-.col { overflow: auto; }
-.col + .col { border-left: 1px solid var(--rule); }
-
-/* --- Sessions: a register, not a list ------------------------------------
-   Fixed-width columns so the eye scans down one axis. This is the ledger
-   habit: same field, same place, every row. */
-.reg-head { padding: 6px 10px; color: var(--ink-dim); font-size: 10px; letter-spacing: 0.08em; border-bottom: 1px solid var(--rule); }
-.row { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; padding: 4px 10px; cursor: default; }
-.row:hover { background: oklch(18% 0.010 250); }
+/* Context as a bar in the rail — it is a quantity, so it gets a length. */
+.meter { width: 64px; height: 5px; background: var(--rule); }
+.meter i { display: block; height: 100%; width: 78%; background: var(--warn); }
+main { display: grid; grid-template-columns: 176px 1fr 330px; overflow: hidden; }
+.col { overflow: auto; } .col + .col { border-left: 1px solid var(--rule); }
+.reg-head { padding: 5px 10px; color: var(--ink-dim); font-size: 10px; letter-spacing: 0.08em; border-bottom: 1px solid var(--rule); position: sticky; top: 0; background: var(--bg); }
+.row { display: grid; grid-template-columns: 12px 1fr auto; gap: 7px; padding: 3px 10px; }
+.row:hover { background: var(--bg2); }
 .row.on { background: oklch(20% 0.02 152); box-shadow: inset 2px 0 0 var(--signal); }
-.row .id { color: var(--ink-dim); }
-.row .nm { color: var(--ink-mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row.on .nm { color: var(--ink); }
-.row .ag { color: var(--ink-dim); font-size: 10px; }
+.row .id { color: var(--ink-dim); } .row .nm { color: var(--ink-mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.on .nm { color: var(--ink); } .row .ag { color: var(--ink-dim); font-size: 10px; }
+.row .ag.run { color: var(--signal); }
 
-/* --- Transcript: turns numbered like readings --------------------------- */
-.turn { display: grid; grid-template-columns: 44px 1fr; border-bottom: 1px solid var(--rule); }
-.gutter { padding: 8px 8px 8px 10px; color: var(--ink-dim); font-size: 10px; text-align: right; border-right: 1px solid var(--rule); user-select: none; }
-.content { padding: 8px 12px; min-width: 0; }
-.who { font-size: 10px; letter-spacing: 0.08em; margin-bottom: 4px; }
-.who.u { color: var(--user); }
-.who.a { color: var(--signal); }
-.txt { color: var(--ink); white-space: pre-wrap; }
-.think { color: var(--ink-dim); font-style: italic; border-left: 1px solid var(--rule-lit); padding-left: 8px; margin: 6px 0; }
-
-/* --- Tool calls: a line, not a card ------------------------------------- */
-.tool { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: baseline; padding: 2px 0; color: var(--ink-mid); }
-.tool .m { color: var(--signal); }
-.tool .m.f { color: var(--stop); }
+/* --- Transcript ---------------------------------------------------------- */
+.turn { display: grid; grid-template-columns: 40px 1fr; border-bottom: 1px solid var(--rule); }
+.gutter { padding: 6px 7px 6px 9px; color: var(--ink-dim); font-size: 10px; text-align: right; border-right: 1px solid var(--rule); user-select: none; }
+.content { padding: 6px 12px; min-width: 0; }
+.who { font-size: 10px; letter-spacing: 0.08em; margin-bottom: 3px; }
+.who.u { color: var(--user); } .who.a { color: var(--signal); }
+.txt { color: var(--ink); }
+.think { color: var(--ink-dim); font-style: italic; border-left: 1px solid var(--rule-lit); padding-left: 8px; margin: 5px 0; }
+.tool { display: grid; grid-template-columns: 11px 1fr auto; gap: 7px; align-items: baseline; color: var(--ink-mid); }
+.tool .m { color: var(--signal); } .tool .m.f { color: var(--stop); }
 .tool .a { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .t { color: var(--ink-dim); font-size: 10px; }
 
-/* --- Approval: inverted, because it is the one thing that blocks -------- */
-.ask { margin: 8px 0; border: 1px solid var(--warn); }
+/* --- Output: inset into the same plane, never a floating card ------------ */
+.out { background: var(--bg2); border-left: 1px solid var(--rule-lit); margin: 4px 0 6px; padding: 5px 9px; font-size: 11px; line-height: 1.6; color: var(--ink-mid); white-space: pre; overflow-x: auto; }
+.out .ok { color: var(--signal); } .out .bad { color: var(--stop); } .out .dim { color: var(--ink-dim); }
+.fold { color: var(--ink-dim); font-size: 10px; padding: 2px 0; cursor: default; }
+.fold:hover { color: var(--ink-mid); }
+
+/* --- Diff: the widest thing in agent work, so it gets full bleed --------- */
+.diff { margin: 5px 0 6px; font-size: 11px; line-height: 1.6; overflow-x: auto; }
+.diff .hd { color: var(--ink-dim); border-bottom: 1px solid var(--rule); padding-bottom: 2px; margin-bottom: 3px; }
+.diff div { white-space: pre; }
+.diff .a { color: var(--add); background: oklch(20% 0.05 152); }
+.diff .d { color: var(--del); background: oklch(20% 0.05 20); }
+.diff .c { color: var(--ink-dim); }
+
+/* --- Todo: rewritten in place, so it is a block not a stream ------------- */
+.todo { border: 1px solid var(--rule); margin: 5px 0 6px; }
+.todo .h { padding: 2px 8px; background: var(--bg2); color: var(--ink-dim); font-size: 10px; letter-spacing: 0.06em; border-bottom: 1px solid var(--rule); }
+.todo .i { padding: 1px 8px; display: flex; gap: 7px; color: var(--ink-mid); }
+.todo .i .s { color: var(--signal); } .todo .i.p .s { color: var(--warn); }
+.todo .i.q { color: var(--ink-dim); } .todo .i.q .s { color: var(--ink-dim); }
+
+.ask { margin: 6px 0; border: 1px solid var(--warn); }
 .ask .h { background: var(--warn); color: oklch(18% 0.03 75); padding: 2px 8px; font-size: 10px; letter-spacing: 0.08em; }
-.ask .b { padding: 8px; }
-.ask code { color: var(--ink); background: oklch(18% 0.01 250); padding: 1px 4px; }
-.btns { display: flex; gap: 6px; margin-top: 8px; }
+.ask .b { padding: 7px 8px; }
+.ask code { color: var(--ink); background: var(--bg2); padding: 1px 4px; }
+.btns { display: flex; gap: 6px; margin-top: 7px; }
 .btn { font: inherit; font-size: 11px; padding: 2px 10px; background: transparent; color: var(--ink-mid); border: 1px solid var(--rule-lit); cursor: pointer; }
 .btn.p { border-color: var(--signal); color: var(--signal); }
 
-/* --- Dock: tabs as a segmented readout ---------------------------------- */
-.dock-tabs { display: flex; border-bottom: 1px solid var(--rule); font-size: 10px; letter-spacing: 0.04em; }
-.dt { padding: 4px 9px; color: var(--ink-dim); border-right: 1px solid var(--rule); cursor: default; }
+.dock-tabs { display: flex; border-bottom: 1px solid var(--rule); font-size: 10px; position: sticky; top: 0; background: var(--bg); }
+.dt { padding: 4px 8px; color: var(--ink-dim); border-right: 1px solid var(--rule); }
 .dt.on { color: var(--bg); background: var(--signal); }
-.dock-body { padding: 10px 12px; }
-.file-line { display: grid; grid-template-columns: 28px 1fr; gap: 10px; }
-.file-line .n { color: var(--ink-dim); text-align: right; user-select: none; }
+.dock-body { padding: 8px 10px; }
+.fl { display: grid; grid-template-columns: 26px 1fr; gap: 9px; font-size: 11px; line-height: 1.65; }
+.fl .n { color: var(--ink-dim); text-align: right; user-select: none; }
+.fl.hit { background: oklch(20% 0.04 152); }
 .kw { color: var(--user); } .st { color: var(--signal); } .cm { color: var(--ink-dim); font-style: italic; }
-
-/* --- Composer: a prompt line, literally --------------------------------- */
-.composer { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--rule); padding: 0 10px; font-size: 12px; }
-.composer .p { color: var(--signal); }
-.composer .i { color: var(--ink-mid); }
+.composer { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--rule); padding: 0 10px; }
+.composer .p { color: var(--signal); } .composer .i { color: var(--ink-mid); }
 .caret { width: 7px; height: 13px; background: var(--signal); animation: b 1.1s steps(1) infinite; }
 @keyframes b { 50% { opacity: 0; } }
-.note { position: fixed; bottom: 26px; right: 10px; font-size: 10px; color: var(--ink-dim); }
+.note { position: fixed; bottom: 28px; right: 10px; font-size: 10px; color: var(--ink-dim); }
 </style>
 </head>
 <body>
 
 <div class="rail">
-  <div class="cell"><span class="dot"></span><span class="live">RUNNING</span></div>
+  <div class="cell"><span class="dot"></span><span class="live">RUNNING</span><span class="k">28 turns</span></div>
   <div class="cell"><span class="k">acct</span><span class="v">work · claude</span></div>
-  <div class="cell"><span class="k">model</span><span class="v">sonnet-5</span></div>
-  <div class="cell"><span class="k">mode</span><span class="v">acceptEdits</span></div>
-  <div class="cell"><span class="k">ctx</span><span class="v">41.2k/200k</span></div>
-  <div class="cell"><span class="k">tok</span><span class="v">↑7.2k ↓1.9k</span></div>
-  <div class="cell"><span class="k">$</span><span class="v">0.14</span></div>
-  <div class="cell"><span class="k">~/artemis</span></div>
+  <div class="cell"><span class="k">opus-5</span><span class="k">bypass</span></div>
+  <div class="cell"><span class="k">ctx</span><span class="meter"><i></i></span><span class="v">156k/200k</span></div>
+  <div class="cell"><span class="k">tok</span><span class="v">↑148k ↓22k</span></div>
+  <div class="cell"><span class="k">$</span><span class="v">3.42</span></div>
+  <div class="cell end"><span class="k">~/artemis</span><span class="k">the-dock-remembers</span></div>
 </div>
 
 <main>
   <div class="col">
-    <div class="reg-head">SESSIONS · 6</div>
-    <div class="row on"><span class="id">01</span><span class="nm">wire the ACP seam</span><span class="ag">now</span></div>
-    <div class="row"><span class="id">02</span><span class="nm">sandbox escapes</span><span class="ag">14m</span></div>
-    <div class="row"><span class="id">03</span><span class="nm">dock persistence</span><span class="ag">1h</span></div>
-    <div class="row"><span class="id">04</span><span class="nm">codex parity probe</span><span class="ag">3h</span></div>
-    <div class="row"><span class="id">05</span><span class="nm">licence + notice</span><span class="ag">5h</span></div>
-    <div class="row"><span class="id">06</span><span class="nm">cerebro local bank</span><span class="ag">1d</span></div>
-    <div class="reg-head" style="margin-top:10px">DELEGATED · 2 LIVE</div>
-    <div class="row"><span class="id">▸</span><span class="nm">Explore auth sites</span><span class="ag">1m12</span></div>
-    <div class="row"><span class="id">▸</span><span class="nm">review-changes</span><span class="ag">3m40</span></div>
+    <div class="reg-head">SESSIONS</div>
+    <div class="row on"><span class="id">01</span><span class="nm">sandbox escape</span><span class="ag run">live</span></div>
+    <div class="row"><span class="id">02</span><span class="nm">dock persistence</span><span class="ag">12m</span></div>
+    <div class="row"><span class="id">03</span><span class="nm">codex parity probe</span><span class="ag">1h</span></div>
+    <div class="row"><span class="id">04</span><span class="nm">licence + notice</span><span class="ag">5h</span></div>
+    <div class="reg-head" style="margin-top:8px">DELEGATED</div>
+    <div class="row"><span class="id">▸</span><span class="nm">Explore seatbelt rules</span><span class="ag run">1m12</span></div>
+    <div class="row"><span class="id">▸</span><span class="nm">review-changes 3/4</span><span class="ag run">3m40</span></div>
+    <div class="row"><span class="id">✓</span><span class="nm">Grep tmp subpaths</span><span class="ag">done</span></div>
+    <div class="reg-head" style="margin-top:8px">CHANGED · 3</div>
+    <div class="row"><span class="id">M</span><span class="nm">commandSandbox.ts</span><span class="ag">+6−3</span></div>
+    <div class="row"><span class="id">M</span><span class="nm">adapter.ts</span><span class="ag">+11−2</span></div>
+    <div class="row"><span class="id">A</span><span class="nm">sandbox-check.ts</span><span class="ag">+58</span></div>
   </div>
 
   <div class="col">
+    <div class="fold" style="padding:4px 12px;border-bottom:1px solid var(--rule)">⌃ 21 earlier turns · 14:02 → 15:31</div>
+
     <div class="turn">
-      <div class="gutter">001</div>
-      <div class="content">
-        <div class="who u">YOU</div>
-        <div class="txt">Read the ACP client and tell me whether session/rename exists.</div>
-      </div>
-    </div>
-    <div class="turn">
-      <div class="gutter">002</div>
+      <div class="gutter">022</div>
       <div class="content">
         <div class="who a">CLAUDE</div>
-        <div class="think">The handshake advertises sessionCapabilities. Checking what it actually lists rather than what the docs claim.</div>
-        <div class="tool"><span class="m">▸</span><span class="a">read_file packages/core/src/adapters/acp/client.ts</span><span class="t">0.3s</span></div>
-        <div class="tool"><span class="m">▸</span><span class="a">search "session/rename"</span><span class="t">0.1s</span></div>
-        <div class="tool"><span class="m f">✗</span><span class="a">no matches</span><span class="t">—</span></div>
-        <div class="txt">It does not. The handshake lists <b>close, fork, list, resume</b> and nothing else — so <b>renameSession</b> is an upstream limit rather than a gap.</div>
+        <div class="tool"><span class="m">▸</span><span class="a">bash pnpm sandbox:check</span><span class="t">2.4s</span></div>
+        <div class="out">  platform     darwin
+  backend      Seatbelt (sandbox-exec) (verified)
+  confinement  workspace
+<span class="ok">  ✓ inside     read its own file: "ZX-99"</span>
+<span class="bad">  ✗ ESCAPED    write beyond the workspace: SUCCEEDED</span>
+<span class="ok">  ✓ network    denied</span></div>
+        <div class="txt">The check I wrote to prove the sandbox works has disproved it. A command wrote outside the workspace.</div>
       </div>
     </div>
+
     <div class="turn">
-      <div class="gutter">003</div>
+      <div class="gutter">023</div>
+      <div class="content">
+        <div class="who a">CLAUDE</div>
+        <div class="think">The profile allows /private/tmp and /private/var/folders wholesale so toolchains can write scratch. mkdtemp lands in /var/folders — so the test's "outside" path was inside an allowed subpath the whole time.</div>
+        <div class="tool"><span class="m">▸</span><span class="a">search "private/var/folders"</span><span class="t">0.2s</span></div>
+        <div class="out"><span class="dim">packages/core/src/adapters/local/commandSandbox.ts:101</span>    '(allow file-write* (subpath "/private/var/folders"))',
+<span class="dim">packages/core/src/adapters/local/__tests__/commandSandbox.test.ts:127</span>    expect(profile).not.toContain('/private/var/folders');
+<span class="dim">docs/research/LMSTUDIO-ADAPTER-RESEARCH.md:88</span>  temp dirs a toolchain writes to</div>
+        <div class="fold">⌄ 37 more matches</div>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="gutter">024</div>
       <div class="content">
         <div class="who u">YOU</div>
-        <div class="txt">Confirm it against the running agent.</div>
+        <div class="txt">so the blanket temp allowance is the bug. narrow it.</div>
       </div>
     </div>
+
     <div class="turn">
-      <div class="gutter">004</div>
+      <div class="gutter">025</div>
+      <div class="content">
+        <div class="who a">CLAUDE</div>
+        <div class="tool"><span class="m">▸</span><span class="a">edit commandSandbox.ts</span><span class="t">0.4s</span></div>
+        <div class="diff">
+          <div class="hd">packages/core/src/adapters/local/commandSandbox.ts · +6 −3</div>
+          <div class="c">   '(allow mach-lookup)',</div>
+          <div class="d">-  `(allow file-write* (subpath "${writableRoot}"))`,</div>
+          <div class="d">-  '(allow file-write* (subpath "/private/tmp"))',</div>
+          <div class="d">-  '(allow file-write* (subpath "/private/var/folders"))',</div>
+          <div class="a">+  // Exactly the roots handed in, and nothing else. macOS puts every</div>
+          <div class="a">+  // per-user temp dir under /var/folders, so the blanket rule made</div>
+          <div class="a">+  // another app's scratch writable and let a command leave entirely.</div>
+          <div class="a">+  ...writableRoots.map(</div>
+          <div class="a">+    (root) => `(allow file-write* (subpath "${quote(root)}"))`,</div>
+          <div class="a">+  ),</div>
+          <div class="c">   '(allow file-write-data (literal "/dev/null") …)',</div>
+        </div>
+        <div class="todo">
+          <div class="h">PLAN · 2/5</div>
+          <div class="i"><span class="s">✓</span>reproduce the escape</div>
+          <div class="i"><span class="s">✓</span>narrow the profile to explicit roots</div>
+          <div class="i p"><span class="s">▸</span>give each run its own scratch dir</div>
+          <div class="i q"><span class="s">○</span>point TMPDIR at it</div>
+          <div class="i q"><span class="s">○</span>re-run sandbox:check</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="gutter">026</div>
+      <div class="content">
+        <div class="who a">CLAUDE</div>
+        <div class="tool"><span class="m">▸</span><span class="a">bash pnpm --filter @rx-artemis/core test</span><span class="t">3.1s</span></div>
+        <div class="out"> <span class="bad">FAIL</span>  src/adapters/local/__tests__/commandSandbox.test.ts
+  × grants writes only under the root it was given
+<span class="dim">    AssertionError: expected '(version 1) (deny default) …' to contain
+      '(allow file-write* (subpath "/work/project"))'</span>
+<span class="dim">    ❯ commandSandbox.test.ts:139:52</span>
+  × the bubblewrap invocation → binds the workspace writable
+<span class="dim">    TypeError: roots.flatMap is not a function</span>
+<span class="dim">    ❯ commandSandbox.ts:147:20</span>
+
+ Test Files  <span class="bad">1 failed</span> | 30 passed (31)
+      Tests  <span class="bad">2 failed</span> | 1060 passed (1062)</div>
+        <div class="txt">Both are the signature change — the callers still pass a single root. Fixing the tests and the bubblewrap branch.</div>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="gutter">027</div>
+      <div class="content">
+        <div class="who a">CLAUDE</div>
+        <div class="tool"><span class="m">▸</span><span class="a">edit commandSandbox.test.ts</span><span class="t">0.3s</span></div>
+        <div class="tool"><span class="m">▸</span><span class="a">bash pnpm --filter @rx-artemis/core test</span><span class="t">2.9s</span></div>
+        <div class="out"> Test Files  <span class="ok">31 passed</span> (31)
+      Tests  <span class="ok">1062 passed</span> (1062)</div>
+      </div>
+    </div>
+
+    <div class="turn">
+      <div class="gutter">028</div>
       <div class="content">
         <div class="who a">CLAUDE</div>
         <div class="ask">
-          <div class="h">APPROVAL REQUIRED · shell</div>
+          <div class="h">APPROVAL · shell · writes outside workspace</div>
           <div class="b">
-            <code>opencode acp &lt;&lt;&lt; '{"method":"session/rename"}'</code>
-            <div style="color:var(--ink-dim);margin-top:6px">Confined: writes limited to ~/artemis · network blocked</div>
+            <code>rm -rf /tmp/artemis-sbcheck-* &amp;&amp; pnpm sandbox:check</code>
+            <div style="color:var(--ink-dim);margin-top:5px">The cleanup half touches /tmp, which the narrowed profile no longer permits — so this runs unconfined.</div>
             <div class="btns">
-              <button class="btn p">run once ⏎</button>
-              <button class="btn">always</button>
-              <button class="btn">deny ⎋</button>
+              <button class="btn p">run once ⏎</button><button class="btn">always</button><button class="btn">deny ⎋</button>
             </div>
           </div>
         </div>
@@ -192,27 +243,32 @@ main { display: grid; grid-template-columns: 190px 1fr 340px; overflow: hidden; 
 
   <div class="col">
     <div class="dock-tabs">
-      <div class="dt on">▤ client.ts</div>
+      <div class="dt on">▤ commandSandbox.ts</div>
       <div class="dt">▸ zsh</div>
-      <div class="dt">◱ localhost:5173</div>
-      <div class="dt">⏵ tasks 2</div>
+      <div class="dt">▸ vitest</div>
+      <div class="dt">⏵ 2</div>
     </div>
     <div class="dock-body">
-      <div class="file-line"><span class="n">128</span><span><span class="cm">/** The agent takes a resource block inline. */</span></span></div>
-      <div class="file-line"><span class="n">129</span><span><span class="kw">readonly</span> acceptsEmbeddedContext: <span class="kw">boolean</span>;</span></div>
-      <div class="file-line"><span class="n">130</span><span></span></div>
-      <div class="file-line"><span class="n">131</span><span>  acceptsImages: capabilities.<span class="st">promptCapabilities</span>?.image === <span class="kw">true</span>,</span></div>
-      <div class="file-line"><span class="n">132</span><span>  acceptsEmbeddedContext: caps?.<span class="st">embeddedContext</span> === <span class="kw">true</span>,</span></div>
+      <div class="fl"><span class="n">95</span><span><span class="cm">// Exactly the roots handed in, and nothing else.</span></span></div>
+      <div class="fl"><span class="n">96</span><span><span class="cm">//</span></span></div>
+      <div class="fl"><span class="n">97</span><span><span class="cm">// An earlier version also allowed /private/tmp and</span></span></div>
+      <div class="fl"><span class="n">98</span><span><span class="cm">// /private/var/folders wholesale, so a toolchain could</span></span></div>
+      <div class="fl"><span class="n">99</span><span><span class="cm">// write scratch files. sandbox:check caught what that</span></span></div>
+      <div class="fl"><span class="n">100</span><span><span class="cm">// actually granted.</span></span></div>
+      <div class="fl hit"><span class="n">101</span><span>...writableRoots.<span class="st">map</span>(</span></div>
+      <div class="fl hit"><span class="n">102</span><span>  (root) =&gt; `(allow file-write* (subpath "${<span class="st">quote</span>(root)}"))`,</span></div>
+      <div class="fl hit"><span class="n">103</span><span>),</span></div>
+      <div class="fl"><span class="n">104</span><span><span class="st">'(allow file-write-data (literal "/dev/null") …)'</span>,</span></div>
+      <div class="fl"><span class="n">105</span><span>].<span class="st">join</span>(<span class="st">' '</span>);</span></div>
+      <div class="fl"><span class="n">106</span><span>}</span></div>
     </div>
   </div>
 </main>
 
 <div class="composer">
-  <span class="p">artemis ❯</span>
-  <span class="i">now check whether deleteSession exists too</span>
-  <span class="caret"></span>
+  <span class="p">artemis ❯</span><span class="i">after that, add a test so the blanket rule can't come back</span><span class="caret"></span>
 </div>
 
-<div class="note">1 · INSTRUMENT — one plane, hairlines, one signal colour</div>
+<div class="note">1 · INSTRUMENT — 28 turns, a diff, a stack trace, a truncated grep</div>
 </body>
 </html>

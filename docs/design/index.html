@@ -29,6 +29,10 @@ h2 { font-size: 17px; font-weight: 600; margin: 3px 0 7px; letter-spacing: -0.01
 .sw { display: inline-flex; gap: 4px; vertical-align: -2px; margin-left: 6px; }
 .sw i { width: 11px; height: 11px; border-radius: 2px; display: block; }
 
+.hard { border: 1px solid var(--rule); border-left: 3px solid var(--mid); border-radius: 4px; padding: 15px 18px; margin: 20px 0 8px; color: var(--mid); font-size: 13.5px; }
+.hard b { color: var(--ink); font-weight: 550; }
+.hard .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px 16px; margin: 11px 0; font: 11.5px var(--mono); color: var(--dim); }
+.hard .grid b { font-weight: 400; color: var(--mid); }
 .foot { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--rule); color: var(--mid); font-size: 13px; max-width: 74ch; }
 .foot h3 { font-size: 13px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
 .foot ul { margin: 0 0 14px 18px; }
@@ -42,7 +46,22 @@ code { font: 12px var(--mono); color: var(--ink); }
   <h1>Five ways to look at it</h1>
   <p class="lede">Five <b>different layouts</b>, not five palettes on the same frame. The brief was that Artemis currently reads as a Claude Code / T3 / Codex clone, so each of these changes the <b>information architecture</b> first and the colour second. New palette in every one, higher contrast throughout, OKLCH structure kept.</p>
   <p class="lede">Nothing here is locked, and they are not meant to be ranked. The useful outcome is <b>which bets you like</b> — they can be mixed.</p>
-  <div class="meta">open each file directly · ~/artemis/docs/design/</div>
+  <div class="hard">
+    <b>Every mockup renders the same real session</b>, and it is one that actually happened — <code>sandbox:check</code> reporting an escape, the diagnosis, the fix, the re-run. The first pass at these was four turns and two tool calls, which proved nothing: nothing in it was hard to lay out.
+    <div class="grid">
+      <span>a <b>diff</b>, +6 −3</span>
+      <span>a <b>failing test run</b> with two stacks</span>
+      <span>a <b>grep with 40 hits</b>, truncated</span>
+      <span>a command that <b>failed, then a retry</b></span>
+      <span>a <b>todo list</b> mutating across turns</span>
+      <span><b>two delegated agents</b>, still running</span>
+      <span><b>28 turns</b>, scrolled mid-session</span>
+      <span>context at <b>78%</b></span>
+      <span>a <b>gate</b> on a command that runs unconfined</span>
+    </div>
+    Judge them on that load. Which still reads at turn 28 with a diff, a stack trace and a truncated grep on screen at once — and which you could work in for six hours.
+  </div>
+  <div class="meta">open each file directly · ~/artemis/docs/design/ · see _session.md</div>
 
   <a class="card" href="1-instrument.html">
     <div class="n">01</div>
