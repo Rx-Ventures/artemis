@@ -239,6 +239,23 @@ export interface FoldProps {
    * fold is stateless between mounts, exactly as it always was.
    */
   readonly rememberAs?: string;
+  /**
+   * Drive the fold from outside, taking over both the state and the memory.
+   *
+   * Pass this with {@link onOpenChange} and {@link defaultOpen} and
+   * {@link rememberAs} stop being consulted — the caller has said it knows
+   * better, and a second opinion held in here would only be able to disagree.
+   *
+   * There is one caller and it is worth naming, because "just use `useState`
+   * and compose `Collapsible` yourself" is otherwise the right answer: the
+   * thinking row's opening position is a *preference*, which the reader can
+   * move while looking at the row. `useFold` reads its default once per mount
+   * by design, and that row is never remounted when the switch flips. Handing
+   * it this rather than letting it rebuild the chevron and the header is what
+   * keeps every disclosure in the app opening the same way.
+   */
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
   readonly className?: string;
   readonly triggerClassName?: string;
   readonly contentClassName?: string;
@@ -267,17 +284,31 @@ export interface FoldProps {
  * back, so closing a work marker and switching sessions no longer hands the
  * reader back the marker they had just closed. Nothing about the render path
  * changes: the state still lives here, and the map is only consulted at mount.
+ *
+ * Or it lives with the caller — see {@link FoldProps.open}, which is the escape
+ * hatch for the one fold whose opening position is a setting rather than a fact
+ * about the row.
  */
+/** For a controlled fold handed no handler: read-only rather than broken. */
+function noop(): void {}
+
 export function Fold({
   summary,
   children,
   defaultOpen = false,
   rememberAs,
+  open: controlled,
+  onOpenChange,
   className,
   triggerClassName,
   contentClassName,
 }: FoldProps): ReactElement {
-  const [open, setOpen] = useFold(rememberAs, defaultOpen);
+  // Called unconditionally, as a hook must be, and then ignored in controlled
+  // mode. That costs one unread `useState` on the one fold that supplies its
+  // own; the alternative is two components with the same body.
+  const [uncontrolled, setUncontrolled] = useFold(rememberAs, defaultOpen);
+  const open = controlled ?? uncontrolled;
+  const setOpen = controlled === undefined ? setUncontrolled : (onOpenChange ?? noop);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={className}>
       <CollapsibleTrigger

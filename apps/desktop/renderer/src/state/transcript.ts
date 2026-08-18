@@ -194,6 +194,22 @@ export type TranscriptItem =
  * sage row, and burying it behind a marker would cost a click to reach the only
  * thing in there.
  *
+ * ## Unless the reader asked to watch it think
+ *
+ * All of that describes thinking as *machinery* — something to get out of the
+ * way of the answer. A reader who turns on the Appearance pane's thinking
+ * switch has said the opposite: the reasoning is the part they came for, and
+ * folding it away is the app hiding what they asked to see. So the switch makes
+ * thinking stop being machinery ({@link TranscriptModel.setThinkingFolds}), and
+ * a burst that was one marker becomes reasoning in the thread with markers
+ * between the paragraphs for the work.
+ *
+ * That does cost what the section above buys — `thinking / tool / thinking /
+ * tool` becomes a marker around each single call — and it is the right trade
+ * *given the switch*, because those markers are now one compact line between
+ * stretches of prose rather than the only thing on screen. It is also why this
+ * is a setting and not the default.
+ *
  * ## An artifact is never folded
  *
  * One kind of call is lifted out of the burst rather than hidden inside it: one
@@ -391,6 +407,15 @@ export class TranscriptModel {
   private artifactTest: ArtifactTest | null = null;
   private artifactVerdicts = new Map<string, boolean>();
 
+  /**
+   * Whether thinking counts as machinery, and so may be folded into a marker.
+   *
+   * True is the historical behaviour and the default, so a bare
+   * `new TranscriptModel()` folds exactly as it always did. See
+   * {@link ActivityGroup} for what the other setting is for.
+   */
+  private thinkingFolds = true;
+
   private listListeners = new Set<Listener>();
   private itemListeners = new Map<string, Set<Listener>>();
 
@@ -414,6 +439,26 @@ export class TranscriptModel {
     if (test === this.artifactTest) return;
     this.artifactTest = test;
     this.artifactVerdicts.clear();
+    this.structural = true;
+    this.markPending();
+  }
+
+  /**
+   * Decide whether thinking folds into markers or stands in the thread.
+   *
+   * Structural, and deliberately retroactive: flipping it rebuilds the rows a
+   * transcript already holds, so the blocks of the turn the reader is looking at
+   * come out of their markers rather than only the next turn's. A setting that
+   * took effect on future work would look, from the chair, like a setting that
+   * did nothing.
+   *
+   * Guarded on equality because every pane is told on every write of the
+   * preference, and the ones already in the asked-for state must not be made to
+   * rebuild and re-notify over a change that is not one.
+   */
+  setThinkingFolds(folds: boolean): void {
+    if (folds === this.thinkingFolds) return;
+    this.thinkingFolds = folds;
     this.structural = true;
     this.markPending();
   }
@@ -1093,10 +1138,17 @@ export class TranscriptModel {
     return { id, ids, ts: ts ?? 0, counts, thinking, running, failed, streaming };
   }
 
-  /** Whether a row is machinery — the thing runs are made of. */
+  /**
+   * Whether a row is machinery — the thing runs are made of.
+   *
+   * A tool call always is. Thinking is only machinery while it is allowed to
+   * fold; once the reader has asked to watch the model think it is content, and
+   * a run of work either side of it becomes two runs with reasoning in between.
+   */
   private isMachinery(id: string): boolean {
     const kind = this.items.get(id)?.kind;
-    return kind === 'tool' || kind === 'thinking';
+    if (kind === 'tool') return true;
+    return kind === 'thinking' && this.thinkingFolds;
   }
 
   /**
