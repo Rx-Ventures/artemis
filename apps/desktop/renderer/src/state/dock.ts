@@ -447,3 +447,109 @@ export function nextActiveTab(
   }
   return visible[0] as DockTab;
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* What survives a restart                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The dock's arrangement, as it goes into preferences.
+ *
+ * **An arrangement, not a session.** That distinction is the whole design here,
+ * and it is what makes each field honest about how much it can promise.
+ *
+ * A browser is a URL, and reopening one gets you the page you were on. A file
+ * and a preview are paths, and the same is true of them. A terminal is neither:
+ * its value is a live process and its scrollback, and a process does not
+ * survive the application exiting. So terminals are stored as a *count* — how
+ * many were open — and restored as fresh shells in the pane's directory. What
+ * comes back is the shape of the workspace, not the work.
+ *
+ * Storing a terminal's title would be the tempting mistake: a tab that says
+ * `vim` and holds a new `zsh` is worse than one that says `zsh`, because the
+ * first is a claim and the second is a fact.
+ */
+export interface DockLayout {
+  /** URLs of the browsers that were open, in tab order. */
+  readonly browsers: readonly string[];
+  /**
+   * How many terminals were open. A count and not a list, because nothing about
+   * a terminal survives except that it existed — see the note above.
+   */
+  readonly terminals: number;
+  /** Path of the file that was open in the viewer, if any. */
+  readonly file: string | null;
+  /** Path of the artifact that was previewed, if any. */
+  readonly preview: string | null;
+  /**
+   * Which tab was in front, by kind.
+   *
+   * A kind rather than a `DockTab`, because the ids inside one are minted at
+   * runtime — a stored `{ kind: 'terminal', id: 't3' }` would name a terminal
+   * that no longer exists. The kind is enough to put the right *sort* of tab in
+   * front, and `nextActiveTab` already handles the rest.
+   */
+  readonly activeKind: DockTab['kind'] | null;
+}
+
+/** Nothing open. What a machine with no stored layout restores. */
+export const EMPTY_DOCK_LAYOUT: DockLayout = {
+  browsers: [],
+  terminals: 0,
+  file: null,
+  preview: null,
+  activeKind: null,
+};
+
+/**
+ * Read a stored layout back, tolerating anything.
+ *
+ * Preferences are JSON a user can edit and a previous build wrote, so every
+ * field is checked rather than trusted. A malformed layout restores nothing,
+ * which is the state the app was in before this existed — never a reason to
+ * fail a launch.
+ */
+export function parseDockLayout(value: unknown): DockLayout {
+  if (typeof value !== 'object' || value === null) return EMPTY_DOCK_LAYOUT;
+  const raw = value as Record<string, unknown>;
+
+  const browsers = Array.isArray(raw['browsers'])
+    ? raw['browsers'].filter((url): url is string => typeof url === 'string' && url.length > 0)
+    : [];
+
+  const count = raw['terminals'];
+  // Clamped rather than trusted: a hand-edited `terminals: 9999` would spawn
+  // nine thousand shells on launch, which is a denial of service by typo.
+  const terminals =
+    typeof count === 'number' && Number.isFinite(count) && count > 0
+      ? Math.min(Math.floor(count), MAX_RESTORED_TERMINALS)
+      : 0;
+
+  const kind = raw['activeKind'];
+  const activeKind =
+    typeof kind === 'string' && (DOCK_TAB_KINDS as readonly string[]).includes(kind)
+      ? (kind as DockTab['kind'])
+      : null;
+
+  return {
+    browsers: browsers.slice(0, MAX_RESTORED_BROWSERS),
+    terminals,
+    file: typeof raw['file'] === 'string' && raw['file'].length > 0 ? raw['file'] : null,
+    preview: typeof raw['preview'] === 'string' && raw['preview'].length > 0 ? raw['preview'] : null,
+    activeKind,
+  };
+}
+
+/**
+ * Ceilings on what a restore will reopen.
+ *
+ * Not a guess at what is reasonable — a bound on what a corrupt or hostile
+ * preferences file can make the app do on launch. Reopening is the one thing
+ * that happens before the user can intervene.
+ */
+export const MAX_RESTORED_TERMINALS = 8;
+export const MAX_RESTORED_BROWSERS = 8;
+
+/** Every tab kind, for validating a stored one. */
+const DOCK_TAB_KINDS = ['preview', 'file', 'terminal', 'browser', 'tasks', 'agent'] as const;

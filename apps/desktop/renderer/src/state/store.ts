@@ -101,6 +101,11 @@ import {
   writeToTerminal,
 } from '../lib/terminalSessions';
 import {
+  EMPTY_DOCK_LAYOUT,
+  MAX_RESTORED_BROWSERS,
+  MAX_RESTORED_TERMINALS,
+  parseDockLayout,
+  type DockLayout,
   FILE_TAB,
   learnSessionId,
   nextActiveTab,
@@ -581,6 +586,14 @@ export interface AppState {
    * `activeProfileId`. See `quickModels`.
    */
   readonly quickModelIdsByProfile: Readonly<Record<ProfileId, readonly string[]>>;
+  /**
+   * The dock's arrangement as it was when the app last closed.
+   *
+   * Read once at boot by `restoreDockLayout` and otherwise inert — it is the
+   * *stored* shape, not the live one, and reading it for anything else would be
+   * reading a snapshot as though it were the truth.
+   */
+  readonly dockLayout: DockLayout;
   /** How wide the transcript column may grow. */
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
@@ -1178,6 +1191,7 @@ interface Prefs {
   pinnedCollapsed?: boolean;
   settingsSection?: SettingsSection;
   quickModelIdsByProfile?: Readonly<Record<string, readonly string[]>>;
+  dockLayout?: unknown;
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
@@ -1246,6 +1260,33 @@ function stringList(value: unknown): readonly string[] | undefined {
  * carried under a reserved key and resolved by {@link seedQuickModels} once the
  * profile list arrives.
  */
+/**
+ * What the dock looks like right now, in the form that survives a restart.
+ *
+ * Read off the *focused* pane rather than every one of them. A split window's
+ * two columns own two docks, and a stored layout that reopened both would have
+ * to remember which column each tab belonged to — through a restart in which
+ * pane identity is minted fresh. The focused column is the one the user was
+ * looking at, and restoring that is the honest ninety per cent.
+ */
+function captureDockLayout(state: AppState): DockLayout {
+  const paneId = state.focusedPaneId;
+  return {
+    browsers: state.browsers
+      .filter((record) => record.owner.paneId === paneId)
+      .map((record) => record.info.state.url)
+      .filter((url) => url.length > 0)
+      .slice(0, MAX_RESTORED_BROWSERS),
+    terminals: Math.min(
+      state.terminals.filter((record) => record.owner.paneId === paneId && !record.exited).length,
+      MAX_RESTORED_TERMINALS,
+    ),
+    file: state.file?.path ?? null,
+    preview: state.preview?.path ?? null,
+    activeKind: state.activeDockTab?.kind ?? null,
+  };
+}
+
 function quickModelMap(raw: Record<string, unknown>): Record<string, readonly string[]> {
   const value = raw['quickModelIdsByProfile'];
   const map: Record<string, readonly string[]> = {};
@@ -1345,6 +1386,7 @@ function loadPrefs(): Prefs {
     ...(raw as Prefs),
     settingsSection: oneOf(raw['settingsSection'], SETTINGS_SECTIONS),
     quickModelIdsByProfile: quickModelMap(raw),
+    dockLayout: parseDockLayout(raw['dockLayout']),
     // `setFastMode` / `setUltracode` keep these mutually exclusive, but that
     // only governs values this build writes. A file left behind by a build
     // whose exclusion lived in the controls, or one edited by hand, can carry
@@ -1443,6 +1485,7 @@ function savePrefs(): void {
     pinnedCollapsed: s.pinnedCollapsed,
     settingsSection: s.settingsSection,
     quickModelIdsByProfile: s.quickModelIdsByProfile,
+    dockLayout: captureDockLayout(s),
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     fontSize: s.fontSize,
@@ -1586,6 +1629,9 @@ function openPane(initial: SessionState): Pane {
 const firstPane = openPane(seedSession());
 
 export const useApp = create<AppState>(() => ({
+  // Empty rather than the stored layout: this is the state before preferences
+  // are read, and `applyPrefs` puts the real one in.
+  dockLayout: EMPTY_DOCK_LAYOUT,
   bridgeMode: 'unavailable',
   version: '',
   platform: 'darwin',
@@ -4535,6 +4581,57 @@ export async function bootstrap(): Promise<void> {
   // The first boot after the shortlist became per-profile. A no-op every time
   // after that, because consuming the sentinel is what removes it.
   seedQuickModels(useApp.getState().profiles);
+  // Last, and not awaited: the dock is the least important thing on screen at
+  // launch, and reopening a browser must not hold up the transcript.
+  void restoreDockLayout();
+}
+
+/**
+ * Put the dock back the way it was.
+ *
+ * Runs once, after the panes exist — a terminal is started in *the pane's*
+ * directory, which is restored from preferences a few lines above this, so the
+ * order matters and is not incidental.
+ *
+ * ## An arrangement, not a session
+ *
+ * A browser comes back to its URL and a file to its path, and those are the
+ * same things they were. A terminal is not: its process died with the app, so
+ * what returns is the same *number* of shells in the same directory, empty. The
+ * tabs are the workspace's shape rather than its contents, which is what every
+ * editor that restores a window also means by it.
+ *
+ * ## Failures are silent on purpose
+ *
+ * Every step can legitimately fail — a file the agent has since deleted, a
+ * directory that has moved, a page that will not load. None of them is worth a
+ * banner at launch: the user did not ask for this to happen, they asked for it
+ * *last time*, and a warning about a tab they may not have wanted back is worse
+ * than the tab quietly not appearing.
+ */
+async function restoreDockLayout(): Promise<void> {
+  const layout = useApp.getState().dockLayout;
+  const pane = focusedPane();
+
+  for (const url of layout.browsers) {
+    await openBrowser(pane, url).catch(() => undefined);
+  }
+  for (let i = 0; i < layout.terminals; i += 1) {
+    await openTerminal(pane).catch(() => undefined);
+  }
+  // A reference rather than a bare path: the viewer takes an optional line, and
+  // a restored file has no line to be at — the reader was not sent there, they
+  // left it open.
+  if (layout.file !== null) await openFile({ path: layout.file }).catch(() => undefined);
+  if (layout.preview !== null) await openPreview(layout.preview, pane).catch(() => undefined);
+
+  // Restored last, because every open above moves the front tab. The kind is
+  // matched rather than the exact tab: the ids inside a stored one were minted
+  // in a process that has exited.
+  const wanted = layout.activeKind;
+  if (wanted === null) return;
+  const match = useApp.getState().visibleDockTabs.find((tab) => tab.kind === wanted);
+  if (match) focusDockTab(match);
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
