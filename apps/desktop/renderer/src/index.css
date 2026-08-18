@@ -1187,3 +1187,92 @@
     animation: none;
   }
 }
+
+/*
+ * Syntax highlighting, in the app's own colours.
+ * ============================================================================
+ *
+ * `FileViewer` deferred highlighting partly because a theme "has to answer to
+ * both palettes". Shipping two of the library's themes and swapping them would
+ * answer it by adding a second source of truth for what a string looks like —
+ * one that drifts the first time either palette is touched.
+ *
+ * So the library's classes are mapped onto the tokens this app already has.
+ * There is nothing to switch: light and dark are already the two values of
+ * every variable below, so a file's colours change with the palette because
+ * they *are* the palette.
+ *
+ * Only the classes `highlight.js` actually emits for the registered languages
+ * are listed. A class with no rule inherits the body colour, which is the
+ * correct fallback — unstyled reads as plain text rather than as invisible.
+ */
+.hljs-comment,
+.hljs-quote {
+  color: var(--color-ink-faint);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-name {
+  color: var(--color-lunar);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--color-sage);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-variable,
+.hljs-template-variable {
+  color: var(--color-cyan);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-title.class_,
+.hljs-title.function_ {
+  color: var(--color-mint);
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-params {
+  color: var(--color-amber);
+}
+
+.hljs-attr,
+.hljs-property,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--color-ink);
+}
+
+.hljs-meta,
+.hljs-tag {
+  color: var(--color-ink-muted);
+}
+
+/* A diff is the one grammar whose colours mean something on their own. */
+.hljs-deletion {
+  color: var(--color-amber);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
