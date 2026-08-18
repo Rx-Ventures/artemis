@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import { CODEX_CAPABILITIES } from '../codex.js';
@@ -94,7 +94,17 @@ describe('describe()', () => {
     const registry = createProviderRegistry([fakeAdapter({ id: 'claude' })]);
     const descriptors = await registry.describe();
 
-    expect(descriptors.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode']);
+    // Every declared provider appears, registered or not — `lmstudio` is here
+    // and greyed out precisely because its adapter does not exist yet, which is
+    // the behaviour this test is named for.
+    expect(descriptors.map((d) => d.id)).toEqual([
+      'claude',
+      'codex',
+      'opencode',
+      'lmstudio',
+      'ollama',
+      'llamacpp',
+    ]);
     expect(descriptors[1]).toMatchObject({
       id: 'codex',
       label: 'Codex',
@@ -167,9 +177,10 @@ describe('describe()', () => {
 describe('createDefaultProviderRegistry', () => {
   it('ships with every declared provider registered, in PROVIDER_IDS order', () => {
     const registry = createDefaultProviderRegistry();
-    // OpenCode was the last id declared but unimplemented. With its adapter
-    // landed, `ProviderId` and the registry finally describe the same set.
-    expect(registry.list().map((a) => a.id)).toEqual(['claude', 'codex', 'opencode']);
+    // Asserted against PROVIDER_IDS rather than a copy of it, so declaring a
+    // provider without registering one fails here instead of silently shipping
+    // a row that greys itself out. That is the whole claim this test makes.
+    expect(registry.list().map((a) => a.id)).toEqual([...PROVIDER_IDS]);
   });
 
   it('gives Claude its real capability set', async () => {

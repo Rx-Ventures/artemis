@@ -36,6 +36,7 @@ import type { ClaudeAdapterOptions } from './claude.js';
 import { createCodexAdapter } from './codex.js';
 import type { CodexAdapterOptions } from './codex.js';
 import { createOpencodeAdapter } from './opencode.js';
+import { createLocalAdapter, LLAMA_CPP, LM_STUDIO, OLLAMA } from './local/adapter.js';
 import type { OpencodeAdapterOptions } from './opencode.js';
 import { adapterError } from './types.js';
 import type { AdapterAvailability, ProviderAdapter, ProviderRegistry } from './types.js';
@@ -45,6 +46,9 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  lmstudio: 'LM Studio',
+  ollama: 'Ollama',
+  llamacpp: 'llama.cpp',
 };
 
 /** Why a known provider is missing from this build. */
@@ -209,5 +213,10 @@ export function createDefaultProviderRegistry(
     createClaudeAdapter(options?.claude),
     createCodexAdapter(options?.codex),
     createOpencodeAdapter(options?.opencode),
+    // Three rows, one adapter. They differ in how you ask what models exist,
+    // not in how a turn runs — see `local/adapter.ts`.
+    createLocalAdapter(LM_STUDIO),
+    createLocalAdapter(OLLAMA),
+    createLocalAdapter(LLAMA_CPP),
   ]);
 }

@@ -79,26 +79,37 @@ is a matter of emptying the third.
   adding to it, and approximating an append with a replace would silently drop
   the coding-agent preset.
 
-**Unknown — nobody has checked, and this is the real v1 work:**
+**Unknown — resolved 2026-08-18, by driving both CLIs:**
 
-- Codex `subagents` / `subagentTranscripts` — does the app-server protocol expose
-  nested agents at all?
-- Codex `costReporting` — Codex reports tokens. Is a price knowable client-side
-  given ChatGPT-plan versus API-key billing?
-- Codex `permissionModes` — `auto` and `dontAsk` are absent. Deliberate, or
-  unmapped?
-- OpenCode `renameSession` / `deleteSession` — does ACP have the methods?
-- OpenCode `fileInput` — `imageInput` is advertised via
-  `promptCapabilities.image`; files are a separate mechanism and need staging
-  work.
-- OpenCode `subagents` — unexamined.
-- OpenCode `permissionModes` — only `plan` and `build` were verified. The more
-  permissive rungs were deliberately not mapped, which is correct, but whether
-  they *exist* is unresolved.
+Every one of the eight was interrogated. **Seven turned out to be upstream
+limits and one was a real bug** — though not the bug that was expected.
 
-**Real gaps** is currently empty, and stays empty until the probe pass moves
-things into it. That is not optimism — it is the honest state of a matrix nobody
-has interrogated since Codex landed.
+| Flag | What the probe found | Verdict |
+| --- | --- | :---: |
+| Codex `subagents` / `subagentTranscripts` | an unknown method makes the server enumerate all ~100 valid ones; none concerns delegation, and the experimental surface has none either | limit |
+| Codex `costReporting` | `account/usage/read` answers tokens and daily buckets, `account/rateLimits/read` adds plan windows and credits; neither carries a price | limit |
+| Codex `auto` / `dontAsk` | `dontAsk` denies where Codex's `never` proceeds — opposites; and `auto` would map to `on-request`, which `acceptEdits` already uses, so it would be two names for one behaviour | limit |
+| OpenCode `renameSession` | `session/rename` → *Method not found* | limit |
+| OpenCode `deleteSession` | `session/delete` → *Method not found* | limit |
+| OpenCode `subagents` | absent from `agentCapabilities`, no method | limit |
+| OpenCode `fileInput` | `promptCapabilities.embeddedContext: true` — **advertised**, but a `resource` block hangs the turn | limit, for now |
+| OpenCode `imageInput` | declared `true` and **never sent** — `createRun` passed a text block only | **bug, fixed** |
+
+The last row is the one worth the reading. The flag most likely to be wrong was
+not one of the `false` ones — it was a `true` that had never been exercised. An
+attached image was dropped in silence and the model answered about a picture it
+had never seen, which is the failure the adapter's own header warns about,
+sitting inside the adapter that warns about it.
+
+`fileInput` is the other lesson. The handshake advertises `embeddedContext`, the
+block was built, and sending it produced nothing for seven minutes while the
+same prompt without it finished in seconds. It was nearly shipped as `true` on
+the strength of the advertisement alone. It stays `false` with the evidence
+written down, and files are named in the prompt as unattachable so the model can
+say so rather than the user waiting on a run that never returns.
+
+**Real gaps: one, found and closed.** The rest of the matrix is upstream limits
+with the UI degrading correctly, which is the v1 bar met for both providers.
 
 ## Workstreams
 
