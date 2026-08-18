@@ -61,6 +61,9 @@ import type {
   SessionSummary,
 } from '@rx-artemis/protocol';
 
+import type { XdgRootSpec } from '../profiles/xdgFarm.js';
+export type { XdgRootSpec };
+
 /* -------------------------------------------------------------------------- */
 /* Environment                                                                */
 /* -------------------------------------------------------------------------- */
@@ -815,27 +818,27 @@ export interface ProviderCredentialSpec {
   readonly credentialEnvKeys: readonly string[];
 
   /**
-   * Further directories this provider keeps *outside* {@link configDirVar},
-   * as variable name → subpath beneath the profile directory.
+   * Generic XDG roots this provider resolves from, which must be stood in for
+   * rather than simply overridden.
    *
-   * Empty for a provider whose one variable moves everything, which is the
-   * happy case and the reason this is optional: `CLAUDE_CONFIG_DIR` and
-   * `CODEX_HOME` each relocate credential, config and history together, so
-   * there is nothing left over to name.
+   * Absent for a provider that names its own directory variable, which is the
+   * happy case: pointing `CLAUDE_CONFIG_DIR` at a profile affects Claude and
+   * nothing else on the machine.
    *
-   * OpenCode is why this exists. `XDG_DATA_HOME` moves the credential and
-   * `OPENCODE_CONFIG_DIR` moves the configuration, and a profile needs *both*
-   * or it gets isolated accounts sharing one config — every profile editing
-   * the same providers, endpoints and model settings, which reads as Artemis
-   * losing a setting rather than as two profiles agreeing.
+   * OpenCode is why this exists. It has no variable of its own — verified
+   * against `opencode debug paths`, its data, config, state and cache come
+   * purely from `XDG_*`, and `OPENCODE_CONFIG_DIR` moves none of them. So
+   * isolating a profile means overriding a variable belonging to the whole
+   * desktop, on a process that exists to spawn other programs: every tool the
+   * agent runs would inherit it and look for *its* state inside Artemis's
+   * profile directory.
    *
-   * These are set exactly like {@link configDirVar}: stripped from the
-   * inherited environment first, then written from the profile's own path. A
-   * variable listed here must therefore also appear in
-   * {@link credentialEnvKeys} if an inherited value would be harmful — being
-   * set here does not imply being scrubbed.
+   * Each entry is built into a stand-in directory — the provider's own entry
+   * real, every other entry a symlink back to where it actually lives — so one
+   * variable answers differently for the provider than for everything else.
+   * See `buildXdgFarm`.
    */
-  readonly profileDirVars?: Readonly<Record<string, string>>;
+  readonly xdgRoots?: readonly XdgRootSpec[];
 
   /** How the user authenticates a profile against {@link configDirVar}. */
   readonly signIn: ProviderSignInSpec;
@@ -849,14 +852,14 @@ export interface ProviderCredentialSpec {
  * that would override Artemis's own choices.
  *
  * Note that Artemis writes only the directory variables — the config directory
- * and any {@link ProviderCredentialSpec.profileDirVars} — and strips every
+ * and any {@link ProviderCredentialSpec.xdgRoots} — and strips every
  * credential variable unconditionally. There is no case in which a credential
  * variable is stripped and then written back.
  */
 export function managedEnvKeys(spec: ProviderCredentialSpec): readonly string[] {
   return [
     spec.configDirVar,
-    ...Object.keys(spec.profileDirVars ?? {}),
+    ...(spec.xdgRoots ?? []).map((root) => root.variable),
     ...spec.credentialEnvKeys,
   ];
 }

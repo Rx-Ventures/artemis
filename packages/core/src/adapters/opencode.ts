@@ -142,18 +142,42 @@ export const OPENCODE_CREDENTIALS: ProviderCredentialSpec = {
   // Not `OPENCODE_CONFIG_DIR` — see the module header.
   configDirVar: 'XDG_DATA_HOME',
   /**
-   * OpenCode splits what every other provider keeps together: `XDG_DATA_HOME`
-   * moves the credential, and configuration answers to its own variable. Set
-   * both, or profiles end up isolated by account and shared by config — every
-   * profile editing one set of providers, endpoints and model settings, which
-   * a user reads as Artemis losing a setting rather than as two profiles
-   * agreeing with each other.
+   * OpenCode names no directory variable of its own — verified against
+   * `opencode debug paths`, every path it uses comes from an `XDG_*` root, and
+   * `OPENCODE_CONFIG_DIR` moves none of them; it only adds a config *file* to
+   * read. So `XDG_DATA_HOME` above is doing the isolation, and it is a variable
+   * the whole desktop shares.
    *
-   * Pointed inside the profile's own directory, alongside the state
-   * `XDG_DATA_HOME` puts at `<profileDir>/opencode/`, so everything one
-   * profile owns is under one path that can be listed, backed up or deleted.
+   * Both roots are therefore stood in for rather than overridden. Data carries
+   * the credential and must be the profile's own; config carries the providers,
+   * endpoints and model settings, which two profiles were sharing until this
+   * existed. Everything else in either root — this machine has `claude` and
+   * `uv` under data, and `gh`, `fish` and a set of mode-600 credential files
+   * under config — is linked back where it belongs, so a tool the agent runs
+   * still finds its real state.
    */
-  profileDirVars: { OPENCODE_CONFIG_DIR: 'opencode-config' },
+  xdgRoots: [
+    {
+      variable: 'XDG_DATA_HOME',
+      defaultSubpath: '.local/share',
+      ownedEntry: 'opencode',
+      // The profile directory *is* the stand-in root, not a directory beneath
+      // it. `configDirVar` already points `XDG_DATA_HOME` here and the account
+      // already lives at `<profileDir>/opencode/`, so building the farm
+      // anywhere else would move `auth.json` out from under existing profiles
+      // and leave the sign-in command — which composes `configDirVar` directly
+      // — pointing somewhere runs no longer read.
+      farmSubpath: '.',
+    },
+    {
+      variable: 'XDG_CONFIG_HOME',
+      defaultSubpath: '.config',
+      ownedEntry: 'opencode',
+      // Config has no such constraint: nothing pointed at it before, so it can
+      // live in a named subdirectory rather than sharing the profile root.
+      farmSubpath: 'xdg-config',
+    },
+  ],
   credentialEnvKeys: OPENCODE_ENV_SCRUB_KEYS,
   signIn: {
     executable: DEFAULT_EXECUTABLE,

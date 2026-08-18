@@ -499,7 +499,14 @@ describe('toMetadata', () => {
  */
 const SPLIT_DIRS: ProviderCredentialSpec = {
   configDirVar: 'FAKE_DATA_HOME',
-  profileDirVars: { FAKE_CONFIG_DIR: 'fake-config' },
+  xdgRoots: [
+    {
+      variable: 'FAKE_CONFIG_DIR',
+      defaultSubpath: '.fake-config',
+      ownedEntry: 'fake',
+      farmSubpath: 'fake-config',
+    },
+  ],
   credentialEnvKeys: ['FAKE_API_KEY', 'FAKE_CONFIG_DIR'],
   signIn: {
     executable: 'fake',

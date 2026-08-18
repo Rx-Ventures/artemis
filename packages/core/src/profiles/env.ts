@@ -43,6 +43,7 @@ import type { Profile, ProfileMetadata } from '@rx-artemis/protocol';
 import { managedEnvKeys } from '../adapters/types.js';
 import type { ProviderCredentialSpec } from '../adapters/types.js';
 import { ProfileError } from './errors.js';
+import { buildXdgFarm } from './xdgFarm.js';
 
 /** Directory under the user-data dir that holds config dirs Artemis creates. */
 export const PROFILES_DIR_NAME = 'profiles';
@@ -243,12 +244,19 @@ export interface ResolveEnvOptions {
    * means a silently non-isolated session store.
    */
   readonly ensureConfigDir?: boolean;
+
 }
 
 /** Options for {@link resolveStoreEnv}. */
 export interface ResolveStoreEnvOptions {
   /** The provider's vocabulary, for its config-directory variable. */
   readonly credentials: ProviderCredentialSpec;
+  /**
+   * The host environment, for a provider whose isolation stands in for a
+   * generic XDG root — it says where the *real* root is. Omitted means "use the
+   * defaults under `HOME`", which is correct on a machine exporting none.
+   */
+  readonly hostEnv?: Readonly<Record<string, string | undefined>>;
   /**
    * Create the profile's config directory if it does not exist. Defaults to
    * **false** — the opposite of {@link resolveEnv}, because this is the read
@@ -277,31 +285,12 @@ export async function resolveStoreEnv(
   if (options.ensureConfigDir === true) {
     await mkdir(configDir, { recursive: true, mode: 0o700 });
   }
-  return { [options.credentials.configDirVar]: configDir, ...profileDirEnv(options.credentials, configDir) };
+  return {
+    [options.credentials.configDirVar]: configDir,
+    ...(await buildXdgFarm(options.credentials.xdgRoots ?? [], configDir, options.hostEnv ?? {})),
+  };
 }
 
-/**
- * The provider's extra profile directories, as environment.
- *
- * Separate from the config-directory variable only because that one is
- * mandatory and these are not — they are the same idea and are set the same
- * way. See {@link ProviderCredentialSpec.profileDirVars} for why a provider
- * would need a second one at all.
- *
- * Deliberately does not create the directories. The provider makes its own on
- * first write, and a config directory Artemis pre-created would be an empty
- * one the CLI then has to distinguish from a configured one.
- */
-function profileDirEnv(
-  credentials: ProviderCredentialSpec,
-  configDir: string,
-): Record<string, string> {
-  const extra: Record<string, string> = {};
-  for (const [name, subpath] of Object.entries(credentials.profileDirVars ?? {})) {
-    extra[name] = path.join(configDir, subpath);
-  }
-  return extra;
-}
 
 /**
  * Build the environment a run executes with.
@@ -369,11 +358,16 @@ export async function resolveEnv(
     await mkdir(configDir, { recursive: true, mode: 0o700 });
   }
   env[credentials.configDirVar] = configDir;
-  // Providers that keep configuration somewhere other than the directory that
-  // holds the credential. Written after the scrub loops above, and their names
-  // are in `managedEnvKeys`, so an inherited value is removed before this sets
-  // the profile's own — the same scrub-then-set order the config directory gets.
-  Object.assign(env, profileDirEnv(credentials, configDir));
+  // Providers with no directory variable of their own. Written after the scrub
+  // loops above and named in `managedEnvKeys`, so an inherited value is removed
+  // before the profile's own is set — the same scrub-then-set order the config
+  // directory gets. The *value* is a stand-in root rather than the profile
+  // itself; see `buildXdgFarm` for why overriding these outright would break
+  // every other tool the agent runs.
+  Object.assign(
+    env,
+    await buildXdgFarm(credentials.xdgRoots ?? [], configDir, options.baseEnv ?? {}),
+  );
 
   return env;
 }
