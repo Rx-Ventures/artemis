@@ -64,7 +64,8 @@ import {
   plansForProvider,
   profileColorProblem,
 } from '@rx-artemis/protocol';
-import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-artemis/protocol';
+import type { AuthStatusInfo, ProfileMetadata, ProviderId,
+  ProviderKind } from '@rx-artemis/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
 import { shortenPath } from '../lib/paths';
@@ -132,6 +133,18 @@ const POLL_INTERVAL_MS = 2_000;
  * only — the authoritative variable name lives on the adapter's
  * `ProviderCredentialSpec`, which the renderer never sees.
  */
+/**
+ * The two halves of the provider picker, in the order they are shown.
+ *
+ * Hosted first because that is what most people are here for, and local
+ * beneath it: a model on your own machine is the deliberate choice, not the
+ * default one.
+ */
+const PROVIDER_GROUPS: readonly { readonly kind: ProviderKind; readonly heading: string }[] = [
+  { kind: 'hosted', heading: 'Hosted — signed in to an account' },
+  { kind: 'local', heading: 'Local — a server on this machine' },
+];
+
 const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
   claude: '.claude',
   codex: '.codex',
@@ -996,6 +1009,9 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
     (s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId,
   );
   const homeDirName = CONVENTIONAL_CONFIG_DIR[providerId];
+  const activeKind = useApp(
+    (s) => s.providers.find((p) => p.id === providerId)?.kind ?? 'hosted',
+  );
 
   /**
    * Whether the user has taken ownership of the path.
@@ -1143,25 +1159,44 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             {editing ? null : (
               <Field>
                 <FieldLabel className="text-2xs text-ink-faint uppercase">Provider</FieldLabel>
-                <ButtonGroup>
-                  {providers.map((option) => (
-                    <ReasonButton
-                      key={option.id}
-                      type="button"
-                      size="sm"
-                      variant={option.id === providerId ? 'secondary' : 'outline'}
-                      aria-pressed={option.id === providerId}
-                      disabled={!option.available}
-                      disabledReason={option.unavailableReason}
-                      onClick={() => setChosenProvider(option.id)}
-                    >
-                      {option.label}
-                    </ReasonButton>
-                  ))}
-                </ButtonGroup>
+                {/*
+                  Split by `ProviderKind` rather than by a list kept here, so a
+                  new provider lands in the right half without this file being
+                  edited. The two halves are entered differently, which is the
+                  reason they are separated at all: a hosted profile is an
+                  account and a config directory, a local one is an address.
+                */}
+                {PROVIDER_GROUPS.map((group) => {
+                  const options = providers.filter(
+                    (option) => (option.kind ?? 'hosted') === group.kind,
+                  );
+                  if (options.length === 0) return null;
+                  return (
+                    <div key={group.kind} className="flex flex-col gap-1">
+                      <span className="text-2xs text-ink-faint">{group.heading}</span>
+                      <ButtonGroup>
+                        {options.map((option) => (
+                          <ReasonButton
+                            key={option.id}
+                            type="button"
+                            size="sm"
+                            variant={option.id === providerId ? 'secondary' : 'outline'}
+                            aria-pressed={option.id === providerId}
+                            disabled={!option.available}
+                            disabledReason={option.unavailableReason}
+                            onClick={() => setChosenProvider(option.id)}
+                          >
+                            {option.label}
+                          </ReasonButton>
+                        ))}
+                      </ButtonGroup>
+                    </div>
+                  );
+                })}
                 <FieldDescription className="text-2xs">
-                  Which CLI this account belongs to. It cannot be changed afterwards — the config
-                  directory below is that CLI's, and its own sign-in is what writes into it.
+                  {activeKind === 'local'
+                    ? 'Which server on this machine this profile talks to. There is nothing to sign in to — the profile is an address, and the server either answers or it does not.'
+                    : "Which CLI this account belongs to. It cannot be changed afterwards — the config directory below is that CLI's, and its own sign-in is what writes into it."}
                 </FieldDescription>
               </Field>
             )}
