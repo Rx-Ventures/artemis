@@ -17,10 +17,20 @@
  * can be offered honestly, and why it is one number rather than a font panel.
  *
  * The rest is genuinely a matter of taste and genuinely wired: how wide the
- * transcript column may grow, how much of the block at the end of a run it
- * keeps, whether the sidebar is showing, and which folders the menu above the
+ * transcript column may grow, whether the model's reasoning is in the thread or
+ * folded into the work it belongs to, how much of the block at the end of a run
+ * it keeps, whether the sidebar is showing, and which folders the menu above the
  * composer offers. All are persisted and all take effect the moment they are
  * set.
+ *
+ * The thinking switch is the largest of those and the one that had to earn the
+ * word "appearance", because it moves rows rather than restyling them: the
+ * transcript folds reasoning into the activity marker on the argument that it is
+ * context for the answer rather than the answer, and this is where a reader says
+ * that is not their argument. It is still appearance and not behaviour — nothing
+ * about the run changes, the blocks were always there — so it belongs here
+ * rather than beside the effort picker, which is the control that decides
+ * whether there is any reasoning to draw.
  *
  * The folder list is the one entry here that is not a preference but a *record*
  * — the app writes it as you work — which is exactly why it needs a pane: it is
@@ -58,6 +68,7 @@ import {
   setDockAutoOpen,
   setFontSize,
   setRunSummary,
+  setShowThinking,
   setSidebarCollapsed,
   setSidebarWidth,
   setStreamingWordFade,
@@ -366,12 +377,13 @@ export function AppearanceSection(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const wordFade = useApp((s) => s.streamingWordFade);
+  const showThinking = useApp((s) => s.showThinking);
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -386,6 +398,40 @@ export function AppearanceSection(): ReactElement {
           choices={WIDTHS}
           onChange={setConversationWidth}
         />
+      </SettingsGroup>
+
+      <SettingsGroup label="Thinking">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Show the model’s reasoning</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Reasoning lands in the conversation as it is written, in muted text beside a sage
+                rule so it never reads as the answer. Off, it stays where it has always been —
+                folded into the activity marker with the work it was reasoning about, one click
+                away. Either way a single block can be collapsed on its own, and moving this
+                rearranges the conversation already on screen rather than only the next one.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-show-thinking"
+                aria-label="Show the model’s reasoning"
+                checked={showThinking}
+                onCheckedChange={setShowThinking}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+        <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
+          {/* Said here rather than left to be discovered, because the switch is
+              the obvious thing to blame for an empty transcript: it governs
+              where thinking is drawn, and cannot conjure a block the provider
+              never sent. */}
+          Only shows what the provider sends. A model set to a low thinking effort, or one that
+          encrypts its reasoning, has little or nothing to show — the effort is set beside the model
+          in the status line.
+        </p>
       </SettingsGroup>
 
       <SettingsGroup label="Run summary">

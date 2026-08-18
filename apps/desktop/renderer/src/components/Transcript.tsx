@@ -159,6 +159,7 @@ import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
 import { useFold } from '../hooks/useFold';
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
+import { recallFold, rememberFold } from '../lib/foldMemory';
 import { formatBytes } from '../lib/attachments';
 import { detectArtifact } from '../lib/artifact';
 import { detectFileEdit } from '../lib/diff';
@@ -672,6 +673,9 @@ function thinkingPreview(item: ThinkingItem): string {
   return oneLine(item.text, 64) || 'thinking…';
 }
 
+/** What a withheld block says instead of itself. */
+const REDACTED = 'This thinking block was encrypted or withheld by the provider.';
+
 /**
  * The block itself, in the same sage well wherever it is opened from.
  *
@@ -680,48 +684,128 @@ function thinkingPreview(item: ThinkingItem): string {
  * rule as every other stretch of prose in the pane. The sage well and the 11px
  * size are what mark it as private and secondary; the typeface was never
  * carrying that and only made it harder to skim.
+ *
+ * This is the treatment for a block someone went and *opened* — inside a marker,
+ * or by clicking a collapsed row. Thinking the reader asked to have on screen
+ * permanently is {@link ThinkingProse}, and is a different shape for a reason
+ * given there.
  */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
   return (
     <div className="rounded-md border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
-      {item.redacted ? 'This thinking block was encrypted or withheld by the provider.' : item.text}
+      {item.redacted ? REDACTED : item.text}
+    </div>
+  );
+}
+
+/**
+ * The same block when the reader has asked to watch the model think.
+ *
+ * A well is the wrong container for this one. A well says "output, parked here,
+ * open it if you want it" — right for a block behind a fold, wrong for the
+ * thing the reader turned a setting on to read, and at the length real
+ * reasoning runs to it becomes a grey slab between every pair of sentences the
+ * agent actually said. So the box goes and a sage rule down the left stays:
+ * enough to mark the column as an aside, nothing that has to be got past.
+ *
+ * Muted rather than sage, and this is the part the setting promises. Sage is a
+ * *label* colour in this pane — it says "thinking" in the gutter and tints the
+ * fold — and a whole paragraph of it reads as emphasis, which is the opposite
+ * of the claim. `--ink-muted` is the app's word for "secondary text", so a
+ * reader scanning the column can tell reasoning from answer without reading
+ * either. The rule keeps the hue where it costs nothing.
+ *
+ * 12px, one step under the 13px the answer is set in and one over the 11px of
+ * the chrome. The folded treatments can be 11px because nobody reads a fold;
+ * this is prose someone opted into and has to hold up over a screenful.
+ *
+ * No `StreamingText` and no markdown, deliberately, per rules 3 and 4 in the
+ * header: the text grows in place as the model writes it, which is the whole
+ * request, and it costs one text node per flush rather than a parse.
+ */
+function ThinkingProse({ item }: { readonly item: ThinkingItem }): ReactElement {
+  return (
+    <div className="border-l-2 border-sage/30 py-0.5 pl-3 text-xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
+      {item.redacted ? REDACTED : item.text}
     </div>
   );
 }
 
 /**
  * Thinking that stands on its own — the reasoning before an answer, with no
- * tool call anywhere near it.
+ * tool call anywhere near it, or every block once the Appearance switch is on.
  *
  * Kept as a bare fold on the spine rather than the card {@link ThinkingCard}
  * draws, because the two are in different places and want different weight: a
  * lone thinking block is one row in the thread, while a block inside an
  * expanded marker is a sibling of the tool cards around it and has to look like
  * one. The model decides which case this is; see `ActivityGroup`.
+ *
+ * The switch decides which way the fold opens, and the collapsed line is worth
+ * keeping either way: it is how a reader who wants the reasoning in general
+ * gets past the one block that turned out to be four thousand words about a
+ * typo.
  */
 function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
+  const shown = useApp((s) => s.showThinking);
+  /*
+   * The one fold in the app that holds its own state, and hands it to `Fold`
+   * rather than letting `useFold` keep it. What `useFold` cannot do is re-seed:
+   * its default is read once per mount, which is exactly right for a fold whose
+   * default is a fact about the block, and wrong here, where the default is a
+   * switch the reader can move while looking at the row. A standalone thinking
+   * row keeps its id when the switch flips and so is never remounted — it would
+   * have sat there closed while the pane rearranged around it, the setting
+   * looking broken at the precise moment it is being tried.
+   *
+   * So: remembered choice first, then the switch — and the switch *moving* is
+   * itself an instruction, which is what the adjustment below says. It is the
+   * React-documented shape for state derived from a changing input (no effect,
+   * no second paint), and it means a per-block click wins until the reader
+   * makes a statement about all of them.
+   */
+  const [open, setOpen] = useState(() => recallFold(item.id) ?? shown);
+  const [wasShown, setWasShown] = useState(shown);
+  if (wasShown !== shown) {
+    setWasShown(shown);
+    setOpen(shown);
+  }
+
+  const toggle = (next: boolean): void => {
+    setOpen(next);
+    // The same key {@link ThinkingCard} writes, so a block that moves between
+    // the two renderings keeps the reader's choice. It is one thinking block
+    // either way, and the model decides which shape it takes.
+    rememberFold(item.id, next);
+  };
+
   return (
     <Line label="thinking" tone="sage" ts={item.ts}>
-      {/* Collapsed by default: thinking is context for the answer, not the
-          answer, and expanded by default it buries every other row. Opened by
-          hand it stays open, keyed by the block's own id — which is the same key
-          {@link ThinkingCard} uses, so a block that moves between the two
-          renderings keeps the reader's choice. It is one thinking block either
-          way, and the model decides which shape it takes. */}
       <Fold
-        rememberAs={item.id}
+        open={open}
+        onOpenChange={toggle}
         triggerClassName="text-2xs"
         summary={
           <span className="flex min-w-0 items-center gap-1.5 text-sage/80">
             <BrainIcon className="size-3 shrink-0" aria-hidden="true" />
-            {/* An excerpt of the prose below, so it is set in the prose face —
-                unlike a tool row's preview, which is a real command. */}
-            <span className="truncate text-2xs">{thinkingPreview(item)}</span>
+            {/* Open, the excerpt would be the next line repeated — so the header
+                falls back to naming itself, the way the card's does. Closed, the
+                excerpt is the only thing saying what is in there, and it is set
+                in the prose face because it is prose, unlike a tool row's
+                preview, which is a real command. */}
+            {open ? (
+              <span className="shrink-0 font-mono text-2xs tracking-wider uppercase">thinking</span>
+            ) : (
+              <span className="truncate text-2xs">{thinkingPreview(item)}</span>
+            )}
             {item.streaming ? <StatusDot tone="sage" pulse /> : null}
           </span>
         }
       >
-        <ThinkingBody item={item} />
+        {/* The reader asking for reasoning in general is what earns it the prose
+            treatment; a block prised open out of curiosity is still output being
+            inspected, and keeps the well. */}
+        {shown ? <ThinkingProse item={item} /> : <ThinkingBody item={item} />}
       </Fold>
     </Line>
   );

@@ -398,6 +398,82 @@ describe('TranscriptModel activity groups', () => {
     expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
   });
 
+  /*
+   * The Appearance pane's thinking switch, at the level that actually moves the
+   * rows. Everything visible about that setting rests on `isMachinery` changing
+   * its mind, so these pin the two halves separately: that thinking leaves the
+   * fold, and that the *work* keeps folding once it has.
+   */
+  describe('with thinking shown rather than folded', () => {
+    it('lifts the reasoning out of the burst and folds the work around it', () => {
+      const model = build();
+      model.setThinkingFolds(false);
+      for (const event of stream(
+        thought('m1', 0, 'where does this live'),
+        ...call('c1', 'Grep'),
+        ...call('c2', 'Grep'),
+        thought('m1', 1, 'now the other file'),
+        ...call('c3', 'Read'),
+      )) {
+        model.apply(event);
+      }
+
+      // Reasoning in the thread, and the calls between two thoughts still one
+      // marker each — the fold is narrowed, not abandoned. A regression that
+      // dropped the grouping entirely would give five rows here.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1', 'g:t:c3']);
+      expect(model.getGroup('g:t:c1')?.counts).toEqual({ search: 2 });
+      expect(model.getGroup('g:t:c1')?.thinking).toBe(0);
+    });
+
+    it('rearranges the transcript it already holds, not just the next turn', () => {
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'where does this live'),
+        ...call('c1', 'Grep'),
+        thought('m1', 1, 'now the other file'),
+      )) {
+        model.apply(event);
+      }
+      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
+
+      const onList = vi.fn();
+      model.subscribeList(onList);
+      model.setThinkingFolds(false);
+
+      // The whole reason this is structural: a reader who flips the switch is
+      // looking at the turn they want unfolded, and a setting that only applied
+      // to future work would read as one that did nothing.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1']);
+      expect(onList).toHaveBeenCalled();
+    });
+
+    it('folds it all back when the switch goes off again', () => {
+      const model = build();
+      model.setThinkingFolds(false);
+      for (const event of stream(thought('m1', 0, 'hmm'), ...call('c1', 'Bash'))) {
+        model.apply(event);
+      }
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+
+      model.setThinkingFolds(true);
+      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
+      expect(model.getGroup('g:k:m1:0')?.thinking).toBe(1);
+    });
+
+    it('says nothing when told what it already knew', () => {
+      const model = build();
+      for (const event of stream(...call('c1', 'Bash'))) model.apply(event);
+
+      const onList = vi.fn();
+      model.subscribeList(onList);
+      // Every pane is told on every write of the preference, so the ones already
+      // in the asked-for state must not rebuild and re-notify over a non-change.
+      model.setThinkingFolds(true);
+      expect(onList).not.toHaveBeenCalled();
+    });
+  });
+
   it('creates the block on the delta that first carries text', () => {
     const model = build();
     for (const event of stream(thought('m1', 0, ''), thought('m1', 0, 'here it is'))) {

@@ -130,6 +130,7 @@ import {
   paneState,
   setHostPlatform,
   setPaneState,
+  setThinkingFolds,
   type MirroredState,
   type Pane,
   type PaneId,
@@ -592,6 +593,23 @@ export interface AppState {
    * exactly as the model sends it — no pacing, no per-word elements.
    */
   readonly streamingWordFade: boolean;
+
+  /**
+   * Whether the model's reasoning is shown in the thread as it arrives.
+   *
+   * Off by default, which is the transcript's own argument: thinking is context
+   * for the answer rather than the answer, so it folds into the activity marker
+   * with the work it was reasoning about and opens on a click. See
+   * `ActivityGroup` in `state/transcript.ts` for why that is the default.
+   *
+   * On is the reader saying the reasoning is what they came for. It changes two
+   * things together, because either alone is half a setting: the blocks stop
+   * being machinery, so they stand in the conversation instead of inside a
+   * marker, and they render open — muted prose that streams as the model writes
+   * it. Both are retroactive, so the turn already on screen rearranges when the
+   * switch moves rather than only the next one.
+   */
+  readonly showThinking: boolean;
 
   /**
    * Whether the dock may open, or grow a tab, without the user asking.
@@ -1155,6 +1173,7 @@ interface Prefs {
   fontSize?: number;
   theme?: Theme;
   streamingWordFade?: boolean;
+  showThinking?: boolean;
   dockAutoOpen?: boolean;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
@@ -1256,6 +1275,7 @@ function loadPrefs(): Prefs {
     // change it and nothing happens.
     theme: oneOf(raw['theme'], THEMES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
+    showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1340,6 +1360,7 @@ function savePrefs(): void {
     fontSize: s.fontSize,
     theme: s.theme,
     streamingWordFade: s.streamingWordFade,
+    showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1381,6 +1402,19 @@ applyFontScale(initialFontSize);
  */
 const initialTheme = prefs.theme ?? DEFAULT_THEME;
 applyTheme(initialTheme);
+
+/*
+ * And the same shape again for the thinking switch, which has to be settled
+ * before `firstPane` below rather than in `bootstrap`.
+ *
+ * A pane's transcript is told how to fold when it is minted, so a value pushed
+ * down after the first pane exists would leave that pane — the one the app
+ * opens into — folding the reasoning away until something else caused a
+ * rebuild. Reading the preference here, above the pane, is what makes the app
+ * open in the state it was left in.
+ */
+const initialShowThinking = prefs.showThinking ?? false;
+setThinkingFolds(!initialShowThinking);
 
 /**
  * The state a brand-new column starts from.
@@ -1498,6 +1532,10 @@ export const useApp = create<AppState>(() => ({
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
+  // Resolved above, because the pane layer had to be told before the first
+  // transcript existed. Same constant, so the switch and the fold cannot
+  // disagree about what was restored.
+  showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
 
@@ -5637,6 +5675,33 @@ export function setFontSize(size: number): void {
 export function setStreamingWordFade(on: boolean): void {
   useApp.setState({ streamingWordFade: on });
   savePrefs();
+}
+
+/**
+ * Show the model's reasoning in the thread, or fold it back into the markers.
+ *
+ * Written in three places because the setting has three audiences, and leaving
+ * any one out is a switch that half works:
+ *
+ *  - **the store**, which is what the rows read to decide whether to render
+ *    themselves open;
+ *  - **every transcript already on screen**, whose rows have to be regrouped;
+ *  - **the pane layer**, for the columns that do not exist yet.
+ *
+ * The middle one is two lists rather than one, and the second is easy to miss.
+ * `allLivePanes` is the conversations — on a column or backgrounded, and
+ * `allPanes` would drop the latter, so a column the reader comes back to would
+ * disagree with the one they set this from. An open agent tab is neither: it is
+ * an off-grid pane in `agentViews` holding a subagent's transcript, drawn by the
+ * same `Transcript` component, and left out of this it is the one place in the
+ * window where the switch appears not to work.
+ */
+export function setShowThinking(on: boolean): void {
+  useApp.setState({ showThinking: on });
+  savePrefs();
+  setThinkingFolds(!on);
+  for (const pane of allLivePanes()) pane.transcript.setThinkingFolds(!on);
+  for (const view of useApp.getState().agentViews) view.pane.transcript.setThinkingFolds(!on);
 }
 
 /**
