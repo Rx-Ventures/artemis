@@ -12,6 +12,7 @@ import {
   validateRunsStart,
   validateSessionsList,
   validateSessionsListAll,
+  validateCerebroSetEnabled,
   validateSessionsSubagentMessages,
   validateTerminalClose,
   validateTerminalList,
@@ -900,5 +901,35 @@ describe('validateSessionsSubagentMessages', () => {
     expect(
       validateSessionsSubagentMessages({ ...base, sessionStore: { load: 'evil' }, dir: '/etc' }),
     ).toEqual(base);
+  });
+});
+
+/**
+ * The Cerebro master switch.
+ *
+ * The invariant worth a test is that neither direction has a default: a call
+ * that omits the field must be refused rather than resolved, because guessing
+ * `true` would opt a machine into writing to a repository the team shares, and
+ * guessing `false` would silently undo an opt-in the user made.
+ */
+describe('validateCerebroSetEnabled', () => {
+  it('takes the state it is given, both ways', () => {
+    expect(validateCerebroSetEnabled({ enabled: true })).toEqual({ enabled: true });
+    expect(validateCerebroSetEnabled({ enabled: false })).toEqual({ enabled: false });
+  });
+
+  it('refuses a call that does not say which', () => {
+    expect(() => validateCerebroSetEnabled({})).toThrow(ValidationError);
+  });
+
+  it('refuses a truthy stand-in for the boolean', () => {
+    // `'true'`, `1` and `'on'` all read as yes to a looser check, and the one
+    // that gets through is an opt-in nobody made.
+    expect(() => validateCerebroSetEnabled({ enabled: 'true' })).toThrow(ValidationError);
+    expect(() => validateCerebroSetEnabled({ enabled: 1 })).toThrow(ValidationError);
+  });
+
+  it('rebuilds the request, so nothing extra reaches main', () => {
+    expect(validateCerebroSetEnabled({ enabled: true, root: '/etc' })).toEqual({ enabled: true });
   });
 });

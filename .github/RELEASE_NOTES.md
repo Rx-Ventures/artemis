@@ -1,6 +1,84 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 0.20.0
+
+- **Watch the model think, if that is what you came for.** Thinking folds into
+  the activity marker with the calls it was reasoning about, which is right when
+  reasoning is context for the answer and wrong when it is the thing you have
+  the app open to see — it put the interesting part behind two clicks. There is
+  a switch in Appearance now, off by default. On, a burst becomes reasoning in
+  the thread with markers between the paragraphs for the work, and the blocks
+  render open as muted prose, growing as the model writes them. It applies to
+  the conversation already on screen, so you can flip it and look rather than
+  flip it and wonder. A single block you would rather not read still collapses
+  on its own, and stays that way.
+
+- **A conversation no longer stops dead while you look at something else.** With
+  Artemis behind another window — minimised, covered, on another Space — the
+  transcript could freeze while the agent carried on working, and then deliver
+  everything in one burst when you came back, reloaded, or stopped and started
+  the session. The moment you most needed to follow was the moment all of it
+  arrived at once.
+
+  Two separate causes, both now fixed. The transcript batched its updates onto
+  an animation frame, and a window that is not being drawn is never given one —
+  so the batch was never applied and every later update queued behind it. And
+  re-attaching after a reload held each conversation's live events while it read
+  that conversation's history back, one after another, with no time limit: the
+  more sessions you had running, the longer the last of them stayed silent.
+  Anyone working across several accounts saw this most, because switching
+  between them is what triggers the heavy history reads.
+
+## What's new in 0.19.0
+
+- **A conversation that is still working keeps its column.** Leaving one —
+  clicking another session, closing a pane — could throw it away outright: the
+  bow went to rest, the workflow tab shut, and the button that reopens it sat
+  disabled with nothing to show. The agent never stopped; sending it any
+  message brought the whole thing back. The cause was that a window decided
+  "finished" from its own delegated rows, and those rows stop arriving the
+  moment the launching turn ends — which is exactly when a workflow starts
+  outliving it. The main process always knew, and can now be asked, so the
+  sidebar keeps marking work that has outlived its turn and a column is set
+  aside rather than destroyed. Anyone running several accounts at once hit this
+  hardest, because switching between them is all navigation.
+
+- **A window in the background keeps its clocks running.** Timers were being
+  throttled to roughly once a minute whenever Artemis was not the front window,
+  which stalled the delegated-agent view and the history feed for precisely as
+  long as you were looking at something else. Coming back showed a frozen
+  indicator over an agent that had been working the whole time.
+
+## What's new in 0.18.0
+
+- **Cerebro waits to be asked.** Having the bank cloned on this machine was
+  being read as consent to it: every run start synced it — promoting drafts and
+  opening pull requests against a repository the whole team shares — and its
+  prompt spent context on every run of every profile. There is a switch now, at
+  the top of Settings → Cerebro, and it is **off**. Turning it on wires every
+  profile back up and syncs once; turning it off unwires them, so the
+  instruction block, the `/cerebro` command and the session-start hook come out
+  rather than staying live for a stock Claude Code on the same machine. The
+  built-in Cerebro prompt follows the switch instead of carrying one of its own
+  — your preference on that row is kept, it simply is not sent while the bank
+  is off.
+
+  **If you already had Cerebro working, it goes quiet until you throw the
+  switch.** That is the point of the default, not a migration gap.
+
+## What's new in 0.17.1
+
+- **The Delegated pane opens when you ask for it.** Turning off *Open on its
+  own* was taking the header's Delegated button with it: with agents working,
+  the button lit up and pressing it did nothing at all — and since a subagent's
+  transcript is reachable only from those rows, nothing delegated could be
+  watched at all while the setting was off. The rows were never lost, only
+  undrawable. The delegated tab is the one surface in the dock with two
+  origins — it arrives with the work, and it opens on a press — and the strip
+  now tells the two apart. Delegated work still opens nothing by itself; a
+  press opens it, and its ✕ hands the setting back.
+
 ## What's new in 0.17.0
 
 - **The team memory bank starts pulling its weight.** Cerebro's sync now runs

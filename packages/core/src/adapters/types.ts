@@ -973,6 +973,31 @@ export interface ProviderAdapter {
   createRun(input: ResolvedRunInput): Promise<Run>;
 
   /**
+   * Conversations this adapter is still holding background work for.
+   *
+   * Optional, and the honest default for a provider that has no notion of work
+   * outliving a turn is to omit it: an empty array from an adapter that *could*
+   * answer means "nothing is running", and one from an adapter that cannot
+   * would be a claim it has no business making. Absent reads as "no opinion",
+   * and the caller falls back to what it can see for itself.
+   *
+   * ## Why a caller cannot work this out
+   *
+   * `background.tasks` is a run event, so it stops arriving when the run ends —
+   * and a backgrounded subagent, a workflow or a registered schedule routinely
+   * outlives by minutes the turn that launched it. That leaves a window's
+   * delegated rows frozen at the last moment a turn was open, which is precisely
+   * the interval in which the interesting thing happens. Anything decided from
+   * those rows in that interval is a guess: the sidebar's working marker, and —
+   * far more expensively — whether a column may be thrown away.
+   *
+   * **Synchronous on purpose.** The answer is in memory, it is asked on a poll,
+   * and a promise here would put a round trip in front of a fact the adapter
+   * already holds. It must not spawn anything or touch the filesystem.
+   */
+  sessionsHoldingWork?(): readonly SessionId[];
+
+  /**
    * List historical sessions.
    *
    * Present **iff** {@link Capabilities.listSessions} is true. A provider that

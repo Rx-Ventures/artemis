@@ -3,6 +3,7 @@ import type { AgentEvent, ToolEndStatus } from '@rx-artemis/protocol';
 import {
   TranscriptModel,
   isGroupId,
+  frameScheduler,
   syncScheduler,
   type AssistantItem,
   type ToolItem,
@@ -398,6 +399,82 @@ describe('TranscriptModel activity groups', () => {
     expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
   });
 
+  /*
+   * The Appearance pane's thinking switch, at the level that actually moves the
+   * rows. Everything visible about that setting rests on `isMachinery` changing
+   * its mind, so these pin the two halves separately: that thinking leaves the
+   * fold, and that the *work* keeps folding once it has.
+   */
+  describe('with thinking shown rather than folded', () => {
+    it('lifts the reasoning out of the burst and folds the work around it', () => {
+      const model = build();
+      model.setThinkingFolds(false);
+      for (const event of stream(
+        thought('m1', 0, 'where does this live'),
+        ...call('c1', 'Grep'),
+        ...call('c2', 'Grep'),
+        thought('m1', 1, 'now the other file'),
+        ...call('c3', 'Read'),
+      )) {
+        model.apply(event);
+      }
+
+      // Reasoning in the thread, and the calls between two thoughts still one
+      // marker each — the fold is narrowed, not abandoned. A regression that
+      // dropped the grouping entirely would give five rows here.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1', 'g:t:c3']);
+      expect(model.getGroup('g:t:c1')?.counts).toEqual({ search: 2 });
+      expect(model.getGroup('g:t:c1')?.thinking).toBe(0);
+    });
+
+    it('rearranges the transcript it already holds, not just the next turn', () => {
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'where does this live'),
+        ...call('c1', 'Grep'),
+        thought('m1', 1, 'now the other file'),
+      )) {
+        model.apply(event);
+      }
+      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
+
+      const onList = vi.fn();
+      model.subscribeList(onList);
+      model.setThinkingFolds(false);
+
+      // The whole reason this is structural: a reader who flips the switch is
+      // looking at the turn they want unfolded, and a setting that only applied
+      // to future work would read as one that did nothing.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1']);
+      expect(onList).toHaveBeenCalled();
+    });
+
+    it('folds it all back when the switch goes off again', () => {
+      const model = build();
+      model.setThinkingFolds(false);
+      for (const event of stream(thought('m1', 0, 'hmm'), ...call('c1', 'Bash'))) {
+        model.apply(event);
+      }
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+
+      model.setThinkingFolds(true);
+      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
+      expect(model.getGroup('g:k:m1:0')?.thinking).toBe(1);
+    });
+
+    it('says nothing when told what it already knew', () => {
+      const model = build();
+      for (const event of stream(...call('c1', 'Bash'))) model.apply(event);
+
+      const onList = vi.fn();
+      model.subscribeList(onList);
+      // Every pane is told on every write of the preference, so the ones already
+      // in the asked-for state must not rebuild and re-notify over a non-change.
+      model.setThinkingFolds(true);
+      expect(onList).not.toHaveBeenCalled();
+    });
+  });
+
   it('creates the block on the delta that first carries text', () => {
     const model = build();
     for (const event of stream(thought('m1', 0, ''), thought('m1', 0, 'here it is'))) {
@@ -638,5 +715,71 @@ describe('TranscriptModel artifacts', () => {
     }
 
     expect(model.getRowsSnapshot()).toEqual(['g:t:c1']);
+  });
+});
+
+/*
+ * The stall this suite exists to prevent.
+ *
+ * `markPending` latches on a single deferred flush, so whatever the scheduler
+ * is must be *guaranteed* to run it. A window that stops producing frames —
+ * occluded behind another Artemis window, minimised, on another Space — stops
+ * running `requestAnimationFrame` callbacks, and a latch that is never cleared
+ * silences the model permanently: every later event short-circuits, nothing is
+ * notified, and the agent's work piles up invisibly until a reload dumps it in
+ * one go. `startSessionFeed` already refuses to gate on visibility for exactly
+ * this reason; the transcript has to hold the same line.
+ */
+describe('flush scheduling', () => {
+  it('keeps notifying when animation frames stop arriving', () => {
+    // Stands in for the timer half of the scheduler: the frame half never runs.
+    const timers: Array<() => void> = [];
+    const model = new TranscriptModel((flush) => timers.push(flush));
+
+    const onList = vi.fn();
+    model.subscribeList(onList);
+
+    const [first, second] = stream(
+      { type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'one' },
+      { type: 'text.delta', messageId: 'm2', blockIndex: 0, text: 'two' },
+    );
+
+    model.apply(first as AgentEvent);
+    expect(timers).toHaveLength(1);
+    (timers.shift() as () => void)();
+    expect(onList).toHaveBeenCalledTimes(1);
+
+    // And the model is unlatched, so the next event schedules again rather than
+    // being swallowed by a `pending` flag nothing will ever clear.
+    model.apply(second as AgentEvent);
+    expect(timers).toHaveLength(1);
+    (timers.shift() as () => void)();
+    expect(onList).toHaveBeenCalledTimes(2);
+  });
+
+  it('frameScheduler runs the flush even when no frame is ever produced', async () => {
+    const realRaf = globalThis.requestAnimationFrame;
+    const realCancel = globalThis.cancelAnimationFrame;
+    // A window that is not being composited: the callback is accepted and
+    // dropped, which is what Chromium does for an occluded or minimised window.
+    globalThis.requestAnimationFrame = (() => 1) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => undefined) as typeof globalThis.cancelAnimationFrame;
+
+    try {
+      const flush = vi.fn();
+      frameScheduler(flush);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(flush).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.requestAnimationFrame = realRaf;
+      globalThis.cancelAnimationFrame = realCancel;
+    }
+  });
+
+  it('flushes once when the frame arrives first, and does not flush twice', async () => {
+    const flush = vi.fn();
+    frameScheduler(flush);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(flush).toHaveBeenCalledTimes(1);
   });
 });

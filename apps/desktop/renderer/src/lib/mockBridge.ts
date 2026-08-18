@@ -298,6 +298,11 @@ const mockSignedOut = new Set<string>(['demo-personal']);
 
 /** The Cerebro "clone": agents write to the real one; here, retire deletes. */
 let mockCerebroInstalled = true;
+/**
+ * The master switch. On in the mock, so the pane's populated state is the one
+ * dev meets by default — the off state is one click away and comes back.
+ */
+let mockCerebroEnabled = true;
 let mockCerebroMemories: CerebroMemory[] = [
   {
     name: 'cerebro-memory-bank',
@@ -969,6 +974,15 @@ export function createMockBridge(): ArtemisBridge {
       stopTask: async ({ runId, taskId }) => ok({ runId, taskId }),
       list: async () => ok({ runs: [...handles.values()] }),
       /*
+       * Empty, deliberately. The mock has no process pool and so no work that
+       * outlives a turn — the one thing this channel exists to report. An
+       * invented set would make the preview exercise a path the real bridge
+       * reaches only when a workflow is mid-flight, and "known to be working"
+       * is a set callers must already handle being empty (see
+       * `RunsLiveWorkResponse`).
+       */
+      liveWork: async () => ok({ sessionIds: [] }),
+      /*
         Always empty, and never `truncated`.
 
         The mock keeps no event history — a run here is a script that emits and
@@ -1209,6 +1223,7 @@ export function createMockBridge(): ArtemisBridge {
       status: async () =>
         ok({
           installed: mockCerebroInstalled,
+          enabled: mockCerebroEnabled,
           repoPath: '/Users/demo/Documents/cerebro',
           remote: 'https://github.com/Rx-Ventures/cerebro.git',
           source: 'cerebro@52a0a32',
@@ -1253,12 +1268,22 @@ export function createMockBridge(): ArtemisBridge {
         }),
       setup: async () => {
         mockCerebroInstalled = true;
+        // Setting it up is the yes — the same thing `setupCerebro` records.
+        mockCerebroEnabled = true;
         return ok({ message: 'Cloned the bank. Enabled every profile. cerebro@52a0a32: 3 memories -> 27 project(s).' });
       },
       sync: async () => ok({ message: 'cerebro@52a0a32: 3 memories -> 27 project(s) across 3 profile(s)' }),
       retire: async (request) => {
         mockCerebroMemories = mockCerebroMemories.filter((m) => m.name !== request.name);
         return ok({ message: `cerebro: opened PR for memory-20260814-retire-${request.name}` });
+      },
+      setEnabled: async (request) => {
+        mockCerebroEnabled = request.enabled;
+        return ok({
+          message: request.enabled
+            ? 'Cerebro is on. Every profile is wired up again. cerebro@52a0a32: 3 memories -> 27 project(s).'
+            : 'Cerebro is off. The instruction block, /cerebro command and sync hook are out of every profile.',
+        });
       },
     },
 

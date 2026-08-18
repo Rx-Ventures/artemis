@@ -56,6 +56,7 @@ import {
   type CerebroListRequest,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
+  type CerebroSetEnabledRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
   type CerebroSyncRequest,
@@ -83,6 +84,7 @@ import {
   type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
+  type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
   type RunsStartRequest,
@@ -1199,6 +1201,19 @@ export function validateRunsList(raw: unknown): RunsListRequest {
 }
 
 /**
+ * A request with no fields, still validated for shape.
+ *
+ * `requireRequest` is the whole check and it is not a formality: it rejects a
+ * non-object, which is what stops a malformed payload reaching the handler and
+ * failing there instead. Whatever else the caller sent is dropped rather than
+ * forwarded — the empty object is the contract.
+ */
+export function validateRunsLiveWork(raw: unknown): RunsLiveWorkRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
  * `-1` is the floor rather than `0` because it is the natural spelling of
  * "everything you still have": `seq` starts at 0, and a caller that has applied
  * nothing has no event to name. Omitting the field means the same thing.
@@ -1784,6 +1799,22 @@ export function validateCerebroRetire(raw: unknown): CerebroRetireRequest {
   }
   const reason = optionalString(request['reason'], 'reason', 200);
   return { name, ...(reason === undefined ? {} : { reason }) };
+}
+
+/**
+ * The master switch, as a state rather than a toggle.
+ *
+ * Required rather than defaulted, and that is the one thing worth being strict
+ * about here: a missing field defaulting to `true` would let a malformed call
+ * opt the machine into writing to a shared repository, and defaulting to
+ * `false` would silently undo an opt-in. Neither is a decision this layer gets
+ * to make on the user's behalf.
+ */
+export function validateCerebroSetEnabled(raw: unknown): CerebroSetEnabledRequest {
+  const request = requireRequest(raw);
+  const enabled = optionalBoolean(request['enabled'], 'enabled');
+  if (enabled === undefined) throw new ValidationError('enabled', 'is required');
+  return { enabled };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -210,6 +210,24 @@ export interface SessionState extends MirroredState {
    * everything the session ever ran.
    */
   readonly dismissedTasks: readonly string[];
+  /**
+   * Whether the delegated tab on screen is one the user opened by hand.
+   *
+   * The mirror of {@link dismissedTasks}, and it exists for the setting that
+   * record cannot answer for. With "the dock never opens on its own" turned off
+   * the tab may not arrive by itself — but the header's Delegated button is a
+   * press, not an arrival, and without somewhere to record that press the strip
+   * has no way to tell the two apart. See `ShownConversation.tasksRequested`.
+   *
+   * A flag rather than ids, which is the opposite of the choice next door and
+   * for the same reason: `dismissedTasks` has to survive `tasks` being replaced
+   * several times a second, whereas this is a statement about the tab and not
+   * about any row in it. New work arriving under an open tab belongs in it.
+   *
+   * Cleared by that tab's ✕ and at every conversation boundary, so it never
+   * authorises the *next* column's uninvited tab.
+   */
+  readonly tasksRequested: boolean;
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
@@ -299,6 +317,26 @@ export function hostPlatform(): Platform {
 }
 
 /**
+ * Whether thinking folds into activity markers, for panes not yet created.
+ *
+ * The same seam as {@link platformOfHost} above and for the same reason: this
+ * is a *window* preference, the store owns it, and the store imports this
+ * module — so the value is pushed down rather than read back up. The store
+ * writes it before the first pane exists and again on every change; what it
+ * covers is the pane minted afterwards, which would otherwise open folding the
+ * reasoning away with the switch on.
+ *
+ * Live panes are told directly by `setShowThinking`, because their transcripts
+ * already hold rows that have to be rebuilt.
+ */
+let thinkingFoldsInPanes = true;
+
+/** Tell the pane layer how new transcripts should treat thinking. */
+export function setThinkingFolds(folds: boolean): void {
+  thinkingFoldsInPanes = folds;
+}
+
+/**
  * Teach a pane's transcript which of its tool calls made artifacts.
  *
  * A fresh closure every time, deliberately: `setArtifactTest` compares by
@@ -324,6 +362,7 @@ export function createPane(initial: SessionState): Pane {
     transcript: new TranscriptModel(),
   };
   installArtifactTest(pane);
+  pane.transcript.setThinkingFolds(thinkingFoldsInPanes);
   return pane;
 }
 

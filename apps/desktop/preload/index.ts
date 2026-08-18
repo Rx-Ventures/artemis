@@ -57,6 +57,7 @@ import {
   type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
+  type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
   type RunsStartRequest,
@@ -67,6 +68,7 @@ import {
   type CerebroListRequest,
   type CerebroPreflightRequest,
   type CerebroRetireRequest,
+  type CerebroSetEnabledRequest,
   type CerebroSetupRequest,
   type CerebroStatusRequest,
   type CerebroSyncRequest,
@@ -426,6 +428,12 @@ const menuOpenSettings = createPushChannel<MenuOpenSettings>({
 window.addEventListener('beforeunload', () => {
   agentEvents.reset();
   terminalEvents.reset();
+  // `browserEvents` was missed here, which left it the one channel whose
+  // subscribers outlive a reload: every ⌘R adds another callback from a dead
+  // world to the set, and `deliver` goes on calling all of them. They are
+  // individually harmless — `deliver` catches what they throw — but the set only
+  // grows, and the `ipcRenderer` listener it keeps attached is never detached.
+  browserEvents.reset();
   windowStates.reset();
   planUsages.reset();
   updateStates.reset();
@@ -503,6 +511,7 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.runsRespondPermission, request),
     dispose: (request: RunsDisposeRequest) => invoke(IPC.runsDispose, request),
     list: (request: RunsListRequest) => invoke(IPC.runsList, request),
+    liveWork: (request: RunsLiveWorkRequest) => invoke(IPC.runsLiveWork, request),
     events: (request: RunsEventsRequest) => invoke(IPC.runsEvents, request),
     onEvent: agentEvents.subscribe,
   }),
@@ -548,6 +557,7 @@ const bridge: ArtemisBridge = Object.freeze({
     setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
     sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
     retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
+    setEnabled: (request: CerebroSetEnabledRequest) => invoke(IPC.cerebroSetEnabled, request),
   }),
 
   /** The standing-instruction library. Read and replaced whole; see {@link IPC}. */

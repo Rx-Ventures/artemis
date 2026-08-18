@@ -92,7 +92,7 @@ import {
 import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
-import { isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
+import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 
@@ -257,6 +257,20 @@ export interface ArtemisEngine {
   ): Promise<void>;
   disposeRun(runId: RunId): Promise<void>;
   listRuns(options: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
+
+  /**
+   * Conversations still holding background work, across every provider.
+   *
+   * Separate from {@link listRuns} because it answers about work that outlives
+   * the run that started it — a workflow, a backgrounded subagent, a registered
+   * schedule — which by definition appears in no live run. Adapters that have no
+   * such notion contribute nothing, so this is "known to be working" and never
+   * the complement of an idle set.
+   *
+   * Synchronous, like {@link runEvents} and for the same reason: it reads
+   * in-memory pools and sits on a poll.
+   */
+  liveWorkSessions(): readonly SessionId[];
 
   /**
    * A run's retained events, for a window that reloaded out from under it.
@@ -471,19 +485,28 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
+  // Where Cerebro's master switch is kept. Told once, here, because this is the
+  // only place that knows `userData`; until it is told, the switch reads as off.
+  configureCerebro(userDataDir);
+
   /**
    * Which built-in prompts have the thing they talk about.
    *
    * Read per run rather than cached at startup, because the precondition can
    * change while the app is open — setting Cerebro up is a button in the
    * settings dialog, and a user who clicks it should not have to restart before
-   * the prompt that describes it starts arriving. `isCerebroInstalled` is one
-   * `existsSync`, which is affordable at that rate; the full status probe,
+   * the prompt that describes it starts arriving. Both halves are cheap at that
+   * rate: one `existsSync` and one cached file read. The full status probe,
    * which spawns the CLI, is not.
+   *
+   * Installed **and** switched on. The bank being cloned is not consent to
+   * spending every run's context describing it, so a machine that has it but
+   * has not said yes gets the prompt withheld however enabled its row is —
+   * which is exactly what `BuiltInAgentPrompt.requires` exists to explain.
    */
   const availableBuiltIns = (): ReadonlySet<BuiltInPromptId> => {
     const available = new Set<BuiltInPromptId>();
-    if (isCerebroInstalled()) available.add('builtin:cerebro');
+    if (isCerebroEnabled() && isCerebroInstalled()) available.add('builtin:cerebro');
     return available;
   };
 
@@ -820,6 +843,16 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await runs.dispose(runId);
     },
     listRuns: (query) => Promise.resolve(runs.list(query.cwd)),
+    liveWorkSessions: () => {
+      // Deduplicated across providers: one conversation belongs to exactly one
+      // adapter, but nothing in the registry enforces that, and a session named
+      // twice would make a window's "keep this" set quietly depend on ordering.
+      const holding = new Set<SessionId>();
+      for (const adapter of providers.list()) {
+        for (const sessionId of adapter.sessionsHoldingWork?.() ?? []) holding.add(sessionId);
+      }
+      return [...holding];
+    },
 
     runEvents: (query) => {
       const afterSeq = query.afterSeq ?? -1;

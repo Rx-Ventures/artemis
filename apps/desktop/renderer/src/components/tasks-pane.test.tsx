@@ -76,7 +76,9 @@ Object.defineProperty(globalThis, 'artemis', {
 
 const { DockPane } = await import('@/components/DockPane');
 const { groupByPhase } = await import('@/components/TasksPane');
-const { closePane, focusedPane, splitPane, toggleTasks, useApp } = await import('@/state/store');
+const { closePane, focusedPane, setDockAutoOpen, splitPane, toggleTasks, useApp } = await import(
+  '@/state/store'
+);
 const { paneState, setPaneState } = await import('@/state/pane');
 const { forgetFolds } = await import('@/lib/foldMemory');
 
@@ -121,6 +123,9 @@ beforeEach(() => {
     activeDockTab: null,
     visibleDockTabs: [],
     background: [],
+    // The window store outlives each `it` too, and the block below turns this
+    // off — left flipped it would hide the tab from every test after it.
+    dockAutoOpen: true,
   });
   setPaneState(focusedPane(), {
     cwd: '/Users/me/project',
@@ -128,6 +133,7 @@ beforeEach(() => {
     // Cleared with the rows, or a test that closes the tab would hide it from
     // the next one — the column is module-level and outlives each `it`.
     dismissedTasks: [],
+    tasksRequested: false,
     resumeSessionId: null,
     run: {
       runId: 'run-1',
@@ -386,6 +392,84 @@ describe('the delegated-work pane', () => {
     // cannot be tied to the run — which is the defect the whole feature is about,
     // one layer up.
     expect(screen.getByRole('tab', { name: /1 running/ })).not.toBeNull();
+  });
+});
+
+/**
+ * The same pane, with the dock told never to open on its own.
+ *
+ * The setting is about the dock arriving uninvited, and the delegated tab is the
+ * one surface in it with two origins — it arrives with the work, *and* it opens
+ * on the header button. Suppressing both is what a user who turned this off in
+ * order to stop the pane growing their screen actually gets today: an enabled
+ * Delegated button that does nothing, and, since `openAgentTab` is reachable
+ * only from these rows, no route to a subagent's transcript either.
+ */
+describe('the delegated-work pane, with the dock forbidden to open on its own', () => {
+  it('still stays out of the way when work is delegated', () => {
+    renderDock();
+    act(() => {
+      setDockAutoOpen(false);
+    });
+    haveTasks(task());
+
+    // The half of the setting that already worked, pinned so the fix below
+    // cannot quietly undo it: nothing the agent does opens this.
+    expect(screen.queryByRole('tab', { name: /running|Delegated/ })).toBeNull();
+  });
+
+  it('opens on the header button, because a press is not an arrival', () => {
+    renderDock();
+    act(() => {
+      setDockAutoOpen(false);
+    });
+    haveTasks(task());
+
+    act(() => {
+      toggleTasks(focusedPane());
+    });
+
+    // What the setting suppresses is the dock *opening itself*. Asking for it is
+    // user input, exactly as opening a shell or a preview is, and the rows were
+    // on the pane the whole time — they were unreachable, not absent.
+    expect(screen.getByRole('tab', { name: /1 running/ })).not.toBeNull();
+    expect(screen.getByText('Audit the mapper')).not.toBeNull();
+  });
+
+  it('goes back to staying out of the way once it is shut', () => {
+    renderDock();
+    act(() => {
+      setDockAutoOpen(false);
+    });
+    haveTasks(task({ id: 'a' }));
+    act(() => {
+      toggleTasks(focusedPane());
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide delegated work' }));
+    // Something new, which with the setting on is precisely what brings the tab
+    // back — see 'comes back when something new is delegated'. Here it must not:
+    // the press authorised the tab the user opened, not every one after it.
+    haveTasks(task({ id: 'a' }), task({ id: 'b' }));
+
+    expect(screen.queryByRole('tab', { name: /running|Delegated/ })).toBeNull();
+  });
+
+  it('keeps the rows through all of it, which is what the setting promises', () => {
+    renderDock();
+    act(() => {
+      setDockAutoOpen(false);
+    });
+    haveTasks(task({ id: 'a' }), task({ id: 'b' }));
+
+    // Suppressed, never dropped. Turning it back on is a reveal rather than a
+    // recovery, and the stop buttons in the pane addressed work that was running
+    // underneath the whole time.
+    expect(paneState(focusedPane()).tasks).toHaveLength(2);
+    act(() => {
+      setDockAutoOpen(true);
+    });
+    expect(screen.getByRole('tab', { name: /2 running/ })).not.toBeNull();
   });
 });
 

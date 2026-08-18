@@ -194,6 +194,22 @@ export type TranscriptItem =
  * sage row, and burying it behind a marker would cost a click to reach the only
  * thing in there.
  *
+ * ## Unless the reader asked to watch it think
+ *
+ * All of that describes thinking as *machinery* — something to get out of the
+ * way of the answer. A reader who turns on the Appearance pane's thinking
+ * switch has said the opposite: the reasoning is the part they came for, and
+ * folding it away is the app hiding what they asked to see. So the switch makes
+ * thinking stop being machinery ({@link TranscriptModel.setThinkingFolds}), and
+ * a burst that was one marker becomes reasoning in the thread with markers
+ * between the paragraphs for the work.
+ *
+ * That does cost what the section above buys — `thinking / tool / thinking /
+ * tool` becomes a marker around each single call — and it is the right trade
+ * *given the switch*, because those markers are now one compact line between
+ * stretches of prose rather than the only thing on screen. It is also why this
+ * is a setting and not the default.
+ *
  * ## An artifact is never folded
  *
  * One kind of call is lifted out of the burst rather than hidden inside it: one
@@ -297,10 +313,84 @@ export type ArtifactTest = (item: ToolItem) => boolean;
 /** How a coalesced flush gets deferred. Injectable so tests can run it now. */
 export type Scheduler = (flush: () => void) => void;
 
-/** One flush per animation frame — the display cannot show more than that. */
+/**
+ * One frame, for the hosts that have no frames to offer.
+ *
+ * Node and jsdom have no `requestAnimationFrame`, so there the timer is not a
+ * backstop but the whole scheduler, and it should approximate the display clock
+ * it stands in for. `cwd.test.ts` waits two of these for a flush.
+ */
+const FRAME_MS = 16;
+
+/**
+ * How long to wait for a frame that was asked for before flushing without it.
+ *
+ * Comfortably longer than a frame at any refresh rate a display has, so that a
+ * window which *is* being composited always flushes on its own frame and the
+ * paragraph below keeps holding — this must not become the thing that drives a
+ * healthy window. Short enough that a window which is not being composited
+ * stays legible: ten flushes a second is far more than a reader can follow and
+ * far fewer than a token stream produces.
+ */
+const FLUSH_FALLBACK_MS = 100;
+
+/**
+ * One flush per animation frame — the display cannot show more than that —
+ * with a timer underneath for the windows that never get one.
+ *
+ * ## Why the timer is not belt-and-braces
+ *
+ * {@link TranscriptModel.markPending} latches: it sets `pending` and hands the
+ * flush to this function, and every event that arrives before that flush runs
+ * short-circuits on the flag. So the scheduler's contract is not "soon" but
+ * *"eventually, always"* — a deferred flush that never runs does not delay the
+ * transcript, it silences the model permanently. Nothing is notified again for
+ * the life of the page, while `dirty` and the text buffers go on filling up
+ * behind it.
+ *
+ * `requestAnimationFrame` alone cannot meet that contract, because a frame is
+ * not something a window is entitled to. Chromium stops compositing a window
+ * with no visible surface — minimised, fully covered by another application, on
+ * a Space the user has switched away from, behind a sleeping display — and the
+ * queued callback is then simply never run. That is not an edge case here; it is
+ * the ordinary shape of using this app, which exists to be left alone while an
+ * agent works and looked at again afterwards.
+ *
+ * The symptom is the worst one this app has. The transcript stops dead while the
+ * agent carries on; the buffered work then lands in a single burst when frames
+ * resume or the page is reloaded, so the one moment the user cannot follow what
+ * happened is the moment all of it appears.
+ * `windowSecurityPreferences` sets `backgroundThrottling: false` against
+ * exactly this failure and it does not reach here — that keeps *timers* honest
+ * while the window is in the background, which is what makes the fallback below
+ * work, but it does not buy frames for a window that is not being drawn.
+ * `startSessionFeed` refuses to gate on visibility for the same reason, in the
+ * same words.
+ *
+ * So the two race and the first to arrive wins, once. A composited window is
+ * unaffected: its frame lands inside 17ms and cancels the timer, so the flush
+ * stays on the display's own clock.
+ */
 export const frameScheduler: Scheduler = (flush) => {
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => flush());
-  else setTimeout(flush, 16);
+  if (typeof requestAnimationFrame !== 'function') {
+    setTimeout(flush, FRAME_MS);
+    return;
+  }
+
+  let done = false;
+  let frame = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const once = (): void => {
+    if (done) return;
+    done = true;
+    if (timer !== undefined) clearTimeout(timer);
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+    flush();
+  };
+
+  frame = requestAnimationFrame(once);
+  timer = setTimeout(once, FLUSH_FALLBACK_MS);
 };
 
 /** Flush immediately. Used by tests. */
@@ -391,6 +481,15 @@ export class TranscriptModel {
   private artifactTest: ArtifactTest | null = null;
   private artifactVerdicts = new Map<string, boolean>();
 
+  /**
+   * Whether thinking counts as machinery, and so may be folded into a marker.
+   *
+   * True is the historical behaviour and the default, so a bare
+   * `new TranscriptModel()` folds exactly as it always did. See
+   * {@link ActivityGroup} for what the other setting is for.
+   */
+  private thinkingFolds = true;
+
   private listListeners = new Set<Listener>();
   private itemListeners = new Map<string, Set<Listener>>();
 
@@ -414,6 +513,26 @@ export class TranscriptModel {
     if (test === this.artifactTest) return;
     this.artifactTest = test;
     this.artifactVerdicts.clear();
+    this.structural = true;
+    this.markPending();
+  }
+
+  /**
+   * Decide whether thinking folds into markers or stands in the thread.
+   *
+   * Structural, and deliberately retroactive: flipping it rebuilds the rows a
+   * transcript already holds, so the blocks of the turn the reader is looking at
+   * come out of their markers rather than only the next turn's. A setting that
+   * took effect on future work would look, from the chair, like a setting that
+   * did nothing.
+   *
+   * Guarded on equality because every pane is told on every write of the
+   * preference, and the ones already in the asked-for state must not be made to
+   * rebuild and re-notify over a change that is not one.
+   */
+  setThinkingFolds(folds: boolean): void {
+    if (folds === this.thinkingFolds) return;
+    this.thinkingFolds = folds;
     this.structural = true;
     this.markPending();
   }
@@ -1093,10 +1212,17 @@ export class TranscriptModel {
     return { id, ids, ts: ts ?? 0, counts, thinking, running, failed, streaming };
   }
 
-  /** Whether a row is machinery — the thing runs are made of. */
+  /**
+   * Whether a row is machinery — the thing runs are made of.
+   *
+   * A tool call always is. Thinking is only machinery while it is allowed to
+   * fold; once the reader has asked to watch the model think it is content, and
+   * a run of work either side of it becomes two runs with reasoning in between.
+   */
   private isMachinery(id: string): boolean {
     const kind = this.items.get(id)?.kind;
-    return kind === 'tool' || kind === 'thinking';
+    if (kind === 'tool') return true;
+    return kind === 'thinking' && this.thinkingFolds;
   }
 
   /**

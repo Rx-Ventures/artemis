@@ -130,6 +130,7 @@ import {
   paneState,
   setHostPlatform,
   setPaneState,
+  setThinkingFolds,
   type MirroredState,
   type Pane,
   type PaneId,
@@ -321,6 +322,26 @@ export interface AppState {
    * element-wise compare and the value is stable between real changes.
    */
   readonly runningSessions: readonly SessionId[];
+  /**
+   * Sessions the **main process** says are still working, as of the last poll.
+   *
+   * The one fact in this store that is not a projection of the panes, and it is
+   * here because the panes cannot know it. Delegated work outlives the run that
+   * launched it, and `background.tasks` is a run event — the adapter stops
+   * emitting it at `run.end` while keeping the provider process alive for
+   * exactly that work. So between one turn ending and the next opening, a
+   * column's rows are frozen and this is the only thing that moves.
+   *
+   * Read as **"keep these"**, never as "the rest are finished". A provider whose
+   * adapter cannot answer contributes nothing, so absence from this set means
+   * "not known to be working" — see `RunsLiveWorkResponse`. Everything that
+   * consumes it therefore widens what counts as live ({@link isWorking}) rather
+   * than narrowing it.
+   *
+   * An array rather than a `Set`, for the reason {@link runningSessions} gives:
+   * it is compared element-wise so the value stays stable between real changes.
+   */
+  readonly sessionsHoldingWork: readonly SessionId[];
   /**
    * Sessions a column is showing right now — what the sidebar marks as open.
    *
@@ -572,6 +593,23 @@ export interface AppState {
    * exactly as the model sends it — no pacing, no per-word elements.
    */
   readonly streamingWordFade: boolean;
+
+  /**
+   * Whether the model's reasoning is shown in the thread as it arrives.
+   *
+   * Off by default, which is the transcript's own argument: thinking is context
+   * for the answer rather than the answer, so it folds into the activity marker
+   * with the work it was reasoning about and opens on a click. See
+   * `ActivityGroup` in `state/transcript.ts` for why that is the default.
+   *
+   * On is the reader saying the reasoning is what they came for. It changes two
+   * things together, because either alone is half a setting: the blocks stop
+   * being machinery, so they stand in the conversation instead of inside a
+   * marker, and they render open — muted prose that streams as the model writes
+   * it. Both are retroactive, so the turn already on screen rearranges when the
+   * switch moves rather than only the next one.
+   */
+  readonly showThinking: boolean;
 
   /**
    * Whether the dock may open, or grow a tab, without the user asking.
@@ -1135,6 +1173,7 @@ interface Prefs {
   fontSize?: number;
   theme?: Theme;
   streamingWordFade?: boolean;
+  showThinking?: boolean;
   dockAutoOpen?: boolean;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
@@ -1236,6 +1275,7 @@ function loadPrefs(): Prefs {
     // change it and nothing happens.
     theme: oneOf(raw['theme'], THEMES),
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
+    showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1320,6 +1360,7 @@ function savePrefs(): void {
     fontSize: s.fontSize,
     theme: s.theme,
     streamingWordFade: s.streamingWordFade,
+    showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1362,6 +1403,19 @@ applyFontScale(initialFontSize);
 const initialTheme = prefs.theme ?? DEFAULT_THEME;
 applyTheme(initialTheme);
 
+/*
+ * And the same shape again for the thinking switch, which has to be settled
+ * before `firstPane` below rather than in `bootstrap`.
+ *
+ * A pane's transcript is told how to fold when it is minted, so a value pushed
+ * down after the first pane exists would leave that pane — the one the app
+ * opens into — folding the reasoning away until something else caused a
+ * rebuild. Reading the preference here, above the pane, is what makes the app
+ * open in the state it was left in.
+ */
+const initialShowThinking = prefs.showThinking ?? false;
+setThinkingFolds(!initialShowThinking);
+
 /**
  * The state a brand-new column starts from.
  *
@@ -1395,6 +1449,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     promptHistory: [],
     draft: '',
     ...overrides,
@@ -1451,6 +1506,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  sessionsHoldingWork: [],
   openSessions: [],
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
@@ -1476,6 +1532,10 @@ export const useApp = create<AppState>(() => ({
   // `??`, not `||`: a persisted `false` is the whole point of the setting and
   // must survive a reload.
   streamingWordFade: prefs.streamingWordFade ?? true,
+  // Resolved above, because the pane layer had to be told before the first
+  // transcript existed. Same constant, so the switch and the fold cannot
+  // disagree about what was restored.
+  showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
 
@@ -1695,16 +1755,23 @@ function paneForSession(
  */
 function syncRunningSessions(): void {
   const ids: SessionId[] = [];
+  // The window value, read once for the whole walk — see `pruneBackground`.
+  const holding = useApp.getState().sessionsHoldingWork;
   for (const pane of allLivePanes()) {
     const state = paneState(pane);
     /*
-     * `hasLiveWork`, not `isLive`: a session whose agents are still going,
-     * marked idle the moment its launching turn ended, is exactly the "nothing
-     * tells me anything is running" hole the delegated pane was built to close.
-     * The pane's tab only exists while its conversation is on screen; this
-     * marker is what says so from the sidebar when it is not.
+     * `isWorking`, not `isLive`: a session whose agents are still going, marked
+     * idle the moment its launching turn ended, is exactly the "nothing tells me
+     * anything is running" hole the delegated pane was built to close. The
+     * pane's tab only exists while its conversation is on screen; this marker is
+     * what says so from the sidebar when it is not.
+     *
+     * And not `hasLiveWork` either, which closed that hole only as far as the
+     * last rows this window was sent. Between turns those stop arriving, so a
+     * workflow that settled a row and carried on went unmarked — the sidebar
+     * fell quiet while the work ran on. The main process is asked as well.
      */
-    if (!hasLiveWork(state)) continue;
+    if (!isWorking(state, holding)) continue;
     /*
      * Both ids, not the better of the two.
      *
@@ -2085,14 +2152,21 @@ export function closeFile(): void {
  * What is written is the ids that were on screen, which is what makes the tab
  * stay shut through the progress messages that follow. Work delegated *after*
  * this is not in that set, so the tab comes back for it in the same way it
- * arrived the first time — which is the only way back, since these rows are not
- * something anyone can reopen by hand.
+ * arrived the first time — or, with the dock forbidden to open on its own, on
+ * the next press of the header's button; see {@link toggleTasks}.
+ *
+ * `tasksRequested` goes with it, and that is the half that matters under the
+ * setting: shutting the tab has to withdraw the permission the press granted,
+ * or the next thing delegated would open a pane the user has just closed.
  */
 export function closeTasks(paneId: PaneId): void {
   const pane = allLivePanes().find((one) => one.id === paneId);
   if (pane === undefined) return;
   // Which tab comes forward is `reconcileDock`'s, on this write.
-  setPaneState(pane, { dismissedTasks: paneState(pane).tasks.map((task) => task.id) });
+  setPaneState(pane, {
+    dismissedTasks: paneState(pane).tasks.map((task) => task.id),
+    tasksRequested: false,
+  });
 }
 
 /**
@@ -2109,6 +2183,13 @@ export function closeTasks(paneId: PaneId): void {
  * reopened it" flag: the record exists to keep the tab shut through the progress
  * messages that follow, and once the user has asked for it back there is nothing
  * left for it to suppress.
+ *
+ * `tasksRequested` is written all the same, and is not that flag. It answers a
+ * different question — not "is this tab shut" but "is this tab the user's
+ * doing" — and only the strip asks it, when the dock is forbidden to open on
+ * its own and has to tell an arrival from a press. Without it this function
+ * still runs, still clears the dismissal, and still focuses a tab that
+ * `visibleTabs` then declines to draw: an enabled button that does nothing.
  *
  * Shaped as a toggle for the same reason {@link toggleTerminal} is — a button
  * that opens something and then does nothing on the second press reads as
@@ -2127,7 +2208,12 @@ export function toggleTasks(pane: Pane = focusedPane()): void {
     return;
   }
 
-  if (state.dismissedTasks.length > 0) setPaneState(pane, { dismissedTasks: [] });
+  // Guarded so that a press which only brings an already-open tab forward
+  // writes nothing: this runs on a strip that rebuilds on every progress
+  // message, and a needless write here would rebuild it again.
+  if (state.dismissedTasks.length > 0 || !state.tasksRequested) {
+    setPaneState(pane, { dismissedTasks: [], tasksRequested: true });
+  }
   focusDockTab(tab);
 }
 
@@ -2290,6 +2376,7 @@ export function openAgentTab(paneId: PaneId, taskId: string): void {
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     draft: '',
   });
 
@@ -2501,6 +2588,11 @@ function describeShown(): readonly ShownConversation[] {
       // and carrying the set through here would make every progress message
       // rebuild the strip.
       ...(showsTasks(state) ? { hasTasks: true } : {}),
+      // Reported beside it rather than folded into it, because the two are read
+      // by different rules: `hasTasks` says a tab is warranted, this says who
+      // warranted it. Only the second survives the dock being told never to
+      // open on its own.
+      ...(state.tasksRequested ? { tasksRequested: true } : {}),
     };
   });
 
@@ -2512,7 +2604,8 @@ function describeShown(): readonly ShownConversation[] {
         one.paneId === before.paneId &&
         one.runId === before.runId &&
         one.sessionId === before.sessionId &&
-        one.hasTasks === before.hasTasks
+        one.hasTasks === before.hasTasks &&
+        one.tasksRequested === before.tasksRequested
       );
     });
 
@@ -2567,10 +2660,16 @@ function reconcileDock(): void {
     browsers.length === 0 &&
     visibleDockTabs.length === 0 &&
     agentViews.length === 0 &&
-    // With auto-open off, tasks cannot surface a tab, so they cannot be the
-    // reason the strip needs rebuilding — and this early return is back on
-    // the fast path it was written for.
-    (!state.dockAutoOpen || !allPanes().some((pane) => showsTasks(paneState(pane))))
+    // Delegated work still cannot be the reason the strip needs rebuilding
+    // when no column may claim a tab for it — but "may" is no longer the
+    // setting alone. A column whose tab the user opened by hand claims one
+    // with the setting off, and returning early on it would leave the strip
+    // empty, the dock shut, and that press looking like it did nothing. The
+    // condition is `visibleTabs`', which the two have to agree on exactly.
+    !allPanes().some((pane) => {
+      const one = paneState(pane);
+      return showsTasks(one) && (state.dockAutoOpen || one.tasksRequested);
+    })
   ) {
     return;
   }
@@ -3142,9 +3241,19 @@ function retirePane(pane: Pane): void {
 /** Evict finished conversations past {@link MAX_BACKGROUND_ENDED}, oldest first. */
 function pruneBackground(): void {
   const { background } = useApp.getState();
-  // `hasLiveWork`: a pane whose run ended but whose workflow has not is not
-  // "finished" — evicting it would orphan the settle turn. See `hasLiveWork`.
-  const ended = background.filter((pane) => !hasLiveWork(paneState(pane)));
+  /*
+   * `isWorking`, not `hasLiveWork`: a pane whose run ended but whose workflow
+   * has not is not "finished" — evicting it would orphan the settle turn — and
+   * between turns this window's rows are the wrong place to ask. This is the
+   * last path that still destroys a conversation, so it asks both sides.
+   *
+   * Read once and threaded through, rather than per pane: the set is a window
+   * value, the walk is over at most a handful of panes, and re-reading the store
+   * inside a filter would be a store read per element for an answer that cannot
+   * change during the loop.
+   */
+  const holding = useApp.getState().sessionsHoldingWork;
+  const ended = background.filter((pane) => !isWorking(paneState(pane), holding));
   if (ended.length <= MAX_BACKGROUND_ENDED) return;
 
   const evicted = new Set(ended.slice(0, ended.length - MAX_BACKGROUND_ENDED).map((p) => p.id));
@@ -3175,7 +3284,10 @@ function handOver(outgoing: Pane, incoming: Pane): void {
   const at = locate(state.grid, outgoing.id);
   if (!at) return;
 
-  const keep = hasLiveWork(paneState(outgoing));
+  // `isDisposable`, not `hasLiveWork`: this decides whether the conversation is
+  // destroyed, and this window cannot see far enough to make that call. See
+  // `isDisposable`.
+  const keep = !isDisposable(paneState(outgoing));
   const grid = state.grid.map((row, index) =>
     index === at.row
       ? { ...row, panes: row.panes.map((p) => (p.id === outgoing.id ? incoming : p)) }
@@ -3239,7 +3351,10 @@ export function closePane(paneId: PaneId): void {
   if (!at) return;
   const pane = (state.grid[at.row] as PaneRow).panes[at.column] as Pane;
 
-  const keep = hasLiveWork(paneState(pane));
+  // Same rule as `handOver`, and for the same reason: closing a column is a
+  // statement about the layout, so it must not be the thing that destroys a
+  // conversation this window only *believes* has finished.
+  const keep = !isDisposable(paneState(pane));
   if (!keep) retirePane(pane);
 
   const grid: PaneRow[] = [];
@@ -3319,6 +3434,105 @@ export function isLive(state: SessionState): boolean {
  */
 export function hasLiveWork(state: SessionState): boolean {
   return isLive(state) || state.tasks.some(isTaskLive);
+}
+
+/**
+ * Both ids a conversation can be known by, for matching against a session set.
+ *
+ * The pair {@link syncRunningSessions} already explains at length: they are
+ * usually the same, and they diverge before `session.started` lands and after a
+ * fork. Matching on either is what stops a conversation being missed under
+ * whichever id the other side happened to use.
+ */
+function sessionIdsOf(state: SessionState): readonly SessionId[] {
+  const ids: SessionId[] = [];
+  if (state.run?.sessionId) ids.push(state.run.sessionId);
+  if (state.resumeSessionId && state.resumeSessionId !== state.run?.sessionId) {
+    ids.push(state.resumeSessionId);
+  }
+  return ids;
+}
+
+/**
+ * True when the main process says this conversation is still working.
+ *
+ * The half of the answer this window cannot see for itself — see
+ * {@link AppState.sessionsHoldingWork}. Kept separate from {@link hasLiveWork}
+ * rather than folded into it so that one stays a pure function of a pane, which
+ * is what its callers in tests rely on.
+ */
+function mainHoldsWork(
+  state: SessionState,
+  holding: readonly SessionId[] = useApp.getState().sessionsHoldingWork,
+): boolean {
+  if (holding.length === 0) return false;
+  return sessionIdsOf(state).some((id) => holding.includes(id));
+}
+
+/**
+ * Is anything about this conversation still going — by either account?
+ *
+ * The union of what this window can see ({@link hasLiveWork}) and what the main
+ * process reports ({@link mainHoldsWork}), and a union rather than a preference
+ * because the two are authoritative about different intervals. This window is
+ * right *during* a turn, where it has the rows as they arrive and main's poll is
+ * up to a few seconds stale. Main is right *between* turns, where the rows have
+ * stopped being sent and this window's copy is frozen. Neither dominates, and
+ * either saying "working" is enough.
+ *
+ * This is what every question about whether a conversation is finished should
+ * ask. `hasLiveWork` remains for the one thing it is exactly right about: what
+ * this window has been told.
+ */
+export function isWorking(
+  state: SessionState,
+  holding?: readonly SessionId[],
+): boolean {
+  return hasLiveWork(state) || mainHoldsWork(state, holding);
+}
+
+/**
+ * True when a conversation can be destroyed outright rather than set aside.
+ *
+ * Deliberately **not** the negation of {@link hasLiveWork}, and the difference
+ * is what this answers for. `hasLiveWork` asks "is something running", from this
+ * window's own bookkeeping, and it is the right question for everything whose
+ * worst outcome is a wrong pixel: the sidebar's working marker, which dock tab
+ * comes forward, how fast the session feed polls. Destruction is not one of
+ * those. {@link retirePane} resets the transcript and closes every agent tab the
+ * conversation opened, and nothing can reach a pane that is gone —
+ * `openAgentTab` resolves its owner through `allLivePanes`, and the delegated
+ * button is disabled with no rows to show. There is no way back.
+ *
+ * ## Why this window's answer is not good enough to destroy on
+ *
+ * `tasks` holds whatever the last `background.tasks` event said, and that event
+ * is run-scoped: the adapter refuses to emit one once the turn has ended (see
+ * `#flushTasks`), while the very same process is kept alive by `#holdsWork` for
+ * exactly the work those rows describe. Between a turn ending and the next one
+ * opening there is nowhere to put an update, so this window's rows are a
+ * snapshot of the last moment a turn was open and the main process is the only
+ * thing that knows what has happened since. A workflow that settled a row and
+ * carried on reads here as finished.
+ *
+ * Retiring on that snapshot is the defect this exists to close: clicking away
+ * from a running workflow and back left the bow at rest, the workflow tab shut,
+ * and the button that reopens it disabled — while the run went on untouched in
+ * main, which is why sending a message brought it all back.
+ *
+ * So the rule is inverted. A conversation is destroyed only when there was never
+ * anything in it to lose; anything that has run, or names a session it could
+ * resume, is set aside instead. Backgrounding is cheap and already bounded by
+ * {@link pruneBackground}, and being wrong in this direction costs a retained
+ * transcript rather than work the user cannot get back to.
+ */
+function isDisposable(state: SessionState): boolean {
+  // Belt and braces. A conversation main is still working on necessarily has a
+  // session id, so the check below already keeps it — but this is the one
+  // predicate whose wrong answer is unrecoverable, and saying so explicitly
+  // means a later narrowing of the rule cannot quietly take the guard with it.
+  if (mainHoldsWork(state)) return false;
+  return state.run === null && state.resumeSessionId === null;
 }
 
 export function activeProfile(state: SessionState): ProfileMetadata | undefined {
@@ -4527,8 +4741,6 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   const [first, ...rest] = live;
   if (first === undefined) return;
 
-  await attachRun(pane, first);
-
   /*
    * Backgrounded *before* they are attached, which is not a tidiness point.
    *
@@ -4568,8 +4780,70 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   if (adopted.length > 0) {
     useApp.setState((s) => ({ background: [...s.background, ...adopted.map((a) => a.pane)] }));
   }
-  for (const { pane: extra, handle } of adopted) {
-    await attachRun(extra, handle);
+  /*
+   * Every run at once, which is not a speed optimisation — it is what stops one
+   * conversation's reload from silencing another's.
+   *
+   * `attachRun` holds every live event for the run it is attaching (see
+   * `replayBuffers`), and it holds them across two IPC round trips, one of which
+   * reads a whole stored transcript through a lock the main process shares with
+   * the sidebar's four-second poll and every other profile's history read. Run
+   * *n* awaited behind runs 1…n-1 therefore held its stream for the sum of all
+   * of their reads, and released the backlog in one burst when its turn finally
+   * came. With several conversations live — the case this function exists for —
+   * the last one adopted was frozen for as long as the whole queue took, and the
+   * user watched an agent that was working the whole time appear to do nothing
+   * and then finish instantly.
+   *
+   * The column's own run is in here rather than awaited above it, for the same
+   * reason: it is the slowest one to replay (it has the most history) and it was
+   * in front of all the others.
+   *
+   * Each attach touches only its own pane and its own buffer, so there is
+   * nothing here for them to race over.
+   */
+  await Promise.all([
+    attachRun(pane, first),
+    ...adopted.map(({ pane: extra, handle }) => attachRun(extra, handle)),
+  ]);
+}
+
+/**
+ * Longest a re-attaching pane will hold its live stream back for a replay.
+ *
+ * The hold is correct — see {@link attachRun} — but it must be finite, because
+ * what it is waiting on is not. `call` has no timeout, the reads behind it are
+ * serialised process-wide in main, and a renderer that waits forever does not
+ * degrade gracefully: it shows a conversation that has visibly stopped while the
+ * agent goes on working into a buffer nobody drains.
+ *
+ * Generous, because expiring is the worse outcome of the two: it costs the
+ * scrollback above the run. Eight seconds is far longer than the read takes when
+ * nothing is contending, and short enough that a wedged one is a pause rather
+ * than the rest of the session.
+ */
+const REPLAY_HOLD_MS = 8_000;
+
+/** Returned by {@link withDeadline} when the work did not finish in time. */
+const TIMED_OUT = Symbol('timed out');
+
+async function withDeadline<T>(ms: number, work: () => Promise<T>): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+
+  const running = work();
+  // A rejection that lands *after* the deadline has no caller left to receive
+  // it, and an unhandled one is a console error in a window that has already
+  // recovered. This marks it handled without swallowing the early case, which
+  // still rejects through the race below.
+  running.catch(() => undefined);
+
+  try {
+    return await Promise.race([running, expiry]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -4600,6 +4874,28 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
 
+  const previous = paneState(pane);
+  /*
+   * Delegated rows survive a re-attach onto the same conversation.
+   *
+   * `background.tasks` is run-scoped, and the run being attached here is
+   * routinely not the one that delegated the work: a workflow outlives the turn
+   * that launched it, and the turn that reports it finished is a continuation
+   * with an id of its own. That run's retained events carry no rows at all, so
+   * clearing unconditionally drops a live workflow's list on every adoption and
+   * leaves the delegated button disabled with nothing left to reopen — the same
+   * loss `isDisposable` describes, arriving by the other door.
+   *
+   * Cleared when the pane is being pointed at a *different* conversation, where
+   * the rows on it genuinely belong to someone else. `permissionQueue` is
+   * cleared either way: a parked request belongs to the run that opened it, and
+   * that run is over.
+   */
+  const sameSession =
+    handle.sessionId !== undefined &&
+    (previous.resumeSessionId === handle.sessionId ||
+      previous.run?.sessionId === handle.sessionId);
+
   replayBuffers.set(handle.runId, []);
   pane.transcript.reset();
   setPaneState(pane, {
@@ -4608,8 +4904,7 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     activeProfileId: handle.profileId,
     cwd: handle.cwd,
     permissionQueue: [],
-    tasks: [],
-    dismissedTasks: [],
+    ...(sameSession ? {} : { tasks: [], dismissedTasks: [], tasksRequested: false }),
     // The session the next prompt continues is this run's own. Set now rather
     // than waiting for `run.end`, because until it is set the sidebar cannot
     // mark the row the user needs in order to find this conversation again.
@@ -4617,9 +4912,30 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
   });
 
   let lastSeq = -1;
+  /*
+   * Cleared when the hold expires, so a read that lands afterwards knows not to
+   * write. Without it a slow `replayEarlierTurns` would apply the conversation's
+   * *history* underneath the live events that were released while it was still
+   * in flight — the transcript out of order, which is the one thing the hold
+   * exists to prevent.
+   */
+  let wanted = true;
   try {
-    await replayEarlierTurns(pane, handle);
-    const replay = await call(() => bridge.runs.events({ runId: handle.runId }));
+    const replay = await withDeadline(REPLAY_HOLD_MS, async () => {
+      await replayEarlierTurns(pane, handle, () => wanted);
+      return call(() => bridge.runs.events({ runId: handle.runId }));
+    });
+
+    if (replay === TIMED_OUT) {
+      wanted = false;
+      pane.transcript.note(
+        'warn',
+        'Could not replay what this run has already done',
+        'Reading it back took too long. It is still running, and everything from here on will appear normally.',
+      );
+      return;
+    }
+
     if (!replay.ok) {
       pane.transcript.note(
         'warn',
@@ -4666,7 +4982,19 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
  * same reason — this is history, and stamping it with the live run's id would
  * make the two indistinguishable inside the transcript.
  */
-async function replayEarlierTurns(pane: Pane, handle: RunHandle): Promise<void> {
+async function replayEarlierTurns(
+  pane: Pane,
+  handle: RunHandle,
+  /**
+   * Whether the answer is still wanted by the time it arrives.
+   *
+   * Read *after* the await, because that is the only place it can have changed:
+   * {@link attachRun} gives up on a read that outruns its hold, and history
+   * applied after the live stream has been released would land below the turn it
+   * came before.
+   */
+  stillWanted: () => boolean = () => true,
+): Promise<void> {
   const { bridge } = resolveBridge();
   const { sessionId, historyOffset } = handle;
   if (!bridge || sessionId === undefined || historyOffset === undefined || historyOffset <= 0) {
@@ -4682,6 +5010,8 @@ async function replayEarlierTurns(pane: Pane, handle: RunHandle): Promise<void> 
       limit: historyOffset,
     }),
   );
+
+  if (!stillWanted()) return;
 
   if (!result.ok) {
     pane.transcript.note(
@@ -5443,6 +5773,33 @@ export function setStreamingWordFade(on: boolean): void {
 }
 
 /**
+ * Show the model's reasoning in the thread, or fold it back into the markers.
+ *
+ * Written in three places because the setting has three audiences, and leaving
+ * any one out is a switch that half works:
+ *
+ *  - **the store**, which is what the rows read to decide whether to render
+ *    themselves open;
+ *  - **every transcript already on screen**, whose rows have to be regrouped;
+ *  - **the pane layer**, for the columns that do not exist yet.
+ *
+ * The middle one is two lists rather than one, and the second is easy to miss.
+ * `allLivePanes` is the conversations — on a column or backgrounded, and
+ * `allPanes` would drop the latter, so a column the reader comes back to would
+ * disagree with the one they set this from. An open agent tab is neither: it is
+ * an off-grid pane in `agentViews` holding a subagent's transcript, drawn by the
+ * same `Transcript` component, and left out of this it is the one place in the
+ * window where the switch appears not to work.
+ */
+export function setShowThinking(on: boolean): void {
+  useApp.setState({ showThinking: on });
+  savePrefs();
+  setThinkingFolds(!on);
+  for (const pane of allLivePanes()) pane.transcript.setThinkingFolds(!on);
+  for (const view of useApp.getState().agentViews) view.pane.transcript.setThinkingFolds(!on);
+}
+
+/**
  * Decide whether the dock may open, or grow a tab, without being asked.
  *
  * `reconcileDock` runs on the write, which is what makes the switch take
@@ -5961,12 +6318,14 @@ export function startSessionFeed(): () => void {
   const tick = (): void => {
     if (stopped) return;
     void refreshSessions();
+    void refreshLiveWork();
     schedule();
   };
 
   const onWake = (): void => {
     if (stopped) return;
     void refreshSessions();
+    void refreshLiveWork();
     schedule();
   };
 
@@ -5980,6 +6339,45 @@ export function startSessionFeed(): () => void {
     window.removeEventListener('focus', onWake);
     document.removeEventListener('visibilitychange', onWake);
   };
+}
+
+/**
+ * Re-read which conversations the main process is still working on.
+ *
+ * Rides the session feed's timer rather than owning one: it is wanted at exactly
+ * the moments a listing is — on a tick, on focus, on returning to a window that
+ * has sat in the background — and a second timer would be a second thing to
+ * reason about for one in-memory read.
+ *
+ * ## Failure leaves the set alone
+ *
+ * A failed read keeps the previous answer instead of clearing it, and that
+ * direction is chosen rather than incidental: this set only ever *widens* what
+ * counts as working ({@link isWorking}), so a stale entry costs a pane held a
+ * little longer than needed, while an empty one on a dropped call would put
+ * every backgrounded workflow back in reach of `pruneBackground`. The engine
+ * being briefly unavailable must not be the thing that decides a conversation is
+ * over.
+ *
+ * Written only on a real change, for the reason {@link syncRunningSessions}
+ * gives: this lands every few seconds and an unconditional write would re-render
+ * every consumer of the store on each one.
+ */
+async function refreshLiveWork(): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const result = await call(() => bridge.runs.liveWork({}));
+  if (!result.ok) return;
+
+  const next = result.value.sessionIds;
+  const current = useApp.getState().sessionsHoldingWork;
+  if (current.length === next.length && current.every((id, at) => id === next[at])) return;
+  useApp.setState({ sessionsHoldingWork: next });
+  // The marker is computed from this set as well as from the panes, and nothing
+  // else will recompute it: the pane subscription that normally drives it fires
+  // on pane writes, and this is a window write.
+  syncRunningSessions();
 }
 
 /** Re-read history once the provider has had a moment to flush its own writes. */
@@ -6030,8 +6428,11 @@ export function newSession(
   // A working conversation moves aside intact; an idle one is simply cleared,
   // which avoids remounting the column — and the composer the user is typing in
   // — for what is, in that case, nothing more than an erase.
+  // `isWorking`: the clear below wipes `tasks`, and between turns this window's
+  // rows cannot say whether a workflow is still going. Handing off costs a
+  // remount; clearing in place costs the rows and the tab they feed.
   let target = pane;
-  if (hasLiveWork(paneState(pane))) {
+  if (isWorking(paneState(pane))) {
     target = handOffToBlank(pane);
   } else {
     pane.transcript.reset();
@@ -6044,6 +6445,7 @@ export function newSession(
       permissionQueue: [],
       tasks: [],
       dismissedTasks: [],
+      tasksRequested: false,
     });
   }
 
@@ -6198,6 +6600,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
+    tasksRequested: false,
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.

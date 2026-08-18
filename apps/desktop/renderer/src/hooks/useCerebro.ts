@@ -33,7 +33,7 @@ import type {
 
 import { call, resolveBridge } from '../lib/bridge';
 
-export type CerebroAction = 'setup' | 'sync' | 'retire';
+export type CerebroAction = 'setup' | 'sync' | 'retire' | 'switch';
 
 /** What the last click came to — the CLI's own words, kept until the next click. */
 export interface CerebroReceipt {
@@ -65,6 +65,16 @@ export interface CerebroPane {
   readonly setup: () => void;
   readonly sync: () => void;
   readonly retire: (request: CerebroRetireRequest) => void;
+  /**
+   * The master switch — Artemis's gate *and* the machine's wiring, together.
+   *
+   * An action rather than a preference write, because it is one: turning it on
+   * re-runs `cerebro enable` and a forced sync, turning it off runs `cerebro
+   * disable`. Both take seconds and both can fail, which is why this shares
+   * `busy` and `lastAction` with the buttons beside it rather than flipping
+   * optimistically the way a settings toggle would.
+   */
+  readonly setEnabled: (enabled: boolean) => void;
 }
 
 function cerebroChannel(): ArtemisBridge['cerebro'] | null {
@@ -155,6 +165,10 @@ export function useCerebro(): CerebroPane {
     (request: CerebroRetireRequest) => void act('retire', (c) => c.retire(request)),
     [act],
   );
+  const setEnabled = useCallback(
+    (enabled: boolean) => void act('switch', (c) => c.setEnabled({ enabled })),
+    [act],
+  );
 
   return {
     reading,
@@ -168,23 +182,29 @@ export function useCerebro(): CerebroPane {
     setup,
     sync,
     retire,
+    setEnabled,
   };
 }
 
 /**
- * Just "is the bank on this machine?".
+ * Just "is the Cerebro prompt actually being sent?".
  *
  * The Agents pane needs this one boolean, to decide whether its built-in
- * Cerebro prompt is currently being sent. Reaching for {@link useCerebro} there
- * would work and would also pull every memory in the bank across IPC — bodies
- * included — plus a preflight that shells out to `cerebro doctor`, all to
- * answer a yes/no question on a pane that shows neither.
+ * Cerebro prompt is currently reaching the model. Reaching for {@link useCerebro}
+ * there would work and would also pull every memory in the bank across IPC —
+ * bodies included — plus a preflight that shells out to `cerebro doctor`, all
+ * to answer a yes/no question on a pane that shows neither.
+ *
+ * Installed **and** switched on, which is the same conjunction `engine.ts`
+ * composes runs with. Two sources of truth for "is this prompt live" is the one
+ * failure this pane must not have: it would tell the user a prompt is being
+ * sent that main is quietly withholding, or the reverse.
  *
  * `null` while the read is in flight, and *stays* `null` if it fails. Not
- * `false`: "not installed" is a claim the pane puts on screen next to a prompt
+ * `false`: "not available" is a claim the pane puts on screen next to a prompt
  * it says is not being sent, and a failed read is not evidence for it.
  */
-export function useCerebroInstalled(): boolean | null {
+export function useCerebroAvailable(): boolean | null {
   const [installed, setInstalled] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -195,7 +215,7 @@ export function useCerebroInstalled(): boolean | null {
     void (async () => {
       const result = await call(() => channel.status({}));
       if (cancelled) return;
-      if (result.ok) setInstalled(result.value.installed);
+      if (result.ok) setInstalled(result.value.installed && result.value.enabled);
     })();
 
     return () => {
