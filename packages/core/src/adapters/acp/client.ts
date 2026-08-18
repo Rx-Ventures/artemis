@@ -129,6 +129,15 @@ export interface AcpHandshake {
   readonly canResume: boolean;
   readonly canLoadSession: boolean;
   readonly acceptsImages: boolean;
+  /**
+   * The agent takes a `resource` block carrying content inline, rather than
+   * only a link to something it must fetch.
+   *
+   * Read as "can a file be attached at all". Separate from
+   * {@link acceptsImages} because the two are advertised separately and an
+   * agent may take one without the other.
+   */
+  readonly acceptsEmbeddedContext: boolean;
 }
 
 /** Raised when an agent refuses a session because the profile is not signed in. */
@@ -492,6 +501,7 @@ export async function connectAcpAgent(options: AcpClientOptions): Promise<AcpCli
       canResume: hasSessionCapability(capabilities, 'resume'),
       canLoadSession: capabilities.loadSession === true,
       acceptsImages: capabilities.promptCapabilities?.image === true,
+      acceptsEmbeddedContext: capabilities.promptCapabilities?.embeddedContext === true,
     };
   } catch (error) {
     // Nothing is usable, so nothing should be left running.

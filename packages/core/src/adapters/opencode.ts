@@ -73,6 +73,7 @@ import type {
   AcpSessionListEntry,
 } from './acp/protocol.js';
 import { composeProviderEnv } from './env.js';
+import { buildPromptBlocks } from './opencode/blocks.js';
 import {
   applyPromptUsage,
   createOpencodeMapperState,
@@ -252,8 +253,32 @@ export const OPENCODE_CAPABILITIES: Capabilities = {
   costReporting: true,
   // Metered credits, not a subscription with rate-limit windows.
   planUsageReporting: false,
-  // Advertised as `promptCapabilities.image`.
+  // Advertised as `promptCapabilities.image`, and — since 2026-08-18 — actually
+  // sent. It was declared true while `createRun` passed only a text block, so an
+  // attached image vanished and the model answered about a picture it had never
+  // seen. See `opencode/blocks.ts`.
   imageInput: true,
+  /**
+   * False despite the agent advertising it, which is the unusual case and the
+   * reason it is written out.
+   *
+   * `opencode acp` 1.18.18 answers the handshake with
+   * `promptCapabilities.embeddedContext: true`, so a `resource` block carrying
+   * inline content should be legal. Sending one **hangs the turn**: the same
+   * prompt with no attachment completes in seconds, with an `image` block
+   * completes, and with a `resource` block produced nothing in seven minutes.
+   * Driven 2026-08-18 through `pnpm opencode:attach`.
+   *
+   * So the advertisement is real and the delivery is not, which is the exact
+   * failure this adapter's header warns about — and it was nearly shipped as
+   * `true` on the strength of the handshake alone. Whether the block shape is
+   * wrong or OpenCode's handling of it is, is unresolved; either way a user
+   * whose run never returns is worse served than one told files are not
+   * supported.
+   *
+   * Reopen this when a `resource` block completes a turn.
+   */
+  fileInput: false,
   // ACP exposes no system-prompt append; OpenCode owns its own instructions.
   systemPromptAppend: false,
   /**
@@ -700,7 +725,17 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
       // mean the provider has finished — the seam says so explicitly.
       void (async () => {
         try {
-          const response = await client.prompt([{ type: 'text', text: input.prompt }]);
+          const response = await client.prompt(
+            buildPromptBlocks(input.prompt, input.attachments, {
+              image: client.handshake.acceptsImages,
+              // Deliberately not `client.handshake.acceptsEmbeddedContext`.
+              // The agent advertises it and hangs when sent one — see
+              // `fileInput` above. Passing false here takes the refusal path,
+              // which names the file in the prompt so the model can say it did
+              // not receive it, rather than leaving the user waiting forever.
+              embeddedContext: false,
+            }),
+          );
           // The authoritative token reading arrives here, on the turn's result,
           // rather than in the stream. Emitted before `run.end` so the run's
           // totals are the ones the agent actually billed.
