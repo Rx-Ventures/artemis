@@ -13,12 +13,29 @@
   are written without their leading dashes above. A version of this file that
   spelled them out parsed as a broken image and rasterised to a blank square.
 
+  THE TILE IS INSET, AND THAT IS NOT A MARGIN FOR LOOKS.
+
+  macOS since Big Sur draws every app icon on one grid: a 1024 canvas whose
+  visible body is 824 square, centred, with a corner radius of 185.4. The 100px
+  of transparency on each side is where the system puts the icon's drop shadow,
+  and the radius is what makes a row of icons read as one family.
+
+  This file used to be a full-bleed 1024 tile at rx 180, which fails both halves
+  of that. Filling the canvas made Artemis render visibly larger than every
+  icon beside it, and 180/1024 is a tighter corner than 185.4/824 — so it came
+  out bigger *and* squarer than its neighbours, which is what showed up as a
+  hard square in Spotlight.
+
+  The mark is scaled to hold the proportion it was drawn at: it spanned 56% of
+  the old full-bleed tile, and 1.245 keeps it at 56% of the smaller body rather
+  than letting it grow into the space the inset just freed.
+
   icon.png and icon.icns are generated from this file by ./icon-build.sh, which
   renders every iconset size at its true size rather than upscaling one.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" rx="180" fill="#0c0d0f"/>
-<g transform="translate(512 512) scale(1.55) translate(-256 -256)" stroke="#31eee8" fill="none">
+<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0c0d0f"/>
+<g transform="translate(512 512) scale(1.245) translate(-256 -256)" stroke="#31eee8" fill="none">
   <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
   <path d="M256 140a116 116 0 0 0 0 232Z" fill="#31eee8" stroke="none"/>
   <circle cx="256" cy="256" r="116" stroke-width="24"/>

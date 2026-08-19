@@ -424,6 +424,7 @@ function Line({
   ts,
   align = 'start',
   avatar,
+  pinLabel = false,
   children,
   className,
 }: {
@@ -432,6 +433,19 @@ function Line({
   readonly ts?: number;
   readonly align?: 'start' | 'end';
   readonly avatar?: ReactNode;
+  /**
+   * Keep the label while the pointer is over the row, instead of trading it for
+   * the clock.
+   *
+   * The trade is right for most rows: the label repeats what the shape of the
+   * row already says, so hovering swaps a redundancy for something you cannot
+   * otherwise see. It is wrong for a row whose label is the *only* thing
+   * distinguishing it from ordinary output — reasoning in the thread reads as
+   * an answer without it, and it disappeared exactly when the reader pointed at
+   * the passage they were trying to identify. The clock still arrives; it just
+   * does not evict the one word that says what this is.
+   */
+  readonly pinLabel?: boolean;
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement {
@@ -449,8 +463,9 @@ function Line({
             'flex flex-col items-end gap-0.5 transition-opacity group-data-[align=end]/message:items-start',
             // Only fade for a row that has a clock to arrive in its place. The
             // working row carries no `ts`, and fading it unconditionally would
-            // trade the mark for an empty gutter.
-            ts === undefined ? undefined : 'group-hover:opacity-0',
+            // trade the mark for an empty gutter. A pinned label never fades —
+            // see `pinLabel`.
+            ts === undefined || pinLabel ? undefined : 'group-hover:opacity-0',
           )}
         >
           {avatar}
@@ -463,7 +478,14 @@ function Line({
           )}
         </div>
         {ts === undefined ? null : (
-          <div className="pointer-events-none absolute top-px right-0 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60 group-data-[align=end]/message:right-auto group-data-[align=end]/message:left-0">
+          <div
+            className={cn(
+              'pointer-events-none absolute right-0 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60 group-data-[align=end]/message:right-auto group-data-[align=end]/message:left-0',
+              // Under a pinned label rather than over it: nothing is being
+              // swapped out, so the two need somewhere to sit side by side.
+              pinLabel ? 'top-4' : 'top-px',
+            )}
+          >
             {formatClock(ts)}
           </div>
         )}
@@ -751,7 +773,7 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
   };
 
   return (
-    <Line label="thinking" tone="sage" ts={item.ts}>
+    <Line label="thinking" tone="sage" ts={item.ts} pinLabel>
       <Fold
         open={open}
         onOpenChange={toggle}

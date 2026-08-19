@@ -2,6 +2,11 @@ node_modules/
 dist/
 out/
 release/
+# electron-builder's output for `dist:beta`. Named separately from `release/`
+# so a beta build cannot overwrite the artifacts of a real one — which also
+# means it needs its own line here, and did not get one until 972MB of dmg was
+# committed by a `git add -A`.
+release-beta/
 build/
 # …but electron-builder's buildResources (app icons) are source, not output.
 !apps/desktop/build/

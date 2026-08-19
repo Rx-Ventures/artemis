@@ -31,7 +31,16 @@ import { IPC_PUSH } from '@rx-artemis/protocol';
 
 import { profilesRoot } from '@rx-artemis/core';
 
-import { APP_NAME, previousUserDataDir } from './appNames.js';
+import { APP_NAME, flavouredAppName, previousUserDataDir } from './appNames.js';
+
+/**
+ * Which build this is: `''` for Artemis, `Beta` for a copy installed beside it.
+ *
+ * Injected by `electron.vite.config.ts` at build time. The fallback covers the
+ * unbundled paths — `electron-vite dev` and anything that imports this module
+ * without going through the bundler — where the define is not substituted.
+ */
+const FLAVOUR: string = typeof __ARTEMIS_FLAVOUR__ === 'string' ? __ARTEMIS_FLAVOUR__ : '';
 import { EngineHost } from './engine.js';
 import {
   broadcast,
@@ -71,13 +80,32 @@ const log = createLogger('main');
  * other, or Windows treats the running app and its installed shortcut as two
  * unrelated applications.
  */
-const APP_USER_MODEL_ID = 'dev.artemis.app';
+const APP_USER_MODEL_ID = FLAVOUR === '' ? 'dev.artemis.app' : `dev.artemis.app.${FLAVOUR.toLowerCase()}`;
 
 /**
  * Set before anything reads a path. See `appNames.ts` for why the name matters
  * and for the rule that governs changing it.
  */
-app.setName(APP_NAME);
+app.setName(flavouredAppName(APP_NAME, FLAVOUR));
+
+/*
+ * A flavoured build is renamed but not rehoused.
+ *
+ * `userData` defaults to a directory named after the app, so `Artemis (Beta)`
+ * would otherwise open as a blank install — no profiles, no history, nothing to
+ * test *with*. Pointing it back at the ordinary directory is what makes a beta
+ * a different build of your app rather than a different app.
+ *
+ * The consequence is stated where it will be met: the single-instance lock is
+ * keyed to this directory, so the two builds cannot run at the same time. The
+ * second to launch is refused and the first is raised. That is the right way
+ * round — two copies writing one set of session files is a worse problem than
+ * having to quit one of them.
+ *
+ * Before `adoptPreviousUserData` and before anything else reads a path, for the
+ * same reason `setName` is.
+ */
+if (FLAVOUR !== '') app.setPath('userData', join(app.getPath('appData'), APP_NAME));
 
 /**
  * Adopt the user data left behind by a previous name.

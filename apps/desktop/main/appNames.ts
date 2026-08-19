@@ -47,6 +47,43 @@ export const APP_NAME = 'Artemis';
 export const PREVIOUS_APP_NAMES = ['Apollo', 'Libra'] as const;
 
 /**
+ * A build that installs beside the real one instead of replacing it.
+ * ============================================================================
+ *
+ * A flavour changes what the app is *called* — `Artemis (Beta)` in the Dock, the
+ * menu bar and the About box — and deliberately nothing else. In particular it
+ * does not change where the data lives: `index.ts` points a flavoured build at
+ * the ordinary installation's user-data directory on purpose, so a beta opens
+ * with the profiles, sessions and settings you already have rather than as an
+ * empty app you would have to set up before you could test anything.
+ *
+ * ## The cost, which is real and worth stating here
+ *
+ * `app.getPath('userData')` is normally derived from the name, and Electron's
+ * single-instance lock is keyed to that directory. Pointing both builds at one
+ * directory therefore means **only one of them can run at a time** — launch the
+ * beta while the release is open and the lock is refused, and the running copy
+ * is raised instead.
+ *
+ * That is the trade the shared directory buys, and it is the right way round:
+ * two copies running simultaneously against one set of profiles would both be
+ * writing the same session files, and "my history went strange" is a far worse
+ * outcome than "quit the other one first".
+ *
+ * The suffix is parenthesised because it lands where a person reads it — the
+ * application menu, the Dock tooltip, the About box. "Artemis (Beta)" is a
+ * legible name; "Artemis-beta" reads like a build artefact and "ArtemisBeta"
+ * like a mistake.
+ *
+ * @param base    {@link APP_NAME}, the product's real name.
+ * @param flavour `''` for the ordinary build, or a short word like `Beta`.
+ */
+export function flavouredAppName(base: string, flavour: string): string {
+  const trimmed = flavour.trim();
+  return trimmed === '' ? base : `${base} (${trimmed})`;
+}
+
+/**
  * Which abandoned user-data directory to adopt, if any.
  *
  * Newest first: someone who ran Artemis *and* Apollo *and* Libra has stale Libra

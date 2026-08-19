@@ -18,7 +18,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { APP_NAME, PREVIOUS_APP_NAMES, previousUserDataDir } from './appNames.js';
+import {
+  APP_NAME,
+  flavouredAppName,
+  PREVIOUS_APP_NAMES,
+  previousUserDataDir,
+} from './appNames.js';
 
 /** Every name the app has shipped under, oldest first. Only ever append. */
 const SHIPPED_NAMES = ['Libra', 'Apollo', 'Artemis'] as const;
@@ -81,5 +86,29 @@ describe('previousUserDataDir', () => {
     // would be a `rename(x, x)` rather than a no-op.
     const sameName = '/data/Apollo';
     expect(previousUserDataDir(parent, sameName, present(sameName), join)).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Flavours — a build that installs beside the real one                       */
+/* -------------------------------------------------------------------------- */
+
+describe('flavours', () => {
+  it('renames the app, which is all a flavour changes', () => {
+    // The name reaches the Dock, the menu bar and the About box. It does *not*
+    // reach the data: `index.ts` points a flavoured build back at the ordinary
+    // user-data directory so a beta opens with the profiles you already have.
+    expect(flavouredAppName('Artemis', 'Beta')).toBe('Artemis (Beta)');
+    expect(flavouredAppName('Artemis', '')).toBe('Artemis');
+    expect(flavouredAppName('Artemis', '   ')).toBe('Artemis');
+  });
+
+  it('keeps the flavour out of the rename chain', () => {
+    // The chain is about names the *product* has shipped under. A flavour is a
+    // suffix applied to the current one, so it must never become an entry —
+    // that is how a future rename would start hunting for `Artemis (Beta)`
+    // directories and adopting them.
+    for (const name of PREVIOUS_APP_NAMES) expect(name).not.toContain('(');
+    expect(APP_NAME).not.toContain('(');
   });
 });
