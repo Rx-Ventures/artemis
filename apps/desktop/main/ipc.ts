@@ -87,6 +87,7 @@ import {
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import type { ServerHost } from './server.js';
 import { readSharedConfigStatus } from './sharedConfig.js';
 import type { TerminalHost } from './terminal.js';
 import type { Updater } from './updater.js';
@@ -106,6 +107,14 @@ import {
   validateRunsRespondPermission,
   validateRunsSend,
   validateRunsStart,
+  validateServerCatalogue,
+  validateServerConfigure,
+  validateServerCreateConnection,
+  validateServerDeleteConnection,
+  validateServerRenameConnection,
+  validateServerStart,
+  validateServerStatus,
+  validateServerStop,
   validateSessionsList,
   validateSessionsDelete,
   validateSessionsTag,
@@ -198,6 +207,7 @@ export interface IpcLayerOptions {
   readonly updater: Updater;
   readonly terminals: TerminalHost;
   readonly browsers: BrowserHost;
+  readonly server: ServerHost;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -212,7 +222,20 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy, updater, terminals, browsers } = options;
+  const { engine, policy, updater, terminals, browsers, server } = options;
+
+  /**
+   * Drop the conversations a program started, leaving the person's own.
+   *
+   * `hasMore` is deliberately left as the engine reported it. It describes the
+   * *provider's* pagination — whether more rows exist past this offset — and
+   * that is still true after filtering. Recomputing it from the filtered length
+   * would tell the sidebar "no more" while the next page still holds the user's
+   * own conversations behind a few server ones.
+   */
+  const withoutServerSessions = <T extends { readonly id: string }>(
+    sessions: readonly T[],
+  ): readonly T[] => sessions.filter((session) => !server.isServerSession(session.id));
 
   const handlers: ChannelHandlers = {
     /* ---------------------------------------------------------------- */
@@ -226,24 +249,47 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       }),
     },
 
+    /*
+     * The three mutations drop the server's cached catalogue.
+     *
+     * That cache exists because assembling it spawns a provider CLI per account
+     * (see `core/server/catalogue.ts`), and its TTL is tuned for the pace at
+     * which providers ship models — not for the pace at which a user creates an
+     * account and immediately looks for it. A profile added, renamed or deleted
+     * changes the *routes*, and a route list that still names a deleted account
+     * for five minutes is a client sending turns to an account that is gone.
+     *
+     * Invalidation and not a rebuild: the next request pays for the refresh, so
+     * a user who creates three profiles in a row does not trigger three
+     * catalogue builds nobody asked for.
+     */
     [IPC.profilesCreate]: {
       validate: validateProfilesCreate,
-      handle: async (request) => ({
-        profile: await engine.require().createProfile(request.draft),
-      }),
+      handle: async (request) => {
+        const profile = await engine.require().createProfile(request.draft);
+        server.invalidateCatalogue();
+        return { profile };
+      },
     },
 
     [IPC.profilesUpdate]: {
       validate: validateProfilesUpdate,
-      handle: async (request) => ({
-        profile: await engine.require().updateProfile(request.id, request.patch),
-      }),
+      handle: async (request) => {
+        const profile = await engine.require().updateProfile(request.id, request.patch);
+        server.invalidateCatalogue();
+        return { profile };
+      },
     },
 
     [IPC.profilesDelete]: {
       validate: validateProfilesDelete,
-      handle: async (request) =>
-        engine.require().deleteProfile(request.id, { deleteConfigDir: request.deleteConfigDir }),
+      handle: async (request) => {
+        const result = await engine
+          .require()
+          .deleteProfile(request.id, { deleteConfigDir: request.deleteConfigDir });
+        server.invalidateCatalogue();
+        return result;
+      },
     },
 
     [IPC.profilesSuggestDir]: {
@@ -380,26 +426,45 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     /* Sessions                                                         */
     /* ---------------------------------------------------------------- */
 
+    /*
+     * Both listings hide conversations the *server* started.
+     *
+     * A turn that arrived over HTTP writes a transcript indistinguishable from
+     * one the user typed — same provider, same directory — so without this a
+     * script polling a summariser every minute would push a person's own work
+     * off the top of their own sidebar within the hour.
+     *
+     * Filtered here rather than in the engine because this is where the
+     * *sidebar's* question is asked. `listSessions` answers "what is in this
+     * account's history", which is a different question with a truthful answer
+     * that includes these; the app's history pane asks "what did I start", and
+     * that is the one being answered at this boundary. Nothing is deleted — see
+     * `serverSessions.ts`.
+     */
     [IPC.sessionsList]: {
       validate: validateSessionsList,
-      handle: async (request) =>
-        engine.require().listSessions({
+      handle: async (request) => {
+        const page = await engine.require().listSessions({
           providerId: request.providerId,
           profileId: request.profileId,
           cwd: request.cwd,
           limit: request.limit,
           offset: request.offset,
-        }),
+        });
+        return { ...page, sessions: withoutServerSessions(page.sessions) };
+      },
     },
 
     [IPC.sessionsListAll]: {
       validate: validateSessionsListAll,
-      handle: async (request) =>
-        engine.require().listAllSessions({
+      handle: async (request) => {
+        const page = await engine.require().listAllSessions({
           providerId: request.providerId,
           limit: request.limit,
           offset: request.offset,
-        }),
+        });
+        return { ...page, sessions: withoutServerSessions(page.sessions) };
+      },
     },
 
     /* ---------------------------------------------------------------- */
@@ -512,6 +577,76 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       validate: validateAgentPromptsSave,
       handle: async (request) => ({
         document: await engine.require().writeAgentPrompts(request.document),
+      }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Server                                                           */
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Five channels onto one host, and every one of them answers with the whole
+     * state — see the protocol's channel block for why.
+     *
+     * None of these reaches the engine directly. The host holds the engine and
+     * assembles the catalogue from it, so there is no path from a renderer
+     * request to "publish this profile": the server serves what the engine says
+     * exists, and these decide only whether it is serving.
+     */
+    [IPC.serverStatus]: {
+      validate: validateServerStatus,
+      handle: async () => ({ state: server.state() }),
+    },
+
+    [IPC.serverStart]: {
+      validate: validateServerStart,
+      handle: async () => ({ state: await server.listen() }),
+    },
+
+    [IPC.serverStop]: {
+      validate: validateServerStop,
+      handle: async () => ({ state: await server.close() }),
+    },
+
+    [IPC.serverConfigure]: {
+      validate: validateServerConfigure,
+      handle: async (request) => ({ state: await server.configure(request) }),
+    },
+
+    [IPC.serverCreateConnection]: {
+      validate: validateServerCreateConnection,
+      handle: async (request) => ({
+        state: await server.createConnection({
+          label: request.label,
+          workspace: request.workspace,
+          ...(request.allow === undefined ? {} : { allow: request.allow }),
+        }),
+      }),
+    },
+
+    [IPC.serverRenameConnection]: {
+      validate: validateServerRenameConnection,
+      handle: async (request) => ({
+        state: await server.renameConnection(request.id, request.label),
+      }),
+    },
+
+    [IPC.serverDeleteConnection]: {
+      validate: validateServerDeleteConnection,
+      handle: async (request) => ({ state: await server.deleteConnection(request.id) }),
+    },
+
+    /**
+     * The same catalogue the HTTP surface serves, off the same cache.
+     *
+     * Not the engine's `listProfiles` plus `listProviderModels` assembled here:
+     * that would be a second implementation of the thing the server publishes,
+     * and the pane's whole value is that it shows what clients actually get.
+     */
+    [IPC.serverCatalogue]: {
+      validate: validateServerCatalogue,
+      handle: async (request) => ({
+        profiles: await server.catalogue({ refresh: request.refresh === true }),
       }),
     },
 

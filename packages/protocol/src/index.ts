@@ -25,6 +25,8 @@
  * | `terminal`      | `TerminalInfo`, the `TerminalEvent` union                  |
  * | `browser`       | `BrowserInfo`, `browserUrlFor`, the `BrowserEvent` union   |
  * | `planLoad`      | what live runs reserve, so the chooser is not blind to them |
+ * | `openai`        | the chat-completions dialect, and the ruling on every param |
+ * | `server`        | the local HTTP server: routes, catalogue shapes, state      |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
  * | `github`        | `parsePullRequestUrl`, `PullRequestSummary`                 |
  * | `agentPrompts`  | the standing-instruction library, and how it composes       |
@@ -52,6 +54,8 @@ export * from './session.js';
 export * from './profile.js';
 export * from './terminal.js';
 export * from './browser.js';
+export * from './openai.js';
+export * from './server.js';
 export * from './sharedConfig.js';
 export * from './github.js';
 export * from './agentPrompts.js';

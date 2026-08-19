@@ -1,0 +1,931 @@
+/**
+ * The Artemis server: what it is, and what it says on the wire.
+ * ============================================================================
+ *
+ * Artemis holds something no other program on the machine can get at: a set of
+ * *accounts* — profiles — each entered through its own config directory, each
+ * with its own plan, its own catalogue and its own capabilities. Everything in
+ * this app has been built to use them from inside a window. This file is the
+ * beginning of the other half: a local HTTP server that lets **other programs**
+ * use them too, the way LM Studio's server lets any OpenAI client reach a model
+ * that is really a file on the disk.
+ *
+ * That makes Artemis a *router*. A profile plus a model is a route, other
+ * programs address it by name, and Artemis decides which account actually runs
+ * the turn.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO SURFACES, AND WHY BOTH
+ * ---------------------------------------------------------------------------
+ *
+ * `/v1/*` is OpenAI's shape, because that is the only shape the ecosystem
+ * already speaks: an editor extension, a script, an SDK and a `curl` all know
+ * `GET /v1/models` and none of them know anything about Artemis. It is the
+ * front door, and it is deliberately dumb — an id, an object type, an owner.
+ *
+ * `/api/{@link SERVER_API_VERSION}/*` is Artemis's own, because OpenAI's schema
+ * has nowhere to put the facts that make this app worth routing through. A
+ * model here is not just an id: it belongs to an *account*, it accepts a set of
+ * *thinking levels* the provider named, and it may or may not accept fast mode
+ * or ultracode. A caller that flattens all of that into `"gpt-4"` cannot ask
+ * for high effort, and a caller that never sees `fastMode: false` will believe
+ * a toggle took effect when the run ignored it — which is the same hazard
+ * `ProviderModelOption.supportsFastMode` exists to prevent inside the app,
+ * arriving now at a consumer we do not control.
+ *
+ * So: the compatible surface for reach, the native surface for truth. Neither
+ * is a subset of the other, and a client is expected to use both — discover on
+ * `/v1/models`, then ask `/api/v0/models` what the row it picked can actually
+ * do.
+ *
+ * ---------------------------------------------------------------------------
+ * A ROUTE IS `profile/model`, AND WHY IT IS NOT JUST A MODEL ID
+ * ---------------------------------------------------------------------------
+ *
+ * `opus` is not addressable on its own here and never will be. Two profiles can
+ * both offer it, on different plans, with different limits and different
+ * entitlements — that is the entire reason profiles exist — so a bare model id
+ * names two different things and Artemis would have to guess which account to
+ * bill. The account is therefore *in the address*: `work-max/opus`.
+ *
+ * The left half is a slug derived from the profile's label rather than its
+ * {@link ProfileId}, because the id is a random string and this is a name a
+ * person types into a config file. Ids still work — see
+ * {@link parseModelRoute} — so a caller that wants stability against a rename
+ * can use one.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TOKEN IS NOT OPTIONAL
+ * ---------------------------------------------------------------------------
+ *
+ * A loopback port is not a private one. Every process on the machine can reach
+ * it, and so can any web page you happen to have open, through a request the
+ * browser is happy to send cross-origin. What is behind this port is the user's
+ * *accounts* — the catalogue today, their spend tomorrow — so the server
+ * refuses anything that does not present the bearer token Artemis generated,
+ * with the single exception of {@link SERVER_HEALTH_PATH}, which answers
+ * "yes, something is listening" and nothing else.
+ */
+
+import type { ProfileId } from './ids.js';
+import type { Capabilities, ProviderId, ProviderKind } from './provider.js';
+
+/* -------------------------------------------------------------------------- */
+/* Addresses                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The version segment of the native API path.
+ *
+ * `v0` and not `v1`, and the zero is a promise rather than modesty: this shape
+ * will change while the completions half is being built, and a client should
+ * see that in the URL it typed rather than discover it when a field moves.
+ */
+export const SERVER_API_VERSION = 'v0';
+
+/**
+ * The interface the server binds.
+ *
+ * Not configurable, and that is the security posture rather than an oversight.
+ * Binding `0.0.0.0` would put a user's accounts on whatever network they are
+ * joined to — a café, a conference, an office VLAN — and the blast radius of a
+ * mistake there is somebody else's turns billed to them. If this ever becomes a
+ * setting it should arrive with its own warning surface, not as a text field.
+ */
+export const SERVER_HOST = '127.0.0.1';
+
+/**
+ * The default port.
+ *
+ * Chosen to sit clear of the neighbours this server will most often be run
+ * beside — LM Studio on 1234, Ollama on 11434, llama.cpp on 8080 — because the
+ * first thing a user does with a router is point it at the things it routes to.
+ */
+export const DEFAULT_SERVER_PORT = 6472;
+
+/** Lowest port a user may choose. Below 1024 needs root on Unix; we do not ask. */
+export const MIN_SERVER_PORT = 1024;
+
+/** Highest port there is. */
+export const MAX_SERVER_PORT = 65_535;
+
+/**
+ * The one path that answers without a token.
+ *
+ * It reports that a server is up and what version of Artemis it belongs to —
+ * enough for a client to wait for the port and no more. It names no profile, no
+ * model and no account, so an unauthenticated caller learns exactly what a
+ * successful TCP connection already told them.
+ */
+export const SERVER_HEALTH_PATH = '/health';
+
+/** `http://127.0.0.1:6472`, with no trailing slash. */
+export function serverUrl(host: string, port: number): string {
+  // IPv6 literals have to be bracketed or the port reads as another group.
+  const authority = host.includes(':') ? `[${host}]` : host;
+  return `http://${authority}:${port}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Routes                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** The separator between the account half of a route and the model half. */
+const ROUTE_SEPARATOR = '/';
+
+/**
+ * Turn a profile's label into the left half of a route.
+ *
+ * Lowercase, ASCII, hyphen-separated — the shape a person can type from memory
+ * and a shell will not mangle. Everything else collapses to a hyphen, because
+ * the alternative is percent-encoding in a URL a human is expected to write.
+ *
+ * Returns an empty string for a label with nothing usable in it (an emoji, a
+ * name in a script this crude transliteration cannot carry). That is a real
+ * case and callers must handle it: {@link assignProfileSlugs} falls back to the
+ * profile's id, which is always addressable.
+ */
+export function profileSlug(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+/**
+ * One slug per profile, all of them distinct.
+ *
+ * Uniqueness is the whole job. Two profiles labelled "Work" and "work " both
+ * slug to `work`, and a route that resolves to either of two accounts is a
+ * route that bills the wrong one — so a collision is broken by appending `-2`,
+ * `-3`, and so on.
+ *
+ * Order decides who keeps the bare slug, so the caller's order must be stable:
+ * pass profiles in a fixed order (the store's own) and a given set of profiles
+ * always produces the same map. A set that changes — a profile added, renamed
+ * or deleted — *can* move a suffix, which is the honest cost of deriving names
+ * from labels and the reason {@link parseModelRoute} also accepts ids.
+ */
+export function assignProfileSlugs(
+  profiles: readonly { readonly id: ProfileId; readonly label: string }[],
+): ReadonlyMap<ProfileId, string> {
+  const taken = new Set<string>();
+  const slugs = new Map<ProfileId, string>();
+
+  for (const profile of profiles) {
+    // An unslugabble label falls back to the id rather than to a generic name:
+    // `profile-2` would be a lie the moment its neighbour is deleted.
+    const base = profileSlug(profile.label) || profileSlug(profile.id) || 'profile';
+    let slug = base;
+    let suffix = 2;
+    while (taken.has(slug)) slug = `${base}-${suffix++}`;
+    taken.add(slug);
+    slugs.set(profile.id, slug);
+  }
+
+  return slugs;
+}
+
+/** `work-max` + `opus` → `work-max/opus`. */
+export function modelRoute(profileSlugOrId: string, modelId: string): string {
+  return `${profileSlugOrId}${ROUTE_SEPARATOR}${modelId}`;
+}
+
+/**
+ * Split a route back into the account half and the model half.
+ *
+ * Splits on the **first** separator only, because a model id may legitimately
+ * contain one — `library/llama3:8b` is an Ollama model, not a profile called
+ * `library`. The account half never does: a slug is `[a-z0-9-]+` by
+ * construction and a {@link ProfileId} has no slash in it either.
+ *
+ * Returns `undefined` for anything without both halves, including a bare model
+ * id. That refusal is deliberate: see the file comment on why a model alone is
+ * not an address.
+ */
+export function parseModelRoute(
+  route: string,
+): { readonly profile: string; readonly model: string } | undefined {
+  const trimmed = route.trim();
+  const cut = trimmed.indexOf(ROUTE_SEPARATOR);
+  if (cut <= 0) return undefined;
+  const profile = trimmed.slice(0, cut);
+  const model = trimmed.slice(cut + 1);
+  if (profile.length === 0 || model.length === 0) return undefined;
+  return { profile, model };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The catalogue, as other programs see it                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One thinking level, on the wire.
+ *
+ * A copy of {@link ProviderEffortOption} rather than a re-export, because the
+ * two are contracts with different audiences: that one is Artemis's internal
+ * vocabulary and may be reshaped whenever the picker needs it to be, this one
+ * is published to programs we do not ship and cannot recompile. They are
+ * identical today and are allowed to stop being.
+ */
+export interface ServerThinkingLevel {
+  /** What a caller sends. Opaque; compare it, do not parse it. */
+  readonly id: string;
+  /** Human-readable, e.g. "High". */
+  readonly label: string;
+  /** One line on what this level trades away. */
+  readonly note: string;
+}
+
+/**
+ * One routable model: an account, a model, and what the pair accepts.
+ *
+ * The three booleans are the reason this surface exists at all. Each says
+ * whether a *setting* reaches the model or is silently dropped, and each is
+ * false unless the adapter said otherwise — the same "absent means no" rule
+ * {@link ProviderModelOption.supportsFastMode} states, made explicit here
+ * because a JSON consumer cannot tell an absent field from a false one without
+ * being told.
+ */
+export interface ServerModel {
+  /** What goes in `model`: `work-max/opus`. Unique across the whole server. */
+  readonly route: string;
+  /** The provider's own id for the model, e.g. `opus`. Not unique on its own. */
+  readonly id: string;
+  /** Short name for dense chrome, e.g. "Opus 5". */
+  readonly label: string;
+  /** The provider's full name, when it publishes one. */
+  readonly displayName?: string;
+  /**
+   * The concrete wire id an alias resolves to, e.g. `opus` → `claude-opus-5`.
+   *
+   * Published because a caller logging what it ran should be able to record the
+   * model rather than the alias — the alias is a moving target by design.
+   */
+  readonly resolvedModel?: string;
+  /** One line on what this model is for. */
+  readonly note: string;
+
+  /** The account this route runs as. */
+  readonly profileId: ProfileId;
+  /** The account's slug — the left half of {@link route}. */
+  readonly profileSlug: string;
+  /** The account's human name. */
+  readonly profileLabel: string;
+  readonly providerId: ProviderId;
+
+  /**
+   * Thinking levels valid on *this* model, least to most.
+   *
+   * Already narrowed by the model's own constraint: a provider offers five
+   * levels and a given model may accept three of them, and it is the
+   * intersection that is true here. Empty means the model takes no thinking
+   * setting at all, which a caller must treat as "do not send one" rather than
+   * as "send the default".
+   */
+  readonly thinkingLevels: readonly ServerThinkingLevel[];
+  /**
+   * The model decides its own depth, so a level is a hint rather than an
+   * instruction. Informational: it explains why setting one may change nothing.
+   */
+  readonly adaptiveThinking: boolean;
+  /** The model accepts fast mode. */
+  readonly fastMode: boolean;
+  /** The model accepts ultracode. */
+  readonly ultracode: boolean;
+  /** Where this sits in its provider's lineup, `0` being smallest. Absent means unknown. */
+  readonly tier?: number;
+}
+
+/**
+ * One account, with everything routable through it.
+ */
+export interface ServerProfile {
+  readonly id: ProfileId;
+  /** The left half of every route below. */
+  readonly slug: string;
+  readonly label: string;
+  readonly provider: {
+    readonly id: ProviderId;
+    readonly label: string;
+    /** `hosted` — an account — or `local` — an endpoint on this machine. */
+    readonly kind: ProviderKind;
+  };
+  /**
+   * The provider is usable in this build and on this machine.
+   *
+   * An unavailable account is still listed, with its reason, for the same
+   * reason the profile screen greys one out rather than hiding it: a client
+   * that cannot see the row cannot tell the user what to fix.
+   */
+  readonly available: boolean;
+  readonly unavailableReason?: string;
+  /** The user hid this account from Artemis's own picker. */
+  readonly disabled: boolean;
+  /**
+   * The account itself confirmed this catalogue, as opposed to it being the
+   * adapter's built-in list.
+   *
+   * Published rather than smoothed over: a client showing a model that the
+   * account may not actually have should be able to say so, exactly as the
+   * settings screen does.
+   */
+  readonly live: boolean;
+  /** What the provider behind this account can do. See {@link Capabilities}. */
+  readonly capabilities: Capabilities;
+  readonly models: readonly ServerModel[];
+}
+
+/** The body of `GET /api/v0/profiles`. */
+export interface ServerProfilesBody {
+  readonly object: 'artemis.profiles';
+  readonly profiles: readonly ServerProfile[];
+}
+
+/** The body of `GET /api/v0/models` — every route on the server, flattened. */
+export interface ServerModelsBody {
+  readonly object: 'artemis.models';
+  readonly models: readonly ServerModel[];
+}
+
+/** One row of `GET /v1/models`, in OpenAI's shape. */
+export interface OpenAiModel {
+  /** The route. What a caller puts in `model`. */
+  readonly id: string;
+  readonly object: 'model';
+  /** Seconds since the epoch. Artemis reports when the server started. */
+  readonly created: number;
+  /** The account's slug, which is the closest thing here to an owner. */
+  readonly owned_by: string;
+}
+
+/** The body of `GET /v1/models`. */
+export interface OpenAiModelList {
+  readonly object: 'list';
+  readonly data: readonly OpenAiModel[];
+}
+
+/**
+ * An error, in the shape OpenAI clients already unwrap.
+ *
+ * Used on both surfaces rather than only on `/v1`, because a client that has
+ * learned one error shape from this server should not meet a second one by
+ * changing path.
+ */
+export interface ServerErrorBody {
+  readonly error: {
+    readonly message: string;
+    /** `invalid_request_error`, `authentication_error`, `server_error`. */
+    readonly type: string;
+    /** Machine-readable, e.g. `model_not_found`. */
+    readonly code?: string;
+  };
+}
+
+/** The body of `GET /health`. Deliberately says nothing about accounts. */
+export interface ServerHealthBody {
+  readonly object: 'artemis.health';
+  readonly status: 'ok';
+  /** Artemis's own version, so a client can branch on the API it will get. */
+  readonly version: string;
+  /** The native API version this build serves, i.e. {@link SERVER_API_VERSION}. */
+  readonly api: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Connections: who is calling, and where their turns run                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where a connection's turns run.
+ *
+ * Three kinds, and the middle one is the reason this is a union rather than an
+ * optional path. "No directory" is not one state, it is two, and they are as
+ * different from each other as either is from a real folder:
+ *
+ * - **`directory`** — a folder the user picked. The agent reads and writes
+ *   there, and that grant was made deliberately in the Server tab.
+ *
+ * - **`ephemeral`** — a scratch directory Artemis creates and deletes. The
+ *   agent still *works*: it has somewhere to write a file, run a build, unpack
+ *   something. Nothing it does survives, and none of it lands in the user's
+ *   projects. This is the right default for a program that only wants to talk
+ *   to a model — a summariser, a classifier, a chat UI — and it is what the
+ *   ChatGPT and Claude APIs implicitly give you, where no working directory
+ *   exists at all.
+ *
+ * - **`none`** — cannot run turns; the catalogue and nothing else. A minimal
+ *   grant for a program that only needs to know which models exist: a picker, a
+ *   dashboard, a script choosing a route. Handing that program write access to
+ *   a directory in order to let it ask a question would be absurd.
+ *
+ * ## What `ephemeral` does and does not promise
+ *
+ * It promises the agent starts somewhere disposable and that Artemis removes it
+ * afterwards. It does **not** promise the agent cannot reach the rest of the
+ * disk — an agent with a shell can always `cd` elsewhere, and confinement is a
+ * separate mechanism (`ProviderDescriptor.sandbox`, and the provider's own
+ * permission modes). Saying "ephemeral means it cannot touch my files" would be
+ * the kind of half-true safety claim this codebase refuses to make elsewhere,
+ * so it is not made here either: the honest sentence is *nothing it writes in
+ * its working directory is kept*.
+ */
+export type ServerWorkspace =
+  | {
+      readonly kind: 'directory';
+      /** Absolute path. The agent reads and writes here. */
+      readonly path: string;
+    }
+  | {
+      readonly kind: 'ephemeral';
+      /**
+       * Keep one scratch directory per conversation rather than per turn.
+       *
+       * On by default, and the default matters: a turn that writes a file and a
+       * follow-up turn that reads it are one conversation, and a fresh
+       * directory between them would make the agent's own work vanish
+       * mid-thought. Off means every turn starts empty.
+       */
+      readonly perSession?: boolean;
+    }
+  | { readonly kind: 'none' };
+
+/** The workspace a new connection gets unless the user says otherwise. */
+export const DEFAULT_WORKSPACE: ServerWorkspace = { kind: 'ephemeral', perSession: true };
+
+/**
+ * Fill in a workspace's defaults, so every stored one has the same shape.
+ *
+ * `perSession` is documented as "on unless set to false", and that default was
+ * originally applied in three places — the IPC validator, the config reader and
+ * the create path — which is three chances to disagree. One of them did: a
+ * connection created in memory kept `perSession: undefined` while an identical
+ * one loaded from disk had `true`, so the same grant compared unequal to itself
+ * across a restart. This is the single definition all three now call.
+ */
+export function normalizeWorkspace(workspace: ServerWorkspace): ServerWorkspace {
+  return workspace.kind === 'ephemeral'
+    ? { kind: 'ephemeral', perSession: workspace.perSession !== false }
+    : workspace;
+}
+
+/** Can a turn run at all in this workspace? */
+export function workspaceCanRunTurns(workspace: ServerWorkspace): boolean {
+  return workspace.kind !== 'none';
+}
+
+/**
+ * One line naming a workspace, for a settings row or a client's own UI.
+ *
+ * `summarise`, not `describe`, because `@rx-artemis/core` already exports a
+ * `describeWorkspace` that answers a different question about a different thing
+ * — what a *folder on disk* is called, repository or plain directory. Two
+ * exported functions of one name, in two packages a consumer routinely imports
+ * together, is a collision waiting for whoever writes that import.
+ */
+export function summariseWorkspace(workspace: ServerWorkspace): string {
+  switch (workspace.kind) {
+    case 'directory':
+      return workspace.path;
+    case 'ephemeral':
+      return 'Scratch space, deleted afterwards';
+    case 'none':
+      return 'Catalogue only — cannot run turns';
+  }
+}
+
+/**
+ * One program's access to this Artemis: a token, a workspace, and
+ * optionally a restricted set of accounts.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE DIRECTORY BELONGS TO THE TOKEN
+ * ---------------------------------------------------------------------------
+ *
+ * An Artemis turn is agentic — it reads files, edits them, runs commands — so
+ * every turn needs a working directory, and something has to choose it. The
+ * obvious place is the request, and that is the wrong place for two reasons.
+ *
+ * The first is whose decision it is. A path in the request means the *calling
+ * program* decides which of the user's repositories an agent may edit, and the
+ * user finds out afterwards. Binding it to the connection puts the decision in
+ * the Server tab, where a person picks a folder with a native directory picker
+ * before any program has run — the same shape as granting an app access to a
+ * folder, which is a decision people already understand.
+ *
+ * The second is what a leaked token is worth. With a path in the request, one
+ * token is authority over every directory on the machine. With the path on the
+ * connection, a token is authority over *one folder*, and revoking it is
+ * deleting one row rather than rotating the credential every other program is
+ * also using.
+ *
+ * ---------------------------------------------------------------------------
+ * A CONNECTION WITHOUT A DIRECTORY IS STILL USEFUL
+ * ---------------------------------------------------------------------------
+ *
+ * {@link cwd} is optional, and absent means "can read the catalogue, cannot run
+ * a turn". That is a real state rather than a half-configured one: a program
+ * that only wants to know which models exist — a dashboard, a picker, a script
+ * choosing a route — needs no directory at all, and should not be handed write
+ * access to one in order to ask.
+ */
+export interface ServerConnection {
+  /** Stable id, for revoking and for naming one in the UI. */
+  readonly id: string;
+  /** What the user called it: "Kronos", "scratch scripts". */
+  readonly label: string;
+  /**
+   * Where this connection's turns run. See {@link ServerWorkspace}.
+   *
+   * **Chosen when the token is created and never changed after.** A connection
+   * is re-scoped by issuing a new one and deleting this, which is a rule rather
+   * than an inconvenience: a token whose authority can widen after it has been
+   * handed to a program is a token nobody can reason about. Only the label is
+   * editable, because a label grants nothing.
+   */
+  readonly workspace: ServerWorkspace;
+  /**
+   * Restrict this connection to specific accounts and models.
+   *
+   * Absent or empty means everything this Artemis has. Present means the
+   * catalogue this connection sees is filtered to the allowance and anything
+   * outside it is not merely refused but *invisible* — which is how a token for
+   * a side project is stopped from spending the account with the real plan on
+   * it, and from even discovering that account exists.
+   *
+   * See {@link ServerAllowance} for why this stores ids rather than routes.
+   */
+  readonly allow?: readonly ServerAllowance[];
+  /** The bearer token this connection authenticates with. */
+  readonly token: string;
+  /** Epoch ms. */
+  readonly createdAt: number;
+  /**
+   * Epoch ms of the last request that presented this token, or absent if none
+   * ever has.
+   *
+   * The one piece of per-connection traffic worth keeping, because it answers
+   * the question that decides whether a token can be deleted: is anything still
+   * using this? Deliberately not a request log — see {@link ServerTraffic}.
+   */
+  readonly lastUsedAt?: number;
+}
+
+/**
+ * One account a connection may use, and which of its models.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS IDS AND NOT ROUTES
+ * ---------------------------------------------------------------------------
+ *
+ * The obvious shape for an allowlist is the same string a client sends:
+ * `["work-max/opus"]`. It is also unsafe, and the reason is {@link profileSlug}.
+ *
+ * A route's left half is a *slug derived from a label*, and slugs are assigned
+ * across the whole set — see {@link assignProfileSlugs}, where a collision is
+ * broken by a numeric suffix. Rename an account, delete one, or add one that
+ * collides, and `work-max` can come to mean a different account than it did
+ * when the grant was written. A permission that silently re-points at another
+ * account is the worst kind of permission bug: nothing errors, and the wrong
+ * plan gets spent.
+ *
+ * So authorisation keys on {@link ProfileId}, which is stable for the life of
+ * the account, and on the provider's own model id, which is stable for the life
+ * of the model. Slugs stay what they always were — an *address*, for humans to
+ * type — and are resolved to ids before anything is decided.
+ */
+export interface ServerAllowance {
+  readonly profileId: ProfileId;
+  /**
+   * Model ids within that account, e.g. `opus`, `haiku`.
+   *
+   * Absent or empty means every model the account offers — including ones it
+   * gains later. That is deliberate: a provider shipping a new model should not
+   * silently widen a grant that named specific models, and should be available
+   * to a grant that named none.
+   */
+  readonly modelIds?: readonly string[];
+}
+
+/**
+ * A connection as a *client* sees itself — `GET /api/v0/connection`.
+ *
+ * The token is absent, and that is not an oversight: the caller already has it,
+ * so echoing it back adds nothing and puts a credential in every response body,
+ * every log and every proxy along the way.
+ */
+export interface ServerConnectionInfo {
+  readonly id: string;
+  readonly label: string;
+  /** Where this connection's turns run. See {@link ServerWorkspace}. */
+  readonly workspace: ServerWorkspace;
+  /** What this connection may use. Absent means everything. */
+  readonly allow?: readonly ServerAllowance[];
+  /** False when the connection has no directory and so cannot run a turn. */
+  readonly canRunTurns: boolean;
+}
+
+/** Strip a connection down to what its own client may see. */
+export function describeConnection(connection: ServerConnection): ServerConnectionInfo {
+  return {
+    id: connection.id,
+    label: connection.label,
+    workspace: connection.workspace,
+    ...(connection.allow === undefined || connection.allow.length === 0
+      ? {}
+      : { allow: connection.allow }),
+    canRunTurns: workspaceCanRunTurns(connection.workspace),
+  };
+}
+
+/**
+ * May this connection use this account at all?
+ *
+ * Absent or empty is "everything" rather than "nothing": a connection the user
+ * never narrowed is unrestricted, and reading an empty allowance as a total
+ * lockout would turn every such token into a dead one.
+ */
+export function connectionAllowsProfile(
+  connection: ServerConnection,
+  profileId: ProfileId,
+): boolean {
+  const allow = connection.allow;
+  if (allow === undefined || allow.length === 0) return true;
+  return allow.some((entry) => entry.profileId === profileId);
+}
+
+/**
+ * May this connection use this model, on this account?
+ *
+ * The finer half of {@link connectionAllowsProfile}, and the two are separate
+ * because the catalogue is filtered at two levels: an account the connection
+ * cannot touch disappears entirely, while an account it can touch keeps only
+ * the models it may run.
+ */
+export function connectionAllowsModel(
+  connection: ServerConnection,
+  profileId: ProfileId,
+  modelId: string,
+): boolean {
+  const allow = connection.allow;
+  if (allow === undefined || allow.length === 0) return true;
+
+  const entry = allow.find((candidate) => candidate.profileId === profileId);
+  if (entry === undefined) return false;
+  // No model list means the whole account — including models it gains later.
+  if (entry.modelIds === undefined || entry.modelIds.length === 0) return true;
+  return entry.modelIds.includes(modelId);
+}
+
+/**
+ * Narrow a catalogue to what a connection may see.
+ *
+ * One function rather than a filter written at each call site, because "hidden,
+ * not merely refused" is a property the whole surface has to keep: a client that
+ * can enumerate a route it cannot run will offer it to its user, who will get an
+ * error nobody can explain. Accounts with nothing left after filtering are
+ * dropped entirely rather than shown empty.
+ */
+export function visibleToConnection(
+  connection: ServerConnection,
+  profiles: readonly ServerProfile[],
+): readonly ServerProfile[] {
+  const allow = connection.allow;
+  if (allow === undefined || allow.length === 0) return profiles;
+
+  const narrowed: ServerProfile[] = [];
+  for (const profile of profiles) {
+    if (!connectionAllowsProfile(connection, profile.id)) continue;
+    const models = profile.models.filter((model) =>
+      connectionAllowsModel(connection, profile.id, model.id),
+    );
+    if (models.length === 0) continue;
+    narrowed.push({ ...profile, models });
+  }
+  return narrowed;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Lifecycle, as the settings tab sees it                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where the server is.
+ *
+ * `starting` and `stopping` are real states rather than optimism: binding a
+ * port is asynchronous and can fail, and a socket with a client attached does
+ * not close instantly. A UI that only had on and off would show "on" for a
+ * server that was about to report `EADDRINUSE`.
+ */
+export type ServerPhase = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
+
+/** Why the server is not running. */
+export interface ServerFault {
+  /**
+   * `port_in_use` and `permission_denied` are called out because they are the
+   * two the user can actually fix, and each has a different fix — change the
+   * number, or choose one above 1024.
+   */
+  readonly code: 'port_in_use' | 'permission_denied' | 'unknown';
+  readonly message: string;
+}
+
+/**
+ * What the server has been asked to do, so the tab can show traffic.
+ *
+ * Counters rather than a log. A log of requests would be the most interesting
+ * thing on the pane and also a record of which accounts a program is reading,
+ * pushed into every open window and retained for as long as the app runs; the
+ * counters answer the only question the pane actually has — "is anything
+ * talking to this?" — and retain nothing that says what was asked.
+ */
+export interface ServerTraffic {
+  /** Requests answered, successfully or not. */
+  readonly total: number;
+  /** Requests refused for a missing or wrong token. A non-zero count is worth noticing. */
+  readonly rejected: number;
+  /** Epoch ms of the most recent request, or absent if there has been none. */
+  readonly lastAt?: number;
+}
+
+/**
+ * The whole of the server's state, as one value.
+ *
+ * One shape for the pull channel and the push channel, so a window that
+ * reloaded and a window that was listening cannot end up rendering different
+ * things. The same discipline `UpdateState` keeps.
+ */
+export interface ServerState {
+  readonly phase: ServerPhase;
+  /** Always {@link SERVER_HOST} today. Carried so the tab does not hard-code it. */
+  readonly host: string;
+  /** The port the user asked for. `0` means "any free port". */
+  readonly port: number;
+  /** The port actually bound. Absent unless running — and it differs from {@link port} when that was `0`. */
+  readonly boundPort?: number;
+  /** `http://127.0.0.1:6472`. Absent unless running. */
+  readonly url?: string;
+  /** Start the server when Artemis launches. */
+  readonly autoStart: boolean;
+  /**
+   * Every connection, each with its own token and working directory.
+   *
+   * These are the one credential in the app that travels *to* the renderer on
+   * purpose. They are not account secrets: Artemis generated them, each
+   * authenticates nothing except this port, and deleting one costs a click. The
+   * tab has to show them because the user's next step is pasting one into
+   * another program's configuration.
+   *
+   * A server with no connections is reachable by nobody, which is the correct
+   * behaviour rather than an edge case: there is no ambient credential, so
+   * "running" and "usable" are separate states and the pane says so.
+   */
+  readonly connections: readonly ServerConnection[];
+  /** Epoch ms the current listen began. Absent unless running. */
+  readonly startedAt?: number;
+  readonly traffic: ServerTraffic;
+  /** Why it stopped or would not start. Absent when there is nothing wrong. */
+  readonly lastError?: ServerFault;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Running a turn: how Artemis's knobs ride on an OpenAI-shaped request        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The extra body field an OpenAI-shaped request carries to reach Artemis's own
+ * settings.
+ *
+ * ## Why a namespace instead of top-level fields
+ *
+ * `POST /v1/chat/completions` is OpenAI's schema, and Artemis has three
+ * settings that schema has no place for: which thinking level to use, and
+ * whether to engage fast mode or ultracode. Three ways to carry them were
+ * possible and only one is safe:
+ *
+ *  1. **Top-level `fast_mode`, `ultracode`.** They would sit beside OpenAI's
+ *     own fields, in a namespace OpenAI owns and extends. The day OpenAI ships
+ *     a field of the same name with different semantics, every stored request
+ *     in the world silently changes meaning.
+ *  2. **Reuse `reasoning_effort`.** Tempting, and half-right — the *concept*
+ *     matches. The values do not: OpenAI's is a fixed enum, while an Artemis
+ *     level is a provider's own vocabulary and can be `xhigh`, `max`, or
+ *     something a provider ships next year. Squeezing one into the other means
+ *     either lying about the value or losing levels.
+ *  3. **One namespaced object**, which is this. It cannot collide, it carries
+ *     provider vocabulary unflattened, and a client that does not know about it
+ *     omits it and gets defaults.
+ *
+ * `reasoning_effort` is still *accepted* as an alias for {@link thinking} — see
+ * `readChatExtensions` — because an off-the-shelf client that already sets it
+ * meant exactly what this field means, and refusing that would be pedantry.
+ *
+ * ## Asking is not getting
+ *
+ * Every field here is a request. A provider may decline fast mode (no
+ * entitlement, a cooldown), and a model that does not advertise a setting
+ * ignores it. That is why {@link ServerModel} publishes what each route
+ * accepts: a caller is expected to check *before* sending, because a setting
+ * that is accepted and dropped is worse than one refused.
+ */
+export interface ArtemisChatExtensions {
+  /**
+   * A thinking level from the target model's {@link ServerModel.thinkingLevels}.
+   *
+   * Not validated against a fixed list here — the valid set is a property of the
+   * model, published per route. Sending one the model does not accept is an
+   * error rather than a silent drop; see {@link CHAT_EXTENSIONS_FIELD}.
+   */
+  readonly thinking?: string;
+  /** Trade reasoning depth for latency. Only on routes with `fastMode: true`. */
+  readonly fastMode?: boolean;
+  /** Spend materially more compute. Only on routes with `ultracode: true`. */
+  readonly ultracode?: boolean;
+  /**
+   * Continue an earlier conversation. Absent starts a new one.
+   *
+   * The only piece of turn state a caller supplies, and it exists because
+   * OpenAI's `messages` array cannot carry it — see the `openai` module on why
+   * a request is a turn rather than a transcript.
+   */
+  readonly sessionId?: string;
+}
+
+/*
+ * NOTE: there is deliberately no `cwd` here.
+ *
+ * There was, briefly, and it was wrong: it let the *calling program* choose
+ * which of the user's directories an agent could edit, and the user found out
+ * afterwards. The working directory is a property of the connection, chosen by
+ * a person when the token is created — see {@link ServerWorkspace}. A field here
+ * would be a way around that decision, which is the whole thing the connection
+ * model exists to prevent.
+ */
+
+/**
+ * The body field {@link ArtemisChatExtensions} travels in: `artemis`.
+ *
+ * Named once, here, so the server's parser and every client agree. OpenAI
+ * clients pass unknown body fields through — the JS SDK and the Python SDK both
+ * do — which is what makes a namespaced extension work with off-the-shelf
+ * tooling rather than requiring a custom HTTP layer.
+ */
+export const CHAT_EXTENSIONS_FIELD = 'artemis';
+
+/**
+ * Pull Artemis's settings out of an OpenAI-shaped request body.
+ *
+ * Lives in protocol rather than in the server because the SDK builds what this
+ * reads, and a parser that disagreed with its writer by one key name would fail
+ * in the quietest possible way: a request that looks accepted, runs, and ignores
+ * every setting on it.
+ *
+ * Unknown keys inside the namespace are dropped rather than rejected, so a
+ * newer client talking to an older server degrades instead of failing. The
+ * *values* are type-checked, because a `thinking: 5` is a caller bug worth
+ * surfacing rather than coercing.
+ */
+export function readChatExtensions(body: unknown): ArtemisChatExtensions {
+  if (typeof body !== 'object' || body === null) return {};
+  const record = body as Record<string, unknown>;
+
+  const namespaced = record[CHAT_EXTENSIONS_FIELD];
+  const extensions =
+    typeof namespaced === 'object' && namespaced !== null
+      ? (namespaced as Record<string, unknown>)
+      : {};
+
+  // The alias, and only as a fallback: a caller that set both meant the
+  // namespaced one, which is the field that can express every level.
+  const aliased = record['reasoning_effort'];
+  const thinking =
+    typeof extensions['thinking'] === 'string'
+      ? (extensions['thinking'] as string)
+      : typeof aliased === 'string'
+        ? aliased
+        : undefined;
+
+  return {
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(typeof extensions['fastMode'] === 'boolean'
+      ? { fastMode: extensions['fastMode'] as boolean }
+      : {}),
+    ...(typeof extensions['ultracode'] === 'boolean'
+      ? { ultracode: extensions['ultracode'] as boolean }
+      : {}),
+    ...(typeof extensions['sessionId'] === 'string'
+      ? { sessionId: extensions['sessionId'] as string }
+      : {}),
+  };
+}
+
+/** A port a user may actually bind. See {@link MIN_SERVER_PORT}. */
+export function isValidServerPort(port: number): boolean {
+  return (
+    Number.isInteger(port) &&
+    // `0` is not a port but is a valid request: let the OS choose one.
+    (port === 0 || (port >= MIN_SERVER_PORT && port <= MAX_SERVER_PORT))
+  );
+}

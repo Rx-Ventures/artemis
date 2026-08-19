@@ -1,0 +1,35 @@
+{
+  "name": "@rx-ventures/artemis-sdk",
+  "private": true,
+  "description": "Typed SDK for the Artemis server: discover an installation's accounts, their models, and what each model accepts. Zero runtime dependencies.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@rx-artemis/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@rx-artemis/core": "workspace:*",
+    "@types/node": "^26.2.0",
+    "typescript": "~7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

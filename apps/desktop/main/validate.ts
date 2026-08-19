@@ -43,6 +43,10 @@ import {
   isProviderEffort,
   isProviderId,
   isSecretEnvKey,
+  isValidServerPort,
+  normalizeWorkspace,
+  MAX_SERVER_PORT,
+  MIN_SERVER_PORT,
   normalizeProfileColor,
   normalizeProfilePlanId,
   profileColorProblem,
@@ -87,6 +91,16 @@ import {
   type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
+  type ServerCatalogueRequest,
+  type ServerConfigureRequest,
+  type ServerAllowance,
+  type ServerCreateConnectionRequest,
+  type ServerDeleteConnectionRequest,
+  type ServerRenameConnectionRequest,
+  type ServerWorkspace,
+  type ServerStartRequest,
+  type ServerStatusRequest,
+  type ServerStopRequest,
   type RunsStartRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
@@ -1945,4 +1959,157 @@ export function validateAgentPromptsSave(raw: unknown): AgentPromptsSaveRequest 
       ),
     },
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Server                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The four empty server requests.
+ *
+ * Empty for `validateCerebroStatus`'s reason, and with one addition of its own:
+ * there is exactly one server, main owns its address, and the renderer decides
+ * only whether it runs. Nothing here could name a profile, a model or a host
+ * without handing the renderer a say in what gets published.
+ */
+export function validateServerStatus(raw: unknown): ServerStatusRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateServerStatus */
+export function validateServerStart(raw: unknown): ServerStartRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/** @see validateServerStatus */
+export function validateServerStop(raw: unknown): ServerStopRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * A connection to be issued: a label, and the workspace it is bound to.
+ *
+ * The workspace is validated strictly because it *is* the grant. A `directory`
+ * must name an absolute path — a relative one would resolve against whatever
+ * directory the app was launched from, which is not a decision the user made —
+ * and an unrecognised kind is rejected rather than defaulted, because guessing
+ * which authority someone meant to grant is the one thing this must never do.
+ */
+export function validateServerCreateConnection(raw: unknown): ServerCreateConnectionRequest {
+  const request = requireRequest(raw);
+  const label = requireString(request['label'], 'label', LIMITS.label);
+  const workspace = requireObject(request['workspace'], 'workspace');
+  const kind = requireString(workspace['kind'], 'workspace.kind', 20);
+
+  let resolved: ServerWorkspace;
+  if (kind === 'directory') {
+    const path = requireString(workspace['path'], 'workspace.path', LIMITS.path);
+    if (!path.startsWith('/')) {
+      throw new ValidationError('workspace.path', 'must be an absolute path');
+    }
+    resolved = { kind: 'directory', path };
+  } else if (kind === 'ephemeral') {
+    resolved = normalizeWorkspace({
+      kind: 'ephemeral',
+      perSession: optionalBoolean(workspace['perSession'], 'workspace.perSession') !== false,
+    });
+  } else if (kind === 'none') {
+    resolved = { kind: 'none' };
+  } else {
+    throw new ValidationError('workspace.kind', 'must be "directory", "ephemeral" or "none"');
+  }
+
+  const allow = validateAllowance(request['allow']);
+
+  return {
+    label,
+    workspace: resolved,
+    ...(allow === undefined || allow.length === 0 ? {} : { allow }),
+  };
+}
+
+/**
+ * The accounts and models a connection may reach.
+ *
+ * Ids, never routes — see `ServerAllowance` for why a slug is unsafe to hold a
+ * permission on. Nothing here is checked against the *catalogue*: an id for an
+ * account that does not exist grants nothing, and rejecting it would make the
+ * form fail whenever a profile is deleted between opening it and submitting.
+ */
+function validateAllowance(value: unknown): ServerAllowance[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ValidationError('allow', 'must be an array');
+
+  return value.map((raw, index) => {
+    const entry = requireObject(raw, `allow[${index}]`);
+    const profileId = requireString(entry['profileId'], `allow[${index}].profileId`, LIMITS.id);
+
+    const rawModels = entry['modelIds'];
+    if (rawModels !== undefined && rawModels !== null && !Array.isArray(rawModels)) {
+      throw new ValidationError(`allow[${index}].modelIds`, 'must be an array');
+    }
+    const modelIds = Array.isArray(rawModels)
+      ? rawModels.map((model, at) =>
+          requireString(model, `allow[${index}].modelIds[${at}]`, LIMITS.label),
+        )
+      : undefined;
+
+    return {
+      profileId: profileId as ServerAllowance['profileId'],
+      ...(modelIds === undefined || modelIds.length === 0 ? {} : { modelIds }),
+    };
+  });
+}
+
+/** @see validateServerCreateConnection */
+export function validateServerRenameConnection(raw: unknown): ServerRenameConnectionRequest {
+  const request = requireRequest(raw);
+  return {
+    id: requireString(request['id'], 'id', LIMITS.id),
+    label: requireString(request['label'], 'label', LIMITS.label),
+  };
+}
+
+/** @see validateServerCreateConnection */
+export function validateServerDeleteConnection(raw: unknown): ServerDeleteConnectionRequest {
+  const request = requireRequest(raw);
+  return { id: requireString(request['id'], 'id', LIMITS.id) };
+}
+
+/**
+ * A port and an autostart flag, each optional.
+ *
+ * `0` is accepted alongside the ordinary range because it is a real request —
+ * "bind any free port" — which is why the bound port is reported separately on
+ * the state. Both fields stay absent when they were absent: see
+ * `ServerConfigureRequest` for why "leave it alone" has to be expressible.
+ */
+export function validateServerConfigure(raw: unknown): ServerConfigureRequest {
+  const request = requireRequest(raw);
+  const port = optionalInteger(request['port'], 'port', 0, MAX_SERVER_PORT);
+  if (port !== undefined && !isValidServerPort(port)) {
+    throw new ValidationError('port', `must be 0, or between ${MIN_SERVER_PORT} and ${MAX_SERVER_PORT}`);
+  }
+  const autoStart = optionalBoolean(request['autoStart'], 'autoStart');
+  return {
+    ...(port === undefined ? {} : { port }),
+    ...(autoStart === undefined ? {} : { autoStart }),
+  };
+}
+
+/**
+ * A single optional flag, and the only server request that carries anything.
+ *
+ * `refresh` is expensive — it re-asks every provider's CLI — so it is checked
+ * rather than coerced: a truthy string arriving here would mean a client
+ * spawning subprocesses by accident.
+ */
+export function validateServerCatalogue(raw: unknown): ServerCatalogueRequest {
+  const request = requireRequest(raw);
+  const refresh = optionalBoolean(request['refresh'], 'refresh');
+  return refresh === undefined ? {} : { refresh };
 }

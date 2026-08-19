@@ -19,5 +19,6 @@ export { AppearanceSection } from './AppearanceSection';
 export { PermissionsSection } from './PermissionsSection';
 export { AgentsSection } from './AgentsSection';
 export { CerebroSection } from './CerebroSection';
+export { ServerSection } from './ServerSection';
 export { AdvancedSection } from './AdvancedSection';
 export { ProfilesSection } from '../ProfilesScreen';

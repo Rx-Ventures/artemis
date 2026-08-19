@@ -58,6 +58,7 @@ import { clearPreviews, registerPreviewScheme, servePreviews } from './preview.j
 import { adoptLoginShellPath } from './shellPath.js';
 import { BrowserHost } from './browser.js';
 import { browserToolServer } from './browserTools.js';
+import { createServerHost, type ServerHost } from './server.js';
 import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
 import {
@@ -198,6 +199,7 @@ let stopTerminalForwarding: (() => void) | null = null;
 let stopBrowserForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
 let stopUpdater: (() => void) | null = null;
+let serverHost: ServerHost | null = null;
 let terminals: TerminalHost | null = null;
 const browsers = new BrowserHost();
 const engineHost = new EngineHost();
@@ -435,7 +437,23 @@ async function bootstrap(): Promise<void> {
   // the same tools a terminal launch would.
   terminals = createTerminalHost();
 
-  ipcLayer = registerIpcHandlers({ engine: engineHost, policy, updater, terminals, browsers });
+  // Created before the IPC layer, whose handlers close over it, and *started*
+  // after — see below. Nothing here binds a port yet.
+  serverHost = createServerHost({
+    engine: engineHost,
+    userDataDir,
+    appVersion: app.getVersion(),
+    broadcast: (state) => broadcast(IPC_PUSH.serverState, state),
+  });
+
+  ipcLayer = registerIpcHandlers({
+    engine: engineHost,
+    policy,
+    updater,
+    terminals,
+    browsers,
+    server: serverHost,
+  });
   stopEventForwarding = forwardAgentEvents(engineHost);
   stopTerminalForwarding = forwardTerminalEvents(terminals);
   stopBrowserForwarding = forwardBrowserEvents(browsers);
@@ -447,6 +465,20 @@ async function bootstrap(): Promise<void> {
 
   createWindow(policy);
   updater.start();
+
+  /*
+   * The server reads its config and, if the user asked for autostart, binds.
+   *
+   * After the window rather than before it, for the reason the updater is:
+   * every outcome here — bound, or failed with a port in use — is news the
+   * pane renders, and news broadcast before a window exists is news nobody
+   * hears. Not awaited, because a bind is not something Artemis's startup
+   * should wait on: the app is fully usable while it is happening, and a
+   * failure is a state on a settings pane rather than a boot error.
+   */
+  void serverHost.start().catch((error: unknown) => {
+    log.error('Could not start the local server', error);
+  });
 
   reportEngineProblem();
 
@@ -513,6 +545,11 @@ app.on('before-quit', (event) => {
   stopBrowserForwarding?.();
   stopPlanUsagePolling?.();
   stopUpdater?.();
+  // Before the race below, and not part of it: an open listener keeps the port
+  // bound, and a user who quits Artemis and relaunches it must not meet
+  // "address already in use" from the copy that is exiting. `dispose` drops
+  // live connections rather than waiting for clients to hang up.
+  void serverHost?.dispose();
   ipcLayer?.dispose();
   // Synchronous, and before the race below: a shell is a child of *this*
   // process, so anything still alive when `app.exit` fires is reparented to

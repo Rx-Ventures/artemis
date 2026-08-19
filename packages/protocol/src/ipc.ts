@@ -35,6 +35,12 @@ import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js'
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
+import type {
+  ServerAllowance,
+  ServerProfile,
+  ServerState,
+  ServerWorkspace,
+} from './server.js';
 import type { SessionSummary } from './session.js';
 import type { SharedConfigStatus } from './sharedConfig.js';
 import type {
@@ -405,6 +411,70 @@ export const IPC = {
    */
   agentPromptsList: 'artemis:agent-prompts:list',
   agentPromptsSave: 'artemis:agent-prompts:save',
+
+  /**
+   * The local HTTP server, which publishes Artemis's accounts to other
+   * programs. See `server.ts` for what it serves and why.
+   *
+   * Five channels, and the shape of the set is deliberate: **every one of them
+   * answers with the whole {@link ServerState}**, exactly as the updater's do.
+   * A start that failed to bind, a port change that took effect on a running
+   * server, and a token rotation all change more than the field they name, and
+   * a response that returned only what was asked about would leave the pane
+   * reconstructing a state machine it does not own.
+   *
+   * The renderer cannot influence *what* is served, only whether it is served:
+   * nothing here names a profile, a model or a host. The catalogue is assembled
+   * in main from the engine, and the bind address is a constant — see
+   * `SERVER_HOST` for why that is not a setting.
+   */
+  serverStatus: 'artemis:server:status',
+  serverStart: 'artemis:server:start',
+  serverStop: 'artemis:server:stop',
+  /**
+   * Change the port, or whether the server starts with the app.
+   *
+   * One channel for both because they are stored together and a pane that saved
+   * them separately would have two ways to leave the file half-updated. A port
+   * change while the server is running rebinds it, which is the behaviour a user
+   * who just edited the number expects — the alternative is a settings field
+   * that silently disagrees with the URL above it.
+   */
+  serverConfigure: 'artemis:server:configure',
+  /**
+   * Issue a connection: a token bound to a workspace chosen right now.
+   *
+   * The workspace is fixed at creation and never edited afterwards — see
+   * `ServerConnection` — so this channel is the only place an authority is
+   * granted, and {@link serverDeleteConnection} the only place one is taken
+   * away. There is deliberately no "change this connection's directory".
+   */
+  serverCreateConnection: 'artemis:server:create-connection',
+  /** Rename one. The label grants nothing, which is why it alone is editable. */
+  serverRenameConnection: 'artemis:server:rename-connection',
+  /**
+   * Revoke one, immediately.
+   *
+   * Present from the first version rather than added after an incident: a token
+   * pasted into a config file, a chat, or a screenshot has to be revocable, and
+   * "delete the file and restart Artemis" is not a revocation story.
+   */
+  serverDeleteConnection: 'artemis:server:delete-connection',
+  /**
+   * Read the catalogue the server publishes — the accounts, and the routes on
+   * each.
+   *
+   * The one server channel that is not about the lifecycle, and it exists so
+   * the pane shows *what clients see* rather than a second opinion assembled in
+   * the renderer. The renderer could compose something similar out of
+   * `profiles:list` and `providers:models`, and that is exactly the problem: two
+   * assemblies of one catalogue drift, and the copy on screen would be the one
+   * nobody is actually serving.
+   *
+   * Answers whether or not the server is listening. A user deciding *whether*
+   * to start it is owed a look at what starting it would publish.
+   */
+  serverCatalogue: 'artemis:server:catalogue',
 } as const;
 
 /**
@@ -510,6 +580,21 @@ export const IPC_PUSH = {
    * the menu bar needs it.
    */
   menuOpenSettings: 'artemis:push:menu-open-settings',
+  /**
+   * Carries a {@link ServerState} whenever the local server's changes.
+   *
+   * Pushed for {@link updateState}'s reason and one of its own. The reason of
+   * its own is that the server is *shared*: it is one listener for the whole
+   * app, and a second window that started it, stopped it or rotated its token
+   * has changed what the first window's pane is describing. Without a push, two
+   * open Settings dialogs would each show their own last known state, and one of
+   * them would be offering a token that no longer works.
+   *
+   * Phase and configuration changes only — never traffic. See
+   * {@link ServerTraffic} for why the counters are polled instead: a push per
+   * request would put an IPC message on every poll an editor extension makes.
+   */
+  serverState: 'artemis:push:server-state',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -1881,6 +1966,107 @@ export interface AgentPromptsSaveRequest {
 export type AgentPromptsSaveResponse = AgentPromptsListResponse;
 
 /* -------------------------------------------------------------------------- */
+/* Server                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Read the server's state, for the first paint before any push.
+ *
+ * Empty for the reason `SharedConfigStatusRequest` is: there is exactly one
+ * server, main owns it, and there is nothing about it a renderer could name.
+ */
+export interface ServerStatusRequest {}
+
+/** @see ServerStatusRequest */
+export interface ServerStartRequest {}
+
+/** @see ServerStatusRequest */
+export interface ServerStopRequest {}
+
+/**
+ * Change the port, whether the server starts with the app, or both.
+ *
+ * Both fields are optional and absent means "leave it alone", so the pane can
+ * send the one control the user touched rather than reasserting the value of
+ * the other — which is what makes two settings edited in quick succession
+ * unable to undo each other.
+ */
+export interface ServerConfigureRequest {
+  /**
+   * A port in `MIN_SERVER_PORT`…`MAX_SERVER_PORT`, or `0` for "any free one".
+   *
+   * Validated in main against those bounds. A port already in use is *not*
+   * rejected here — it is a bind failure, reported as `ServerFault` on the
+   * state, because the only way to know is to try.
+   */
+  readonly port?: number;
+  /** Start the server when Artemis launches. */
+  readonly autoStart?: boolean;
+}
+
+/**
+ * Issue a connection.
+ *
+ * Carries the workspace because that is the decision being made: a token and
+ * the place it may work are created in the same act, and there is no channel
+ * that changes one afterwards.
+ */
+export interface ServerCreateConnectionRequest {
+  readonly label: string;
+  readonly workspace: ServerWorkspace;
+  /**
+   * Accounts and models this token may reach. Omit or empty for everything.
+   *
+   * Carried here for the reason `workspace` is: it is fixed when the token is
+   * issued, and there is no channel that widens it afterwards.
+   */
+  readonly allow?: readonly ServerAllowance[];
+}
+
+/** Rename a connection. @see ServerCreateConnectionRequest */
+export interface ServerRenameConnectionRequest {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** Revoke a connection. */
+export interface ServerDeleteConnectionRequest {
+  readonly id: string;
+}
+
+/** Read what the server publishes. */
+export interface ServerCatalogueRequest {
+  /**
+   * Skip the cache and re-ask every provider.
+   *
+   * Slow — a subprocess per account — so it is the pane's explicit Refresh and
+   * never its mount. See `core/server/catalogue.ts` for what is cached and why.
+   */
+  readonly refresh?: boolean;
+}
+
+/**
+ * The catalogue, exactly as `/api/v0/profiles` serves it.
+ *
+ * The same type the HTTP surface returns, deliberately: a pane rendering a
+ * different shape from the one on the wire is a pane that can be right about
+ * something the server is wrong about.
+ */
+export interface ServerCatalogueResponse {
+  readonly profiles: readonly ServerProfile[];
+}
+
+/**
+ * The whole state, for every server channel.
+ *
+ * One response type rather than five, for the reason the channel block gives:
+ * every one of these operations can change more than the thing it names.
+ */
+export interface ServerStateResponse {
+  readonly state: ServerState;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1951,6 +2137,14 @@ export type IpcRequestMap = {
   [IPC.cerebroSetEnabled]: CerebroSetEnabledRequest;
   [IPC.agentPromptsList]: AgentPromptsListRequest;
   [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
+  [IPC.serverStatus]: ServerStatusRequest;
+  [IPC.serverStart]: ServerStartRequest;
+  [IPC.serverStop]: ServerStopRequest;
+  [IPC.serverConfigure]: ServerConfigureRequest;
+  [IPC.serverCreateConnection]: ServerCreateConnectionRequest;
+  [IPC.serverRenameConnection]: ServerRenameConnectionRequest;
+  [IPC.serverDeleteConnection]: ServerDeleteConnectionRequest;
+  [IPC.serverCatalogue]: ServerCatalogueRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -2020,6 +2214,14 @@ export type IpcResponseMap = {
   [IPC.cerebroSetEnabled]: CerebroSetEnabledResponse;
   [IPC.agentPromptsList]: AgentPromptsListResponse;
   [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
+  [IPC.serverStatus]: ServerStateResponse;
+  [IPC.serverStart]: ServerStateResponse;
+  [IPC.serverStop]: ServerStateResponse;
+  [IPC.serverConfigure]: ServerStateResponse;
+  [IPC.serverCreateConnection]: ServerStateResponse;
+  [IPC.serverRenameConnection]: ServerStateResponse;
+  [IPC.serverDeleteConnection]: ServerStateResponse;
+  [IPC.serverCatalogue]: ServerCatalogueResponse;
 };
 
 /** Request type for a channel. */
@@ -2054,6 +2256,7 @@ export type IpcPushMap = {
   [IPC_PUSH.terminalEvent]: TerminalEvent;
   [IPC_PUSH.browserEvent]: BrowserEvent;
   [IPC_PUSH.menuOpenSettings]: MenuOpenSettings;
+  [IPC_PUSH.serverState]: ServerState;
 };
 
 /** Payload type for a push channel. */
@@ -2549,6 +2752,64 @@ export interface ArtemisBridge {
      * store, which is why this needs no matching "close" push.
      */
     onOpenSettings(listener: (payload: MenuOpenSettings) => void): Unsubscribe;
+  };
+
+  /**
+   * The local server, which lends Artemis's accounts to other programs.
+   *
+   * Five verbs and no way to say what is served. That asymmetry is the design:
+   * the catalogue is assembled in main out of the engine's own answers, so a
+   * renderer cannot add a route, expose a hidden profile, or point the listener
+   * at an address — it can only decide whether the thing is on, on which port,
+   * and under which token.
+   *
+   * Every call answers with the whole state, so the pane never has to merge a
+   * reply into what it already had. Subscribe with {@link onChange} *before*
+   * calling {@link status}, for `runs.onEvent`'s reason: another window can
+   * start the server while the first read is still in flight.
+   */
+  readonly server: {
+    /** The state right now, for the first paint. */
+    status(request: ServerStatusRequest): Promise<IpcResult<ServerStateResponse>>;
+    /**
+     * Bind the port. Resolves once the attempt has settled — either listening,
+     * or `phase: 'error'` with the reason — rather than as soon as it is
+     * underway, because "the port was already taken" is the single most likely
+     * outcome and a pane that had already said "running" would have to take it
+     * back.
+     */
+    start(request: ServerStartRequest): Promise<IpcResult<ServerStateResponse>>;
+    /** Stop listening and drop open connections. Idempotent. */
+    stop(request: ServerStopRequest): Promise<IpcResult<ServerStateResponse>>;
+    /** Change the port, autostart, or both. @see ServerConfigureRequest */
+    configure(request: ServerConfigureRequest): Promise<IpcResult<ServerStateResponse>>;
+    /**
+     * Issue a connection: a token, and the workspace it is bound to for life.
+     *
+     * The one place an authority is granted. A connection's directory is never
+     * editable afterwards — re-scoping means issuing another and deleting this.
+     */
+    createConnection(
+      request: ServerCreateConnectionRequest,
+    ): Promise<IpcResult<ServerStateResponse>>;
+    /** Rename one. Labels grant nothing, so this changes no authority. */
+    renameConnection(
+      request: ServerRenameConnectionRequest,
+    ): Promise<IpcResult<ServerStateResponse>>;
+    /** Revoke one. It stops working on the very next request. */
+    deleteConnection(
+      request: ServerDeleteConnectionRequest,
+    ): Promise<IpcResult<ServerStateResponse>>;
+    /**
+     * What the server publishes — accounts, routes, thinking levels, and which
+     * of fast mode and ultracode each route accepts.
+     *
+     * Answers whether or not the server is listening, so the pane can show what
+     * starting it would expose. `refresh` re-asks every provider and is slow.
+     */
+    catalogue(request: ServerCatalogueRequest): Promise<IpcResult<ServerCatalogueResponse>>;
+    /** Subscribe to phase and configuration changes. */
+    onChange(listener: (state: ServerState) => void): Unsubscribe;
   };
 }
 

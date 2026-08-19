@@ -5,6 +5,7 @@
   "references": [
     { "path": "./packages/protocol" },
     { "path": "./packages/core" },
+    { "path": "./packages/sdk" },
     { "path": "./apps/desktop/main" },
     { "path": "./apps/desktop/preload" },
     { "path": "./apps/desktop/renderer" },

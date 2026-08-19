@@ -18,6 +18,10 @@
  * │ SessionNamer    names a new session from its opening message         │
  * │ SessionOwners   which account each session ran under, once a store   │
  * │                 is shared and the directory no longer says           │
+ * ├── server ────────────────────────────────────────────────────────────┤
+ * │ Catalogue       the accounts and models this machine can route to    │
+ * │ ArtemisServer   a loopback HTTP server that publishes them, so that  │
+ * │                 programs outside Artemis can use its profiles too    │
  * ├── workspace ─────────────────────────────────────────────────────────┤
  * │ checkWorkingDirectory  is this cwd real, a directory, and readable?  │
  * │ describeWorkspace      what is it called — repository, or folder?    │
@@ -47,4 +51,5 @@
 export * from './adapters/index.js';
 export * from './profiles/index.js';
 export * from './sessions/index.js';
+export * from './server/index.js';
 export * from './workspace/index.js';
