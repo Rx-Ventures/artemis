@@ -253,7 +253,7 @@ describe('the command bar carries the way into search', () => {
     // fastest way in and the one nobody finds unaided.
     mount(<AppHeader />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Search sessions, files and commands/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Search sessions and commands/ }));
     expect(useApp.getState().paletteOpen).toBe(true);
   });
 });

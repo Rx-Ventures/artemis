@@ -181,7 +181,7 @@ export function CommandPalette(): ReactElement {
           />
           <CommandList className="max-h-[22rem]">
             {page === 'root' ? (
-              <RootPage onPage={setPage} onClose={close} />
+              <RootPage onPage={setPage} onClose={close} query={search} />
             ) : page === 'sessions' ? (
               <SessionsPage onClose={close} />
             ) : page === 'providers' ? (
@@ -211,9 +211,12 @@ const PLACEHOLDERS: Record<Page, string> = {
 function RootPage({
   onPage,
   onClose,
+  query,
 }: {
   readonly onPage: (page: Page) => void;
   readonly onClose: () => void;
+  /** What is typed, so sessions can join the list once there is something to match. */
+  readonly query: string;
 }): ReactElement {
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
@@ -229,6 +232,31 @@ function RootPage({
   const thinking = usePane(activeThinkingLevel);
   const fast = usePane((s) => s.fastMode);
   const ultra = usePane((s) => s.ultracode);
+  const sessions = useApp((s) => s.sessions);
+  const hold = useApp((s) => s.sessionOrderHold);
+
+  /*
+   * Sessions, right here, as soon as there is something to match them against.
+   *
+   * The bar says it searches sessions and the header's entry says so twice, and
+   * until this they were a page down: the reader typed a session's name into a
+   * list of commands, got "Nothing matches that", and had no way to know that
+   * the thing they asked for was behind a row called "Resume a past session…".
+   * A promise on the surface has to be true *of the surface*.
+   *
+   * Only while something is typed. Every session in the history above the
+   * commands would bury the commands, and an empty palette is a menu rather
+   * than a search — which is what the page below is still for when someone
+   * wants to browse rather than to look something up.
+   *
+   * No filtering here: `cmdk` matches on each row's `value`, which `SessionRow`
+   * fills with the title, the opening prompt, the branch, the project and the
+   * profile. Rendering them is enough; the ones that do not match never draw.
+   */
+  const searching = query.trim().length > 0 && listing.supported && sessions.length > 0;
+  const ordered = searching
+    ? [...sessions].sort((a, b) => sessionOrderKey(b, hold) - sessionOrderKey(a, hold))
+    : [];
 
   return (
     <>
@@ -476,6 +504,29 @@ function RootPage({
           Re-probe providers
         </CommandItem>
       </CommandGroup>
+
+      {/* Last, under the commands, because a palette is answerable to what was
+          typed *and* to what it offers: putting a hundred sessions above four
+          commands would make the commands unreachable by eye. cmdk keeps the
+          group out of the DOM entirely when nothing in it matches. */}
+      {ordered.length === 0 ? null : (
+        <>
+          <CommandSeparator />
+          <CommandGroup heading="Sessions">
+            {ordered.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                disabled={!resuming.supported}
+                onSelect={() => {
+                  resumeSession(session);
+                  onClose();
+                }}
+              />
+            ))}
+          </CommandGroup>
+        </>
+      )}
     </>
   );
 }

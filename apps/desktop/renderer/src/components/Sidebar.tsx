@@ -298,7 +298,7 @@ function Rail({
       </IconButton>
 
       <IconButton
-        label={`Search sessions, files and commands (${keyLabel('mod+k')})`}
+        label={`Search sessions and commands (${keyLabel('mod+k')})`}
         onClick={togglePalette}
         size="icon-sm"
         className="text-ink-faint"

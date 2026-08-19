@@ -12,7 +12,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ActivityIndicator, activityOf, formatElapsed } from '@/components/Activity';
+import { ActivityIndicator, ActivityRule, activityOf, formatElapsed } from '@/components/Activity';
 import { PaneProvider } from '@/state/paneContext';
 import { focusedPane } from '@/state/store';
 import { seedApp } from '@/state/testkit';
@@ -139,5 +139,76 @@ describe('ActivityIndicator', () => {
     const status = screen.getByRole('status');
     expect(status.dataset['activity']).toBe('waiting');
     expect(status.textContent).toContain('needs your answer to continue');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The seam                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The border above the composer, which is the same five conditions drawn as a
+ * line.
+ *
+ * Asserted on classes, which this suite otherwise avoids — but the whole claim
+ * here *is* the geometry and the colour: a border that did not grow would clip
+ * the animation it exists to carry, and one that stayed put at rest would be a
+ * 3px bar under every idle conversation.
+ */
+describe('ActivityRule', () => {
+  afterEach(cleanup);
+
+  const mount = (): HTMLElement => {
+    const { container } = render(
+      <PaneProvider pane={focusedPane()}>
+        <ActivityRule />
+      </PaneProvider>,
+    );
+    return container.firstElementChild as HTMLElement;
+  };
+
+  it('is an ordinary hairline while nothing is running', () => {
+    seedApp({ run: null, permissionQueue: [] });
+    const rule = mount();
+
+    expect(rule.dataset['activityRule']).toBe('settled');
+    expect(rule.className).toContain('h-px');
+    expect(rule.className).toContain('bg-line');
+    expect(rule.className).not.toContain('shuttle');
+  });
+
+  it('grows and carries the shuttle while a run is in flight', () => {
+    seedApp({ run: { status: 'running', startedAt: AT } as never, permissionQueue: [] });
+    const rule = mount();
+
+    expect(rule.dataset['activityRule']).toBe('running');
+    // 3px, because that is what the animation needs. A shuttle drawn inside a
+    // 1px border would either clip or straddle the seam.
+    expect(rule.className).toContain('h-[3px]');
+    expect(rule.className).toContain('shuttle');
+  });
+
+  it('goes amber, and still, while something is parked on an answer', () => {
+    seedApp({
+      run: { status: 'running', startedAt: AT } as never,
+      permissionQueue: [{ id: 'p1' }] as never,
+    });
+    const rule = mount();
+
+    // Not moving: nothing is progressing until it is answered, and a shuttle
+    // would say the opposite in the most visible place in the window.
+    expect(rule.dataset['activityRule']).toBe('waiting');
+    expect(rule.className).toContain('bg-amber');
+    expect(rule.className).not.toContain('shuttle');
+  });
+
+  it('says nothing out loud, because the indicator already does', () => {
+    seedApp({ run: { status: 'running', startedAt: AT } as never, permissionQueue: [] });
+    const rule = mount();
+
+    // Two live regions for one fact is how a screen reader ends up announcing
+    // every turn twice.
+    expect(rule.getAttribute('aria-hidden')).toBe('true');
+    expect(rule.getAttribute('role')).toBeNull();
   });
 });

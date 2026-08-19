@@ -509,11 +509,11 @@ function SearchEntry(): ReactElement {
     <button
       type="button"
       onClick={togglePalette}
-      aria-label={`Search sessions, files and commands (${keyLabel('mod+k')})`}
+      aria-label={`Search sessions and commands (${keyLabel('mod+k')})`}
       className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-sm border border-line bg-inset px-2 text-2xs text-ink-faint transition-colors hover:border-line-strong hover:text-ink-muted lg:flex"
     >
       <SearchIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">Search sessions, files, commands</span>
+      <span className="truncate">Search sessions and commands</span>
       <span aria-hidden="true" className="ml-auto shrink-0 font-mono opacity-70">
         {keyLabel('mod+k')}
       </span>
