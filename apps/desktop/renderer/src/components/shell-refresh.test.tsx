@@ -28,9 +28,11 @@ import type { UpdateState } from '@rx-artemis/protocol';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Sidebar } from '@/components/Sidebar';
+import { TasksPane } from '@/components/TasksPane';
 import { AppHeader } from '@/components/AppHeader';
 import { seedApp } from '@/state/testkit';
-import { useApp } from '@/state/store';
+import { allLivePanes, focusedPane, splitPane, useApp } from '@/state/store';
+import { setPaneState } from '@/state/pane';
 
 class NoopObserver {
   observe(): void {}
@@ -172,5 +174,71 @@ describe('one update surface', () => {
     expect((chip as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(chip);
     expect(installed).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The dock's scope (item 5)                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** A delegated task, with the fields the row actually reads. */
+const task = (id: string, status = 'running') =>
+  ({
+    id,
+    status,
+    kind: 'agent',
+    name: `task ${id}`,
+    description: `task ${id}`,
+    startedAt: 1,
+  }) as never;
+
+describe('the delegated view has a scope', () => {
+  beforeEach(() => {
+    useApp.setState({ dockScope: 'pane' });
+    setPaneState(focusedPane(), { tasks: [task('a')] } as never);
+  });
+
+  it('shows this column by default, because the tab names one conversation', () => {
+    const pane = focusedPane();
+    mount(<TasksPane paneId={pane.id} />);
+
+    expect(screen.getByRole('button', { name: 'this pane' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(screen.getByLabelText('Delegated work').children).toHaveLength(1);
+  });
+
+  it('gathers every column when asked, and persists the choice', () => {
+    const pane = focusedPane();
+    mount(<TasksPane paneId={pane.id} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'all' }));
+    expect(useApp.getState().dockScope).toBe('all');
+
+    const stored = JSON.parse(localStorage.getItem('artemis.prefs.v1') ?? '{}');
+    expect(stored.dockScope).toBe('all');
+  });
+
+  it('survives a split while it is showing every column', () => {
+    /*
+     * The case the first implementation would have thrown on.
+     *
+     * It called `usePaneTasks` inside a `map` over the panes, so the number of
+     * hooks this component ran was the number of columns open — and splitting
+     * one changes that mid-life, which is exactly the invariant React enforces.
+     * One subscription over every store keeps the count fixed.
+     */
+    useApp.setState({ dockScope: 'all' });
+    const pane = focusedPane();
+    mount(<TasksPane paneId={pane.id} />);
+
+    expect(() => {
+      act(() => {
+        splitPane(pane);
+      });
+    }).not.toThrow();
+
+    expect(allLivePanes(useApp.getState()).length).toBeGreaterThan(1);
+    expect(screen.getByRole('button', { name: 'all' }).getAttribute('aria-pressed')).toBe('true');
   });
 });

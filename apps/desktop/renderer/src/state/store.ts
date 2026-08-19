@@ -676,6 +676,16 @@ export interface AppState {
    */
   readonly dockAutoOpen: boolean;
   /**
+   * Whether the dock's delegated view shows this column's work or every
+   * column's. See `_layout.md` item 5.
+   *
+   * A window value rather than a pane one, and that is the point of it: the
+   * question it answers — "is anything, anywhere, still going" — is about the
+   * window, and storing the answer per column would make it a different setting
+   * depending on which conversation you happened to ask from.
+   */
+  readonly dockScope: 'pane' | 'all';
+  /**
    * Whether Escape stops a run.
    *
    * Only that. Escape also dismisses the palette, closes a dialog and denies a
@@ -1242,6 +1252,7 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  dockScope?: 'pane' | 'all';
   escapeStopsRun?: boolean;
   autoHandoff?: boolean;
   /**
@@ -1502,6 +1513,7 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    dockScope: raw['dockScope'] === 'all' ? 'all' : undefined,
     escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
     autoHandoff: boolOrUndefined(raw['autoHandoff']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
@@ -1591,6 +1603,7 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    dockScope: s.dockScope,
     escapeStopsRun: s.escapeStopsRun,
     autoHandoff: s.autoHandoff,
     updateChannel: s.updateChannel,
@@ -1786,6 +1799,10 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  // This column, unless asked otherwise. The dock tab names a conversation, and
+  // opening it to find another one's work would be answering a question nobody
+  // asked from a place that says it is about this one.
+  dockScope: prefs.dockScope ?? 'pane',
   // Defaults on: this is how Escape has always behaved, and a preference that
   // silently changed an existing reflex would be worse than not having one.
   escapeStopsRun: prefs.escapeStopsRun ?? true,
@@ -6367,6 +6384,11 @@ export function setShowThinking(on: boolean): void {
  * agent put up (their records survive — see `visibleTabs`), and turning it on
  * reveals whatever arrived while it was off.
  */
+export function setDockScope(scope: 'pane' | 'all'): void {
+  useApp.setState({ dockScope: scope });
+  savePrefs();
+}
+
 export function setDockAutoOpen(on: boolean): void {
   useApp.setState({ dockAutoOpen: on });
   savePrefs();
