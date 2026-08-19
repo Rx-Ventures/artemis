@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   ChevronLeftIcon,
+  CornerLeftUpIcon,
   FileCodeIcon,
   FileIcon,
   FileJsonIcon,
@@ -245,6 +246,39 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
         </div>
       ) : (
         <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Folder">
+          {/*
+            The way back, in the list rather than only in the header.
+
+            The chevron above does the same thing and is not where anyone looks
+            for it: a folder listing is a thing you navigate by clicking rows,
+            and every file browser since the Finder has put `..` at the top of
+            one. Having walked *into* a folder by clicking its row, the hand is
+            already here — asking it to travel to a chevron in the header to
+            come back out is the kind of small friction that makes a browser
+            feel like a viewer.
+
+            Both, not one. The header control keeps its place because it is
+            where the current folder's name is, and because it stays reachable
+            when the list is scrolled past this row.
+          */}
+          {parent === null ? null : (
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setAt(parent);
+                }}
+                className="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left text-xs text-ink-muted transition-colors hover:bg-raised/50 hover:text-ink"
+              >
+                <CornerLeftUpIcon className="size-3.5 shrink-0 text-beam" aria-hidden="true" />
+                {/* Mono, because it is a path fragment rather than a name — and
+                    two dots in the body font read as an ellipsis that lost a
+                    letter. */}
+                <span className="min-w-0 flex-1 truncate font-mono">..</span>
+              </button>
+            </li>
+          )}
+
           {listing.entries.map((entry) => (
             <li key={entry.name}>
               <button
