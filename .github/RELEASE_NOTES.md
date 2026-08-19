@@ -1,6 +1,28 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.1.0
+
+- **A reload stops hiding the work that is still running.** With subagents or a
+  workflow going, reloading the window left the conversation looking finished:
+  the delegated tab greyed out, the column reading as dead, nothing to reopen.
+  The work was never interrupted — only the window's view of it — and sending
+  any message brought the whole list straight back, which is a poor way to find
+  out your workflow was alive the entire time.
+
+  The rows were only ever announced on the turn that launched them, and they
+  were retained only on that turn's own stream. A workflow routinely outlives
+  the turn that started it by minutes, so by the time you reloaded there was
+  nothing left to replay: the conversation was being served by a later turn that
+  had never mentioned the work. Artemis knew the conversation was still busy —
+  that is what kept the column from being thrown away — it just had no way to
+  ask what it was busy *with*. It does now, and the rows come back on their own
+  a moment after the window does.
+
+  They keep arriving, too. A workflow that finishes while no turn is open used
+  to leave its rows frozen mid-flight until something else opened one; they now
+  settle on their own.
+
 ## What's new in 1.0.0
 
 Version one. Three providers at a stated bar, a design language that is the
