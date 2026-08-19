@@ -192,6 +192,51 @@ providers, the reworked dock, and the scope as it actually ended up rather than
 as it was when the current design was drawn. Doing it earlier guarantees doing
 it twice.
 
+## Where this ended up
+
+Written 2026-08-17, closed 2026-08-19. Recorded here rather than deleted,
+because the interesting part of a roadmap is where it was wrong.
+
+| | Workstream | Outcome |
+| --- | --- | --- |
+| A | ACP transport and OpenCode adapter | **Done.** |
+| B | The probe pass | **Done.** Eight flags resolved: seven upstream limits, one real bug — and the bug was a `true`, not a `false`. |
+| C | Codex to the v1 bar | **Done.** |
+| D | OpenCode to the v1 bar | **Done.** |
+| E | Cerebro: any bank, including local-only | **Done for v1.** See below. |
+| F | The dock | **Partly.** Surfaces and shared chrome done; delegation not rethought. Deferred past v1 deliberately. |
+| G | The UI overhaul | **Done.** |
+
+### Where the plan was wrong
+
+**F was framed as "redesign or rewrite", and the framing was the error.** The
+question cited `TasksPane` at 29k as "the question in miniature". Measured, that
+is 375 lines of code across 20 small components plus 260 lines of comment;
+`DockPane` is 369 across 11; `state/dock.ts` is 68% comment. The bytes were
+mostly the documentation that makes this codebase good. Sizing a rewrite
+decision by file weight in a repo that comments this heavily reads the wrong
+signal.
+
+What the dock actually needed was smaller and more specific than either option:
+two panes had drifted to different header heights, one class named a token that
+never existed, and one colour reached past the design system into Tailwind's
+palette. None of that is visible from a line count.
+
+**E was written as product work and had mostly become infrastructure by the
+time it was read.** The wizard, off-by-default, any-bank and local-only all
+landed on `v1` during the provider work. One gap remains — `v1` can retire a
+memory but cannot draft one — and the answer for v1 is that the CLI is enough,
+because that is the path every memory has actually been written through.
+`origin/cerebro-settings` carries a drafting UI, predates `v1`'s Cerebro work by
+three days, and conflicts in five files; it is not v1's problem.
+
+**The v1 bar held.** "True, or false for a documented reason" was proposed as
+the softer alternative to universal parity and was worth confirming rather than
+assuming. It survived contact: the probe pass produced seven documented
+`false`s, and the one place the softer bar would have let something slide — a
+capability declared and not delivered — is exactly where it caught a bug
+instead.
+
 ## Sequence
 
 ```
@@ -235,5 +280,10 @@ delegation is settled. G last is the user's call and a sound one.
    is not, the branch needs a rebase onto the newer `cerebro.ts`, not a merge.
 3. **What is the v1 bar for the dock — a redesign or a rewrite?** `TasksPane` at
    29k is the question in miniature.
-4. **Version skew:** the root manifest says `0.16.2` while `apps/desktop` says
-   `0.20.0`. Whatever v1 means for versioning, these should agree first.
+4. ~~**Version skew:**~~ **Answered.** The root, `core` and `protocol` manifests
+   are private, unpublished, and linked by `workspace:*`, which resolves by name
+   — nothing read their versions, which is why they had drifted to `0.16.2` and
+   `0.14.2` while the app was at `0.20.0`. Syncing them would only recreate the
+   drift at the next release, since releases bump the app alone, so the field is
+   gone from all three. `apps/desktop` keeps it: the release workflow checks the
+   tag against it, and it is now `1.0.0`.

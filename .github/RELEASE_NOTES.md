@@ -1,6 +1,94 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.0.0
+
+Version one. Three providers at a stated bar, a design language that is the
+app's own, and both of those enforced by tests rather than described in
+comments.
+
+### Three providers, honestly labelled
+
+Claude, Codex and OpenCode are all supported, and every capability is either
+`true` or `false` **for a documented upstream reason**. That is the bar, and it
+is deliberately not "everything works everywhere" — ACP has no steering method,
+so flag-for-flag parity is unreachable and pretending otherwise would just move
+the lie into the UI.
+
+Which means the interface degrades from what a provider actually does rather
+than from what it advertises. A control that cannot work is disabled and says
+why. Driving each capability rather than trusting the handshake found eight
+answers and one real bug: `imageInput` was declared and the attachments were
+silently dropped.
+
+Local models are first class alongside them: **LM Studio, Ollama and llama.cpp**,
+no account and no network.
+
+### Tools run confined, or they do not run
+
+Commands execute inside an OS sandbox — Seatbelt on macOS, bubblewrap on Linux
+— across two axes copied from Codex: what the OS permits, and when a human is
+asked. Where nothing can confine a command, Artemis **refuses rather than
+silently downgrading**.
+
+The check that proves this works caught the sandbox failing: a blanket
+`/private/var/folders` rule made every other application's scratch directory
+writable, and a command escaped the workspace. The profile now allows exactly
+the roots it was handed and nothing else.
+
+### It looks like itself now
+
+The old palette was six steps of elevation, Vercel's typeface and the violet
+every tool of this generation uses — each decision defensible alone, and
+together somebody else's identity.
+
+Now: one plane and a hairline. Depth is deleted rather than reduced, so
+boundaries are rules instead of stacked greys. Archivo and JetBrains Mono.
+A teal accent. Radius carries meaning — square for what the machine produced,
+soft for what you operate. A new mark: a square frame around a half-lit moon,
+which is that same rule drawn at 512.
+
+**Waiting looks different from working.** A run is starting, running, waiting on
+you, failed or settled — five named states where several used to be the same
+grey dot — and each says *why*. A queued permission outranks a running status,
+because a provider that has asked for something is, to you, waiting. Elapsed
+time sits beside it, because "is it stuck" is the real question and a spinner
+cannot answer it.
+
+### What the tests now enforce
+
+Four checks that read the source and fail the build, added because prose does
+not fail a build:
+
+- every palette value falls inside sRGB, clears WCAG AA on both grounds, and
+  keeps 40° of hue separation
+- nothing in the normal flow lifts off the plane
+- small caps are spelled one way
+- every colour class names a token that exists
+
+Writing them found bugs that judgement had not, including one that shipped in
+two previous releases: `--line-strong` had never met WCAG 1.4.11 in dark mode.
+It draws scrollbar thumbs and radio borders, which are owed 3:1, and it measured
+1.97.
+
+### Also
+
+- `pnpm package` works from a clean checkout. It used to depend on `typecheck`
+  having run first to build the workspace libraries, which was true in CI by
+  accident of ordering and false on a new machine.
+- The slowest test in the suite was not flaky, it was queueing on a real 600ms
+  debounce five times over. 2.91s to 542ms.
+- Private vulnerability reporting is enabled, so `SECURITY.md`'s link resolves.
+
+### Known
+
+- The light theme's accent is muted and cannot be otherwise: teal is the
+  narrowest useful hue in sRGB at mid lightness. Documented rather than nudged.
+- The tasks and agent panes have the new surface treatment but not a rethought
+  one. Delegation is still presented as a list.
+- Unsigned, as before. Every artifact is built on the machine it targets and
+  boots before it ships.
+
 ## What's new in 0.20.0
 
 - **Watch the model think, if that is what you came for.** Thinking folds into
