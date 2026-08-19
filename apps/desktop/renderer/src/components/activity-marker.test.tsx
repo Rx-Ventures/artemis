@@ -318,52 +318,41 @@ describe('a fold the reader operated', () => {
   });
 });
 
-describe('the provider mark', () => {
-  it('sits on the agent’s turn, naming who answered', () => {
+/*
+ * The provider mark used to sit in the gutter of every agent turn, and three
+ * cases pinned it: that it named who answered, that it stayed off our own
+ * turns, and that it kept naming the *run's* account after the window switched
+ * to another one.
+ *
+ * It is gone. The fact it carried is real and does not change from row to row,
+ * so repeating it under every paragraph was the one constant in the thread that
+ * earned nothing — the status line and the header both name the provider, and
+ * they name it once. What survives here is the claim that a turn's gutter stays
+ * empty until the pointer arrives, because an avatar creeping back is exactly
+ * the kind of change nobody notices in a diff.
+ */
+describe('the gutter of an agent turn', () => {
+  it('carries no mark, on either side', () => {
     play({ type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'done' });
-    render(<Transcript />);
-
-    expect(screen.getByTitle('Claude')).not.toBeNull();
-  });
-
-  it('does not appear on our own turns', () => {
     appTranscript().pushUserMessage('fix the auth bug');
     appTranscript().flush();
     render(<Transcript />);
 
+    expect(screen.getByText('done')).not.toBeNull();
     expect(screen.getByText('fix the auth bug')).not.toBeNull();
     expect(screen.queryByTitle('Claude')).toBeNull();
   });
 
-  it('keeps saying who actually answered after the account is switched', () => {
-    play({ type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'done' });
-    seedApp({
-      providers: [
-        ...useApp.getState().providers,
-        {
-          id: 'codex',
-          label: 'Codex',
-          capabilities: CAPABILITIES,
-          models: [],
-          effortLevels: [],
-          available: true,
-        },
-      ],
-      run: {
-        runId: 'run_1',
-        status: 'running',
-        providerId: 'claude',
-        profileId: 'p1',
-        cwd: '/w',
-        capabilities: CAPABILITIES,
-        startedAt: 0,
-      },
-      // The window has moved on to the other account; the transcript has not.
-      activeProviderId: 'codex',
-    });
+  it('still names a subagent, which is a fact about the row rather than the thread', () => {
+    play({
+      type: 'text.complete',
+      messageId: 'm1',
+      role: 'assistant',
+      text: 'searched the tree',
+      agentId: 'task9',
+    } as never);
     render(<Transcript />);
 
-    expect(screen.getByTitle('Claude')).not.toBeNull();
-    expect(screen.queryByTitle('Codex')).toBeNull();
+    expect(screen.getByText('subagent')).not.toBeNull();
   });
 });

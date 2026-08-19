@@ -76,19 +76,15 @@
  *    80%-wide blob would both squeeze the code and fight `.md`, which already
  *    draws its own wells and rules. Ghost strips the chrome and lets the answer
  *    read as full-width prose, which is what it is.
- *  - **One avatar, on the agent's side only, and it *is* the label.** The
- *    gutter of an agent turn carries the mark of the provider that answered —
- *    Anthropic's or OpenAI's — because with two accounts signed in at once,
- *    *which model wrote this* is a fact about the transcript rather than a
- *    setting to go and look up. It sits in a ringed disc with no word under it:
- *    "agent" beneath a mark that already means the agent was a second line of
- *    gutter spent saying nothing, and on a one-line answer that line was taller
- *    than the answer. The ring is what makes the mark read as an avatar rather
- *    than as a stray glyph now that it stands alone. A subagent keeps its word,
- *    because the mark cannot say *which* agent. The user's own turns get no
- *    avatar: alignment and the tinted fill already say whose they are, so a
- *    second constant glyph down the thread would spend horizontal room to
- *    repeat something the layout has already said.
+ *  - **No avatar on either side.** An agent turn used to carry the mark of the
+ *    provider that answered, on the grounds that with two accounts signed in
+ *    *which model wrote this* is a fact about the transcript. It is — and it is
+ *    a fact that does not change from row to row, so it was the same disc
+ *    repeated down the whole thread, once per paragraph, while the status line
+ *    and the header both name the provider already. What it cost was the thing
+ *    the design otherwise protects: a turn's gutter is now empty until the
+ *    pointer arrives with its clock. A subagent still gets its word, because
+ *    that one *does* differ per row.
  *
  * Thinking, tool calls, permissions, notices and run-ends are NOT conversation
  * turns and are not bubbles. They stay the compact rows that expand in place,
@@ -205,7 +201,6 @@ import { EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
-import { ProviderLogo } from './provider-mark';
 import { StreamingText } from './StreamingText';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Button } from '@/components/ui/button';
@@ -412,18 +407,14 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
  * so it has to keep that name even though `components/ui/message` is not used;
  * plain `group` is what the clock's hover reveal uses.
  *
- * `avatar` renders above the label rather than beside it — a disc and a word do
- * not both fit across 3.5rem, and the alternative (widening the spine) would
- * spend the content column's width on every row to decorate two. An empty
- * `label` renders nothing at all, which is how an agent turn gets a gutter that
- * is just the mark and a notice gets one that is just the clock.
+ * An empty `label` renders nothing at all, which is how an agent turn and a
+ * notice both get a gutter that is only the clock.
  */
 function Line({
   label,
   tone = 'neutral',
   ts,
   align = 'start',
-  avatar,
   pinLabel = false,
   children,
   className,
@@ -432,7 +423,6 @@ function Line({
   readonly tone?: Tone;
   readonly ts?: number;
   readonly align?: 'start' | 'end';
-  readonly avatar?: ReactNode;
   /**
    * Keep the label while the pointer is over the row, instead of trading it for
    * the clock.
@@ -461,14 +451,11 @@ function Line({
         <div
           className={cn(
             'flex flex-col items-end gap-0.5 transition-opacity group-data-[align=end]/message:items-start',
-            // Only fade for a row that has a clock to arrive in its place. The
-            // working row carries no `ts`, and fading it unconditionally would
-            // trade the mark for an empty gutter. A pinned label never fades —
-            // see `pinLabel`.
+            // Only fade for a row that has a clock to arrive in its place. A
+            // pinned label never fades — see `pinLabel`.
             ts === undefined || pinLabel ? undefined : 'group-hover:opacity-0',
           )}
         >
-          {avatar}
           {label === '' ? null : (
             <div
               className={cn('chrome-label', toneClasses.text[tone])}
@@ -497,35 +484,6 @@ function Line({
         {children}
       </div>
     </div>
-  );
-}
-
-/**
- * The mark of whoever is answering, for the gutter of an agent turn.
- *
- * Prefers the *run's* provider over the pane's current one. They are usually
- * the same, but a transcript that is still on screen after the user switches
- * profiles must keep saying who actually wrote it — relabelling finished turns
- * to match the account now selected would be a quiet lie about the record.
- *
- * Read from the pane rather than the window, which is the same rule one scope
- * out: with several conversations open the window has no single answer, and the
- * one that matters is the account *this* column is billing.
- *
- * The disc is the whole difference between a mark and an avatar. Bare, at 13px
- * against the page, the mark read as decoration on the label under it — and
- * with that label gone there is nothing left to read it against. A hairline
- * ring on a barely-raised fill is the least chrome that still says "this is
- * who", and it is `--line` rather than a brand colour for the reason the marks
- * are monochrome at all: see `provider-mark.tsx`.
- */
-function AgentAvatar(): ReactElement {
-  const providerId = usePane((s) => s.run?.providerId ?? s.activeProviderId);
-  const label = useApp((s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId);
-  return (
-    <span className="flex size-5 items-center justify-center rounded-full border border-line bg-raised/50 text-ink-muted">
-      <ProviderLogo providerId={providerId} title={label} size={11} />
-    </span>
   );
 }
 
@@ -645,13 +603,13 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
 
   return (
     <Line
-      // No word for the main agent — the mark above says it, and see the header
-      // note on the avatar. A subagent still needs one: the mark is the
-      // provider, which is the same for both.
+      // No word for the main agent: the shape of the row already says whose
+      // turn this is, and a word repeated under every paragraph is the same
+      // clutter the provider mark was. A subagent still needs one — that is a
+      // fact about *this* row rather than about the whole thread.
       label={item.agentId ? 'subagent' : ''}
       tone="neutral"
       ts={item.ts}
-      avatar={<AgentAvatar />}
       className="turn-in mt-1.5"
     >
       {/* `ghost` zeroes the padding and the fill, so `.md` renders against the
@@ -910,8 +868,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
 
   // The pane this card is in, so a preview opens against *this* column's
   // working directory and reports a failure into *this* column's transcript.
-  // One subscription that fires on a focus change and never on a token — the
-  // same cost `AgentAvatar` two rows up already pays.
+  // One subscription that fires on a focus change and never on a token.
   const pane = usePaneRef();
   const cwd = usePane((s) => s.cwd);
   const platform = useApp((s) => s.platform);
