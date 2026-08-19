@@ -190,7 +190,11 @@ function AddressBar({ id, url, loading }: {
         autoComplete="off"
         aria-label="Address"
         className={cn(
-          'min-w-0 flex-1 rounded-md bg-surface px-2 py-1 text-xs text-ink outline-none',
+          // `bg-inset`, and it used to say `bg-surface` — a token that has never
+          // existed, so the class generated nothing and the field had no fill at
+          // all. An address bar is a well you type a machine string into, which
+          // is what `--inset` is for.
+          'min-w-0 flex-1 rounded-sm bg-inset px-2 py-1 text-xs text-ink outline-none',
           'placeholder:text-ink-faint focus-visible:ring-2 focus-visible:ring-ring/50',
           loading && 'text-ink-muted',
         )}
