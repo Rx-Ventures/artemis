@@ -142,6 +142,12 @@ export function createProviderRegistry(
           // descriptor predates the field" without a second code path.
           models: adapter.models ?? [],
           effortLevels: adapter.effortLevels ?? [],
+          // Absent unless the adapter runs commands itself — see
+          // `describeSandbox`. A `?? undefined` rather than a branch, so an
+          // adapter that gains the method later needs no change here.
+          ...(adapter.describeSandbox === undefined
+            ? {}
+            : { sandbox: await adapter.describeSandbox() }),
           available: availability.available,
           unavailableReason: availability.available
             ? undefined

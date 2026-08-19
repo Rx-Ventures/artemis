@@ -31,6 +31,7 @@ import { Sidebar } from '@/components/Sidebar';
 import { TasksPane } from '@/components/TasksPane';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { AppHeader } from '@/components/AppHeader';
+import { StatusLine } from '@/components/StatusLine';
 import { seedApp } from '@/state/testkit';
 import { allLivePanes, focusedPane, splitPane, useApp } from '@/state/store';
 import { setPaneState } from '@/state/pane';
@@ -310,5 +311,92 @@ describe('the prompt bubble', () => {
      * that this bubble is not the ghost one.
      */
     expect(root?.getAttribute('data-variant')).toBe('surface');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The sandbox, where it is actually true (item 4)                            */
+/* -------------------------------------------------------------------------- */
+
+const provider = (id: string, sandbox?: unknown) =>
+  ({
+    id,
+    label: id,
+    kind: id === 'claude' ? 'hosted' : 'local',
+    capabilities: { permissionModes: [] },
+    models: [],
+    effortLevels: [],
+    available: true,
+    ...(sandbox === undefined ? {} : { sandbox }),
+  }) as never;
+
+describe('the status line reports the sandbox', () => {
+  it('says nothing for a provider that brings its own CLI', () => {
+    /*
+     * The reason this is per-provider rather than global. Claude and Codex
+     * spawn their own CLI, which owns permission handling — the mode segment
+     * beside this one is the honest answer for them. A chip reading `seatbelt`
+     * next to a Claude profile would claim a confinement Artemis is not
+     * providing.
+     */
+    seedApp({ providers: [provider('claude')], activeProviderId: 'claude' } as never);
+    mount(<StatusLine />);
+
+    expect(screen.queryByText('seatbelt')).toBeNull();
+    expect(screen.queryByText('unconfined')).toBeNull();
+  });
+
+  it('names the backend for a local provider, which Artemis does confine', () => {
+    seedApp({
+      providers: [
+        provider('ollama', {
+          backend: 'Seatbelt',
+          confinement: 'workspace',
+          verification: 'verified',
+          detail: 'Commands run under Seatbelt.',
+        }),
+      ],
+      activeProviderId: 'ollama',
+    } as never);
+    mount(<StatusLine />);
+
+    expect(screen.getByText('seatbelt')).toBeTruthy();
+  });
+
+  it('is loud when nothing can confine, because commands will be refused', () => {
+    seedApp({
+      providers: [
+        provider('ollama', {
+          confinement: 'none',
+          verification: 'unverified',
+          detail: 'bubblewrap is not installed, so commands will not be run.',
+        }),
+      ],
+      activeProviderId: 'ollama',
+    } as never);
+    mount(<StatusLine />);
+
+    const chip = screen.getByText('unconfined');
+    expect(chip.className).toContain('text-amber');
+    expect(chip.getAttribute('title')).toContain('will not be run');
+  });
+
+  it('marks a backend that has never been proven on a real machine', () => {
+    // The capability bar's rule applied to a sentence rather than a flag: say
+    // what is unverified instead of letting the word imply otherwise.
+    seedApp({
+      providers: [
+        provider('ollama', {
+          backend: 'bubblewrap',
+          confinement: 'workspace',
+          verification: 'unverified',
+          detail: 'This backend has not been verified on a real machine.',
+        }),
+      ],
+      activeProviderId: 'ollama',
+    } as never);
+    mount(<StatusLine />);
+
+    expect(screen.getByText('bubblewrap').textContent).toContain('?');
   });
 });

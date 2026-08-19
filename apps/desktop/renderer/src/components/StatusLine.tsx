@@ -219,6 +219,7 @@ export function StatusLine(): ReactElement {
         <ModelSegment />
         <Divider />
         <ModeSegment />
+        <SandboxSegment />
 
         <div className="ml-auto flex min-w-0 items-center gap-0.5">
           <RunSegment />
@@ -1242,3 +1243,59 @@ function RunSegment(): ReactElement | null {
  * value; it just moved.
  */
 
+/**
+ * What is confining this provider's shell commands, when anything is.
+ *
+ * `_layout.md` item 4 put `seatbelt` in the elided chip beside the effort and
+ * the directory. Those two found homes elsewhere — effort inside the model
+ * popover, the directory above the composer — and this one found none at all:
+ * the word `seatbelt` appeared nowhere in the renderer, while the release notes
+ * led with "commands execute inside an OS sandbox". A headline claim the app
+ * never made.
+ *
+ * ## Only where it is true
+ *
+ * Absent for Claude and Codex, because it would be a lie there. They spawn
+ * their own CLI and that CLI owns permission handling — which is what the mode
+ * segment immediately to the left already reports. Artemis builds and confines
+ * the shell tool only for the local providers, so only they publish a
+ * `sandbox` on their descriptor and only they draw this.
+ *
+ * ## `none` is the loud case
+ *
+ * A machine that cannot confine will refuse to run commands at all, so the
+ * interesting state is the failure: it takes the warning colour and says so.
+ * A working sandbox is the quiet default and reads as chrome, because "things
+ * are as they should be" does not deserve attention.
+ */
+function SandboxSegment(): ReactElement | null {
+  const sandbox = usePane(
+    (s) => s.providers.find((p) => p.id === s.activeProviderId)?.sandbox,
+  );
+  if (sandbox === undefined) return null;
+
+  const refused = sandbox.confinement === 'none';
+  const label = refused ? 'unconfined' : (sandbox.backend ?? 'sandboxed').toLowerCase();
+
+  return (
+    <>
+      <Divider />
+      <span
+        title={sandbox.detail}
+        className={cn(
+          'shrink-0 px-1 font-mono text-2xs',
+          refused ? 'text-amber' : 'text-ink-faint',
+        )}
+      >
+        {label}
+        {/* An unverified backend is a claim we have not tested on a real
+            machine of that platform. The capability bar's rule applies to this
+            as much as to a flag: say what is unproven rather than let a green
+            word imply otherwise. */}
+        {!refused && sandbox.verification === 'unverified' ? (
+          <span className="text-amber"> ?</span>
+        ) : null}
+      </span>
+    </>
+  );
+}
