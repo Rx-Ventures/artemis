@@ -83,6 +83,7 @@ import {
   type PlanUsagePush,
   type MenuOpenSettings,
   type UpdateState,
+  type UpdatesSetChannelRequest,
   type UpdatesDismissRequest,
   type UpdatesInstallRequest,
   type UpdatesRestartRequest,
@@ -660,6 +661,7 @@ const bridge: ArtemisBridge = Object.freeze({
     install: (request: UpdatesInstallRequest) => invoke(IPC.updatesInstall, request),
     restart: (request: UpdatesRestartRequest) => invoke(IPC.updatesRestart, request),
     dismiss: (request: UpdatesDismissRequest) => invoke(IPC.updatesDismiss, request),
+    setChannel: (request: UpdatesSetChannelRequest) => invoke(IPC.updatesSetChannel, request),
     onChange: updateStates.subscribe,
   }),
 

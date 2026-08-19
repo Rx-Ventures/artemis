@@ -58,6 +58,7 @@ import { app } from 'electron';
 import type { UpdateState } from '@rx-artemis/protocol';
 
 import { createLogger } from './log.js';
+import { tagForChannel, type ReleaseSummary, type UpdateChannel } from './updateChannel.js';
 import { parseUpdateFeed, shouldOffer, type UpdateFeed } from './updateFeed.js';
 
 const execFileAsync = promisify(execFile);
@@ -79,6 +80,22 @@ const RELEASES_URL = `https://github.com/${REPO}/releases`;
  * artifact to install and an Intel Mac must never be handed the arm64 zip.
  */
 const FEED_NAME = `latest-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.yml`;
+
+/**
+ * The releases API, used only by the beta channel.
+ *
+ * Stable never calls it: `/releases/latest` on the download host already
+ * excludes prereleases, so stable resolves with no API request at all. Beta
+ * cannot use that endpoint — skipping prereleases is precisely what it must not
+ * do — so it lists releases and picks the newest itself.
+ *
+ * Unauthenticated, which is rate-limited to 60 requests an hour per IP. The
+ * updater checks every four hours, so that is roughly 240 times more headroom
+ * than needed, and a rate-limit answer is treated like any other unreachable
+ * feed: no banner today.
+ */
+const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=20`;
+const RELEASES_FETCH_TIMEOUT_MS = 15_000;
 
 /** First check shortly after launch; then steadily. Both deliberately lazy —
  * an update is never urgent enough to compete with startup. */
@@ -127,6 +144,13 @@ export type CheckOutcome =
 export interface Updater {
   /** The state right now, for the pull channel. */
   state(): UpdateState;
+  /**
+   * Set which releases this installation will be offered, and report the state
+   * unchanged — the channel decides what a *future* check sees, and changing it
+   * deliberately does not kick one off. Someone toggling a setting has not
+   * asked to download anything.
+   */
+  setChannel(channel: UpdateChannel): UpdateState;
   /**
    * Check now, because someone asked, and say what was found.
    *
@@ -317,6 +341,13 @@ export function createUpdater(options: UpdaterOptions): Updater {
   let checking = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  /**
+   * Stable until the renderer says otherwise, which it does at startup and on
+   * every change. The main process persists no preferences of its own, so this
+   * resets on each launch and is told again — which is also why an unreachable
+   * renderer degrades to stable rather than to something surprising.
+   */
+  let channel: UpdateChannel = 'stable';
 
   function setState(next: UpdateState): UpdateState {
     current = next;
@@ -363,6 +394,36 @@ export function createUpdater(options: UpdaterOptions): Updater {
     return process.platform === 'darwin' && app.isPackaged;
   }
 
+  /**
+   * Which tag to read the feed from.
+   *
+   * Returns `''` for stable, which `fetchAsset` understands as "the
+   * /releases/latest path" — no API call, one fewer thing to fail. Beta asks
+   * the API and falls back to the same empty string when it cannot: an
+   * unreachable API should degrade to stable behaviour, not to no updates.
+   */
+  async function tagToCheck(): Promise<string> {
+    if (channel === 'stable') return '';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), RELEASES_FETCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(RELEASES_API, {
+          signal: controller.signal,
+          headers: { accept: 'application/vnd.github+json' },
+        });
+        if (!response.ok) throw new Error(`releases API answered ${response.status}`);
+        const releases = (await response.json()) as ReleaseSummary[];
+        return tagForChannel('beta', Array.isArray(releases) ? releases : []);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (error) {
+      log.debug('Could not list releases for the beta channel; falling back to latest.', error);
+      return '';
+    }
+  }
+
   async function check(options: { readonly manual: boolean }): Promise<CheckOutcome> {
     // Never check over an active offer or install: an offer mid-download must
     // not be replaced under the banner's feet. A manual check may leave an
@@ -382,7 +443,10 @@ export function createUpdater(options: UpdaterOptions): Updater {
         const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
         try {
           feed = parseUpdateFeed(
-            await readFile(await fetchAsset(FEED_NAME, '', dir, FEED_FETCH_TIMEOUT_MS), 'utf8'),
+            await readFile(
+              await fetchAsset(FEED_NAME, await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS),
+              'utf8',
+            ),
           );
         } finally {
           await removeTree(dir);
@@ -511,6 +575,14 @@ export function createUpdater(options: UpdaterOptions): Updater {
 
   return {
     state: () => current,
+
+    setChannel(next: UpdateChannel): UpdateState {
+      // No check is kicked off. Someone toggling a setting has not asked to
+      // download anything; the channel decides what the *next* check sees.
+      if (next !== channel) log.info(`Update channel is now ${next}.`);
+      channel = next;
+      return current;
+    },
 
     checkNow: () => check({ manual: true }),
 

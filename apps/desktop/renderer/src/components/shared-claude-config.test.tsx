@@ -79,6 +79,9 @@ let reading: { root: string; rootMissing: string[]; dirs: Dir[] } = {
 let failure: string | null = null;
 let reads = 0;
 
+/** Every channel main has been told, in order. Cleared before each test. */
+const channelsSent: string[] = [];
+
 /**
  * Installed before the first render: `resolveBridge` memoises its binding on
  * first use, so a later assignment would never be seen. Which is also why the
@@ -93,6 +96,12 @@ let reads = 0;
       return failure === null
         ? { ok: true as const, value: reading }
         : { ok: false as const, error: { code: 'unknown', message: failure } };
+    },
+  },
+  updates: {
+    setChannel: async ({ channel }: { channel: string }) => {
+      channelsSent.push(channel);
+      return { ok: true as const, value: { state: null } };
     },
   },
 };
@@ -133,6 +142,8 @@ beforeEach(() => {
   };
   failure = null;
   reads = 0;
+  useApp.setState({ updateChannel: 'stable' });
+  channelsSent.length = 0;
 });
 
 afterEach(() => {
@@ -464,5 +475,55 @@ describe('copying', () => {
     expect(screen.queryByText('Copied')).toBeNull();
 
     vi.unstubAllGlobals();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The update channel                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The same pane carries the beta switch, and the thing worth asserting is not
+ * that a `Switch` toggles — it is that the choice reaches main.
+ *
+ * Main holds no preferences of its own: it is told the channel at every launch
+ * and again whenever it changes, and if either message is dropped the app
+ * silently checks the wrong feed. Nothing on screen would say so — the switch
+ * would still read `beta` while the updater looked at stable — which is exactly
+ * the class of bug a test has to hold, because a person cannot see it.
+ */
+describe('the update channel', () => {
+  const betaSwitch = (): HTMLElement =>
+    screen.getByRole('switch', { name: 'Offer beta releases' });
+
+  it('starts on stable and reflects the stored choice', () => {
+    renderPane();
+    expect(betaSwitch().getAttribute('aria-checked')).toBe('false');
+
+    cleanup();
+    useApp.setState({ updateChannel: 'beta' });
+    renderPane();
+    expect(betaSwitch().getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('tells main in both directions', async () => {
+    renderPane();
+    fireEvent.click(betaSwitch());
+    await waitFor(() => expect(channelsSent).toEqual(['beta']));
+    expect(useApp.getState().updateChannel).toBe('beta');
+
+    fireEvent.click(betaSwitch());
+    await waitFor(() => expect(channelsSent).toEqual(['beta', 'stable']));
+    expect(useApp.getState().updateChannel).toBe('stable');
+  });
+
+  it('persists the choice, because it is a standing decision about risk', () => {
+    renderPane();
+    fireEvent.click(betaSwitch());
+    // Read back through the same key the store writes, rather than trusting the
+    // in-memory value: a channel that survives the click but not the restart is
+    // the failure this pref exists to prevent.
+    const raw = JSON.parse(localStorage.getItem('artemis.prefs.v1') ?? '{}');
+    expect(raw.updateChannel).toBe('beta');
   });
 });

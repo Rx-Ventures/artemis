@@ -69,8 +69,26 @@ describe('isNewerVersion', () => {
 
   it('fails toward silence on garbage', () => {
     expect(isNewerVersion('latest', '0.2.0')).toBe(false);
-    expect(isNewerVersion('0.3.0-alpha.1', '0.2.0')).toBe(false);
     expect(isNewerVersion('0.3.0', 'unknown')).toBe(false);
+    expect(isNewerVersion('', '0.2.0')).toBe(false);
+    expect(isNewerVersion('1.0.0', '')).toBe(false);
+  });
+
+  it('understands prereleases, which it used to treat as garbage', () => {
+    // This assertion used to read the other way: a prerelease compared as *not
+    // newer*, because the parser required every dot-separated part to be an
+    // integer and `0-alpha` is not. That conflated two jobs. Deciding what a
+    // machine is *shown* belongs to the update channel — GitHub's
+    // /releases/latest excludes prereleases, so a stable installation never
+    // sees one regardless of what this function says. Deciding what is *newer*
+    // belongs here, and 0.3.0-alpha.1 is newer than 0.2.0.
+    //
+    // Left as it was, a beta build could never update itself: its own version
+    // failed to parse, so nothing was ever newer than it.
+    expect(isNewerVersion('0.3.0-alpha.1', '0.2.0')).toBe(true);
+    expect(isNewerVersion('1.0.0', '1.0.0-beta.3')).toBe(true);
+    expect(isNewerVersion('1.0.0-beta.3', '1.0.0')).toBe(false);
+    expect(isNewerVersion('1.0.0-beta.10', '1.0.0-beta.9')).toBe(true);
   });
 });
 

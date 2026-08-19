@@ -100,6 +100,7 @@ import {
   type AuthStatusRequest,
   type UsagePlanRequest,
   type UpdatesDismissRequest,
+  type UpdatesSetChannelRequest,
   type UpdatesInstallRequest,
   type UpdatesRestartRequest,
   type UpdatesStateRequest,
@@ -1747,6 +1748,17 @@ export function validateUpdatesRestart(raw: unknown): UpdatesRestartRequest {
 export function validateUpdatesDismiss(raw: unknown): UpdatesDismissRequest {
   const request = requireRequest(raw);
   return { version: requireString(request['version'], 'version', LIMITS.label) };
+}
+
+/**
+ * The channel is a closed set of two, so it is checked against the set rather
+ * than accepted as any string. An unrecognised value falls back to `stable`
+ * rather than failing the call: the worst case for a bad value must be "you are
+ * not offered prereleases", never "the app cannot start".
+ */
+export function validateUpdatesSetChannel(raw: unknown): UpdatesSetChannelRequest {
+  const request = requireRequest(raw);
+  return { channel: request['channel'] === 'beta' ? 'beta' : 'stable' };
 }
 
 /* -------------------------------------------------------------------------- */

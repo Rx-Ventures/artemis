@@ -75,6 +75,7 @@ import type {
   SessionSummary,
   TerminalId,
   TokenUsage,
+  UpdateChannel,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
@@ -649,6 +650,8 @@ export interface AppState {
    * rather than destroying them.
    */
   readonly dockAutoOpen: boolean;
+  /** Which releases this installation is willing to be offered. */
+  readonly updateChannel: UpdateChannel;
 
   /**
    * Whether the user has taken up the shared-`~/.claude` arrangement.
@@ -1201,6 +1204,11 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  /**
+   * Persisted rather than derived: it is a standing choice about risk, and the
+   * app must not quietly move someone between channels across a restart.
+   */
+  updateChannel?: UpdateChannel;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
   /**
@@ -1407,6 +1415,7 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
     contextWindows: numberMap(raw['contextWindows']),
@@ -1493,6 +1502,7 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
@@ -1672,6 +1682,7 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
   // being offered an undo for something it never did.
@@ -4556,6 +4567,12 @@ export async function bootstrap(): Promise<void> {
     return;
   }
 
+  // Main keeps no preferences of its own, so the update channel has to be sent
+  // on every launch rather than only when it changes. It goes here, before the
+  // first check can fire, because a beta user whose channel arrived late would
+  // be told about the stable release they had already declined.
+  void bridge.updates?.setChannel?.({ channel: useApp.getState().updateChannel });
+
   await Promise.all([refreshProviders(), refreshProfiles()]);
   await adoptLiveRuns(focusedPane());
   await adoptTerminals(focusedPane());
@@ -6069,6 +6086,25 @@ export function setSharedClaudeConfig(on: boolean): void {
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged || on,
   }));
   savePrefs();
+}
+
+/**
+ * Choose which releases this installation is offered.
+ *
+ * `beta` widens what the updater considers rather than pointing it somewhere
+ * else: a beta user is still offered the stable release once it is the newest
+ * thing, because "beta" means *earlier*, not *a different product*. Going back
+ * to `stable` never uninstalls anything — it only stops future prereleases
+ * being offered, so someone on 1.1.0-beta.3 stays there until 1.1.0 ships.
+ * That is the honest behaviour, and the pane says so.
+ */
+export function setUpdateChannel(channel: UpdateChannel): void {
+  useApp.setState({ updateChannel: channel });
+  savePrefs();
+  // The main process holds no preferences of its own, so it has to be told.
+  // Deliberately fire-and-forget: the preference is already saved, and an
+  // unreachable bridge means the next launch tells it again at startup.
+  void resolveBridge().bridge?.updates?.setChannel?.({ channel });
 }
 
 export function setPalette(open: boolean): void {
