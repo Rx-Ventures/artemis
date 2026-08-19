@@ -215,6 +215,24 @@ delegation is settled. G last is the user's call and a sound one.
 2. **Does v1 gate on a Cerebro that ships to other people?** E is written as
    product work. If Cerebro stays an internal tool, its wizard does not have to
    be finished for Artemis v1 and can drop out of the release entirely.
+
+   **Measured, 2026-08-19.** Most of E has landed on `v1` already: the bank can
+   live anywhere, private is a decision, and a bank that cannot commit says so
+   rather than looking finished. `v1` carries eight Cerebro IPC channels —
+   status, list, preflight, setup, sync, retire, setEnabled — so the wizard and
+   the off-by-default rule are done.
+
+   One gap, and it is a specific one: **`v1` can retire a memory but cannot
+   draft one.** `cerebroDraft` exists only on `origin/cerebro-settings`, whose
+   last commit predates `v1`'s Cerebro work by three days and which now
+   conflicts in five files. That branch is not obsolete — it carries a real
+   drafting UI — but rebasing it is work that only pays off if drafting from
+   inside Artemis is in scope.
+
+   So the question narrows usefully: **does v1 need to draft memories from the
+   app, or is the CLI enough?** If the CLI is enough, E is done and
+   `cerebro-settings` should be deleted rather than left looking pending. If it
+   is not, the branch needs a rebase onto the newer `cerebro.ts`, not a merge.
 3. **What is the v1 bar for the dock — a redesign or a rewrite?** `TasksPane` at
    29k is the question in miniature.
 4. **Version skew:** the root manifest says `0.16.2` while `apps/desktop` says
