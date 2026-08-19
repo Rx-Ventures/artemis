@@ -178,7 +178,13 @@ function DockStrip({
       // 34px of icons down the left edge. `overflow-y-auto` rather than `-x`:
       // a dock with nine tabs scrolls vertically, where there is room, instead
       // of eating the width of the panel it is labelling.
-      className="flex w-[34px] shrink-0 flex-col items-stretch gap-px overflow-y-auto border-r border-line py-1"
+      //
+      // No vertical padding, because the active tab is a *filled* row: a gap
+      // above the first one leaves its fill floating below the top border with
+      // a sliver of panel showing through, which reads as a mistake rather than
+      // as breathing room. The tabs meet the edges; the gap between them is
+      // `gap-px`, which is the hairline the design language already uses.
+      className="flex w-[34px] shrink-0 flex-col items-stretch gap-px overflow-y-auto border-r border-line"
     >
       {tabs.map((tab) => (
         <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />

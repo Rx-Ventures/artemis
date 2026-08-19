@@ -182,6 +182,36 @@ describe('the folder browser', () => {
     await screen.findByText('README.md');
   });
 
+  it('offers `..` in the list, where a hand that just clicked a folder already is', async () => {
+    openFiles();
+    renderDock();
+    await screen.findByText('apps');
+
+    fireEvent.click(screen.getByText('apps'));
+    await screen.findByText('index.ts');
+
+    fireEvent.click(screen.getByText('..'));
+
+    await screen.findByText('README.md');
+    expect(listed).toEqual([
+      '/Users/me/project',
+      '/Users/me/project/apps',
+      '/Users/me/project',
+    ]);
+  });
+
+  it('leaves `..` out at the top of the filesystem', async () => {
+    tree['/'] = { entries: [dir('Users')] };
+    setPaneState(focusedPane(), { cwd: '/' } as never);
+    openFiles();
+    renderDock();
+    await screen.findByText('Users');
+
+    // A row that navigates nowhere is worse than no row: it invites the click
+    // that proves it does nothing.
+    expect(screen.queryByText('..')).toBeNull();
+  });
+
   it('walks up past the working directory, which is where the file channel ends', async () => {
     openFiles();
     renderDock();

@@ -1,18 +1,12 @@
 /**
  * The bug report card — the last thing in the sidebar, always there.
  *
- *      ╭────────────────────────────────╮
  *      │ [ + New session       ⌘N ] [◧] │
  *      │ ▾ Sessions · 47                │
  *      │   …                            │
- *      ╰────────────────────────────────╯
- *      ╭────────────────────────────────╮
- *      │ ↓ Artemis 0.7.0 is available ✕ │  ← UpdateCard, when there is one
- *      │ [ Update now ]                 │
- *      ╰────────────────────────────────╯
- *      ╭────────────────────────────────╮
- *      │ ⛭ Report a bug               → │  ← this
- *      ╰────────────────────────────────╯
+ *      ├────────────────────────────────┤
+ *      │ ⛭ Report a bug                 │  ← this
+ *      └────────────────────────────────┘
  *
  * ## Why this gets the permanent slot the sidebar spent two versions clearing
  *
@@ -31,9 +25,17 @@
  *
  * So it is permanent, and it is a row rather than a card's worth of furniture:
  * one line, one icon, muted, the height of a session row. It reads as the floor
- * of the sidebar rather than as a notice, which is the distinction that lets it
- * sit under `UpdateCard` without the two competing — an update is news and looks
- * like it, this is a door and looks like one.
+ * of the sidebar rather than as a notice — a door, not news.
+ *
+ * ## Flat, because the sidebar is
+ *
+ * This was a rounded, bordered, filled card back when the sidebar was a stack
+ * of them. The shell refresh took the cards away: the sidebar is one panel with
+ * hairlines dividing it, and a rounded rectangle floating inside that with a
+ * margin around it was the one piece of the old language left, which made it
+ * read as something that had been pasted in. It is now a full-width row under
+ * a hairline, and the hairline is the only thing separating it from the list —
+ * the same rule every other boundary in the panel follows.
  */
 
 import { useState, type ReactElement } from 'react';
@@ -47,16 +49,17 @@ export function BugReportCard(): ReactElement {
   return (
     <>
       {/*
-        The session card's chrome, like `UpdateCard` — same radius, border, fill,
-        shadow and ring — so the foot of the sidebar reads as a stack of siblings
-        rather than a panel with things bolted under it. `shrink-0` for the same
-        reason it is there: the card above is `flex-1` and would otherwise give up
-        the list's rows to this one line.
+        `shrink-0` for the reason it has always been there: the list above is
+        `flex-1` and would otherwise give up its rows to this one line.
+
+        The focus ring is inset, because a row that meets both edges of the
+        panel has no margin for a ring to sit in — an outset one would be
+        clipped on the left and hang over the transcript on the right.
       */}
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-2 text-2xs text-ink-muted transition-colors hover:bg-raised/70 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex shrink-0 items-center gap-2 border-t border-line px-2.5 py-2 text-2xs text-ink-muted transition-colors hover:bg-raised/50 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         <BugIcon aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
         <span className="min-w-0 flex-1 truncate text-left">Report a bug</span>
