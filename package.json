@@ -29,6 +29,7 @@
     "opencode:attach": "tsx scripts/opencode-attach.ts"
   },
   "devDependencies": {
+    "@rx-ventures/artemis-sdk": "workspace:*",
     "@rx-artemis/core": "workspace:*",
     "@rx-artemis/protocol": "workspace:*",
     "@types/node": "^26.2.0",

@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "lib": ["ES2023"],
+    // `node` rather than the DOM lib: the implementation needs `fetch`,
+    // `AbortSignal` and `Response` at runtime, and Node has published them as
+    // globals since 18. The DOM lib would put those names in the *emitted*
+    // types too, which is exactly what this package must not require of its
+    // consumers — see the structural stand-ins in `client.ts`.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"],
+  "references": [{ "path": "../protocol" }]
+}

@@ -29,6 +29,7 @@ import type {
   ProviderModelOption,
   RunEndReason,
   RunHandle,
+  ServerState,
   SharedConfigEntryState,
   UpdateState,
   RunsStartRequest,
@@ -39,7 +40,10 @@ import type {
   WindowState,
 } from '@rx-artemis/protocol';
 import {
+  assignProfileSlugs,
   browserUrlFor,
+  DEFAULT_SERVER_PORT,
+  modelRoute,
   NO_CAPABILITIES,
   SHARED_ENTRIES,
   normalizeProfileColor,
@@ -795,6 +799,64 @@ export function createMockBridge(): ArtemisBridge {
       unavailableReason: 'Not supported in this version of Artemis yet.',
     },
   ];
+
+  /** The same assignment the real catalogue makes, from the same helper. */
+  const slugs = assignProfileSlugs(profiles);
+
+  /**
+   * The mock server's state, and the fan-out the real push channel provides.
+   *
+   * Declared before the bridge rather than beside the rest of the mock's
+   * helpers because these are *statements*: the function declarations below the
+   * `return` are hoisted and these would not be.
+   */
+  let serverState: ServerState = {
+    phase: 'stopped',
+    host: '127.0.0.1',
+    port: DEFAULT_SERVER_PORT,
+    autoStart: false,
+    // Two, because the pane's interesting states are a directory grant and a
+    // scratch one, and a mock with a single row never shows the difference.
+    connections: [
+      {
+        id: 'conn-kronos',
+        label: 'Kronos',
+        workspace: { kind: 'directory', path: '/Users/demo/code/kronos' },
+        token: mockServerToken(),
+        createdAt: Date.now() - 86_400_000,
+        lastUsedAt: Date.now() - 240_000,
+      },
+      {
+        id: 'conn-scratch',
+        label: 'Summariser',
+        workspace: { kind: 'ephemeral', perSession: true },
+        token: mockServerToken(),
+        createdAt: Date.now() - 3_600_000,
+      },
+    ],
+    traffic: { total: 0, rejected: 0 },
+  };
+  const serverListeners = new Set<(state: ServerState) => void>();
+
+  const pushServerState = (): void => {
+    for (const listener of serverListeners) listener(serverState);
+  };
+
+  // Traffic only moves while the server is up, which is the one thing about it
+  // that is honest to fake: a stopped server reporting requests would teach the
+  // pane's reader something untrue about what the counter means.
+  setInterval(() => {
+    if (serverState.phase !== 'running') return;
+    serverState = {
+      ...serverState,
+      traffic: {
+        total: serverState.traffic.total + 1,
+        rejected: serverState.traffic.rejected,
+        lastAt: Date.now(),
+      },
+    };
+    pushServerState();
+  }, 9_000);
 
   return {
     version: '0.1.0-mock',
@@ -1866,6 +1928,144 @@ export function createMockBridge(): ArtemisBridge {
   menu: {
       onOpenSettings: (): Unsubscribe => () => undefined,
     },
+
+    /**
+     * A server that really does change state, and really does not listen.
+     *
+     * A browser tab cannot bind a port, so nothing here is reachable over HTTP —
+     * but every *state* the pane renders is reachable, which is what this mock
+     * is for. Start, stop, rotate and reconfigure all move the same value the
+     * real host would move, so the running layout, the stopped layout and the
+     * token block can all be seen in dev.
+     *
+     * Traffic ticks up on its own once running, because "nothing has called
+     * this yet" and "something is calling this" are different pieces of chrome
+     * and the second one is otherwise unreachable without another program.
+     */
+    server: {
+      status: async () => ok({ state: serverState }),
+      start: async () => {
+        serverState = {
+          ...serverState,
+          phase: 'running',
+          boundPort: serverState.port,
+          url: `http://127.0.0.1:${serverState.port}`,
+          startedAt: Date.now(),
+        };
+        delete (serverState as { lastError?: unknown }).lastError;
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      stop: async () => {
+        const { boundPort: _boundPort, url: _url, startedAt: _startedAt, ...rest } = serverState;
+        serverState = { ...rest, phase: 'stopped' };
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      configure: async (request) => {
+        serverState = {
+          ...serverState,
+          port: request.port ?? serverState.port,
+          autoStart: request.autoStart ?? serverState.autoStart,
+        };
+        if (serverState.phase === 'running') {
+          serverState = {
+            ...serverState,
+            boundPort: serverState.port,
+            url: `http://127.0.0.1:${serverState.port}`,
+          };
+        }
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      createConnection: async (request) => {
+        serverState = {
+          ...serverState,
+          connections: [
+            ...serverState.connections,
+            {
+              id: `conn-${serverState.connections.length + 1}`,
+              label: request.label,
+              workspace: request.workspace,
+              token: mockServerToken(),
+              createdAt: Date.now(),
+            },
+          ],
+        };
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      renameConnection: async (request) => {
+        serverState = {
+          ...serverState,
+          connections: serverState.connections.map((connection) =>
+            connection.id === request.id ? { ...connection, label: request.label } : connection,
+          ),
+        };
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      deleteConnection: async (request) => {
+        serverState = {
+          ...serverState,
+          connections: serverState.connections.filter(
+            (connection) => connection.id !== request.id,
+          ),
+        };
+        pushServerState();
+        return ok({ state: serverState });
+      },
+      /*
+       * Built from the same profiles and descriptors the rest of this mock
+       * serves, through the same route composition the real catalogue uses.
+       * Anything less — a hand-written fixture — would let the pane look right
+       * against rows no server would ever publish.
+       */
+      catalogue: async () =>
+        ok({
+          profiles: profiles.map((profile) => {
+            const descriptor = providers.find((entry) => entry.id === profile.providerId);
+            const slug = slugs.get(profile.id) ?? profile.id;
+            return {
+              id: profile.id,
+              slug,
+              label: profile.label,
+              provider: {
+                id: profile.providerId,
+                label: descriptor?.label ?? profile.providerId,
+                kind: descriptor?.kind ?? ('hosted' as const),
+              },
+              available: descriptor?.available ?? false,
+              disabled: profile.disabled === true,
+              live: descriptor?.available === true,
+              capabilities: descriptor?.capabilities ?? NO_CAPABILITIES,
+              models: (descriptor?.models ?? []).map((model) => ({
+                route: modelRoute(slug, model.id),
+                id: model.id,
+                label: model.label,
+                ...(model.displayName === undefined ? {} : { displayName: model.displayName }),
+                note: model.note,
+                profileId: profile.id,
+                profileSlug: slug,
+                profileLabel: profile.label,
+                providerId: profile.providerId,
+                thinkingLevels: (descriptor?.effortLevels ?? []).filter(
+                  (level) =>
+                    model.effortLevels === undefined || model.effortLevels.includes(level.id),
+                ),
+                adaptiveThinking: model.adaptiveThinking === true,
+                fastMode: model.supportsFastMode === true,
+                ultracode: model.supportsUltracode === true,
+                ...(model.tier === undefined ? {} : { tier: model.tier }),
+              })),
+            };
+          }),
+        }),
+      onChange: (listener): Unsubscribe => {
+        serverListeners.add(listener);
+        return () => serverListeners.delete(listener);
+      },
+    },
   };
 
   function mockUpdateState(): UpdateState {
@@ -1881,6 +2081,16 @@ export function createMockBridge(): ArtemisBridge {
       message: phase === 'error' ? 'The download could not be verified.' : null,
       releaseUrl: phase === 'error' ? 'https://github.com/Rx-Ventures/artemis/releases' : null,
     };
+  }
+
+  /** Shaped like the real one — 32 bytes, base64url — so the pane's layout meets a real length. */
+  function mockServerToken(): string {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let token = '';
+    for (let index = 0; index < 43; index += 1) {
+      token += alphabet[Math.floor(Math.random() * alphabet.length)] ?? 'a';
+    }
+    return token;
   }
 
   function mockWindowState(): WindowState {

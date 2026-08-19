@@ -14,6 +14,9 @@ importers:
       '@rx-artemis/protocol':
         specifier: workspace:*
         version: link:packages/protocol
+      '@rx-ventures/artemis-sdk':
+        specifier: workspace:*
+        version: link:packages/sdk
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -217,6 +220,25 @@ importers:
 
   packages/protocol:
     devDependencies:
+      typescript:
+        specifier: ~7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@26.2.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12))
+
+  packages/sdk:
+    dependencies:
+      '@rx-artemis/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@rx-artemis/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
       typescript:
         specifier: ~7.0.2
         version: 7.0.2

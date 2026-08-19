@@ -63,6 +63,15 @@ import {
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
   type RunsStartRequest,
+  type ServerCatalogueRequest,
+  type ServerConfigureRequest,
+  type ServerCreateConnectionRequest,
+  type ServerDeleteConnectionRequest,
+  type ServerRenameConnectionRequest,
+  type ServerStartRequest,
+  type ServerState,
+  type ServerStatusRequest,
+  type ServerStopRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
   type AgentPromptsListRequest,
@@ -300,6 +309,40 @@ function isUpdateState(value: unknown): value is UpdateState {
   );
 }
 
+/**
+ * A pushed {@link ServerState}, checked the way every other push is.
+ *
+ * The token is checked for being a string and never for its content: this guard
+ * exists to reject a stray message on the channel, not to audit main's own
+ * payload, and a length or charset rule here would be a second definition of
+ * what a token is that could disagree with the one that issues them.
+ */
+function isServerState(value: unknown): value is ServerState {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as {
+    phase?: unknown;
+    host?: unknown;
+    port?: unknown;
+    autoStart?: unknown;
+    token?: unknown;
+    traffic?: unknown;
+  };
+  const phases = ['stopped', 'starting', 'running', 'stopping', 'error'];
+  const traffic = candidate.traffic as { total?: unknown; rejected?: unknown } | null | undefined;
+  return (
+    typeof candidate.phase === 'string' &&
+    phases.includes(candidate.phase) &&
+    typeof candidate.host === 'string' &&
+    typeof candidate.port === 'number' &&
+    typeof candidate.autoStart === 'boolean' &&
+    typeof candidate.token === 'string' &&
+    typeof traffic === 'object' &&
+    traffic !== null &&
+    typeof traffic.total === 'number' &&
+    typeof traffic.rejected === 'number'
+  );
+}
+
 interface PushChannel<T> {
   /** Register a listener. Returns an idempotent disposer. */
   readonly subscribe: (listener: (payload: T) => void) => Unsubscribe;
@@ -427,6 +470,12 @@ const menuOpenSettings = createPushChannel<MenuOpenSettings>({
   isValid: isMenuOpenSettings,
 });
 
+const serverStates = createPushChannel<ServerState>({
+  channel: IPC_PUSH.serverState,
+  label: 'artemis.server.onChange',
+  isValid: isServerState,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
@@ -443,6 +492,7 @@ window.addEventListener('beforeunload', () => {
   planUsages.reset();
   updateStates.reset();
   menuOpenSettings.reset();
+  serverStates.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -673,6 +723,25 @@ const bridge: ArtemisBridge = Object.freeze({
 
   menu: Object.freeze({
     onOpenSettings: menuOpenSettings.subscribe,
+  }),
+
+  /**
+   * The local server. Five verbs, and no way to say what it publishes — the
+   * catalogue is main's, assembled from the engine. See the contract.
+   */
+  server: Object.freeze({
+    status: (request: ServerStatusRequest) => invoke(IPC.serverStatus, request),
+    start: (request: ServerStartRequest) => invoke(IPC.serverStart, request),
+    stop: (request: ServerStopRequest) => invoke(IPC.serverStop, request),
+    configure: (request: ServerConfigureRequest) => invoke(IPC.serverConfigure, request),
+    createConnection: (request: ServerCreateConnectionRequest) =>
+      invoke(IPC.serverCreateConnection, request),
+    renameConnection: (request: ServerRenameConnectionRequest) =>
+      invoke(IPC.serverRenameConnection, request),
+    deleteConnection: (request: ServerDeleteConnectionRequest) =>
+      invoke(IPC.serverDeleteConnection, request),
+    catalogue: (request: ServerCatalogueRequest) => invoke(IPC.serverCatalogue, request),
+    onChange: serverStates.subscribe,
   }),
 
   /**

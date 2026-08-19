@@ -52,6 +52,7 @@ import {
   BrainIcon,
   KeyRoundIcon,
   PaletteIcon,
+  ServerIcon,
   ShieldIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react';
@@ -63,6 +64,7 @@ import { AppearanceSection } from './AppearanceSection';
 import { CerebroSection } from './CerebroSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
+import { ServerSection } from './ServerSection';
 import { closeSettings, setSettingsSection, useApp, type SettingsSection } from '../../state/store';
 import { Button } from '@/components/ui/button';
 import {
@@ -129,6 +131,16 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Cerebro',
     hint: 'Team memory bank',
     icon: <BrainIcon aria-hidden="true" />,
+  },
+  // Below everything that describes what Artemis does for its own user, because
+  // this is the one pane that is not about that: it decides whether *other
+  // programs* may use the accounts every pane above it configures. Meeting it
+  // before Profiles would be being offered the door before the room.
+  {
+    id: 'server',
+    label: 'Server',
+    hint: 'Lend models to other apps',
+    icon: <ServerIcon aria-hidden="true" />,
   },
   // Last, and last on purpose: nothing above it depends on anything in it, and
   // what it holds are arrangements Artemis hands to the user to perform rather
@@ -255,6 +267,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <AgentsSection />;
     case 'cerebro':
       return <CerebroSection />;
+    case 'server':
+      return <ServerSection />;
     case 'advanced':
       return <AdvancedSection />;
     case 'profiles':

@@ -183,6 +183,7 @@ export type SettingsSection =
   | 'permissions'
   | 'agents'
   | 'cerebro'
+  | 'server'
   | 'advanced';
 
 /**
@@ -1174,6 +1175,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'permissions',
   'agents',
   'cerebro',
+  'server',
   'advanced',
 ];
 
