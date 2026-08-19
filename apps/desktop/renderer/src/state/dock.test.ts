@@ -210,7 +210,7 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
   }
 
   it('keeps the tasks tab out of the strip', () => {
-    expect(visibleTabs(null, [], busy, [], null, [], false)).toEqual([]);
+    expect(visibleTabs(null, [], busy, [], [], [], false)).toEqual([]);
     // And the flag defaulting to true is every release before it: same state,
     // tab present.
     expect(visibleTabs(null, [], busy).map(tabKey)).toEqual(['tasks:pane1']);
@@ -223,7 +223,7 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
     // The delegated tab is the one surface here with two origins, and only the
     // uninvited one is what this setting is about. Suppressing the press too
     // leaves the header's Delegated button enabled and inert.
-    expect(visibleTabs(null, [], asked, [], null, [], false).map(tabKey)).toEqual(['tasks:pane1']);
+    expect(visibleTabs(null, [], asked, [], [], [], false).map(tabKey)).toEqual(['tasks:pane1']);
   });
 
   it('will not let it in on the flag alone', () => {
@@ -231,8 +231,8 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
     // whose rows were dismissed answers no, and a stale request must not
     // resurrect it. The two are read in that order, never as alternatives.
     const stale: readonly ShownConversation[] = [{ paneId: 'pane1', tasksRequested: true }];
-    expect(visibleTabs(null, [], stale, [], null, [], false)).toEqual([]);
-    expect(visibleTabs(null, [], stale, [], null, [], true)).toEqual([]);
+    expect(visibleTabs(null, [], stale, [], [], [], false)).toEqual([]);
+    expect(visibleTabs(null, [], stale, [], [], [], true)).toEqual([]);
   });
 
   it('keeps an agent-opened page out, and leaves the user’s own alone', () => {
@@ -241,7 +241,7 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
       [],
       here,
       [],
-      null,
+      [],
       [browser('mine', false), browser('theirs', true)],
       false,
     );
@@ -250,10 +250,10 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
 
   it('reveals what arrived while it was off, the moment it is back on', () => {
     const records = [browser('hidden', true)];
-    expect(visibleTabs(null, [], busy, [], null, records, false)).toEqual([]);
+    expect(visibleTabs(null, [], busy, [], [], records, false)).toEqual([]);
     // Same records, same conversations — only the permission changed. This is
     // `setDockAutoOpen`'s reveal: nothing was destroyed by being suppressed.
-    expect(visibleTabs(null, [], busy, [], null, records, true).map(tabKey)).toEqual([
+    expect(visibleTabs(null, [], busy, [], [], records, true).map(tabKey)).toEqual([
       'browser:hidden',
       'tasks:pane1',
     ]);
@@ -265,11 +265,11 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
       [terminal('t1', { paneId: 'pane1' })],
       here,
       [{ paneId: 'pane1', taskId: 'task9' }],
-      { paneId: 'pane1' },
+      [{ id: 'f1', owner: { paneId: 'pane1' } }],
       [],
       false,
     );
-    expect(tabs.map(tabKey)).toEqual(['preview', 'file', 'terminal:t1', 'agent:pane1:task9']);
+    expect(tabs.map(tabKey)).toEqual(['preview', 'file:f1', 'terminal:t1', 'agent:pane1:task9']);
   });
 });
 

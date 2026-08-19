@@ -219,7 +219,7 @@ function DockTabButton({
   readonly active: boolean;
 }): ReactElement | null {
   if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
-  if (tab.kind === 'file') return <FileTabButton active={active} />;
+  if (tab.kind === 'file') return <FileTabButton id={tab.id} active={active} />;
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
   if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} />;
   if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
@@ -369,9 +369,15 @@ function PreviewTabButton({ active }: { readonly active: boolean }): ReactElemen
  * Its ✕ is the preview's, not the terminal's: it drops a snapshot the renderer
  * is holding, and the link that opened it is still in the transcript.
  */
-function FileTabButton({ active }: { readonly active: boolean }): ReactElement | null {
-  const file = useApp((s) => s.file);
-  if (file === null) return null;
+function FileTabButton({
+  id,
+  active,
+}: {
+  readonly id: string;
+  readonly active: boolean;
+}): ReactElement | null {
+  const file = useApp((s) => s.files.find((one) => one.id === id));
+  if (file === undefined) return null;
 
   return (
     <TabShell
@@ -379,8 +385,8 @@ function FileTabButton({ active }: { readonly active: boolean }): ReactElement |
       label={file.title}
       title={file.path}
       icon={<FileCodeIcon className="size-3 shrink-0" aria-hidden="true" />}
-      onSelect={() => focusDockTab({ kind: 'file' })}
-      onClose={closeFile}
+      onSelect={() => focusDockTab({ kind: 'file', id })}
+      onClose={() => closeFile(id)}
       closeLabel={`Close ${file.title}`}
     />
   );
@@ -579,18 +585,18 @@ function DockBody({
   readonly active: DockTab | null;
 }): ReactElement {
   const terminals = useApp((s) => s.terminals);
-  const file = useApp((s) => s.file);
   const showPreview = active?.kind === 'preview';
 
   return (
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showPreview ? <PreviewPane /> : null}
       {/*
-       * Keyed by path, so following a second link scrolls the new file from its
-       * own top rather than inheriting where the reader had got to in the last
-       * one — and so the jump to a `:line` runs again for the new file.
+       * Keyed by the tab's id, so switching between two open files scrolls each
+       * from where that file was left rather than inheriting the other's
+       * position — and so the jump to a `:line` runs again when a link reopens
+       * one that is already here.
        */}
-      {active?.kind === 'file' ? <FileViewer key={file?.path ?? ''} /> : null}
+      {active?.kind === 'file' ? <FileViewer key={active.id} id={active.id} /> : null}
       {active?.kind === 'files' ? <FilesPane paneId={active.paneId} /> : null}
       {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
       {/*

@@ -121,11 +121,11 @@ beforeEach(() => {
   for (const extra of useApp.getState().grid.flatMap((row) => row.panes).slice(1)) {
     closePane(extra.id);
   }
-  // `file` among them: the case below that opens one leaves it in the dock, and
-  // a survivor would put a second tab in the strip every test after it.
+  // `files` among them: the case below that opens one leaves it in the dock,
+  // and a survivor would put an extra tab in the strip every test after it.
   useApp.setState({
     preview: null,
-    file: null,
+    files: [],
     terminals: [],
     activeDockTab: null,
     visibleDockTabs: [],

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EMPTY_DOCK_LAYOUT,
   MAX_RESTORED_BROWSERS,
+  MAX_RESTORED_FILES,
   MAX_RESTORED_TERMINALS,
   parseDockLayout,
 } from './dock';
@@ -22,7 +23,7 @@ describe('parseDockLayout', () => {
     const layout = parseDockLayout({
       browsers: ['https://example.com', 'http://localhost:3000'],
       terminals: 2,
-      file: 'src/store.ts',
+      files: ['src/store.ts', 'src/dock.ts'],
       preview: 'out/report.html',
       activeKind: 'terminal',
     });
@@ -30,7 +31,7 @@ describe('parseDockLayout', () => {
     expect(layout).toEqual({
       browsers: ['https://example.com', 'http://localhost:3000'],
       terminals: 2,
-      file: 'src/store.ts',
+      files: ['src/store.ts', 'src/dock.ts'],
       preview: 'out/report.html',
       activeKind: 'terminal',
     });
@@ -95,19 +96,30 @@ describe('parseDockLayout', () => {
   );
 
   it('treats an empty path as no path', () => {
-    const layout = parseDockLayout({ file: '', preview: '' });
+    const layout = parseDockLayout({ files: ['', 'real.ts', ''], preview: '' });
 
-    expect(layout.file).toBeNull();
+    expect(layout.files).toEqual(['real.ts']);
     expect(layout.preview).toBeNull();
+  });
+
+  it('bounds how many files a launch will reopen', () => {
+    // Not a guess at what is reasonable. This is the one list a hand-edited
+    // preferences file can make the app read from disk before anyone can
+    // intervene.
+    const layout = parseDockLayout({
+      files: Array.from({ length: 40 }, (_unused, index) => `f${String(index)}.ts`),
+    });
+
+    expect(layout.files).toHaveLength(MAX_RESTORED_FILES);
   });
 
   it('keeps the fields it understands when others are broken', () => {
     // A partially-corrupt layout should not cost the parts that are fine.
-    const layout = parseDockLayout({ browsers: 'not-an-array', terminals: 1, file: 'a.ts' });
+    const layout = parseDockLayout({ browsers: 'not-an-array', terminals: 1, files: ['a.ts'] });
 
     expect(layout.browsers).toEqual([]);
     expect(layout.terminals).toBe(1);
-    expect(layout.file).toBe('a.ts');
+    expect(layout.files).toEqual(['a.ts']);
   });
 
   it('ARRANGEMENT: stores no terminal titles, because a restored shell is not the old one', () => {
