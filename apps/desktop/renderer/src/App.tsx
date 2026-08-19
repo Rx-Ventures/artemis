@@ -50,8 +50,9 @@
  *
  * Under it, in the same margin, is a second card that exists only when the
  * updater has something to say. That is the whole of the update surface while
- * the sidebar is showing — see `UpdateCard` and the note on `UpdateBanner`
- * below.
+ * the sidebar is showing — see `UpdateCard`. When it is hidden the sidebar
+ * collapses to a rail rather than to nothing, so the card has somewhere to
+ * point to and there is no second update component standing in for it.
  *
  * ## The status line belongs to the composer, not to the window
  *
@@ -91,7 +92,6 @@
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { AppHeader } from './components/AppHeader';
-import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { ErrorSurface } from './components/ErrorSurface';
 import { RunInfoDialog } from './components/RunInfoDialog';
@@ -128,8 +128,6 @@ import {
 export function App(): ReactElement {
   const bridgeMode = useApp((s) => s.bridgeMode);
   const booted = useApp((s) => s.booted);
-  // Only to decide which of the two update surfaces is mounted; see below.
-  const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
   const started = useRef(false);
 
   /**
@@ -299,18 +297,6 @@ export function App(): ReactElement {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-abyss">
       <AppHeader />
-      {/*
-        The update lives at the foot of the sidebar now, as its own floating
-        card — see `UpdateCard`. This strip is what stands in when there is no
-        sidebar to hold it, because `Sidebar` collapses to `null` and an update
-        nobody can see is an update nobody installs. Exactly one of the two is
-        ever mounted.
-
-        Full window width, unlike the ErrorSurface strip below: an update is a
-        fact about the installation rather than about any one column, and every
-        window shows the same one.
-      */}
-      {sidebarCollapsed && <UpdateBanner />}
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {/*

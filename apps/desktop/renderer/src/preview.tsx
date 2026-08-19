@@ -118,7 +118,7 @@ function Gallery(): ReactElement {
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight text-ink">Artemis design system</h1>
           <p className="text-sm text-ink-muted">
-            Charcoal and moonlight. Dark only, dense, no gradients.
+            One plane and a hairline. Nothing is lighter because it is nearer.
           </p>
         </header>
 
