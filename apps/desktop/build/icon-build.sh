@@ -18,7 +18,22 @@ render() { # size, out
 <style>html,body{margin:0;padding:0;background:transparent}
 img{width:${1}px;height:${1}px;display:block}</style><img src="icon.svg">
 HTML
+  # `--default-background-color=00000000` is load-bearing and was missing.
+  #
+  # Headless Chrome composites onto an opaque white backdrop by default, so a
+  # screenshot of a page with transparent margins comes out as RGB with those
+  # margins *flattened to white* — no alpha channel at all. That is not a
+  # cosmetic loss: an app icon's transparency is what tells macOS the shape.
+  #
+  # It produced three different-looking bugs from one cause. Inset art arrived
+  # as a white rounded tile with the mark floating on it; a self-rounded
+  # full-bleed tile arrived with white corners, reading as square against its
+  # neighbours. Both were diagnosed as macOS re-plating the icon. macOS was
+  # doing nothing of the kind — every pixel was already white when it got here.
+  #
+  # The value is RGBA hex, so `00000000` is transparent black.
   "$CHROME" --headless --disable-gpu --force-device-scale-factor=1 \
+    --default-background-color=00000000 \
     --hide-scrollbars --virtual-time-budget=2000 \
     --window-size="$1,$1" --screenshot="$2" "$(pwd)/.icon-shot.html" >/dev/null 2>&1
   rm -f .icon-shot.html

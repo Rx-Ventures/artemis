@@ -13,35 +13,38 @@
   are written without their leading dashes above. A version of this file that
   spelled them out parsed as a broken image and rasterised to a blank square.
 
-  THE ART IS FULL-BLEED AND SQUARE. THE SYSTEM OWNS THE SHAPE.
+  THE TILE IS INSET AND ROUNDED, AND THE MARGIN MUST BE TRANSPARENT.
 
-  macOS 26 (Tahoe) runs every legacy `.icns` through its own mask before it
-  draws it, and that changes what this file has to contain. It must be a square
-  that reaches all four edges, with no rounding and no transparency of its own.
+  macOS draws every app icon on one grid: a 1024 canvas whose visible body is
+  824 square, centred, with a corner radius of 185.4. The 100px of transparency
+  on each side is where the system puts the shadow, and the radius is what makes
+  a row of icons read as one family. Measured against Claude and Obsidian on
+  this machine, both land within a pixel of it.
 
-  Both of the ways this has been wrong are worth writing down, because each
-  looks like a different bug and they have the same cause — arguing with the
-  system mask.
+  This took three attempts because the geometry was never the real problem. The
+  rasteriser was: `icon-build.sh` drove headless Chrome without
+  Chrome's transparent-backdrop flag, so every transparent pixel was flattened to
+  *white* and the PNGs carried no alpha channel at all.
 
-  Rounding it ourselves at rx 180 put our corners *inside* the system's, which
-  are wider. The result is a tile that reads visibly squarer than every icon
-  beside it, which is how it showed up in Spotlight.
+  That one bug wore three costumes. Inset art came out as a white rounded tile
+  with the mark floating on it. A self-rounded full-bleed tile came out with
+  white corners, reading as square beside its neighbours. Going full-bleed and
+  square hid it — nothing was transparent, so nothing was flattened — at the
+  price of an icon that ignores the grid every other app sits on.
 
-  Insetting the art to 824 with transparent margins was worse. The system reads
-  large transparency as "this is a foreground glyph" and supplies a plate of its
-  own behind it — a light one — so a dark icon arrived in the Dock as a white
-  tile with the mark floating on it.
+  So the shape is back on the grid, and the script now asks Chrome for a
+  transparent backdrop. If this ever looks wrong again, check the alpha channel
+  before touching these numbers:
 
-  So: no radius, no margin. The system rounds it, shadows it, and produces the
-  light and dark variants. The mark is back at the 1.55 it was drawn at, which
-  is the proportion that survives the mask's corner crop.
+      iconutil, converting to an iconset, then read the PNG header
+      # PNG colour type 6 is RGBA; 2 is RGB and means the alpha was lost.
 
   icon.png and icon.icns are generated from this file by ./icon-build.sh, which
   renders every iconset size at its true size rather than upscaling one.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" fill="#0c0d0f"/>
-<g transform="translate(512 512) scale(1.55) translate(-256 -256)" stroke="#31eee8" fill="none">
+<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0c0d0f"/>
+<g transform="translate(512 512) scale(1.245) translate(-256 -256)" stroke="#31eee8" fill="none">
   <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
   <path d="M256 140a116 116 0 0 0 0 232Z" fill="#31eee8" stroke="none"/>
   <circle cx="256" cy="256" r="116" stroke-width="24"/>
