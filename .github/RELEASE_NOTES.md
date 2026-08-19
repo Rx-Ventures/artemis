@@ -71,6 +71,18 @@ two previous releases: `--line-strong` had never met WCAG 1.4.11 in dark mode.
 It draws scrollbar thumbs and radio borders, which are owed 3:1, and it measured
 1.97.
 
+### A beta channel, off by default
+
+Settings → Advanced has a switch that widens what the updater will offer this
+installation to include prereleases. It is off unless you turn it on, and it
+changes nothing else: a beta is the same build as the release that follows it,
+tagged earlier, and the version you are offered still lands on the stable one.
+Turning it back off uninstalls nothing.
+
+Building it fixed a bug that had been there the whole time — the update
+comparator returned false for any version carrying a suffix, so a beta build
+could never have updated itself, not even to the release it was a rehearsal for.
+
 ### Also
 
 - `pnpm package` works from a clean checkout. It used to depend on `typecheck`
