@@ -1,6 +1,6 @@
 {
   "name": "@rx-ventures/artemis-sdk",
-  "private": true,
+  "version": "1.2.0",
   "description": "Typed SDK for the Artemis server: discover an installation's accounts, their models, and what each model accepts. Zero runtime dependencies.",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,18 +17,28 @@
     "dist"
   ],
   "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rx-Ventures/artemis.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "scripts": {
     "build": "tsc -b",
+    "build:dist": "tsup && tsc -p tsconfig.pack.json && node scripts/pack.mjs",
+    "prepack": "pnpm run build:dist",
     "typecheck": "tsc -b",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "@rx-artemis/protocol": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@rx-artemis/core": "workspace:*",
     "@types/node": "^26.2.0",
+    "tsup": "^8.5.1",
     "typescript": "~7.0.2",
     "vitest": "^4.1.10"
   }
