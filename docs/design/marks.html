@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Artemis — five marks, five idles</title>
+<style>
+/* The verified Sheet palette. Every value checked against sRGB and WCAG rather
+   than eyed: nothing clips, worst text contrast is 5.10 on either ground, and
+   the minimum hue separation across the accent and the five semantics is 42°. */
+[data-theme="dark"] {
+  --abyss: oklch(9% 0.003 250); --panel: oklch(13% 0.003 250);
+  --raised: oklch(16% 0.004 250); --inset: oklch(10.5% 0.003 250);
+  --line: oklch(27% 0.004 250); --line-2: oklch(42% 0.006 250);
+  --ink: oklch(97% 0.002 250); --ink-2: oklch(76% 0.004 250); --ink-3: oklch(60% 0.005 250);
+  --accent: oklch(86% 0.140 192); --accent-dim: oklch(74% 0.120 192);
+  --tool: oklch(80% 0.100 250); --amber: oklch(85% 0.155 85); --mint: oklch(84% 0.170 150);
+}
+[data-theme="light"] {
+  --abyss: oklch(97% 0.002 250); --panel: oklch(100% 0 250);
+  --raised: oklch(94% 0.003 250); --inset: oklch(95.5% 0.003 250);
+  --line: oklch(89% 0.004 250); --line-2: oklch(64% 0.008 250);
+  --ink: oklch(22% 0.008 250); --ink-2: oklch(43% 0.008 250); --ink-3: oklch(52% 0.008 250);
+  --accent: oklch(50% 0.084 192); --accent-dim: oklch(43% 0.072 192);
+  --tool: oklch(48% 0.100 250); --amber: oklch(50% 0.098 85); --mint: oklch(50% 0.130 150);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--abyss); color: var(--ink);
+  font: 13px/1.55 'Archivo', ui-sans-serif, system-ui, sans-serif; padding: 40px 24px 90px; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 8px; }
+h2 { font-size: 11px; font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.16em;
+     color: var(--ink-3); margin: 42px 0 4px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+.lede { color: var(--ink-2); max-width: 82ch; margin-bottom: 6px; }
+.lede b { color: var(--ink); font-weight: 600; }
+code { font: 12px ui-monospace, Menlo, monospace; color: var(--accent); }
+.ctl { display: flex; gap: 8px; margin: 16px 0 4px; }
+.ctl button { background: transparent; border: 1px solid var(--line); color: var(--ink-3);
+  font: 11.5px 'Archivo', sans-serif; padding: 6px 13px; cursor: pointer; }
+.ctl button.on { background: var(--accent); border-color: var(--accent); color: var(--abyss); font-weight: 600; }
+
+/* ── marks ──────────────────────────────────────────────────────────────── */
+.marks { display: flex; flex-direction: column; gap: 0; margin-top: 18px; }
+.mark { display: flex; gap: 26px; align-items: flex-start; padding: 22px 0; border-bottom: 1px solid var(--line); }
+.big { width: 132px; height: 132px; flex: none; border: 1px solid var(--line); display: grid; place-items: center; background: var(--panel); }
+.big svg { width: 96px; height: 96px; color: var(--accent); }
+.sizes { display: flex; align-items: flex-end; gap: 16px; flex: none; }
+.sz { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.sz svg { color: var(--ink); }
+.sz .n { font: 9px ui-monospace, monospace; color: var(--ink-3); }
+.onfill { width: 44px; height: 44px; background: var(--accent); display: grid; place-items: center; }
+.onfill svg { width: 26px; height: 26px; color: var(--abyss); }
+.words { flex: 1; min-width: 0; }
+.words .nm { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 10px; }
+.words .nm .no { font: 9.5px ui-monospace, monospace; letter-spacing: 0.16em; color: var(--ink-3); }
+.words p { color: var(--ink-2); font-size: 12.5px; margin-top: 6px; max-width: 62ch; }
+.words .risk { color: var(--amber); font-size: 12px; margin-top: 7px; }
+.words .risk b { font-weight: 600; }
+.lockup { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+.lockup svg { width: 22px; height: 22px; color: var(--accent); }
+.lockup .t { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* ── idles ──────────────────────────────────────────────────────────────── */
+.idles { display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; margin-top: 18px; }
+.idle { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.idle .nm { font-size: 14.5px; font-weight: 600; display: flex; align-items: baseline; gap: 9px; }
+.idle .nm .no { font: 9.5px ui-monospace, monospace; letter-spacing: 0.16em; color: var(--ink-3); }
+.idle p { color: var(--ink-2); font-size: 12.5px; margin: 5px 0 14px; max-width: 54ch; }
+.idle .risk { color: var(--amber); font-size: 11.5px; margin-top: 10px; }
+.stage { background: var(--panel); border: 1px solid var(--line); padding: 15px 14px 13px; }
+.stage .ctxt { font-size: 12.5px; color: var(--ink-2); margin-bottom: 13px; }
+.meta { display: flex; align-items: center; gap: 9px; font: 10px ui-monospace, monospace;
+        color: var(--ink-3); margin-top: 9px; letter-spacing: 0.06em; }
+.meta .w { color: var(--accent); }
+
+/* 1 · SCAN — a lit segment sweeping a fixed rule */
+.scan { position: relative; height: 3px; background: var(--line); overflow: hidden; }
+.scan i { position: absolute; inset: 0 auto 0 0; width: 26%; background: var(--accent);
+          animation: scan 1.5s cubic-bezier(.55,0,.45,1) infinite; }
+@keyframes scan { 0% { left: -26%; } 100% { left: 100%; } }
+
+/* 2 · MARCH — a wave travelling through a row of ticks */
+.march { display: flex; gap: 3px; align-items: flex-end; height: 15px; }
+.march i { width: 3px; height: 7px; background: var(--line-2); display: block;
+           animation: march 1.15s ease-in-out infinite; }
+@keyframes march {
+  0%, 62%, 100% { height: 7px; background: var(--line-2); }
+  28% { height: 15px; background: var(--accent); }
+}
+
+/* 3 · TERMINATOR — the mark's own phase, turning */
+.term { width: 26px; height: 26px; }
+.term .rot { transform-origin: 50% 50%; animation: spin 2.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 4 · TRACE — a live plot that draws and scrolls */
+.trace { height: 26px; overflow: hidden; }
+.trace svg { display: block; }
+.trace .g { animation: trace 1.9s linear infinite; }
+@keyframes trace { from { transform: translateX(0); } to { transform: translateX(-160px); } }
+
+/* 5 · SHUTTLE — grows from the left, then leaves from the left */
+.shut { position: relative; height: 3px; background: var(--line); overflow: hidden; }
+.shut i { position: absolute; inset: 0 auto 0 0; background: var(--accent);
+          animation: shut 1.8s cubic-bezier(.65,0,.35,1) infinite; }
+@keyframes shut {
+  0%   { left: 0; right: 100%; }
+  48%  { left: 0; right: 0; }
+  100% { left: 100%; right: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scan i, .march i, .term .rot, .trace .g, .shut i { animation-duration: 0s; }
+}
+.foot { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line);
+        color: var(--ink-2); font-size: 13px; max-width: 84ch; }
+.foot h3 { font-size: 12px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
+.foot ul { margin: 0 0 16px 18px; } .foot li { margin-bottom: 5px; }
+.foot b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Five marks, five idles</h1>
+  <p class="lede">Both drawn in the <b>Sheet</b> language and its verified palette. The mark today is a bow — Artemis the huntress — and it is also the app icon, so whatever replaces it has to be redrawn in <code>build/icon.svg</code> too. Every candidate below stays inside the Artemis reading; none of the idles touch the bow, as asked.</p>
+  <p class="lede">Each mark is shown at <b>96px, 32px, 20px and 16px</b>, and reversed on an accent fill. 16px is the real test: the current bow's string is 15/512 of the box, so it thins below a pixel under ~20px and the mark collapses to an arc.</p>
+
+  <div class="ctl">
+    <button class="on" onclick="theme('dark',this)">Dark</button>
+    <button onclick="theme('light',this)">Light</button>
+  </div>
+
+  <h2>MARKS</h2>
+  <div class="marks">
+
+    <!-- 1 · APERTURE -->
+    <div class="mark">
+      <div class="big">
+        <svg viewBox="0 0 512 512" fill="none" stroke="currentColor">
+          <circle cx="256" cy="256" r="192" stroke-width="26"/>
+          <path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div class="sz"><svg width="32" height="32" viewBox="0 0 512 512" fill="none" stroke="currentColor"><circle cx="256" cy="256" r="192" stroke-width="26"/><path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/></svg><span class="n">32</span></div>
+        <div class="sz"><svg width="20" height="20" viewBox="0 0 512 512" fill="none" stroke="currentColor"><circle cx="256" cy="256" r="192" stroke-width="26"/><path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/></svg><span class="n">20</span></div>
+        <div class="sz"><svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor"><circle cx="256" cy="256" r="192" stroke-width="26"/><path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/></svg><span class="n">16</span></div>
+        <div class="sz"><div class="onfill"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><circle cx="256" cy="256" r="192" stroke-width="26"/><path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/></svg></div><span class="n">fill</span></div>
+      </div>
+      <div class="words">
+        <div class="nm"><span class="no">01</span>Aperture</div>
+        <p>The moon the <code>--lunar</code> accent was named for, put back — but held inside a ring so it reads as an <b>aperture</b> as much as a phase. Two circles and a crescent: nothing to thin out, nothing to lose at 16px. It is the most obviously "Artemis" of the five without being a weapon.</p>
+        <div class="risk"><b>Risk:</b> the file's own note about why the moon was dropped still stands — <code>moon</code> and <code>contrast</code> both ship in lucide, which the app already imports, so this sits near the theme toggle in glyph-space. The ring is what separates them; without it this is lucide's <code>moon</code>.</div>
+        <div class="lockup"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><circle cx="256" cy="256" r="192" stroke-width="26"/><path d="M256 118a138 138 0 1 0 0 276 172 172 0 0 1 0-276Z" fill="currentColor" stroke="none"/></svg><span class="t">Artemis</span></div>
+      </div>
+    </div>
+
+    <!-- 2 · ANTLER -->
+    <div class="mark">
+      <div class="big">
+        <svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square">
+          <path d="M256 458V382"/>
+          <path d="M256 382 176 330 146 244 160 132"/>
+          <path d="M176 330 96 296M146 244 62 224"/>
+          <path d="M256 382 336 330 366 244 352 132"/>
+          <path d="M336 330 416 296M366 244 450 224"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div class="sz"><svg width="32" height="32" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square"><path d="M256 458V382"/><path d="M256 382 176 330 146 244 160 132"/><path d="M176 330 96 296M146 244 62 224"/><path d="M256 382 336 330 366 244 352 132"/><path d="M336 330 416 296M366 244 450 224"/></svg><span class="n">32</span></div>
+        <div class="sz"><svg width="20" height="20" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square"><path d="M256 458V382"/><path d="M256 382 176 330 146 244 160 132"/><path d="M176 330 96 296M146 244 62 224"/><path d="M256 382 336 330 366 244 352 132"/><path d="M336 330 416 296M366 244 450 224"/></svg><span class="n">20</span></div>
+        <div class="sz"><svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square"><path d="M256 458V382"/><path d="M256 382 176 330 146 244 160 132"/><path d="M176 330 96 296M146 244 62 224"/><path d="M256 382 336 330 366 244 352 132"/><path d="M336 330 416 296M366 244 450 224"/></svg><span class="n">16</span></div>
+        <div class="sz"><div class="onfill"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square"><path d="M256 458V382"/><path d="M256 382 176 330 146 244 160 132"/><path d="M176 330 96 296M146 244 62 224"/><path d="M256 382 336 330 366 244 352 132"/><path d="M336 330 416 296M366 244 450 224"/></svg></div><span class="n">fill</span></div>
+      </div>
+      <div class="words">
+        <div class="nm"><span class="no">02</span>Antler</div>
+        <p>The stag — Artemis's animal, and the one thing in her iconography that is <b>hers alone</b>. A bow belongs to any archer; the deer belongs to this goddess. Six strokes at one weight, symmetric, square caps. Nothing in lucide is close to it, so it needs no geometry spent on avoiding a neighbour.</p>
+        <div class="risk"><b>Risk:</b> the most decorative of the five, and the one most likely to read as a hunting-lodge brand rather than a developer tool. It also has the most strokes, so it is the first to muddy at 16px — check that size carefully.</div>
+        <div class="lockup"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="square"><path d="M256 458V382"/><path d="M256 382 176 330 146 244 160 132"/><path d="M176 330 96 296M146 244 62 224"/><path d="M256 382 336 330 366 244 352 132"/><path d="M336 330 416 296M366 244 450 224"/></svg><span class="t">Artemis</span></div>
+      </div>
+    </div>
+
+    <!-- 3 · WAYPOINT -->
+    <div class="mark">
+      <div class="big">
+        <svg viewBox="0 0 512 512" fill="none" stroke="currentColor">
+          <path d="M64 448 400 112" stroke-width="30"/>
+          <path d="M150 362h-2M236 276h-2M322 190h-2" stroke-width="30" stroke-linecap="round" opacity=".55"/>
+          <rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div class="sz"><svg width="32" height="32" viewBox="0 0 512 512" fill="none" stroke="currentColor"><path d="M64 448 400 112" stroke-width="30"/><rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/></svg><span class="n">32</span></div>
+        <div class="sz"><svg width="20" height="20" viewBox="0 0 512 512" fill="none" stroke="currentColor"><path d="M64 448 400 112" stroke-width="30"/><rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/></svg><span class="n">20</span></div>
+        <div class="sz"><svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor"><path d="M64 448 400 112" stroke-width="30"/><rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/></svg><span class="n">16</span></div>
+        <div class="sz"><div class="onfill"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><path d="M64 448 400 112" stroke-width="30"/><rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/></svg></div><span class="n">fill</span></div>
+      </div>
+      <div class="words">
+        <div class="nm"><span class="no">03</span>Waypoint</div>
+        <p>The hunt without the weapon: a <b>trajectory and the thing it arrives at</b>. One rule on the diagonal, three faint stations along it, a filled square at the end. This is the most Sheet of the five — a hairline and a square, no curves at all — and it is the only one that carries the app's actual subject rather than the goddess's props.</p>
+        <div class="risk"><b>Risk:</b> the most abstract, and the least "Artemis" if you read it cold. It also loses the three stations below 32px (they are dropped in the small sizes above, deliberately) which means it is really two marks, not one.</div>
+        <div class="lockup"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><path d="M64 448 400 112" stroke-width="30"/><rect x="366" y="78" width="82" height="82" fill="currentColor" stroke="none"/></svg><span class="t">Artemis</span></div>
+      </div>
+    </div>
+
+    <!-- 4 · TERMINATOR -->
+    <div class="mark">
+      <div class="big">
+        <svg viewBox="0 0 512 512" fill="none" stroke="currentColor">
+          <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
+          <path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/>
+          <circle cx="256" cy="256" r="116" stroke-width="24"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div class="sz"><svg width="32" height="32" viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></svg><span class="n">32</span></div>
+        <div class="sz"><svg width="20" height="20" viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></svg><span class="n">20</span></div>
+        <div class="sz"><svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></svg><span class="n">16</span></div>
+        <div class="sz"><div class="onfill"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></svg></div><span class="n">fill</span></div>
+      </div>
+      <div class="words">
+        <div class="nm"><span class="no">04</span>Terminator</div>
+        <p>Sheet's own grammar as a mark: a <b>square machine frame around a round human moon</b>, split on the terminator line. It is the only candidate that states the design language in the logo — square is what the machine made, round is what you are looking at — and it is the one that animates for free, which is why idle <b>03</b> below is this mark turning.</p>
+        <div class="risk"><b>Risk:</b> a filled half-circle in a box is a near neighbour of every contrast/theme toggle ever drawn, which is precisely the collision the moon was dropped for. The frame is doing all the differentiating.</div>
+        <div class="lockup"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></svg><span class="t">Artemis</span></div>
+      </div>
+    </div>
+
+    <!-- 5 · MONOGRAM -->
+    <div class="mark">
+      <div class="big">
+        <svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square">
+          <path d="M92 440 256 88l164 352"/>
+          <path d="M168 328h176"/>
+        </svg>
+      </div>
+      <div class="sizes">
+        <div class="sz"><svg width="32" height="32" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square"><path d="M92 440 256 88l164 352"/><path d="M168 328h176"/></svg><span class="n">32</span></div>
+        <div class="sz"><svg width="20" height="20" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square"><path d="M92 440 256 88l164 352"/><path d="M168 328h176"/></svg><span class="n">20</span></div>
+        <div class="sz"><svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square"><path d="M92 440 256 88l164 352"/><path d="M168 328h176"/></svg><span class="n">16</span></div>
+        <div class="sz"><div class="onfill"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square"><path d="M92 440 256 88l164 352"/><path d="M168 328h176"/></svg></div><span class="n">fill</span></div>
+      </div>
+      <div class="words">
+        <div class="nm"><span class="no">05</span>Monogram</div>
+        <p>Just the <b>A</b>, constructed rather than typeset — three strokes at one weight, square caps, apex left sharp. It survives anything: 16px, a favicon, a monochrome print, a menu-bar template icon. And it is the only one that cannot be mistaken for another app's glyph, because it is a letter.</p>
+        <div class="risk"><b>Risk:</b> it says nothing. No hunt, no moon, no idea — it is a wordmark's first letter, which is the safe answer and the forgettable one. Worth considering only if the identity is going to live in the <i>name</i> rather than the mark.</div>
+        <div class="lockup"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="square"><path d="M92 440 256 88l164 352"/><path d="M168 328h176"/></svg><span class="t">Artemis</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>IDLES · BOTTOM OF THE TRANSCRIPT</h2>
+  <p class="lede">All five sit where the next turn will appear, are <b>indeterminate on purpose</b> — none of them implies progress toward a known end — and all carry the elapsed time, because "is it stuck" is the actual question. None is bow-derived. Each honours <code>prefers-reduced-motion</code>.</p>
+
+  <div class="idles">
+
+    <div class="idle">
+      <div class="nm"><span class="no">01</span>Scan</div>
+      <p>A lit segment sweeping a fixed rule, easing at both ends. Reads as an instrument taking a pass — and at full pane width it is impossible to miss from across the room.</p>
+      <div class="stage">
+        <div class="ctxt">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="scan"><i></i></div>
+        <div class="meta"><span class="w">working</span><span>41s</span><span>opus 5</span></div>
+      </div>
+      <div class="risk"><b>Cost:</b> a sweep across a full-width rule is close to what an indeterminate progress bar means elsewhere, so it may read as "loading" rather than "thinking".</div>
+    </div>
+
+    <div class="idle">
+      <div class="nm"><span class="no">02</span>March</div>
+      <p>A wave travelling through a row of ticks, each rising and brightening in turn. It shares its vocabulary with the transcript's own turn ticks, so it looks like part of the app rather than a borrowed widget.</p>
+      <div class="stage">
+        <div class="ctxt">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="march">
+          <i style="animation-delay:0s"></i><i style="animation-delay:.05s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.2s"></i><i style="animation-delay:.25s"></i><i style="animation-delay:.3s"></i><i style="animation-delay:.35s"></i><i style="animation-delay:.4s"></i><i style="animation-delay:.45s"></i><i style="animation-delay:.5s"></i><i style="animation-delay:.55s"></i><i style="animation-delay:.6s"></i><i style="animation-delay:.65s"></i><i style="animation-delay:.7s"></i><i style="animation-delay:.75s"></i><i style="animation-delay:.8s"></i><i style="animation-delay:.85s"></i>
+        </div>
+        <div class="meta"><span class="w">working</span><span>41s</span><span>opus 5</span></div>
+      </div>
+      <div class="risk"><b>Cost:</b> eighteen animated elements is the heaviest of the five to paint, and it is the one most likely to look busy beside a dense transcript.</div>
+    </div>
+
+    <div class="idle">
+      <div class="nm"><span class="no">03</span>Phase</div>
+      <p>The <b>Terminator</b> mark turning on its own axis — the logo doing the waiting. The only one that builds identity while it works, and the only one that stays legible at 20px in a pane header as well as at the foot of a transcript.</p>
+      <div class="stage">
+        <div class="ctxt">Narrowing the profile to exactly the roots handed in.</div>
+        <div style="display:flex;align-items:center;gap:11px">
+          <svg class="term" viewBox="0 0 512 512" fill="none" stroke="currentColor" style="color:var(--accent)">
+            <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
+            <g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g>
+          </svg>
+          <span style="font:10px ui-monospace,monospace;color:var(--ink-3);letter-spacing:.06em">thinking</span>
+        </div>
+        <div class="meta"><span class="w">working</span><span>41s</span><span>opus 5</span></div>
+      </div>
+      <div class="risk"><b>Cost:</b> ties the idle to mark <b>04</b>. Pick a different logo and this one has to be redrawn or dropped. It is also the smallest, so it is the least visible from a distance.</div>
+    </div>
+
+    <div class="idle">
+      <div class="nm"><span class="no">04</span>Trace</div>
+      <p>A live plot scrolling right to left, like a strip chart. The most literally "something is happening" of the five — the line is <i>being produced</i> rather than a shape being animated — and it never repeats visibly because it scrolls rather than loops in place.</p>
+      <div class="stage">
+        <div class="ctxt">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="trace">
+          <svg width="100%" height="26" viewBox="0 0 320 26" preserveAspectRatio="none">
+            <g class="g">
+              <path d="M0 20 20 20 26 6 32 22 40 13 52 13 58 4 64 21 74 16 88 16 94 9 100 18 112 12 124 12 130 3 136 23 146 15
+                       160 20 180 20 186 6 192 22 200 13 212 13 218 4 224 21 234 16 248 16 254 9 260 18 272 12 284 12 290 3 296 23 306 15 320 20 340 20"
+                    fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--accent)"/>
+            </g>
+          </svg>
+        </div>
+        <div class="meta"><span class="w">working</span><span>41s</span><span>opus 5</span></div>
+      </div>
+      <div class="risk"><b>Cost:</b> it implies the shape means something, and it does not — the waveform is decorative. That is a small lie in an app whose whole argument is that a declared capability must be real.</div>
+    </div>
+
+    <div class="idle">
+      <div class="nm"><span class="no">05</span>Shuttle</div>
+      <p>Grows from the left edge, fills, then leaves from the left. Two phases rather than a loop, so the eye gets a beginning and an end without being told how far along anything is. The quietest, and the closest to the app's existing hairline vocabulary.</p>
+      <div class="stage">
+        <div class="ctxt">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="shut"><i></i></div>
+        <div class="meta"><span class="w">working</span><span>41s</span><span>opus 5</span></div>
+      </div>
+      <div class="risk"><b>Cost:</b> the first phase is indistinguishable from a determinate bar filling, so for about a second every cycle it looks like real progress that then throws itself away.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <h3>What picking one commits to</h3>
+    <ul>
+      <li><b>The mark is the app icon.</b> <code>components/logo.tsx</code> and <code>apps/desktop/build/icon.svg</code> are the same four paths on purpose, and the <code>.png</code>/<code>.icns</code> are rasterised from the svg — so a change is three files and a re-export, not one component.</li>
+      <li><b>16px is the gate.</b> Antler is the one at risk; Monogram and Waypoint are safe by construction; Aperture and Terminator hold because their thinnest element is a 24/512 stroke rather than the bow's 15/512 string.</li>
+      <li><b>Idle 03 is not independent.</b> It is mark 04 in motion. Any other pairing needs the idle chosen on its own merits.</li>
+      <li><b>None of this is applied.</b> Say which mark and which idle and I will draw them properly — icon svg, png, icns, the component, and the reduced-motion path — before touching anything else.</li>
+    </ul>
+    <h3>If you want a recommendation</h3>
+    <p><b>Antler, with Scan.</b> Antler is the only mark here that is Artemis's and nobody else's — a bow is any archer's, a moon is every theme toggle's, an A is any product's — and it has no neighbour in the icon set the app already ships. Its one real risk is 16px, which is a drawing problem I can solve with a reduced two-tine variant rather than a reason to reject it. Scan pairs with it because it shares nothing with the mark, so the two never compete, and it is the only idle that stays obvious at pane width in a 2×2.</p>
+  </div>
+
+</div>
+<script>
+/* #idles or #marks shows one section on its own. */
+function only() {
+  var h = location.hash;
+  var marks = document.querySelectorAll('h2')[0], idles = document.querySelectorAll('h2')[1];
+  var mSec = document.querySelector('.marks'), iSec = document.querySelector('.idles');
+  var iLede = idles.nextElementSibling;
+  var showM = h !== '#idles', showI = h !== '#marks';
+  marks.style.display = mSec.style.display = showM ? '' : 'none';
+  idles.style.display = iSec.style.display = iLede.style.display = showI ? '' : 'none';
+}
+addEventListener('hashchange', only); only();
+
+function theme(t, el) {
+  document.documentElement.setAttribute('data-theme', t);
+  var g = el.parentNode.children;
+  for (var i = 0; i < g.length; i++) g[i].classList.remove('on');
+  el.classList.add('on');
+}
+</script>
+</body>
+</html>
