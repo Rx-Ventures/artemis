@@ -1992,6 +1992,30 @@ function paneForSession(
 }
 
 /**
+ * Bring the first conversation that is waiting on an answer to the front.
+ *
+ * "First" is the order `syncRunningSessions` collected them in, which is the
+ * order the panes are laid out — so the badge walks left to right rather than
+ * by how long each has been parked. Either would be defensible; this one is
+ * predictable, and a control the user presses repeatedly should be predictable
+ * before it is clever.
+ *
+ * Returns `false` when nothing is waiting or the pane has since gone, so the
+ * caller can leave the badge alone rather than focusing something arbitrary.
+ */
+export function focusWaitingPane(): boolean {
+  const state = useApp.getState();
+  for (const sessionId of state.waitingSessions) {
+    const pane = paneForSession(sessionId, state);
+    if (pane !== undefined) {
+      focusPane(pane.id);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Recompute {@link AppState.runningSessions} from the conversations themselves.
  *
  * The sidebar needs to know which sessions are working, and "working" is a fact

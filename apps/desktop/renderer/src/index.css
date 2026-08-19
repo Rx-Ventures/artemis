@@ -942,55 +942,6 @@
     animation: artemis-turn-in 160ms ease-out both;
   }
 
-  /* Indeterminate progress hairline, used on the run status strip. */
-  .runbar::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      color-mix(in oklch, var(--beam) 70%, transparent),
-      transparent
-    );
-    animation: artemis-sweep 1.5s linear infinite;
-  }
-
-  /*
-   * The hunt — Artemis' bow at the foot of the conversation's text, loosing
-   * an arrow across the column at the stingray on the far side for as long as
-   * a run is going. `HuntBar.tsx` owns the geometry and the poses; what lives
-   * here is the choreography.
-   *
-   * It rides *with* the runbar above, not instead of it: the hairline is the
-   * transient report (present only while a run is live), the bow is the
-   * constant fixture at the conversation's foot. The two share the beam
-   * accent so they read as one system saying one thing.
-   *
-   * One 2400ms cycle shared by all four classes, and the sharing is the
-   * mechanism: the string, the nocked arrow, the recoil and the flight are
-   * separate elements with separate animations, kept in step by nothing more
-   * than running the same clock from the same commit — the keyframe
-   * percentages are the whole synchronisation story. Draw to 40%, hold the
-   * aim, loose at ~55%, and the flight carries the arrow off the pane while
-   * the bow re-nocks behind it.
-   *
-   * `d: path(…)` is what bends the string, and leaning on it is safe for the
-   * reason `field-sizing` was: this app renders in exactly one engine, and
-   * Chromium interpolates `d` between structurally identical paths. If that
-   * ever regressed the string would simply stay straight — the draw still
-   * reads from the arrow sliding back.
-   *
-   * Transforms and opacity only, nothing that changes a box: the strip sits
-   * directly above the composer, and a layout-animating mascot would move the
-   * input under the user's caret for the whole run.
-   */
-  /* Linear, deliberately: an arrow does not accelerate mid-flight, and the
-     ease every other segment wants would read as it braking to admire the far
-     edge of the pane. */
-  /* The stingray at the far side — swimming in place on the same clock, with
-     its flinch keyed to the frames the flight lands in. */
-
   /*
    * The two corrections xterm's own stylesheet needs to live in this app.
    *
@@ -1040,54 +991,6 @@
   }
 }
 
-@keyframes artemis-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(100%);
-  }
-}
-
-/*
- * The bow's cycle. All four run the same 2400ms clock, so a percentage here is
- * a moment there: the string reaches full draw at 40% exactly as the nocked
- * arrow does, and the flight appears in the frame after both let go. The
- * near-adjacent stops (54→58, 55→56, 79→80) are the loose — the one moment of
- * the cycle that should be violent.
- *
- * Path coordinates are the bow's own 16×16 viewBox (see `HuntBar.tsx` for the
- * geometry); both string poses keep the same M-L-L structure, which is what
- * makes the `d` interpolation legal.
- */
-
-/* The arrow rides the string back, vanishes on the loose (the flight takes
-   over in that frame), and fades back in nocked for the next cycle. */
-
-/* Under a pixel, and only after the loose. Any more and the bow reads as
-   walking along the strip rather than kicking. */
-
-/*
- * `translateX(…)` is against the flight span's own width, and the span is the
- * whole strip — the trick the old runbar's sweep used, kept because it is what
- * lets the arrow cross whatever the column happens to measure without a script
- * ever reading a width. 10px parks the hidden glyph at the bow until the
- * loose; the `- 40px` is where the flight now *ends* — at the stingray's
- * flank rather than off the edge, vanishing in the same frames the quarry's
- * flinch begins. The two are on the same clock, which is the whole of how the
- * hit lands.
- */
-
-/*
- * The stingray's cycle: a slow swim all the way round — small drifts, eased,
- * so it reads as idling rather than twitching — and then the flinch at 83%,
- * three frames after the arrow lands at 80%. It settles back by the time the
- * bow has re-nocked. Sub-2px throughout: the quarry is sixteen pixels tall,
- * and any more motion than this reads as the whole strip shaking.
- */
-
-/* 3px, not 8. The gesture only has to say "this is new"; any further and a fast
-   provider's back-and-forth reads as the whole column sliding. */
 @keyframes artemis-turn-in {
   from {
     opacity: 0;
@@ -1105,12 +1008,6 @@
  * `animation: none` on a `both`-filled animation leaves the element in its
  * natural state, which is the finished state — so the turn simply appears.
  *
- * The hunt degrades to a still: the string's attribute pose is straight, the
- * nocked arrow's is visible, and the flight span carries `opacity-0` in its
- * markup precisely so that losing its animation hides it rather than parking
- * a loose arrow over the bow. A motionless nocked bow still says "a run is
- * here" — the same information the strip's presence always carried — without
- * a single moving part.
  */
 /*
  * The chrome label.
@@ -1222,7 +1119,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
-  .runbar::after,
   .turn-in,
   .word-in {
     animation: none;

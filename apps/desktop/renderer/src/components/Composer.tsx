@@ -350,20 +350,18 @@ export function Composer(): ReactElement {
    * on the window background, with the status line under it — nothing boxes
    * either of them in.
    *
-   * The run bar stays, but hairline-thin and only while a run is live. It is
-   * the one piece of chrome here that reports something — the transient
-   * report, beside the constant one: Artemis' bow sits above this seam, under
-   * the transcript, firing for the same span this line sweeps. See
-   * `HuntBar.tsx` for why the two coexist.
+   * Nothing here reports on the run any more, either.
+   *
+   * A hairline swept across this seam while a run was live. It said one thing —
+   * "something is happening" — and said it in the one place the reader is not
+   * looking, an inch below the text they are waiting on. `ActivityIndicator`
+   * now sits at the foot of the transcript and answers the question that was
+   * actually being asked: *what* is happening, why, and for how long. Two
+   * indicators for one fact is one too many, and the one that survives is the
+   * one that can distinguish waiting from working.
    */
   return (
     <div className="shrink-0">
-      {live ? (
-        <div className="relative h-px overflow-hidden bg-line">
-          <span className="runbar absolute inset-0 block" />
-        </div>
-      ) : null}
-
       <HandoffStrip />
 
       {/*

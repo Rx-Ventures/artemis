@@ -837,6 +837,17 @@ const Row = memo(function Row({
    * `syncRunningSessions`.
    */
   const running = useApp((s) => s.runningSessions.includes(session.id));
+  /*
+   * Waiting outranks running, and that ordering is the whole point of drawing
+   * two colours instead of one.
+   *
+   * A running conversation needs nothing from anybody — the dot is a courtesy.
+   * A waiting one has stopped and will stay stopped until someone answers it,
+   * and the sidebar is the only place that fact is visible when the pane is not
+   * on screen. `activityOf` already ranks them this way at the foot of the
+   * transcript; the two must not disagree about what a conversation is doing.
+   */
+  const waiting = useApp((s) => s.waitingSessions.includes(session.id));
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
   const renaming = useCapability('renameSession');
   const deleting = useCapability('deleteSession');
@@ -974,7 +985,15 @@ const Row = memo(function Row({
         >
           {/* Ahead of the title, not after it: the title is what truncates, and
               a marker on the far side of a clip is a marker nobody sees. */}
-          {running ? <StatusDot tone="cyan" pulse /> : null}
+          {/* Amber is the app's "you are being waited on" colour — the same one
+              the activity indicator and the permission card use, so the sidebar
+              is saying the thing the pane would say. Not pulsing: a pulse reads
+              as progress, and nothing is progressing. */}
+          {waiting ? (
+            <StatusDot tone="amber" />
+          ) : running ? (
+            <StatusDot tone="cyan" pulse />
+          ) : null}
           <span className="truncate">{condenseTitle(session.title)}</span>
         </span>
         <span className="flex w-full shrink-0 items-center gap-1 font-mono text-2xs text-ink-faint">
