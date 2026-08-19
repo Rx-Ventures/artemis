@@ -75,6 +75,7 @@ import type {
   RunId,
   RunInput,
   RunStatus,
+  SessionDelegatedWork,
   SessionId,
   SessionSummary,
   TerminalId,
@@ -7150,6 +7151,71 @@ export function startSessionFeed(): () => void {
 }
 
 /**
+ * Put delegated rows back onto the columns that have none.
+ *
+ * ## Why a poll has to do this at all
+ *
+ * Rows normally arrive on `background.tasks`, which is run-scoped: it is emitted
+ * onto the turn being served and retained on that run's event stream. Neither
+ * half survives a reload of a conversation whose work outlived its turn. ⌘R
+ * empties every pane's `tasks`, and `attachRun` re-attaches to the run that is
+ * live *now* — routinely a continuation whose retained events never mentioned the
+ * workflow, because the turn that launched it ended long ago. `attachRun` has a
+ * guard for this (`sameSession`), but a freshly loaded window has no previous
+ * pane state for it to match on, so it can only ever decline to clear rows that
+ * were already gone.
+ *
+ * The ledger on the provider process is the surviving copy, and this is where it
+ * lands. The symptom without it: a live workflow shows as a disabled delegated
+ * tab on a conversation that reads as finished, until the user sends a message
+ * and the turn that opens announces the rows that were there the whole time.
+ *
+ * ## Restoring, never correcting
+ *
+ * A pane with rows *and* a live run is left alone. `background.tasks` is
+ * authoritative while a turn is open and arrives several times a second; this
+ * read is seconds behind it, and writing over live rows would replace them with
+ * older ones and walk the list backwards on screen. Between turns there is no
+ * competing writer — which is the whole reason this channel exists — so a column
+ * whose run has ended takes the update and its rows settle without waiting for a
+ * turn that may never come.
+ *
+ * Conversations the main process reported nothing for are not cleared here.
+ * Absent means "no rows held", which is what a provider that cannot answer also
+ * looks like; treating it as "delegated nothing" would empty a list on the
+ * strength of a question nobody answered.
+ */
+function restoreDelegatedRows(delegated: readonly SessionDelegatedWork[]): void {
+  if (delegated.length === 0) return;
+  const app = useApp.getState();
+  for (const entry of delegated) {
+    const pane = paneForSession(entry.sessionId, app);
+    if (pane === undefined) continue;
+    const state = paneState(pane);
+    if (state.tasks.length > 0 && isLive(state)) continue;
+    // Compared before writing because this lands every few seconds for the whole
+    // life of a workflow, and `setPaneState` wakes every subscriber to the
+    // column — the delegated tab, the header count, the sidebar marker. Whole
+    // rows rather than a chosen few fields: they nest (a workflow carries its
+    // agents), and a comparison that reads only the top level would go quiet on
+    // exactly the updates a workflow row exists to show.
+    if (JSON.stringify(state.tasks) === JSON.stringify(entry.tasks)) continue;
+    // The dismissal record is pruned against the incoming set exactly as the
+    // event path prunes it, and for the same reason: it must only ever name rows
+    // the provider is still reporting, or `showsTasks` is asking whether a row
+    // that no longer exists was dismissed. Two writers of `tasks` that disagree
+    // about that would make the delegated tab's return depend on which of them
+    // last ran.
+    const reported = new Set(entry.tasks.map((one) => one.id));
+    const kept = state.dismissedTasks.filter((id) => reported.has(id));
+    setPaneState(pane, {
+      tasks: entry.tasks,
+      ...(kept.length === state.dismissedTasks.length ? {} : { dismissedTasks: kept }),
+    });
+  }
+}
+
+/**
  * Re-read which conversations the main process is still working on.
  *
  * Rides the session feed's timer rather than owning one: it is wanted at exactly
@@ -7177,6 +7243,12 @@ async function refreshLiveWork(): Promise<void> {
 
   const result = await call(() => bridge.runs.liveWork({}));
   if (!result.ok) return;
+
+  // Before the comparison below, not after: that one returns early whenever the
+  // *set of working sessions* has not moved, which is the ordinary case for a
+  // window that reloaded while a workflow was already running. Rows restored on
+  // the strength of an unrelated change would be rows restored by luck.
+  restoreDelegatedRows(result.value.delegated);
 
   const next = result.value.sessionIds;
   const current = useApp.getState().sessionsHoldingWork;

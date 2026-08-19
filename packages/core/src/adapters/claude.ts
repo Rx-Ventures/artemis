@@ -87,6 +87,7 @@ import type {
   AgentError,
   AgentEvent,
   Attachment,
+  BackgroundTask,
   Capabilities,
   JsonObject,
   PermissionDecision,
@@ -103,6 +104,7 @@ import type {
   RunEndReason,
   RunId,
   RunStatus,
+  SessionDelegatedWork,
   SessionId,
   SessionSummary,
   SystemPromptSpec,
@@ -889,6 +891,25 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         if (!process.closed && process.holdsWork) holding.push(sessionId);
       }
       return holding;
+    },
+
+    /**
+     * The same pool, read for its rows rather than its verdict.
+     *
+     * Conversations with no rows are left out entirely rather than reported
+     * empty. An empty array on the wire is a claim — "this conversation has
+     * delegated nothing" — and the caller uses these to *restore* rows a reload
+     * destroyed, so a claim it cannot support would clear a list rather than
+     * decline to refill it.
+     */
+    delegatedWork(): readonly SessionDelegatedWork[] {
+      const work: SessionDelegatedWork[] = [];
+      for (const [sessionId, process] of live) {
+        if (process.closed) continue;
+        const tasks = process.tasks;
+        if (tasks.length > 0) work.push({ sessionId, tasks });
+      }
+      return work;
     },
 
     async createRun(input: ResolvedRunInput): Promise<Run> {
@@ -2235,6 +2256,24 @@ class ClaudeProcess {
    */
   get holdsWork(): boolean {
     return this.#holdsWork();
+  }
+
+  /**
+   * The ledger's current rows, for a caller that missed the event carrying them.
+   *
+   * The companion to {@link holdsWork} and the answer to the question that one
+   * deliberately does not answer: not *whether* there is work, but *what*. Both
+   * exist because {@link #flushTasks} has nowhere to put an event between turns,
+   * and this one additionally because a window that reloaded has no memory of the
+   * events that were emitted while it was alive.
+   *
+   * A copy, so a caller cannot hold a reference to the ledger's interior and
+   * watch it change underneath a render — and `peek` rather than `snapshot`,
+   * because a reader must not be able to mark the ledger clean and strand the
+   * event a pending change is owed.
+   */
+  get tasks(): readonly BackgroundTask[] {
+    return this.#tasks.peek();
   }
 
   /** True once the transport is gone. A closed process must never be attached to. */

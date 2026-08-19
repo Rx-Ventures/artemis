@@ -57,6 +57,7 @@ import type {
   RunId,
   RunInput,
   RunStatus,
+  SessionDelegatedWork,
   SessionId,
   SessionSummary,
 } from '@rx-artemis/protocol';
@@ -1037,6 +1038,32 @@ export interface ProviderAdapter {
    * already holds. It must not spawn anything or touch the filesystem.
    */
   sessionsHoldingWork?(): readonly SessionId[];
+
+  /**
+   * The delegated rows this adapter holds, per conversation.
+   *
+   * {@link sessionsHoldingWork} answers "keep this conversation alive"; this
+   * answers "and here is what it has delegated". They are deliberately separate
+   * calls returning deliberately different sets — a process kept open by a
+   * registered schedule holds work and has no rows, and one whose tasks have all
+   * settled has rows worth reading and holds nothing — so folding them together
+   * would force each caller to re-derive the half it did not want.
+   *
+   * ## Why a caller cannot work this out
+   *
+   * Same reason as above, one step further. A window builds its rows from
+   * `background.tasks`, which is run-scoped, is not emitted once the turn has
+   * ended, and is retained only on the stream of the run that emitted it. A
+   * window that reloads has no rows and no run to replay them from: the work it
+   * is looking for was delegated by a turn that is over, and the live run is a
+   * continuation whose retained events never mentioned it. The ledger on the
+   * process is the only surviving copy, and this is the only way to ask for it.
+   *
+   * Optional, and absent reads as "no opinion" exactly as above. **Synchronous
+   * on purpose**, for the same reason and under the same rules: it is polled, the
+   * answer is already in memory, and it must not spawn anything or touch disk.
+   */
+  delegatedWork?(): readonly SessionDelegatedWork[];
 
   /**
    * List historical sessions.

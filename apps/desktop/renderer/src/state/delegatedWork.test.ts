@@ -31,13 +31,21 @@ import {
   newSession,
   paneCount,
   splitPane,
+  startSessionFeed,
   useApp,
 } from './store';
 import { paneState, setPaneState } from './pane';
 
+/** What the main process is currently reporting, rewritten per test. */
+let liveWorkReply: { sessionIds: readonly string[]; delegated: readonly unknown[] } = {
+  sessionIds: [],
+  delegated: [],
+};
+
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   runs: {
     list: async () => ({ ok: true, value: { runs: [] } }),
+    liveWork: async () => ({ ok: true, value: liveWorkReply }),
     onEvent: () => () => undefined,
   },
   sessions: {
@@ -251,3 +259,94 @@ describe('leaving a conversation whose delegated work is still going', () => {
     expect(paneState(fresh).tasks).toHaveLength(0);
   });
 });
+
+/**
+ * ⌘R must not make a working conversation look finished.
+ *
+ * Reloading the renderer leaves every provider process untouched and takes every
+ * pane's `tasks` with it. Rows normally come back on `background.tasks` — but
+ * that event is run-scoped, and the run a reloaded window attaches to is
+ * routinely a *continuation*: the turn that launched the workflow ended minutes
+ * ago, so the retained events being replayed never mentioned it. `attachRun`
+ * guards this with `sameSession`, which a fresh window can never satisfy — there
+ * is no previous pane state to match against.
+ *
+ * The observed failure: delegated tab disabled, column reading as dead, and the
+ * rows snapping back the instant the user sent a message and a turn opened to
+ * announce them. The poll is where they come back instead.
+ */
+describe('rows a reloaded window has no run to replay', () => {
+  /** Let `refreshSessions` and `refreshLiveWork` settle. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  /** Drive one poll the way returning to the window does. */
+  const poll = async (): Promise<void> => {
+    const stop = startSessionFeed();
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    stop();
+  };
+
+  it('restores them onto a column that has none', async () => {
+    const pane = focusedPane();
+    // A window that has just come back: it knows which conversation this column
+    // is showing and nothing else about it.
+    setPaneState(pane, { run: null, resumeSessionId: 'sess-1', tasks: [] } as never);
+    liveWorkReply = {
+      sessionIds: ['sess-1'],
+      delegated: [{ sessionId: 'sess-1', tasks: [task('running')] }],
+    };
+
+    await poll();
+
+    expect(paneState(pane).tasks).toHaveLength(1);
+    expect(paneState(pane).tasks[0]?.status).toBe('running');
+  });
+
+  it('does not overwrite what a live run is still streaming', async () => {
+    const pane = focusedPane();
+    // A turn is open, so `background.tasks` is arriving several times a second
+    // and is authoritative. This read is seconds behind it.
+    handleAgentEvent(tasksEvent(0, ['running']));
+    liveWorkReply = {
+      sessionIds: ['sess-1'],
+      delegated: [{ sessionId: 'sess-1', tasks: [task('pending')] }],
+    };
+
+    await poll();
+
+    // The older answer must not walk the row backwards on screen.
+    expect(paneState(pane).tasks[0]?.status).toBe('running');
+  });
+
+  it('settles rows on a column whose turn ended without one to announce it', async () => {
+    const pane = focusedPane();
+    handleAgentEvent(tasksEvent(0, ['running']));
+    handleAgentEvent(ended(1));
+    // Between turns there is no competing writer — which is the whole reason
+    // this channel exists — so the freshest answer wins.
+    liveWorkReply = {
+      sessionIds: [],
+      delegated: [{ sessionId: 'sess-1', tasks: [task('completed')] }],
+    };
+
+    await poll();
+
+    expect(paneState(pane).tasks[0]?.status).toBe('completed');
+  });
+
+  it('leaves rows alone when the main process reports none', async () => {
+    const pane = focusedPane();
+    handleAgentEvent(tasksEvent(0, ['running']));
+    handleAgentEvent(ended(1));
+    // Absent is what a provider that cannot answer looks like too. Reading it as
+    // "delegated nothing" would empty the list on a question nobody answered.
+    liveWorkReply = { sessionIds: [], delegated: [] };
+
+    await poll();
+
+    expect(paneState(pane).tasks).toHaveLength(1);
+  });
+})

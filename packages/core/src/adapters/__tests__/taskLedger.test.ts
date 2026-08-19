@@ -473,3 +473,49 @@ describe('a workflow’s agents', () => {
     });
   });
 });
+
+/**
+ * Reading the rows and *announcing* them are different acts.
+ *
+ * `snapshot` clears `dirty` because its only caller is about to put what it
+ * returns on the stream. Once anything else reads the ledger — the reload path
+ * asks it directly, since no event is going to carry these rows — that coupling
+ * becomes a hazard: a reader that clears the flag marks an unsent change as
+ * sent, the `background.tasks` event it was owed is never emitted, and every
+ * window's rows sit frozen until something unrelated dirties the ledger again.
+ *
+ * So `peek` exists, and the thing worth pinning down is what it does *not* do.
+ */
+describe('reading the ledger without claiming to have sent it', () => {
+  it('leaves a pending change pending', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('task_1'));
+    expect(ledger.dirty).toBe(true);
+
+    // The poll reads it. The turn that has not opened yet is still owed an event.
+    expect(ledger.peek()).toHaveLength(1);
+
+    expect(ledger.dirty).toBe(true);
+    expect(ledger.snapshot()).toHaveLength(1);
+    expect(ledger.dirty).toBe(false);
+  });
+
+  it('reports the same rows as the emitting read', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(level({ id: 'task_1' }));
+    ledger.observe(progress('task_1'));
+
+    expect(ledger.peek()).toEqual(ledger.snapshot());
+  });
+
+  it('hands back a copy rather than the ledger’s own list', () => {
+    const ledger = new TaskLedger(clock().now);
+    ledger.observe(started('task_1'));
+
+    const rows = ledger.peek() as { id: string }[];
+    rows.length = 0;
+
+    // A caller that mutates what it was given must not empty the ledger.
+    expect(ledger.peek()).toHaveLength(1);
+  });
+});
