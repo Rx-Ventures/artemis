@@ -402,6 +402,19 @@ export interface ArtemisEngine {
   }): Promise<{ readonly deleted: boolean }>;
 
   /**
+   * Write the provider's own tag onto a stored session, or clear it.
+   *
+   * Resolves `false` when there was no such session, on the same rule
+   * `deleteSession` follows.
+   */
+  tagSession(options: {
+    readonly profileId: ProfileId;
+    readonly sessionId: SessionId;
+    readonly cwd?: string;
+    readonly tag: string | null;
+  }): Promise<{ readonly tagged: boolean }>;
+
+  /**
    * Subscribe to every run's events.
    *
    * One firehose rather than a subscription per run: the renderer multiplexes
@@ -1057,6 +1070,27 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       });
       return { deleted };
+    },
+
+    tagSession: async (query) => {
+      const profile = await profiles.require(query.profileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter === undefined) {
+        throw new EngineUnavailableError(
+          `No adapter is registered for provider "${profile.providerId}".`,
+        );
+      }
+      if (adapter.tagSession === undefined) {
+        throw new EngineUnavailableError(`${adapter.label} cannot tag a stored session.`);
+      }
+
+      const tagged = await adapter.tagSession({
+        sessionId: query.sessionId,
+        env: await storeEnvFor(query.profileId, profile.providerId),
+        tag: query.tag,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+      return { tagged };
     },
 
     listSessions: async (query) => {

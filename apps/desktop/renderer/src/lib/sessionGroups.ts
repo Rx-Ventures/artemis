@@ -88,7 +88,7 @@
  * id, and duplicate React keys inside one list silently drop a row.
  */
 
-import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
+import { isArchived, type ProfileId, type SessionSummary } from '@rx-artemis/protocol';
 
 import { compareFolderNames } from './paths';
 
@@ -169,7 +169,7 @@ export function partitionSessions(
   if (
     sets.pinned.size === 0 &&
     sets.archived.size === 0 &&
-    !sessions.some((session) => session.spawnedBy !== undefined)
+    !sessions.some((session) => session.spawnedBy !== undefined || isArchived(session))
   ) {
     return { pinned: [], active: sessions, archived: [] };
   }
@@ -191,6 +191,14 @@ export function partitionSessions(
       pinned.push(session);
     } else if (
       session.spawnedBy !== undefined ||
+      // The provider's own tag, which is the real answer — see
+      // `toggleSessionArchived`. It needs no key matching at all: a tag is
+      // attached to the transcript, so it cannot be filed under the wrong owner
+      // the way a stored key could.
+      isArchived(session) ||
+      // The set that predates the tag, still read so an installation that has
+      // not been migrated yet does not open with its archive apparently empty.
+      // `migrateArchivedSessions` empties it once the tags are written.
       keys.some((key) => sets.archived.has(key)) ||
       (shared && archivedIds.has(session.id))
     ) {

@@ -108,6 +108,7 @@ import {
   validateRunsStart,
   validateSessionsList,
   validateSessionsDelete,
+  validateSessionsTag,
   validateSessionsListAll,
   validateSessionsMessages,
   validateSessionsSubagentMessages,
@@ -760,6 +761,17 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
         engine.require().deleteSession({
           profileId: request.profileId,
           sessionId: request.sessionId,
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        }),
+    },
+
+    [IPC.sessionsTag]: {
+      validate: validateSessionsTag,
+      handle: async (request) =>
+        engine.require().tagSession({
+          profileId: request.profileId,
+          sessionId: request.sessionId,
+          tag: request.tag,
           ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
         }),
     },

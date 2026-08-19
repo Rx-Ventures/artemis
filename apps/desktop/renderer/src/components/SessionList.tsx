@@ -851,6 +851,7 @@ const Row = memo(function Row({
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
   const renaming = useCapability('renameSession');
   const deleting = useCapability('deleteSession');
+  const tagging = useCapability('tagSession');
 
   /*
    * Whether this row is allowed to name an account at all.
@@ -1101,15 +1102,27 @@ const Row = memo(function Row({
            * firing still works (it clears the pin and the rule refiles it), so
            * the item is only inert in the direction that would lie.
            */}
+          {/*
+            Two reasons this can be inert, and they are different in kind.
+            The scheduled-run rule is a *policy*: the row is archived because
+            nothing put it in view, so offering "unarchive" would lie. The
+            capability is a *fact about the provider*: archiving writes a tag
+            onto the stored session, and a provider whose store has no tag —
+            Codex, the local servers — has nowhere to put it. Both say so
+            rather than vanishing, which is the rule `disabled-reason.tsx` sets
+            out and the one rename and delete already follow.
+          */}
           <MenuAction
             hotkey="a"
-            disabled={archived && session.spawnedBy !== undefined}
+            disabled={(archived && session.spawnedBy !== undefined) || !tagging.supported}
             title={
-              archived && session.spawnedBy !== undefined
-                ? 'Scheduled runs stay archived — pin one to keep it in view'
-                : undefined
+              !tagging.supported
+                ? tagging.reason
+                : archived && session.spawnedBy !== undefined
+                  ? 'Scheduled runs stay archived — pin one to keep it in view'
+                  : undefined
             }
-            onSelect={() => toggleSessionArchived(session)}
+            onSelect={() => void toggleSessionArchived(session)}
           >
             {archived ? (
               <>

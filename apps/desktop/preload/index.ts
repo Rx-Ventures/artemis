@@ -77,6 +77,7 @@ import {
   type SharedConfigStatusRequest,
   type Unsubscribe,
   type SessionsDeleteRequest,
+  type SessionsTagRequest,
   type SessionsMessagesRequest,
   type SessionsSubagentMessagesRequest,
   type SessionsRenameRequest,
@@ -527,6 +528,7 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.sessionsSubagentMessages, request),
     rename: (request: SessionsRenameRequest) => invoke(IPC.sessionsRename, request),
     delete: (request: SessionsDeleteRequest) => invoke(IPC.sessionsDelete, request),
+    tag: (request: SessionsTagRequest) => invoke(IPC.sessionsTag, request),
   }),
 
   workspace: Object.freeze({

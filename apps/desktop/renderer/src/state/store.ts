@@ -34,6 +34,8 @@
 
 import { create } from 'zustand';
 import {
+  ARCHIVED_TAG,
+  isArchived,
   isEndedRunError,
   isProfileAutoSelectable,
   isProfileEnabled,
@@ -6517,6 +6519,69 @@ function invalidateSessions(): void {
   sessionsGeneration += 1;
 }
 
+/**
+ * Carry the old local archive onto the provider's own records, once.
+ * ============================================================================
+ *
+ * Archiving used to be a set of keys in this window's preferences. It is a tag
+ * on the session now — see {@link toggleSessionArchived} — and this is what
+ * stops the change from reading, to anyone who had archived anything, as the
+ * app having forgotten all of it.
+ *
+ * Runs after a listing, because it needs the sessions to match keys against,
+ * and it only ever *adds* tags: a row the old set named is tagged, and the key
+ * is dropped. Nothing is untagged here. Somebody may have tagged a session from
+ * the CLI, and an entry missing from a set that never knew about it is not
+ * evidence of anything.
+ *
+ * Providers that cannot tag are skipped and their keys kept. Codex has no tag
+ * to write, so its archive stays local and stays working; discarding the keys
+ * would delete the only record of it. That is the one place the two halves
+ * still differ, and it is bounded by what the provider can actually do.
+ *
+ * Idempotent by construction: it consumes the set it reads from, so the second
+ * run has nothing to do.
+ */
+async function migrateArchivedSessions(): Promise<void> {
+  const state = useApp.getState();
+  if (state.archivedSessions.length === 0) return;
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const canTag = new Set(
+    state.providers.filter((provider) => provider.capabilities.tagSession).map((p) => p.id),
+  );
+  if (canTag.size === 0) return;
+
+  const migrated = new Set<string>();
+  for (const session of state.sessions) {
+    if (!canTag.has(session.providerId) || isArchived(session)) continue;
+    const hits = entriesFiling(session, state.archivedSessions);
+    if (hits.length === 0) continue;
+
+    const result = await call(() =>
+      bridge.sessions.tag({
+        profileId: session.profileId,
+        sessionId: session.id,
+        tag: ARCHIVED_TAG,
+        ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+      }),
+    );
+    // A failure keeps the key, so the row stays archived on the old mechanism
+    // and the next listing tries again. Silent: this is a background repair of
+    // something the user did not ask for, and a banner per failed row would be
+    // a wall of noise about work nobody requested.
+    if (result.ok) for (const hit of hits) migrated.add(hit);
+  }
+
+  if (migrated.size === 0) return;
+  useApp.setState((s) => ({
+    archivedSessions: s.archivedSessions.filter((entry) => !migrated.has(entry)),
+  }));
+  savePrefs();
+}
+
 export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
   const app = useApp.getState();
@@ -6600,6 +6665,11 @@ export async function refreshSessions(): Promise<void> {
     // these land and by project afterwards, and a listing should not wait on a
     // walk of the filesystem to put rows on screen. See `learnProjects`.
     void learnProjects(listing.sessions.map((session) => session.cwd));
+
+    // Also after the write, and for the same reason: it needs the rows this
+    // listing just produced to match its keys against, and it repairs history
+    // rather than deciding what is on screen now. See `migrateArchivedSessions`.
+    void migrateArchivedSessions();
   } finally {
     sessionsInFlight = false;
     /*
@@ -6679,36 +6749,86 @@ export async function renameSession(session: SessionSummary, title: string): Pro
 
 /**
  * Put a session away, or take it back out.
+ * ============================================================================
  *
- * Purely local — see {@link AppState.archivedSessions}. No IPC, nothing on
- * disk changes, and the session stays resumable the whole time; the row simply
- * moves from its project into the Archived section.
+ * A tag on the provider's own record, not a note Artemis keeps.
+ *
+ * This used to be a list of ids in the renderer's preferences, and that was
+ * wrong in a way that took three separate bug reports to see whole. An archive
+ * held here is a fact about *one installation*: invisible to a second build,
+ * absent on another machine reading the same `~/.claude`, and gone entirely the
+ * moment the window's storage is reset. All three happened. Meanwhile `delete`
+ * and `rename` had never had the problem, because both were always the
+ * provider's operation.
+ *
+ * So archiving is `tagSession`, beside them, and the tag comes back on every
+ * listing as {@link SessionSummary.tag}. There is no local set to keep in step
+ * with anything, which is what makes the whole class of bug unreachable rather
+ * than fixed.
+ *
+ * Optimistic, then corrected. The row moves the moment it is clicked — waiting
+ * on a subprocess to redraw a sidebar is the wrong trade — and `refreshSessions`
+ * replaces the guess with what the provider actually stored. A failure puts the
+ * row back and says why.
  *
  * Archiving unpins, always. The two are opposite claims about one row, and a
- * session that was both would have to be drawn in two places or arbitrarily in
- * one; clearing the other set at the point of the write means that state cannot
- * be reached at all rather than being tidied up wherever it is noticed.
+ * session that was both would have to be drawn twice or arbitrarily once.
+ * Pinning stays local: it is a claim about how *this* person wants their
+ * sidebar ordered, not a property of the conversation, and no provider has a
+ * concept to delegate it to.
  */
-export function toggleSessionArchived(session: SessionSummary): void {
-  const key = sessionKey(session);
-  useApp.setState((s) => {
-    // Read against every entry that files this session — its current keys, and
-    // for a shared row any profile's key on the same id — and write back only
-    // the canonical one, so an entry stored under a since-changed owner
-    // converges the first time it is toggled. See `entriesFiling` for why the
-    // stale ones must be removed too: an unarchive that left one behind would
-    // look done and be undone at the next listing.
-    const archivedHits = new Set(entriesFiling(session, s.archivedSessions));
-    const pinnedHits = new Set(entriesFiling(session, s.pinnedSessions));
-    return {
-      archivedSessions:
-        archivedHits.size > 0
-          ? s.archivedSessions.filter((entry) => !archivedHits.has(entry))
-          : [...s.archivedSessions, key],
-      pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
-    };
-  });
+export async function toggleSessionArchived(session: SessionSummary): Promise<void> {
+  const wasArchived = isArchived(session);
+  const tag = wasArchived ? null : ARCHIVED_TAG;
+
+  // Optimistic, and the pin is cleared in the same write so the row cannot be
+  // seen in two sections between here and the refresh below.
+  const pinnedHits = new Set(entriesFiling(session, useApp.getState().pinnedSessions));
+  useApp.setState((s) => ({
+    sessions: s.sessions.map((row) =>
+      row.id === session.id && row.profileId === session.profileId
+        ? withTag(row, tag)
+        : row,
+    ),
+    pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
+  }));
   savePrefs();
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const result = await call(() =>
+    bridge.sessions.tag({
+      profileId: session.profileId,
+      sessionId: session.id,
+      tag,
+      ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+    }),
+  );
+
+  if (!result.ok) {
+    // Put it back. An archive that appeared to work and did not is worse than
+    // one that refused: the row would return at the next listing with no
+    // explanation, which is the report this whole change came from.
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((row) =>
+        row.id === session.id && row.profileId === session.profileId
+          ? withTag(row, wasArchived ? ARCHIVED_TAG : null)
+          : row,
+      ),
+    }));
+    reportFailure(wasArchived ? 'Could not restore that session' : 'Could not archive that session', result.error);
+    return;
+  }
+
+  // What the provider stored is the answer; the optimistic write was a guess.
+  void refreshSessions();
+}
+
+/** A copy of `session` carrying `tag`, or with the field absent for `null`. */
+function withTag(session: SessionSummary, tag: string | null): SessionSummary {
+  const { tag: _previous, ...rest } = session;
+  return tag === null ? rest : { ...rest, tag };
 }
 
 /**

@@ -1108,6 +1108,23 @@ export function createMockBridge(): ArtemisBridge {
         );
         return ok({ deleted: seedSessions.length < before });
       },
+
+      /*
+       * Writes the tag onto the seeded row, which is what makes archiving
+       * behave in the browser preview: the sidebar reads `session.tag`, so a
+       * mock that swallowed the write would show a row that refused to move to
+       * the archive and give no reason.
+       */
+      tag: async ({ profileId, sessionId, tag }) => {
+        let tagged = false;
+        seedSessions = seedSessions.map((s) => {
+          if (s.id !== sessionId || s.profileId !== profileId) return s;
+          tagged = true;
+          const { tag: _dropped, ...rest } = s;
+          return tag === null ? rest : { ...rest, tag };
+        });
+        return ok({ tagged });
+      },
     },
 
     workspace: {
