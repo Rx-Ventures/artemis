@@ -55,6 +55,48 @@ because a provider that has asked for something is, to you, waiting. Elapsed
 time sits beside it, because "is it stuck" is the real question and a spinner
 cannot answer it.
 
+### The conversation reads as a conversation
+
+The transcript used to interleave everything as it happened: a paragraph, a
+`Ran 3 commands` bar, the rest of the paragraph. Now the calls sink to one
+marker at the foot of the exchange — growing as the run works, folding open in
+order — and the boundary is the *break*, when the model stops and waits.
+Interrupting a run to redirect it does not split the account in two; steering
+one request is still one request.
+
+Reasoning is a message, not machinery. It stands where the model wrote it, as
+muted prose beside a sage rule, on by default — the Appearance switch now only
+decides whether a block arrives expanded. And the provider avatar is gone from
+the gutter: which model wrote a turn is a fact that does not change per row,
+and the status line already says it once.
+
+While a run is live, the border above the composer is the indicator: an
+ordinary hairline at rest, it grows to carry the shuttle while work happens,
+amber while something waits on your answer, signal when a run fails. The words
+— which state, why, for how long — stay at the foot of the conversation.
+
+### The dock grows a file browser, and files stop evicting each other
+
+The working directory sits in the dock: the column's own folder, icons by
+kind, `..` at the top of every listing, click a file to read it. The reader is
+the same one the transcript's links open — same channel, same gates, syntax
+highlighting included — and every file now gets a tab of its own. Following a
+second link used to replace the first, which made the thing reading code is
+mostly made of impossible. Tabs keep their own scroll positions, a path opened
+twice is one tab brought forward, and a restart reopens what was open.
+
+The strip that holds it all runs down the dock's side instead of across its
+top, so tabs cost height in a column that scrolls rather than width the
+composer needed.
+
+### The command bar searches what it says it searches
+
+Typing a session's title into ⌘K used to return "Nothing matches that" — the
+sessions were a page down, behind a row named "Resume a past session…".
+Matching sessions now join the results as you type, found by title, opening
+prompt, branch, project or profile. An empty bar still shows commands, so it
+opens as a menu and behaves as a search.
+
 ### What the tests now enforce
 
 Four checks that read the source and fail the build, added because prose does
