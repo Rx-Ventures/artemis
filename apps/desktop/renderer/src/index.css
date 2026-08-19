@@ -971,26 +971,11 @@
    * directly above the composer, and a layout-animating mascot would move the
    * input under the user's caret for the whole run.
    */
-  .hunt-string {
-    animation: artemis-bow-string 2400ms ease-in-out infinite;
-  }
-  .hunt-nock {
-    animation: artemis-bow-nock 2400ms ease-in-out infinite;
-  }
-  .hunt-recoil {
-    animation: artemis-bow-recoil 2400ms ease-out infinite;
-  }
   /* Linear, deliberately: an arrow does not accelerate mid-flight, and the
      ease every other segment wants would read as it braking to admire the far
      edge of the pane. */
-  .hunt-flight {
-    animation: artemis-bow-flight 2400ms linear infinite;
-  }
   /* The stingray at the far side — swimming in place on the same clock, with
      its flinch keyed to the frames the flight lands in. */
-  .hunt-quarry {
-    animation: artemis-bow-quarry 2400ms ease-in-out infinite;
-  }
 
   /*
    * The two corrections xterm's own stylesheet needs to live in this app.
@@ -1061,61 +1046,12 @@
  * geometry); both string poses keep the same M-L-L structure, which is what
  * makes the `d` interpolation legal.
  */
-@keyframes artemis-bow-string {
-  0%,
-  10% {
-    d: path('M5 2 L5 8 L5 14');
-  }
-  40%,
-  54% {
-    d: path('M5 2 L2 8 L5 14');
-  }
-  58%,
-  100% {
-    d: path('M5 2 L5 8 L5 14');
-  }
-}
 
 /* The arrow rides the string back, vanishes on the loose (the flight takes
    over in that frame), and fades back in nocked for the next cycle. */
-@keyframes artemis-bow-nock {
-  0%,
-  10% {
-    transform: translateX(0);
-    opacity: 1;
-  }
-  40%,
-  54% {
-    transform: translateX(-3px);
-    opacity: 1;
-  }
-  55%,
-  90% {
-    transform: translateX(0);
-    opacity: 0;
-  }
-  97%,
-  100% {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
 
 /* Under a pixel, and only after the loose. Any more and the bow reads as
    walking along the strip rather than kicking. */
-@keyframes artemis-bow-recoil {
-  0%,
-  54% {
-    transform: translateX(0);
-  }
-  58% {
-    transform: translateX(0.8px);
-  }
-  64%,
-  100% {
-    transform: translateX(0);
-  }
-}
 
 /*
  * `translateX(…)` is against the flight span's own width, and the span is the
@@ -1127,24 +1063,6 @@
  * flinch begins. The two are on the same clock, which is the whole of how the
  * hit lands.
  */
-@keyframes artemis-bow-flight {
-  0%,
-  55% {
-    opacity: 0;
-    transform: translateX(10px);
-  }
-  56% {
-    opacity: 1;
-  }
-  79% {
-    opacity: 1;
-  }
-  80%,
-  100% {
-    opacity: 0;
-    transform: translateX(calc(100% - 40px));
-  }
-}
 
 /*
  * The stingray's cycle: a slow swim all the way round — small drifts, eased,
@@ -1153,29 +1071,6 @@
  * bow has re-nocked. Sub-2px throughout: the quarry is sixteen pixels tall,
  * and any more motion than this reads as the whole strip shaking.
  */
-@keyframes artemis-bow-quarry {
-  0% {
-    transform: translate(0, 0);
-  }
-  30% {
-    transform: translate(-0.6px, 0.6px);
-  }
-  60% {
-    transform: translate(0, -0.5px);
-  }
-  79% {
-    transform: translate(0, 0);
-  }
-  83% {
-    transform: translate(1.6px, -1.2px);
-  }
-  90% {
-    transform: translate(0.4px, -0.3px);
-  }
-  100% {
-    transform: translate(0, 0);
-  }
-}
 
 /* 3px, not 8. The gesture only has to say "this is new"; any further and a fast
    provider's back-and-forth reads as the whole column sliding. */
@@ -1203,13 +1098,79 @@
  * here" — the same information the strip's presence always carried — without
  * a single moving part.
  */
+/*
+ * The activity indicator.
+ * ============================================================================
+ *
+ * A rule at the foot of the transcript, exactly where the next turn will
+ * appear, with a bar that grows from the left edge and then leaves from the
+ * left edge. It answers one question — is this still working — and it answers
+ * it from across the room, because it takes whatever width the pane gives it
+ * rather than being a fixed-size glyph.
+ *
+ * ### Why it is not linear, and why that is not decoration
+ *
+ * The first draft filled at a constant rate, which is precisely what a
+ * *determinate* progress bar does. For the first half of every cycle it looked
+ * like real progress toward a known end, and then threw it away. Nothing here
+ * knows how long a turn will take, so nothing here may imply that it does.
+ *
+ * Both phases are eased instead. The bar decelerates out of nothing, sits full
+ * for a beat, and accelerates away — which reads as something being driven
+ * rather than something being metered. It is still a monotonic fill, so the
+ * resemblance is softened rather than eliminated; the beat at full width is
+ * what does most of the work of breaking it.
+ *
+ * ### Reduced motion
+ *
+ * The bar stops and parks at three-quarters rather than vanishing. A run that
+ * is happening still has to look different from one that is not, and the
+ * elapsed counter beside it carries the rest of the claim. An indicator nobody
+ * can look at is worse than no indicator, but an *absent* one is worse still.
+ */
+@keyframes artemis-shuttle {
+  0% {
+    left: 0;
+    right: 100%;
+    animation-timing-function: cubic-bezier(0.3, 0, 0.15, 1);
+  }
+  46% {
+    left: 0;
+    right: 0;
+    animation-timing-function: linear;
+  }
+  56% {
+    left: 0;
+    right: 0;
+    animation-timing-function: cubic-bezier(0.55, 0, 0.2, 1);
+  }
+  100% {
+    left: 100%;
+    right: 0;
+  }
+}
+
+@layer components {
+  .shuttle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--beam);
+    animation: artemis-shuttle 1.9s infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shuttle::after {
+    animation: none;
+    left: 0;
+    right: 25%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .caret::after,
-  .hunt-flight,
-  .hunt-nock,
-  .hunt-quarry,
-  .hunt-recoil,
-  .hunt-string,
   .runbar::after,
   .turn-in,
   .word-in {

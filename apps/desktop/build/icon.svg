@@ -1,11 +1,26 @@
+<!--
+  The app icon, and the same three elements as renderer/src/components/logo.tsx
+  with the same coordinates and stroke widths. Edit them together or not at all:
+  two drawings of one idea drift the first time either is touched.
+
+  Colours are literal because an .icns has no cascade to inherit from. They are
+  the design tokens resolved to sRGB, not chosen here. #31eee8 is the accent
+  token at oklch(86% 0.14 192); #0c0d0f is the window ground lifted a step,
+  because the ground itself resolves to #020203 and reads as a void rather than
+  a tile.
+
+  Note for editors: XML forbids a double hyphen inside a comment, so token names
+  are written without their leading dashes above. A version of this file that
+  spelled them out parsed as a broken image and rasterised to a blank square.
+
+  icon.png and icon.icns are generated from this file by ./icon-build.sh, which
+  renders every iconset size at its true size rather than upscaling one.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" fill="#111114"/>
-<g transform="scale(2)">
-<g transform="translate(36 -36) rotate(-45 256 256)" stroke="#a39af4" fill="none" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M176 96C220 104 272 176 272 256C272 336 220 408 176 416" stroke-width="38"/>
-  <path d="M176 96L72 256L176 416" stroke-width="15"/>
-  <path d="M72 256H326" stroke-width="30"/>
-  <path d="M412 256L318 210L318 302Z" fill="#a39af4" stroke="none"/>
-</g>
+<rect width="1024" height="1024" rx="180" fill="#0c0d0f"/>
+<g transform="translate(512 512) scale(1.55) translate(-256 -256)" stroke="#31eee8" fill="none">
+  <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
+  <path d="M256 140a116 116 0 0 0 0 232Z" fill="#31eee8" stroke="none"/>
+  <circle cx="256" cy="256" r="116" stroke-width="24"/>
 </g>
 </svg>

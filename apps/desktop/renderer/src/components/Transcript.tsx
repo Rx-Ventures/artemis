@@ -200,8 +200,8 @@ import {
   type UserItem,
 } from '../state/transcript';
 import { DiffView } from './DiffView';
+import { ActivityIndicator } from './Activity';
 import { EmptyState } from './EmptyState';
-import { HuntBar } from './HuntBar';
 import { InlinePermission } from './InlinePermission';
 import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
@@ -319,14 +319,12 @@ export function Transcript(): ReactElement {
           className={cn('mx-auto flex w-full flex-col gap-0.5 px-4 py-4', COLUMN_MAX[width])}
         >
           {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
-          <Working />
-          {/* The hunt, riding the conversation's tail: inside the content
-              column so it sits at the bottom of the text itself — pushed down
-              by every row that streams in, scrolling with the transcript, and
-              sharing the column's measure so the arrow crosses exactly the
-              width the prose does. Static height, transforms-only inside, so
-              it never trips the tail-follower above. See `HuntBar.tsx`. */}
-          <HuntBar />
+          {/* What the pane is doing, riding the conversation's tail: inside the
+              content column so it sits at the bottom of the text itself —
+              pushed down by every row that streams in, scrolling with the
+              transcript, and sharing the column's measure so the rule crosses
+              exactly the width the prose does. See `Activity.tsx`. */}
+          <ActivityIndicator />
         </div>
       </div>
 
@@ -345,33 +343,6 @@ export function Transcript(): ReactElement {
   );
 }
 
-/**
- * The working indicator, for providers that do not stream.
- *
- * `partialMessages` is a rendering capability rather than a control, so it can
- * never be "gated" the way a button is — but leaving it unhandled would mean a
- * non-streaming provider showed a completely static screen for the whole time
- * it was thinking, which reads as a hung app. This is where that capability is
- * answered: a typewriter when the provider streams, a pulse when it does not.
- *
- * Subscribed narrowly, and to `useApp` rather than to the transcript, so it
- * costs nothing while text is arriving.
- */
-function Working(): ReactElement | null {
-  const live = usePane((s) => s.run !== null && s.run.status === 'running');
-  const streams = usePane((s) => activeCapabilities(s).partialMessages);
-  const waiting = usePane((s) => s.permissionQueue.length > 0);
-
-  if (!live || streams || waiting) return null;
-  return (
-    <Line label="" avatar={<AgentAvatar />}>
-      <span className="flex items-center gap-2 py-1 font-mono text-2xs text-ink-faint">
-        <StatusDot tone="cyan" pulse />
-        Working — this provider sends whole messages, so nothing appears until the block is done.
-      </span>
-    </Line>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Row dispatch                                                               */
