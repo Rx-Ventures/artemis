@@ -27,7 +27,7 @@
 
 import type { AgentPromptsDocument } from './agentPrompts.js';
 import type { PullRequestRef, PullRequestResult } from './github.js';
-import type { AgentEvent } from './events.js';
+import type { AgentEvent, BackgroundTask } from './events.js';
 import type { AgentError } from './errors.js';
 import type { Attachment } from './attachment.js';
 import type { PermissionDecision } from './permissions.js';
@@ -806,21 +806,55 @@ export type RunsLiveWorkRequest = Record<string, never>;
  *
  * ## What a window does with it
  *
- * Two things, and the second is why this exists. It marks the session as working
- * in the sidebar, which is cosmetic and was already approximately right. And it
- * decides whether a column may be **destroyed** — which is not cosmetic, because
- * retiring a pane closes its agent tabs and resets its transcript, and nothing
- * can reach a conversation that is gone. A window that guessed from its own
- * frozen rows threw away running workflows.
+ * Three things. It marks the session as working in the sidebar, which is
+ * cosmetic and was already approximately right. It decides whether a column may
+ * be **destroyed** — which is not cosmetic, because retiring a pane closes its
+ * agent tabs and resets its transcript, and nothing can reach a conversation
+ * that is gone. A window that guessed from its own frozen rows threw away
+ * running workflows.
+ *
+ * And it is where a window that has just been recreated gets its delegated rows
+ * back at all. ⌘R leaves the provider processes untouched but takes every pane's
+ * `tasks` with it, and the run being re-attached is routinely not the one that
+ * delegated the work, so its retained events carry no rows to replay. Without
+ * {@link RunsLiveWorkResponse.delegated} the reloaded window shows a live
+ * workflow as a disabled tab on a conversation that looks finished, and stays
+ * that way until the user sends a message and a turn opens to announce it.
  *
  * A session absent from this set is not necessarily idle: a provider whose
  * adapter cannot answer contributes nothing, so this is a set of conversations
  * *known* to be working rather than the complement of the idle ones. Callers
  * must treat it as "keep these", never as "the rest are finished".
  */
+/**
+ * One conversation's delegated rows, as the adapter holds them right now.
+ *
+ * The same set a `background.tasks` event carries, addressed by session rather
+ * than by run — which is the whole point of it being here. The ledger belongs to
+ * the provider *process*, and a process outlives any number of runs; a reader
+ * that only ever saw these rows on a run's event stream cannot get them back
+ * once that run is over.
+ */
+export interface SessionDelegatedWork {
+  readonly sessionId: SessionId;
+  /** Live and recently settled, exactly as `background.tasks` reports them. */
+  readonly tasks: readonly BackgroundTask[];
+}
+
 export interface RunsLiveWorkResponse {
   /** Sessions known to still be working. Never a complete idle-set complement. */
   readonly sessionIds: readonly SessionId[];
+  /**
+   * The rows themselves, for every conversation whose adapter still holds any.
+   *
+   * Not the same set as {@link sessionIds} in either direction, and neither gap
+   * is an inconsistency to be tidied away. A process held open by a registered
+   * schedule is working with no rows to show; a process whose tasks have all
+   * settled has rows worth reading and is no longer working. A reader wanting
+   * "keep this conversation" asks the first; one wanting "what has it
+   * delegated" asks this.
+   */
+  readonly delegated: readonly SessionDelegatedWork[];
 }
 
 /**

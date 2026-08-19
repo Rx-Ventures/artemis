@@ -983,7 +983,7 @@ export function createMockBridge(): ArtemisBridge {
        * is a set callers must already handle being empty (see
        * `RunsLiveWorkResponse`).
        */
-      liveWork: async () => ok({ sessionIds: [] }),
+      liveWork: async () => ok({ sessionIds: [], delegated: [] }),
       /*
         Always empty, and never `truncated`.
 

@@ -356,7 +356,13 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
 
     [IPC.runsLiveWork]: {
       validate: validateRunsLiveWork,
-      handle: () => Promise.resolve({ sessionIds: engine.require().liveWorkSessions() }),
+      handle: () => {
+        const host = engine.require();
+        return Promise.resolve({
+          sessionIds: host.liveWorkSessions(),
+          delegated: host.delegatedWork(),
+        });
+      },
     },
 
     [IPC.runsEvents]: {

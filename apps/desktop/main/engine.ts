@@ -57,6 +57,7 @@ import type {
   ProviderModelOption,
   RunHandle,
   RunId,
+  SessionDelegatedWork,
   SessionId,
   RunInput,
   SessionSummary,
@@ -271,6 +272,19 @@ export interface ArtemisEngine {
    * in-memory pools and sits on a poll.
    */
   liveWorkSessions(): readonly SessionId[];
+
+  /**
+   * What those conversations have delegated, for a window rebuilding its rows.
+   *
+   * The other half of {@link liveWorkSessions}, and the half a reloaded window
+   * cannot get anywhere else: delegated rows arrive on `background.tasks`, which
+   * is run-scoped, so a window with no memory and a continuation run to attach to
+   * has nothing to replay. Conversations holding no rows are omitted rather than
+   * reported empty — see the adapter contract.
+   *
+   * Synchronous, on the same poll, for the same reason.
+   */
+  delegatedWork(): readonly SessionDelegatedWork[];
 
   /**
    * A run's retained events, for a window that reloaded out from under it.
@@ -865,6 +879,20 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         for (const sessionId of adapter.sessionsHoldingWork?.() ?? []) holding.add(sessionId);
       }
       return [...holding];
+    },
+
+    delegatedWork: () => {
+      // Deduplicated by session for the reason above, and first-writer-wins
+      // rather than last: with one conversation per adapter the case cannot
+      // arise, and if it somehow does, silently merging two providers' rows into
+      // one list would be a worse answer than taking one of them whole.
+      const bySession = new Map<SessionId, SessionDelegatedWork>();
+      for (const adapter of providers.list()) {
+        for (const entry of adapter.delegatedWork?.() ?? []) {
+          if (!bySession.has(entry.sessionId)) bySession.set(entry.sessionId, entry);
+        }
+      }
+      return [...bySession.values()];
     },
 
     runEvents: (query) => {

@@ -239,9 +239,30 @@ export class TaskLedger {
     }
   }
 
-  /** Every row, running first, in the order they were first heard of. */
+  /**
+   * Every row, running first, in the order they were first heard of.
+   *
+   * The **emitting** read: it clears {@link dirty}, because the only caller is
+   * about to put what it returns onto the stream. Anything reading the ledger
+   * for another reason wants {@link peek}.
+   */
   snapshot(): readonly BackgroundTask[] {
     this.#dirty = false;
+    return this.peek();
+  }
+
+  /**
+   * The same rows, without claiming to have delivered them.
+   *
+   * For a reader answering a poll rather than filling an event — the reload path
+   * in particular, which asks the ledger directly precisely because no event is
+   * going to carry these rows. It must not clear {@link dirty}: doing so would
+   * mark an unsent change as sent, and the `background.tasks` event that change
+   * was owed would never be emitted. Every window's rows would then sit frozen
+   * until something unrelated dirtied the ledger again — a poll silently
+   * breaking the live stream it exists to back up.
+   */
+  peek(): readonly BackgroundTask[] {
     return [...this.#rows.values()];
   }
 
