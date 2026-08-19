@@ -416,15 +416,25 @@
   --ink-faint: oklch(52% 0.008 250);
 
   /* ---- Accents --------------------------------------------------------
-     Not the dark values darkened; see the header. Teal is narrow in sRGB at
-     mid lightness — the ceiling at L50 H192 is 0.089 against 0.148 at L86 —
-     so the accent is at 0.084. `--amber` came down to L50 C0.098 because at
-     L55 C0.13 it measured 4.48 against AA's 4.5 on white.
+     Not the dark values darkened; see the header.
+
+     The light accent is as saturated as it is allowed to be, and that is not
+     very. Teal is the narrowest useful hue in sRGB at mid lightness: at L52 it
+     ceilings at 0.088, where blue reaches 0.142 and red 0.203 at L50. Push the
+     lightness up to gain chroma and the contrast on white falls through AA at
+     about L55. So it sits at L52 C0.088 — 4.83 on the window ground, 5.27 on a
+     panel — and it will read as a muted teal rather than as the vivid one dark
+     mode gets. That is structural, not a tuning error: the only ways out are
+     display-p3 or a different hue in light, and both are policy decisions
+     rather than something to fix by nudging this number.
+
+     `--amber` came down to L50 C0.098 because at L55 C0.13 it measured 4.48
+     against AA's 4.5 on white.
 
      `--beam-ink` and `--signal-ink` swap ends: the fills they sit on are dark
      here, so the text on them is near-white rather than near-black. */
-  --beam: oklch(50% 0.084 192);
-  --beam-dim: oklch(43% 0.072 192);
+  --beam: oklch(52% 0.088 192);
+  --beam-dim: oklch(44% 0.073 192);
   --beam-ink: oklch(98% 0.004 192);
   --cyan: oklch(48% 0.1 250);
   --sage: oklch(50% 0.03 310);

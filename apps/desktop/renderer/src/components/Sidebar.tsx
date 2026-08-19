@@ -140,7 +140,7 @@ export function Sidebar(): ReactElement {
       aria-label="Sessions"
       className="relative flex shrink-0 flex-col p-2"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-panel">
         <div className="flex flex-col gap-1.5 p-2.5">
           <div className="flex items-center gap-1.5">
             <Button

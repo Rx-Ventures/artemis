@@ -93,7 +93,7 @@ export function UpdateCard(): ReactElement | null {
        * `shrink-0` is not decoration: the card above is `flex-1`, and without
        * this the sentence would be squeezed instead of the session list.
        */
-      className="mt-2 shrink-0 rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5"
+      className="mt-2 shrink-0 rounded-md border border-line bg-panel"
     >
       <div className="flex flex-col gap-2 p-2.5">
         <div className="flex items-start gap-2">

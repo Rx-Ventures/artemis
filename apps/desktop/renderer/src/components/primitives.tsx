@@ -174,6 +174,8 @@ export function ProfileSwatch({ color, className }: ProfileSwatchProps): ReactEl
       className={cn(
         // A hairline ring, because a dark swatch on the dark panel and a pale
         // one on the light theme both otherwise dissolve into the background.
+        // sheet:allow-lift — this is definition, not elevation: the swatch
+        // carries an arbitrary colour and needs an edge against either ground.
         'inline-block size-2 shrink-0 rounded-[3px] ring-1 ring-foreground/15',
         className,
       )}
