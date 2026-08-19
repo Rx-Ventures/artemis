@@ -435,7 +435,17 @@ describe('parseThreadList', () => {
         createdAt: 1782631656,
         updatedAt: 1782631679,
       },
-      { id: 'th-2', cwd: '/other', name: 'Release prep', updatedAt: 1782631700 },
+      {
+        id: 'th-2',
+        cwd: '/other',
+        name: 'Release prep',
+        updatedAt: 1782631700,
+        gitInfo: {
+          sha: '87f4da6be0f4af42edca3c95621326b896473e56',
+          branch: 'main',
+          originUrl: 'https://github.com/Rx-Ventures/artemis.git',
+        },
+      },
       { id: 'th-3', preview: 'no cwd anywhere' },
     ],
   } as unknown as JsonValue;
@@ -458,6 +468,20 @@ describe('parseThreadList', () => {
       firstPrompt: 'fix the build',
     });
     expect(sessions.find((s) => s.id === 'th-1')).not.toHaveProperty('titleIsCustom');
+  });
+
+  it('reads the branch Codex reports, so a row says where it came from', () => {
+    /*
+     * `thread/list` carries `gitInfo` — verified live against 0.147 — and the
+     * sidebar's second line reads `gitBranch` off the summary. Not reading it
+     * did not make the line degrade gracefully: it made every Codex row claim,
+     * silently and only by omission, to have no branch, beside Claude rows that
+     * all had one.
+     */
+    const sessions = parseThreadList(response, PROFILE, undefined);
+    expect(sessions.find((s) => s.id === 'th-2')?.gitBranch).toBe('main');
+    // Absent, not empty: a thread outside a repository has no branch to state.
+    expect(sessions.find((s) => s.id === 'th-1')).not.toHaveProperty('gitBranch');
   });
 
   it('drops a thread with no recoverable cwd rather than guessing', () => {
