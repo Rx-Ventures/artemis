@@ -1,6 +1,46 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.1.1
+
+Three fixes, all of them things that were quietly claiming something untrue.
+
+- **An archive that stored nothing stops being reported as done.** Archiving
+  moved to the provider's own record in 1.1.0, and the call that writes it can
+  answer "found nothing to write to" — a success, in the sense that the caller
+  asked about the state of the world and was told what it is, but a success
+  that stored nothing. Both places that archive read only whether the call had
+  failed.
+
+  For the one-time migration that carried existing archives across, that was
+  every archived session at once: it dropped each local record on an answer
+  that had written no tag, and it is written to run only once, so it never came
+  back to try again. An entire sidebar unarchived itself with nothing left on
+  disk saying it ever had been. Archiving a single session had the same blind
+  spot in miniature — the row would disappear and then return at the next
+  listing with no explanation, which is the report that moved archiving to the
+  provider in the first place.
+
+  Both now check that something was actually written. A migration that could
+  not write keeps its record and tries again next time; an archive that could
+  not write puts the row back and says the provider has no record of it.
+
+- **Local providers can be chosen again when making a profile.** LM Studio,
+  Ollama and llama.cpp are meant to sit in their own half of the provider
+  picker, selectable whether or not the server happens to be answering right
+  now — a local profile is an address you are about to point somewhere, not an
+  installation to be verified. The field that says which half a provider
+  belongs to was never filled in, and an unset one means "hosted", so all three
+  were filed under an account they do not have and disabled for not being
+  signed in to it. There was no way to create a profile for any of them.
+
+- **A Codex session says which branch it came from.** The second line of every
+  sidebar row reads a branch off the session, and no Codex session ever carried
+  one — not because the branch was unavailable, but because Artemis read the
+  id, the directory, the name and the timestamps and stopped. Codex has
+  reported it all along. Codex rows now answer the same as Claude rows, and stay
+  blank only for a session opened outside a repository.
+
 ## What's new in 1.1.0
 
 - **A reload stops hiding the work that is still running.** With subagents or a
