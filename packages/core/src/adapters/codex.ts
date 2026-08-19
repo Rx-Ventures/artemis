@@ -1944,6 +1944,13 @@ export function parseThreadList(
     const name = readString(thread, 'name');
     const preview = readString(thread, 'preview');
 
+    // Codex records the branch a thread was opened on and reports it here as
+    // `gitInfo.branch` — verified live against 0.147, beside `sha` and
+    // `originUrl`. The sidebar's second line reads it off the summary the same
+    // way it does for Claude, so a Codex row that omits it is not a row without
+    // a branch: it is a row whose branch was never asked for.
+    const branch = readString(asRecord(thread['gitInfo']), 'branch');
+
     // Codex timestamps threads in Unix *seconds*; every Artemis timestamp is
     // milliseconds.
     const createdAt = readNumber(thread, 'createdAt');
@@ -1957,6 +1964,7 @@ export function parseThreadList(
       title: name ?? preview ?? 'Untitled session',
       ...(name === undefined ? {} : { titleIsCustom: true }),
       ...(preview === undefined ? {} : { firstPrompt: preview }),
+      ...(branch === undefined ? {} : { gitBranch: branch }),
       updatedAt: updatedAt * 1000,
       ...(createdAt === undefined ? {} : { createdAt: createdAt * 1000 }),
     });
