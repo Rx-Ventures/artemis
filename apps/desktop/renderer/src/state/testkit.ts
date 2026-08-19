@@ -24,6 +24,8 @@
  */
 
 import { focusedPane, useApp, type AppState } from './store';
+import type { Capabilities } from '@rx-artemis/protocol';
+
 import { setPaneState, type SessionState } from './pane';
 
 /**
@@ -105,4 +107,63 @@ export function appSession(): SessionState {
 /** The focused column's transcript. There is one per column now. */
 export function appTranscript(): ReturnType<typeof focusedPane>['transcript'] {
   return focusedPane().transcript;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Capabilities                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every capability on, as one typed object.
+ * ============================================================================
+ *
+ * Here rather than in each test file, and the reason is the same one
+ * {@link SESSION_KEYS} exists for: **this file is not a test file, so the
+ * compiler reads it.** `renderer/tsconfig.json` excludes `*.test.ts(x)`, which
+ * means a `Capabilities` literal written inside a test is never checked against
+ * the type at all.
+ *
+ * That is not theoretical. `tagSession` was added to `Capabilities`, every
+ * adapter and the mock bridge, and the context menu's own `ALL` literal was
+ * missed — silently, because nothing type-checks it. The tests then failed at
+ * runtime with an undefined flag reading as "not supported", which is a long
+ * way from the change that caused it.
+ *
+ * Declared `Capabilities` rather than inferred, so adding a flag to the type
+ * breaks *this line*, once, with the name of what is missing — instead of
+ * thirty test files failing on an assertion that has nothing to do with it.
+ *
+ * `permissionModes` carries all three: a test that needs a narrower set passes
+ * one, and a test that never touches the picker should not have to think about
+ * it.
+ */
+export const ALL_CAPABILITIES: Capabilities = {
+  interactivePermissions: true,
+  partialMessages: true,
+  midRunSteering: true,
+  forkSession: true,
+  listSessions: true,
+  subagents: true,
+  subagentTranscripts: true,
+  renameSession: true,
+  deleteSession: true,
+  tagSession: true,
+  systemPromptAppend: true,
+  permissionModes: ['default', 'plan', 'acceptEdits'],
+  resumeSession: true,
+  usageReporting: true,
+  costReporting: true,
+  planUsageReporting: true,
+  imageInput: true,
+  fileInput: true,
+};
+
+/**
+ * A capability set with some flags turned off.
+ *
+ * The shape every test that gates on one flag actually wants: name the flag,
+ * inherit the rest, and stay correct when a new one is added.
+ */
+export function capabilities(overrides: Partial<Capabilities> = {}): Capabilities {
+  return { ...ALL_CAPABILITIES, ...overrides };
 }

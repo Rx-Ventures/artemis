@@ -36,6 +36,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { DeleteSessionDialog } from '@/components/DeleteSessionDialog';
 import { SessionList } from '@/components/SessionList';
 import { useApp } from '@/state/store';
+import { ALL_CAPABILITIES } from '@/state/testkit';
 
 class NoopObserver {
   observe(): void {}
@@ -51,22 +52,16 @@ Element.prototype.hasPointerCapture ??= function hasPointerCapture(): boolean {
 };
 Element.prototype.releasePointerCapture ??= function releasePointerCapture(): void {};
 
-const ALL: Capabilities = {
-  tagSession: true,
-  interactivePermissions: true,
-  partialMessages: true,
-  midRunSteering: true,
-  forkSession: true,
-  listSessions: true,
-  subagents: true,
-  renameSession: true,
-  deleteSession: true,
-  permissionModes: ['default'],
-  resumeSession: true,
-  usageReporting: true,
-  costReporting: true,
-  planUsageReporting: true,
-};
+/*
+ * Everything on, from the testkit rather than written out here.
+ *
+ * This literal is why `ALL_CAPABILITIES` exists: it was a hand-rolled copy of
+ * the `Capabilities` type inside a file the compiler does not read — tests are
+ * excluded from `renderer/tsconfig.json` — so when `tagSession` was added it
+ * was silently missing, read as `undefined`, and every archive assertion here
+ * failed on a flag that had nothing to do with what was being tested.
+ */
+const ALL: Capabilities = ALL_CAPABILITIES;
 
 const SESSION: SessionSummary = {
   id: 'sess-1111-2222',

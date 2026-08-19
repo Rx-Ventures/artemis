@@ -30,7 +30,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Composer } from '@/components/Composer';
-import { seedApp } from '@/state/testkit';
+import { capabilities, seedApp } from '@/state/testkit';
 import { focusedPane, setEscapeStopsRun, useApp } from '@/state/store';
 import { setPaneState } from '@/state/pane';
 import { pressEscape } from '@/App';
@@ -52,21 +52,7 @@ vi.mock('@/state/store', async (importOriginal) => ({
   denyPendingPermission,
 }));
 
-const CAPABILITIES = {
-  interactivePermissions: true,
-  partialMessages: true,
-  midRunSteering: true,
-  forkSession: true,
-  listSessions: true,
-  subagents: true,
-  permissionModes: ['default', 'plan'],
-  resumeSession: true,
-  usageReporting: true,
-  costReporting: true,
-  planUsageReporting: true,
-  imageInput: true,
-  fileInput: true,
-};
+const CAPABILITIES = capabilities();
 
 function setUp(): void {
   seedApp({
