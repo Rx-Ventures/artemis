@@ -207,7 +207,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
 
       <div className="px-2.5 py-2">
         {request.reason ? (
-          <p className="mb-2 rounded-md border border-line bg-inset px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
+          <p className="mb-2 rounded-none border border-line bg-inset px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
             {request.reason}
           </p>
         ) : null}

@@ -51,17 +51,17 @@
  *
  * ## Why the app grew a header
  *
- * The sidebar is now a floating card that can be hidden, and a control that
- * vanishes along with the thing it controls makes hiding a one-way door. The
- * toggle used to live in the status line for exactly that reason — but the
- * status line is, by its own file header, the bar that says *what the next
- * prompt will do*, and "is the sidebar showing" is not that. It is a property
- * of the window. So the window got a bar of its own, and the toggle moved to
- * the one place a person looks for window chrome: the top-left corner.
+ * Originally because a control that vanishes along with the thing it controls
+ * makes hiding a one-way door: the sidebar collapsed to nothing, so its toggle
+ * had to live somewhere that did not. The status line held it first, which was
+ * wrong on its own terms — that bar says *what the next prompt will do*, and
+ * "is the sidebar showing" is not that. So the window got a bar of its own.
  *
- * The status line keeps its own copy of the toggle. That is deliberate
- * duplication, not an oversight: it is a live control, it costs 20px, and
- * removing it would have meant editing a file this change does not own.
+ * That original reason is gone: the sidebar collapses to a rail and reopens
+ * itself. The toggle stays here anyway, because the top-left corner is where a
+ * person looks for window chrome — which is a reason to keep it rather than an
+ * obligation to. The status line no longer carries a copy; an earlier change
+ * removed it and left both file headers claiming otherwise.
  *
  * ## New session is not here either
  *

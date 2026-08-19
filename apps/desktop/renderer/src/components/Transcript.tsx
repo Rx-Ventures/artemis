@@ -663,7 +663,7 @@ const REDACTED = 'This thinking block was encrypted or withheld by the provider.
  */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
   return (
-    <div className="rounded-md border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
+    <div className="rounded-none border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
       {item.redacted ? REDACTED : item.text}
     </div>
   );

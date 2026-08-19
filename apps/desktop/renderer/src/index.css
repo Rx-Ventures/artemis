@@ -259,11 +259,15 @@
      chose. 3px is the base — the milled edge of a made thing rather than a
      card — and shadcn derives sm/md/lg/xl from it in `@theme inline` below.
 
-     `--radius-machine` is 0 and belongs on everything the machine produced:
-     code wells, diffs, tool output, terminals, file viewers. Square is the
-     tell that you are looking at something the app did not write. Anything a
-     person operates keeps the 3px. That distinction has to be applied at the
-     call site, because no token can know which is which. */
+     Square is the tell that you are looking at something the app did not
+     write, and it is applied at the call site rather than through a token,
+     because no token can know which is which. `rounded-none` is what says it:
+     `DiffView`, the raw-output well in `primitives`, the quoted command in
+     `InlinePermission`, and the redacted-thinking block in `Transcript`.
+
+     `--radius-machine` exists as the name for that decision so the reason is
+     findable from the stylesheet, not because a class reads it. Anything a
+     person operates — buttons, inputs, the composer, cards — keeps the 3px. */
   --radius: 0.1875rem; /* 3px — things a person operates             */
   --radius-machine: 0; /* things the machine produced                */
 

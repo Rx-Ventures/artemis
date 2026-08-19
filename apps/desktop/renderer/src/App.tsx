@@ -31,15 +31,19 @@
  * the *window's*, and there is one of each no matter how many panes are open.
  * Each of those surfaces acts on the focused pane.
  *
- * ## The header exists so that hiding the sidebar is reversible
+ * ## The header carries what is true of the window
  *
- * `Sidebar` renders `null` when collapsed — not a rail, not a sliver — so its
- * own close button cannot bring it back. That control has to live somewhere
- * always-mounted, and "somewhere always-mounted" used to mean the status line,
- * which is the bar describing *what the next prompt will do*. Whether a pane is
- * showing is not that; it is a property of the window. So the window has a bar
- * of its own now, carrying the pane toggle, the name of what this window is
- * pointed at, and the way into settings. It is also the Electron drag region.
+ * It used to exist for a different reason, and the difference is worth keeping
+ * written down. `Sidebar` returned `null` when collapsed — not a rail, not a
+ * sliver — so its own close button could not bring it back, and the toggle had
+ * to live somewhere always-mounted. The header was that somewhere.
+ *
+ * The sidebar collapses to a rail now, so it reopens itself and the header is
+ * no longer holding a control on someone else's behalf. What it holds is what
+ * belongs to the *window* rather than to any one pane: the name of what this
+ * window is pointed at, the way into settings, and the Electron drag region.
+ * The sidebar toggle stays because the top-left corner is where a person looks
+ * for it, not because nowhere else can hold it.
  *
  * ## The sidebar floats
  *

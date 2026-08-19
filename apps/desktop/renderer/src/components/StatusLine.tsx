@@ -193,10 +193,11 @@ const MODE_NOTES: Record<PermissionMode, string> = {
  *    so they line up with its edges instead of running the full width of a
  *    pane the input does not fill.
  *
- * The sidebar toggle stays, and has to: `Sidebar` renders nothing at all when
- * collapsed, so its own close button cannot reopen it. This is the only
- * always-present control that can, and dropping it would make collapsing the
- * sidebar a one-way door for anyone who does not know `mod+b`.
+ * There is no sidebar toggle here, and this header used to say there was. The
+ * control moved to `AppHeader` — window chrome belongs on the window's bar —
+ * and the argument that kept a copy here is gone twice over: the sidebar now
+ * collapses to a rail that reopens itself, so no always-present stand-in is
+ * needed at all.
  */
 export function StatusLine(): ReactElement {
   // No fill. These controls belong to the input directly above them, and the

@@ -350,7 +350,7 @@ export function CodeBlock({ text, tone = 'neutral', className }: CodeBlockProps)
   return (
     <pre
       className={cn(
-        'max-h-72 overflow-auto rounded-md border bg-inset px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
+        'max-h-72 overflow-auto rounded-none border bg-inset px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
         tone === 'error' ? 'border-signal/35 text-signal' : 'border-line text-ink-muted',
         className,
       )}
