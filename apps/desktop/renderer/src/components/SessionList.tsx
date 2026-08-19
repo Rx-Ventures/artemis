@@ -41,14 +41,20 @@
  * ## 0. Each project is its own fold, and there is no title over them
  *
  * There was a `SESSIONS` caption here once, and later the current repository's
- * name; both sat over a single fold for the entire list. The caption named the
- * shape of what was below rather than its subject, the repository name became a
- * lie the moment the list held every project, and the fold answered a question
- * nobody has — "hide all my history at once" — while the one people do have,
- * "put *that* project away", had no control at all.
+ * name; both sat over a single fold for the entire list. The repository name
+ * became a lie the moment the list held every project, and the fold answered a
+ * question nobody has — "hide all my history at once" — while the one people do
+ * have, "put *that* project away", had no control at all.
  *
- * So the title is gone and each group heading folds its own project. The filter
- * has the row to itself.
+ * So the fold is gone from here and each group heading folds its own project.
+ * The filter has the row to itself.
+ *
+ * A `Sessions` caption is back in the shell refresh, and it is not the same
+ * thing: it sits in `Sidebar` over the *column*, naming what the column is
+ * beside a rail that offers other views, and its chevron collapses the column
+ * rather than folding the list. What was wrong before was a caption that
+ * folded everything below it; what is right now is a caption that says which
+ * view you are in. See `docs/design/_layout.md` item 1.
  *
  * A group is a *project*, not a directory. Working in
  * `~/code/artemis/apps/desktop` you are working on *artemis*, and a session
