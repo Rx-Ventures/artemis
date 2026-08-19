@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Artemis — five ways the mark turns</title>
+<style>
+[data-theme="dark"] {
+  --abyss: oklch(9% 0.003 250); --panel: oklch(13% 0.003 250);
+  --raised: oklch(16% 0.004 250); --inset: oklch(10.5% 0.003 250);
+  --line: oklch(27% 0.004 250); --line-2: oklch(42% 0.006 250);
+  --ink: oklch(97% 0.002 250); --ink-2: oklch(76% 0.004 250); --ink-3: oklch(60% 0.005 250);
+  --accent: oklch(86% 0.140 192); --amber: oklch(85% 0.155 85);
+}
+[data-theme="light"] {
+  --abyss: oklch(97% 0.002 250); --panel: oklch(100% 0 250);
+  --raised: oklch(94% 0.003 250); --inset: oklch(95.5% 0.003 250);
+  --line: oklch(89% 0.004 250); --line-2: oklch(64% 0.008 250);
+  --ink: oklch(22% 0.008 250); --ink-2: oklch(43% 0.008 250); --ink-3: oklch(52% 0.008 250);
+  --accent: oklch(50% 0.084 192); --amber: oklch(50% 0.098 85);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--abyss); color: var(--ink);
+  font: 13px/1.55 'Archivo', ui-sans-serif, system-ui, sans-serif; padding: 40px 24px 80px; }
+.wrap { max-width: 1160px; margin: 0 auto; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 8px; }
+.lede { color: var(--ink-2); max-width: 84ch; margin-bottom: 6px; }
+.lede b { color: var(--ink); font-weight: 600; }
+code { font: 12px ui-monospace, Menlo, monospace; color: var(--accent); }
+.ctl { display: flex; gap: 8px; margin: 18px 0 26px; flex-wrap: wrap; }
+.ctl button { background: transparent; border: 1px solid var(--line); color: var(--ink-3);
+  font: 11.5px 'Archivo', sans-serif; padding: 6px 13px; cursor: pointer; }
+.ctl button.on { background: var(--accent); border-color: var(--accent); color: var(--abyss); font-weight: 600; }
+.ctl .grp { display: flex; gap: 8px; }
+.ctl .grp + .grp { margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--line); }
+
+.row { display: flex; gap: 24px; align-items: flex-start; padding: 24px 0; border-bottom: 1px solid var(--line); }
+.demo { flex: none; display: flex; align-items: center; gap: 20px; }
+.cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.cell .n { font: 9px ui-monospace, monospace; color: var(--ink-3); letter-spacing: 0.1em; }
+.big { width: 76px; height: 76px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; }
+.big svg { width: 56px; height: 56px; color: var(--accent); }
+.real { width: 44px; height: 44px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; }
+.real svg { width: 22px; height: 22px; color: var(--accent); }
+.words { flex: 1; min-width: 0; }
+.words .nm { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 10px; }
+.words .nm .no { font: 9.5px ui-monospace, monospace; letter-spacing: 0.16em; color: var(--ink-3); }
+.words p { color: var(--ink-2); font-size: 12.5px; margin-top: 6px; max-width: 70ch; }
+.words .curve { font: 10.5px ui-monospace, monospace; color: var(--ink-3); margin-top: 8px; }
+.words .risk { color: var(--amber); font-size: 12px; margin-top: 7px; }
+.ctxrow { margin-top: 12px; padding: 11px 12px; background: var(--panel); border: 1px solid var(--line); max-width: 420px; }
+.ctxrow .t { font-size: 12.5px; color: var(--ink-2); margin-bottom: 10px; }
+.ctxrow .f { display: flex; align-items: center; gap: 10px; }
+.ctxrow .f svg { width: 20px; height: 20px; color: var(--accent); }
+.ctxrow .f .m { font: 10px ui-monospace, monospace; color: var(--ink-3); letter-spacing: 0.06em; }
+.ctxrow .f .m b { color: var(--accent); font-weight: 400; }
+
+/* ══ the five profiles ═════════════════════════════════════════════════════
+   All turn the same disc inside the same fixed frame. Only the motion curve
+   differs — and the curve is the whole point, so each is written out rather
+   than left to a single easing keyword. Speed is scaled by --k so slow motion
+   is the same animation, not a different one. */
+.rot { transform-origin: 50% 50%; }
+
+/* 1 · ESCAPEMENT — eight 45° steps, each snapping and settling with a touch of
+   overshoot. A clock's escapement: work happening in discrete bites. */
+.esc .rot { animation: esc calc(4.4s * var(--k)) infinite; }
+@keyframes esc {
+  0%    { transform: rotate(0deg);   animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  5%    { transform: rotate(45deg);  animation-timing-function: linear; }
+  12.5% { transform: rotate(45deg);  animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  17.5% { transform: rotate(90deg);  animation-timing-function: linear; }
+  25%   { transform: rotate(90deg);  animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  30%   { transform: rotate(135deg); animation-timing-function: linear; }
+  37.5% { transform: rotate(135deg); animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  42.5% { transform: rotate(180deg); animation-timing-function: linear; }
+  50%   { transform: rotate(180deg); animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  55%   { transform: rotate(225deg); animation-timing-function: linear; }
+  62.5% { transform: rotate(225deg); animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  67.5% { transform: rotate(270deg); animation-timing-function: linear; }
+  75%   { transform: rotate(270deg); animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  80%   { transform: rotate(315deg); animation-timing-function: linear; }
+  87.5% { transform: rotate(315deg); animation-timing-function: cubic-bezier(.3,.9,.35,1.25); }
+  92.5% { transform: rotate(360deg); animation-timing-function: linear; }
+  100%  { transform: rotate(360deg); }
+}
+
+/* 2 · FLYWHEEL — one revolution, heavy at both ends. Mass being spun up and
+   allowed to coast down. The slowest-feeling of the five. */
+.fly .rot { animation: fly calc(2.6s * var(--k)) cubic-bezier(.85,0,.15,1) infinite; }
+@keyframes fly { to { transform: rotate(360deg); } }
+
+/* 3 · BREATH — two half-turns, each accelerating then settling, with a beat of
+   stillness between. Closest to something alive. */
+.bre .rot { animation: bre calc(3.1s * var(--k)) infinite; }
+@keyframes bre {
+  0%   { transform: rotate(0deg);   animation-timing-function: cubic-bezier(.55,0,.15,1); }
+  38%  { transform: rotate(180deg); animation-timing-function: linear; }
+  50%  { transform: rotate(180deg); animation-timing-function: cubic-bezier(.55,0,.15,1); }
+  88%  { transform: rotate(360deg); animation-timing-function: linear; }
+  100% { transform: rotate(360deg); }
+}
+
+/* 4 · HUNT — overshoots, backs off, goes again. Something searching and
+   correcting rather than executing a known path. */
+.hun .rot { animation: hun calc(3.4s * var(--k)) infinite; }
+@keyframes hun {
+  0%   { transform: rotate(0deg);   animation-timing-function: cubic-bezier(.25,0,.1,1); }
+  30%  { transform: rotate(200deg); animation-timing-function: cubic-bezier(.4,0,.6,1); }
+  42%  { transform: rotate(170deg); animation-timing-function: cubic-bezier(.25,0,.1,1); }
+  75%  { transform: rotate(390deg); animation-timing-function: cubic-bezier(.4,0,.6,1); }
+  86%  { transform: rotate(355deg); animation-timing-function: cubic-bezier(.3,0,.2,1); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 5 · SURGE — long slow drift, then a fast three-quarter sweep. Thinking, then
+   a step of progress, then thinking again. */
+.sur .rot { animation: sur calc(3.8s * var(--k)) infinite; }
+@keyframes sur {
+  0%   { transform: rotate(0deg);   animation-timing-function: linear; }
+  58%  { transform: rotate(48deg);  animation-timing-function: cubic-bezier(.72,0,.18,1); }
+  76%  { transform: rotate(318deg); animation-timing-function: linear; }
+  100% { transform: rotate(360deg); }
+}
+
+/* Slow motion is the same curve stretched, so what you judge is what ships. */
+:root { --k: 1; }
+[data-speed="slow"] { --k: 3.4; }
+[data-speed="crawl"] { --k: 8; }
+
+/* Reduced motion: the mark holds still and the elapsed counter carries the
+   "still working" claim on its own. A spinner nobody can look at is worse
+   than no spinner. */
+@media (prefers-reduced-motion: reduce) { .rot { animation: none !important; } }
+
+.foot { margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--line);
+        color: var(--ink-2); font-size: 13px; max-width: 84ch; }
+.foot h3 { font-size: 12px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
+.foot ul { margin: 0 0 14px 18px; } .foot li { margin-bottom: 5px; }
+.foot b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Five ways the mark turns</h1>
+  <p class="lede">Same mark, same disc, same fixed frame — <b>only the motion curve differs</b>. None is a linear spin: every one accelerates and decelerates, and three of them hold still at points, which is what stops it reading as a loading throbber.</p>
+  <p class="lede">Judge them at <b>real size</b> (22px, right-hand cell) — that is where they live. The 56px cell is only so you can see what the curve is doing. <b>Slow motion stretches the same curve</b> rather than substituting an easier one, so what you pick is what ships.</p>
+
+  <div class="ctl">
+    <div class="grp">
+      <button class="on" onclick="speed('normal',this)">Real speed</button>
+      <button onclick="speed('slow',this)">Slow 3.4×</button>
+      <button onclick="speed('crawl',this)">Crawl 8×</button>
+    </div>
+    <div class="grp">
+      <button class="on" onclick="theme('dark',this)">Dark</button>
+      <button onclick="theme('light',this)">Light</button>
+    </div>
+  </div>
+
+  <!-- 1 -->
+  <div class="row esc">
+    <div class="demo">
+      <div class="cell"><div class="big"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">56</span></div>
+      <div class="cell"><div class="real"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">22 · REAL</span></div>
+    </div>
+    <div class="words">
+      <div class="nm"><span class="no">01</span>Escapement</div>
+      <p>Eight 45° steps per revolution. Each one snaps across, overshoots a hair, and settles — then holds still for slightly longer than the move took. A clock's escapement: <b>work arriving in discrete bites</b> rather than a continuous grind.</p>
+      <div class="curve">8 × 45° · move 5% / hold 7.5% · cubic-bezier(.3,.9,.35,1.25)</div>
+      <div class="risk"><b>Cost:</b> the busiest of the five. Eight events a cycle in the corner of your eye is a lot when you are trying to read the transcript above it.</div>
+      <div class="ctxrow"><div class="t">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="f"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg><span class="m"><b>working</b> · 41s · opus 5</span></div></div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="row fly">
+    <div class="demo">
+      <div class="cell"><div class="big"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">56</span></div>
+      <div class="cell"><div class="real"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">22 · REAL</span></div>
+    </div>
+    <div class="words">
+      <div class="nm"><span class="no">02</span>Flywheel</div>
+      <p>One revolution, heavy at both ends: it takes real time to get going, whips through the middle, and coasts to a stop just as the next turn begins. Nothing ever quite stops, so it reads as <b>continuous effort with mass behind it</b>.</p>
+      <div class="curve">360° per cycle · cubic-bezier(.85,0,.15,1) · 2.6s</div>
+      <div class="risk"><b>Cost:</b> the least eventful. At 22px the slow ends can look briefly frozen, which is the one thing an idle must never do.</div>
+      <div class="ctxrow"><div class="t">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="f"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg><span class="m"><b>working</b> · 41s · opus 5</span></div></div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="row bre">
+    <div class="demo">
+      <div class="cell"><div class="big"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">56</span></div>
+      <div class="cell"><div class="real"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">22 · REAL</span></div>
+    </div>
+    <div class="words">
+      <div class="nm"><span class="no">03</span>Breath</div>
+      <p>Two half-turns a cycle. Each accelerates hard out of stillness, decelerates into the opposite phase, and rests there for a beat before going again. Because it stops at 180°, the mark <b>lands on its own silhouette</b> both times — it never looks like a shape mid-blur.</p>
+      <div class="curve">2 × 180° · move 38% / rest 12% · cubic-bezier(.55,0,.15,1)</div>
+      <div class="risk"><b>Cost:</b> the rest is 12% of the cycle — about 370ms — and a pause that long can read as "it finished" for the fraction of a second before it moves again.</div>
+      <div class="ctxrow"><div class="t">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="f"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg><span class="m"><b>working</b> · 41s · opus 5</span></div></div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="row hun">
+    <div class="demo">
+      <div class="cell"><div class="big"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">56</span></div>
+      <div class="cell"><div class="real"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">22 · REAL</span></div>
+    </div>
+    <div class="words">
+      <div class="nm"><span class="no">04</span>Hunt</div>
+      <p>Drives forward past where it was going, backs off thirty degrees, then drives again. The only one that <b>moves against itself</b> — which is what makes it read as searching and correcting rather than executing a known path. Given what the app is, that is the most honest description of what is happening.</p>
+      <div class="curve">0 → 200° → 170° → 390° → 355° → 360° · four curves per cycle</div>
+      <div class="risk"><b>Cost:</b> reversal reads as hesitation, and hesitation reads as trouble. Fine for "thinking", wrong if it is still spinning while something is actually stuck.</div>
+      <div class="ctxrow"><div class="t">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="f"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg><span class="m"><b>working</b> · 41s · opus 5</span></div></div>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <div class="row sur">
+    <div class="demo">
+      <div class="cell"><div class="big"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">56</span></div>
+      <div class="cell"><div class="real"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg></div><span class="n">22 · REAL</span></div>
+    </div>
+    <div class="words">
+      <div class="nm"><span class="no">05</span>Surge</div>
+      <p>A long, barely-moving drift — 48° over more than half the cycle — then a fast 270° sweep, then drift again. The most extreme ratio of the five, and the one that most looks like <b>a long think followed by a decision</b>.</p>
+      <div class="curve">drift 48° over 58% · sweep 270° over 18% · drift 42° over 24%</div>
+      <div class="risk"><b>Cost:</b> the drift is slow enough that a still frame looks stopped, so anyone glancing at exactly the wrong moment sees a frozen app. Mitigated only by the elapsed counter beside it.</div>
+      <div class="ctxrow"><div class="t">Narrowing the profile to exactly the roots handed in.</div>
+        <div class="f"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor"><rect x="72" y="72" width="368" height="368" stroke-width="28"/><g class="rot"><path d="M256 140a116 116 0 0 0 0 232Z" fill="currentColor" stroke="none"/><circle cx="256" cy="256" r="116" stroke-width="24"/></g></svg><span class="m"><b>working</b> · 41s · opus 5</span></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <h3>What the disc being half-filled does to a spin</h3>
+    <p>This mark is not rotationally symmetric — it is a half-filled circle, so a full turn passes through every phase and reads as a moon cycling as much as a wheel turning. That is why <b>where a profile stops matters</b>. Breath stops at 180°, landing on the mirrored silhouette, so both rest states look deliberate. Escapement stops at eight positions, four of which are diagonal and read as neither phase. If the resting frames matter to you, Breath is the only one that got them for free.</p>
+    <h3>If you want a recommendation</h3>
+    <p><b>Breath, then Escapement.</b> Breath is the one that feels alive rather than driven — the acceleration is steep enough to be unmistakable at 22px, and it lands on a clean silhouette twice a cycle. Escapement is the better answer if you want the idle to feel like <i>a machine getting through work</i> rather than something thinking, and it is the most obviously never-stuck of the five because something visibly moves eight times a cycle.</p>
+    <p style="margin-top:9px">I would not ship <b>Surge</b> or <b>Flywheel</b> without a change: both have stretches slow enough that a glance can catch them apparently stopped, which defeats the entire purpose. Surge's is over a second at real speed.</p>
+    <h3>Not decided here</h3>
+    <p>What the mark does at the <i>ends</i> — how it starts when a turn begins and how it resolves when the turn lands. A spinner that simply vanishes is a missed beat; settling to rest at 0° or completing to 360° is a nicer finish and is worth designing once a profile is picked.</p>
+  </div>
+
+</div>
+<script>
+function speed(s, el) {
+  document.documentElement.setAttribute('data-speed', s === 'normal' ? '' : s);
+  sel(el);
+}
+function theme(t, el) { document.documentElement.setAttribute('data-theme', t); sel(el); }
+function sel(el) {
+  var g = el.parentNode.children;
+  for (var i = 0; i < g.length; i++) g[i].classList.remove('on');
+  el.classList.add('on');
+}
+</script>
+</body>
+</html>
