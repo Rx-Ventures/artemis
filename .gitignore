@@ -36,3 +36,6 @@ coverage/
 
 # Worktrees created by other sessions
 .claude/worktrees/
+
+# Python bytecode from the design scripts.
+__pycache__/

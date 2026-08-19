@@ -1,6 +1,5 @@
 {
   "name": "@rx-artemis/protocol",
-  "version": "0.14.2",
   "private": true,
   "description": "Shared contract for Artemis: normalized agent events, provider capabilities, profiles and the typed IPC surface. Zero runtime dependencies.",
   "license": "Apache-2.0",
@@ -14,7 +13,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -b",

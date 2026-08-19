@@ -33,7 +33,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { BUILT_IN_AGENT_PROMPTS, NO_CAPABILITIES } from '@rx-artemis/protocol';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -123,6 +123,30 @@ async function renderLoaded(): Promise<void> {
   await waitFor(() => expect(screen.queryByText('Reading the library…')).toBeNull());
 }
 
+/**
+ * Let the save debounce elapse, without spending it.
+ *
+ * `useAgentPrompts` saves on a 600ms debounce, and this file used to wait it
+ * out five times on the wall clock — three seconds in isolation, and far worse
+ * inside the full suite, where the run competes for CPU and a real timer that
+ * asks for 600ms gets whatever it gets. That is what made this file the
+ * slowest in the suite and the one that looked flaky: it was not racing, it was
+ * queueing.
+ *
+ * Fake timers make it exact instead. `advanceTimersByTimeAsync` also flushes
+ * the microtasks the save promise resolves through, which `advanceTimersByTime`
+ * would not.
+ */
+async function flushSave(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS);
+  });
+}
+
+/** Must match `useAgentPrompts`. A test that waits less than the real debounce
+ *  would pass by accident today and fail the day the value changes. */
+const SAVE_DEBOUNCE_MS = 600;
+
 /** The most recent saved document, or null. */
 function lastSave(): { prompts: any[] } | null {
   return (saved.at(-1) as { prompts: any[] } | undefined) ?? null;
@@ -145,6 +169,10 @@ function narrow(): void {
 }
 
 beforeEach(() => {
+  // `shouldAdvanceTime` keeps the library's initial read — a real promise, not
+  // a timer — from hanging while the clock is frozen. Without it `renderLoaded`
+  // waits forever for "Reading the library…" to disappear.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   seedApp({ providers: PROVIDERS as never, profiles: PROFILES as never });
   library = [HOUSE_STYLE, CEREBRO_ROW];
   cerebroInstalled = true;
@@ -196,7 +224,8 @@ describe('who a prompt reaches', () => {
     open('House style');
     narrow();
 
-    await waitFor(() => expect(lastSave()).not.toBeNull());
+    await flushSave();
+    expect(lastSave()).not.toBeNull();
     const scope = lastSave()!.prompts[0].scope;
     // Not `[]` — that would turn the prompt off as a side effect of the user
     // asking to narrow it. Not `['work','side']` either: `side` could never
@@ -243,7 +272,8 @@ describe("Artemis's own prompts", () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole('switch', { name: /Use Cerebro/ }));
 
-    await waitFor(() => expect(lastSave()).not.toBeNull());
+    await flushSave();
+    expect(lastSave()).not.toBeNull();
     const row = lastSave()!.prompts.find((p: any) => p.builtIn === 'builtin:cerebro');
     expect(row.enabled).toBe(false);
   });
@@ -268,7 +298,8 @@ describe('the library', () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole('button', { name: /New prompt/ }));
 
-    await waitFor(() => expect(lastSave()).not.toBeNull());
+    await flushSave();
+    expect(lastSave()).not.toBeNull();
     const added = lastSave()!.prompts.at(-1);
     expect(added.scope).toEqual({ kind: 'all' });
     expect(added.enabled).toBe(true);
@@ -278,7 +309,8 @@ describe('the library', () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole('switch', { name: /House style/ }));
 
-    await waitFor(() => expect(lastSave()).not.toBeNull());
+    await flushSave();
+    expect(lastSave()).not.toBeNull();
     const row = lastSave()!.prompts.find((p: any) => p.id === 'p1');
     // Off, and its text intact — "try without it" must not be an expensive
     // experiment.

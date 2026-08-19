@@ -182,11 +182,11 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
        * of buttons. `--line-strong` is the token for an emphasised edge, which
        * is exactly the job the amber border was doing.
        *
-       * The focus ring goes lunar, because lunar *is* the focus ring in this
+       * The focus ring goes beam, because beam *is* the focus ring in this
        * palette (see `index.css`) and a ring in the warning colour on a card
        * that is no longer warning-coloured reads as an error state.
        */
-      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-lunar/50"
+      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
     >
       <div className="flex items-start gap-2 border-b border-line px-2.5 py-2">
         <ShieldAlertIcon className="mt-0.5 size-3.5 shrink-0 text-amber" aria-hidden="true" />
@@ -207,12 +207,12 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
 
       <div className="px-2.5 py-2">
         {request.reason ? (
-          <p className="mb-2 rounded-md border border-line bg-inset px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
+          <p className="mb-2 rounded-none border border-line bg-inset px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
             {request.reason}
           </p>
         ) : null}
 
-        <p className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase">arguments</p>
+        <p className="mb-1 chrome-label text-ink-faint">arguments</p>
         <CodeBlock text={formatJson(request.input)} className="max-h-56" />
 
         {suggestions.length > 0 ? (
@@ -232,7 +232,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
         <div className="mt-2.5">
           <Label
             htmlFor={`deny-reason-${request.id}`}
-            className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase"
+            className="mb-1 chrome-label text-ink-faint"
           >
             reason for denial (optional)
           </Label>

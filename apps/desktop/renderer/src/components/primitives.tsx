@@ -35,12 +35,12 @@ import { cn } from '@/lib/utils';
  * them a union rather than free-form class strings is what stops a fourteenth
  * shade of green appearing in a feature component six months from now.
  */
-export type Tone = 'neutral' | 'lunar' | 'cyan' | 'sage' | 'mint' | 'amber' | 'signal';
+export type Tone = 'neutral' | 'beam' | 'cyan' | 'sage' | 'mint' | 'amber' | 'signal';
 
 /** Foreground + border, for outline treatments. */
 const TONE_OUTLINE: Record<Tone, string> = {
   neutral: 'border-line text-ink-muted',
-  lunar: 'border-lunar/40 text-lunar',
+  beam: 'border-beam/40 text-beam',
   cyan: 'border-cyan/40 text-cyan',
   sage: 'border-sage/40 text-sage',
   mint: 'border-mint/40 text-mint',
@@ -51,7 +51,7 @@ const TONE_OUTLINE: Record<Tone, string> = {
 /** Solid fill, for dots and rules. */
 const TONE_FILL: Record<Tone, string> = {
   neutral: 'bg-ink-faint',
-  lunar: 'bg-lunar',
+  beam: 'bg-beam',
   cyan: 'bg-cyan',
   sage: 'bg-sage',
   mint: 'bg-mint',
@@ -62,7 +62,7 @@ const TONE_FILL: Record<Tone, string> = {
 /** Text only. */
 const TONE_TEXT: Record<Tone, string> = {
   neutral: 'text-ink-muted',
-  lunar: 'text-lunar',
+  beam: 'text-beam',
   cyan: 'text-cyan',
   sage: 'text-sage',
   mint: 'text-mint',
@@ -100,7 +100,7 @@ export function ToneBadge({ tone = 'neutral', children, className }: ToneBadgePr
     <Badge
       variant="outline"
       className={cn(
-        'h-[17px] gap-1 rounded-sm bg-transparent px-1.5 py-0 font-mono text-2xs tracking-wide uppercase',
+        'chrome-label h-[17px] gap-1 rounded-sm bg-transparent px-1.5 py-0',
         TONE_OUTLINE[tone],
         className,
       )}
@@ -174,6 +174,8 @@ export function ProfileSwatch({ color, className }: ProfileSwatchProps): ReactEl
       className={cn(
         // A hairline ring, because a dark swatch on the dark panel and a pale
         // one on the light theme both otherwise dissolve into the background.
+        // sheet:allow-lift — this is definition, not elevation: the swatch
+        // carries an arbitrary colour and needs an edge against either ground.
         'inline-block size-2 shrink-0 rounded-[3px] ring-1 ring-foreground/15',
         className,
       )}
@@ -350,7 +352,7 @@ export function CodeBlock({ text, tone = 'neutral', className }: CodeBlockProps)
   return (
     <pre
       className={cn(
-        'max-h-72 overflow-auto rounded-md border bg-inset px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
+        'max-h-72 overflow-auto rounded-none border bg-inset px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
         tone === 'error' ? 'border-signal/35 text-signal' : 'border-line text-ink-muted',
         className,
       )}

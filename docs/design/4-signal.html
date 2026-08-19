@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Signal — a design language for the layout we have</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* ── Signal: the language. Everything below the token block is structural
+   and is emitted identically into all four files by _build.py. ─────────── */
+:root {
+  --void: oklch(9% 0.010 265); --bg: oklch(13.5% 0.014 265);
+  --chrome: oklch(17% 0.016 265); --well: oklch(11% 0.012 265);
+  --bar: oklch(20.5% 0.020 265); --ph-bg: oklch(20.5% 0.020 265);
+  --line: oklch(31% 0.020 265); --line-2: oklch(45% 0.026 265);
+  --ink: oklch(96% 0.006 265); --ink-2: oklch(78% 0.012 265); --ink-3: oklch(62% 0.016 265);
+  --accent: oklch(80% 0.16 250); --accent-ink: oklch(17% 0.05 250);
+  --tool: oklch(84% 0.16 165); --think: oklch(70% 0.07 300); --dele: oklch(78% 0.17 310);
+  --ok: oklch(84% 0.16 165); --warn: oklch(84% 0.16 78); --warn-ink: oklch(19% 0.05 78);
+  --err: oklch(72% 0.19 15);
+  --add-bg: oklch(84% 0.16 165 / 0.12); --del-bg: oklch(72% 0.19 15 / 0.12); --gate-bg: oklch(84% 0.16 78 / 0.10);
+  --syn-kw: oklch(78% 0.17 310); --syn-st: oklch(84% 0.16 165); --syn-fn: oklch(80% 0.16 250); --syn-nu: oklch(84% 0.16 78);
+  --sans: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif; --display: var(--sans); --prose: var(--sans);
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --fs: 13px; --lh-prose: 1.55; --w-hi: 600; --tr-hi: -0.02em; --tr-ui: 0.01em;
+  --r: 6px; --r-sm: 5px; --r-win: 10px; --r-pill: 999px; --gap: 9px;
+  --sh-win: 0 22px 64px oklch(0% 0 0 / 0.55);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--void); color: var(--ink); font: var(--fs)/1.55 var(--sans); padding: 26px; -webkit-font-smoothing: antialiased; }
+.page { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 21px; font-weight: var(--w-hi); letter-spacing: var(--tr-hi); margin-bottom: 7px; font-family: var(--display); }
+.kicker { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 6px; }
+.note { color: var(--ink-2); font-size: 13.5px; max-width: 80ch; margin-bottom: 5px; }
+.note b { color: var(--ink); font-weight: var(--w-hi); }
+a.back { color: var(--accent); text-decoration: none; font: 11px var(--mono); }
+
+/* the specimen strip: the language stated, not just shown */
+.spec { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; margin: 16px 0 4px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.spec .col { display: flex; flex-direction: column; gap: 5px; }
+.spec .lab { font: 9.5px var(--mono); letter-spacing: 0.13em; color: var(--ink-3); }
+.spec .sw { display: flex; gap: 3px; }
+.spec .sw i { width: 26px; height: 15px; display: block; border: 1px solid var(--line); }
+.spec .val { font: 10.5px var(--mono); color: var(--ink-2); }
+.spec .big { font-family: var(--display); font-size: 20px; font-weight: var(--w-hi); letter-spacing: var(--tr-hi); color: var(--ink); }
+.spec .mid { font-size: 13px; color: var(--ink-2); }
+.spec .mn { font: 11.5px var(--mono); color: var(--ink-2); }
+
+/* ── the window ─────────────────────────────────────────────────────────── */
+.win { margin-top: 18px; width: 1400px; height: 1000px; flex: none; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-win); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--sh-win); }
+.hdr { height: 36px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 11px; background: var(--chrome); border-bottom: 1px solid var(--line); }
+.lights { display: flex; gap: 6px; margin-right: 4px; }
+.lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); display: block; }
+.icon { width: 22px; height: 22px; border: 1px solid var(--line); border-radius: var(--r-sm); display: grid; place-items: center; color: var(--ink-2); font-size: 11px; }
+.crumb { font-size: 12px; color: var(--ink-2); }
+.crumb b { color: var(--ink); font-weight: var(--w-hi); }
+.crumb span { color: var(--ink-3); margin: 0 5px; }
+.hdr .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.ctx { display: flex; align-items: center; gap: 6px; font: 10.5px var(--mono); color: var(--warn); }
+.ctxbar { width: 54px; height: 4px; border-radius: 2px; background: var(--well); overflow: hidden; }
+.ctxbar i { display: block; height: 100%; width: 78%; background: var(--warn); }
+.body { flex: 1; display: flex; min-height: 0; padding: var(--gap); gap: var(--gap); }
+
+/* ── sidebar ────────────────────────────────────────────────────────────── */
+.side { width: 194px; flex: none; display: flex; flex-direction: column; gap: var(--gap); }
+.card { background: var(--chrome); border: 1px solid var(--line); border-radius: var(--r); }
+.side .top { padding: 8px; display: flex; gap: 6px; }
+.newbtn { flex: 1; height: 26px; border-radius: var(--r-sm); background: var(--accent); color: var(--accent-ink); font-size: 11.5px; font-weight: var(--w-hi); display: grid; place-items: center; letter-spacing: var(--tr-ui); }
+.proj { font: 10px var(--mono); letter-spacing: 0.11em; color: var(--ink-3); padding: 9px 10px 5px; display: flex; justify-content: space-between; }
+.sess { padding: 5px 10px; display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); border-left: 2px solid transparent; }
+.sess.on { background: var(--well); color: var(--ink); border-left-color: var(--accent); }
+.sess .dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--line-2); }
+.sess .dot.run { background: var(--tool); }
+.sess .dot.gate { background: var(--warn); }
+.sess .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess .ago { margin-left: auto; font: 9.5px var(--mono); color: var(--ink-3); }
+.upd { padding: 9px 10px; }
+.upd .a { font-size: 11px; color: var(--ink); }
+.upd .b { font: 10px var(--mono); color: var(--ink-3); margin-top: 3px; }
+
+/* ── working area ───────────────────────────────────────────────────────── */
+.work { flex: 1; display: flex; gap: var(--gap); min-width: 0; }
+.grid { flex: 1; display: flex; gap: var(--gap); min-width: 0; }
+.pane { flex: 1; min-width: 0; background: var(--chrome); border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden; }
+.pane.focus { border-color: var(--line-2); }
+.ph { height: 28px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-2); background: var(--ph-bg); }
+.pane.focus .ph { color: var(--ink); }
+.ph .x { margin-left: auto; color: var(--ink-3); }
+.scroll { flex: 1; overflow: hidden; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; position: relative; }
+.scroll > * { flex: none; }
+.scroll.btm { justify-content: flex-end; }
+.fade { position: absolute; inset: 0 0 auto; height: 22px; background: linear-gradient(var(--chrome), transparent); z-index: 2; }
+
+/* ── transcript grammar ─────────────────────────────────────────────────── */
+.turn { font: 9.5px var(--mono); color: var(--ink-3); letter-spacing: 0.09em; display: flex; align-items: center; gap: 7px; }
+.turn::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.you { color: var(--ink); font-size: 13px; }
+.said { color: var(--ink-2); font-size: 13px; font-family: var(--prose); line-height: var(--lh-prose); }
+.said b { color: var(--ink); font-weight: var(--w-hi); }
+.inline { font: 11.5px var(--mono); color: var(--tool); background: var(--well); padding: 1px 4px; border-radius: 2px; }
+.think { font-size: 11.5px; color: var(--think); display: flex; gap: 7px; align-items: baseline; }
+.think .chev { font-size: 9px; }
+.think .txt { font-style: italic; }
+
+.tool { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; background: var(--well); }
+.tool .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--bar); }
+.tool .bar .k { color: var(--tool); }
+.tool .bar .a { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool .bar .r { margin-left: auto; font-size: 10px; color: var(--ink-3); flex: none; }
+.tool .bar .r.bad { color: var(--err); }
+.tool .bar .r.ok { color: var(--ok); }
+.tool pre { padding: 7px 9px; font: 10.5px/1.5 var(--mono); color: var(--ink-2); overflow: hidden; white-space: pre; }
+.tool pre .em { color: var(--err); }
+.tool pre .dim { color: var(--ink-3); }
+.tool pre .hit { color: var(--ink); }
+.more { padding: 4px 9px; font: 10px var(--mono); color: var(--ink-3); border-top: 1px solid var(--line); }
+
+.diff { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+.diff .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--bar); }
+.diff .bar .f { color: var(--ink); }
+.diff .bar .n { margin-left: auto; font-size: 10px; }
+.diff .bar .n .p { color: var(--ok); }
+.diff .bar .n .m { color: var(--err); margin-left: 6px; }
+.diff pre { font: 10.5px/1.55 var(--mono); background: var(--well); overflow: hidden; white-space: normal; }
+.diff pre > span { display: block; padding: 0 9px; white-space: pre; }
+.diff .add { background: var(--add-bg); color: var(--ok); }
+.diff .del { background: var(--del-bg); color: var(--err); }
+.diff .ctxl { color: var(--ink-3); }
+
+.todo { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 7px 9px; background: var(--well); }
+.todo .h { font: 10px var(--mono); letter-spacing: 0.11em; color: var(--ink-3); margin-bottom: 5px; }
+.todo li { list-style: none; font-size: 11.5px; color: var(--ink-3); display: flex; gap: 7px; padding: 1.5px 0; }
+.todo li.done { text-decoration: line-through; }
+.todo li.now { color: var(--ink); }
+.todo li .m { width: 10px; flex: none; font: 10px var(--mono); }
+.todo li.done .m { color: var(--ok); }
+.todo li.now .m { color: var(--warn); }
+
+.dele { display: flex; gap: 7px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: var(--r-pill); padding: 3px 9px 3px 7px; font: 10.5px var(--mono); color: var(--ink-2); display: flex; align-items: center; gap: 6px; background: var(--well); }
+.chip i { width: 5px; height: 5px; border-radius: 50%; background: var(--dele); display: block; }
+.chip.done i { background: var(--ok); }
+
+.gate { border: 1px solid var(--warn); border-radius: var(--r-sm); background: var(--gate-bg); overflow: hidden; }
+.gate .h { padding: 6px 9px; font: 10px var(--mono); letter-spacing: 0.11em; color: var(--warn); display: flex; gap: 7px; align-items: center; }
+.gate .cmd { padding: 0 9px 7px; font: 11.5px var(--mono); color: var(--ink); }
+.gate .why { padding: 0 9px 8px; font-size: 11.5px; color: var(--ink-2); }
+.gate .why b { color: var(--warn); font-weight: var(--w-hi); }
+.gate .row { display: flex; gap: 6px; padding: 0 9px 8px; }
+.btn { border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 4px 10px; font-size: 11px; color: var(--ink-2); }
+.btn.go { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); font-weight: var(--w-hi); }
+.btn .k { font: 9.5px var(--mono); opacity: 0.65; margin-left: 5px; }
+
+.comp { flex: none; margin: 0 9px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--well); }
+.comp .in { padding: 8px 10px; font-size: 12.5px; color: var(--ink-3); min-height: 42px; }
+.status { display: flex; align-items: center; padding: 0 3px 3px; font: 10px var(--mono); color: var(--ink-3); flex-wrap: wrap; }
+.status s { text-decoration: none; padding: 2px 6px; border-radius: 2px; }
+.status s.hot { color: var(--ink-2); }
+.status s.mode { color: var(--warn); }
+.status .sep { color: var(--line-2); }
+.status .send { margin-left: auto; color: var(--accent); }
+
+/* ── dock ───────────────────────────────────────────────────────────────── */
+.dock { width: 320px; flex: none; background: var(--chrome); border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden; }
+.dock .tabs { height: 28px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--ph-bg); }
+.dock .tabs d { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; color: var(--ink-3); border-right: 1px solid var(--line); }
+.dock .tabs d.on { color: var(--ink); background: var(--chrome); box-shadow: inset 0 -1px 0 var(--accent); }
+.dock .fv { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.dock .fvh { padding: 5px 9px; font: 10px var(--mono); color: var(--ink-3); border-bottom: 1px solid var(--line); display: flex; }
+.dock .fvh .g { margin-left: auto; color: var(--ok); }
+.dock pre { flex: 1; font: 10.5px/1.6 var(--mono); padding: 6px 0; overflow: hidden; background: var(--well); white-space: normal; }
+.dock pre > span { display: block; padding: 0 9px 0 0; white-space: pre; }
+.dock pre .ln { display: inline-block; width: 30px; text-align: right; margin-right: 9px; color: var(--ink-3); opacity: 0.6; font-style: normal; }
+.kw { color: var(--syn-kw); } .st { color: var(--syn-st); } .fn { color: var(--syn-fn); }
+.cm { color: var(--ink-3); } .nu { color: var(--syn-nu); }
+
+/* ── annotation ─────────────────────────────────────────────────────────── */
+.fitnote { font: 10.5px var(--mono); color: var(--ink-3); margin-top: 9px; }
+.fitnote b { color: var(--ink-2); font-weight: 400; }
+.foot { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.box { border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; background: var(--chrome); }
+.box h3 { font-size: 12px; margin-bottom: 8px; color: var(--ink); font-weight: var(--w-hi); font-family: var(--display); letter-spacing: var(--tr-ui); }
+.box h3.cost { color: var(--warn); }
+.box li, .box p { font-size: 13px; color: var(--ink-2); }
+.box ul { margin-left: 15px; }
+.box li { margin-bottom: 5px; }
+.box b { color: var(--ink); font-weight: var(--w-hi); }
+
+
+/* Every block is tinted by its actor. The tint is 6–8% — enough to sort a
+   scrolling column at a glance, not enough to read as a coloured box. */
+.you { border-left: 3px solid var(--accent); padding-left: 10px;
+       background: linear-gradient(90deg, oklch(80% 0.16 250 / 0.10), transparent 62%); padding-top: 3px; padding-bottom: 3px; }
+.tool { border-left: 3px solid var(--tool); }
+.tool .bar { background: linear-gradient(90deg, oklch(84% 0.16 165 / 0.13), var(--bar) 55%); }
+.diff { border-left: 3px solid var(--tool); }
+.chip { border-left: 3px solid var(--dele); background: linear-gradient(90deg, oklch(78% 0.17 310 / 0.12), var(--well) 70%); }
+.chip.done { border-left-color: var(--ok); }
+.think { border-left: 3px solid var(--think); padding-left: 9px; }
+.said { border-left: 3px solid transparent; padding-left: 10px; }
+/* Severity is the only thing that fills. */
+.gate { border-left: 3px solid var(--warn); }
+.gate .h { background: oklch(84% 0.16 78 / 0.14); }
+.pane.focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px oklch(80% 0.16 250 / 0.28); }
+.ph .pd.gate { color: var(--warn); }
+.ph .pd.run { color: var(--tool); }
+.sess .dot.run { box-shadow: 0 0 0 3px oklch(84% 0.16 165 / 0.18); }
+.sess .dot.gate { box-shadow: 0 0 0 3px oklch(84% 0.16 78 / 0.18); }
+.box h3 { letter-spacing: 0.005em; }
+</style>
+</head>
+<body>
+<div class="page">
+  <a class="back" href="index.html">← all four</a>
+  <div class="kicker" style="margin-top:12px">4 · COLOUR: ACTOR</div>
+  <h1>Signal</h1>
+  <p class="note">The rule that colour is <b>semantic only</b> is the one this overturns. Here colour says <b>who</b>: you are blue, the agent is plain ink, the machine is green, a delegated agent is violet. Severity rides on top as amber and rose, and is the only thing allowed to fill a surface.</p>
+  <p class="note">The claim is that in a transcript the first question is not "how bad is this" but "who did this" — and today that is carried by indentation and a small label, which is the weakest signal on screen.</p>
+  <div class="spec">
+    <div class="col"><div class="lab">GROUND</div><div class="sw"><i style="background:var(--void)"></i><i style="background:var(--bg)"></i><i style="background:var(--well)"></i></div></div>
+    <div class="col"><div class="lab">ACTORS</div><div class="sw"><i style="background:var(--accent)"></i><i style="background:var(--ink)"></i><i style="background:var(--tool)"></i><i style="background:var(--dele)"></i></div></div>
+    <div class="col"><div class="lab">SEVERITY</div><div class="sw"><i style="background:var(--ok)"></i><i style="background:var(--warn)"></i><i style="background:var(--err)"></i></div></div>
+    <div class="col"><div class="lab">DISPLAY</div><div class="big">Space Grotesk 600</div></div>
+    <div class="col"><div class="lab">MONO</div><div class="mn">JetBrains Mono 400</div></div>
+    <div class="col"><div class="lab">RADIUS</div><div class="val">5px · pills 999px</div></div>
+  </div>
+
+  <div class="win">
+    <div class="hdr">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="icon">◧</div>
+      <div class="crumb"><b>artemis</b><span>›</span>The sandbox lets a write escape</div>
+      <div class="right">
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="side">
+        <div class="card">
+          <div class="top"><div class="newbtn">+ New session</div><div class="icon">◧</div></div>
+          <div class="proj"><span>ARTEMIS</span><span>22</span></div>
+          <div class="sess on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span><span class="ago">now</span></div>
+          <div class="sess"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span><span class="ago">4m</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">Probe the capability flags</span><span class="ago">1h</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">OpenCode model configurator</span><span class="ago">3h</span></div>
+          <div class="proj"><span>CEREBRO</span><span>4</span></div>
+          <div class="sess"><i class="dot run"></i><span class="t">Setup wizard for any bank</span><span class="ago">now</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">Local-only bank, no remote</span><span class="ago">2d</span></div>
+        </div>
+        <div class="card upd">
+          <div class="a">↓ 0.21.0 available</div>
+          <div class="b">restart to install</div>
+        </div>
+      </div>
+
+      <div class="work">
+        <div class="grid">
+          <div class="pane focus">
+            <div class="ph"><span class="pd gate">◆</span> artemis › sandbox escape <span class="x">✕</span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="turn">TURN 24</div>
+              <div class="you">it says the write succeeded — that's the bug, not the test</div>
+              <div class="think"><span class="chev">▾</span><span class="txt">Thought for 8s — the check writes to a path under /var/folders, and the profile allows that subpath wholesale…</span></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">pnpm sandbox:check</span><span class="r bad">exit 1 · 4.2s</span></div>
+                <pre> FAIL  src/adapters/local/sandbox.check.ts &gt; escape is refused
+<span class="em">AssertionError: expected 'written' to be 'refused'</span>
+  ❯ src/adapters/local/sandbox.check.ts:71:5
+<span class="dim">     70|
+     71|   expect(out.status).toBe('refused')
+       |   ^
+  ❯ processTicksAndRejections node:internal/…:95:5</span>
+       Tests  <span class="em">1 failed</span> | 12 passed (13)</pre>
+              </div>
+              <div class="said">The profile allows <span class="inline">/private/var/folders</span> as a subpath. macOS puts <b>every</b> per-user temporary directory under there, so the rule makes another application's scratch space writable.</div>
+              <div class="tool">
+                <div class="bar"><span class="k">search</span><span class="a">rg "var/folders" --type ts</span><span class="r">40 hits</span></div>
+                <pre><span class="hit">local/commandSandbox.ts</span><span class="dim">:118</span>  '(allow file-write* (subpath "/private/var/folders"))',
+<span class="hit">local/commandSandbox.ts</span><span class="dim">:119</span>  '(allow file-write* (subpath "/private/tmp"))',
+<span class="hit">local/sandbox.test.ts</span><span class="dim">:44</span>       const scratch = mkdtempSync(join(tmpdir(), 'a-'))</pre>
+                <div class="more">… 37 more · ⌘⏎ to open all in the dock</div>
+              </div>
+              <div class="turn">TURN 26</div>
+              <div class="diff">
+                <div class="bar"><span class="f">commandSandbox.ts</span><span class="n"><span class="p">+6</span><span class="m">−3</span></span></div>
+                <pre><span class="ctxl">@@ -114,9 +114,12 @@ function profile(writableRoots, scratch) {</span>
+<span class="del">-    '(allow file-write* (subpath "/private/tmp"))',</span>
+<span class="del">-    '(allow file-write* (subpath "/private/var/folders"))',</span>
+<span class="del">-    ...writableRoots.map((r) =&gt; allow(r)),</span>
+<span class="add">+    // Exactly the roots handed in, and nothing else. The blanket</span>
+<span class="add">+    // /var/folders rule let a command escape the workspace.</span>
+<span class="add">+    ...writableRoots.map(</span>
+<span class="add">+      (root) =&gt; `(allow file-write* (subpath "${esc(root)}"))`,</span>
+<span class="add">+    ),</span>
+<span class="ctxl">   ].join('\n')</span></pre>
+              </div>
+              <div class="todo">
+                <div class="h">TODO · REWRITTEN THIS TURN</div>
+                <ul>
+                  <li class="done"><span class="m">✓</span>reproduce the escape</li>
+                  <li class="done"><span class="m">✓</span>find which rule allows it</li>
+                  <li class="now"><span class="m">→</span>narrow the writable roots</li>
+                  <li><span class="m">○</span>give each run its own scratch dir</li>
+                  <li><span class="m">○</span>re-run sandbox:check on all three backends</li>
+                </ul>
+              </div>
+              <div class="dele">
+                <div class="chip"><i></i>bubblewrap probe · 2m14s</div>
+                <div class="chip done"><i></i>seatbelt · done</div>
+              </div>
+              <div class="turn">TURN 28</div>
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="why">Runs <b>unconfined</b> — the path is outside every writable root, so no backend can contain it.</div>
+                <div class="row">
+                  <div class="btn go">Allow once<span class="k">⏎</span></div>
+                  <div class="btn">Always here<span class="k">⇧⏎</span></div>
+                  <div class="btn">No<span class="k">esc</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="comp">
+              <div class="in">Reply to artemis…</div>
+              <div class="status">
+                <s class="hot">claude · opus 5</s><span class="sep">·</span><s>think hard</s><span class="sep">·</span><s class="mode">plan</s><span class="sep">·</span><s>~/artemis</s><span class="sep">·</span><s>seatbelt</s>
+                <s class="send">⏎ send</s>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane">
+            <div class="ph"><span class="pd run">◆</span> cerebro › setup wizard <span class="x">✕</span></div>
+            <div class="scroll">
+              <div class="fade"></div>
+              <div class="turn">TURN 9</div>
+              <div class="you">local-only banks too — no remote at all</div>
+              <div class="think"><span class="chev">▾</span><span class="txt">Thinking — init_bank has to fail loudly when git identity is missing, or promote commits nothing and says it worked…</span></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">git -C ~/bank config user.email</span><span class="r bad">exit 1</span></div>
+                <pre><span class="dim">(no output)</span></pre>
+              </div>
+              <div class="said">That is the bug in CI too — no identity, <span class="inline">git commit</span> fails, and the wrapper swallowed it. It has to refuse and name the fix.</div>
+              <div class="tool"><div class="bar"><span class="k">write</span><span class="a">bin/cerebro</span><span class="r ok">+34 −2</span></div></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">cerebro setup --local ~/bank</span><span class="r ok">exit 0 · 0.9s</span></div>
+                <pre>✓ bank initialised at ~/bank
+✓ 18 memories installed
+<span class="dim">  no remote configured — promote will commit locally</span></pre>
+              </div>
+              <div class="said">Writing the wizard's second screen now<span style="color:var(--tool)">▌</span></div>
+            </div>
+            <div class="comp">
+              <div class="in">Reply to cerebro…</div>
+              <div class="status">
+                <s class="hot">claude · sonnet 5</s><span class="sep">·</span><s>normal</s><span class="sep">·</span><s class="mode">accept edits</s><span class="sep">·</span><s>~/cerebro</s>
+                <s class="send">⏎ send</s>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dock">
+          <div class="tabs"><d class="on">◫ commandSandbox.ts</d><d>▤ tasks</d><d>&gt;_ zsh</d><d>◱ localhost</d></div>
+          <div class="fv">
+            <div class="fvh"><span>packages/core/src/adapters/local/</span><span class="g">+6 −3</span></div>
+            <pre><span><i class="ln">112</i><span class="kw">function</span> <span class="fn">profile</span>(writableRoots, scratch) {</span>
+<span><i class="ln">113</i>  <span class="kw">return</span> [</span>
+<span><i class="ln">114</i>    <span class="st">'(version 1)'</span>,</span>
+<span><i class="ln">115</i>    <span class="st">'(deny default)'</span>,</span>
+<span><i class="ln">116</i>    <span class="cm">// Exactly the roots handed in, and nothing</span></span>
+<span><i class="ln">117</i>    <span class="cm">// else. The blanket /var/folders rule made</span></span>
+<span><i class="ln">118</i>    <span class="cm">// another app's scratch space writable and</span></span>
+<span><i class="ln">119</i>    <span class="cm">// let a command escape the workspace.</span></span>
+<span><i class="ln">120</i>    ...writableRoots.<span class="fn">map</span>(</span>
+<span><i class="ln">121</i>      (root) =&gt; <span class="st">`(allow file-write* …)`</span>,</span>
+<span><i class="ln">122</i>    ),</span>
+<span><i class="ln">123</i>    <span class="fn">allow</span>(scratch),</span>
+<span><i class="ln">124</i>  ].<span class="fn">join</span>(<span class="st">'\n'</span>)</span>
+<span><i class="ln">125</i>}</span>
+<span><i class="ln">126</i></span>
+<span><i class="ln">127</i><span class="cm">/** Null when nothing can confine. The caller</span></span>
+<span><i class="ln">128</i><span class="cm">    must refuse, never silently downgrade. */</span></span>
+<span><i class="ln">129</i><span class="kw">export function</span> <span class="fn">wrapCommand</span>(argv, opts) {</span>
+<span><i class="ln">130</i>  <span class="kw">const</span> backend = <span class="fn">detect</span>()</span>
+<span><i class="ln">131</i>  <span class="kw">if</span> (backend === <span class="nu">WINDOWS_UNCONFINED</span>)</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="box">
+      <h3>What this language buys</h3>
+      <ul>
+        <li><b>Who did what is answerable without reading.</b> Scrolling fast through 28 turns, the blue marks are you, the green are the machine, the violet are delegated work — today all three are the same grey column.</li>
+        <li><b>Delegated agents finally have an identity.</b> They are the newest thing in the app and the thing most easily lost in a transcript; a violet edge makes their output distinguishable from the parent's.</li>
+        <li><b>Severity keeps its force by being the only filler.</b> Nothing else in the language is allowed a background wash, so a filled block always means something went wrong or something is waiting.</li>
+        <li><b>Space Grotesk has a face.</b> It is the only one of the four with real personality in the letterforms, which matters if the app should look like it came from somewhere.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3 class="cost">What it costs</h3>
+      <ul>
+        <li><b>It breaks the best rule the current system has.</b> "Colour is semantic, never decorative" is why today's app never looks like a toy, and actor-tinting spends that discipline. If it is applied loosely it degrades into decoration fast.</li>
+        <li><b>Four actor hues plus three severity hues is seven meanings in colour</b>, which is past what most people reliably distinguish — especially the ~8% of men with a red-green deficiency, for whom the machine green and the error rose are the two that collapse.</li>
+        <li><b>Tints are hard to keep honest across themes.</b> A 12% wash over a dark ground is invisible over a light one, so the light theme needs its own scale rather than an inversion.</li>
+        <li><b>Busiest of the four.</b> Every block having an edge means the transcript has a coloured left margin all the way down, and that is a lot of structure for a quiet conversation.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="fitnote">scaled to fit — <b>click the window</b> for 1:1</div>
+<script>
+(function () {
+  var win = document.querySelector('.win'), page = document.querySelector('.page');
+  var note = document.querySelector('.fitnote'), W = 1400, H = 1000, one = false;
+  function fit() {
+    var s = one ? 1 : Math.min(1, page.clientWidth / W);
+    win.style.transformOrigin = 'top left';
+    win.style.transform = 'scale(' + s + ')';
+    win.style.marginBottom = (H * s - H + 20) + 'px';
+    note.innerHTML = one ? 'showing 1:1 — <b>click the window</b> to fit'
+                         : 'scaled to ' + Math.round(s * 100) + '% — <b>click the window</b> for 1:1';
+    note.style.display = (s === 1 && !one) ? 'none' : 'block';
+    document.body.style.overflowX = one ? 'auto' : 'hidden';
+  }
+  win.addEventListener('click', function () { one = !one; fit(); });
+  addEventListener('resize', fit); fit();
+})();
+</script>
+
+</body>
+</html>

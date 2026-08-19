@@ -93,7 +93,7 @@ export function UpdateCard(): ReactElement | null {
        * `shrink-0` is not decoration: the card above is `flex-1`, and without
        * this the sentence would be squeezed instead of the session list.
        */
-      className="mt-2 shrink-0 rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5"
+      className="mt-2 shrink-0 rounded-md border border-line bg-panel"
     >
       <div className="flex flex-col gap-2 p-2.5">
         <div className="flex items-start gap-2">
@@ -185,12 +185,12 @@ function Phase({ phase }: { readonly phase: UpdateState['phase'] }): ReactElemen
     return <TriangleAlertIcon aria-hidden className="mt-px size-3.5 shrink-0 text-signal" />;
   }
   if (phase === 'available') {
-    return <DownloadIcon aria-hidden className="mt-px size-3.5 shrink-0 text-lunar" />;
+    return <DownloadIcon aria-hidden className="mt-px size-3.5 shrink-0 text-beam" />;
   }
   if (phase === 'ready') {
-    return <RefreshCwIcon aria-hidden className="mt-px size-3.5 shrink-0 text-lunar" />;
+    return <RefreshCwIcon aria-hidden className="mt-px size-3.5 shrink-0 text-beam" />;
   }
   return (
-    <LoaderCircleIcon aria-hidden className="mt-px size-3.5 shrink-0 animate-spin text-lunar" />
+    <LoaderCircleIcon aria-hidden className="mt-px size-3.5 shrink-0 animate-spin text-beam" />
   );
 }

@@ -1,6 +1,5 @@
 {
   "name": "@rx-artemis/core",
-  "version": "0.14.2",
   "private": true,
   "description": "Artemis's headless engine: provider adapters, profile/env resolution and session bookkeeping. Must never import electron.",
   "license": "Apache-2.0",
@@ -34,7 +33,9 @@
       "default": "./dist/workspace/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -b",

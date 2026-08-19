@@ -41,7 +41,7 @@ export function DiffView({ edit }: { readonly edit: FileEdit }): ReactElement {
   const Icon = edit.whole ? FilePlus2Icon : FilePenLineIcon;
 
   return (
-    <div className="overflow-hidden rounded-md border border-line bg-inset">
+    <div className="overflow-hidden rounded-none border border-line bg-inset">
       <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-2.5 py-1">
         <Icon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
         {/* `dir="rtl"` with LTR text: a path too long for the column keeps its

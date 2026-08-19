@@ -84,7 +84,7 @@ import './index.css';
 function Section({ title, children }: { title: string; children: ReactNode }): ReactElement {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-2xs font-semibold tracking-[0.16em] text-ink-faint uppercase">{title}</h2>
+      <h2 className="chrome-label text-ink-faint">{title}</h2>
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel p-4">
         {children}
       </div>
@@ -92,7 +92,7 @@ function Section({ title, children }: { title: string; children: ReactNode }): R
   );
 }
 
-const TONES: readonly Tone[] = ['neutral', 'lunar', 'cyan', 'sage', 'mint', 'amber', 'signal'];
+const TONES: readonly Tone[] = ['neutral', 'beam', 'cyan', 'sage', 'mint', 'amber', 'signal'];
 
 const SWATCHES: readonly (readonly [string, string])[] = [
   ['abyss', 'bg-abyss'],
@@ -101,7 +101,7 @@ const SWATCHES: readonly (readonly [string, string])[] = [
   ['float', 'bg-float'],
   ['inset', 'bg-inset'],
   ['line', 'bg-line'],
-  ['lunar', 'bg-lunar'],
+  ['beam', 'bg-beam'],
   ['cyan', 'bg-cyan'],
   ['sage', 'bg-sage'],
   ['mint', 'bg-mint'],
@@ -118,7 +118,7 @@ function Gallery(): ReactElement {
         <header className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight text-ink">Artemis design system</h1>
           <p className="text-sm text-ink-muted">
-            Charcoal and moonlight. Dark only, dense, no gradients.
+            One plane and a hairline. Nothing is lighter because it is nearer.
           </p>
         </header>
 
@@ -203,7 +203,7 @@ function Gallery(): ReactElement {
           {TONES.map((tone) => (
             <StatusDot key={tone} tone={tone} />
           ))}
-          <StatusDot tone="lunar" pulse />
+          <StatusDot tone="beam" pulse />
         </Section>
 
         <Section title="Form controls">
@@ -318,7 +318,7 @@ function Gallery(): ReactElement {
           <div className="grid w-full grid-cols-2 gap-4">
             <div className="overflow-hidden rounded-lg border border-line bg-panel">
               <div className="flex h-8 shrink-0 items-center justify-between border-b border-line px-2.5">
-                <h3 className="text-2xs font-semibold tracking-[0.14em] text-ink-faint uppercase">
+                <h3 className="chrome-label text-ink-faint">
                   Run details
                 </h3>
                 <IconButton label="Copy">

@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>B · One Bar — four bars of chrome become one</title>
+<style>
+/* ── The round-two palette. Identical in all five files. ──────────────────
+   Same colour *roles* as today (primary, tools, thinking, success, warning,
+   error), new hue base, and more contrast at every step: the background is
+   deeper, hairlines are lighter, and muted text moves 78% instead of 71%. */
+:root {
+  --abyss: oklch(12.5% 0.008 265);
+  --panel: oklch(16.5% 0.010 265);
+  --raised: oklch(21% 0.012 265);
+  --float: oklch(25% 0.013 265);
+  --inset: oklch(9.5% 0.007 265);
+  --line: oklch(32% 0.014 265);
+  --line-strong: oklch(45% 0.018 265);
+  --ink: oklch(96% 0.004 265);
+  --ink-muted: oklch(78% 0.008 265);
+  --ink-faint: oklch(63% 0.010 265);
+  --accent: oklch(78% 0.16 265);
+  --cyan: oklch(80% 0.12 215);
+  --sage: oklch(72% 0.06 190);
+  --mint: oklch(84% 0.16 155);
+  --amber: oklch(82% 0.15 75);
+  --signal: oklch(72% 0.19 18);
+  --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: oklch(8% 0.006 265); color: var(--ink); font: 13px/1.55 var(--sans); padding: 26px; -webkit-font-smoothing: antialiased; }
+.page { max-width: 1400px; margin: 0 auto; }
+.note { color: var(--ink-muted); font-size: 13px; max-width: 78ch; margin-bottom: 4px; }
+.note b { color: var(--ink); font-weight: 550; }
+.kicker { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-faint); margin-bottom: 6px; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 7px; }
+a.back { color: var(--accent); text-decoration: none; font: 11px var(--mono); }
+
+/* ── The window ─────────────────────────────────────────────────────────── */
+.win { margin-top: 20px; width: 1400px; height: 1000px; flex: none; background: var(--abyss); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px oklch(0% 0 0 / 0.5); }
+
+.hdr { height: 36px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 11px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.lights { display: flex; gap: 6px; margin-right: 4px; }
+.lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); display: block; }
+.icon { width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 4px; display: grid; place-items: center; color: var(--ink-muted); font-size: 11px; }
+.crumb { font-size: 12px; color: var(--ink-muted); }
+.crumb b { color: var(--ink); font-weight: 550; }
+.crumb span { color: var(--ink-faint); margin: 0 5px; }
+.hdr .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.ctx { display: flex; align-items: center; gap: 6px; font: 10.5px var(--mono); color: var(--amber); }
+.ctxbar { width: 54px; height: 4px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.ctxbar i { display: block; height: 100%; width: 78%; background: var(--amber); }
+
+.body { flex: 1; display: flex; min-height: 0; padding: 9px; gap: 9px; }
+
+/* ── Sidebar ────────────────────────────────────────────────────────────── */
+.side { width: 194px; flex: none; display: flex; flex-direction: column; gap: 9px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; }
+.side .top { padding: 8px; display: flex; gap: 6px; }
+.newbtn { flex: 1; height: 26px; border-radius: 5px; background: var(--accent); color: oklch(18% 0.04 265); font-size: 11.5px; font-weight: 600; display: grid; place-items: center; }
+.proj { font: 10px var(--mono); letter-spacing: 0.1em; color: var(--ink-faint); padding: 9px 10px 5px; display: flex; justify-content: space-between; }
+.sess { padding: 5px 10px; display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-muted); border-left: 2px solid transparent; }
+.sess.on { background: var(--raised); color: var(--ink); border-left-color: var(--accent); }
+.sess .dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--line-strong); }
+.sess .dot.run { background: var(--cyan); box-shadow: 0 0 0 3px oklch(80% 0.12 215 / 0.16); }
+.sess .dot.gate { background: var(--amber); box-shadow: 0 0 0 3px oklch(82% 0.15 75 / 0.16); }
+.sess .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess .ago { margin-left: auto; font: 9.5px var(--mono); color: var(--ink-faint); }
+
+/* ── Working area: two panes + dock ─────────────────────────────────────── */
+.work { flex: 1; display: flex; gap: 9px; min-width: 0; }
+.grid { flex: 1; display: flex; gap: 9px; min-width: 0; }
+.pane { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; display: flex; flex-direction: column; overflow: hidden; }
+.pane.focus { border-color: var(--line-strong); }
+.pane .ph { height: 28px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-muted); background: oklch(18% 0.010 265); }
+.pane.focus .ph { color: var(--ink); }
+.pane .ph .x { margin-left: auto; color: var(--ink-faint); }
+
+.scroll { flex: 1; overflow: hidden; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; position: relative; }
+.fade { position: absolute; inset: 0 0 auto; height: 22px; background: linear-gradient(var(--panel), transparent); }
+
+/* ── Transcript grammar ─────────────────────────────────────────────────── */
+.turn { font: 9.5px var(--mono); color: var(--ink-faint); letter-spacing: 0.08em; display: flex; align-items: center; gap: 7px; }
+.turn::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.you { border-left: 2px solid var(--accent); padding-left: 9px; color: var(--ink); font-size: 12.5px; }
+.said { color: var(--ink-muted); font-size: 12.5px; }
+.said b { color: var(--ink); font-weight: 550; }
+.said code, .inline { font: 11.5px var(--mono); color: var(--cyan); background: var(--inset); padding: 1px 4px; border-radius: 3px; }
+
+.think { font-size: 11.5px; color: var(--sage); display: flex; gap: 7px; align-items: baseline; }
+.think .chev { font-size: 9px; }
+.think .txt { font-style: italic; opacity: 0.92; }
+
+/* tool call: a bar you can read the result off without opening */
+.tool { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--inset); }
+.tool .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--raised); }
+.tool .bar .k { color: var(--cyan); }
+.tool .bar .a { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool .bar .r { margin-left: auto; font-size: 10px; color: var(--ink-faint); flex: none; }
+.tool .bar .r.bad { color: var(--signal); }
+.tool .bar .r.ok { color: var(--mint); }
+.tool pre { padding: 7px 9px; font: 10.5px/1.5 var(--mono); color: var(--ink-muted); overflow: hidden; white-space: pre; }
+.tool pre .em { color: var(--signal); }
+.tool pre .dim { color: var(--ink-faint); }
+.tool pre .hit { color: var(--ink); }
+.more { padding: 4px 9px; font: 10px var(--mono); color: var(--ink-faint); border-top: 1px solid var(--line); }
+
+/* diff */
+.diff { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.diff .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--raised); }
+.diff .bar .f { color: var(--ink); }
+.diff .bar .n { margin-left: auto; font-size: 10px; }
+.diff .bar .n .p { color: var(--mint); }
+.diff .bar .n .m { color: var(--signal); margin-left: 6px; }
+.diff pre { font: 10.5px/1.55 var(--mono); background: var(--inset); overflow: hidden; white-space: normal; }
+.diff pre > span { display: block; padding: 0 9px; white-space: pre; }
+.diff .add { background: oklch(84% 0.16 155 / 0.10); color: var(--mint); }
+.diff .del { background: oklch(72% 0.19 18 / 0.10); color: var(--signal); }
+.diff .ctxl { color: var(--ink-faint); }
+
+/* todo */
+.todo { border: 1px solid var(--line); border-radius: 5px; padding: 7px 9px; background: var(--inset); }
+.todo .h { font: 10px var(--mono); letter-spacing: 0.1em; color: var(--ink-faint); margin-bottom: 5px; }
+.todo li { list-style: none; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 7px; padding: 1.5px 0; }
+.todo li.done { text-decoration: line-through; }
+.todo li.now { color: var(--ink); }
+.todo li .m { width: 10px; flex: none; font: 10px var(--mono); }
+.todo li.done .m { color: var(--mint); }
+.todo li.now .m { color: var(--amber); }
+
+/* delegated agents */
+.dele { display: flex; gap: 7px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px 3px 7px; font: 10.5px var(--mono); color: var(--ink-muted); display: flex; align-items: center; gap: 6px; background: var(--inset); }
+.chip i { width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); display: block; }
+.chip.done i { background: var(--mint); }
+
+/* the gate */
+.gate { border: 1px solid var(--amber); border-radius: 6px; background: oklch(82% 0.15 75 / 0.07); overflow: hidden; }
+.gate .h { padding: 6px 9px; font: 10px var(--mono); letter-spacing: 0.1em; color: var(--amber); display: flex; gap: 7px; align-items: center; }
+.gate .cmd { padding: 0 9px 7px; font: 11.5px var(--mono); color: var(--ink); }
+.gate .why { padding: 0 9px 8px; font-size: 11px; color: var(--ink-muted); }
+.gate .why b { color: var(--amber); font-weight: 550; }
+.gate .row { display: flex; gap: 6px; padding: 0 9px 8px; }
+.btn { border: 1px solid var(--line-strong); border-radius: 4px; padding: 4px 10px; font-size: 11px; color: var(--ink-muted); }
+.btn.go { background: var(--amber); border-color: var(--amber); color: oklch(20% 0.05 75); font-weight: 600; }
+.btn .k { font: 9.5px var(--mono); opacity: 0.65; margin-left: 5px; }
+
+/* composer + status */
+.comp { flex: none; margin: 0 9px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raised); }
+.comp .in { padding: 8px 10px; font-size: 12px; color: var(--ink-faint); min-height: 42px; }
+.status { display: flex; align-items: center; gap: 0; padding: 0 3px 3px; font: 10px var(--mono); color: var(--ink-faint); flex-wrap: wrap; }
+.status s { text-decoration: none; padding: 2px 6px; border-radius: 3px; }
+.status s.hot { color: var(--ink-muted); }
+.status s.mode { color: var(--amber); }
+.status .sep { color: var(--line-strong); }
+.status .send { margin-left: auto; color: var(--accent); }
+
+/* ── Dock ───────────────────────────────────────────────────────────────── */
+.dock { width: 320px; flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; display: flex; flex-direction: column; overflow: hidden; }
+.dock .tabs { height: 28px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: oklch(18% 0.010 265); }
+.dock .tabs d { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; color: var(--ink-faint); border-right: 1px solid var(--line); }
+.dock .tabs d.on { color: var(--ink); background: var(--panel); box-shadow: inset 0 -1px 0 var(--accent); }
+.dock .fv { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.dock .fvh { padding: 5px 9px; font: 10px var(--mono); color: var(--ink-faint); border-bottom: 1px solid var(--line); display: flex; }
+.dock .fvh .g { margin-left: auto; color: var(--mint); }
+.dock pre { flex: 1; font: 10.5px/1.6 var(--mono); padding: 6px 0; overflow: hidden; background: var(--inset); white-space: normal; }
+.dock pre > span { display: block; padding: 0 9px 0 0; white-space: pre; }
+.dock pre .ln { display: inline-block; width: 30px; text-align: right; margin-right: 9px; color: oklch(40% 0.010 265); }
+.kw { color: oklch(76% 0.14 300); } .st { color: var(--mint); } .fn { color: var(--cyan); } .cm { color: oklch(52% 0.020 265); } .nu { color: var(--amber); }
+
+/* ── B: the pane header is gone; the status line carries everything ────── */
+.pane .ph { display: none; }
+.scroll { padding-top: 13px; }
+.comp { margin-top: 0; }
+.onebar { display: flex; align-items: center; gap: 0; padding: 4px 4px 4px 7px; font: 10px var(--mono); color: var(--ink-faint); border-top: 1px solid var(--line); background: oklch(18% 0.010 265); }
+.onebar .nm { color: var(--ink-muted); font-size: 10.5px; display: flex; align-items: center; gap: 6px; padding-right: 8px; margin-right: 6px; border-right: 1px solid var(--line); }
+.pane.focus .onebar .nm { color: var(--ink); }
+.onebar s { text-decoration: none; padding: 2px 5px; border-radius: 3px; }
+.onebar s.hot { color: var(--ink-muted); }
+.onebar s.mode { color: var(--amber); }
+.onebar .sep { color: var(--line-strong); }
+.onebar .x { margin-left: auto; padding-left: 8px; color: var(--ink-faint); }
+.saved { position: absolute; right: 0; bottom: 0; }
+
+/* Transcript children keep their natural height — flex was squashing the diff
+   into a single line. Pane 1 is anchored to the bottom because that is what a
+   transcript scrolled to the live edge looks like: the gate is fully visible
+   and turn 24 clips off the top under the fade. */
+.scroll > *, .stream > * { flex: none; }
+.scroll.btm, .stream.btm { justify-content: flex-end; }
+
+/* ── Annotation ─────────────────────────────────────────────────────────── */
+.fitnote { font: 10.5px var(--mono); color: var(--ink-faint); margin-top: 9px; }
+.fitnote b { color: var(--ink-muted); font-weight: 400; }
+.foot { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.box { border: 1px solid var(--line); border-radius: 6px; padding: 13px 15px; background: var(--panel); }
+.box h3 { font-size: 12px; margin-bottom: 7px; color: var(--ink); font-weight: 600; }
+.box h3.cost { color: var(--amber); }
+.box p, .box li { font-size: 12.5px; color: var(--ink-muted); }
+.box ul { margin-left: 15px; }
+.box li { margin-bottom: 4px; }
+.box b { color: var(--ink); font-weight: 550; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <a class="back" href="index.html">← all five</a>
+  <div class="kicker" style="margin-top:12px">B · ONE BET: CHROME</div>
+  <h1>One Bar</h1>
+  <p class="note">Everything from Recut, plus one structural change: <b>the pane header is deleted and the status line absorbs it.</b> Session name, state dot, close button, profile, model, effort, permission mode, directory and sandbox backend all live on a single line at the bottom of each pane — next to the composer, which is where you are already looking when you care about any of them.</p>
+  <p class="note">A pane costs <b>28px less</b>. In a 2×2 that is 56px of transcript back; in a 4×4, 112px. Nothing is removed — the same nine facts are on screen, on one line instead of two.</p>
+
+  <div class="win">
+    <div class="hdr">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="icon">◧</div>
+      <div class="crumb"><b>artemis</b><span>›</span>The sandbox lets a write escape</div>
+      <div class="right">
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+
+    <div class="body">
+      <!-- sidebar -->
+      <div class="side">
+        <div class="card">
+          <div class="top"><div class="newbtn">+ New session</div><div class="icon">◧</div></div>
+          <div class="proj"><span>ARTEMIS</span><span>22</span></div>
+          <div class="sess on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span><span class="ago">now</span></div>
+          <div class="sess"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span><span class="ago">4m</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">Probe the capability flags</span><span class="ago">1h</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">OpenCode model configurator</span><span class="ago">3h</span></div>
+          <div class="proj"><span>CEREBRO</span><span>4</span></div>
+          <div class="sess"><i class="dot run"></i><span class="t">Setup wizard for any bank</span><span class="ago">now</span></div>
+          <div class="sess"><i class="dot"></i><span class="t">Local-only bank, no remote</span><span class="ago">2d</span></div>
+        </div>
+        <div class="card" style="padding:9px 10px">
+          <div style="font-size:11px;color:var(--ink)">↓ 0.21.0 available</div>
+          <div style="font:10px var(--mono);color:var(--ink-faint);margin-top:3px">restart to install</div>
+        </div>
+      </div>
+
+      <!-- working area -->
+      <div class="work">
+        <div class="grid">
+
+          <!-- pane 1: the real session -->
+          <div class="pane focus">
+            <div class="scroll btm">
+              <div class="fade"></div>
+
+              <div class="turn">TURN 24</div>
+              <div class="you">it says the write succeeded — that's the bug, not the test</div>
+
+              <div class="think"><span class="chev">▾</span><span class="txt">Thought for 8s — the check writes to a path under /var/folders, and the profile allows that subpath wholesale…</span></div>
+
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">pnpm sandbox:check</span><span class="r bad">exit 1 · 4.2s</span></div>
+                <pre> FAIL  src/adapters/local/sandbox.check.ts &gt; escape is refused
+<span class="em">AssertionError: expected 'written' to be 'refused'</span>
+  ❯ src/adapters/local/sandbox.check.ts:71:5
+<span class="dim">     69|   const out = await run(argv, { cwd: workspace })
+     70|
+     71|   expect(out.status).toBe('refused')
+       |   ^
+     72| })
+  ❯ processTicksAndRejections node:internal/…:95:5</span>
+       Tests  <span class="em">1 failed</span> | 12 passed (13)</pre>
+              </div>
+
+              <div class="said">The profile allows <span class="inline">/private/var/folders</span> as a subpath. macOS puts <b>every</b> per-user temporary directory under there, so the rule makes another application's scratch space writable.</div>
+
+              <div class="tool">
+                <div class="bar"><span class="k">search</span><span class="a">rg "var/folders" --type ts</span><span class="r">40 hits</span></div>
+                <pre><span class="hit">core/src/adapters/local/commandSandbox.ts</span><span class="dim">:118</span>  '(allow file-write* (subpath "/private/var/folders"))',
+<span class="hit">core/src/adapters/local/commandSandbox.ts</span><span class="dim">:119</span>  '(allow file-write* (subpath "/private/tmp"))',
+<span class="hit">core/src/adapters/local/sandbox.test.ts</span><span class="dim">:44</span>       const scratch = mkdtempSync(join(tmpdir(), 'a-'))
+<span class="hit">core/src/adapters/local/sandbox.check.ts</span><span class="dim">:12</span>       // /var/folders is where macOS puts per-user temp</pre>
+                <div class="more">… 36 more · ⌘⏎ to open all in the dock</div>
+              </div>
+
+              <div class="turn">TURN 26</div>
+
+              <div class="diff">
+                <div class="bar"><span class="f">commandSandbox.ts</span><span class="n"><span class="p">+6</span><span class="m">−3</span></span></div>
+                <pre><span class="ctxl">@@ -114,9 +114,12 @@ function profile(writableRoots, scratch) {</span>
+<span class="del">-    '(allow file-write* (subpath "/private/tmp"))',</span>
+<span class="del">-    '(allow file-write* (subpath "/private/var/folders"))',</span>
+<span class="del">-    ...writableRoots.map((r) => allow(r)),</span>
+<span class="add">+    // Exactly the roots handed in, and nothing else. The blanket</span>
+<span class="add">+    // /var/folders rule made another app's scratch writable and let</span>
+<span class="add">+    // a command escape the workspace entirely.</span>
+<span class="add">+    ...writableRoots.map(</span>
+<span class="add">+      (root) =&gt; `(allow file-write* (subpath "${esc(root)}"))`,</span>
+<span class="add">+    ),</span>
+<span class="ctxl">   ].join('\n')</span></pre>
+              </div>
+
+              <div class="todo">
+                <div class="h">TODO · REWRITTEN THIS TURN</div>
+                <ul>
+                  <li class="done"><span class="m">✓</span>reproduce the escape</li>
+                  <li class="done"><span class="m">✓</span>find which rule allows it</li>
+                  <li class="now"><span class="m">→</span>narrow the writable roots</li>
+                  <li><span class="m">○</span>give each run its own scratch dir</li>
+                  <li><span class="m">○</span>re-run sandbox:check on all three backends</li>
+                </ul>
+              </div>
+
+              <div class="dele">
+                <div class="chip"><i></i>bubblewrap probe · 2m14s</div>
+                <div class="chip done"><i></i>seatbelt · done</div>
+                
+              </div>
+
+              <div class="turn">TURN 28</div>
+
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="why">Runs <b>unconfined</b> — the path is outside every writable root, so no backend can contain it.</div>
+                <div class="row">
+                  <div class="btn go">Allow once<span class="k">⏎</span></div>
+                  <div class="btn">Always here<span class="k">⇧⏎</span></div>
+                  <div class="btn">No<span class="k">esc</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="comp" style="margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0">
+              <div class="in">Reply to artemis…</div>
+            </div>
+            <div class="onebar">
+              <span class="nm"><span style="color:var(--amber)">◆</span> artemis › sandbox escape</span>
+              <s class="hot">opus 5</s><span class="sep">·</span><s>think hard</s><span class="sep">·</span><s class="mode">plan</s><span class="sep">·</span><s>~/artemis</s><span class="sep">·</span><s>seatbelt</s>
+              <span class="x">⏎ send &nbsp; ✕</span>
+            </div>
+          </div>
+
+          <!-- pane 2 -->
+          <div class="pane">
+            <div class="scroll">
+              <div class="fade"></div>
+              <div class="turn">TURN 9</div>
+              <div class="you">local-only banks too — no remote at all</div>
+              <div class="think"><span class="chev">▾</span><span class="txt">Thinking — init_bank has to fail loudly when git identity is missing, or promote commits nothing and says it worked…</span></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">git -C ~/bank config user.email</span><span class="r bad">exit 1</span></div>
+                <pre><span class="dim">(no output)</span></pre>
+              </div>
+              <div class="said">That is the bug in CI too — no identity, <span class="inline">git commit</span> fails, and the wrapper swallowed it. It has to refuse and name the fix.</div>
+              <div class="tool">
+                <div class="bar"><span class="k">write</span><span class="a">bin/cerebro</span><span class="r ok">+34 −2</span></div>
+              </div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">cerebro setup --local ~/bank</span><span class="r ok">exit 0 · 0.9s</span></div>
+                <pre>✓ bank initialised at ~/bank
+✓ 18 memories installed
+<span class="dim">  no remote configured — promote will commit locally</span></pre>
+              </div>
+              <div class="said">Writing the wizard's second screen now<span style="color:var(--cyan)">▌</span></div>
+            </div>
+            <div class="comp" style="margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0">
+              <div class="in">Reply to cerebro…</div>
+            </div>
+            <div class="onebar">
+              <span class="nm"><span style="color:var(--cyan)">◆</span> cerebro › setup wizard</span>
+              <s class="hot">sonnet 5</s><span class="sep">·</span><s>normal</s><span class="sep">·</span><s class="mode">accept edits</s><span class="sep">·</span><s>~/cerebro</s>
+              <span class="x">⏎ &nbsp; ✕</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- dock -->
+        <div class="dock">
+          <div class="tabs"><d class="on">◫ commandSandbox.ts</d><d>▤ tasks</d><d>&gt;_ zsh</d><d>◱ localhost</d></div>
+          <div class="fv">
+            <div class="fvh"><span>packages/core/src/adapters/local/</span><span class="g">+6 −3</span></div>
+            <pre><span><i class="ln">112</i><span class="kw">function</span> <span class="fn">profile</span>(writableRoots, scratch) {</span>
+<span><i class="ln">113</i>  <span class="kw">return</span> [</span>
+<span><i class="ln">114</i>    <span class="st">'(version 1)'</span>,</span>
+<span><i class="ln">115</i>    <span class="st">'(deny default)'</span>,</span>
+<span><i class="ln">116</i>    <span class="cm">// Exactly the roots handed in, and nothing</span></span>
+<span><i class="ln">117</i>    <span class="cm">// else. The blanket /var/folders rule made</span></span>
+<span><i class="ln">118</i>    <span class="cm">// another app's scratch space writable and</span></span>
+<span><i class="ln">119</i>    <span class="cm">// let a command escape the workspace.</span></span>
+<span><i class="ln">120</i>    ...writableRoots.<span class="fn">map</span>(</span>
+<span><i class="ln">121</i>      (root) =&gt; <span class="st">`(allow file-write* …)`</span>,</span>
+<span><i class="ln">122</i>    ),</span>
+<span><i class="ln">123</i>    <span class="fn">allow</span>(scratch),</span>
+<span><i class="ln">124</i>  ].<span class="fn">join</span>(<span class="st">'\n'</span>)</span>
+<span><i class="ln">125</i>}</span>
+<span><i class="ln">126</i></span>
+<span><i class="ln">127</i><span class="cm">/** Null when nothing can confine. The caller</span></span>
+<span><i class="ln">128</i><span class="cm">    must refuse, never silently downgrade. */</span></span>
+<span><i class="ln">129</i><span class="kw">export function</span> <span class="fn">wrapCommand</span>(argv, opts) {</span>
+<span><i class="ln">130</i>  <span class="kw">const</span> backend = <span class="fn">detect</span>()</span>
+<span><i class="ln">131</i>  <span class="kw">if</span> (backend === <span class="nu">WINDOWS_UNCONFINED</span>)</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="box">
+      <h3>What actually changed</h3>
+      <ul>
+        <li><b>Two bars become one.</b> The pane header carried three things — a state dot, a name and a close button — and spent 28px doing it. All three fit in the gutter the status line already had spare.</li>
+        <li><b>Identity sits next to the input.</b> "Which session am I about to send to, as which model, in which mode, in which directory" is now one unbroken line, read left to right, immediately above the thing you press ⏎ in.</li>
+        <li><b>The window header still names the focused pane</b>, so the answer to "where am I" is never only at the bottom.</li>
+        <li>Everything else is Recut — same palette, same tool bars, same truncation, same gate.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3 class="cost">What it costs</h3>
+      <ul>
+        <li><b>Titles move to the bottom.</b> Scanning a 2×2 grid for "which pane is cerebro" means reading along the floor of each pane rather than the ceiling. Every other tabbed application on the machine puts it on top.</li>
+        <li><b>Long session names now compete</b> with five status segments for one line. At a narrow pane width something has to truncate, and the honest answer is the name does.</li>
+        <li><b>Drag-to-rearrange loses its grip.</b> The pane header was the handle you grabbed to move a pane in the grid; that needs somewhere new to live.</li>
+        <li><b>The win only shows up in a grid.</b> With one pane open you have recovered 28px of a 700px column and changed where the title is for no reason.</li>
+      </ul>
+      <p style="margin-top:9px">Worth it if you genuinely run 2×2 and up. Close to neutral if you mostly run one pane.</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="fitnote">scaled to fit — <b>click the window</b> for 1:1</div>
+<script>
+/* The composition is designed at 1400×760. Rather than squeezing panes into a
+   narrow window — which would misrepresent every layout here — scale the whole
+   thing down to fit, and let a click restore 1:1 with horizontal scroll. */
+(function () {
+  var win = document.querySelector('.win');
+  var page = document.querySelector('.page');
+  var note = document.querySelector('.fitnote');
+  var W = 1400, H = 1000, oneToOne = false;
+  function fit() {
+    var s = oneToOne ? 1 : Math.min(1, page.clientWidth / W);
+    win.style.transformOrigin = 'top left';
+    win.style.transform = 'scale(' + s + ')';
+    win.style.marginBottom = (H * s - H + 20) + 'px';
+    note.textContent = '';
+    note.innerHTML = oneToOne
+      ? 'showing 1:1 — <b>click the window</b> to fit'
+      : 'scaled to ' + Math.round(s * 100) + '% to fit — <b>click the window</b> for 1:1';
+    note.style.display = s === 1 && !oneToOne ? 'none' : 'block';
+    document.body.style.overflowX = oneToOne ? 'auto' : 'hidden';
+  }
+  win.addEventListener('click', function () { oneToOne = !oneToOne; fit(); });
+  addEventListener('resize', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

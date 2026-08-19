@@ -209,7 +209,10 @@ const TaskRow = memo(function TaskRow({
   return (
     <li
       className={cn(
-        'flex flex-col overflow-hidden rounded-md border',
+        // Square: this is a record of work the machine did, in the same family
+        // as a diff or a block of tool output, and Sheet's shape rule is that
+        // square is the tell for something the app did not write.
+        'flex flex-col overflow-hidden rounded-none border',
         live ? 'border-line-strong bg-raised/40' : 'border-line bg-inset/40',
       )}
     >

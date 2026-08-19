@@ -31,15 +31,19 @@
  * the *window's*, and there is one of each no matter how many panes are open.
  * Each of those surfaces acts on the focused pane.
  *
- * ## The header exists so that hiding the sidebar is reversible
+ * ## The header carries what is true of the window
  *
- * `Sidebar` renders `null` when collapsed — not a rail, not a sliver — so its
- * own close button cannot bring it back. That control has to live somewhere
- * always-mounted, and "somewhere always-mounted" used to mean the status line,
- * which is the bar describing *what the next prompt will do*. Whether a pane is
- * showing is not that; it is a property of the window. So the window has a bar
- * of its own now, carrying the pane toggle, the name of what this window is
- * pointed at, and the way into settings. It is also the Electron drag region.
+ * It used to exist for a different reason, and the difference is worth keeping
+ * written down. `Sidebar` returned `null` when collapsed — not a rail, not a
+ * sliver — so its own close button could not bring it back, and the toggle had
+ * to live somewhere always-mounted. The header was that somewhere.
+ *
+ * The sidebar collapses to a rail now, so it reopens itself and the header is
+ * no longer holding a control on someone else's behalf. What it holds is what
+ * belongs to the *window* rather than to any one pane: the name of what this
+ * window is pointed at, the way into settings, and the Electron drag region.
+ * The sidebar toggle stays because the top-left corner is where a person looks
+ * for it, not because nowhere else can hold it.
  *
  * ## The sidebar floats
  *
@@ -50,8 +54,9 @@
  *
  * Under it, in the same margin, is a second card that exists only when the
  * updater has something to say. That is the whole of the update surface while
- * the sidebar is showing — see `UpdateCard` and the note on `UpdateBanner`
- * below.
+ * the sidebar is showing — see `UpdateCard`. When it is hidden the sidebar
+ * collapses to a rail rather than to nothing, so the card has somewhere to
+ * point to and there is no second update component standing in for it.
  *
  * ## The status line belongs to the composer, not to the window
  *
@@ -91,7 +96,6 @@
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { AppHeader } from './components/AppHeader';
-import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { ErrorSurface } from './components/ErrorSurface';
 import { RunInfoDialog } from './components/RunInfoDialog';
@@ -128,8 +132,6 @@ import {
 export function App(): ReactElement {
   const bridgeMode = useApp((s) => s.bridgeMode);
   const booted = useApp((s) => s.booted);
-  // Only to decide which of the two update surfaces is mounted; see below.
-  const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
   const started = useRef(false);
 
   /**
@@ -299,18 +301,6 @@ export function App(): ReactElement {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-abyss">
       <AppHeader />
-      {/*
-        The update lives at the foot of the sidebar now, as its own floating
-        card — see `UpdateCard`. This strip is what stands in when there is no
-        sidebar to hold it, because `Sidebar` collapses to `null` and an update
-        nobody can see is an update nobody installs. Exactly one of the two is
-        ever mounted.
-
-        Full window width, unlike the ErrorSurface strip below: an update is a
-        fact about the installation rather than about any one column, and every
-        window shows the same one.
-      */}
-      {sidebarCollapsed && <UpdateBanner />}
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {/*

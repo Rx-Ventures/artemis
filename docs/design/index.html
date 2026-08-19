@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Artemis — design</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&display=swap');
+:root {
+  --bg: oklch(11% 0.006 265); --panel: oklch(15.5% 0.008 265); --well: oklch(9% 0.005 265);
+  --line: oklch(30% 0.012 265); --line-2: oklch(44% 0.016 265);
+  --ink: oklch(96% 0.004 265); --ink-2: oklch(78% 0.008 265); --ink-3: oklch(62% 0.010 265);
+  --accent: oklch(80% 0.16 250); --ok: oklch(84% 0.16 155); --warn: oklch(84% 0.15 78); --err: oklch(72% 0.19 18);
+  --sans: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.62 var(--sans); padding: 46px 24px 80px; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 950px; margin: 0 auto; }
+h1 { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 9px; }
+.lede { color: var(--ink-2); margin-bottom: 9px; max-width: 76ch; }
+.lede b { color: var(--ink); font-weight: 550; }
+.meta { font: 11px var(--mono); color: var(--ink-3); margin: 26px 0 12px; letter-spacing: 0.05em; }
+
+.settled { border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 5px; padding: 14px 17px; margin: 20px 0 10px; background: var(--panel); }
+.settled h3 { font-size: 12px; color: var(--ok); margin-bottom: 7px; font-weight: 600; letter-spacing: 0.05em; }
+.settled p { color: var(--ink-2); font-size: 13.5px; max-width: 80ch; }
+.settled p + p { margin-top: 7px; }
+.settled b { color: var(--ink); font-weight: 550; }
+
+table { border-collapse: collapse; width: 100%; margin: 14px 0 6px; font-size: 12.5px; }
+th { text-align: left; font: 9.5px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); padding: 0 12px 7px 0; font-weight: 400; border-bottom: 1px solid var(--line); }
+td { padding: 8px 12px 8px 0; color: var(--ink-2); border-bottom: 1px solid var(--line); vertical-align: top; }
+td b { color: var(--ink); font-weight: 550; }
+td.q { color: var(--ink-3); }
+
+a.card { display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px 19px; margin-bottom: 11px; }
+a.card:hover { border-color: var(--line-2); }
+.hd { display: flex; align-items: baseline; gap: 10px; }
+.n { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-3); }
+h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; }
+.tag { margin-left: auto; font: 10px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); border: 1px solid var(--line); border-radius: 3px; padding: 1px 7px; }
+.sw { display: flex; gap: 3px; margin: 9px 0 8px; }
+.sw i { width: 30px; height: 13px; display: block; border-radius: 2px; }
+.bet { color: var(--ink-2); margin-bottom: 9px; max-width: 80ch; font-size: 13.5px; }
+.bet b { color: var(--ink); font-weight: 550; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; font-size: 12.5px; }
+.pair div { color: var(--ink-2); }
+.pair .lab { font: 9.5px var(--mono); letter-spacing: 0.12em; display: block; margin-bottom: 2px; }
+.pair .win .lab { color: var(--ok); }
+.pair .cost .lab { color: var(--warn); }
+
+.foot { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 13.5px; max-width: 80ch; }
+.foot h3 { font-size: 13px; color: var(--ink); margin-bottom: 8px; font-weight: 600; }
+.foot ul { margin: 0 0 16px 18px; }
+.foot li { margin-bottom: 6px; }
+.foot b { color: var(--ink); font-weight: 550; }
+.old { margin-top: 26px; opacity: 0.7; }
+.old a { color: var(--ink-3); text-decoration: none; font: 11.5px var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px; margin-right: 6px; display: inline-block; margin-bottom: 6px; }
+.old a:hover { color: var(--ink-2); }
+code { font: 12px var(--mono); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Design</h1>
+  <p class="lede"><b>Round three.</b> The layout is settled — keep it. What restarts is the design language laid over it.</p>
+
+  <div class="settled">
+    <h3>SETTLED IN ROUND TWO</h3>
+    <p><b>The layout stays.</b> The 4×4 grid of live conversations, the dock, the floating sidebar, the pane header, the composer and the status line are right. Four attempts to improve on them each cost more than they returned, and the control — which changed no layout at all — won.</p>
+    <p>Round one's mistake is worth keeping in view: it rendered a <b>simpler application than the one that exists</b>, deleting the grid, the dock, the sidebar and the ability to see run state. A design that removes an affordance is not bolder, it is smaller.</p>
+  </div>
+
+  <p class="lede">What has <b>never been chosen from scratch</b> is the visual system. It grew one decision at a time, each defensible on its own, and the result reads like a stock dark developer app because most of those decisions are the stock answer. Everything below is real, in <code>index.css</code>, and well argued there — which is the point. They are good answers to questions nobody re-asked.</p>
+
+  <table>
+    <tr><th>CHOICE TODAY</th><th>WHY IT IS WORTH RE-OPENING</th></tr>
+    <tr><td><b>Geist &amp; Geist Mono</b></td><td class="q">It is Vercel's typeface. Shipping it means wearing another company's identity — the single largest reason the app reads as a clone of things built by that company's users.</td></tr>
+    <tr><td><b>Six elevation steps, by fill</b></td><td class="q">Stacked greys are <i>the</i> shadcn-era idiom, and at six steps two adjacent ones are indistinguishable at 13px.</td></tr>
+    <tr><td><b>Violet accent</b> (hue 287)</td><td class="q">The default accent of this generation of AI tools — the least ownable hue currently available.</td></tr>
+    <tr><td><b>Greys pulled into the accent's hue</b></td><td class="q">Sound rule, but it means the accent choice silently determines the entire substrate.</td></tr>
+    <tr><td><b>Colour is semantic, never decorative</b></td><td class="q">Genuinely good discipline — but it is a choice, and it means the transcript can say how badly something went, never <i>who</i> did it.</td></tr>
+    <tr><td><b>One radius, 7px, everywhere</b></td><td class="q">A default, not a decision. Radius could carry meaning instead: machine surfaces square, human surfaces soft.</td></tr>
+  </table>
+
+  <p class="lede" style="margin-top:16px"><b>All four are generated from one shared layout</b> by <code>_build.py</code> — same markup, same structural CSS, byte-identical. Only the language block differs: tokens, type, surface model, radius, and the transcript grammar drawn on top. Round two varied palette and layout together and nothing could be compared; here the layout is identical <i>by construction</i>, so anything you see differing is the language and nothing else. Each renders the same session and ends with what it costs. See <code>_language.md</code>.</p>
+
+  <div class="settled" style="border-left-color:var(--accent)">
+    <h3 style="color:var(--accent)">ROUND FOUR · THE LIVE ONE</h3>
+    <p><b><a href="app.html" style="color:var(--accent);text-decoration:none">app.html</a></b> — the layout refreshed <i>intentionally</i> rather than additively, with <b>Sheet and Signal swappable live</b>. Six screens: the session grid, a full 2×2, the dock's tasks and terminal, the command palette, the profiles screen and first run. Every state is linkable: <code>app.html#signal/quad</code>. Press <b>L</b> to swap language, <b>1–6</b> for screens.</p>
+    <p>The refresh fixes what was accretion: <b>a navigator rail that never disappears</b> — which removes the reason the window header existed, since the sidebar could not reopen itself — <b>one update surface</b> instead of a card and a banner, <b>a status line that elides</b> to the two facts that change behaviour, and <b>a dock with a vertical tab rail and a this-pane/all scope</b>. See <code>_layout.md</code>.</p>
+  </div>
+
+  <div class="meta">ROUND THREE · FOUR LANGUAGES, ONE LAYOUT</div>
+
+  <a class="card" href="1-sheet.html">
+    <div class="hd"><span class="n">1</span><h2>Sheet</h2><span class="tag">DEPTH: NONE</span></div>
+    <div class="sw"><i style="background:oklch(13% 0.003 250)"></i><i style="background:oklch(10.5% 0.003 250)"></i><i style="background:oklch(27% 0.004 250)"></i><i style="background:oklch(86% 0.17 192)"></i><i style="background:oklch(86% 0.17 145)"></i><i style="background:oklch(85% 0.16 85)"></i><i style="background:oklch(72% 0.19 22)"></i></div>
+    <p class="bet"><b>Elevation is deleted</b> — not reduced, removed. One ground, one well for machine text, and every boundary is a hairline. Type and space carry all hierarchy; radius is <b>zero on anything the machine produced</b> and soft on anything human. Colour appears about eight times on the whole screen. Archivo + JetBrains Mono, near-neutral grey, teal-cyan accent.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Two surface decisions instead of six. Structurally cannot look like a shadcn app. Colour recovers its force. Radius finally means something.</div>
+      <div class="cost"><span class="lab">COSTS</span>Hairlines vanish on a bad panel with no fill to fall back on. Popovers must break the rule to float. Coldest of the four.</div>
+    </div>
+  </a>
+
+  <a class="card" href="2-slab.html">
+    <div class="hd"><span class="n">2</span><h2>Slab</h2><span class="tag">DEPTH: WEIGHT</span></div>
+    <div class="sw"><i style="background:oklch(17.5% 0.006 95)"></i><i style="background:oklch(11% 0.005 95)"></i><i style="background:oklch(48% 0.012 95)"></i><i style="background:oklch(88% 0.20 122)"></i><i style="background:oklch(84% 0.17 140)"></i><i style="background:oklch(84% 0.16 70)"></i><i style="background:oklch(70% 0.20 25)"></i></div>
+    <p class="bet">Depth as <b>weight rather than lightness</b>. A hard 2px edge means "this is an object", 1px means "this is a division inside one". The loudest type ramp of the four — 700 for structure, uppercase mono for every label — on graphite, with <b>hi-vis yellow-green</b>: a machine-shop palette, not a software one. Instrument Sans + IBM Plex Mono.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Scales best to a full grid — pane boundaries are unmistakable, and focus is an accent edge rather than a 10% lighter border. Nobody else's palette.</div>
+      <div class="cost"><span class="lab">COSTS</span>2px edges eat real estate across a 4×4. It is loud. The accent sits only 18° from the success green.</div>
+    </div>
+  </a>
+
+  <a class="card" href="3-ink.html">
+    <div class="hd"><span class="n">3</span><h2>Ink</h2><span class="tag">HIERARCHY: TYPE</span></div>
+    <div class="sw"><i style="background:oklch(16.5% 0.006 70)"></i><i style="background:oklch(12% 0.005 70)"></i><i style="background:oklch(28% 0.007 70)"></i><i style="background:oklch(74% 0.15 252)"></i><i style="background:oklch(78% 0.13 150)"></i><i style="background:oklch(80% 0.13 65)"></i><i style="background:oklch(69% 0.17 20)"></i></div>
+    <p class="bet">The one thing the agent produces that is genuinely <i>prose</i> gets set as prose: <b>Newsreader at 14.5px with real leading, in a 62-character column</b>. Everything mechanical stays small and mechanical, so size alone tells you what kind of text you are looking at. Surfaces recede almost to nothing. The calmest of the four.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The agent's explanation stops being chrome. Kind-of-text is legible before you read a word, with no colour spent on it. A thing you can sit in all day.</div>
+      <div class="cost"><span class="lab">COSTS</span>A serif in a developer tool is a real risk and the likeliest of the four to be wrong. Three faces. Mixed baselines. Big prose costs vertical space.</div>
+    </div>
+  </a>
+
+  <a class="card" href="4-signal.html">
+    <div class="hd"><span class="n">4</span><h2>Signal</h2><span class="tag">COLOUR: ACTOR</span></div>
+    <div class="sw"><i style="background:oklch(17% 0.016 265)"></i><i style="background:oklch(11% 0.012 265)"></i><i style="background:oklch(80% 0.16 250)"></i><i style="background:oklch(84% 0.16 165)"></i><i style="background:oklch(78% 0.17 310)"></i><i style="background:oklch(84% 0.16 78)"></i><i style="background:oklch(72% 0.19 15)"></i></div>
+    <p class="bet">Overturns the rule that colour is semantic only. Here colour says <b>who</b>: you are blue, the agent is plain ink, the machine is green, a delegated agent is violet — and severity rides on top as amber and rose, <b>the only thing allowed to fill a surface</b>. The claim: in a transcript the first question is not how bad this is, it is who did it. Space Grotesk + JetBrains Mono.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Who did what is answerable without reading. Delegated agents finally have an identity. Severity keeps its force by being the only filler.</div>
+      <div class="cost"><span class="lab">COSTS</span>Spends the best rule the current system has. Seven meanings in colour — and green/rose is exactly the pair that collapses for red-green deficiency. Busiest of the four.</div>
+    </div>
+  </a>
+
+  <div class="foot">
+    <h3>What to look for</h3>
+    <ul>
+      <li><b>The layout is identical in all four.</b> If one feels clearer, that is the language doing it — there is no layout variable left to confound it.</li>
+      <li><b>They are separable.</b> Sheet's surface model works under Signal's colour rule; Ink's prose treatment drops into any of the other three. The four axes — depth, colour meaning, hierarchy, type — can be mixed, and probably should be.</li>
+      <li><b>Every one drops Geist and violet</b>, because those are the two choices most responsible for the clone problem.</li>
+    </ul>
+    <h3>If you want one answer</h3>
+    <p><b>Sheet's surface model, Ink's treatment of prose, Slab's focus edge.</b> Sheet is the strongest single answer — deleting elevation removes the exact thing that makes dark developer apps interchangeable, and it costs the least. Ink's prose column is the best individual idea here and does not need Ink's serif to work. Signal is the most interesting and the most dangerous: worth trying the actor rule on <i>delegated agents only</i>, where the need is real, before spending it on everything.</p>
+    <h3>Not decided here</h3>
+    <p>Light mode, which for Signal is not an inversion and needs its own tint scale. Motion and streaming. Focus rings. Empty and first-run states. And the token layer itself — whichever wins needs writing properly before any component is converted, which is where this stops being mockups and starts being work.</p>
+    <div class="old">
+      <div class="meta" style="margin-top:0">EARLIER ROUNDS · KEPT FOR THE RECORD</div>
+      <a href="a-recut.html">A · Recut</a><a href="b-onebar.html">B · One Bar</a><a href="c-spine.html">C · Spine</a><a href="d-muster.html">D · Muster</a><a href="e-catch.html">E · Catch</a><br>
+      <a href="1-instrument.html">1 · Instrument</a><a href="2-ledger.html">2 · Ledger</a><a href="3-yard.html">3 · Yard</a><a href="4-rail.html">4 · Rail</a><a href="5-quiet.html">5 · Quiet</a>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -395,7 +395,12 @@ export function Composer(): ReactElement {
         <div
           className={cn(
             'relative min-w-0 flex-1 rounded-md',
-            dragging && 'ring-2 ring-accent ring-offset-2 ring-offset-bg',
+            // `ring-offset-bg` named no token — there is no `--color-bg`, so
+            // the offset had no colour and Tailwind emitted nothing. And
+            // `ring-accent` is shadcn's *hover surface*, not the accent colour,
+            // which drew a near-invisible grey ring around a drop target that
+            // exists to be obvious. Both are the design's own names now.
+            dragging && 'ring-2 ring-beam ring-offset-2 ring-offset-abyss',
           )}
           onDragOver={(event: DragEvent<HTMLDivElement>) => {
             if (!event.dataTransfer.types.includes('Files')) return;

@@ -103,7 +103,7 @@ export function SettingsGroup({ label, children, className }: SettingsGroupProps
   return (
     <section className={cn('flex flex-col gap-2', className)}>
       {label ? (
-        <h3 className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">{label}</h3>
+        <h3 className="chrome-label text-ink-faint">{label}</h3>
       ) : null}
       {children}
     </section>
@@ -174,7 +174,7 @@ export function ChoiceList<T extends string>({
               'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors',
               'has-focus-visible:border-ring has-focus-visible:ring-3 has-focus-visible:ring-ring/50',
               checked
-                ? 'border-lunar/45 bg-lunar/5'
+                ? 'border-beam/45 bg-beam/5'
                 : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
               choice.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
             )}
@@ -182,7 +182,7 @@ export function ChoiceList<T extends string>({
             <RadioGroupItem
               value={choice.id}
               disabled={choice.disabled ?? false}
-              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-lunar data-[state=checked]:text-lunar"
+              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-beam data-[state=checked]:text-beam"
             />
             <span className="flex min-w-0 flex-col gap-0.5">
               <span

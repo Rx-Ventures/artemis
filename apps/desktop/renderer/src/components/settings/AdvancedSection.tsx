@@ -279,7 +279,7 @@ function StatusBlock({
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-3">
-        <h4 className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">On disk</h4>
+        <h4 className="chrome-label text-ink-faint">On disk</h4>
         <Button
           size="xs"
           variant="ghost"
