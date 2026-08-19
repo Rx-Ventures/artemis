@@ -70,6 +70,7 @@ import {
   readAttachments,
   type AttachmentRejection,
 } from '../lib/attachments';
+import { ActivityRule } from './Activity';
 import { ReasonButton, WithReason } from './disabled-reason';
 import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
@@ -350,18 +351,19 @@ export function Composer(): ReactElement {
    * on the window background, with the status line under it — nothing boxes
    * either of them in.
    *
-   * Nothing here reports on the run any more, either.
+   * The seam itself is the exception, and it is one line.
    *
-   * A hairline swept across this seam while a run was live. It said one thing —
-   * "something is happening" — and said it in the one place the reader is not
-   * looking, an inch below the text they are waiting on. `ActivityIndicator`
-   * now sits at the foot of the transcript and answers the question that was
-   * actually being asked: *what* is happening, why, and for how long. Two
-   * indicators for one fact is one too many, and the one that survives is the
-   * one that can distinguish waiting from working.
+   * A hairline used to sweep across here while a run was live, saying only
+   * "something is happening" — and it was removed for saying that in the one
+   * place the reader is not looking. What is there now is not that hairline: it
+   * is the *border* between the conversation and the prompt, which the seam
+   * wanted anyway, and it carries the run's state rather than the bare fact of
+   * one. The words still live at the foot of the transcript, where the question
+   * "what is it doing" is actually asked. See `ActivityRule`.
    */
   return (
     <div className="shrink-0">
+      <ActivityRule />
       <HandoffStrip />
 
       {/*

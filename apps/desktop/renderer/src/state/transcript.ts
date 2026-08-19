@@ -1073,10 +1073,27 @@ export class TranscriptModel {
         continue;
       }
 
-      // A run ending is the one row that must stay *after* the account of the
-      // run it ends, so the flush comes first.
-      if (this.items.get(id)?.kind === 'run-end') {
-        flush();
+      /*
+       * A run ending closes the account of it — unless the reader ended it.
+       *
+       * The boundary is the *break*: the model stopped, said its piece, and is
+       * waiting. Everything it did to get there belongs in one marker under
+       * it, and the next thing asked starts a fresh one.
+       *
+       * An interruption is not that break. Stopping a run to redirect it is one
+       * request being steered, not two: the calls before the interruption and
+       * the calls after it are the same piece of work, and splitting them into
+       * two markers would report the reader's impatience as a boundary in what
+       * the agent did. So the run-end row goes out — it happened, and the
+       * transcript is the record — and the accumulation carries across it into
+       * the run that follows.
+       *
+       * The flush comes before the row for the same reason it always did: the
+       * account of a run reads above the line that ends it.
+       */
+      const ending = this.items.get(id);
+      if (ending?.kind === 'run-end') {
+        if (ending.reason !== 'interrupted') flush();
         rows.push(id);
         continue;
       }

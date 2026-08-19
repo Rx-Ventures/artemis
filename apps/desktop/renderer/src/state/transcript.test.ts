@@ -456,6 +456,57 @@ describe('TranscriptModel activity groups', () => {
       expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
     });
 
+    it('closes the marker when the model stops, and opens a fresh one for the next ask', () => {
+      /*
+       * The break. The model said its piece and is waiting, so the account of
+       * how it got there is complete — and what is asked next is a new
+       * question with a new account.
+       */
+      const model = build();
+      for (const event of stream(
+        ...call('c1', 'Grep'),
+        { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'found it' },
+        { type: 'run.end', reason: 'completed' },
+        { type: 'text.complete', messageId: 'u2', role: 'user', text: 'now fix it' },
+        ...call('c2', 'Bash'),
+        { type: 'text.complete', messageId: 'm2', role: 'assistant', text: 'done' },
+      )) {
+        model.apply(event);
+      }
+
+      const rows = model.getRowsSnapshot();
+      // Two markers, one per turn, each under the answer it belongs to.
+      expect(rows.filter((id) => id.startsWith('g:'))).toEqual(['g:t:c1', 'g:t:c2']);
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1']);
+      expect(model.getGroup('g:t:c2')?.ids).toEqual(['t:c2']);
+    });
+
+    it('carries the accumulation across an interruption, because that is not a break', () => {
+      /*
+       * Stopping a run to redirect it is one request being steered, not two.
+       * Splitting here would report the reader's impatience as a boundary in
+       * what the agent did.
+       */
+      const model = build();
+      for (const event of stream(
+        ...call('c1', 'Grep'),
+        { type: 'run.end', reason: 'interrupted' },
+        { type: 'text.complete', messageId: 'u2', role: 'user', text: 'no, the other file' },
+        ...call('c2', 'Read'),
+        { type: 'text.complete', messageId: 'm2', role: 'assistant', text: 'got it' },
+        { type: 'run.end', reason: 'completed' },
+      )) {
+        model.apply(event);
+      }
+
+      const rows = model.getRowsSnapshot();
+      expect(rows.filter((id) => id.startsWith('g:'))).toEqual(['g:t:c1']);
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
+      // The interruption itself is still on the record — it happened, and the
+      // transcript is the record. It just is not a boundary.
+      expect(rows.filter((id) => id.startsWith('e:'))).toHaveLength(2);
+    });
+
     it('gives a run that only thought no marker at all', () => {
       // Nothing was done, so there is nothing to account for. A marker here
       // would be a fold over an empty list.

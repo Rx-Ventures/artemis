@@ -126,7 +126,6 @@ export function ActivityIndicator(): ReactElement | null {
 
   if (state.kind === 'settled') return null;
 
-  const moving = state.kind === 'running' || state.kind === 'starting';
   const tone =
     state.kind === 'waiting' ? 'text-amber' : state.kind === 'failed' ? 'text-signal' : 'text-beam';
 
@@ -140,31 +139,64 @@ export function ActivityIndicator(): ReactElement | null {
       className="flex flex-col gap-1.5 px-1 pt-1 pb-2"
       data-activity={state.kind}
     >
-      <div
-        className={cn(
-          'relative h-[3px] overflow-hidden',
-          // Square, because the machine is what is producing this.
-          'rounded-none',
-          moving ? 'bg-line shuttle' : 'bg-transparent',
-        )}
-      >
-        {/* Not moving: a static rule in the state's own colour, so a waiting or
-            failed pane still reads as *something* from across the room rather
-            than as an empty gap where the indicator used to be. */}
-        {moving ? null : (
-          <span
-            className={cn(
-              'absolute inset-y-0 left-0 w-full',
-              state.kind === 'waiting' ? 'bg-amber' : 'bg-signal',
-            )}
-          />
-        )}
-      </div>
+      {/* The rule that used to be here is now the composer's top border — see
+          {@link ActivityRule}. What is left is the part a rule cannot say:
+          which of the five conditions this is, why, and for how long. */}
       <div className="flex items-center gap-2 font-mono text-2xs tracking-wide text-ink-faint">
         <span className={tone}>{state.kind === 'failed' ? 'failed' : state.kind}</span>
         <span className="min-w-0 truncate">{state.because}</span>
         {elapsed ? <span className="ml-auto shrink-0 tabular-nums">{elapsed}</span> : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The same five conditions, drawn as the seam above the composer.
+ * ============================================================================
+ *
+ * A boundary the eye is already at. The conversation ends here and the prompt
+ * begins, so a reader watching output arrive is looking within an inch of this
+ * line — which is the objection that removed the old hairline from this seam
+ * and is now the argument for putting one back, with something worth reading on
+ * it.
+ *
+ * At rest it is an ordinary 1px border: the transcript needs an edge, and the
+ * composer floating on the window background without one was the seam looking
+ * unfinished. While a run is live it grows to 3px and carries the state —
+ * the shuttle while work is happening, amber while something is waiting on an
+ * answer, signal when a run has failed.
+ *
+ * **Growing rather than overlaying.** A 3px animation drawn inside a 1px border
+ * would either clip or straddle the seam; the height moves instead, and the
+ * transition is what keeps that from reading as the layout jumping.
+ *
+ * `aria-hidden`, because {@link ActivityIndicator} is the `status` region for
+ * exactly this state and says it in words. Two live regions for one fact is how
+ * a screen reader ends up announcing every turn twice.
+ */
+export function ActivityRule(): ReactElement {
+  const run = usePane((s) => s.run);
+  const queued = usePane((s) => s.permissionQueue.length);
+  const state = activityOf(run, queued);
+
+  const moving = state.kind === 'running' || state.kind === 'starting';
+
+  return (
+    <div
+      aria-hidden="true"
+      data-activity-rule={state.kind}
+      className={cn(
+        'relative w-full shrink-0 overflow-hidden transition-[height] duration-200',
+        state.kind === 'settled' ? 'h-px' : 'h-[3px]',
+        moving
+          ? 'bg-line shuttle'
+          : state.kind === 'waiting'
+            ? 'bg-amber'
+            : state.kind === 'failed'
+              ? 'bg-signal'
+              : 'bg-line',
+      )}
+    />
   );
 }
