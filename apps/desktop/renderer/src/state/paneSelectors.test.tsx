@@ -101,7 +101,9 @@ function paneWith(model: string | null): SessionState {
     contextWindows: {},
     // A pinned shortlist, so `quickModels` actually builds an array. With no
     // picks it returns the catalogue unchanged and never consults the cache.
-    quickModelIds: ['sonnet'],
+    // Keyed by the profile the pane is on, which is what `paneQuickModelIds`
+    // resolves against.
+    quickModelIdsByProfile: { p1: ['sonnet'] },
     activeProviderId: 'claude',
     activeProfileId: 'p1',
     cwd: '/w',
@@ -177,7 +179,7 @@ describe('pane-scoped selectors under a split window', () => {
       focusedPaneId: panes[0]!.id,
       providers: [DESCRIPTOR],
       profiles: [PROFILE],
-      quickModelIds: ['sonnet'],
+      quickModelIdsByProfile: { p1: ['sonnet'] },
       booted: true,
     });
 

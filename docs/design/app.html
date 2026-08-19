@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en" data-lang="sheet">
+<head>
+<meta charset="utf-8">
+<title>Artemis — the refreshed layout, two languages</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE TWO LANGUAGES
+   Every colour, face, radius and weight below is a token. The toggle rewrites
+   one attribute on <html>; nothing else in the file changes. That is what
+   makes the comparison exact rather than approximate.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── SHEET — depth: none. One ground, one well, hairlines for every boundary.
+   Radius zero on anything the machine produced. Colour is rare. ─────────── */
+[data-lang="sheet"] {
+  --void: oklch(8% 0.002 250); --bg: oklch(13% 0.003 250);
+  --chrome: oklch(13% 0.003 250); --well: oklch(10.5% 0.003 250);
+  --bar: oklch(13% 0.003 250); --rail: oklch(11% 0.003 250);
+  --line: oklch(27% 0.004 250); --line-2: oklch(42% 0.006 250);
+  --ink: oklch(97% 0.002 250); --ink-2: oklch(76% 0.004 250); --ink-3: oklch(58% 0.005 250);
+  --accent: oklch(86% 0.17 192); --accent-ink: oklch(16% 0.04 192); --accent-soft: oklch(86% 0.17 192 / 0.13);
+  --tool: oklch(82% 0.10 192); --think: oklch(66% 0.03 210); --dele: oklch(74% 0.09 192); --you: oklch(86% 0.17 192);
+  --ok: oklch(86% 0.17 145); --warn: oklch(85% 0.16 85); --warn-ink: oklch(18% 0.04 85);
+  --err: oklch(72% 0.19 22);
+  --add-bg: transparent; --del-bg: transparent; --gate-bg: transparent; --tint: transparent;
+  --syn-kw: oklch(82% 0.10 192); --syn-st: oklch(86% 0.17 145); --syn-fn: oklch(97% 0.002 250); --syn-nu: oklch(85% 0.16 85);
+  --sans: 'Archivo', ui-sans-serif, system-ui, sans-serif; --display: var(--sans);
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --fs: 13px; --w-hi: 600; --tr-hi: -0.012em; --tr-lab: 0.14em;
+  --r: 0px; --r-sm: 0px; --r-win: 4px; --r-pill: 0px; --r-human: 3px;
+  --gap: 8px; --sh: none; --edge: 1px;
+}
+/* ── SIGNAL — colour means who. You blue, machine green, delegated violet;
+   severity the only thing allowed to fill a surface. ───────────────────── */
+[data-lang="signal"] {
+  --void: oklch(9% 0.010 265); --bg: oklch(13.5% 0.014 265);
+  --chrome: oklch(17% 0.016 265); --well: oklch(11% 0.012 265);
+  --bar: oklch(20.5% 0.020 265); --rail: oklch(15% 0.015 265);
+  --line: oklch(31% 0.020 265); --line-2: oklch(45% 0.026 265);
+  --ink: oklch(96% 0.006 265); --ink-2: oklch(78% 0.012 265); --ink-3: oklch(62% 0.016 265);
+  --accent: oklch(80% 0.16 250); --accent-ink: oklch(17% 0.05 250); --accent-soft: oklch(80% 0.16 250 / 0.16);
+  --tool: oklch(84% 0.16 165); --think: oklch(70% 0.07 300); --dele: oklch(78% 0.17 310); --you: oklch(80% 0.16 250);
+  --ok: oklch(84% 0.16 165); --warn: oklch(84% 0.16 78); --warn-ink: oklch(19% 0.05 78);
+  --err: oklch(72% 0.19 15);
+  --add-bg: oklch(84% 0.16 165 / 0.12); --del-bg: oklch(72% 0.19 15 / 0.12);
+  --gate-bg: oklch(84% 0.16 78 / 0.10); --tint: 1;
+  --syn-kw: oklch(78% 0.17 310); --syn-st: oklch(84% 0.16 165); --syn-fn: oklch(80% 0.16 250); --syn-nu: oklch(84% 0.16 78);
+  --sans: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif; --display: var(--sans);
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --fs: 13px; --w-hi: 600; --tr-hi: -0.02em; --tr-lab: 0.10em;
+  --r: 6px; --r-sm: 5px; --r-win: 10px; --r-pill: 999px; --r-human: 6px;
+  --gap: 9px; --sh: 0 22px 64px oklch(0% 0 0 / 0.5); --edge: 1px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--void); color: var(--ink); font: var(--fs)/1.55 var(--sans); padding: 22px 22px 60px; -webkit-font-smoothing: antialiased; }
+.page { max-width: 1440px; margin: 0 auto; }
+
+/* ── the control strip ──────────────────────────────────────────────────── */
+.ctl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.ctl .grp { display: flex; border: 1px solid var(--line); border-radius: var(--r-human); overflow: hidden; }
+.ctl button { background: transparent; border: 0; color: var(--ink-3); font: 11.5px var(--sans); padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--line); }
+.ctl button:last-child { border-right: 0; }
+.ctl button.on { background: var(--accent); color: var(--accent-ink); font-weight: var(--w-hi); }
+.ctl .lang button.on { letter-spacing: var(--tr-hi); }
+.ctl .say { font: 10.5px var(--mono); color: var(--ink-3); margin-left: auto; }
+h1 { font-family: var(--display); font-size: 19px; font-weight: var(--w-hi); letter-spacing: var(--tr-hi); margin-bottom: 5px; }
+.lede { color: var(--ink-2); font-size: 13px; max-width: 92ch; margin-bottom: 13px; }
+.lede b { color: var(--ink); font-weight: var(--w-hi); }
+
+/* ── window frame ───────────────────────────────────────────────────────── */
+.win { width: 1440px; height: 900px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-win); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--sh); position: relative; }
+.screen { display: none; }
+.screen.on { display: block; }
+
+/* command bar — window-level truth only */
+.cmd { height: 38px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 11px; background: var(--chrome); border-bottom: 1px solid var(--line); }
+.lights { display: flex; gap: 6px; margin-right: 3px; }
+.lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); display: block; }
+.crumb { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; }
+.crumb b { color: var(--ink); font-weight: var(--w-hi); }
+.crumb .sl { color: var(--ink-3); }
+.seek { flex: 1; max-width: 280px; height: 24px; border: 1px solid var(--line); border-radius: var(--r-human); display: flex; align-items: center; gap: 7px; padding: 0 8px; color: var(--ink-3); font-size: 11.5px; margin: 0 auto; }
+.seek .k { margin-left: auto; font: 9.5px var(--mono); }
+.cmd .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.att { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--r-human); background: var(--warn); color: var(--warn-ink); font-size: 11px; font-weight: var(--w-hi); }
+.att .k { font: 9.5px var(--mono); opacity: 0.72; }
+.ctx { display: flex; align-items: center; gap: 6px; font: 10.5px var(--mono); color: var(--warn); }
+.ctxbar { width: 46px; height: 4px; border-radius: 2px; background: var(--well); overflow: hidden; }
+.ctxbar i { display: block; height: 100%; width: 78%; background: var(--warn); }
+.upd { display: flex; align-items: center; gap: 5px; font: 10px var(--mono); color: var(--ok); border: 1px solid var(--line); border-radius: var(--r-human); padding: 3px 7px; }
+.icon { width: 22px; height: 22px; border: 1px solid var(--line); border-radius: var(--r-sm); display: grid; place-items: center; color: var(--ink-2); font-size: 11px; flex: none; }
+
+.body { flex: 1; display: flex; min-height: 0; }
+
+/* ── navigator rail — always mounted, so collapse is reversible by itself ── */
+.rail { width: 46px; flex: none; background: var(--rail); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 4px; }
+.rail .r { width: 30px; height: 30px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--ink-3); font-size: 13px; position: relative; }
+.rail .r.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.rail .r .bdg { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.rail .sp { flex: 1; }
+
+/* session list panel */
+.nav { width: 208px; flex: none; background: var(--chrome); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.nav .h { height: 30px; flex: none; display: flex; align-items: center; padding: 0 10px; font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); border-bottom: 1px solid var(--line); }
+.nav .h .x { margin-left: auto; }
+.nav .newbtn { margin: 8px; height: 26px; border-radius: var(--r-human); background: var(--accent); color: var(--accent-ink); font-size: 11.5px; font-weight: var(--w-hi); display: grid; place-items: center; }
+.proj { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); padding: 8px 10px 4px; display: flex; justify-content: space-between; }
+.sess { padding: 5px 10px; display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); border-left: 2px solid transparent; }
+.sess.on { color: var(--ink); border-left-color: var(--accent); background: var(--accent-soft); }
+.sess .dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--line-2); }
+.sess .dot.run { background: var(--tool); }
+.sess .dot.gate { background: var(--warn); }
+.sess .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess .ago { margin-left: auto; font: 9.5px var(--mono); color: var(--ink-3); }
+
+/* ── grid ───────────────────────────────────────────────────────────────── */
+.work { flex: 1; display: flex; min-width: 0; padding: var(--gap); gap: var(--gap); }
+.grid { flex: 1; display: flex; gap: var(--gap); min-width: 0; }
+.grid.quad { flex-wrap: wrap; }
+.grid.quad .pane { flex: 0 0 calc(50% - var(--gap) / 2); height: calc(50% - var(--gap) / 2); }
+.pane { flex: 1; min-width: 0; background: var(--chrome); border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden; }
+.pane.focus { border-color: var(--accent); }
+.ph { height: 27px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-2); }
+.pane.focus .ph { color: var(--ink); }
+.ph .d { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--line-2); }
+.ph .d.gate { background: var(--warn); }
+.ph .d.run { background: var(--tool); }
+.ph .r { margin-left: auto; display: flex; gap: 8px; color: var(--ink-3); font: 9.5px var(--mono); align-items: center; }
+.prog { height: 1px; flex: none; background: var(--line); position: relative; overflow: hidden; }
+.prog i { position: absolute; inset: 0 58% 0 0; background: var(--tool); display: block; }
+
+.scroll { flex: 1; overflow: hidden; padding: 10px 11px; display: flex; flex-direction: column; gap: 9px; position: relative; }
+.scroll > * { flex: none; }
+.scroll.btm { justify-content: flex-end; }
+.fade { position: absolute; inset: 0 0 auto; height: 20px; background: linear-gradient(var(--chrome), transparent); z-index: 2; }
+
+/* ── transcript grammar ─────────────────────────────────────────────────── */
+.turn { font: 9.5px var(--mono); color: var(--ink-3); letter-spacing: var(--tr-lab); display: flex; align-items: center; gap: 7px; }
+.turn::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.you { color: var(--ink); font-size: 13px; border-left: 2px solid var(--you); padding-left: 9px; background: var(--tint-you, transparent); }
+[data-lang="signal"] .you { background: linear-gradient(90deg, oklch(80% 0.16 250 / 0.11), transparent 60%); padding-top: 2px; padding-bottom: 2px; }
+.said { color: var(--ink-2); font-size: 13px; }
+.said b { color: var(--ink); font-weight: var(--w-hi); }
+.inline { font: 11.5px var(--mono); color: var(--tool); background: var(--well); padding: 1px 4px; border-radius: 2px; }
+.think { font-size: 11.5px; color: var(--think); display: flex; gap: 7px; align-items: baseline; }
+[data-lang="signal"] .think { border-left: 2px solid var(--think); padding-left: 8px; }
+.think .txt { font-style: italic; }
+
+.tool { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; background: var(--well); }
+[data-lang="signal"] .tool { border-left: 3px solid var(--tool); }
+.tool .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--bar); border-bottom: 1px solid var(--line); }
+[data-lang="signal"] .tool .bar { background: linear-gradient(90deg, oklch(84% 0.16 165 / 0.14), var(--bar) 52%); }
+.tool .bar .k { color: var(--tool); }
+.tool .bar .a { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool .bar .r { margin-left: auto; font-size: 10px; color: var(--ink-3); flex: none; }
+.tool .bar .r.bad { color: var(--err); }
+.tool .bar .r.ok { color: var(--ok); }
+.tool pre { padding: 6px 9px; font: 10.5px/1.5 var(--mono); color: var(--ink-2); overflow: hidden; white-space: pre; }
+.tool pre .em { color: var(--err); }
+.tool pre .dim { color: var(--ink-3); }
+.tool pre .hit { color: var(--ink); }
+.more { padding: 4px 9px; font: 10px var(--mono); color: var(--ink-3); border-top: 1px solid var(--line); }
+
+.diff { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+[data-lang="signal"] .diff { border-left: 3px solid var(--tool); }
+.diff .bar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font: 11px var(--mono); background: var(--bar); border-bottom: 1px solid var(--line); }
+.diff .bar .f { color: var(--ink); }
+.diff .bar .n { margin-left: auto; font-size: 10px; }
+.diff .bar .n .p { color: var(--ok); }
+.diff .bar .n .m { color: var(--err); margin-left: 6px; }
+.diff pre { font: 10.5px/1.55 var(--mono); background: var(--well); overflow: hidden; white-space: normal; }
+.diff pre > span { display: block; padding: 0 9px 0 7px; white-space: pre; border-left: 2px solid transparent; }
+.diff .add { background: var(--add-bg); color: var(--ok); border-left-color: var(--ok); }
+.diff .del { background: var(--del-bg); color: var(--err); border-left-color: var(--err); }
+.diff .ctxl { color: var(--ink-3); }
+
+.todo { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 7px 9px; background: var(--well); }
+.todo .h { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); margin-bottom: 5px; }
+.todo li { list-style: none; font-size: 11.5px; color: var(--ink-3); display: flex; gap: 7px; padding: 1px 0; }
+.todo li.done { text-decoration: line-through; }
+.todo li.now { color: var(--ink); }
+.todo li .m { width: 10px; flex: none; font: 10px var(--mono); }
+.todo li.done .m { color: var(--ok); }
+.todo li.now .m { color: var(--warn); }
+
+.dele { display: flex; gap: 7px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: var(--r-pill); padding: 3px 9px 3px 7px; font: 10.5px var(--mono); color: var(--ink-2); display: flex; align-items: center; gap: 6px; background: var(--well); }
+[data-lang="signal"] .chip { border-left: 3px solid var(--dele); background: linear-gradient(90deg, oklch(78% 0.17 310 / 0.13), var(--well) 68%); }
+.chip i { width: 5px; height: 5px; border-radius: 50%; background: var(--dele); display: block; }
+.chip.done i { background: var(--ok); }
+[data-lang="signal"] .chip.done { border-left-color: var(--ok); background: var(--well); }
+
+.gate { border: 1px solid var(--warn); border-radius: var(--r-sm); background: var(--gate-bg); overflow: hidden; }
+[data-lang="sheet"] .gate { border: 0; border-left: 2px solid var(--warn); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.gate .h { padding: 6px 9px; font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--warn); }
+[data-lang="signal"] .gate .h { background: oklch(84% 0.16 78 / 0.15); }
+.gate .cmd2 { padding: 0 9px 6px; font: 11.5px var(--mono); color: var(--ink); }
+.gate .why { padding: 0 9px 8px; font-size: 11.5px; color: var(--ink-2); }
+.gate .why b { color: var(--warn); font-weight: var(--w-hi); }
+.gate .row { display: flex; gap: 6px; padding: 0 9px 8px; }
+.btn { border: 1px solid var(--line-2); border-radius: var(--r-human); padding: 4px 10px; font-size: 11px; color: var(--ink-2); }
+.btn.go { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); font-weight: var(--w-hi); }
+.btn.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: var(--w-hi); }
+.btn .k { font: 9.5px var(--mono); opacity: 0.65; margin-left: 5px; }
+
+/* composer + the eliding status line */
+.comp { flex: none; margin: 0 9px 9px; border: 1px solid var(--line-2); border-radius: var(--r-human); background: var(--well); }
+.comp .in { padding: 8px 10px; font-size: 12.5px; color: var(--ink-3); min-height: 40px; }
+.status { display: flex; align-items: center; gap: 5px; padding: 0 6px 5px; font: 10px var(--mono); color: var(--ink-3); }
+.status s { text-decoration: none; }
+.status s.hot { color: var(--ink-2); }
+.status s.mode { color: var(--warn); }
+.status .el { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 5px; color: var(--ink-3); }
+.status .send { margin-left: auto; color: var(--accent); }
+
+/* ── dock: vertical tab rail + scope ────────────────────────────────────── */
+.dock { width: 336px; flex: none; display: flex; background: var(--chrome); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.dock.wide { width: 620px; }
+.dtabs { width: 34px; flex: none; background: var(--rail); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 5px 0; gap: 3px; }
+.dtabs d { width: 26px; height: 26px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--ink-3); font-size: 12px; }
+.dtabs d.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.dbody { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dh { height: 27px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 9px; border-bottom: 1px solid var(--line); font: 10px var(--mono); color: var(--ink-3); }
+.dh .nm { color: var(--ink-2); font-size: 11px; font-family: var(--sans); }
+.scope { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: var(--r-pill); overflow: hidden; font-size: 9.5px; }
+.scope s { text-decoration: none; padding: 1px 7px; color: var(--ink-3); }
+.scope s.on { background: var(--accent); color: var(--accent-ink); }
+.dock pre { flex: 1; font: 10.5px/1.6 var(--mono); padding: 6px 0; overflow: hidden; background: var(--well); white-space: normal; }
+.dock pre > span { display: block; padding: 0 9px 0 0; white-space: pre; }
+.dock pre .ln { display: inline-block; width: 30px; text-align: right; margin-right: 9px; color: var(--ink-3); opacity: 0.55; font-style: normal; }
+.kw { color: var(--syn-kw); } .st { color: var(--syn-st); } .fn { color: var(--syn-fn); }
+.cm { color: var(--ink-3); } .nu { color: var(--syn-nu); }
+
+/* terminal / browser / tasks */
+.term { flex: 1; background: var(--well); font: 10.5px/1.65 var(--mono); padding: 7px 9px; color: var(--ink-2); overflow: hidden; white-space: pre; }
+.term .p { color: var(--ok); } .term .e { color: var(--err); } .term .d { color: var(--ink-3); }
+.brow { flex: 1; display: flex; flex-direction: column; background: var(--well); }
+.urlbar { height: 26px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 8px; border-bottom: 1px solid var(--line); font: 10.5px var(--mono); color: var(--ink-3); }
+.urlbar .u { color: var(--ink-2); }
+.viewport { flex: 1; background: oklch(97% 0.002 250); position: relative; overflow: hidden; }
+.vp-h { height: 34px; background: oklch(92% 0.004 250); border-bottom: 1px solid oklch(85% 0.005 250); display: flex; align-items: center; padding: 0 12px; gap: 10px; }
+.vp-h .b { width: 54px; height: 8px; border-radius: 2px; background: oklch(72% 0.006 250); }
+.vp-h .b.s { width: 30px; }
+.vp-b { padding: 14px; display: flex; flex-direction: column; gap: 9px; }
+.vp-b .l { height: 8px; border-radius: 2px; background: oklch(83% 0.005 250); }
+.vp-b .l.w1 { width: 72%; } .vp-b .l.w2 { width: 54%; } .vp-b .l.w3 { width: 88%; }
+.vp-b .card2 { border: 1px solid oklch(87% 0.005 250); border-radius: 4px; height: 62px; background: oklch(95% 0.003 250); }
+.tasks { flex: 1; background: var(--well); overflow: hidden; }
+.trow { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--ink-2); }
+.trow .s { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.trow .s.run { background: var(--tool); } .trow .s.ok { background: var(--ok); } .trow .s.wait { background: var(--warn); }
+.trow .m { margin-left: auto; font: 9.5px var(--mono); color: var(--ink-3); }
+.trow .sub { font: 9.5px var(--mono); color: var(--ink-3); }
+
+/* ── overlays ───────────────────────────────────────────────────────────── */
+.scrim { position: absolute; inset: 0; background: oklch(6% 0.004 265 / 0.62); display: grid; place-items: start center; padding-top: 96px; z-index: 9; }
+.pal { width: 600px; background: var(--chrome); border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; box-shadow: 0 24px 60px oklch(0% 0 0 / 0.55); }
+.pal .q { display: flex; align-items: center; gap: 9px; padding: 11px 13px; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--ink); }
+.pal .q .c { color: var(--ink-3); font: 11px var(--mono); }
+.pal .sec { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); padding: 8px 13px 4px; }
+.pal .it { display: flex; align-items: center; gap: 9px; padding: 6px 13px; font-size: 12.5px; color: var(--ink-2); }
+.pal .it.on { background: var(--accent-soft); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.pal .it .g { width: 15px; color: var(--ink-3); font-size: 11px; }
+.pal .it .k { margin-left: auto; font: 9.5px var(--mono); color: var(--ink-3); }
+.pal .it .tag { font: 9.5px var(--mono); color: var(--ink-3); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 6px; }
+
+/* ── settings / profiles ────────────────────────────────────────────────── */
+.set { flex: 1; display: flex; min-width: 0; }
+.setnav { width: 176px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; background: var(--chrome); }
+.setnav .s { padding: 6px 14px; font-size: 12px; color: var(--ink-3); border-left: 2px solid transparent; }
+.setnav .s.on { color: var(--ink); border-left-color: var(--accent); background: var(--accent-soft); }
+.setnav .g { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); padding: 12px 14px 5px; }
+.setbody { flex: 1; min-width: 0; overflow: hidden; padding: 16px 20px; display: flex; flex-direction: column; gap: 13px; }
+.setbody h2 { font-family: var(--display); font-size: 16px; font-weight: var(--w-hi); letter-spacing: var(--tr-hi); }
+.setbody .sub { font-size: 12.5px; color: var(--ink-3); margin-top: -8px; }
+.prov { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.prov .ph2 { display: flex; align-items: center; gap: 9px; padding: 8px 11px; background: var(--bar); border-bottom: 1px solid var(--line); font-size: 12px; }
+.prov .ph2 .n { color: var(--ink); font-weight: var(--w-hi); }
+.prov .ph2 .cap { margin-left: auto; display: flex; gap: 5px; }
+.cap b { font: 9px var(--mono); font-weight: 400; border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 6px; color: var(--ink-3); }
+.cap b.y { color: var(--ok); border-color: oklch(84% 0.16 155 / 0.4); }
+.cap b.n { color: var(--ink-3); opacity: 0.6; text-decoration: line-through; }
+.prov .rowl { display: flex; align-items: center; gap: 9px; padding: 6px 11px; border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--ink-2); }
+.prov .rowl:last-child { border-bottom: 0; }
+.prov .rowl .mono { font: 10.5px var(--mono); color: var(--ink-3); }
+.prov .rowl .sw2 { margin-left: auto; width: 26px; height: 14px; border-radius: 999px; background: var(--line); position: relative; flex: none; }
+.prov .rowl .sw2.on { background: var(--accent); }
+.prov .rowl .sw2 i { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--ink); display: block; }
+.prov .rowl .sw2.on i { left: 14px; background: var(--accent-ink); }
+.local { border-top: 1px solid var(--line); margin-top: 3px; padding-top: 11px; }
+.local .lh { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); margin-bottom: 8px; }
+.lgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.lcard { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; }
+.lcard .n { font-size: 12px; color: var(--ink); font-weight: var(--w-hi); }
+.lcard .u { font: 9.5px var(--mono); color: var(--ink-3); margin-top: 2px; }
+.lcard .st2 { font: 9.5px var(--mono); margin-top: 7px; display: flex; align-items: center; gap: 5px; color: var(--ok); }
+.lcard .st2.off { color: var(--ink-3); }
+.lcard .st2 i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; display: block; }
+
+/* ── first run ──────────────────────────────────────────────────────────── */
+.first { flex: 1; display: grid; place-items: center; }
+.fbox { width: 620px; }
+.fbox .mark { font-family: var(--display); font-size: 28px; font-weight: var(--w-hi); letter-spacing: var(--tr-hi); margin-bottom: 5px; }
+.fbox .tag2 { color: var(--ink-3); font-size: 13px; margin-bottom: 22px; }
+.fbox .step { font: 9.5px var(--mono); letter-spacing: var(--tr-lab); color: var(--ink-3); margin-bottom: 9px; }
+.pgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-bottom: 18px; }
+.pcard { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 13px; display: flex; align-items: flex-start; gap: 10px; }
+.pcard.on { border-color: var(--accent); background: var(--accent-soft); }
+.pcard .g { font-size: 15px; color: var(--ink-2); }
+.pcard .n { font-size: 13px; color: var(--ink); font-weight: var(--w-hi); }
+.pcard .d { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.pcard .ok2 { margin-left: auto; color: var(--ok); font-size: 11px; }
+.frow { display: flex; gap: 8px; align-items: center; }
+.frow .skip { color: var(--ink-3); font-size: 11.5px; }
+
+/* ── notes ──────────────────────────────────────────────────────────────── */
+.notes { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.nbox { border: 1px solid var(--line); border-radius: var(--r); padding: 13px 15px; background: var(--chrome); }
+.nbox h3 { font-family: var(--display); font-size: 12px; margin-bottom: 8px; color: var(--ink); font-weight: var(--w-hi); }
+.nbox h3.w { color: var(--warn); }
+.nbox li { font-size: 12.5px; color: var(--ink-2); margin-bottom: 5px; }
+.nbox ul { margin-left: 15px; }
+.nbox b { color: var(--ink); font-weight: var(--w-hi); }
+.fitnote { font: 10.5px var(--mono); color: var(--ink-3); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>The refreshed layout</h1>
+  <p class="lede">Everything the app has today, arranged on purpose instead of by accretion — <b>a navigator rail that never disappears</b> (so collapse is reversible by itself, which is the only reason the header existed), <b>one update surface</b>, <b>a status line that elides</b>, and <b>a dock with a vertical tab rail and a scope</b>. Six screens. The toggle swaps the entire design language: every colour, face, radius and weight is a token, so nothing but the language changes. See <code>_layout.md</code>.</p>
+
+  <div class="ctl">
+    <div class="grp lang">
+      <button class="on" onclick="setLang('sheet',this)">Sheet</button>
+      <button onclick="setLang('signal',this)">Signal</button>
+    </div>
+    <div class="grp">
+      <button class="on" onclick="go('session',this)">Session</button>
+      <button onclick="go('quad',this)">2×2 grid</button>
+      <button onclick="go('dock',this)">Dock</button>
+      <button onclick="go('palette',this)">Palette</button>
+      <button onclick="go('settings',this)">Profiles</button>
+      <button onclick="go('first',this)">First run</button>
+    </div>
+    <div class="say" id="say">sheet · depth: none · hairlines · teal · square machine surfaces</div>
+  </div>
+
+  <!-- ══ SESSION ══════════════════════════════════════════════════════════ -->
+  <div class="screen on" id="s-session">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>artemis</b><span class="sl">›</span>The sandbox lets a write escape</div>
+      <div class="seek">⌕ Search sessions, files, commands<span class="k">⌘K</span></div>
+      <div class="right">
+        <div class="upd">↓ 0.21.0</div>
+        <div class="att">◈ 2 waiting<span class="k">⌥⏎</span></div>
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <div class="r on">▤</div><div class="r">⌕</div><div class="r">☰<span class="bdg"></span></div><div class="r">◫</div>
+        <div class="sp"></div>
+        <div class="r">◐</div><div class="r">⚙</div>
+      </div>
+      <div class="nav">
+        <div class="h">SESSIONS<span class="x">‹</span></div>
+        <div class="newbtn">+ New session</div>
+        <div class="proj"><span>ARTEMIS</span><span>22</span></div>
+        <div class="sess on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span><span class="ago">now</span></div>
+        <div class="sess"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span><span class="ago">4m</span></div>
+        <div class="sess"><i class="dot gate"></i><span class="t">Probe the capability flags</span><span class="ago">6m</span></div>
+        <div class="sess"><i class="dot"></i><span class="t">OpenCode model configurator</span><span class="ago">3h</span></div>
+        <div class="sess"><i class="dot"></i><span class="t">Licence and notice</span><span class="ago">5h</span></div>
+        <div class="proj"><span>CEREBRO</span><span>4</span></div>
+        <div class="sess"><i class="dot run"></i><span class="t">Setup wizard for any bank</span><span class="ago">now</span></div>
+        <div class="sess"><i class="dot"></i><span class="t">Local-only bank, no remote</span><span class="ago">2d</span></div>
+      </div>
+      <div class="work">
+        <div class="grid">
+          <div class="pane focus">
+            <div class="ph"><i class="d gate"></i>artemis › sandbox escape<span class="r"><span>waiting 40s</span><span>⋯</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="turn">TURN 24</div>
+              <div class="you">it says the write succeeded — that's the bug, not the test</div>
+              <div class="think"><span class="txt">Thought for 8s — the check writes under /var/folders, and the profile allows that subpath wholesale…</span></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">pnpm sandbox:check</span><span class="r bad">exit 1 · 4.2s</span></div>
+                <pre> FAIL  local/sandbox.check.ts &gt; escape is refused
+<span class="em">AssertionError: expected 'written' to be 'refused'</span>
+<span class="dim">  ❯ sandbox.check.ts:71:5 · 1 failed | 12 passed</span></pre>
+              </div>
+              <div class="said">The profile allows <span class="inline">/private/var/folders</span> as a subpath. macOS puts <b>every</b> per-user temporary directory under there, so the rule makes another application's scratch space writable.</div>
+              <div class="tool">
+                <div class="bar"><span class="k">search</span><span class="a">rg "var/folders" --type ts</span><span class="r">40 hits</span></div>
+                <pre><span class="hit">local/commandSandbox.ts</span><span class="dim">:118</span>  '(allow file-write* (subpath "/private/var/folders"))',
+<span class="hit">local/commandSandbox.ts</span><span class="dim">:119</span>  '(allow file-write* (subpath "/private/tmp"))',</pre>
+                <div class="more">… 38 more · ⌘⏎ opens all in the dock</div>
+              </div>
+              <div class="turn">TURN 26</div>
+              <div class="diff">
+                <div class="bar"><span class="f">commandSandbox.ts</span><span class="n"><span class="p">+6</span><span class="m">−3</span></span></div>
+                <pre><span class="ctxl">@@ -114,9 +114,12 @@ function profile(writableRoots, scratch) {</span>
+<span class="del">-    '(allow file-write* (subpath "/private/tmp"))',</span>
+<span class="del">-    '(allow file-write* (subpath "/private/var/folders"))',</span>
+<span class="del">-    ...writableRoots.map((r) =&gt; allow(r)),</span>
+<span class="add">+    // Exactly the roots handed in, and nothing else. The blanket</span>
+<span class="add">+    // /var/folders rule let a command escape the workspace.</span>
+<span class="add">+    ...writableRoots.map(</span>
+<span class="add">+      (root) =&gt; `(allow file-write* (subpath "${esc(root)}"))`,</span>
+<span class="add">+    ),</span></pre>
+              </div>
+              <div class="todo">
+                <div class="h">TODO · REWRITTEN THIS TURN</div>
+                <ul>
+                  <li class="done"><span class="m">✓</span>reproduce the escape</li>
+                  <li class="done"><span class="m">✓</span>find which rule allows it</li>
+                  <li class="now"><span class="m">→</span>narrow the writable roots</li>
+                  <li><span class="m">○</span>give each run its own scratch dir</li>
+                </ul>
+              </div>
+              <div class="dele">
+                <div class="chip"><i></i>bubblewrap probe · 2m14s</div>
+                <div class="chip done"><i></i>seatbelt · done</div>
+              </div>
+              <div class="turn">TURN 28</div>
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd2">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="why">Runs <b>unconfined</b> — the path is outside every writable root, so no backend can contain it.</div>
+                <div class="row"><div class="btn go">Allow once<span class="k">⏎</span></div><div class="btn">Always here<span class="k">⇧⏎</span></div><div class="btn">No<span class="k">esc</span></div></div>
+              </div>
+            </div>
+            <div class="comp">
+              <div class="in">Reply to artemis…</div>
+              <div class="status"><s class="hot">opus 5</s><s class="mode">plan</s><s class="el">⋯ think hard · ~/artemis · seatbelt</s><s class="send">⏎ send</s></div>
+            </div>
+          </div>
+          <div class="pane">
+            <div class="ph"><i class="d run"></i>cerebro › setup wizard<span class="r"><span>running 41s</span><span>⋯</span><span>✕</span></span></div>
+            <div class="prog"><i></i></div>
+            <div class="scroll">
+              <div class="fade"></div>
+              <div class="turn">TURN 9</div>
+              <div class="you">local-only banks too — no remote at all</div>
+              <div class="think"><span class="txt">Thinking — init_bank has to fail loudly when git identity is missing, or promote commits nothing and says it worked…</span></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">git -C ~/bank config user.email</span><span class="r bad">exit 1</span></div>
+                <pre><span class="dim">(no output)</span></pre>
+              </div>
+              <div class="said">That is the bug in CI too — no identity, <span class="inline">git commit</span> fails, and the wrapper swallowed it. It has to refuse and name the fix.</div>
+              <div class="tool"><div class="bar"><span class="k">write</span><span class="a">bin/cerebro</span><span class="r ok">+34 −2</span></div></div>
+              <div class="tool">
+                <div class="bar"><span class="k">shell</span><span class="a">cerebro setup --local ~/bank</span><span class="r ok">exit 0 · 0.9s</span></div>
+                <pre>✓ bank initialised at ~/bank
+✓ 18 memories installed
+<span class="dim">  no remote — promote commits locally</span></pre>
+              </div>
+              <div class="said">Writing the wizard's second screen now<span style="color:var(--tool)">▌</span></div>
+            </div>
+            <div class="comp">
+              <div class="in">Reply to cerebro…</div>
+              <div class="status"><s class="hot">sonnet 5</s><s class="mode">accept edits</s><s class="el">⋯ normal · ~/cerebro</s><s class="send">⏎ send</s></div>
+            </div>
+          </div>
+        </div>
+        <div class="dock">
+          <div class="dtabs"><d class="on">◫</d><d>☰</d><d>&gt;_</d><d>◱</d></div>
+          <div class="dbody">
+            <div class="dh"><span class="nm">commandSandbox.ts</span><span>+6 −3</span><span class="scope"><s class="on">this pane</s><s>all</s></span></div>
+            <pre><span><i class="ln">112</i><span class="kw">function</span> <span class="fn">profile</span>(writableRoots, scratch) {</span>
+<span><i class="ln">113</i>  <span class="kw">return</span> [</span>
+<span><i class="ln">114</i>    <span class="st">'(version 1)'</span>,</span>
+<span><i class="ln">115</i>    <span class="st">'(deny default)'</span>,</span>
+<span><i class="ln">116</i>    <span class="cm">// Exactly the roots handed in, and nothing</span></span>
+<span><i class="ln">117</i>    <span class="cm">// else. The blanket /var/folders rule made</span></span>
+<span><i class="ln">118</i>    <span class="cm">// another app's scratch space writable and</span></span>
+<span><i class="ln">119</i>    <span class="cm">// let a command escape the workspace.</span></span>
+<span><i class="ln">120</i>    ...writableRoots.<span class="fn">map</span>(</span>
+<span><i class="ln">121</i>      (root) =&gt; <span class="st">`(allow file-write* …)`</span>,</span>
+<span><i class="ln">122</i>    ),</span>
+<span><i class="ln">123</i>    <span class="fn">allow</span>(scratch),</span>
+<span><i class="ln">124</i>  ].<span class="fn">join</span>(<span class="st">'\n'</span>)</span>
+<span><i class="ln">125</i>}</span>
+<span><i class="ln">126</i></span>
+<span><i class="ln">127</i><span class="cm">/** Null when nothing can confine. The caller</span></span>
+<span><i class="ln">128</i><span class="cm">    must refuse, never silently downgrade. */</span></span>
+<span><i class="ln">129</i><span class="kw">export function</span> <span class="fn">wrapCommand</span>(argv, opts) {</span>
+<span><i class="ln">130</i>  <span class="kw">const</span> backend = <span class="fn">detect</span>()</span>
+<span><i class="ln">131</i>  <span class="kw">if</span> (backend === <span class="nu">WINDOWS_UNCONFINED</span>)</span>
+<span><i class="ln">132</i>    <span class="kw">return</span> <span class="nu">null</span></span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ══ 2×2 GRID ═════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s-quad">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>artemis</b><span class="sl">›</span>Probe the capability flags</div>
+      <div class="seek">⌕ Search sessions, files, commands<span class="k">⌘K</span></div>
+      <div class="right">
+        <div class="att">◈ 2 waiting<span class="k">⌥⏎</span></div>
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <div class="r">▤</div><div class="r">⌕</div><div class="r">☰<span class="bdg"></span></div><div class="r">◫</div>
+        <div class="sp"></div><div class="r">◐</div><div class="r">⚙</div>
+      </div>
+      <div class="work">
+        <div class="grid quad">
+          <div class="pane">
+            <div class="ph"><i class="d gate"></i>artemis › sandbox escape<span class="r"><span>waiting 40s</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="tool"><div class="bar"><span class="k">shell</span><span class="a">pnpm sandbox:check</span><span class="r bad">exit 1</span></div>
+              <pre><span class="em">expected 'written' to be 'refused'</span></pre></div>
+              <div class="diff"><div class="bar"><span class="f">commandSandbox.ts</span><span class="n"><span class="p">+6</span><span class="m">−3</span></span></div>
+              <pre><span class="del">-    '(allow file-write* (subpath "/private/tmp"))',</span>
+<span class="add">+    ...writableRoots.map(</span>
+<span class="add">+      (root) =&gt; `(allow file-write* …)`,</span></pre></div>
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd2">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="row"><div class="btn go">Allow once<span class="k">⏎</span></div><div class="btn">No<span class="k">esc</span></div></div>
+              </div>
+            </div>
+            <div class="comp"><div class="in">Reply…</div><div class="status"><s class="hot">opus 5</s><s class="mode">plan</s><s class="el">⋯</s><s class="send">⏎</s></div></div>
+          </div>
+          <div class="pane">
+            <div class="ph"><i class="d run"></i>cerebro › setup wizard<span class="r"><span>41s</span><span>✕</span></span></div>
+            <div class="prog"><i></i></div>
+            <div class="scroll">
+              <div class="fade"></div>
+              <div class="you">local-only banks too — no remote</div>
+              <div class="tool"><div class="bar"><span class="k">shell</span><span class="a">cerebro setup --local</span><span class="r ok">exit 0</span></div>
+              <pre>✓ bank initialised
+✓ 18 memories installed</pre></div>
+              <div class="said">Writing the second screen<span style="color:var(--tool)">▌</span></div>
+            </div>
+            <div class="comp"><div class="in">Reply…</div><div class="status"><s class="hot">sonnet 5</s><s class="mode">accept edits</s><s class="el">⋯</s><s class="send">⏎</s></div></div>
+          </div>
+          <div class="pane focus">
+            <div class="ph"><i class="d gate"></i>artemis › capability flags<span class="r"><span>failed 6m</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="turn">TURN 12</div>
+              <div class="you">drive it, don't trust the handshake</div>
+              <div class="tool"><div class="bar"><span class="k">shell</span><span class="a">opencode acp — resource block</span><span class="r bad">timeout 7m</span></div>
+              <pre><span class="dim">sent: session/prompt (resource)</span>
+<span class="em">no response · turn never completed</span></pre></div>
+              <div class="said">So <span class="inline">fileInput</span> is a false claim — the handshake advertises it, driving it hangs. Reverting to <b>false</b> with the evidence.</div>
+              <div class="dele"><div class="chip"><i></i>codex parity · 3m40s</div></div>
+            </div>
+            <div class="comp"><div class="in">Reply…</div><div class="status"><s class="hot">opus 5</s><s class="mode">bypass</s><s class="el">⋯</s><s class="send">⏎</s></div></div>
+          </div>
+          <div class="pane">
+            <div class="ph"><i class="d"></i>artemis › model configurator<span class="r"><span>idle 3h</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="tool"><div class="bar"><span class="k">write</span><span class="a">ProfilesScreen.tsx</span><span class="r ok">+212 −18</span></div></div>
+              <div class="tool"><div class="bar"><span class="k">shell</span><span class="a">pnpm -r test</span><span class="r ok">1062 passed</span></div></div>
+              <div class="said">Filter lands per profile. 340 OpenCode models, 12 pinned.</div>
+              <div class="todo"><div class="h">TODO</div><ul>
+                <li class="done"><span class="m">✓</span>per-profile filter</li>
+                <li class="done"><span class="m">✓</span>config dir isolation</li>
+              </ul></div>
+            </div>
+            <div class="comp"><div class="in">Reply…</div><div class="status"><s class="hot">sonnet 5</s><s class="mode">plan</s><s class="el">⋯</s><s class="send">⏎</s></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ══ DOCK ═════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s-dock">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>artemis</b><span class="sl">›</span>The sandbox lets a write escape</div>
+      <div class="seek">⌕ Search sessions, files, commands<span class="k">⌘K</span></div>
+      <div class="right">
+        <div class="att">◈ 2 waiting<span class="k">⌥⏎</span></div>
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <div class="r">▤</div><div class="r">⌕</div><div class="r">☰<span class="bdg"></span></div><div class="r on">◫</div>
+        <div class="sp"></div><div class="r">◐</div><div class="r">⚙</div>
+      </div>
+      <div class="work">
+        <div class="grid">
+          <div class="pane focus">
+            <div class="ph"><i class="d gate"></i>artemis › sandbox escape<span class="r"><span>waiting 40s</span><span>⋯</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="turn">TURN 27</div>
+              <div class="said">Re-running the check on all three backends. The terminal is live in the dock — <span class="inline">bubblewrap</span> is the one I cannot verify from here.</div>
+              <div class="tool"><div class="bar"><span class="k">shell</span><span class="a">pnpm sandbox:check --all</span><span class="r">running</span></div></div>
+              <div class="dele"><div class="chip"><i></i>bubblewrap probe · 2m14s</div><div class="chip done"><i></i>seatbelt · done</div></div>
+              <div class="turn">TURN 28</div>
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd2">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="why">Runs <b>unconfined</b> — outside every writable root.</div>
+                <div class="row"><div class="btn go">Allow once<span class="k">⏎</span></div><div class="btn">Always here<span class="k">⇧⏎</span></div><div class="btn">No<span class="k">esc</span></div></div>
+              </div>
+            </div>
+            <div class="comp"><div class="in">Reply to artemis…</div><div class="status"><s class="hot">opus 5</s><s class="mode">plan</s><s class="el">⋯ think hard · ~/artemis · seatbelt</s><s class="send">⏎ send</s></div></div>
+          </div>
+        </div>
+        <div class="dock wide">
+          <div class="dtabs"><d>◫</d><d class="on">☰</d><d>&gt;_</d><d>◱</d></div>
+          <div class="dbody">
+            <div class="dh"><span class="nm">Tasks</span><span>3 running · 1 waiting</span><span class="scope"><s>this pane</s><s class="on">all</s></span></div>
+            <div class="tasks">
+              <div class="trow"><i class="s wait"></i><span>The sandbox lets a write escape</span><span class="sub">· permission</span><span class="m">40s</span></div>
+              <div class="trow"><i class="s run"></i><span>bubblewrap probe</span><span class="sub">· delegated · sandbox escape</span><span class="m">2m14s</span></div>
+              <div class="trow"><i class="s run"></i><span>Setup wizard for any bank</span><span class="sub">· cerebro</span><span class="m">41s</span></div>
+              <div class="trow"><i class="s run"></i><span>Dock remembers its arrangement</span><span class="sub">· artemis</span><span class="m">4m02s</span></div>
+              <div class="trow"><i class="s ok"></i><span>seatbelt matrix</span><span class="sub">· delegated · sandbox escape</span><span class="m">done</span></div>
+              <div class="trow"><i class="s ok"></i><span>codex parity probe</span><span class="sub">· artemis</span><span class="m">done</span></div>
+            </div>
+            <div class="dh" style="border-top:1px solid var(--line)"><span class="nm">zsh</span><span>~/artemis</span></div>
+            <div class="term"><span class="p">artemis</span> ❯ pnpm sandbox:check --all
+<span class="d">  seatbelt      </span><span class="p">refused</span><span class="d">   write outside workspace</span>
+<span class="d">  bubblewrap    </span><span class="p">refused</span><span class="d">   write outside workspace</span>
+<span class="d">  windows       </span><span class="e">unconfined</span><span class="d"> no backend — caller must refuse</span>
+
+<span class="d">  3 backends · 2 confine · 1 refuses to run</span>
+<span class="p">artemis</span> ❯ <span style="color:var(--tool)">▌</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="fitnote">The dock's other two tabs — browser and file viewer — are on the Session screen and below. Scope chip set to <b>all</b> here, which is why a delegated task from another pane is listed.</p>
+  </div>
+
+  <!-- ══ PALETTE ══════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s-palette">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>artemis</b><span class="sl">›</span>The sandbox lets a write escape</div>
+      <div class="seek" style="border-color:var(--accent);color:var(--ink)">⌕ sandbox<span class="k">esc</span></div>
+      <div class="right">
+        <div class="att">◈ 2 waiting<span class="k">⌥⏎</span></div>
+        <div class="ctx">78%<div class="ctxbar"><i></i></div></div>
+        <div class="icon">⊞</div><div class="icon">+</div><div class="icon">⚙</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <div class="r">▤</div><div class="r on">⌕</div><div class="r">☰<span class="bdg"></span></div><div class="r">◫</div>
+        <div class="sp"></div><div class="r">◐</div><div class="r">⚙</div>
+      </div>
+      <div class="work">
+        <div class="grid">
+          <div class="pane focus">
+            <div class="ph"><i class="d gate"></i>artemis › sandbox escape<span class="r"><span>waiting 40s</span><span>⋯</span><span>✕</span></span></div>
+            <div class="scroll btm">
+              <div class="fade"></div>
+              <div class="said">The profile allows <span class="inline">/private/var/folders</span> as a subpath, so another application's scratch space is writable.</div>
+              <div class="diff"><div class="bar"><span class="f">commandSandbox.ts</span><span class="n"><span class="p">+6</span><span class="m">−3</span></span></div>
+              <pre><span class="del">-    '(allow file-write* (subpath "/private/var/folders"))',</span>
+<span class="add">+    ...writableRoots.map(</span>
+<span class="add">+      (root) =&gt; `(allow file-write* (subpath "${esc(root)}"))`,</span>
+<span class="add">+    ),</span></pre></div>
+              <div class="gate">
+                <div class="h">⚠ WANTS YOUR PERMISSION</div>
+                <div class="cmd2">rm -rf /tmp/artemis-sandbox-probe-*</div>
+                <div class="row"><div class="btn go">Allow once<span class="k">⏎</span></div><div class="btn">No<span class="k">esc</span></div></div>
+              </div>
+            </div>
+            <div class="comp"><div class="in">Reply to artemis…</div><div class="status"><s class="hot">opus 5</s><s class="mode">plan</s><s class="el">⋯ think hard · ~/artemis · seatbelt</s><s class="send">⏎ send</s></div></div>
+          </div>
+        </div>
+        <div class="dock">
+          <div class="dtabs"><d class="on">◫</d><d>☰</d><d>&gt;_</d><d>◱</d></div>
+          <div class="dbody">
+            <div class="dh"><span class="nm">commandSandbox.ts</span><span>+6 −3</span><span class="scope"><s class="on">this pane</s><s>all</s></span></div>
+            <pre><span><i class="ln">116</i>    <span class="cm">// Exactly the roots handed in, and nothing</span></span>
+<span><i class="ln">117</i>    <span class="cm">// else. The blanket /var/folders rule made</span></span>
+<span><i class="ln">118</i>    <span class="cm">// another app's scratch space writable.</span></span>
+<span><i class="ln">119</i>    ...writableRoots.<span class="fn">map</span>(</span>
+<span><i class="ln">120</i>      (root) =&gt; <span class="st">`(allow file-write* …)`</span>,</span>
+<span><i class="ln">121</i>    ),</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="scrim">
+      <div class="pal">
+        <div class="q">⌕ sandbox<span class="c">│</span><span class="c" style="margin-left:auto">3 sources</span></div>
+        <div class="sec">SESSIONS</div>
+        <div class="it on"><span class="g">▤</span>The sandbox lets a write escape<span class="tag">artemis · waiting</span><span class="k">⏎</span></div>
+        <div class="it"><span class="g">▤</span>Sandbox on linux and windows<span class="tag">artemis · 2d</span></div>
+        <div class="sec">FILES · CHANGED IN THIS SESSION</div>
+        <div class="it"><span class="g">◫</span>adapters/local/commandSandbox.ts<span class="tag">+6 −3</span></div>
+        <div class="it"><span class="g">◫</span>adapters/local/sandbox.check.ts<span class="tag">new</span></div>
+        <div class="it"><span class="g">◫</span>adapters/local/sandbox.ts<span class="tag">+11 −2</span></div>
+        <div class="sec">COMMANDS</div>
+        <div class="it"><span class="g">&gt;_</span>Run pnpm sandbox:check<span class="k">⌘⏎</span></div>
+        <div class="it"><span class="g">◐</span>Switch permission mode → bypass<span class="k">⌘⇧P</span></div>
+        <div class="it"><span class="g">⚙</span>Open sandbox settings</div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ══ SETTINGS / PROFILES ══════════════════════════════════════════════ -->
+  <div class="screen" id="s-settings">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>Settings</b><span class="sl">›</span>Providers and profiles</div>
+      <div class="seek">⌕ Search settings<span class="k">⌘K</span></div>
+      <div class="right"><div class="icon">✕</div></div>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <div class="r">▤</div><div class="r">⌕</div><div class="r">☰<span class="bdg"></span></div><div class="r">◫</div>
+        <div class="sp"></div><div class="r">◐</div><div class="r on">⚙</div>
+      </div>
+      <div class="set">
+        <div class="setnav">
+          <div class="g">SETTINGS</div>
+          <div class="s on">Providers</div>
+          <div class="s">Profiles</div>
+          <div class="s">Sandbox</div>
+          <div class="s">Appearance</div>
+          <div class="s">Keyboard</div>
+          <div class="g">WORKSPACE</div>
+          <div class="s">Directories</div>
+          <div class="s">Memory bank</div>
+          <div class="s">Updates</div>
+        </div>
+        <div class="setbody">
+          <h2>Providers</h2>
+          <p class="sub">A capability is either true, or false for a documented upstream reason. The UI degrades from what is declared here.</p>
+          <div class="prov">
+            <div class="ph2"><span class="n">Claude</span><span class="mono" style="font:10px var(--mono);color:var(--ink-3)">claude-agent-sdk</span>
+              <span class="cap"><b class="y">stream</b><b class="y">steer</b><b class="y">images</b><b class="y">files</b><b class="y">plan</b><b class="y">tasks</b></span></div>
+            <div class="rowl"><span>opus 5</span><span class="mono">1M context · thinking</span><span class="sw2 on"><i></i></span></div>
+            <div class="rowl"><span>sonnet 5</span><span class="mono">200k context</span><span class="sw2 on"><i></i></span></div>
+            <div class="rowl"><span>haiku 4.5</span><span class="mono">200k context</span><span class="sw2"><i></i></span></div>
+          </div>
+          <div class="prov">
+            <div class="ph2"><span class="n">Codex</span><span class="mono" style="font:10px var(--mono);color:var(--ink-3)">codex exec · json</span>
+              <span class="cap"><b class="y">stream</b><b class="n">steer</b><b class="y">images</b><b class="y">files</b><b class="y">plan</b><b class="n">tasks</b></span></div>
+            <div class="rowl"><span>gpt-5-codex</span><span class="mono">no steering — upstream has no method</span><span class="sw2 on"><i></i></span></div>
+          </div>
+          <div class="prov">
+            <div class="ph2"><span class="n">OpenCode</span><span class="mono" style="font:10px var(--mono);color:var(--ink-3)">opencode acp · stdio</span>
+              <span class="cap"><b class="y">stream</b><b class="n">steer</b><b class="y">images</b><b class="n">files</b><b class="n">plan</b><b class="n">tasks</b></span></div>
+            <div class="rowl"><span>340 models available</span><span class="mono">12 pinned to this profile</span><span class="btn" style="margin-left:auto">Configure…</span></div>
+            <div class="rowl"><span style="color:var(--warn)">files: declared, driven, hangs</span><span class="mono">a resource block never completes the turn — set false with evidence</span></div>
+          </div>
+          <div class="local">
+            <div class="lh">LOCAL · NO ACCOUNT, NO NETWORK</div>
+            <div class="lgrid">
+              <div class="lcard"><div class="n">LM Studio</div><div class="u">127.0.0.1:1234</div><div class="st2"><i></i>4 models loaded</div></div>
+              <div class="lcard"><div class="n">Ollama</div><div class="u">127.0.0.1:11434</div><div class="st2"><i></i>ministral-3b</div></div>
+              <div class="lcard"><div class="n">llama.cpp</div><div class="u">127.0.0.1:8080</div><div class="st2 off"><i></i>not running</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ══ FIRST RUN ════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s-first">
+  <div class="win">
+    <div class="cmd">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="crumb"><b>Artemis</b></div>
+      <div class="right"><div class="icon">◐</div><div class="icon">⚙</div></div>
+    </div>
+    <div class="body">
+      <div class="first">
+        <div class="fbox">
+          <div class="mark">Artemis</div>
+          <div class="tag2">One window for every agent you run.</div>
+          <div class="step">STEP 1 OF 2 · CHOOSE A PROVIDER</div>
+          <div class="pgrid">
+            <div class="pcard on"><span class="g">◆</span><div><div class="n">Claude</div><div class="d">Signed in as seth@storrence.dev</div></div><span class="ok2">✓</span></div>
+            <div class="pcard"><span class="g">◇</span><div><div class="n">Codex</div><div class="d">CLI found · not signed in</div></div></div>
+            <div class="pcard"><span class="g">◈</span><div><div class="n">OpenCode</div><div class="d">CLI found · 340 models</div></div></div>
+            <div class="pcard"><span class="g">▣</span><div><div class="n">Local</div><div class="d">LM Studio running on :1234</div></div><span class="ok2">✓</span></div>
+          </div>
+          <div class="step">CONFINEMENT</div>
+          <div class="pcard" style="margin-bottom:18px"><span class="g">⛨</span><div><div class="n">Seatbelt · verified on this machine</div><div class="d">Commands run confined to the working directory. Anything that cannot be contained is refused, never silently downgraded.</div></div></div>
+          <div class="frow"><div class="btn pri">Continue<span class="k">⏎</span></div><div class="btn">Add another provider</div><span class="skip">You can change all of this later in Settings.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="notes">
+    <div class="nbox">
+      <h3>What the refresh fixes</h3>
+      <ul>
+        <li><b>The rail never disappears.</b> Collapse is reversible by the rail itself, which removes the reason the header existed as a workaround. Compare the Session and 2×2 screens — the list panel is gone in one, and nothing is stranded.</li>
+        <li><b>One update surface.</b> <code>↓ 0.21.0</code> lives in the command bar whatever else is open, instead of a card when the sidebar shows and a banner when it does not.</li>
+        <li><b>The status line elides.</b> Model and permission mode always — the two that change behaviour — and the rest behind <code>⋯</code>. Round two's One Bar proved nine facts do not fit; this shows two and admits the rest.</li>
+        <li><b>Dock tabs go vertical and gain a scope.</b> Tabs stop eating the narrowest panel's width, and <i>this pane / all</i> answers who a tab belongs to — the question Catch could not resolve.</li>
+        <li><b>The pane header stays on top.</b> One Bar moved it to the floor and the render showed the name wrapping to three lines.</li>
+      </ul>
+    </div>
+    <div class="nbox">
+      <h3 class="w">What is still open</h3>
+      <ul>
+        <li><b>Signal's tints need a decision.</b> At 11–14% they sort a column but do not shout. Stronger reads as decoration; weaker is invisible. The delegated-agent violet is the one that clearly earns itself.</li>
+        <li><b>Sheet has no way to float.</b> The palette here uses a border and a shadow, which is the one place the language breaks its own no-elevation rule. It may simply be the honest exception.</li>
+        <li><b>Light mode is not an inversion for Signal.</b> A 12% wash over a dark ground disappears over a light one; it needs its own scale.</li>
+        <li><b>The rail's icons are placeholders.</b> Six glyphs doing six jobs needs real drawing, and the badge convention is asserted rather than designed.</li>
+        <li><b>Motion is undesigned</b> — streaming, the progress hairline, focus transitions, and what the palette does on open.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+var SAY = {
+  sheet: 'sheet · depth: none · hairlines · teal · square machine surfaces',
+  signal: 'signal · colour means who · you blue · machine green · delegated violet'
+};
+function setLang(l, el) {
+  document.documentElement.setAttribute('data-lang', l);
+  document.getElementById('say').textContent = SAY[l];
+  var g = el.parentNode.children;
+  for (var i = 0; i < g.length; i++) g[i].classList.remove('on');
+  el.classList.add('on');
+}
+function go(id, el) {
+  var s = document.querySelectorAll('.screen');
+  for (var i = 0; i < s.length; i++) s[i].classList.remove('on');
+  document.getElementById('s-' + id).classList.add('on');
+  var g = el.parentNode.children;
+  for (var j = 0; j < g.length; j++) g[j].classList.remove('on');
+  el.classList.add('on');
+}
+/* Each state is linkable: app.html#signal/quad. Also what lets a headless
+   renderer capture a specific state without driving the page. */
+var VIEWS = ['session', 'quad', 'dock', 'palette', 'settings', 'first'];
+function fromHash() {
+  var h = (location.hash || '').replace('#', '').split('/');
+  var lang = h[0] === 'signal' ? 'signal' : 'sheet';
+  var view = VIEWS.indexOf(h[1]) >= 0 ? VIEWS.indexOf(h[1]) : 0;
+  document.querySelectorAll('.ctl .lang button')[lang === 'sheet' ? 0 : 1].click();
+  document.querySelectorAll('.ctl .grp:nth-of-type(2) button')[view].click();
+}
+addEventListener('hashchange', fromHash);
+fromHash();
+
+/* L toggles the language, 1–6 the screens — so a side-by-side comparison is
+   two keystrokes rather than two clicks across the page. */
+addEventListener('keydown', function (e) {
+  var lang = document.querySelectorAll('.ctl .lang button');
+  var views = document.querySelectorAll('.ctl .grp:nth-of-type(2) button');
+  if (e.key === 'l' || e.key === 'L') {
+    var next = document.documentElement.getAttribute('data-lang') === 'sheet' ? 1 : 0;
+    lang[next].click();
+  }
+  var n = parseInt(e.key, 10);
+  if (n >= 1 && n <= views.length) views[n - 1].click();
+});
+</script>
+</body>
+</html>

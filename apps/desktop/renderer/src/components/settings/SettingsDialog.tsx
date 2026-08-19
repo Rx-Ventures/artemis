@@ -202,12 +202,12 @@ export function SettingsDialog(): ReactElement {
                     // layout, while `ring-*` on this component collides with
                     // the focus ring it declares for itself.
                     active
-                      ? 'border-lunar/30 bg-lunar/10 text-ink hover:bg-lunar/15'
+                      ? 'border-beam/30 bg-beam/10 text-ink hover:bg-beam/15'
                       : 'text-ink-muted',
                   )}
                   onClick={() => setSettingsSection(entry.id)}
                 >
-                  <span className={cn('shrink-0', active ? 'text-lunar' : 'text-ink-faint')}>
+                  <span className={cn('shrink-0', active ? 'text-beam' : 'text-ink-faint')}>
                     {entry.icon}
                   </span>
                   <span className="flex min-w-0 flex-col">

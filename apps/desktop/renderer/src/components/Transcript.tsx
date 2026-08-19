@@ -53,7 +53,7 @@
  *
  * `align` flips the whole row, gutter included, so a user turn puts its label
  * on the right where the bubble is. That is the back-and-forth: the user speaks
- * from the right in a filled lunar bubble, everything the agent does answers
+ * from the right in a filled beam bubble, everything the agent does answers
  * from the left.
  *
  * Four choices inside that worth stating, because each had an obvious
@@ -67,9 +67,9 @@
  *    the hooks `bubble.tsx` itself selects on — renaming the group would
  *    quietly break a vendored file's own styling.
  *  - **The user bubble is `tinted`, not `default`.** `default` fills with
- *    `--primary`, which here is lunar at 73% lightness. A one-line prompt would
+ *    `--primary`, which here is beam at 73% lightness. A one-line prompt would
  *    survive that; a pasted twenty-line spec is a floodlight in a dark room
- *    someone is sitting in for eight hours. `tinted` is the same lunar hue at
+ *    someone is sitting in for eight hours. `tinted` is the same beam hue at
  *    30% lightness — unmistakably "yours", legible in `--ink`, and quiet.
  *  - **The agent bubble is `ghost`.** Agent output here is code-heavy markdown
  *    — fenced blocks, tables, diff-adjacent prose — not chat banter. A filled
@@ -200,8 +200,8 @@ import {
   type UserItem,
 } from '../state/transcript';
 import { DiffView } from './DiffView';
+import { ActivityIndicator } from './Activity';
 import { EmptyState } from './EmptyState';
-import { HuntBar } from './HuntBar';
 import { InlinePermission } from './InlinePermission';
 import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
@@ -319,14 +319,12 @@ export function Transcript(): ReactElement {
           className={cn('mx-auto flex w-full flex-col gap-0.5 px-4 py-4', COLUMN_MAX[width])}
         >
           {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
-          <Working />
-          {/* The hunt, riding the conversation's tail: inside the content
-              column so it sits at the bottom of the text itself — pushed down
-              by every row that streams in, scrolling with the transcript, and
-              sharing the column's measure so the arrow crosses exactly the
-              width the prose does. Static height, transforms-only inside, so
-              it never trips the tail-follower above. See `HuntBar.tsx`. */}
-          <HuntBar />
+          {/* What the pane is doing, riding the conversation's tail: inside the
+              content column so it sits at the bottom of the text itself —
+              pushed down by every row that streams in, scrolling with the
+              transcript, and sharing the column's measure so the rule crosses
+              exactly the width the prose does. See `Activity.tsx`. */}
+          <ActivityIndicator />
         </div>
       </div>
 
@@ -345,33 +343,6 @@ export function Transcript(): ReactElement {
   );
 }
 
-/**
- * The working indicator, for providers that do not stream.
- *
- * `partialMessages` is a rendering capability rather than a control, so it can
- * never be "gated" the way a button is — but leaving it unhandled would mean a
- * non-streaming provider showed a completely static screen for the whole time
- * it was thinking, which reads as a hung app. This is where that capability is
- * answered: a typewriter when the provider streams, a pulse when it does not.
- *
- * Subscribed narrowly, and to `useApp` rather than to the transcript, so it
- * costs nothing while text is arriving.
- */
-function Working(): ReactElement | null {
-  const live = usePane((s) => s.run !== null && s.run.status === 'running');
-  const streams = usePane((s) => activeCapabilities(s).partialMessages);
-  const waiting = usePane((s) => s.permissionQueue.length > 0);
-
-  if (!live || streams || waiting) return null;
-  return (
-    <Line label="" avatar={<AgentAvatar />}>
-      <span className="flex items-center gap-2 py-1 font-mono text-2xs text-ink-faint">
-        <StatusDot tone="cyan" pulse />
-        Working — this provider sends whole messages, so nothing appears until the block is done.
-      </span>
-    </Line>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Row dispatch                                                               */
@@ -485,7 +456,7 @@ function Line({
           {avatar}
           {label === '' ? null : (
             <div
-              className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}
+              className={cn('chrome-label', toneClasses.text[tone])}
             >
               {label}
             </div>
@@ -542,7 +513,7 @@ function AgentAvatar(): ReactElement {
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   return (
-    <Line label="you" tone="lunar" ts={item.ts} align="end" className="turn-in mt-2">
+    <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2">
       <Bubble
         align="end"
         variant="tinted"
@@ -565,7 +536,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             `rounded-br-sm` is the tail — the one square corner points back at
             the author, which is what makes an aligned bubble read as *from*
             someone rather than merely offset. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
+        <BubbleContent className="rounded-2xl rounded-br-sm border-beam/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -585,7 +556,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                     // Capped rather than full-bleed: a tall screenshot at full
                     // width would push the prompt it belongs to off the screen,
                     // and this is a record of what was sent, not a viewer.
-                    className="max-h-48 max-w-full rounded-md border border-lunar/25 object-contain"
+                    className="max-h-48 max-w-full rounded-md border border-beam/25 object-contain"
                   />
                 ) : (
                   /* A file has no picture, so the record of it is its name and
@@ -596,7 +567,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                   <span
                     key={attachment.id}
                     title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
-                    className="flex max-w-full items-center gap-1.5 rounded-md border border-lunar/25 px-2 py-1 font-mono text-2xs text-ink-muted"
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-beam/25 px-2 py-1 font-mono text-2xs text-ink-muted"
                   >
                     <PaperclipIcon className="size-3 shrink-0" />
                     <span className="truncate text-ink">{attachment.name}</span>
@@ -692,7 +663,7 @@ const REDACTED = 'This thinking block was encrypted or withheld by the provider.
  */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
   return (
-    <div className="rounded-md border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
+    <div className="rounded-none border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
       {item.redacted ? REDACTED : item.text}
     </div>
   );
@@ -794,7 +765,7 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
                 in the prose face because it is prose, unlike a tool row's
                 preview, which is a real command. */}
             {open ? (
-              <span className="shrink-0 font-mono text-2xs tracking-wider uppercase">thinking</span>
+              <span className="shrink-0 chrome-label">thinking</span>
             ) : (
               <span className="truncate text-2xs">{thinkingPreview(item)}</span>
             )}
@@ -1370,7 +1341,7 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
             ) : (
               <SparklesIcon className="size-3 text-mint" aria-hidden="true" />
             )}
-            <span className="font-mono text-2xs tracking-wider text-ink-muted uppercase">
+            <span className="chrome-label text-ink-muted">
               {item.reason.replace(/_/g, ' ')}
             </span>
           </span>
@@ -1420,7 +1391,7 @@ function Stat({
   return (
     <span className="flex items-baseline gap-1">
       <span className="font-mono text-2xs text-ink-faint">{label}</span>
-      <span className={cn('font-mono text-2xs', emphasis ? 'text-lunar' : 'text-ink-muted')}>
+      <span className={cn('font-mono text-2xs', emphasis ? 'text-beam' : 'text-ink-muted')}>
         {value}
       </span>
     </span>

@@ -1799,6 +1799,7 @@ export function createMockBridge(): ArtemisBridge {
       install: async () => ok({ state: mockUpdateState() }),
       restart: async () => ok({ state: mockUpdateState() }),
       dismiss: async () => ok({ state: mockUpdateState() }),
+      setChannel: async () => ok({ state: mockUpdateState() }),
       onChange: (): Unsubscribe => () => undefined,
     },
 

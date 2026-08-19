@@ -1,0 +1,29 @@
+Artemis
+Copyright 2026 Rx Ventures
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+Artemis is an independent open-source project. It is not affiliated with,
+endorsed by, or a distribution of any vendor's coding CLI, and it is not a
+reimplementation of one's interface. "Powered by Claude" is the extent of the
+attribution.
+
+The Artemis name, logo and visual identity are not licensed under the Apache
+License; section 6 of that license grants no trademark rights.
+
+--------------------------------------------------------------------------------
+IF YOU REDISTRIBUTE ARTEMIS, READ THIS FIRST
+
+Artemis performs no login and stores no credential. Its sign-in flow ends in the
+provider CLI's own login, run by the user in their own terminal.
+
+Anthropic's Agent SDK documentation states that third-party developers may not
+offer claude.ai login or subscription rate limits for their products without
+prior approval from Anthropic. Artemis's sign-in flow ends in exactly that login.
+If you distribute a build of Artemis to other people, seek that approval first.
+
+Running your own build against your own subscription is a separate matter from
+distributing one to others.
+
+This notice is carried under section 4(d) of the Apache License: if you
+redistribute Artemis or a derivative of it, this warning travels with the code.

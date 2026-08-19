@@ -64,7 +64,8 @@ import {
   plansForProvider,
   profileColorProblem,
 } from '@rx-artemis/protocol';
-import type { AuthStatusInfo, ProfileMetadata, ProviderId } from '@rx-artemis/protocol';
+import type { AuthStatusInfo, ProfileMetadata, ProviderId,
+  ProviderKind } from '@rx-artemis/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
 import { shortenPath } from '../lib/paths';
@@ -132,10 +133,34 @@ const POLL_INTERVAL_MS = 2_000;
  * only — the authoritative variable name lives on the adapter's
  * `ProviderCredentialSpec`, which the renderer never sees.
  */
+/**
+ * The two halves of the provider picker, in the order they are shown.
+ *
+ * Hosted first because that is what most people are here for, and local
+ * beneath it: a model on your own machine is the deliberate choice, not the
+ * default one.
+ */
+const PROVIDER_GROUPS: readonly { readonly kind: ProviderKind; readonly heading: string }[] = [
+  { kind: 'hosted', heading: 'Hosted — signed in to an account' },
+  { kind: 'local', heading: 'Local — a server on this machine' },
+];
+
 const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
   claude: '.claude',
   codex: '.codex',
   opencode: '.config/opencode',
+  /**
+   * The odd one out, and deliberately empty.
+   *
+   * The other three name a directory a CLI already keeps its account in, which
+   * is what makes "point it at your existing one" a useful hint. A local
+   * inference server has no such directory — a profile here is defined by an
+   * *endpoint*, not by an account on disk — so offering a path to reuse would
+   * be inventing a convention rather than reporting one.
+   */
+  lmstudio: '',
+  ollama: '',
+  llamacpp: '',
 };
 
 export function ProfilesSection(): ReactElement {
@@ -293,7 +318,7 @@ function ProfileCard({
   }, [signedIn]);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-lunar/50' : 'ring-line')}>
+    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-beam/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         {/*
           Only problems get a badge.
@@ -304,7 +329,7 @@ function ProfileCard({
           the only badge that needs acting on, was sitting in a line of green
           and orange reassurance.
 
-          Neither fact is lost. Active is the card's lunar ring, which reads
+          Neither fact is lost. Active is the card's beam ring, which reads
           faster than a word and does not compete for the same slot; signed-in
           is the account line below, which names the account rather than
           asserting that one exists.
@@ -498,7 +523,7 @@ function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactEl
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
+    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
       <CardContent className="flex flex-col gap-3">
         <h2 className="text-sm font-medium text-ink">Sign in</h2>
         <SignInStep profileId={createdId} onDone={onDone} />
@@ -663,7 +688,7 @@ function PlanField({
 
   return (
     <Field>
-      <FieldLabel htmlFor="profile-plan" className="text-2xs text-ink-faint uppercase">
+      <FieldLabel htmlFor="profile-plan" className="chrome-label text-ink-faint">
         Plan
       </FieldLabel>
       <Select
@@ -777,7 +802,7 @@ function AvailabilityField({
 }): ReactElement {
   return (
     <Field>
-      <FieldLabel className="text-2xs text-ink-faint uppercase">Availability</FieldLabel>
+      <FieldLabel className="chrome-label text-ink-faint">Availability</FieldLabel>
       <div className="flex flex-col gap-3 rounded-lg border border-line bg-inset/60 px-3 py-2.5">
         <AvailabilityToggle
           id="profile-auto-select"
@@ -984,6 +1009,9 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
     (s) => s.providers.find((p) => p.id === providerId)?.label ?? providerId,
   );
   const homeDirName = CONVENTIONAL_CONFIG_DIR[providerId];
+  const activeKind = useApp(
+    (s) => s.providers.find((p) => p.id === providerId)?.kind ?? 'hosted',
+  );
 
   /**
    * Whether the user has taken ownership of the path.
@@ -1111,7 +1139,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
+    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">
@@ -1130,32 +1158,51 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             */}
             {editing ? null : (
               <Field>
-                <FieldLabel className="text-2xs text-ink-faint uppercase">Provider</FieldLabel>
-                <ButtonGroup>
-                  {providers.map((option) => (
-                    <ReasonButton
-                      key={option.id}
-                      type="button"
-                      size="sm"
-                      variant={option.id === providerId ? 'secondary' : 'outline'}
-                      aria-pressed={option.id === providerId}
-                      disabled={!option.available}
-                      disabledReason={option.unavailableReason}
-                      onClick={() => setChosenProvider(option.id)}
-                    >
-                      {option.label}
-                    </ReasonButton>
-                  ))}
-                </ButtonGroup>
+                <FieldLabel className="chrome-label text-ink-faint">Provider</FieldLabel>
+                {/*
+                  Split by `ProviderKind` rather than by a list kept here, so a
+                  new provider lands in the right half without this file being
+                  edited. The two halves are entered differently, which is the
+                  reason they are separated at all: a hosted profile is an
+                  account and a config directory, a local one is an address.
+                */}
+                {PROVIDER_GROUPS.map((group) => {
+                  const options = providers.filter(
+                    (option) => (option.kind ?? 'hosted') === group.kind,
+                  );
+                  if (options.length === 0) return null;
+                  return (
+                    <div key={group.kind} className="flex flex-col gap-1">
+                      <span className="text-2xs text-ink-faint">{group.heading}</span>
+                      <ButtonGroup>
+                        {options.map((option) => (
+                          <ReasonButton
+                            key={option.id}
+                            type="button"
+                            size="sm"
+                            variant={option.id === providerId ? 'secondary' : 'outline'}
+                            aria-pressed={option.id === providerId}
+                            disabled={!option.available}
+                            disabledReason={option.unavailableReason}
+                            onClick={() => setChosenProvider(option.id)}
+                          >
+                            {option.label}
+                          </ReasonButton>
+                        ))}
+                      </ButtonGroup>
+                    </div>
+                  );
+                })}
                 <FieldDescription className="text-2xs">
-                  Which CLI this account belongs to. It cannot be changed afterwards — the config
-                  directory below is that CLI's, and its own sign-in is what writes into it.
+                  {activeKind === 'local'
+                    ? 'Which server on this machine this profile talks to. There is nothing to sign in to — the profile is an address, and the server either answers or it does not.'
+                    : "Which CLI this account belongs to. It cannot be changed afterwards — the config directory below is that CLI's, and its own sign-in is what writes into it."}
                 </FieldDescription>
               </Field>
             )}
 
             <Field>
-              <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">
+              <FieldLabel htmlFor="profile-label" className="chrome-label text-ink-faint">
                 Name
               </FieldLabel>
               <div className="flex items-center gap-2">
@@ -1180,7 +1227,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             <PlanField providerId={providerId} value={planId} onChange={setPlanId} />
 
             <Field>
-              <FieldLabel htmlFor="profile-config-dir" className="text-2xs text-ink-faint uppercase">
+              <FieldLabel htmlFor="profile-config-dir" className="chrome-label text-ink-faint">
                 Config directory
               </FieldLabel>
               <div className="flex items-center gap-2">
@@ -1252,7 +1299,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             */}
             {editing ? (
               <Field>
-                <FieldLabel htmlFor="profile-env" className="text-2xs text-ink-faint uppercase">
+                <FieldLabel htmlFor="profile-env" className="chrome-label text-ink-faint">
                   Extra environment (optional)
                 </FieldLabel>
                 <Textarea

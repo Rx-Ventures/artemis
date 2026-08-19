@@ -319,7 +319,7 @@ function MemoryCard({
     <div className="flex flex-col gap-1 rounded-md border border-line bg-panel px-3 py-2.5">
       <div className="flex items-center gap-2">
         <span className="font-mono text-xs font-medium text-ink">{memory.name}</span>
-        <ToneBadge tone="neutral" className="uppercase">
+        <ToneBadge tone="neutral">
           {memory.type}
         </ToneBadge>
         <span className="ml-auto">

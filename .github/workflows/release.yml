@@ -147,11 +147,23 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # A tag carrying a semver prerelease part — v1.0.0-beta.1 — is published
+      # as a prerelease, and that is not cosmetic. GitHub's
+      # `/releases/latest` endpoint skips prereleases, and that endpoint is
+      # exactly what the updater asks for on the stable channel, so the flag is
+      # the only thing standing between a beta build and every installed copy
+      # of the app offering it. Without it a beta tag ships to everyone.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            *-*) prerelease="--prerelease" ;;
+            *)   prerelease="" ;;
+          esac
+          # shellcheck disable=SC2086
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Artemis $version" \
-            --notes-file .github/RELEASE_NOTES.md
+            --notes-file .github/RELEASE_NOTES.md \
+            $prerelease

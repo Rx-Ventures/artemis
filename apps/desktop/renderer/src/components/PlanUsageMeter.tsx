@@ -742,7 +742,7 @@ function PlanWindows({
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-2xs uppercase tracking-wide text-ink-faint">
+        <span className="chrome-label tracking-wide text-ink-faint">
           {usage.subscriptionType ? `${usage.subscriptionType} plan` : 'Plan usage'}
         </span>
         <Button

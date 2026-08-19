@@ -5,8 +5,9 @@ A desktop UI for agentic coding CLIs.
 Artemis is an open-source Electron app that puts a real interface in front of
 command-line coding agents: a readable transcript, an approval surface you can
 actually reason about, isolated accounts you can switch between, and session
-history you can browse. Claude and Codex are the providers today. The
-architecture is built around a provider seam so OpenCode can follow.
+history you can browse. Claude, Codex and OpenCode are the providers today —
+and through OpenCode's own configuration, any model it can be pointed at,
+including ones running locally.
 
 Powered by Claude.
 
@@ -14,14 +15,20 @@ Powered by Claude.
 
 ## Status
 
-Working end to end for Claude and for Codex. You can create a profile, sign it
+Working end to end for all three providers. You can create a profile, sign it
 in with the provider's own CLI, start a run, watch it stream, approve or deny
 tool calls, interrupt it, and browse past sessions.
 
-Codex shows as available whenever its CLI is on your `PATH`; when it is not,
-the profile screen greys the provider out and says so rather than hiding it.
-OpenCode is declared in the protocol and appears in the UI as unavailable;
-that adapter does not exist yet.
+Codex and OpenCode show as available whenever their CLI is on your `PATH`;
+when it is not, the profile screen greys the provider out and says so rather
+than hiding it. Every provider id the protocol declares now has an adapter
+behind it.
+
+What each one can do differs, and the UI reads that from the provider rather
+than assuming: OpenCode has no mid-run steering (its protocol models a turn as
+one request) and offers two permission modes rather than six, so the composer
+locks while it works and the mode picker is shorter. Nothing is hidden — the
+affordances it lacks are disabled with a reason.
 
 ## Authentication
 
@@ -118,11 +125,19 @@ account it started with; nothing rotates accounts mid-run.
 The three providers Artemis targets have nothing in common at the transport
 layer:
 
-| Provider | Transport                               |
-| -------- | --------------------------------------- |
-| Claude   | in-process Node library                 |
-| Codex    | subprocess speaking JSON-RPC over stdio |
-| OpenCode | local HTTP server                       |
+| Provider | Transport                                        |
+| -------- | ------------------------------------------------ |
+| Claude   | in-process Node library                          |
+| Codex    | subprocess speaking JSON-RPC over stdio          |
+| OpenCode | subprocess speaking the Agent Client Protocol    |
+
+Two of those are JSON-RPC over a pipe and still share almost nothing: Codex's
+app-server is its own vocabulary, while OpenCode speaks ACP — an open protocol
+several vendors have adopted. That difference is why the ACP half lives in
+`adapters/acp` rather than inside the OpenCode adapter: it is the
+vendor-recommended surface for Kimi Code and Grok Build too, so the next
+adapter of that kind is a mapper and a credential spec rather than a second
+transport.
 
 So the abstraction cannot be shaped like any one of them. Every adapter
 normalizes its native stream onto a single eleven-variant event union —
@@ -159,25 +174,62 @@ export function createDefaultProviderRegistry(options?) {
   return createProviderRegistry([
     createClaudeAdapter(options?.claude),
     createCodexAdapter(options?.codex),
-    // createOpenCodeAdapter(options?.opencode),
+    createOpencodeAdapter(options?.opencode),
   ])
 }
 ```
 
-That claim has been tested once now: adding Codex was this array plus an
-options field, with nothing changed elsewhere in the app.
+That claim has been tested twice now: adding Codex, and then OpenCode, was
+this array plus an options field, with nothing changed elsewhere in the app.
+The second time cost two test edits as well — both in the registry's own
+suite, which had been using OpenCode as its example of a provider with no
+adapter behind it.
 
 An adapter declares its own credential vocabulary alongside its capabilities —
 which variable points the provider at the profile's isolated config directory
-(`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex), which credential
-variables could authenticate the provider some other way and must therefore be
-stripped, and the sign-in commands (login, status probe, logout) with a
-sentence of prose to show beside them. `resolveEnv` reads that spec rather
-than any provider's variable names, and the profile screen composes its
-sign-in instructions from it, so a second provider does not need a change
-anywhere outside its own adapter. Nothing in `@rx-artemis/protocol` names a
-variable or a command; it defines the shape and the adapter supplies the
-contents.
+(`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex, `XDG_DATA_HOME` for
+OpenCode), which credential variables could authenticate the provider some
+other way and must therefore be stripped, and the sign-in commands (login,
+status probe, logout) with a sentence of prose to show beside them.
+`resolveEnv` reads that spec rather than any provider's variable names, and the
+profile screen composes its sign-in instructions from it, so a second provider
+does not need a change anywhere outside its own adapter. Nothing in
+`@rx-artemis/protocol` names a variable or a command; it defines the shape and
+the adapter supplies the contents.
+
+OpenCode is the case that shows why the variable is the adapter's to choose
+rather than a convention to guess at. It ships an `OPENCODE_CONFIG_DIR`, and
+that is the *wrong* variable: it relocates configuration while the credential
+stays in `~/.local/share/opencode/auth.json`, so two profiles set up that way
+would quietly share one account. `XDG_DATA_HOME` is what actually moves the
+account. The scrub list is longer than any other provider's for a related
+reason — OpenCode will authenticate to any of twenty model providers from the
+environment, and every one of those outranks the profile's own login.
+
+### Local models
+
+Local models are their own provider, not a way of configuring another one.
+
+The route through OpenCode looks obvious and was tried first: point its config
+at an OpenAI-compatible endpoint and the models appear. It gets as far as
+*listing* them. A real turn against a local model hung for five minutes and
+emitted nothing, while a direct request to the same endpoint answered in 1.16
+seconds — so inference was healthy and the agent path was not. Reusing
+OpenCode's own provider id made it worse: its catalogue merged in three models
+that were not downloaded on the machine, so the picker offered work that would
+fail on selection.
+
+So the seam gains a fourth adapter instead. The honest cost is that a bare
+endpoint is not an agent runtime — Claude, Codex and OpenCode each ship
+something that owns the tool loop, and an inference server does not. **For local
+models the loop is Artemis's**: the tool schemas, the execution, the permission
+gate and the result-feedback cycle. The transport is the easy half.
+
+That is a real expense and it buys something the other three cannot offer: every
+`false` in this provider's capability descriptor is a *not yet* rather than a
+*cannot*, because nothing upstream is imposing the limit.
+
+See [docs/research/LMSTUDIO-ADAPTER-RESEARCH.md](docs/research/LMSTUDIO-ADAPTER-RESEARCH.md).
 
 ### The path a prompt takes
 
@@ -186,7 +238,7 @@ contents.
      │              and starts matching events before start() resolves
      ▼
   window.artemis      preload/index.ts — the whole attack surface.
-     │              48 fixed channels, no ipcRenderer passthrough,
+     │              67 fixed channels, no ipcRenderer passthrough,
      ▼              no channel name ever built from renderer input
   ipcMain           main/ipc.ts — verify sender, validate and rebuild the
      │              payload, dispatch, then scan the response for secrets
@@ -230,7 +282,7 @@ label and a path.
 
 Three things enforce that rather than merely documenting it:
 
-- No credential channel exists to misuse. Of the 48 fixed channels the preload
+- No credential channel exists to misuse. Of the 67 fixed channels the preload
   exposes, none accepts or returns a token, `ipcRenderer` is never exposed or
   wrapped, and no channel name is ever built from renderer input — so the
   reachable surface is fixed at build time and readable in one screen.
@@ -255,7 +307,9 @@ refusing to render the conversation would help nobody.
 ```
 packages/protocol/     shared types only — zero runtime deps, imported by everything
 packages/core/         headless engine; never imports electron
-  src/adapters/        the provider seam: types.ts, claude.ts, codex.ts, registry.ts
+  src/adapters/        the provider seam: types.ts, registry.ts, one file per provider
+    acp/               the Agent Client Protocol, shared by every ACP provider
+    opencode/          ACP → event-union mapping for OpenCode
   src/profiles/        profile storage and env resolution
   src/sessions/        live-run registry
   src/workspace/       working-directory checks and naming
@@ -263,7 +317,11 @@ apps/desktop/
   main/                Electron main process — hosts core, owns the IPC boundary
   preload/             contextBridge; the renderer's entire view of the outside
   renderer/            React + Vite + Tailwind
-scripts/smoke.ts       headless end-to-end run, no Electron
+scripts/smoke.ts           headless end-to-end run against Claude, no Electron
+scripts/opencode-smoke.ts  the same for OpenCode, and it checks the event
+                           stream's shape rather than trusting it
+scripts/acp-probe.ts       drive any ACP agent's handshake — how a candidate
+                           provider is verified before an adapter exists
 ```
 
 Three boundaries are enforced by the type system rather than by convention:
@@ -286,6 +344,25 @@ and prints the normalized event stream:
 pnpm smoke
 pnpm smoke "list the files in this directory"   # custom prompt
 ```
+
+OpenCode has two of its own, and they answer different questions:
+
+```bash
+pnpm opencode:smoke          # the adapter: a real turn, checked for shape
+pnpm acp:probe opencode      # the transport: handshake, capabilities, sign-in
+```
+
+`opencode:smoke` runs a turn through the adapter and then asserts the contract
+rather than printing and hoping — session first, `run.end` last and exactly
+once, `seq` dense from zero, every `tool.start` closed — before reading the
+model catalogue, the session list and a resumed conversation back. It runs in a
+throwaway profile directory, so it also exercises the isolation a real profile
+depends on: if `XDG_DATA_HOME` ever stopped relocating the account, the smoke
+would start reading yours.
+
+`acp:probe` takes any ACP agent, not just OpenCode. It is how a candidate
+provider gets verified before an adapter for it exists — the eight-requirement
+audit in `docs/research/` was run through it.
 
 No environment variable authenticates it. The script runs against the config
 directory your CLI is already signed in to — `$CLAUDE_CONFIG_DIR` if set,
@@ -311,6 +388,27 @@ reimplementation of one's interface. "Powered by Claude" is the extent of the
 attribution. Contributions must not introduce another product's branding,
 visual identity, or ASCII art.
 
+## Contributing
+
+**Artemis is not accepting pull requests yet. Issues are open, and they are
+read.** The provider seam has been tested once, with Codex; until the OpenCode
+adapter lands, the interfaces a contribution would build on are still allowed to
+move, and a pull request against them could be invalidated by the very change
+that proves them. [CONTRIBUTING.md](CONTRIBUTING.md) gives the full reasoning,
+says what is welcome now — bug reports, ideas, design disagreement — and
+documents the conventions. When the third adapter lands, that file changes.
+
+Security reports go through [private disclosure](SECURITY.md), never the issue
+tracker.
+
 ## License
 
-MIT
+[Apache 2.0](LICENSE).
+
+Apache rather than MIT for one reason that matters here: the [NOTICE](NOTICE)
+file propagates. If you redistribute Artemis, the warning about shipping a build
+whose sign-in ends in a claude.ai login travels with the code, instead of staying
+behind in a README you rewrote. Read it before you ship a build to other people.
+
+The Artemis name and visual identity are not licensed under it — section 6 of
+the license grants no trademark rights.

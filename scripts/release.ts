@@ -14,6 +14,15 @@
  * The version is read from apps/desktop/package.json — bump it there first.
  * Release notes are `.github/RELEASE_NOTES.md`, versioned with the code.
  *
+ * ## Betas
+ *
+ * There is no separate command and no separate branch. A version with a
+ * prerelease suffix — `1.0.0-beta.1` — is a beta, and every step downstream
+ * reads it off the number: `release.yml` passes `--prerelease` to `gh release
+ * create`, GitHub keeps it out of `/releases/latest`, and only installations
+ * that have turned the beta channel on in Settings → Advanced are offered it.
+ * A beta is the same commit as the release it rehearses, tagged earlier.
+ *
  * This script used to build and publish from the local machine. It stopped
  * because a laptop can only build its own platform: the Agent SDK ships one
  * native binary per platform and pnpm installs only the host's, so the
@@ -24,7 +33,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-import { applyBump, inspectSinceLastTag, satisfies } from './nextVersion.js';
+import { applyBump, inspectSinceLastTag, isPrerelease, satisfies } from './nextVersion.js';
 
 function run(command: string, args: readonly string[]): void {
   console.log(`\n$ ${command} ${args.join(' ')}`);
@@ -81,10 +90,21 @@ try {
  * version being cut has to exist before the tag does.
  */
 const notes = readFileSync('.github/RELEASE_NOTES.md', 'utf8');
-if (!notes.includes(`What's new in ${version}`)) {
+/*
+ * A prerelease is allowed to answer with its own version *or* the one it is a
+ * rehearsal for: `1.0.0-beta.2` is not a separate product from `1.0.0`, and
+ * demanding a fresh section per beta would mean either rewriting the notes on
+ * every attempt or writing "same as beta.1" three times. The final release then
+ * ships the section the betas were already published under, which is the point.
+ */
+const wantedInNotes = isPrerelease(version)
+  ? [version, version.replace(/-.*$/, '')]
+  : [version];
+if (!wantedInNotes.some((candidate) => notes.includes(`What's new in ${candidate}`))) {
   fail(
-    `.github/RELEASE_NOTES.md never mentions ${version} — it still leads with the previous ` +
-      `release's notes.\n        Add a "## What's new in ${version}" section (it publishes verbatim), then re-run.`,
+    `.github/RELEASE_NOTES.md never mentions ${wantedInNotes.join(' or ')} — it still leads ` +
+      `with the previous release's notes.\n        Add a "## What's new in ${wantedInNotes.at(-1) ?? version}" ` +
+      `section (it publishes verbatim), then re-run.`,
   );
 }
 
@@ -143,4 +163,11 @@ Windows natively, boot-verifying each, and publishing the release:
 
   watch:   gh run watch
   result:  gh release view ${tag}
-`);
+${
+  isPrerelease(version)
+    ? `
+It is a prerelease: GitHub will keep it out of /releases/latest, so only
+installations with the beta channel on in Settings → Advanced are offered it.
+`
+    : ''
+}`);

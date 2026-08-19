@@ -16,15 +16,21 @@
  * is in it" and can do it for anything that holds text — which is to say, for
  * the file the conversation was actually about.
  *
- * ## No syntax highlighting, on purpose and for now
+ * ## Syntax highlighting, which arrived where this file said it would
  *
- * The issue this was built for said so outright, and there is a reason worth
- * keeping past the first request: highlighting means shipping a grammar set and
- * choosing a theme that has to answer to both palettes, and neither of those is
- * on the path to "I want to see the file I just read". The type is monospaced,
- * the lines are numbered, and everything else is deferred. If it arrives later
- * it belongs *here*, behind this same component, and nothing outside this file
- * should need to know.
+ * It was deferred with two objections and both have been answered rather than
+ * waved away. A grammar set is shipped, but a chosen subset — sixteen languages
+ * this repo and the projects it works on actually contain — not the megabyte
+ * that registering everything costs. And the theme answers to both palettes by
+ * being the app's own tokens: the classes map to `--ink`, `--beam` and the
+ * rest in CSS, so a file's colours move with the palette instead of being a
+ * second source of truth for what a string looks like.
+ *
+ * It landed exactly where this header said it would — behind this component,
+ * with `lib/highlight.ts` holding the grammar and this file still holding the
+ * layout. A file with no grammar for it renders as plain text, which is what
+ * every file did before, so an unknown extension is the previous behaviour
+ * rather than a failure.
  *
  * ## The line numbers are a column, not a prefix
  *
@@ -49,8 +55,10 @@
 import { useEffect, useMemo, useRef, type ReactElement } from 'react';
 
 import { useApp } from '../state/store';
+import { highlightLines } from '../lib/highlight';
 import { formatBytes } from '../lib/attachments';
 import { CopyButton } from './primitives';
+import { DockHeader } from './DockHeader';
 import { cn } from '@/lib/utils';
 
 /**
@@ -90,7 +98,7 @@ export function FileViewer(): ReactElement | null {
         clipped={clipped}
         text={file.text}
       />
-      <Body lines={shown} line={file.line} />
+      <Body lines={shown} line={file.line} path={file.path} />
     </div>
   );
 }
@@ -118,7 +126,7 @@ function Caption({
   readonly text: string;
 }): ReactElement {
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
+    <DockHeader>
       <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint" title={path}>
         {path}
       </span>
@@ -150,18 +158,33 @@ function Caption({
           className="opacity-100"
         />
       )}
-    </div>
+    </DockHeader>
   );
 }
 
 function Body({
   lines,
   line,
+  path,
 }: {
   readonly lines: readonly string[];
   readonly line: number | undefined;
+  readonly path: string;
 }): ReactElement {
   const marked = useRef<HTMLDivElement>(null);
+
+  /*
+   * Highlighted once for the whole file, not once per row.
+   *
+   * Grammar crosses lines — a block comment opened on line 4 is still open on
+   * line 9 — so the document is coloured whole and split back into rows by
+   * `highlightLines`. Memoised on the text because the alternative is
+   * re-tokenising a twenty-thousand-line file on every scroll-driven render.
+   *
+   * `null` means no grammar for this path, and the plain-text branch below is
+   * what every file used before highlighting existed.
+   */
+  const highlighted = useMemo(() => highlightLines(lines.join('\n'), path), [lines, path]);
 
   /*
    * `block: 'center'` puts the line in the middle rather than at the top edge,
@@ -203,7 +226,20 @@ function Body({
                 sideways instead, which is what every editor does and what makes
                 the numbers trustworthy.
               */}
-              <span className="whitespace-pre text-ink-muted">{text}</span>
+              {/*
+                `dangerouslySetInnerHTML` is confined to this one span and its
+                content comes from `highlight.js`, which escapes the source it
+                was given — the file's text is never interpolated raw. The plain
+                branch beside it is what runs for anything without a grammar.
+              */}
+              {highlighted === undefined || highlighted === null ? (
+                <span className="whitespace-pre text-ink-muted">{text}</span>
+              ) : (
+                <span
+                  className="hljs whitespace-pre text-ink-muted"
+                  dangerouslySetInnerHTML={{ __html: highlighted[index] ?? '' }}
+                />
+              )}
             </div>
           );
         })}

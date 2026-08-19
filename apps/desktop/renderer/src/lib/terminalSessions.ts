@@ -85,7 +85,7 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
   const mint = token('--mint', '#8fd9b6');
   const amber = token('--amber', '#e8c07d');
   const cyan = token('--cyan', '#8fbce8');
-  const lunar = token('--lunar', '#b9a9f0');
+  const beam = token('--beam', '#b9a9f0');
   const sage = token('--sage', '#a8c8a0');
   const signal = token('--signal', '#e89a9a');
   const faint = token('--ink-faint', '#8b8794');
@@ -114,19 +114,19 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     // sits on the app's surface rather than punching a black rectangle in it.
     background: 'rgba(0,0,0,0)',
     foreground: ink,
-    cursor: lunar,
+    cursor: beam,
     cursorAccent: token('--panel', '#151318'),
     // Mixed from the accent rather than the literal `rgba(185,169,240,0.28)`
-    // this was, which is the *dark* lunar frozen into a number — under the
+    // this was, which is the *dark* beam frozen into a number — under the
     // light palette it stayed a pale lavender while every other selection in
     // the app moved. Same 28%, same source of truth as `::selection`.
-    selectionBackground: `color-mix(in oklch, ${lunar} 28%, transparent)`,
+    selectionBackground: `color-mix(in oklch, ${beam} 28%, transparent)`,
     black: ansiBlack,
     red: signal,
     green: mint,
     yellow: amber,
     blue: cyan,
-    magenta: lunar,
+    magenta: beam,
     cyan: cyan,
     white: ansiWhite,
     brightBlack: faint,
@@ -134,7 +134,7 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     brightGreen: sage,
     brightYellow: amber,
     brightBlue: cyan,
-    brightMagenta: lunar,
+    brightMagenta: beam,
     brightCyan: cyan,
     brightWhite: ansiWhite,
   };

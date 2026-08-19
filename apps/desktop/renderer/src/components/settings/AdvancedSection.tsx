@@ -79,7 +79,7 @@ import type { SharedConfigDirStatus, SharedConfigStatus } from '@rx-artemis/prot
 import { useCopy } from '@/hooks/useCopy';
 import { CodeBlock, StatusDot, toneClasses, type Tone } from '../primitives';
 import { ChoiceList, SettingsGroup, SettingsPane } from './pane';
-import { setSharedClaudeConfig, useApp } from '../../state/store';
+import { setSharedClaudeConfig, setUpdateChannel, useApp } from '../../state/store';
 import { shortenPath } from '../../lib/paths';
 import {
   useSharedConfigStatus,
@@ -160,6 +160,7 @@ export function AdvancedSection(): ReactElement {
    * nothing-is-wrong.
    */
   const showStatus = dirs.length > 0 && (mode !== null || linked);
+  const channel = useApp((state) => state.updateChannel);
 
   return (
     <SettingsPane
@@ -225,6 +226,32 @@ export function AdvancedSection(): ReactElement {
         )}
       </SettingsGroup>
 
+      <SettingsGroup label="Updates">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Offer beta releases</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                A beta is the same build as the release that follows it, offered days earlier and
+                with correspondingly more chance of being wrong. Beta means{' '}
+                <span className="text-ink-muted">earlier</span>, not{' '}
+                <span className="text-ink-muted">a different Artemis</span> — the version you are
+                offered still lands on the stable one. Turning this back off uninstalls nothing: a
+                beta you already have stays until the release it became ships.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-update-channel"
+                aria-label="Offer beta releases"
+                checked={channel === 'beta'}
+                onCheckedChange={(next) => setUpdateChannel(next ? 'beta' : 'stable')}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
       <WarningDialog
         open={warning}
         count={dirs.length}
@@ -279,7 +306,7 @@ function StatusBlock({
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-3">
-        <h4 className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">On disk</h4>
+        <h4 className="chrome-label text-ink-faint">On disk</h4>
         <Button
           size="xs"
           variant="ghost"

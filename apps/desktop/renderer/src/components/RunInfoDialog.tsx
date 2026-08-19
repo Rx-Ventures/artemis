@@ -135,7 +135,7 @@ function Section({
 }): ReactElement {
   return (
     <section className="mb-3">
-      <h3 className="mb-1 font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">{title}</h3>
+      <h3 className="mb-1 chrome-label text-ink-faint">{title}</h3>
       <div className="rounded-md border border-line bg-inset/60 px-2 py-1.5">{children}</div>
     </section>
   );
@@ -270,7 +270,7 @@ function UsageBlock(): ReactElement {
       )}
       <Row label="cost">
         {costing ? (
-          <span className="text-lunar">{formatUsd(usage.costUsd)}</span>
+          <span className="text-beam">{formatUsd(usage.costUsd)}</span>
         ) : (
           <span className="text-ink-faint">not reported</span>
         )}

@@ -178,7 +178,22 @@ export const CODEX_CAPABILITIES: Capabilities = {
   resumeSession: true,
   usageReporting: true,
   planUsageReporting: true,
+  /**
+   * No delegation concept exists anywhere in the app server. Established
+   * 2026-08-18 against 0.147.0 rather than assumed: an unknown method makes the
+   * server enumerate every valid one, and none of the ~100 concerns subagents,
+   * tasks or delegation. `collaborationMode/list` sounds like it might and
+   * answers `Plan` and `Default` — conversation modes, not delegates — and the
+   * experimental surface behind `experimentalApi` lists nothing either.
+   */
   subagents: false,
+  /**
+   * Codex reports tokens and never a price. `account/usage/read` answers with
+   * `lifetimeTokens`, `peakDailyTokens` and daily buckets; `account/rateLimits/read`
+   * adds plan windows and a credit balance. Neither carries a per-token cost,
+   * and under a subscription there is no client-side price to compute one from.
+   * Verified 2026-08-18.
+   */
   costReporting: false,
   // Codex's only instruction lever is `baseInstructions`, which *replaces* the
   // coding-agent preset rather than adding to it — the adapter uses it exactly
@@ -401,6 +416,14 @@ export interface CodexPermissions {
  *
  * A mode outside the advertised list is rejected by {@link validateRunInput},
  * not quietly substituted.
+ *
+ * Re-checked against 0.147.0 on 2026-08-18 and both omissions still hold. There
+ * is a second reason to leave `auto` out that is worth recording: Codex's
+ * `on-request` is already what `acceptEdits` maps to, so offering `auto` as
+ * well would be two names for one behaviour — a choice that is not a choice.
+ * `permissionProfile/list` answers `:read-only`, `:workspace` and
+ * `:danger-full-access`, which are sandbox profiles rather than approval
+ * policies, so they add no mode either.
  */
 export function toCodexPermissions(
   mode: PermissionMode | undefined,

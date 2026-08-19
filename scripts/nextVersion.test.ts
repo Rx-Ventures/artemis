@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyBump,
   classifyChanges,
+  isPrerelease,
   parseDiff,
   parseLog,
   satisfies,
@@ -195,6 +196,21 @@ describe('turning a verdict into a number', () => {
     expect(satisfies('v0.10.0', '0.11.0', 'patch')).toBe(true);
     expect(satisfies('v0.10.0', '0.10.1', 'minor')).toBe(false);
     expect(satisfies('v0.10.0', '0.10.0', 'patch')).toBe(false);
+  });
+
+  it('reads a prerelease as the version it rehearses', () => {
+    // Before this, `'1.0.0-beta.1'.split('.').map(Number)` gave `[1, 0, NaN,
+    // NaN]`, and NaN compares false against everything — so a beta registered
+    // as no bump at all and the release script refused to cut it.
+    expect(isPrerelease('1.0.0-beta.1')).toBe(true);
+    expect(isPrerelease('v1.0.0')).toBe(false);
+
+    expect(satisfies('v0.20.0', '1.0.0-beta.1', 'major')).toBe(true);
+    expect(satisfies('v0.20.0', '0.20.1-beta.1', 'minor')).toBe(false);
+    // And the promotion: measured from the last *stable* tag, the final release
+    // is the same major the beta was, so cutting it needs no override.
+    expect(satisfies('v0.20.0', '1.0.0', 'major')).toBe(true);
+    expect(applyBump('v1.0.0-beta.3', 'patch')).toBe('1.0.1');
   });
 });
 

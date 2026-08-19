@@ -102,7 +102,7 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react';
-import { PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import {
@@ -114,14 +114,16 @@ import {
   setSidebarWidth,
   useApp,
 } from '../state/store';
+import type { Pane } from '../state/pane';
 import { usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
 import { BugReportCard } from './BugReportCard';
 import { UpdateCard } from './UpdateCard';
+import { useUpdateState } from '../hooks/useUpdateState';
 import { IconButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
 
-export function Sidebar(): ReactElement | null {
+export function Sidebar(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const width = useApp((s) => s.sidebarWidth);
   // The sidebar sits outside every column, so this is the focused one — which
@@ -129,7 +131,7 @@ export function Sidebar(): ReactElement | null {
   const pane = usePaneRef();
   const asideRef = useRef<HTMLElement>(null);
 
-  if (collapsed) return null;
+  if (collapsed) return <Rail pane={pane} />;
 
   return (
     <aside
@@ -138,7 +140,7 @@ export function Sidebar(): ReactElement | null {
       aria-label="Sessions"
       className="relative flex shrink-0 flex-col p-2"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-md ring-1 ring-foreground/5">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-panel">
         <div className="flex flex-col gap-1.5 p-2.5">
           <div className="flex items-center gap-1.5">
             <Button
@@ -176,6 +178,76 @@ export function Sidebar(): ReactElement | null {
       <BugReportCard />
 
       <ResizeHandle target={asideRef} />
+    </aside>
+  );
+}
+
+/**
+ * What is left when the sidebar is hidden.
+ *
+ * This used to be `null`, and that one decision cost the app two components and
+ * a bar. `App.tsx` said it plainly: the header exists so that hiding the sidebar
+ * stays reversible, because "`Sidebar` renders `null` when collapsed — not a
+ * rail, not a sliver — so its own close button cannot bring it back". And
+ * `UpdateBanner` existed because the update card went with it, and "an update
+ * nobody can see is an update nobody installs".
+ *
+ * A rail fixes both at the source. Collapse is reversible by the thing that
+ * collapsed, and the update has somewhere to live that never disappears — so
+ * the second update component is gone and the header is free to carry what is
+ * actually true of the window rather than a control it was holding for someone
+ * else.
+ *
+ * It is 46px and it holds three things: the way back, the one action worth
+ * having without opening anything, and news. Everything else — the session
+ * list, the bug report, the project headings — is what expanding is *for*, and
+ * putting a stunted version of it here would only make the rail a worse
+ * sidebar rather than a good rail.
+ */
+function Rail({ pane }: { readonly pane: Pane }): ReactElement {
+  const update = useUpdateState();
+
+  return (
+    <aside
+      aria-label="Sessions, collapsed"
+      className="flex w-[46px] shrink-0 flex-col items-center gap-1.5 border-r border-line bg-panel py-2"
+    >
+      <IconButton
+        label={`Show the sidebar (${keyLabel('mod+b')})`}
+        onClick={() => setSidebarCollapsed(false)}
+        size="icon-sm"
+        className="text-ink-faint"
+      >
+        <PanelLeftOpenIcon />
+      </IconButton>
+      <IconButton
+        label={`New session (${keyLabel('mod+n')})`}
+        onClick={() => newSession(pane)}
+        size="icon-sm"
+        className="text-ink-faint"
+      >
+        <PlusIcon />
+      </IconButton>
+
+      {/*
+        News, at the size a rail can carry it: a dot, not a sentence. Opening
+        the sidebar is what shows the sentence, so the dot's whole job is to
+        make you want to — which is why it is a button and not an ornament.
+      */}
+      {update.phase === 'idle' ? null : (
+        <IconButton
+          label={
+            update.phase === 'error'
+              ? 'The update failed — open the sidebar for details'
+              : `Artemis ${update.version ?? ''} — open the sidebar for details`.trim()
+          }
+          onClick={() => setSidebarCollapsed(false)}
+          size="icon-sm"
+          className={update.phase === 'error' ? 'text-signal' : 'text-beam'}
+        >
+          <span aria-hidden="true" className="block size-1.5 rounded-full bg-current" />
+        </IconButton>
+      )}
     </aside>
   );
 }
@@ -307,7 +379,7 @@ function ResizeHandle({
           setSidebarWidth(width + KEYBOARD_STEP);
         }
       }}
-      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-lunar/30 focus-visible:bg-lunar/40"
+      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-beam/30 focus-visible:bg-beam/40"
     />
   );
 }

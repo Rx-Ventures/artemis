@@ -107,7 +107,22 @@ export interface MirroredState {
   readonly profiles: readonly ProfileMetadata[];
   readonly sessions: readonly SessionSummary[];
   readonly contextWindows: Readonly<Record<string, number>>;
-  readonly quickModelIds: readonly string[];
+  /**
+   * Each profile's pinned shortlist, keyed by profile id.
+   *
+   * The *map* is mirrored rather than one profile's array, because which entry
+   * applies is a per-pane question — {@link SessionState.activeProfileId} — and
+   * a selector must be a pure function of the state it subscribes to. Mirroring
+   * the resolved array instead would put the window in charge of a choice only
+   * the pane can make, and two columns on two accounts would show one column's
+   * shortlist in both pickers.
+   *
+   * Per profile rather than per window because catalogues are not comparable:
+   * OpenCode reaches hundreds of models across twenty providers while Claude
+   * ships a handful, so one shared shortlist is either swamped by one account's
+   * lineup or empty for it. See `quickModels`.
+   */
+  readonly quickModelIdsByProfile: Readonly<Record<ProfileId, readonly string[]>>;
 }
 
 /** Every mirrored key, exactly once. The compiler enforces "exactly". */
@@ -116,7 +131,7 @@ export const MIRRORED_KEYS: readonly (keyof MirroredState)[] = [
   'profiles',
   'sessions',
   'contextWindows',
-  'quickModelIds',
+  'quickModelIdsByProfile',
 ];
 
 /** One column's worth of state. Read through `usePane`, written by `store.ts`. */

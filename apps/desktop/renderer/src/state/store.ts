@@ -75,6 +75,7 @@ import type {
   SessionSummary,
   TerminalId,
   TokenUsage,
+  UpdateChannel,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
@@ -101,6 +102,11 @@ import {
   writeToTerminal,
 } from '../lib/terminalSessions';
 import {
+  EMPTY_DOCK_LAYOUT,
+  MAX_RESTORED_BROWSERS,
+  MAX_RESTORED_TERMINALS,
+  parseDockLayout,
+  type DockLayout,
   FILE_TAB,
   learnSessionId,
   nextActiveTab,
@@ -564,11 +570,31 @@ export interface AppState {
    * opened settings must still get a usable picker, so there is no way to
    * express an intentionally empty quick list and no need for one.
    *
-   * A shortlist is a statement about which models the *user* likes, not about
-   * an account, so it stays here and is mirrored into every pane rather than
-   * kept per column.
+   * Keyed by profile, because catalogues are not comparable. A Claude account
+   * offers a handful of models and an OpenCode one reaches hundreds across
+   * twenty providers, so a single shared shortlist is either swamped by the
+   * large catalogue or empty for it — and "pinned nothing" reads as the whole
+   * catalogue, which turns the swamped case into no shortlist at all.
+   *
+   * This was once one array for the window, on the reasoning that a shortlist
+   * states which models the *user* likes rather than anything about an account.
+   * That holds only while every account offers roughly the same lineup. It
+   * stopped holding when a provider arrived whose catalogue is two orders of
+   * magnitude larger, which is the situation the pins exist to make bearable.
+   *
+   * Still window-owned and mirrored into every pane: the map is the same for
+   * both columns, and each pane resolves its own entry through its
+   * `activeProfileId`. See `quickModels`.
    */
-  readonly quickModelIds: readonly string[];
+  readonly quickModelIdsByProfile: Readonly<Record<ProfileId, readonly string[]>>;
+  /**
+   * The dock's arrangement as it was when the app last closed.
+   *
+   * Read once at boot by `restoreDockLayout` and otherwise inert — it is the
+   * *stored* shape, not the live one, and reading it for anything else would be
+   * reading a snapshot as though it were the truth.
+   */
+  readonly dockLayout: DockLayout;
   /** How wide the transcript column may grow. */
   readonly conversationWidth: ConversationWidth;
   /** How much of the run-end accounting the transcript keeps. */
@@ -624,6 +650,8 @@ export interface AppState {
    * rather than destroying them.
    */
   readonly dockAutoOpen: boolean;
+  /** Which releases this installation is willing to be offered. */
+  readonly updateChannel: UpdateChannel;
 
   /**
    * Whether the user has taken up the shared-`~/.claude` arrangement.
@@ -1165,7 +1193,8 @@ interface Prefs {
   pinnedSessions?: readonly string[];
   pinnedCollapsed?: boolean;
   settingsSection?: SettingsSection;
-  quickModelIds?: readonly string[];
+  quickModelIdsByProfile?: Readonly<Record<string, readonly string[]>>;
+  dockLayout?: unknown;
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
@@ -1175,6 +1204,11 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  /**
+   * Persisted rather than derived: it is a standing choice about risk, and the
+   * app must not quietly move someone between channels across a restart.
+   */
+  updateChannel?: UpdateChannel;
   sharedClaudeConfig?: boolean;
   sharedClaudeConfigAcknowledged?: boolean;
   /**
@@ -1213,6 +1247,109 @@ function boolOrUndefined(value: unknown): boolean | undefined {
 function stringList(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * The pinned shortlists, per profile — and the migration off the flat one.
+ *
+ * Builds before this stored a single window-wide `quickModelIds`, which cannot
+ * be attributed to a profile after the fact: the array says which models the
+ * user pinned and nothing about which account they were looking at.
+ *
+ * So it is seeded into *every* profile rather than dropped or guessed at. That
+ * reads reckless and is not, because a pin is already filtered against the live
+ * catalogue at read time — see `computeQuickModels`. A Claude profile keeps the
+ * Claude ids and an OpenCode profile matches none of them, which falls back to
+ * the whole catalogue: exactly the state that profile was in before. Nothing is
+ * lost, nothing is invented, and the first edit to any profile replaces its
+ * seeded copy.
+ *
+ * The seed is keyed by profile id, which `loadPrefs` does not have — so it is
+ * carried under a reserved key and resolved by {@link seedQuickModels} once the
+ * profile list arrives.
+ */
+/**
+ * What the dock looks like right now, in the form that survives a restart.
+ *
+ * Read off the *focused* pane rather than every one of them. A split window's
+ * two columns own two docks, and a stored layout that reopened both would have
+ * to remember which column each tab belonged to — through a restart in which
+ * pane identity is minted fresh. The focused column is the one the user was
+ * looking at, and restoring that is the honest ninety per cent.
+ */
+function captureDockLayout(state: AppState): DockLayout {
+  const paneId = state.focusedPaneId;
+  return {
+    browsers: state.browsers
+      .filter((record) => record.owner.paneId === paneId)
+      .map((record) => record.info.state.url)
+      .filter((url) => url.length > 0)
+      .slice(0, MAX_RESTORED_BROWSERS),
+    terminals: Math.min(
+      state.terminals.filter((record) => record.owner.paneId === paneId && !record.exited).length,
+      MAX_RESTORED_TERMINALS,
+    ),
+    file: state.file?.path ?? null,
+    preview: state.preview?.path ?? null,
+    activeKind: state.activeDockTab?.kind ?? null,
+  };
+}
+
+function quickModelMap(raw: Record<string, unknown>): Record<string, readonly string[]> {
+  const value = raw['quickModelIdsByProfile'];
+  const map: Record<string, readonly string[]> = {};
+
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    for (const [profileId, entry] of Object.entries(value as Record<string, unknown>)) {
+      const ids = stringList(entry);
+      if (ids !== undefined && ids.length > 0) map[profileId] = ids;
+    }
+  }
+
+  // Only when the new shape is absent entirely. A file carrying both is one
+  // this build already wrote, and the legacy key is then a leftover rather than
+  // an instruction.
+  if (Object.keys(map).length === 0) {
+    const legacy = stringList(raw['quickModelIds']);
+    if (legacy !== undefined && legacy.length > 0) map[LEGACY_PINS_KEY] = legacy;
+  }
+
+  return map;
+}
+
+/**
+ * Where a pre-migration shortlist waits for the profile list to arrive.
+ *
+ * Not a profile id and deliberately unable to collide with one — profile ids
+ * are generated, this is a sentinel. {@link seedQuickModels} consumes it.
+ */
+const LEGACY_PINS_KEY = ' legacy';
+
+/**
+ * Spread a migrated shortlist across the profiles, once they are known.
+ *
+ * Called from the same place the profile list is stored. A no-op in every run
+ * after the first, because consuming the sentinel is what removes it.
+ */
+function seedQuickModels(profiles: readonly ProfileMetadata[]): void {
+  const state = useApp.getState();
+  const legacy = state.quickModelIdsByProfile[LEGACY_PINS_KEY];
+  if (legacy === undefined || profiles.length === 0) return;
+
+  const seeded: Record<string, readonly string[]> = {};
+  for (const profile of profiles) seeded[profile.id] = legacy;
+  useApp.setState({
+    quickModelIdsByProfile: { ...seeded, ...withoutLegacy(state.quickModelIdsByProfile) },
+  });
+  savePrefs();
+}
+
+function withoutLegacy(
+  map: Readonly<Record<string, readonly string[]>>,
+): Record<string, readonly string[]> {
+  const next = { ...map };
+  delete next[LEGACY_PINS_KEY];
+  return next;
 }
 
 /**
@@ -1256,7 +1393,8 @@ function loadPrefs(): Prefs {
   return {
     ...(raw as Prefs),
     settingsSection: oneOf(raw['settingsSection'], SETTINGS_SECTIONS),
-    quickModelIds: stringList(raw['quickModelIds']),
+    quickModelIdsByProfile: quickModelMap(raw),
+    dockLayout: parseDockLayout(raw['dockLayout']),
     // `setFastMode` / `setUltracode` keep these mutually exclusive, but that
     // only governs values this build writes. A file left behind by a build
     // whose exclusion lived in the controls, or one edited by hand, can carry
@@ -1277,6 +1415,7 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
     contextWindows: numberMap(raw['contextWindows']),
@@ -1354,7 +1493,8 @@ function savePrefs(): void {
     pinnedSessions: s.pinnedSessions,
     pinnedCollapsed: s.pinnedCollapsed,
     settingsSection: s.settingsSection,
-    quickModelIds: s.quickModelIds,
+    quickModelIdsByProfile: s.quickModelIdsByProfile,
+    dockLayout: captureDockLayout(s),
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     fontSize: s.fontSize,
@@ -1362,6 +1502,7 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
@@ -1429,7 +1570,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     profiles: [],
     sessions: [],
     contextWindows: prefs.contextWindows ?? {},
-    quickModelIds: prefs.quickModelIds ?? [],
+    quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
 
     activeProviderId: prefs.activeProviderId ?? 'claude',
     activeProfileId: (prefs.activeProfileId ?? null) as ProfileId | null,
@@ -1498,6 +1639,9 @@ function openPane(initial: SessionState): Pane {
 const firstPane = openPane(seedSession());
 
 export const useApp = create<AppState>(() => ({
+  // Empty rather than the stored layout: this is the state before preferences
+  // are read, and `applyPrefs` puts the real one in.
+  dockLayout: EMPTY_DOCK_LAYOUT,
   bridgeMode: 'unavailable',
   version: '',
   platform: 'darwin',
@@ -1524,7 +1668,7 @@ export const useApp = create<AppState>(() => ({
   authByProfile: {},
   planUsageByProfile: {},
 
-  quickModelIds: prefs.quickModelIds ?? [],
+  quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   fontSize: initialFontSize,
@@ -1538,6 +1682,7 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
   // being offered an undo for something it never did.
@@ -1899,7 +2044,7 @@ function mirrorToPanes(state: AppState): void {
     profiles: state.profiles,
     sessions: state.sessions,
     contextWindows: state.contextWindows,
-    quickModelIds: state.quickModelIds,
+    quickModelIdsByProfile: state.quickModelIdsByProfile,
   };
   // Backgrounded conversations included: one comes home the moment the user
   // clicks its row, and a pane that had been out of the mirror would arrive
@@ -3156,7 +3301,7 @@ function seedBeside(source: Pane, state: AppState = useApp.getState()): SessionS
     profiles: state.profiles,
     sessions: state.sessions,
     contextWindows: state.contextWindows,
-    quickModelIds: state.quickModelIds,
+    quickModelIdsByProfile: state.quickModelIdsByProfile,
     activeProviderId: from.activeProviderId,
     activeProfileId: from.activeProfileId,
     cwd: from.cwd,
@@ -3769,8 +3914,29 @@ const computeQuickModels = memoisePerPane(
   },
 );
 
+/**
+ * The pins that apply to *this* pane — its profile's entry, or none.
+ *
+ * A pane with no profile has no entry and gets the uncurated whole catalogue,
+ * which is the same answer an unpinned profile gets and for the same reason:
+ * a picker that shows nothing is broken, and there is no way to express an
+ * intentionally empty shortlist.
+ *
+ * `NO_PINS` is a module constant rather than a fresh `[]` so the identity is
+ * stable across reads — `computeQuickModels` memoises on it, and a new array
+ * per call would defeat the memo on every store read. Same hazard the
+ * `NO_OPTIONS` note describes.
+ */
+export function paneQuickModelIds(state: SessionState): readonly string[] {
+  const profileId = state.activeProfileId;
+  if (profileId === null) return NO_PINS;
+  return state.quickModelIdsByProfile[profileId] ?? NO_PINS;
+}
+
+const NO_PINS: readonly string[] = [];
+
 export function quickModels(state: SessionState): readonly ProviderModelOption[] {
-  return computeQuickModels(activeModels(state), state.quickModelIds);
+  return computeQuickModels(activeModels(state), paneQuickModelIds(state));
 }
 
 /**
@@ -4401,6 +4567,12 @@ export async function bootstrap(): Promise<void> {
     return;
   }
 
+  // Main keeps no preferences of its own, so the update channel has to be sent
+  // on every launch rather than only when it changes. It goes here, before the
+  // first check can fire, because a beta user whose channel arrived late would
+  // be told about the stable release they had already declined.
+  void bridge.updates?.setChannel?.({ channel: useApp.getState().updateChannel });
+
   await Promise.all([refreshProviders(), refreshProfiles()]);
   await adoptLiveRuns(focusedPane());
   await adoptTerminals(focusedPane());
@@ -4423,6 +4595,60 @@ export async function bootstrap(): Promise<void> {
   // makes the profile menu's recommendation available immediately in a window
   // opened into an app that has been running for hours.
   void seedPlanUsage(useApp.getState().profiles);
+  // The first boot after the shortlist became per-profile. A no-op every time
+  // after that, because consuming the sentinel is what removes it.
+  seedQuickModels(useApp.getState().profiles);
+  // Last, and not awaited: the dock is the least important thing on screen at
+  // launch, and reopening a browser must not hold up the transcript.
+  void restoreDockLayout();
+}
+
+/**
+ * Put the dock back the way it was.
+ *
+ * Runs once, after the panes exist — a terminal is started in *the pane's*
+ * directory, which is restored from preferences a few lines above this, so the
+ * order matters and is not incidental.
+ *
+ * ## An arrangement, not a session
+ *
+ * A browser comes back to its URL and a file to its path, and those are the
+ * same things they were. A terminal is not: its process died with the app, so
+ * what returns is the same *number* of shells in the same directory, empty. The
+ * tabs are the workspace's shape rather than its contents, which is what every
+ * editor that restores a window also means by it.
+ *
+ * ## Failures are silent on purpose
+ *
+ * Every step can legitimately fail — a file the agent has since deleted, a
+ * directory that has moved, a page that will not load. None of them is worth a
+ * banner at launch: the user did not ask for this to happen, they asked for it
+ * *last time*, and a warning about a tab they may not have wanted back is worse
+ * than the tab quietly not appearing.
+ */
+async function restoreDockLayout(): Promise<void> {
+  const layout = useApp.getState().dockLayout;
+  const pane = focusedPane();
+
+  for (const url of layout.browsers) {
+    await openBrowser(pane, url).catch(() => undefined);
+  }
+  for (let i = 0; i < layout.terminals; i += 1) {
+    await openTerminal(pane).catch(() => undefined);
+  }
+  // A reference rather than a bare path: the viewer takes an optional line, and
+  // a restored file has no line to be at — the reader was not sent there, they
+  // left it open.
+  if (layout.file !== null) await openFile({ path: layout.file }).catch(() => undefined);
+  if (layout.preview !== null) await openPreview(layout.preview, pane).catch(() => undefined);
+
+  // Restored last, because every open above moves the front tab. The kind is
+  // matched rather than the exact tab: the ids inside a stored one were minted
+  // in a process that has exited.
+  const wanted = layout.activeKind;
+  if (wanted === null) return;
+  const match = useApp.getState().visibleDockTabs.find((tab) => tab.kind === wanted);
+  if (match) focusDockTab(match);
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -4624,19 +4850,22 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
       const before = paneState(pane);
       const outgoing = activeModels(before);
       const models = result.value.models;
-      // The shortlist is the window's, so its migration is written to the window
-      // store — from where the mirror puts the carried ids in front of *both*
-      // columns' pickers, which is right: the pins did not move, the catalogue
-      // renaming them did.
-      const quickModelIds = carryModelIds(useApp.getState().quickModelIds, outgoing, models);
+      // Only this profile's shortlist migrates. The catalogue that just arrived
+      // belongs to one account, and renaming another account's pins against it
+      // would be the old window-wide behaviour reintroduced through the back
+      // door — `opus` in a Claude profile is not a stale id just because an
+      // OpenCode catalogue has never heard of it.
+      const pins = useApp.getState().quickModelIdsByProfile;
+      const carried = carryModelIds(pins[profileId] ?? [], outgoing, models);
       const model = before.model === null ? null : carryModelId(before.model, outgoing, models);
 
       setPaneState(pane, { models, modelsError: null, model });
-      if (quickModelIds !== useApp.getState().quickModelIds) useApp.setState({ quickModelIds });
+      const moved = carried !== (pins[profileId] ?? undefined) && carried.length > 0;
+      if (moved) useApp.setState({ quickModelIdsByProfile: { ...pins, [profileId]: carried } });
       // Only when something actually moved. Persisting the carried ids is what
       // stops the migration from running again on every launch, and skipping the
       // write in the common case keeps a background refresh silent.
-      if (quickModelIds !== before.quickModelIds || model !== before.model) savePrefs();
+      if (moved || model !== before.model) savePrefs();
     } else {
       setPaneState(pane, { modelsError: null });
     }
@@ -5678,18 +5907,41 @@ export function setSettingsSection(section: SettingsSection): void {
  * are simply filtered out at read time — see {@link quickModels} — so there is
  * no cleanup pass and no way for a stale pin to break the picker.
  */
-export function toggleQuickModel(id: string): void {
-  useApp.setState((s) => ({
-    quickModelIds: s.quickModelIds.includes(id)
-      ? s.quickModelIds.filter((existing) => existing !== id)
-      : [...s.quickModelIds, id],
-  }));
-  savePrefs();
+export function toggleQuickModel(id: string, pane: Pane = focusedPane()): void {
+  const profileId = paneState(pane).activeProfileId;
+  // No profile means no catalogue was ever fetched and no entry to key. Storing
+  // pins under a null profile would strand them: nothing reads that key back.
+  if (profileId === null) return;
+
+  const current = useApp.getState().quickModelIdsByProfile[profileId] ?? [];
+  writeQuickModels(
+    profileId,
+    current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id],
+  );
 }
 
-/** Replace the whole pinned set — for a settings pane that edits it as a list. */
-export function setQuickModels(ids: readonly string[]): void {
-  useApp.setState({ quickModelIds: [...ids] });
+/** Replace one profile's pinned set — for a settings pane that edits it as a list. */
+export function setQuickModels(ids: readonly string[], pane: Pane = focusedPane()): void {
+  const profileId = paneState(pane).activeProfileId;
+  if (profileId === null) return;
+  writeQuickModels(profileId, [...ids]);
+}
+
+/**
+ * Write one profile's entry, dropping it entirely when it empties.
+ *
+ * Deleting rather than storing `[]` keeps the two indistinguishable states from
+ * both existing on disk: an empty array and an absent key both mean "not
+ * curated", and a prefs file that carried empty arrays for every profile ever
+ * opened would grow without ever saying anything.
+ */
+function writeQuickModels(profileId: ProfileId, ids: readonly string[]): void {
+  useApp.setState((s) => {
+    const next = { ...s.quickModelIdsByProfile };
+    if (ids.length === 0) delete next[profileId];
+    else next[profileId] = ids;
+    return { quickModelIdsByProfile: next };
+  });
   savePrefs();
 }
 
@@ -5834,6 +6086,25 @@ export function setSharedClaudeConfig(on: boolean): void {
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged || on,
   }));
   savePrefs();
+}
+
+/**
+ * Choose which releases this installation is offered.
+ *
+ * `beta` widens what the updater considers rather than pointing it somewhere
+ * else: a beta user is still offered the stable release once it is the newest
+ * thing, because "beta" means *earlier*, not *a different product*. Going back
+ * to `stable` never uninstalls anything — it only stops future prereleases
+ * being offered, so someone on 1.1.0-beta.3 stays there until 1.1.0 ships.
+ * That is the honest behaviour, and the pane says so.
+ */
+export function setUpdateChannel(channel: UpdateChannel): void {
+  useApp.setState({ updateChannel: channel });
+  savePrefs();
+  // The main process holds no preferences of its own, so it has to be told.
+  // Deliberately fire-and-forget: the preference is already saved, and an
+  // unreachable bridge means the next launch tells it again at startup.
+  void resolveBridge().bridge?.updates?.setChannel?.({ channel });
 }
 
 export function setPalette(open: boolean): void {

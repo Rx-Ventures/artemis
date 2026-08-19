@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
 import { CLAUDE_CAPABILITIES } from '../claude.js';
 import { CODEX_CAPABILITIES } from '../codex.js';
@@ -94,7 +94,17 @@ describe('describe()', () => {
     const registry = createProviderRegistry([fakeAdapter({ id: 'claude' })]);
     const descriptors = await registry.describe();
 
-    expect(descriptors.map((d) => d.id)).toEqual(['claude', 'codex', 'opencode']);
+    // Every declared provider appears, registered or not — `lmstudio` is here
+    // and greyed out precisely because its adapter does not exist yet, which is
+    // the behaviour this test is named for.
+    expect(descriptors.map((d) => d.id)).toEqual([
+      'claude',
+      'codex',
+      'opencode',
+      'lmstudio',
+      'ollama',
+      'llamacpp',
+    ]);
     expect(descriptors[1]).toMatchObject({
       id: 'codex',
       label: 'Codex',
@@ -165,9 +175,12 @@ describe('describe()', () => {
 });
 
 describe('createDefaultProviderRegistry', () => {
-  it('ships with Claude and Codex registered, in PROVIDER_IDS order', () => {
+  it('ships with every declared provider registered, in PROVIDER_IDS order', () => {
     const registry = createDefaultProviderRegistry();
-    expect(registry.list().map((a) => a.id)).toEqual(['claude', 'codex']);
+    // Asserted against PROVIDER_IDS rather than a copy of it, so declaring a
+    // provider without registering one fails here instead of silently shipping
+    // a row that greys itself out. That is the whole claim this test makes.
+    expect(registry.list().map((a) => a.id)).toEqual([...PROVIDER_IDS]);
   });
 
   it('gives Claude its real capability set', async () => {
@@ -217,14 +230,18 @@ describe('createDefaultProviderRegistry', () => {
   });
 
   it('offers no sign-in instructions for a provider that is not registered', async () => {
-    const descriptors = await createDefaultProviderRegistry().describe();
+    // Every declared provider now ships with an adapter, so this case can no
+    // longer be reached through the default registry — it is built by hand
+    // rather than deleted, because the rule it guards outlives the provider
+    // that used to illustrate it: an unregistered id must render silent, never
+    // wearing another adapter's command under its own name.
+    const registry = createProviderRegistry([]);
+    const descriptors = await registry.describe();
     const opencode = descriptors.find((d) => d.id === 'opencode');
 
-    // Silence rather than another adapter's command rendered under OpenCode's
-    // name. Codex used to be the example here; it is registered now, so the
-    // still-unimplemented provider carries the case.
     expect(opencode?.signInHowTo).toBeUndefined();
     expect(opencode?.available).toBe(false);
+    expect(opencode?.unavailableReason).toBeTruthy();
   });
 
   it('gives Codex a capability set that differs from Claude’s', async () => {
