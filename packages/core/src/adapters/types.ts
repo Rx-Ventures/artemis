@@ -1216,6 +1216,26 @@ export interface ProviderAdapter {
   tagSession?(query: SessionTagQuery): Promise<boolean>;
 
   /**
+   * How this adapter confines the shell commands it runs, on this machine.
+   *
+   * Optional, and absent for every adapter that does not run commands itself.
+   * Claude and Codex spawn their own CLI, which owns permission handling; only
+   * the local providers build a shell tool and therefore have to confine it.
+   * An adapter that does not implement this publishes no `sandbox` on its
+   * descriptor, and the renderer shows nothing rather than inventing a label
+   * for a confinement Artemis is not providing.
+   *
+   * Must be cheap and must not throw: it is called while building the provider
+   * list, which the profile screen waits on.
+   */
+  describeSandbox?(): Promise<{
+    readonly backend?: string;
+    readonly confinement: 'workspace' | 'none';
+    readonly verification: 'verified' | 'unverified';
+    readonly detail: string;
+  }>;
+
+  /**
    * Probe whether this provider is usable on this machine.
    *
    * Must be cheap and must not throw — report trouble as

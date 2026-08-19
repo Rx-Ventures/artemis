@@ -338,16 +338,7 @@ class LocalRun implements Run {
    * that commands will be refused before the model tries one, not after.
    */
   async #sandbox(): Promise<ResolvedSandbox> {
-    this.#resolvedSandbox ??= await resolveSandbox(process.platform, async (binary) => {
-      if (binary.startsWith('/')) return existsSync(binary);
-      // A bare name has to be found on PATH, which is what `which` is for.
-      try {
-        await execFileAsync('which', [binary]);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    this.#resolvedSandbox ??= await resolveSandbox(process.platform, hasBinary);
     return this.#resolvedSandbox;
   }
 
@@ -573,6 +564,25 @@ function toError(error: unknown, flavour: LocalFlavour): AgentError {
   ).agentError;
 }
 
+/**
+ * Whether a binary is here — the probe both the run and the descriptor use.
+ *
+ * Shared rather than written twice, because two copies of "can this machine
+ * confine a command" would be two chances to answer differently, and the whole
+ * value of showing the confinement is that it is the same answer the shell tool
+ * will act on.
+ */
+async function hasBinary(binary: string): Promise<boolean> {
+  if (binary.startsWith('/')) return existsSync(binary);
+  // A bare name has to be found on PATH, which is what `which` is for.
+  try {
+    await execFileAsync('which', [binary]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Build the adapter for one local server. */
 export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
   return {
@@ -586,6 +596,23 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
      * is on `PATH` — the server may be an app, a container or a machine on the
      * desk. Asking the endpoint is the only honest probe.
      */
+    /**
+     * What is confining this provider's shell commands on this machine.
+     *
+     * Only the local providers implement this, and that asymmetry is the point:
+     * Artemis builds the shell tool here, so Artemis is what confines it. See
+     * `ProviderAdapter.describeSandbox`.
+     */
+    async describeSandbox() {
+      const resolved = await resolveSandbox(process.platform, hasBinary);
+      return {
+        ...(resolved.backend === undefined ? {} : { backend: resolved.backend.name }),
+        confinement: resolved.confinement,
+        verification: resolved.backend?.verification ?? ('unverified' as const),
+        detail: describeConfinement(resolved),
+      };
+    },
+
     async checkAvailability() {
       try {
         const response = await fetch(`${flavour.defaultBaseUrl}/v1/models`, {

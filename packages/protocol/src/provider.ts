@@ -526,6 +526,33 @@ export interface ProviderDescriptor {
    * build.
    */
   readonly signInHowTo?: string;
+
+  /**
+   * How this provider's shell commands are confined on *this* machine.
+   *
+   * Present only for the local providers, and that is the point rather than an
+   * omission. LM Studio, Ollama and llama.cpp are raw model endpoints with no
+   * agent harness of their own, so Artemis builds the shell tool and has to
+   * confine it — Seatbelt on macOS, bubblewrap on Linux, and a refusal where
+   * nothing can. Claude and Codex bring their own CLI, which does its own
+   * permission handling; the permission-mode control is the honest answer for
+   * them, and a chip reading `seatbelt` beside a Claude profile would be
+   * claiming a confinement Artemis is not providing.
+   *
+   * `unverified` is carried through rather than flattened away. A backend that
+   * has never been exercised on a real machine of that platform is a claim we
+   * have not tested, and the capability bar's rule is that we do not state what
+   * we cannot back.
+   */
+  readonly sandbox?: {
+    /** `Seatbelt`, `bubblewrap`, or absent when nothing can confine. */
+    readonly backend?: string;
+    /** `workspace` — writes limited, network denied — or `none`. */
+    readonly confinement: 'workspace' | 'none';
+    readonly verification: 'verified' | 'unverified';
+    /** The sentence `describeConfinement` writes, for a tooltip. */
+    readonly detail: string;
+  };
   /**
    * Models this provider offers, in display order. The first entry is the
    * default — what a run gets when {@link RunInput.model} is omitted.

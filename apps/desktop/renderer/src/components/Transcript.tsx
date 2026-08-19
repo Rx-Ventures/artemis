@@ -548,10 +548,13 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
          * something, and "the user said this" is structure rather than signal —
          * the alignment and the tail already carry it.
          *
-         * `ghost` because the fill is set below on `BubbleContent` from the
-         * surface tokens, and `tinted`'s own `bg-*` would win the cascade.
+         * `surface` is a variant of its own rather than `ghost` plus classes.
+         * `ghost` is the "no bubble at all" variant — it zeroes the radius, the
+         * padding and the width cap at a specificity the caller cannot beat,
+         * which is exactly what it did when this was first written: the prompt
+         * came out as a full-width square with no padding.
          */
-        variant="ghost"
+        variant="surface"
         // Dimmed means "Artemis has not confirmed delivery" — a prompt whose
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
@@ -576,7 +579,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             bubble needs to read as one. The hairline is `--line` for the same
             reason the fill is a surface: `beam/25` was the accent again, one
             layer out. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border border-line bg-raised px-3.5 py-2 text-sm text-ink whitespace-pre-wrap">
+        <BubbleContent className="rounded-2xl rounded-br-sm px-3.5 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -746,14 +749,12 @@ function ThinkingProse({ item }: { readonly item: ThinkingItem }): ReactElement 
  * Thinking that stands on its own — the reasoning before an answer, with no
  * tool call anywhere near it, or every block once the Appearance switch is on.
  *
- * Kept as a bare fold on the spine rather than the card {@link ThinkingCard}
- * draws, because the two are in different places and want different weight: a
- * lone thinking block is one row in the thread, while a block inside an
- * expanded marker is a sibling of the tool cards around it and has to look like
- * one. The model decides which case this is; see `ActivityGroup`.
+ * A bare fold on the spine rather than a card, because this is the only shape
+ * it takes: reasoning is a message in the thread, sitting where the model wrote
+ * it, and never a member of the marker at the foot of the run.
  *
- * The switch decides which way the fold opens, and the collapsed line is worth
- * keeping either way: it is how a reader who wants the reasoning in general
+ * Open by default, which is what the switch begins at. The collapsed line is
+ * still worth keeping: it is how a reader who wants the reasoning in general
  * gets past the one block that turned out to be four thousand words about a
  * typo.
  */
@@ -784,9 +785,8 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
 
   const toggle = (next: boolean): void => {
     setOpen(next);
-    // The same key {@link ThinkingCard} writes, so a block that moves between
-    // the two renderings keeps the reader's choice. It is one thinking block
-    // either way, and the model decides which shape it takes.
+    // Remembered per block, so a reader who collapsed one long block finds it
+    // collapsed on the way back up.
     rememberFold(item.id, next);
   };
 
@@ -819,46 +819,6 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
         {shown ? <ThinkingProse item={item} /> : <ThinkingBody item={item} />}
       </Fold>
     </Line>
-  );
-}
-
-/**
- * Thinking as one member of a burst, shaped like the tool cards beside it.
- *
- * Same chrome as {@link ToolCard} — icon, name, one-line preview, expands in
- * place — so an opened marker reads as a list of what happened rather than two
- * kinds of thing that happen to be stacked. Sage rather than the status tones,
- * because a thinking block has no status: it did not succeed or fail, it is
- * just what the model was working through between two calls.
- */
-function ThinkingCard({ item }: { readonly item: ThinkingItem }): ReactElement {
-  // Not a `Fold` — see the note above on why this wears the card's chrome — but
-  // the same state and so the same memory, under the same key `ThinkingRow` uses.
-  const [open, setOpen] = useFold(item.id);
-  return (
-    <div className={cn('rounded-lg border bg-panel/60', open ? 'border-sage/40' : 'border-line')}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <BrainIcon className="size-3 shrink-0 text-sage/80" aria-hidden="true" />
-        {/* The label is chrome and stays mono; the preview beside it is an
-            excerpt of the model's prose and does not. */}
-        <span className="shrink-0 font-mono text-xs font-semibold text-sage">thinking</span>
-        <span className="min-w-0 flex-1 truncate text-2xs text-ink-faint">
-          {thinkingPreview(item)}
-        </span>
-        {item.streaming ? <StatusDot tone="sage" pulse /> : null}
-      </button>
-
-      {open ? (
-        <div className="border-t border-line px-2.5 py-2">
-          <ThinkingBody item={item} />
-        </div>
-      ) : null}
-    </div>
   );
 }
 
@@ -1180,13 +1140,11 @@ const MAX_MARKER_ICONS = 3;
  * interleaved with the thinking between them is what they were getting.
  * Expanding restores every piece, in order, exactly as it was.
  *
- * The summary counts the *calls*, not the thinking: what a reader wants off a
- * folded row is what the agent did, and "thought 9 times" is both meaningless
- * and, on a narrow column, in front of the part that is not. That the reasoning
- * is in there is said by the brain icon leading the cluster, which costs no
- * width in the line that truncates.
+ * It holds calls and only calls. The reasoning that used to be folded in here
+ * with them stands in the thread where the model wrote it — see `ActivityGroup`
+ * in `state/transcript.ts` for why the two stopped being one category.
  *
- * Three things are deliberately *not* summarised away:
+ * Two things are deliberately *not* summarised away:
  *
  *  - **Failures.** A group holding an error or a denial says so on the
  *    collapsed line, in signal, and opens itself. A marker that read the same
@@ -1194,9 +1152,6 @@ const MAX_MARKER_ICONS = 3;
  *  - **Work in flight.** While a call is still running the line reads in
  *    present tense with a pulsing dot, so a long `Bash` looks like progress
  *    rather than a thread that stopped.
- *  - **Thinking in flight.** A block still arriving pulses the same dot without
- *    touching the tense — the calls it is thinking *about* are finished, and
- *    "Running 2 commands" would be a lie about work that is over.
  *
  * The gutter beside it carries no label. "work" only repeated the icons and the
  * sentence next to them, and the failure it used to colour is already on the
@@ -1212,7 +1167,6 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
   const live = group.running > 0;
   const summary = describeActivity(group.counts, live);
   const icons: Array<{ key: string; Icon: LucideIcon; tone?: string }> = [];
-  if (group.thinking > 0) icons.push({ key: 'thinking', Icon: BrainIcon, tone: 'text-sage/70' });
   for (const category of TOOL_CATEGORY_ORDER) {
     if ((group.counts[category] ?? 0) > 0) {
       icons.push({ key: category, Icon: CATEGORY_ICON[category] });
@@ -1245,9 +1199,7 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
               ))}
             </span>
             <span className="truncate font-mono text-2xs">{summary}</span>
-            {live || group.streaming ? (
-              <StatusDot tone={live ? 'cyan' : 'sage'} pulse />
-            ) : null}
+            {live ? <StatusDot tone="cyan" pulse /> : null}
             {group.failed > 0 ? (
               <span className="shrink-0 font-mono text-2xs text-signal">
                 · {group.failed} failed
@@ -1267,17 +1219,14 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
 }
 
 /**
- * One member of an expanded group — a call, or the thinking beside it.
+ * One member of an expanded group — always a call.
  *
  * Subscribed by its own id and memoised, which is rule 2 applied one level
- * down: a `tool.end` inside an open marker re-renders that one card, not the
- * other thirty-nine beside it, and a thinking block streaming inside an open
- * marker re-renders itself and nothing else. That is what lets thinking join
- * the fold without putting text back on the group's subscription.
+ * down: a `tool.end` inside an open marker re-renders that one card and not the
+ * other thirty-nine beside it.
  */
 const MemberCard = memo(function MemberCard({ id }: { readonly id: string }): ReactElement | null {
   const item = useTranscriptItem(id);
-  if (item?.kind === 'thinking') return <ThinkingCard item={item} />;
   if (item?.kind !== 'tool') return null;
   return <ToolCard item={item} />;
 });

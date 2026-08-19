@@ -98,13 +98,17 @@ import {
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { useWindowState } from '../hooks/useWindowState';
+import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpdateState';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
+import { ArrowDownIcon, FolderIcon, SearchIcon } from 'lucide-react';
 import {
   focusWaitingPane,
   openSettings,
+  togglePalette,
   toggleBrowser,
+  toggleFiles,
   toggleTasks,
   toggleTerminal,
   toggleSidebar,
@@ -285,14 +289,17 @@ export function AppHeader(): ReactElement {
           </span>
         )}
         <ChevronRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
-        <h1 className="min-w-0 flex-1 truncate text-xs font-normal text-ink-muted">{title}</h1>
+        <h1 className="min-w-0 truncate text-xs font-normal text-ink-muted">{title}</h1>
       </div>
+
+      <SearchEntry />
 
       {/*
         `toggleTerminal` opens the focused conversation's shell or brings it
         forward — see the store for why repeating it does not stack up terminals
         nobody asked for.
       */}
+      <UpdateChip />
       <WaitingBadge />
 
       <IconButton
@@ -334,6 +341,22 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <UsersIcon />
+      </IconButton>
+      {/*
+        Last of the surfaces, before settings.
+
+        Settings ends the row because it is the only control here that is not
+        about the conversation in front of you, and everything that opens
+        something in the dock sits together on its near side. Never disabled:
+        unlike delegated work there is always a folder, so the question this
+        answers is always answerable.
+      */}
+      <IconButton
+        label="The working folder"
+        onClick={() => toggleFiles(pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <FolderIcon />
       </IconButton>
       <IconButton
         label={`Settings (${keyLabel('mod+,')})`}
@@ -400,6 +423,100 @@ function WaitingBadge(): ReactElement | null {
     >
       <StatusDot tone="neutral" className="bg-abyss/70" />
       {waiting} waiting
+    </button>
+  );
+}
+
+/**
+ * The one update surface.
+ *
+ * `_layout.md` item 3: in the command bar, always, whatever else is open. It
+ * used to be three places telling one story — a card in the sidebar, a dot on
+ * the rail when the sidebar was shut, and, before that, a strip under the
+ * header for when both were gone. Each existed because the one before it could
+ * disappear. The command bar cannot, so one is enough and the other two are
+ * gone.
+ *
+ * A chip rather than a sentence, because the header is not where an update is
+ * *read* — it is where it is noticed. Clicking installs when there is something
+ * to install and restarts when the new version is already staged, which are the
+ * only two things anyone wants from it; everything else the card used to say is
+ * a consequence of one of those two.
+ *
+ * Renders nothing while the updater is idle, which is almost always.
+ */
+function UpdateChip(): ReactElement | null {
+  const state = useUpdateState();
+  if (state.phase === 'idle') return null;
+
+  const version = state.version ?? '';
+  const ready = state.phase === 'ready';
+  const failed = state.phase === 'error';
+  const busy = state.phase === 'working' || state.phase === 'restarting';
+
+  const label = failed
+    ? 'The update could not be installed'
+    : ready
+      ? `Artemis ${version} is ready — restart to use it`.trim()
+      : busy
+        ? `Working on Artemis ${version}`.trim()
+        : `Artemis ${version} is available`.trim();
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={busy}
+      onClick={() => {
+        if (ready) restartForUpdate();
+        else if (!busy) installUpdate();
+      }}
+      className={cn(
+        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm border px-2 font-mono text-2xs transition-colors',
+        failed
+          ? 'border-signal/50 text-signal hover:bg-signal/10'
+          : 'border-beam/50 text-beam hover:bg-beam/10',
+        busy && 'opacity-60',
+      )}
+    >
+      <ArrowDownIcon className="size-3" aria-hidden="true" />
+      {failed ? 'update failed' : ready ? `restart for ${version}` : version}
+    </button>
+  );
+}
+
+/**
+ * The way into the palette, `_layout.md` item 2.
+ *
+ * A field rather than an icon, and it is not a field: it is a button dressed as
+ * one, because the palette owns the input and two text boxes for one query
+ * would be one too many. What the shape buys is that people look for search in
+ * something search-shaped — `⌘K` is the fastest way in and also the one nobody
+ * finds without being told.
+ *
+ * In the command bar because that is where a window-level action belongs: the
+ * palette searches every session, every file and every command, not the
+ * conversation in front of you. The rail carries the same action for when the
+ * pointer is already over there.
+ *
+ * `max-w-md` and `hidden lg:flex`: it is the first thing that should give up
+ * room, since the two things beside it — what you are looking at, and what
+ * wants you — are facts, and this is a door that has a keyboard shortcut.
+ */
+function SearchEntry(): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={togglePalette}
+      aria-label={`Search sessions, files and commands (${keyLabel('mod+k')})`}
+      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-sm border border-line bg-inset px-2 text-2xs text-ink-faint transition-colors hover:border-line-strong hover:text-ink-muted lg:flex"
+    >
+      <SearchIcon className="size-3 shrink-0" aria-hidden="true" />
+      <span className="truncate">Search sessions, files, commands</span>
+      <span aria-hidden="true" className="ml-auto shrink-0 font-mono opacity-70">
+        {keyLabel('mod+k')}
+      </span>
     </button>
   );
 }

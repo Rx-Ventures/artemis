@@ -63,13 +63,13 @@ import {
   SquareArrowOutUpRightIcon,
   TerminalIcon,
   UsersIcon,
-  XIcon,
-} from 'lucide-react';
+  XIcon, FolderIcon,} from 'lucide-react';
 
 import {
   agentViewIsLive,
   closeAgentTab,
   closeFile,
+  closeFiles,
   closePreview,
   closeTasks,
   closeTerminal,
@@ -87,6 +87,7 @@ import {
 import { AgentPane } from './AgentPane';
 import { FileViewer } from './FileViewer';
 import { PreviewPane } from './PreviewPane';
+import { FilesPane } from './FilesPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
 import { BrowserPane } from './BrowserPane';
@@ -99,9 +100,20 @@ export function DockPane(): ReactElement | null {
   if (tabs.length === 0) return null;
 
   return (
-    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel/40">
+    /*
+     * A row, not a column — `_layout.md` item 5.
+     *
+     * The tabs were a horizontal strip across the top, which put them in
+     * competition with the panel's width: every tab took room from the thing
+     * the panel exists to show, and a fourth or fifth one started scrolling
+     * sideways in the narrowest surface in the window. A 34px icon column costs
+     * the same 34px whether the dock holds two tabs or nine.
+     */
+    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 bg-panel/40">
       <DockStrip tabs={tabs} active={active} />
-      <DockBody tabs={tabs} active={active} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <DockBody tabs={tabs} active={active} />
+      </div>
     </section>
   );
 }
@@ -120,17 +132,21 @@ function DockStrip({
   const strip = useRef<HTMLDivElement>(null);
 
   /*
-   * Left/right move between tabs, Home/End jump to the ends — what a `tablist`
-   * is expected to do, and what Radix would have given us. Focus is moved as
-   * well as selection, because a roving tabindex that selects without focusing
-   * strands the keyboard on the tab that has gone quiet.
+   * Up/down move between tabs, Home/End jump to the ends — what a vertical
+   * `tablist` is expected to do. Left/right are kept as aliases rather than
+   * dropped: the strip was horizontal until the shell refresh, and a reader
+   * whose fingers learned it there should not find the keys dead.
+   *
+   * Focus moves with selection, because a roving tabindex that selects without
+   * focusing strands the keyboard on the tab that has gone quiet.
    */
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
-      const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+      const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
       if (!keys.includes(event.key)) return;
       event.preventDefault();
 
+      const back = event.key === 'ArrowUp' || event.key === 'ArrowLeft';
       const at = tabs.findIndex((tab) => sameTab(tab, active));
       const last = tabs.length - 1;
       const to =
@@ -138,7 +154,7 @@ function DockStrip({
           ? 0
           : event.key === 'End'
             ? last
-            : event.key === 'ArrowLeft'
+            : back
               ? Math.max(0, at - 1)
               : Math.min(last, at + 1);
 
@@ -159,7 +175,10 @@ function DockStrip({
       // Same height and border as a pane's caption, so the two read as one row
       // rather than as two applications side by side — the rule `PreviewPane`
       // set when it was the only thing in this rail.
-      className="flex h-7 shrink-0 items-stretch gap-px overflow-x-auto border-b border-line pr-1"
+      // 34px of icons down the left edge. `overflow-y-auto` rather than `-x`:
+      // a dock with nine tabs scrolls vertically, where there is room, instead
+      // of eating the width of the panel it is labelling.
+      className="flex w-[34px] shrink-0 flex-col items-stretch gap-px overflow-y-auto border-r border-line py-1"
     >
       {tabs.map((tab) => (
         <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
@@ -178,7 +197,7 @@ function DockStrip({
         label="Open another terminal"
         size="icon-xs"
         onClick={() => void openTerminal()}
-        className="my-0.5 ml-0.5 shrink-0 self-center text-ink-faint"
+        className="mx-auto mt-0.5 shrink-0 text-ink-faint"
       >
         <PlusIcon />
       </IconButton>
@@ -198,6 +217,11 @@ function DockTabButton({
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
   if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} />;
   if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
+  // Named rather than left to a fallthrough. The `default` case used to assume
+  // `agent` was the only kind left, which is true right up until it is not —
+  // adding `files` to the union turned a compile error into the only warning
+  // anyone got.
+  if (tab.kind === 'files') return <FilesTabButton paneId={tab.paneId} active={active} />;
   return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
 }
 
@@ -234,9 +258,21 @@ function TabShell({
 }): ReactElement {
   return (
     <div
+      /*
+       * An icon in a column, so the name moves to the tooltip and the ✕ to a
+       * hover corner. The label is not lost: `DockHeader` carries it in full at
+       * the top of the panel, which is where a reader looks for "what am I
+       * looking at" — the strip's job here is only "which of these".
+       *
+       * The active marker is a left hairline in the accent rather than a filled
+       * tab, because a vertical strip has no shared edge with the panel to
+       * merge into the way a horizontal one does.
+       */
       className={cn(
-        'group flex min-w-0 shrink items-center gap-1.5 border-r border-line px-2 text-2xs',
-        active ? 'bg-raised/60 text-ink' : 'text-ink-faint hover:bg-raised/30',
+        'group relative flex shrink-0 items-center justify-center border-l-2 py-1.5',
+        active
+          ? 'border-beam bg-raised/60 text-ink'
+          : 'border-transparent text-ink-faint hover:bg-raised/30',
       )}
       // Middle-click closes, as it does on every other tab strip. On `auxiliary`
       // rather than `click` because a middle button never produces a `click`.
@@ -254,12 +290,14 @@ function TabShell({
         tabIndex={active ? 0 : -1}
         title={title}
         onClick={onSelect}
-        className="flex min-w-0 items-center gap-1.5 py-1 outline-none"
+        aria-label={label}
+        // `muted` is a terminal that has exited or a view still loading. It was
+        // a strike-through on the name; with the name gone it dims the icon,
+        // which says the same thing in the room a 34px column has.
+        className={cn('grid size-6 place-items-center outline-none', muted === true && 'opacity-50')}
       >
         {icon}
-        <span className={cn('min-w-0 max-w-40 truncate', muted === true && 'line-through')}>
-          {label}
-        </span>
+        <span className="sr-only">{label}</span>
       </button>
       <button
         type="button"
@@ -267,11 +305,21 @@ function TabShell({
         title={closeLabel}
         onClick={onClose}
         className={cn(
-          'grid size-3.5 shrink-0 place-items-center rounded-xs text-ink-faint transition-opacity hover:bg-line-strong/60 hover:text-ink',
-          // Chrome's rule: the active tab always offers its ✕, the others offer
-          // it on hover. Kept focusable throughout — `opacity-0` hides it from
-          // the eye, and `focus-visible` brings it back for the keyboard.
-          active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+          'absolute top-0 right-0 grid size-3.5 place-items-center rounded-xs bg-panel text-ink-faint transition-opacity hover:bg-line-strong/60 hover:text-ink',
+          /*
+           * Pinned to the tab's top-right corner rather than sitting beside the
+           * icon. A 34px column has no room for two targets in a row, and an ✕
+           * that shrank the icon to fit would make the thing you aim at smaller
+           * than the thing you rarely want.
+           *
+           * Chrome's rule otherwise, unchanged: the active tab always offers
+           * its ✕, the others on hover — but *only* on hover here, because a
+           * permanently-visible ✕ overlapping a 24px icon reads as part of it.
+           * Focusable throughout: `opacity-0` hides it from the eye and
+           * `focus-visible` brings it back for the keyboard.
+           */
+          'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+          active && 'text-ink',
         )}
       >
         <XIcon className="size-2.5" aria-hidden="true" />
@@ -412,6 +460,27 @@ function BrowserTabButton({
  * `closeTasks` writes down what was on screen so it stays shut; the next thing
  * delegated brings it back, the same way the first one did.
  */
+/** The folder browser's tab. One per column, like the delegated list's. */
+function FilesTabButton({
+  paneId,
+  active,
+}: {
+  readonly paneId: string;
+  readonly active: boolean;
+}): ReactElement {
+  return (
+    <TabShell
+      active={active}
+      label="Files"
+      title="The working folder"
+      icon={<FolderIcon className="size-3.5 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'files', paneId })}
+      onClose={() => closeFiles(paneId)}
+      closeLabel="Close the folder browser"
+    />
+  );
+}
+
 function TasksTabButton({
   paneId,
   active,
@@ -516,6 +585,7 @@ function DockBody({
        * one — and so the jump to a `:line` runs again for the new file.
        */}
       {active?.kind === 'file' ? <FileViewer key={file?.path ?? ''} /> : null}
+      {active?.kind === 'files' ? <FilesPane paneId={active.paneId} /> : null}
       {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
       {/*
        * Only the active one, unlike the terminals below. An agent tab holds no

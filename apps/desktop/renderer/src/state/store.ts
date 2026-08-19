@@ -149,7 +149,6 @@ import {
   paneState,
   setHostPlatform,
   setPaneState,
-  setThinkingFolds,
   type MirroredState,
   type Pane,
   type PaneId,
@@ -675,6 +674,16 @@ export interface AppState {
    * rather than destroying them.
    */
   readonly dockAutoOpen: boolean;
+  /**
+   * Whether the dock's delegated view shows this column's work or every
+   * column's. See `_layout.md` item 5.
+   *
+   * A window value rather than a pane one, and that is the point of it: the
+   * question it answers — "is anything, anywhere, still going" — is about the
+   * window, and storing the answer per column would make it a different setting
+   * depending on which conversation you happened to ask from.
+   */
+  readonly dockScope: 'pane' | 'all';
   /**
    * Whether Escape stops a run.
    *
@@ -1242,6 +1251,7 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  dockScope?: 'pane' | 'all';
   escapeStopsRun?: boolean;
   autoHandoff?: boolean;
   /**
@@ -1502,6 +1512,7 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    dockScope: raw['dockScope'] === 'all' ? 'all' : undefined,
     escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
     autoHandoff: boolOrUndefined(raw['autoHandoff']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
@@ -1591,6 +1602,7 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    dockScope: s.dockScope,
     escapeStopsRun: s.escapeStopsRun,
     autoHandoff: s.autoHandoff,
     updateChannel: s.updateChannel,
@@ -1647,17 +1659,15 @@ const initialTheme = prefs.theme ?? DEFAULT_THEME;
 applyTheme(initialTheme);
 
 /*
- * And the same shape again for the thinking switch, which has to be settled
- * before `firstPane` below rather than in `bootstrap`.
+ * The thinking switch, defaulting to on.
  *
- * A pane's transcript is told how to fold when it is minted, so a value pushed
- * down after the first pane exists would leave that pane — the one the app
- * opens into — folding the reasoning away until something else caused a
- * rebuild. Reading the preference here, above the pane, is what makes the app
- * open in the state it was left in.
+ * On, because reasoning is part of the conversation: the model works out what
+ * to say and then says it, and a reader watching an agent work wants both. It
+ * is a preference rather than a fact because one block in fifty is four
+ * thousand words about a typo — that is what turning it off is for, and the
+ * per-block fold is there for the same reason at a finer grain.
  */
-const initialShowThinking = prefs.showThinking ?? false;
-setThinkingFolds(!initialShowThinking);
+const initialShowThinking = prefs.showThinking ?? true;
 
 /**
  * The state a brand-new column starts from.
@@ -1693,6 +1703,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     tasks: [],
     dismissedTasks: [],
     tasksRequested: false,
+    filesRequested: false,
     promptHistory: [],
     handoff: 'none',
     draft: '',
@@ -1786,6 +1797,10 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  // This column, unless asked otherwise. The dock tab names a conversation, and
+  // opening it to find another one's work would be answering a question nobody
+  // asked from a place that says it is about this one.
+  dockScope: prefs.dockScope ?? 'pane',
   // Defaults on: this is how Escape has always behaved, and a preference that
   // silently changed an existing reflex would be worse than not having one.
   escapeStopsRun: prefs.escapeStopsRun ?? true,
@@ -2477,6 +2492,30 @@ export function closeFile(): void {
  * setting: shutting the tab has to withdraw the permission the press granted,
  * or the next thing delegated would open a pane the user has just closed.
  */
+/**
+ * Open the folder browser, bring it forward, or shut it.
+ *
+ * `toggleTasks`'s twin, without its one guard: that refuses when nothing is
+ * delegated, and a working directory always exists — so this only ever has to
+ * decide between the three states of a tab.
+ */
+export function toggleFiles(pane: Pane = focusedPane()): void {
+  const tab: DockTab = { kind: 'files', paneId: pane.id };
+  if (sameTab(useApp.getState().activeDockTab, tab)) {
+    closeFiles(pane.id);
+    return;
+  }
+  if (!paneState(pane).filesRequested) setPaneState(pane, { filesRequested: true });
+  focusDockTab(tab);
+}
+
+export function closeFiles(paneId: PaneId): void {
+  const pane = allLivePanes().find((one) => one.id === paneId);
+  if (pane === undefined) return;
+  // Which tab comes forward is `reconcileDock`'s, on this write.
+  setPaneState(pane, { filesRequested: false });
+}
+
 export function closeTasks(paneId: PaneId): void {
   const pane = allLivePanes().find((one) => one.id === paneId);
   if (pane === undefined) return;
@@ -2911,6 +2950,7 @@ function describeShown(): readonly ShownConversation[] {
       // warranted it. Only the second survives the dock being told never to
       // open on its own.
       ...(state.tasksRequested ? { tasksRequested: true } : {}),
+      ...(state.filesRequested ? { filesRequested: true } : {}),
     };
   });
 
@@ -2923,7 +2963,13 @@ function describeShown(): readonly ShownConversation[] {
         one.runId === before.runId &&
         one.sessionId === before.sessionId &&
         one.hasTasks === before.hasTasks &&
-        one.tasksRequested === before.tasksRequested
+        one.tasksRequested === before.tasksRequested &&
+        // Every field this object carries has to be compared here. Leaving one
+        // out reuses a cached array that disagrees with the panes, and the
+        // strip stops tracking it — which is what closing the folder browser
+        // did: the flag went false, this said "nothing moved", and the tab sat
+        // there with nothing behind it.
+        one.filesRequested === before.filesRequested
       );
     });
 
@@ -2983,9 +3029,12 @@ function reconcileDock(): void {
     // setting alone. A column whose tab the user opened by hand claims one
     // with the setting off, and returning early on it would leave the strip
     // empty, the dock shut, and that press looking like it did nothing. The
-    // condition is `visibleTabs`', which the two have to agree on exactly.
+    // condition is `visibleTabs`', which the two have to agree on exactly —
+    // and the folder browser is the second tab a column can claim without
+    // anything else being in the dock, so it is in here for the same reason.
     !allPanes().some((pane) => {
       const one = paneState(pane);
+      if (one.filesRequested === true) return true;
       return showsTasks(one) && (state.dockAutoOpen || one.tasksRequested);
     })
   ) {
@@ -6333,30 +6382,19 @@ export function setStreamingWordFade(on: boolean): void {
 }
 
 /**
- * Show the model's reasoning in the thread, or fold it back into the markers.
+ * Whether a reasoning block opens on arrival, or waits for a click.
  *
- * Written in three places because the setting has three audiences, and leaving
- * any one out is a switch that half works:
- *
- *  - **the store**, which is what the rows read to decide whether to render
- *    themselves open;
- *  - **every transcript already on screen**, whose rows have to be regrouped;
- *  - **the pane layer**, for the columns that do not exist yet.
- *
- * The middle one is two lists rather than one, and the second is easy to miss.
- * `allLivePanes` is the conversations — on a column or backgrounded, and
- * `allPanes` would drop the latter, so a column the reader comes back to would
- * disagree with the one they set this from. An open agent tab is neither: it is
- * an off-grid pane in `agentViews` holding a subagent's transcript, drawn by the
- * same `Transcript` component, and left out of this it is the one place in the
- * window where the switch appears not to work.
+ * One write, not four. It used to move rows as well as open them — reasoning
+ * was machinery when this was off, and got folded into the activity marker with
+ * the tool calls — so every transcript on screen and the pane layer behind them
+ * all had to be told. Reasoning is a message in the thread now, always, and the
+ * only thing left to decide is whether it arrives expanded. `ThinkingRow` reads
+ * this from the store and adjusts itself, so the rows on screen follow without
+ * being rebuilt.
  */
 export function setShowThinking(on: boolean): void {
   useApp.setState({ showThinking: on });
   savePrefs();
-  setThinkingFolds(!on);
-  for (const pane of allLivePanes()) pane.transcript.setThinkingFolds(!on);
-  for (const view of useApp.getState().agentViews) view.pane.transcript.setThinkingFolds(!on);
 }
 
 /**
@@ -6367,6 +6405,11 @@ export function setShowThinking(on: boolean): void {
  * agent put up (their records survive — see `visibleTabs`), and turning it on
  * reveals whatever arrived while it was off.
  */
+export function setDockScope(scope: 'pane' | 'all'): void {
+  useApp.setState({ dockScope: scope });
+  savePrefs();
+}
+
 export function setDockAutoOpen(on: boolean): void {
   useApp.setState({ dockAutoOpen: on });
   savePrefs();
@@ -7184,6 +7227,7 @@ export function newSession(
       tasks: [],
       dismissedTasks: [],
       tasksRequested: false,
+      filesRequested: false,
       // A new conversation is exactly what a handoff was asking for, so the
       // latch comes off with everything else. Whether the account still has
       // room is a question for the next reading, not a state to inherit — and a

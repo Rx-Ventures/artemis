@@ -115,6 +115,7 @@ import {
   type FilesCheckRequest,
   type GithubPullRequestsRequest,
   type PullRequestRef,
+  type FilesListRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalListRequest,
@@ -1340,6 +1341,18 @@ export function validatePreviewOpen(raw: unknown): PreviewOpenRequest {
  * the argument that a validator and a handler holding two copies of one rule
  * will eventually disagree about it.
  */
+/**
+ * Listing a directory.
+ *
+ * Exactly {@link validateFilesRead}'s gate, because it is exactly the same
+ * reach: anything this can name, the read could already open. A looser rule
+ * here would be the interesting one to find.
+ */
+export function validateFilesList(raw: unknown): FilesListRequest {
+  const request = requireRequest(raw);
+  return { path: requireAbsolutePath(request['path'], 'path') };
+}
+
 export function validateFilesRead(raw: unknown): FilesReadRequest {
   const request = requireRequest(raw);
   return { path: requireAbsolutePath(request['path'], 'path') };

@@ -1,19 +1,19 @@
 /**
  * @vitest-environment jsdom
  *
- * Watching the model think: the Appearance switch, and what it moves.
+ * Watching the model think: reasoning in the thread, and the switch over it.
  *
- * The setting makes one claim with four parts, and each part fails somewhere
- * different, so each is pinned on its own:
+ * Reasoning is a message in the conversation. It stands where the model wrote
+ * it, between the prose it was working towards, and it is never a member of the
+ * activity marker at the foot of the run — the marker is the account of what
+ * was *done*, and thinking is not that. The switch decides one thing only:
+ * whether a block arrives expanded or collapsed to its one-line fold.
  *
- *  - **It is on screen without a click.** The default folds reasoning into the
- *    activity marker, which is two clicks from the text. The whole request is
- *    that turning this on removes both, and the failure mode is quiet: the
- *    switch flips, the store is right, and the reader still has to go digging.
- *  - **It is in the thread, not in the marker.** Rendering it open inside the
- *    fold would satisfy the sentence above and still be the wrong shape — the
- *    reasoning has to sit between the work it came from, which is a question
- *    about grouping and is answered in the transcript model.
+ * Three claims, each failing somewhere different, so each is pinned on its own:
+ *
+ *  - **It is on screen without a click.** With the switch on — which is where
+ *    it ships — the text is simply there. The failure mode is quiet: the switch
+ *    flips, the store is right, and the reader still has to go digging.
  *  - **It is muted.** The one visual promise the setting makes in words: that
  *    reasoning cannot be mistaken for the answer. Asserted on the class,
  *    unusually for this suite, because it is the requirement rather than a
@@ -97,9 +97,9 @@ function play(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): void 
 /**
  * Move the switch the way the settings pane does, and let the pane catch up.
  *
- * The explicit flush is the real behaviour rather than a test convenience:
- * `setThinkingFolds` marks the model pending and the rebuild lands on the next
- * frame, which nothing here is waiting around for.
+ * The flush is belt and braces now that the switch no longer moves rows — it
+ * opens and closes them — but a transcript with work queued behind a frame is
+ * the state these render into, so it stays.
  */
 function flip(on: boolean): void {
   act(() => {
@@ -159,10 +159,6 @@ afterEach(() => {
 });
 
 describe('the Appearance switch', () => {
-  it('is off to begin with, so the transcript reads as it always did', () => {
-    expect(useApp.getState().showThinking).toBe(false);
-  });
-
   it('writes the store, and back again', () => {
     render(
       <TooltipProvider>
@@ -180,12 +176,16 @@ describe('the Appearance switch', () => {
 });
 
 describe('with the switch off', () => {
-  it('keeps the reasoning folded into the work it belongs to', () => {
+  it('collapses the reasoning to its own line, still in the thread', () => {
     play(thought(0, REASONING), ...call('c1', 'Grep'));
     render(<Transcript />);
 
+    // Off is about weight, not about place. The prose is behind a click; the
+    // row saying there is prose to click is where the model wrote it, and the
+    // marker beneath holds the call and nothing else.
     expect(screen.getByText('Searched the code')).not.toBeNull();
     expect(screen.queryByText(REASONING)).toBeNull();
+    expect(screen.getByText('thinking')).not.toBeNull();
   });
 });
 
@@ -199,7 +199,7 @@ describe('with the switch on', () => {
     expect(bodyOf(REASONING)).not.toBeNull();
   });
 
-  it('stands it in the thread, with the work still folded around it', () => {
+  it('stands it in the thread, with the work folded beneath it', () => {
     play(
       thought(0, REASONING),
       ...call('c1', 'Grep'),
@@ -209,14 +209,15 @@ describe('with the switch on', () => {
     );
     render(<Transcript />);
 
-    // Both stretches of reasoning are readable, and the calls between them are
-    // still one line each rather than five rows of machinery.
+    // Both stretches of reasoning readable and in order, with the three calls
+    // that used to be two markers *between* them folded underneath instead.
     expect(bodyOf(REASONING)).not.toBeNull();
     expect(bodyOf(SECOND_THOUGHT)).not.toBeNull();
-    expect(screen.getByText('Searched the code 2 times')).not.toBeNull();
-    expect(screen.getByText('Read a file')).not.toBeNull();
-    // Nothing was unfolded to achieve it: the calls are still behind the marker.
+    // Nothing was unfolded to achieve it. That the three became *one* marker
+    // rather than two is asserted in `transcript.test.ts` against the row ids,
+    // where it can be checked without depending on the summary's wording.
     expect(screen.queryByText('Grep')).toBeNull();
+    expect(screen.queryByText('Read')).toBeNull();
   });
 
   it('draws it as muted prose rather than as the answer', () => {
@@ -265,8 +266,19 @@ describe('with the switch on', () => {
   });
 });
 
+/*
+ * The case a `defaultOpen` cannot reach, and the reason `ThinkingRow` keeps its
+ * own state instead of using `useFold`.
+ *
+ * Every thinking block is a row of its own, on or off, so flipping the switch
+ * changes nothing structural: same row id, same component instance, no remount.
+ * A default read once at mount would leave every row on screen sitting in the
+ * state it was born in while the setting claimed otherwise — which is exactly
+ * what a reader does with this, since they flip it while looking at the
+ * conversation it is meant to change.
+ */
 describe('flipping the switch under a transcript already on screen', () => {
-  it('unfolds the turn the reader is looking at', () => {
+  it('opens the blocks the reader is looking at', () => {
     play(thought(0, REASONING), ...call('c1', 'Grep'));
     render(<Transcript />);
     expect(screen.queryByText(REASONING)).toBeNull();
@@ -276,25 +288,7 @@ describe('flipping the switch under a transcript already on screen', () => {
     expect(bodyOf(REASONING)).not.toBeNull();
   });
 
-  /*
-   * The case a `defaultOpen` cannot reach, and the reason `ThinkingRow` keeps
-   * its own state instead of using `useFold`. A lone thinking block is already
-   * a row of its own with the switch off, so flipping it changes nothing
-   * structural: same row id, same component instance, no remount. Read once at
-   * mount, the default would still say "closed" and this row alone would sit
-   * shut while the rest of the pane opened around it.
-   */
-  it('opens a block that was already standing on its own', () => {
-    play(thought(0, REASONING), { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'done' });
-    render(<Transcript />);
-    expect(screen.queryByText(REASONING)).toBeNull();
-
-    flip(true);
-
-    expect(bodyOf(REASONING)).not.toBeNull();
-  });
-
-  it('folds it all back away when the switch goes off', () => {
+  it('closes them again when the switch goes off', () => {
     setShowThinking(true);
     play(thought(0, REASONING), ...call('c1', 'Grep'));
     render(<Transcript />);

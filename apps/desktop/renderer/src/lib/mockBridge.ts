@@ -1490,6 +1490,24 @@ export function createMockBridge(): ArtemisBridge {
      * real file that produces them.
      */
     files: {
+      /*
+       * A fixed little tree, so the browser preview has something to click
+       * through. `truncated: false` on purpose: a mock that claimed to be
+       * capped would put a banner on screen that nothing could clear.
+       */
+      list: async ({ path }) => ({
+        ok: true as const,
+        value: {
+          path,
+          entries: [
+            { name: 'apps', kind: 'directory' as const },
+            { name: 'packages', kind: 'directory' as const },
+            { name: 'README.md', kind: 'file' as const, bytes: 2_048 },
+            { name: 'package.json', kind: 'file' as const, bytes: 1_190 },
+          ],
+          truncated: false,
+        },
+      }),
       read: async ({ path }) => {
         const name = path.split('/').at(-1) ?? path;
 

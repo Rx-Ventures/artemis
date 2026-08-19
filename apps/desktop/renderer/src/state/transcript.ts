@@ -171,44 +171,27 @@ export type TranscriptItem =
 /* -------------------------------------------------------------------------- */
 
 /**
- * A run of consecutive machinery — thinking blocks and tool calls — summarised.
+ * The tool calls of one run, gathered under it and summarised.
  *
  * The transcript draws one marker per group — "Ran 36 commands, read 6 files"
  * — instead of one row per call, because a turn that touches forty files is
  * forty rows of machinery between two sentences of actual answer.
  *
- * ## Why thinking is in here too
+ * ## Calls, and nothing but calls
  *
- * Grouping tool calls alone fixed half the problem and made the other half
- * obvious. A working turn does not emit a clean burst of calls: it thinks,
- * calls a tool, thinks about the result, calls the next one. Folding only the
- * calls leaves that as `thinking / tool / thinking / tool / thinking …` — the
- * marker collapses each run of one, and the reader is back to a screen of rows
- * for what is a single line of reasoning with some work hanging off it.
+ * Reasoning is not in here, and the distinction is the whole point. A tool call
+ * is an account of *how* the answer was arrived at, which is worth keeping and
+ * is not worth reading in line; a thinking block is the model working out
+ * *what* to say, which belongs beside the saying of it. They are two kinds of
+ * thing, so they get two treatments: the calls sink to the foot of the run (see
+ * {@link TranscriptModel} for that walk), and the reasoning stays exactly where
+ * it happened.
  *
- * So a run is *machinery*, not tools, and the whole stretch between two things
- * someone actually said folds into one row.
- *
- * A run with no tool call in it is left alone: a thinking block on its own is
- * the model's reasoning before it answers, it already renders as one compact
- * sage row, and burying it behind a marker would cost a click to reach the only
- * thing in there.
- *
- * ## Unless the reader asked to watch it think
- *
- * All of that describes thinking as *machinery* — something to get out of the
- * way of the answer. A reader who turns on the Appearance pane's thinking
- * switch has said the opposite: the reasoning is the part they came for, and
- * folding it away is the app hiding what they asked to see. So the switch makes
- * thinking stop being machinery ({@link TranscriptModel.setThinkingFolds}), and
- * a burst that was one marker becomes reasoning in the thread with markers
- * between the paragraphs for the work.
- *
- * That does cost what the section above buys — `thinking / tool / thinking /
- * tool` becomes a marker around each single call — and it is the right trade
- * *given the switch*, because those markers are now one compact line between
- * stretches of prose rather than the only thing on screen. It is also why this
- * is a setting and not the default.
+ * This used to be otherwise — both were "machinery" and a burst of either
+ * folded into a marker where it fell. What that produced was a conversation
+ * interrupted mid-paragraph by a bar reading `Ran 3 commands`, and reasoning
+ * that could only be reached by opening one. The rule now is simply: prose and
+ * reasoning read top to bottom, and the work is underneath.
  *
  * ## An artifact is never folded
  *
@@ -264,28 +247,16 @@ export type TranscriptItem =
 export interface ActivityGroup {
   /** `g:` + the first member's id. Distinct from every item id by prefix. */
   readonly id: string;
-  /** Member item ids, in transcript order. Holds at least one tool call. */
+  /** Member item ids, in transcript order. Tool calls, and nothing else. */
   readonly ids: readonly string[];
   /** When the burst started — the first member's timestamp. */
   readonly ts: number;
   /** How many calls of each kind, for the summary line. */
   readonly counts: ActivityCounts;
-  /** Thinking blocks folded in. The marker says *that* they are here, not how many. */
-  readonly thinking: number;
   /** Calls still running. Non-zero means the marker reads in present tense. */
   readonly running: number;
   /** Calls that errored or were denied. Never hidden behind a collapsed row. */
   readonly failed: number;
-  /**
-   * A thinking block is still arriving.
-   *
-   * Kept apart from {@link running} rather than folded into it because the two
-   * drive different things: the marker pulses for either, but only a running
-   * *call* may put the summary in the present tense. A group whose commands
-   * have all finished while the model thinks about them did run them, and
-   * "Running 2 commands" would be a lie about work that is over.
-   */
-  readonly streaming: boolean;
 }
 
 /** True for a row id that names an {@link ActivityGroup} rather than an item. */
@@ -481,15 +452,6 @@ export class TranscriptModel {
   private artifactTest: ArtifactTest | null = null;
   private artifactVerdicts = new Map<string, boolean>();
 
-  /**
-   * Whether thinking counts as machinery, and so may be folded into a marker.
-   *
-   * True is the historical behaviour and the default, so a bare
-   * `new TranscriptModel()` folds exactly as it always did. See
-   * {@link ActivityGroup} for what the other setting is for.
-   */
-  private thinkingFolds = true;
-
   private listListeners = new Set<Listener>();
   private itemListeners = new Map<string, Set<Listener>>();
 
@@ -513,26 +475,6 @@ export class TranscriptModel {
     if (test === this.artifactTest) return;
     this.artifactTest = test;
     this.artifactVerdicts.clear();
-    this.structural = true;
-    this.markPending();
-  }
-
-  /**
-   * Decide whether thinking folds into markers or stands in the thread.
-   *
-   * Structural, and deliberately retroactive: flipping it rebuilds the rows a
-   * transcript already holds, so the blocks of the turn the reader is looking at
-   * come out of their markers rather than only the next turn's. A setting that
-   * took effect on future work would look, from the chair, like a setting that
-   * did nothing.
-   *
-   * Guarded on equality because every pane is told on every write of the
-   * preference, and the ones already in the asked-for state must not be made to
-   * rebuild and re-notify over a change that is not one.
-   */
-  setThinkingFolds(folds: boolean): void {
-    if (folds === this.thinkingFolds) return;
-    this.thinkingFolds = folds;
     this.structural = true;
     this.markPending();
   }
@@ -1067,73 +1009,82 @@ export class TranscriptModel {
    * renaming it, so an expanded marker does not collapse itself every time the
    * agent runs one more command.
    *
-   * The one place a row id does change under the reader is the moment a run of
-   * pure thinking gains its first tool call — a thinking row becomes a marker.
-   * That is the fold arriving, not a glitch: the alternative is holding the
-   * burst back until it is over, which would mean the transcript showed nothing
-   * at all while the work was happening.
+   * No row id changes under the reader as a run grows. A message keeps its own
+   * id wherever it lands, and a call joins a marker named for the first call of
+   * its run — so the marker at the foot extends rather than being renamed, and
+   * an expanded one does not collapse itself every time the agent runs one more
+   * command.
    */
   private rebuildRows(): void {
     const rows: string[] = [];
     const members = new Map<string, readonly string[]>();
     const groupOf = new Map<string, string>();
 
-    for (let i = 0; i < this.ids.length; ) {
-      const id = this.ids[i];
-      if (id === undefined) {
-        i += 1;
-        continue;
-      }
-      if (!this.isMachinery(id)) {
-        rows.push(id);
-        i += 1;
-        continue;
-      }
-      /*
-       * The run is walked to its natural end — an artifact does *not* end it —
-       * and then split in two: what stays folded, and what is lifted out of the
-       * fold to stand beside the marker. See {@link ActivityGroup}.
-       *
-       * Walking first and splitting after is the whole difference between one
-       * marker with tiles under it and a marker per gap between artifacts. The
-       * burst is still one burst; only what it is willing to hide has changed.
-       */
-      const run: string[] = [];
-      const lifted: string[] = [];
-      let tools = 0;
-      while (i < this.ids.length) {
-        const next = this.ids[i];
-        if (next === undefined || !this.isMachinery(next)) break;
-        i += 1;
-        if (this.isArtifact(next)) {
-          lifted.push(next);
-          continue;
-        }
-        if (this.items.get(next)?.kind === 'tool') tools += 1;
-        run.push(next);
-      }
+    /*
+     * The calls sink to the foot of their run. Everything else stays put.
+     * ------------------------------------------------------------------
+     *
+     * Calls used to be emitted where they happened, folded into a marker per
+     * burst. That reads as the agent being interrupted: a paragraph, a `Ran 3
+     * commands` bar, the rest of the paragraph — and the prose is what the
+     * reader came for. The work is worth seeing and is not worth seeing *there*.
+     *
+     * So every tool call in a run collects into one marker beneath that run's
+     * last message, growing as the run goes. The conversation reads as
+     * conversation; the account of how it was done sits under it, in order, in
+     * one place.
+     *
+     * Reasoning is not part of that account and never sinks. It is the model
+     * working out what to say, which belongs against the saying of it — see
+     * {@link ActivityGroup}. So a thinking block is an ordinary row here, in the
+     * position it arrived in, and the marker below holds only calls.
+     *
+     * A run's boundary is its `run-end` row, and the tail after the last one is
+     * the run in flight — which is why the flush happens both on that row and
+     * once at the end.
+     */
+    let machinery: string[] = [];
+    let lifted: string[] = [];
 
-      // Nothing was *done* here — or nothing that is still hidden — so there is
-      // nothing to summarise: a stretch of thinking on its own stays the rows it
-      // already was. A burst whose only calls were artifacts lands here too, and
-      // correctly: with the tiles lifted out there is no work left to fold.
-      const first = run[0];
-      if (tools === 0 || first === undefined) {
-        for (const memberId of run) rows.push(memberId);
-      } else {
-        // Named for the first *folded* member rather than the run's first item,
-        // so a burst that opens with an artifact still gets a stable id.
+    const flush = (): void => {
+      const first = machinery[0];
+      if (first !== undefined) {
+        // Named for the first member, so appending to a live run extends the
+        // marker rather than renaming it — an expanded marker must not collapse
+        // itself every time the agent runs one more command.
         const groupId = `g:${first}`;
-        for (const memberId of run) groupOf.set(memberId, groupId);
-        members.set(groupId, run);
+        for (const memberId of machinery) groupOf.set(memberId, groupId);
+        members.set(groupId, machinery);
         rows.push(groupId);
       }
-
-      // After the marker, in the order they were made. The tiles are the reason
-      // anyone is looking at this stretch of the transcript, so they come out
-      // below the one line that describes the work rather than above it.
+      // Below the marker: the tiles are the reason anyone opens this stretch,
+      // so they come out under the one line that describes the work.
       for (const artifactId of lifted) rows.push(artifactId);
+      machinery = [];
+      lifted = [];
+    };
+
+    for (const id of this.ids) {
+      if (id === undefined) continue;
+
+      if (this.isMachinery(id)) {
+        if (this.isArtifact(id)) lifted.push(id);
+        else machinery.push(id);
+        continue;
+      }
+
+      // A run ending is the one row that must stay *after* the account of the
+      // run it ends, so the flush comes first.
+      if (this.items.get(id)?.kind === 'run-end') {
+        flush();
+        rows.push(id);
+        continue;
+      }
+
+      rows.push(id);
     }
+
+    flush();
 
     // Retire cached summaries whose group is gone or whose membership moved.
     // Everything else keeps its object identity, which is the point.
@@ -1187,20 +1138,12 @@ export class TranscriptModel {
     if (ids === undefined || ids.length === 0) return undefined;
 
     const counts: Partial<Record<ToolCategory, number>> = {};
-    let thinking = 0;
     let running = 0;
     let failed = 0;
-    let streaming = false;
     let ts: number | undefined;
 
     for (const memberId of ids) {
       const item = this.items.get(memberId);
-      if (item?.kind === 'thinking') {
-        ts ??= item.ts;
-        thinking += 1;
-        if (item.streaming) streaming = true;
-        continue;
-      }
       if (item?.kind !== 'tool') continue;
       ts ??= item.ts;
       const category = classifyTool(item.name);
@@ -1209,20 +1152,19 @@ export class TranscriptModel {
       else if (item.status === 'error' || item.status === 'denied') failed += 1;
     }
 
-    return { id, ids, ts: ts ?? 0, counts, thinking, running, failed, streaming };
+    return { id, ids, ts: ts ?? 0, counts, running, failed };
   }
 
   /**
-   * Whether a row is machinery — the thing runs are made of.
+   * Whether a row is machinery — the thing the marker at the foot is made of.
    *
-   * A tool call always is. Thinking is only machinery while it is allowed to
-   * fold; once the reader has asked to watch the model think it is content, and
-   * a run of work either side of it becomes two runs with reasoning in between.
+   * Tool calls, and only tool calls. Reasoning was in here once; it is content
+   * now, and stands in the thread where the model wrote it whether or not the
+   * reader has asked to see it expanded. See {@link ActivityGroup} for why the
+   * two stopped being one category.
    */
   private isMachinery(id: string): boolean {
-    const kind = this.items.get(id)?.kind;
-    if (kind === 'tool') return true;
-    return kind === 'thinking' && this.thinkingFolds;
+    return this.items.get(id)?.kind === 'tool';
   }
 
   /**
@@ -1400,7 +1342,6 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  */
 function sameGroup(a: ActivityGroup, b: ActivityGroup): boolean {
   if (a.ts !== b.ts || a.running !== b.running || a.failed !== b.failed) return false;
-  if (a.thinking !== b.thinking || a.streaming !== b.streaming) return false;
   if (!sameIds(a.ids, b.ids)) return false;
   const keys = Object.keys(a.counts) as ToolCategory[];
   if (keys.length !== Object.keys(b.counts).length) return false;

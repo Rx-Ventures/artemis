@@ -69,6 +69,7 @@ import {
   allLivePanes,
   canOpenSubagents,
   openAgentTab,
+  setDockScope,
   stopTask,
   taskHasTranscript,
   useApp,
@@ -86,15 +87,31 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
   // tab names the column it belongs to and the strip is drawn outside every
   // `PaneProvider`, so there is no context to read this from.
   const pane = useApp((s) => allLivePanes(s).find((one) => one.id === paneId));
-  const tasks = usePaneTasks(pane);
-  const now = useTicker(tasks.some(isTaskLive));
+  const scope = useApp((s) => s.dockScope);
+  const own = usePaneTasks(pane);
+  const everywhere = useAllPaneTasks();
+  /*
+   * The scope decides which list is drawn, and the *rows* carry which column
+   * each belongs to when it is "all" — see `TaskRow`. A merged list with no
+   * attribution would answer "is anything still going" and lose "where", which
+   * is the half you need in order to go and look.
+   */
+  // The ticker's input is computed from both lists rather than from `rows`,
+  // because `rows` cannot be built until `pane` is narrowed and the narrowing
+  // has to come after every hook.
+  const now = useTicker(own.some(isTaskLive) || everywhere.some((row) => isTaskLive(row.task)));
 
   if (pane === undefined) return null;
 
-  if (tasks.length === 0) {
+  const rows = scope === 'all' ? everywhere : own.map((task) => ({ task, pane }));
+
+  if (rows.length === 0) {
     return (
-      <div className="grid flex-1 place-items-center p-4 text-2xs text-ink-faint">
-        Nothing delegated yet.
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ScopeChip scope={scope} />
+        <div className="grid flex-1 place-items-center p-4 text-2xs text-ink-faint">
+          {scope === 'all' ? 'Nothing delegated in any conversation.' : 'Nothing delegated yet.'}
+        </div>
       </div>
     );
   }
@@ -112,15 +129,17 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
    * were delegated and a row that moved as it settled would be a row the eye
    * has to re-find — the same reason `visibleTabs` refuses to reorder the dock.
    */
-  const live = tasks.filter(isTaskLive);
-  const finished = tasks.filter((task) => !isTaskLive(task));
+  const live = rows.filter((row) => isTaskLive(row.task));
+  const finished = rows.filter((row) => !isTaskLive(row.task));
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <ScopeChip scope={scope} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
       {live.length > 0 ? (
         <ul className="flex flex-col gap-1.5" aria-label="Delegated work">
-          {live.map((task) => (
-            <TaskRow key={task.id} task={task} now={now} pane={pane} />
+          {live.map((row) => (
+            <TaskRow key={row.task.id} task={row.task} now={now} pane={row.pane} />
           ))}
         </ul>
       ) : null}
@@ -148,12 +167,86 @@ export function TasksPane({ paneId }: { readonly paneId: PaneId }): ReactElement
           }
         >
           <ul className="flex flex-col gap-1.5" aria-label="Finished work">
-            {finished.map((task) => (
-              <TaskRow key={task.id} task={task} now={now} pane={pane} />
+            {finished.map((row) => (
+              <TaskRow key={row.task.id} task={row.task} now={now} pane={row.pane} />
             ))}
           </ul>
         </Fold>
       ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Every column's delegated work, each row remembering whose it is.
+ * ============================================================================
+ *
+ * One `useState` and one `useEffect`, whatever the pane count — *not* a
+ * `usePaneTasks` per pane inside a `map`.
+ *
+ * The first version did that, with a comment claiming the pane list was stable
+ * enough. It is not: splitting a column changes the number of hooks this
+ * component calls, which is precisely the invariant React enforces, and it
+ * would have thrown the moment anyone split a pane with the delegated view
+ * open on "all". A comment asserting a rule is safe to break is worth less than
+ * the rule.
+ *
+ * So it subscribes to every pane store from one effect and rebuilds a flat
+ * list. The tasks live in the pane stores rather than the window's, so there is
+ * nothing here a single window selector could have read — the same reason
+ * `syncRunningSessions` exists one layer down.
+ */
+function useAllPaneTasks(): readonly { readonly task: BackgroundTask; readonly pane: Pane }[] {
+  const panes = useApp(allLivePanes);
+  const [rows, setRows] = useState<readonly { task: BackgroundTask; pane: Pane }[]>([]);
+
+  useEffect(() => {
+    const gather = (): void => {
+      setRows(panes.flatMap((pane) => paneState(pane).tasks.map((task) => ({ task, pane }))));
+    };
+    gather();
+    // One subscription per pane, torn down together. `panes` is a stable
+    // reference between splits — `allLivePanes` is memoised in the store — so
+    // this re-subscribes when the grid changes and not on every render.
+    const stops = panes.map((pane) => pane.store.subscribe(gather));
+    return () => {
+      for (const stop of stops) stop();
+    };
+  }, [panes]);
+
+  return rows;
+}
+
+/**
+ * This column's work, or every column's.
+ *
+ * `_layout.md` item 5's other half. The dock tab names one conversation, so the
+ * pane's own work is the honest default — but "is anything, anywhere, still
+ * running" is a real question that had no surface at all, and answering it
+ * meant clicking through every column in turn.
+ *
+ * A chip rather than a setting, because the answer changes with what you are
+ * doing rather than with who you are. It persists all the same: a scope that
+ * reset on every launch would be a question re-asked rather than a view chosen.
+ */
+function ScopeChip({ scope }: { readonly scope: 'pane' | 'all' }): ReactElement {
+  return (
+    <div className="flex h-6 shrink-0 items-center gap-1 border-b border-line px-1.5">
+      {(['pane', 'all'] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={scope === option}
+          onClick={() => setDockScope(option)}
+          className={cn(
+            'chrome-label rounded-xs px-1.5 py-0.5 transition-colors',
+            scope === option ? 'bg-raised text-ink' : 'text-ink-faint hover:text-ink-muted',
+          )}
+        >
+          {option === 'pane' ? 'this pane' : 'all'}
+        </button>
+      ))}
     </div>
   );
 }

@@ -411,10 +411,10 @@ export function AppearanceSection(): ReactElement {
               <ItemTitle className="text-xs text-ink">Show the model’s reasoning</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
                 Reasoning lands in the conversation as it is written, in muted text beside a sage
-                rule so it never reads as the answer. Off, it stays where it has always been —
-                folded into the activity marker with the work it was reasoning about, one click
-                away. Either way a single block can be collapsed on its own, and moving this
-                rearranges the conversation already on screen rather than only the next one.
+                rule so it never reads as the answer. Off, each block collapses to a single line
+                where it happened — still in the thread, one click from the text. Either way a
+                single block can be collapsed on its own, and moving this opens or closes the
+                conversation already on screen rather than only the next one.
                 <br />
                 <br />
                 <span className="text-ink-muted">

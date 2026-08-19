@@ -313,7 +313,17 @@ describe('TranscriptModel activity groups', () => {
     expect(group?.failed).toBe(0);
   });
 
-  it('breaks a group only when the agent says something', () => {
+  it('does not break the work up when the agent says something mid-run', () => {
+    /*
+     * This asserted the opposite until the machinery moved to the foot of the
+     * run, and the opposite is what it was reported as: a paragraph, a
+     * `Ran 3 commands` bar, the rest of the paragraph. The prose is what the
+     * reader came for, and a marker between its halves interrupts the one thing
+     * the transcript exists to carry.
+     *
+     * So a message no longer splits the work in two. It flows on, and every
+     * call in the run collects into one marker underneath it.
+     */
     const model = build();
     for (const event of stream(
       ...call('c1', 'Bash'),
@@ -324,13 +334,13 @@ describe('TranscriptModel activity groups', () => {
     }
 
     const rows = model.getRowsSnapshot();
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).toBe('g:t:c1');
-    expect(isGroupId(rows[1] as string)).toBe(false);
-    expect(rows[2]).toBe('g:t:c2');
+    expect(rows).toHaveLength(2);
+    // The message first, uninterrupted; one marker for both calls after it.
+    expect(isGroupId(rows[0] as string)).toBe(false);
+    expect(rows[1]).toBe('g:t:c1');
   });
 
-  it('keeps the thinking between two calls inside the same burst', () => {
+  it('leaves the thinking between two calls in the thread, and sinks the calls', () => {
     const model = build();
     for (const event of stream(
       thought('m1', 0, 'where does this live'),
@@ -342,32 +352,34 @@ describe('TranscriptModel activity groups', () => {
       model.apply(event);
     }
 
-    // One row for the whole stretch, named for the thinking that opened it.
-    const rows = model.getRowsSnapshot();
-    expect(rows).toEqual(['g:k:m1:0']);
+    // The interleaving the marker used to swallow whole. Reasoning is what the
+    // model was working out and reads in order with the prose around it; the
+    // calls are the account of how, and collect underneath.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'k:m1:2', 'g:t:c1']);
 
-    const group = model.getGroup('g:k:m1:0');
-    expect(group?.ids).toEqual(['k:m1:0', 't:c1', 'k:m1:1', 't:c2', 'k:m1:2']);
+    const group = model.getGroup('g:t:c1');
+    expect(group?.ids).toEqual(['t:c1', 't:c2']);
     expect(group?.counts).toEqual({ search: 1, read: 1 });
-    expect(group?.thinking).toBe(3);
-    // The last block is still open — nothing has settled it — so the marker
-    // pulses without claiming either call is still running.
-    expect(group?.streaming).toBe(true);
     expect(group?.running).toBe(0);
   });
 
-  it('leaves thinking that did nothing as its own row', () => {
+  it('leaves thinking that did no work exactly where it happened', () => {
+    /*
+     * Reasoning before an answer, which is the commonest shape there is: the
+     * model works out what to say and then says it, and read in that order it
+     * is a conversation. Sinking it under the answer — which this briefly did,
+     * back when reasoning and calls were one category — put the working-out
+     * after the working-out's conclusion.
+     */
     const model = build();
     for (const event of stream(
       thought('m1', 0, 'the user wants the short answer'),
-      { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'no' },
+      { type: 'text.complete', messageId: 'm1', role: 'assistant', blockIndex: 1, text: 'no' },
     )) {
       model.apply(event);
     }
 
-    const rows = model.getRowsSnapshot();
-    expect(rows).toEqual(['k:m1:0', 'a:m1:0']);
-    expect(rows.some((id) => isGroupId(id))).toBe(false);
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'a:m1:1']);
   });
 
   it('gives no row to a thinking block that arrives empty', () => {
@@ -400,15 +412,15 @@ describe('TranscriptModel activity groups', () => {
   });
 
   /*
-   * The Appearance pane's thinking switch, at the level that actually moves the
-   * rows. Everything visible about that setting rests on `isMachinery` changing
-   * its mind, so these pin the two halves separately: that thinking leaves the
-   * fold, and that the *work* keeps folding once it has.
+   * The two kinds of row, interleaved every way a run interleaves them. The
+   * Appearance switch no longer reaches this level at all — it decides whether
+   * a reasoning row arrives expanded, not where it goes — so what these pin is
+   * the rule itself: reasoning in place, calls at the foot, whatever order they
+   * arrived in.
    */
-  describe('with thinking shown rather than folded', () => {
-    it('lifts the reasoning out of the burst and folds the work around it', () => {
+  describe('reasoning against the work it happened between', () => {
+    it('keeps both thoughts in the thread and folds the three calls beneath', () => {
       const model = build();
-      model.setThinkingFolds(false);
       for (const event of stream(
         thought('m1', 0, 'where does this live'),
         ...call('c1', 'Grep'),
@@ -419,59 +431,38 @@ describe('TranscriptModel activity groups', () => {
         model.apply(event);
       }
 
-      // Reasoning in the thread, and the calls between two thoughts still one
-      // marker each — the fold is narrowed, not abandoned. A regression that
-      // dropped the grouping entirely would give five rows here.
-      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1', 'g:t:c3']);
-      expect(model.getGroup('g:t:c1')?.counts).toEqual({ search: 2 });
-      expect(model.getGroup('g:t:c1')?.thinking).toBe(0);
+      // Both thoughts keep their place in order, and the three calls that used
+      // to be two markers around them are one marker underneath.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'g:t:c1']);
+      expect(model.getGroup('g:t:c1')?.counts).toEqual({ search: 2, read: 1 });
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2', 't:c3']);
     });
 
-    it('rearranges the transcript it already holds, not just the next turn', () => {
+    it('holds the thought that lands after the last call', () => {
+      // The tail case: a run whose reasoning arrives *between* the work and the
+      // answer. The marker is named for the first call, so a thought after it
+      // does not move the marker's id — an expanded one must not collapse.
       const model = build();
       for (const event of stream(
-        thought('m1', 0, 'where does this live'),
         ...call('c1', 'Grep'),
-        thought('m1', 1, 'now the other file'),
+        thought('m1', 0, 'now the other file'),
+        ...call('c2', 'Read'),
+        thought('m1', 1, 'that explains it'),
       )) {
         model.apply(event);
       }
-      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
 
-      const onList = vi.fn();
-      model.subscribeList(onList);
-      model.setThinkingFolds(false);
-
-      // The whole reason this is structural: a reader who flips the switch is
-      // looking at the turn they want unfolded, and a setting that only applied
-      // to future work would read as one that did nothing.
-      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 'k:m1:1']);
-      expect(onList).toHaveBeenCalled();
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'g:t:c1']);
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
     });
 
-    it('folds it all back when the switch goes off again', () => {
+    it('gives a run that only thought no marker at all', () => {
+      // Nothing was done, so there is nothing to account for. A marker here
+      // would be a fold over an empty list.
       const model = build();
-      model.setThinkingFolds(false);
-      for (const event of stream(thought('m1', 0, 'hmm'), ...call('c1', 'Bash'))) {
-        model.apply(event);
-      }
-      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+      for (const event of stream(thought('m1', 0, 'hmm'))) model.apply(event);
 
-      model.setThinkingFolds(true);
-      expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
-      expect(model.getGroup('g:k:m1:0')?.thinking).toBe(1);
-    });
-
-    it('says nothing when told what it already knew', () => {
-      const model = build();
-      for (const event of stream(...call('c1', 'Bash'))) model.apply(event);
-
-      const onList = vi.fn();
-      model.subscribeList(onList);
-      // Every pane is told on every write of the preference, so the ones already
-      // in the asked-for state must not rebuild and re-notify over a non-change.
-      model.setThinkingFolds(true);
-      expect(onList).not.toHaveBeenCalled();
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
     });
   });
 
@@ -485,7 +476,7 @@ describe('TranscriptModel activity groups', () => {
     expect(model.getItem('k:m1:0')).toMatchObject({ kind: 'thinking', text: 'here it is' });
   });
 
-  it('does not count an empty block toward a burst it never joined', () => {
+  it('gives an empty block no row of its own to stand in', () => {
     const model = build();
     for (const event of stream(
       thought('m1', 0, 'first, look'),
@@ -496,20 +487,23 @@ describe('TranscriptModel activity groups', () => {
       model.apply(event);
     }
 
-    const group = model.getGroup('g:k:m1:0');
-    expect(group?.ids).toEqual(['k:m1:0', 't:c1', 't:c2']);
-    expect(group?.thinking).toBe(1);
+    // `k:m1:1` never became an item — a fold that says "thinking…" and opens
+    // onto nothing is worse than no row.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+    expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
   });
 
-  it('folds a lone thinking row into the marker once a call joins it', () => {
+  it('leaves a lone thinking row alone when a call arrives after it', () => {
     const model = build();
     model.apply(stream(thought('m1', 0, 'let me look'))[0] as AgentEvent);
     expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
 
     for (const event of stream(...call('c1', 'Read'))) model.apply(event);
 
-    expect(model.getRowsSnapshot()).toEqual(['g:k:m1:0']);
-    expect(model.getGroup('g:k:m1:0')?.ids).toEqual(['k:m1:0', 't:c1']);
+    // The row the reader was already looking at keeps its id and its place. It
+    // used to be swallowed into a marker at this moment, which moved text off
+    // the screen as the agent worked.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
   });
 
   it('stays silent while a thinking block inside it streams', () => {
@@ -667,7 +661,18 @@ describe('TranscriptModel artifacts', () => {
       model.apply(event);
     }
 
-    expect(model.getRowsSnapshot()).toEqual(['g:t:c1', 't:c2', 't:c3', 't:c4']);
+    // The three thoughts stay in the thread in the order the model wrote them;
+    // the marker and its tiles land beneath the lot, and the tiles are still in
+    // the order they were made rather than interleaved with the reasoning.
+    expect(model.getRowsSnapshot()).toEqual([
+      'k:m1:0',
+      'k:m1:1',
+      'k:m1:2',
+      'g:t:c1',
+      't:c2',
+      't:c3',
+      't:c4',
+    ]);
   });
 
   it('produces no marker when the burst was nothing but artifacts', () => {

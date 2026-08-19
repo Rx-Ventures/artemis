@@ -243,6 +243,14 @@ export interface SessionState extends MirroredState {
    * authorises the *next* column's uninvited tab.
    */
   readonly tasksRequested: boolean;
+  /**
+   * Whether this column has asked for the folder browser.
+   *
+   * A flag rather than "is there anything to show", which is what gates the
+   * delegated tab: a working directory always exists, so the tab's presence can
+   * only ever be a request. Cleared at a conversation boundary with the rest.
+   */
+  readonly filesRequested: boolean;
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
@@ -356,26 +364,6 @@ export function hostPlatform(): Platform {
 }
 
 /**
- * Whether thinking folds into activity markers, for panes not yet created.
- *
- * The same seam as {@link platformOfHost} above and for the same reason: this
- * is a *window* preference, the store owns it, and the store imports this
- * module — so the value is pushed down rather than read back up. The store
- * writes it before the first pane exists and again on every change; what it
- * covers is the pane minted afterwards, which would otherwise open folding the
- * reasoning away with the switch on.
- *
- * Live panes are told directly by `setShowThinking`, because their transcripts
- * already hold rows that have to be rebuilt.
- */
-let thinkingFoldsInPanes = true;
-
-/** Tell the pane layer how new transcripts should treat thinking. */
-export function setThinkingFolds(folds: boolean): void {
-  thinkingFoldsInPanes = folds;
-}
-
-/**
  * Teach a pane's transcript which of its tool calls made artifacts.
  *
  * A fresh closure every time, deliberately: `setArtifactTest` compares by
@@ -401,7 +389,6 @@ export function createPane(initial: SessionState): Pane {
     transcript: new TranscriptModel(),
   };
   installArtifactTest(pane);
-  pane.transcript.setThinkingFolds(thinkingFoldsInPanes);
   return pane;
 }
 
