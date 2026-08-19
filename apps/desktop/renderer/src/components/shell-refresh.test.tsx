@@ -29,6 +29,7 @@ import type { UpdateState } from '@rx-artemis/protocol';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Sidebar } from '@/components/Sidebar';
 import { TasksPane } from '@/components/TasksPane';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { AppHeader } from '@/components/AppHeader';
 import { seedApp } from '@/state/testkit';
 import { allLivePanes, focusedPane, splitPane, useApp } from '@/state/store';
@@ -240,5 +241,74 @@ describe('the delegated view has a scope', () => {
 
     expect(allLivePanes(useApp.getState()).length).toBeGreaterThan(1);
     expect(screen.getByRole('button', { name: 'all' }).getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('the command bar carries the way into search', () => {
+  it('offers a search entry that opens the palette', () => {
+    // `_layout.md` item 2. A button dressed as a field: the palette owns the
+    // input, and two text boxes for one query would be one too many — but
+    // people look for search in something search-shaped, and ⌘K is both the
+    // fastest way in and the one nobody finds unaided.
+    mount(<AppHeader />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Search sessions, files and commands/ }));
+    expect(useApp.getState().paletteOpen).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The prompt bubble keeps its shape                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Moving the user bubble off the accent broke it, and the break was invisible
+ * to every existing test.
+ *
+ * The fill was changed by switching to `variant="ghost"` and adding the colours
+ * as classes. `ghost` is the "no bubble at all" variant: it sets
+ * `rounded-none`, `p-0` and `bg-transparent` on the content and `max-w-full` on
+ * the root, all through `*:data-[slot=...]` selectors that outrank anything the
+ * caller passes. The prompt shipped as a full-width square with no padding.
+ *
+ * So the fill lives in a `surface` variant now, and this pins the three things
+ * that went missing. Asserted on the class list rather than on computed style
+ * because jsdom does not run Tailwind — what is being checked is that the
+ * variant does not *strip* the geometry, which is a fact about the class list.
+ */
+describe('the prompt bubble', () => {
+  it('keeps its radius, padding and width cap on the surface variant', () => {
+    render(
+      <Bubble align="end" variant="surface">
+        <BubbleContent className="rounded-2xl rounded-br-sm px-3.5 py-2">hello</BubbleContent>
+      </Bubble>,
+    );
+
+    const content = screen.getByText('hello');
+    expect(content.className).toContain('rounded-2xl');
+    expect(content.className).toContain('px-3.5');
+    expect(content.className).not.toContain('rounded-none');
+    expect(content.className).not.toContain('p-0');
+  });
+
+  it('does not let the variant widen the bubble to the full column', () => {
+    // `max-w-[80%]` is what makes an aligned bubble read as *from* someone.
+    // `ghost` removes it; `surface` must not.
+    const { container } = render(
+      <Bubble align="end" variant="surface">
+        <BubbleContent>hello</BubbleContent>
+      </Bubble>,
+    );
+
+    const root = container.firstElementChild;
+    expect(root?.className).toContain('max-w-[80%]');
+    /*
+     * On the attribute, not the class list. The base string carries
+     * `data-[variant=ghost]:max-w-full`, which contains the literal
+     * "max-w-full" but only applies when the variant *is* ghost — a substring
+     * check would fail on a bubble that is behaving perfectly. What matters is
+     * that this bubble is not the ghost one.
+     */
+    expect(root?.getAttribute('data-variant')).toBe('surface');
   });
 });

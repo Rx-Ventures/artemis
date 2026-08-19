@@ -102,10 +102,11 @@ import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpd
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import { ArrowDownIcon } from 'lucide-react';
+import { ArrowDownIcon, SearchIcon } from 'lucide-react';
 import {
   focusWaitingPane,
   openSettings,
+  togglePalette,
   toggleBrowser,
   toggleTasks,
   toggleTerminal,
@@ -287,8 +288,10 @@ export function AppHeader(): ReactElement {
           </span>
         )}
         <ChevronRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
-        <h1 className="min-w-0 flex-1 truncate text-xs font-normal text-ink-muted">{title}</h1>
+        <h1 className="min-w-0 truncate text-xs font-normal text-ink-muted">{title}</h1>
       </div>
+
+      <SearchEntry />
 
       {/*
         `toggleTerminal` opens the focused conversation's shell or brings it
@@ -462,6 +465,41 @@ function UpdateChip(): ReactElement | null {
     >
       <ArrowDownIcon className="size-3" aria-hidden="true" />
       {failed ? 'update failed' : ready ? `restart for ${version}` : version}
+    </button>
+  );
+}
+
+/**
+ * The way into the palette, `_layout.md` item 2.
+ *
+ * A field rather than an icon, and it is not a field: it is a button dressed as
+ * one, because the palette owns the input and two text boxes for one query
+ * would be one too many. What the shape buys is that people look for search in
+ * something search-shaped — `⌘K` is the fastest way in and also the one nobody
+ * finds without being told.
+ *
+ * In the command bar because that is where a window-level action belongs: the
+ * palette searches every session, every file and every command, not the
+ * conversation in front of you. The rail carries the same action for when the
+ * pointer is already over there.
+ *
+ * `max-w-md` and `hidden lg:flex`: it is the first thing that should give up
+ * room, since the two things beside it — what you are looking at, and what
+ * wants you — are facts, and this is a door that has a keyboard shortcut.
+ */
+function SearchEntry(): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={togglePalette}
+      aria-label={`Search sessions, files and commands (${keyLabel('mod+k')})`}
+      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-sm border border-line bg-inset px-2 text-2xs text-ink-faint transition-colors hover:border-line-strong hover:text-ink-muted lg:flex"
+    >
+      <SearchIcon className="size-3 shrink-0" aria-hidden="true" />
+      <span className="truncate">Search sessions, files, commands</span>
+      <span aria-hidden="true" className="ml-auto shrink-0 font-mono opacity-70">
+        {keyLabel('mod+k')}
+      </span>
     </button>
   );
 }

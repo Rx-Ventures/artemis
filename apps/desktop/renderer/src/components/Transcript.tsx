@@ -548,10 +548,13 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
          * something, and "the user said this" is structure rather than signal —
          * the alignment and the tail already carry it.
          *
-         * `ghost` because the fill is set below on `BubbleContent` from the
-         * surface tokens, and `tinted`'s own `bg-*` would win the cascade.
+         * `surface` is a variant of its own rather than `ghost` plus classes.
+         * `ghost` is the "no bubble at all" variant — it zeroes the radius, the
+         * padding and the width cap at a specificity the caller cannot beat,
+         * which is exactly what it did when this was first written: the prompt
+         * came out as a full-width square with no padding.
          */
-        variant="ghost"
+        variant="surface"
         // Dimmed means "Artemis has not confirmed delivery" — a prompt whose
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
@@ -576,7 +579,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             bubble needs to read as one. The hairline is `--line` for the same
             reason the fill is a surface: `beam/25` was the accent again, one
             layer out. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border border-line bg-raised px-3.5 py-2 text-sm text-ink whitespace-pre-wrap">
+        <BubbleContent className="rounded-2xl rounded-br-sm px-3.5 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
