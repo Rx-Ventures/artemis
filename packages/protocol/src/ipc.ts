@@ -406,6 +406,22 @@ export interface MenuOpenSettings {
  * Main → renderer push channels, used with `webContents.send` /
  * `ipcRenderer.on`.
  */
+/**
+ * The two synchronous preference channels.
+ *
+ * Deliberately outside {@link IPC} and {@link IPC_PUSH}, which are the
+ * validated request/response and broadcast surfaces. These are neither: one
+ * synchronous read of a local JSON file that must complete before the
+ * renderer's first paint, and its fire-and-forget write. See
+ * `apps/desktop/main/prefs.ts` for why that read cannot be asynchronous.
+ *
+ * Named here rather than in main so the preload and the main process cannot
+ * drift on the string, which is the same reason every other channel name lives
+ * in this file.
+ */
+export const PREFS_READ_CHANNEL = 'artemis:prefs:read-sync';
+export const PREFS_WRITE_CHANNEL = 'artemis:prefs:write';
+
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
   agentEvent: 'artemis:push:agent-event',
@@ -2396,6 +2412,14 @@ export interface ArtemisBridge {
    * state in charge of app-level chrome. All that crosses is the news that a
    * user picked something.
    */
+  /**
+   * The preferences blob, as stored text — synchronous, and the only member of
+   * this bridge that is. See `apps/desktop/main/prefs.ts`.
+   */
+  readonly prefsFile: {
+    read(): string | null;
+    write(json: string): void;
+  };
   readonly menu: {
     /**
      * Subscribe to the menu bar's Settings… item. The listener runs on every

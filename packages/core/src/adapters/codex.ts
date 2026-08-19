@@ -175,6 +175,11 @@ export const CODEX_CAPABILITIES: Capabilities = {
   listSessions: true,
   renameSession: true, // `thread/name/set` — the field Codex's own UI renames
   deleteSession: true, // `thread/delete` — removes the rollout file, not a soft archive
+  // The app-server protocol has no tag or label on a thread: `thread/delete` is
+  // the only mutation it offers. Archiving therefore has nowhere provider-side
+  // to live, and the control says so rather than writing a note Artemis alone
+  // could read.
+  tagSession: false,
   resumeSession: true,
   usageReporting: true,
   planUsageReporting: true,

@@ -48,6 +48,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   deleteSession as sdkDeleteSession,
+  tagSession as sdkTagSession,
   getSessionMessages as sdkGetSessionMessages,
   getSubagentMessages as sdkGetSubagentMessages,
   listSessions as sdkListSessions,
@@ -174,6 +175,7 @@ import type {
   Run,
   SendResult,
   SessionDeleteQuery,
+  SessionTagQuery,
   SessionListPage,
   SessionListQuery,
   SessionListScope,
@@ -209,6 +211,7 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
   subagentTranscripts: true, // the SDK's `getSubagentMessages(session, agentId)`
   renameSession: true, // the SDK's `renameSession(id, title)`
   deleteSession: true, // the SDK's `deleteSession(id)` — unlinks the transcript
+  tagSession: true, // the SDK's `tagSession(id, tag)` — read back as `SDKSessionInfo.tag`
 
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true, // `Options.resume`
@@ -1486,6 +1489,34 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       } catch (error) {
         if (isMissingSession(error)) return false;
         throw adapterError('unknown', `Could not delete that session: ${describe(error)}`, {
+          cause: error,
+        });
+      }
+    },
+
+    /**
+     * Write the SDK's own tag onto a stored session.
+     *
+     * Deliberately the same shape as `deleteSession` above — the config
+     * directory locates the store, `dir` narrows the search, a missing session
+     * is `false` rather than a throw — because they are the same kind of
+     * operation: a mutation of the provider's record, performed by the
+     * provider, which is what makes the result true wherever that record is
+     * read from.
+     */
+    async tagSession(input: SessionTagQuery): Promise<boolean> {
+      const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
+
+      try {
+        await withClaudeConfigDir(configDir, () =>
+          sdkTagSession(input.sessionId, input.tag, {
+            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+          }),
+        );
+        return true;
+      } catch (error) {
+        if (isMissingSession(error)) return false;
+        throw adapterError('unknown', `Could not tag that session: ${describe(error)}`, {
           cause: error,
         });
       }

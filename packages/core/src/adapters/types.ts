@@ -533,6 +533,16 @@ export interface SessionMessagesQuery {
  * has to find the transcript by exactly the route a read does; anything else
  * and a delete could land in a different profile's copy of the same id.
  */
+export interface SessionTagQuery {
+  readonly sessionId: SessionId;
+  /** The directory the session ran in. Narrows the search; omit to search all. */
+  readonly cwd?: string;
+  /** The profile's resolved environment — this is what locates the store. */
+  readonly env: EnvBundle;
+  /** The tag to write, or `null` to clear whatever is there. */
+  readonly tag: string | null;
+}
+
 export interface SessionDeleteQuery {
   readonly sessionId: SessionId;
   /** The directory the session ran in. Narrows the search; omit to search all. */
@@ -1182,6 +1192,28 @@ export interface ProviderAdapter {
    * asked for the session to not exist, and it does not.
    */
   deleteSession?(query: SessionDeleteQuery): Promise<boolean>;
+
+  /**
+   * Write the provider's own tag onto a stored session, or clear it.
+   *
+   * Present **iff** {@link Capabilities.tagSession} is true. This is what
+   * archiving is built on, and the reason it is here rather than in the
+   * renderer: a tag written into the provider's store is true of the session
+   * everywhere it is read — another window, another build, another machine
+   * against the same config directory. A list of ids kept by the app is true of
+   * one installation and silently false everywhere else, which is precisely how
+   * an archive goes missing.
+   *
+   * The value is passed through rather than interpreted. Artemis writes
+   * {@link ARCHIVED_TAG} and reads anything else untouched, because the field
+   * belongs to the provider and a session tagged from the CLI is not Artemis's
+   * to rewrite.
+   *
+   * Resolves `true` when a session was found and written, `false` when there
+   * was nothing there to tag — the same "already gone is not an error" rule
+   * {@link deleteSession} follows.
+   */
+  tagSession?(query: SessionTagQuery): Promise<boolean>;
 
   /**
    * Probe whether this provider is usable on this machine.

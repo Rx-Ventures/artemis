@@ -43,6 +43,7 @@ import {
   resolvePlanWeight,
 } from '@rx-artemis/protocol';
 import type {
+  ArtemisBridge,
   AuthStatusInfo,
   AgentError,
   AgentEvent,
@@ -80,6 +81,7 @@ import type {
   UpdateChannel,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
+import { activityOf } from '../components/Activity';
 import {
   handoffPrompt,
   handoffReason,
@@ -337,6 +339,18 @@ export interface AppState {
    * element-wise compare and the value is stable between real changes.
    */
   readonly runningSessions: readonly SessionId[];
+  /**
+   * Sessions that have stopped and are waiting on *you*.
+   *
+   * The same projection {@link runningSessions} is, computed in the same walk
+   * and for the same reason, but a strictly more urgent fact: a running
+   * conversation needs nothing from anybody, while one of these has parked and
+   * will stay parked until someone answers it. Kept apart rather than folded
+   * into a status enum because the two are read by different surfaces — the
+   * sidebar dot wants to know which of the two a row is, and the header badge
+   * only ever counts these.
+   */
+  readonly waitingSessions: readonly SessionId[];
   /**
    * Sessions the **main process** says are still working, as of the last poll.
    *
@@ -1393,10 +1407,57 @@ function numberMap(value: unknown): Record<string, number> | undefined {
   return out;
 }
 
+/**
+ * The stored preferences text, from the file, or from `localStorage` once.
+ *
+ * The file is where these live now — see `main/prefs.ts` for why they left
+ * `localStorage`, and what it cost while they were there. `localStorage` is
+ * kept as the *migration source* and nothing else: an installation that
+ * predates the move has its only copy there, and reading it once is the
+ * difference between carrying the user's archived sessions across and quietly
+ * resetting their sidebar.
+ *
+ * The migration is a read, not a move. The old copy is left where it is,
+ * because a build that has not been updated yet is still reading it, and taking
+ * it away would strand that build rather than upgrade it.
+ */
+function prefsFile(): ArtemisBridge['prefsFile'] | undefined {
+  /*
+   * Read off the global rather than through `resolveBridge`, and that is not a
+   * shortcut — it is the only correct way to reach it from here.
+   *
+   * `loadPrefs` runs at *module scope*, before anything else in this file, and
+   * `resolveBridge` memoises its binding the first time it is called. Calling it
+   * here would make preference loading the thing that decides, for the lifetime
+   * of the window, whether a bridge exists — and it would decide it earlier than
+   * any caller expects. Under test that is fatal and was: 48 of them install
+   * their stub after the module graph has loaded, and every one of them was
+   * being answered by a binding taken before their stub existed.
+   */
+  return (globalThis as { artemis?: ArtemisBridge }).artemis?.prefsFile;
+}
+
+function storedPrefsText(): string | null {
+  const file = prefsFile();
+  const stored = file?.read() ?? null;
+  if (stored !== null && stored !== '') return stored;
+
+  let legacy: string | null = null;
+  try {
+    legacy = globalThis.localStorage?.getItem(PREFS_KEY) ?? null;
+  } catch {
+    legacy = null;
+  }
+  // Written through immediately, so the next launch reads the file and this
+  // branch is never taken again.
+  if (legacy !== null && legacy !== '' && file !== undefined) file.write(legacy);
+  return legacy;
+}
+
 function loadPrefs(): Prefs {
   let raw: Record<string, unknown>;
   try {
-    const text = globalThis.localStorage?.getItem(PREFS_KEY);
+    const text = storedPrefsText();
     if (!text) return {};
     const parsed: unknown = JSON.parse(text);
     if (typeof parsed !== 'object' || parsed === null) return {};
@@ -1535,8 +1596,19 @@ function savePrefs(): void {
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
   };
+  const json = JSON.stringify(prefs);
+  const file = prefsFile();
+  if (file !== undefined) {
+    // One writer, and it is the file. Mirroring into `localStorage` as well
+    // would leave two copies that disagree the moment a second build wrote one
+    // of them, which is the whole problem the move exists to end.
+    file.write(json);
+    return;
+  }
+  // No bridge: a browser preview, or a window whose preload never loaded. There
+  // is no second process to share a file with, so the old home is still right.
   try {
-    globalThis.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
+    globalThis.localStorage?.setItem(PREFS_KEY, json);
   } catch {
     /* Preferences are a convenience; a full quota is not worth an error. */
   }
@@ -1679,6 +1751,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  waitingSessions: [],
   sessionsHoldingWork: [],
   openSessions: [],
   sessionOrderHold: {},
@@ -1935,6 +2008,14 @@ function paneForSession(
  */
 function syncRunningSessions(): void {
   const ids: SessionId[] = [];
+  /*
+   * Collected in the same walk, deliberately.
+   *
+   * Waiting is a fact about the same pane stores this is already reading, and a
+   * second subscription over the same panes would double the work done on every
+   * keystroke in a composer for a value that changes on the same beat.
+   */
+  const waiting: SessionId[] = [];
   // The window value, read once for the whole walk — see `pruneBackground`.
   const holding = useApp.getState().sessionsHoldingWork;
   for (const pane of allLivePanes()) {
@@ -1951,6 +2032,25 @@ function syncRunningSessions(): void {
      * workflow that settled a row and carried on went unmarked — the sidebar
      * fell quiet while the work ran on. The main process is asked as well.
      */
+    /*
+     * Waiting is judged *before* the working check and never skipped by it.
+     *
+     * `activityOf` is the same function the foot of the transcript uses, so the
+     * sidebar and the pane cannot disagree about what a conversation is doing —
+     * and it already ranks a queued permission above a `running` status, which
+     * is the ordering that matters here: a provider that has asked for
+     * something is, to the person who has to answer, waiting rather than busy.
+     *
+     * Outside the `isWorking` guard because a pane can be parked on a
+     * permission while `isWorking` says no — the run reports
+     * `awaiting_permission` and nothing is being computed. That is precisely
+     * the conversation this badge exists to send you back to.
+     */
+    if (activityOf(state.run, state.permissionQueue.length).kind === 'waiting') {
+      if (state.run?.sessionId !== undefined) waiting.push(state.run.sessionId);
+      else if (state.resumeSessionId !== null) waiting.push(state.resumeSessionId);
+    }
+
     if (!isWorking(state, holding)) continue;
     /*
      * Both ids, not the better of the two.
@@ -1971,9 +2071,21 @@ function syncRunningSessions(): void {
     }
   }
 
-  const current = useApp.getState().runningSessions;
-  if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
-  useApp.setState({ runningSessions: ids, sessionOrderHold: holdOrder(ids) });
+  const state = useApp.getState();
+  const sameRunning =
+    state.runningSessions.length === ids.length &&
+    ids.every((id, i) => state.runningSessions[i] === id);
+  const sameWaiting =
+    state.waitingSessions.length === waiting.length &&
+    waiting.every((id, i) => state.waitingSessions[i] === id);
+  // Both compared before writing either: this runs on every keystroke in a
+  // composer — the same store holds `draft` — and an unconditional `setState`
+  // would re-render the whole session list per character.
+  if (sameRunning && sameWaiting) return;
+  useApp.setState({
+    ...(sameRunning ? {} : { runningSessions: ids, sessionOrderHold: holdOrder(ids) }),
+    ...(sameWaiting ? {} : { waitingSessions: waiting }),
+  });
 }
 
 /**

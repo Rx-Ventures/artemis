@@ -138,6 +138,22 @@ export interface Capabilities {
   readonly deleteSession: boolean;
 
   /**
+   * A stored session can carry a tag the provider keeps beside it.
+   *
+   * This is what archiving is built on, and the reason it is a *provider*
+   * operation rather than a list of ids Artemis keeps. An archive held here
+   * would be a fact about one installation: invisible to another build, absent
+   * on another machine, and gone the moment the window's storage was reset —
+   * all three of which happened. A tag lives with the session, so it is simply
+   * true of the session wherever it is read from.
+   *
+   * `false` is an honest answer for a provider whose store has no such concept
+   * — Codex threads and the local servers have none — and the Archive control
+   * degrades and says so, exactly as it does for rename and delete.
+   */
+  readonly tagSession: boolean;
+
+  /**
    * Permission modes this provider accepts in {@link RunInput.permissionMode}
    * and (if `midRunSteering`) mid-run. Empty means the concept does not apply.
    *
@@ -243,6 +259,7 @@ export const NO_CAPABILITIES: Capabilities = {
   subagentTranscripts: false,
   renameSession: false,
   deleteSession: false,
+  tagSession: false,
   permissionModes: [],
   resumeSession: false,
   usageReporting: false,

@@ -50,25 +50,17 @@ export const PREVIOUS_APP_NAMES = ['Apollo', 'Libra'] as const;
  * A build that installs beside the real one instead of replacing it.
  * ============================================================================
  *
- * A flavour changes what the app is *called* — `Artemis (Beta)` in the Dock, the
- * menu bar and the About box — and deliberately nothing else. In particular it
- * does not change where the data lives: `index.ts` points a flavoured build at
- * the ordinary installation's user-data directory on purpose, so a beta opens
- * with the profiles, sessions and settings you already have rather than as an
- * empty app you would have to set up before you could test anything.
+ * A flavour changes what the app is *called*, and that name decides one thing
+ * only: `app.getPath('userData')`, where Chromium keeps its caches, its cookie
+ * jar, `Local Storage` and the files that are the single-instance lock. Keeping
+ * those per-name is what lets both builds run at the same time without two
+ * processes writing one LevelDB.
  *
- * ## The cost, which is real and worth stating here
- *
- * `app.getPath('userData')` is normally derived from the name, and Electron's
- * single-instance lock is keyed to that directory. Pointing both builds at one
- * directory therefore means **only one of them can run at a time** — launch the
- * beta while the release is open and the lock is refused, and the running copy
- * is raised instead.
- *
- * That is the trade the shared directory buys, and it is the right way round:
- * two copies running simultaneously against one set of profiles would both be
- * writing the same session files, and "my history went strange" is a far worse
- * outcome than "quit the other one first".
+ * Artemis's own data — profiles, prompts, session ownership — is *not* keyed to
+ * the name. `index.ts` points a flavoured build at the release's directory for
+ * those, so a beta opens with the accounts and history you already have rather
+ * than as an empty app you would have to set up before you could test anything.
+ * See `artemisDataDir` there for the split and why it is drawn where it is.
  *
  * The suffix is parenthesised because it lands where a person reads it — the
  * application menu, the Dock tooltip, the About box. "Artemis (Beta)" is a
