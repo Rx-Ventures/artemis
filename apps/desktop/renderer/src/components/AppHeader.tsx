@@ -98,9 +98,11 @@ import {
 
 import { keyLabel } from '../hooks/useHotkeys';
 import { useWindowState } from '../hooks/useWindowState';
+import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpdateState';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
+import { ArrowDownIcon } from 'lucide-react';
 import {
   focusWaitingPane,
   openSettings,
@@ -293,6 +295,7 @@ export function AppHeader(): ReactElement {
         forward — see the store for why repeating it does not stack up terminals
         nobody asked for.
       */}
+      <UpdateChip />
       <WaitingBadge />
 
       <IconButton
@@ -400,6 +403,65 @@ function WaitingBadge(): ReactElement | null {
     >
       <StatusDot tone="neutral" className="bg-abyss/70" />
       {waiting} waiting
+    </button>
+  );
+}
+
+/**
+ * The one update surface.
+ *
+ * `_layout.md` item 3: in the command bar, always, whatever else is open. It
+ * used to be three places telling one story — a card in the sidebar, a dot on
+ * the rail when the sidebar was shut, and, before that, a strip under the
+ * header for when both were gone. Each existed because the one before it could
+ * disappear. The command bar cannot, so one is enough and the other two are
+ * gone.
+ *
+ * A chip rather than a sentence, because the header is not where an update is
+ * *read* — it is where it is noticed. Clicking installs when there is something
+ * to install and restarts when the new version is already staged, which are the
+ * only two things anyone wants from it; everything else the card used to say is
+ * a consequence of one of those two.
+ *
+ * Renders nothing while the updater is idle, which is almost always.
+ */
+function UpdateChip(): ReactElement | null {
+  const state = useUpdateState();
+  if (state.phase === 'idle') return null;
+
+  const version = state.version ?? '';
+  const ready = state.phase === 'ready';
+  const failed = state.phase === 'error';
+  const busy = state.phase === 'working' || state.phase === 'restarting';
+
+  const label = failed
+    ? 'The update could not be installed'
+    : ready
+      ? `Artemis ${version} is ready — restart to use it`.trim()
+      : busy
+        ? `Working on Artemis ${version}`.trim()
+        : `Artemis ${version} is available`.trim();
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={busy}
+      onClick={() => {
+        if (ready) restartForUpdate();
+        else if (!busy) installUpdate();
+      }}
+      className={cn(
+        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm border px-2 font-mono text-2xs transition-colors',
+        failed
+          ? 'border-signal/50 text-signal hover:bg-signal/10'
+          : 'border-beam/50 text-beam hover:bg-beam/10',
+        busy && 'opacity-60',
+      )}
+    >
+      <ArrowDownIcon className="size-3" aria-hidden="true" />
+      {failed ? 'update failed' : ready ? `restart for ${version}` : version}
     </button>
   );
 }

@@ -187,7 +187,17 @@ describe('the foot of the sidebar', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('grows the card when an update arrives', async () => {
+  it('stays quiet when an update arrives, because it is no longer the place', async () => {
+    /*
+     * This asserted the opposite until the shell refresh, and the opposite was
+     * the problem `_layout.md` item 3 names.
+     *
+     * The update had three homes: a card here, a dot on the rail once the
+     * sidebar was shut, and a strip under the header for when both were gone.
+     * Each existed because the one before it could disappear. The command bar
+     * cannot disappear, so it carries the one surface and this column carries
+     * none — see `UpdateChip` in `AppHeader`.
+     */
     render(
       <TooltipProvider>
         <Sidebar />
@@ -197,7 +207,7 @@ describe('the foot of the sidebar', () => {
       pushState?.({ phase: 'ready', version: '0.4.0', message: null, releaseUrl: null });
     });
 
-    expect(screen.getByRole('status')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Restart now' })).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restart now' })).toBeNull();
   });
 });

@@ -102,7 +102,14 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react';
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon } from 'lucide-react';
+import {
+  ListTreeIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  PlusIcon,
+  SearchIcon,
+  SettingsIcon,
+} from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import {
@@ -110,12 +117,15 @@ import {
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   newSession,
+  openSettings,
+  togglePalette,
+  toggleTasks,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
 } from '../state/store';
 import type { Pane } from '../state/pane';
-import { usePaneRef } from '../state/paneContext';
+import { usePane, usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
 import { BugReportCard } from './BugReportCard';
 import { UpdateCard } from './UpdateCard';
@@ -131,54 +141,89 @@ export function Sidebar(): ReactElement {
   const pane = usePaneRef();
   const asideRef = useRef<HTMLElement>(null);
 
-  if (collapsed) return <Rail pane={pane} />;
-
+  /*
+   * The rail is always mounted; the list opens *beside* it.
+   *
+   * It used to be one or the other — `collapsed` returned the rail instead of
+   * the sidebar — which is a narrower thing than it looks. A rail that only
+   * exists while the list is shut is not a navigator, it is an undo button for
+   * having shut it. `_layout.md` asks for the first: 46px of icons that never
+   * disappear, so the window always has one fixed place to steer from and
+   * collapse stops being a state the rest of the chrome has to work around.
+   *
+   * The fragment is deliberate. Two siblings in the same flex row, so the list
+   * can be absent without the rail moving a pixel — anything else animates the
+   * rail sideways every time the sidebar is toggled.
+   */
   return (
-    <aside
-      ref={asideRef}
-      style={{ width }}
-      aria-label="Sessions"
-      className="relative flex shrink-0 flex-col p-2"
-    >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-panel">
-        <div className="flex flex-col gap-1.5 p-2.5">
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              onClick={() => newSession(pane)}
-              className="min-w-0 flex-1 justify-start gap-1.5"
-            >
-              <PlusIcon />
-              <span className="truncate">New session</span>
-              <span aria-hidden="true" className="ml-auto font-mono text-2xs opacity-60">
-                {keyLabel('mod+n')}
-              </span>
-            </Button>
+    <>
+      <Rail pane={pane} collapsed={collapsed} />
+      {collapsed ? null : (
+        <aside
+          ref={asideRef}
+          style={{ width }}
+          aria-label="Sessions"
+          className="relative flex shrink-0 flex-col border-r border-line bg-panel"
+        >
+          {/*
+            A caption over the list, and the chevron that shuts it.
+
+            The card this replaced had a `+ New session` button in a header of
+            its own, which put the one thing you came to do above the thing you
+            came to look at. The mockup's order is the honest one: say what the
+            column is, give it a way to close, and let the action sit with the
+            list it acts on.
+          */}
+          <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-3">
+            <span className="chrome-label text-ink-faint">Sessions</span>
             <IconButton
               label={`Hide the sidebar (${keyLabel('mod+b')})`}
               onClick={() => setSidebarCollapsed(true)}
               size="icon-xs"
-              className="shrink-0 text-ink-faint"
+              className="ml-auto shrink-0 text-ink-faint"
             >
               <PanelLeftCloseIcon />
             </IconButton>
           </div>
-        </div>
 
-        <SessionList />
-      </div>
+          <div className="p-2">
+            {/*
+              Filled with the accent, not outlined.
 
-      {/*
-        Siblings of the card, not rows inside it. The update is absent entirely
-        until the updater has something to say (`UpdateCard`); the bug report is
-        always there and deliberately quieter than the card above it, so news and
-        furniture do not read as the same kind of thing (`BugReportCard`).
-      */}
-      <UpdateCard />
-      <BugReportCard />
+              It is the only thing in this column that *starts* something, and
+              Sheet spends colour on exactly that. Everything else here — the
+              rows, the headings, the counts — is a record of work that already
+              exists.
+            */}
+            <Button
+              size="sm"
+              onClick={() => newSession(pane)}
+              className="w-full min-w-0 justify-center gap-1.5 bg-beam text-beam-ink hover:bg-beam-dim"
+            >
+              <PlusIcon />
+              <span className="truncate">New session</span>
+              <span aria-hidden="true" className="font-mono text-2xs opacity-70">
+                {keyLabel('mod+n')}
+              </span>
+            </Button>
+          </div>
 
-      <ResizeHandle target={asideRef} />
-    </aside>
+          <SessionList />
+
+          {/*
+            The bug report stays; the update card is gone from here. There is
+            one update surface now and it is in the command bar — see
+            `_layout.md` item 3 and `AppHeader`. A card here *and* a dot on the
+            rail *and* a strip under the header was three places telling one
+            story, which is how the old header ended up carrying a control it
+            did not own.
+          */}
+          <BugReportCard />
+
+          <ResizeHandle target={asideRef} />
+        </aside>
+      )}
+    </>
   );
 }
 
@@ -204,22 +249,43 @@ export function Sidebar(): ReactElement {
  * putting a stunted version of it here would only make the rail a worse
  * sidebar rather than a good rail.
  */
-function Rail({ pane }: { readonly pane: Pane }): ReactElement {
-  const update = useUpdateState();
-
+function Rail({
+  pane,
+  collapsed,
+}: {
+  readonly pane: Pane;
+  readonly collapsed: boolean;
+}): ReactElement {
   return (
     <aside
-      aria-label="Sessions, collapsed"
-      className="flex w-[46px] shrink-0 flex-col items-center gap-1.5 border-r border-line bg-panel py-2"
+      aria-label="Navigator"
+      className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-2"
     >
+      {/*
+        The sessions *view*, not a second hide button.
+
+        The list has its own chevron in its caption; giving the rail one too
+        would be two controls with one job and one of them always redundant.
+        This is what the mockup's highlighted `▤` is: which view the column is
+        showing, lit while it is showing it. Pressing it when the column is shut
+        is how the column comes back, which is the property that lets collapse
+        be reversible without the header holding a control for it.
+      */}
       <IconButton
-        label={`Show the sidebar (${keyLabel('mod+b')})`}
-        onClick={() => setSidebarCollapsed(false)}
+        label={collapsed ? `Show sessions (${keyLabel('mod+b')})` : 'Sessions'}
+        onClick={() => setSidebarCollapsed(!collapsed)}
         size="icon-sm"
-        className="text-ink-faint"
+        className={collapsed ? 'text-ink-faint' : 'bg-raised text-beam'}
       >
         <PanelLeftOpenIcon />
       </IconButton>
+
+      {/*
+        The one action worth having without opening anything. It stays on the
+        rail even while the list is open, where the list has its own filled
+        button — the same action reachable from the fixed place and from the
+        place you are already looking, which is what a navigator is for.
+      */}
       <IconButton
         label={`New session (${keyLabel('mod+n')})`}
         onClick={() => newSession(pane)}
@@ -229,26 +295,55 @@ function Rail({ pane }: { readonly pane: Pane }): ReactElement {
         <PlusIcon />
       </IconButton>
 
+      <IconButton
+        label={`Search sessions, files and commands (${keyLabel('mod+k')})`}
+        onClick={togglePalette}
+        size="icon-sm"
+        className="text-ink-faint"
+      >
+        <SearchIcon />
+      </IconButton>
+
       {/*
-        News, at the size a rail can carry it: a dot, not a sentence. Opening
-        the sidebar is what shows the sentence, so the dot's whole job is to
-        make you want to — which is why it is a button and not an ornament.
+        Delegated work, with the badge the mockup puts here. The count is the
+        window's, not the focused pane's: the rail is the one piece of chrome
+        that is about the whole window, and a rail reporting only what is in
+        front of you would be answering a question you can already see.
       */}
-      {update.phase === 'idle' ? null : (
-        <IconButton
-          label={
-            update.phase === 'error'
-              ? 'The update failed — open the sidebar for details'
-              : `Artemis ${update.version ?? ''} — open the sidebar for details`.trim()
-          }
-          onClick={() => setSidebarCollapsed(false)}
-          size="icon-sm"
-          className={update.phase === 'error' ? 'text-signal' : 'text-beam'}
-        >
-          <span aria-hidden="true" className="block size-1.5 rounded-full bg-current" />
-        </IconButton>
-      )}
+      <RailTasks pane={pane} />
+
+      <div className="flex-1" />
+
+      <IconButton
+        label="Settings"
+        onClick={() => openSettings()}
+        size="icon-sm"
+        className="text-ink-faint"
+      >
+        <SettingsIcon />
+      </IconButton>
     </aside>
+  );
+}
+
+/** Delegated work on the rail, with a dot when any of it is still running. */
+function RailTasks({ pane }: { readonly pane: Pane }): ReactElement | null {
+  const count = usePane((s) => s.tasks.length);
+  if (count === 0) return null;
+
+  return (
+    <IconButton
+      label={`Delegated work — ${String(count)} task${count === 1 ? '' : 's'}`}
+      onClick={() => toggleTasks(pane)}
+      size="icon-sm"
+      className="relative text-ink-faint"
+    >
+      <ListTreeIcon />
+      <span
+        aria-hidden="true"
+        className="absolute top-1 right-1 block size-1.5 rounded-full bg-beam"
+      />
+    </IconButton>
   );
 }
 
