@@ -1,0 +1,16 @@
+{
+  "//": "Declarations for the published tarball, emitted unconditionally. The main tsconfig is `composite` and incremental, which is right for the workspace build and wrong here: `tsup` wipes `dist/` first, and an incremental compiler reading a build-info file that describes files it can no longer see decides there is nothing to do — so the tarball shipped JavaScript with no types at all, and a consumer got `implicitly has an 'any' type` from inside node_modules. This one is neither composite nor incremental, so every pack emits.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": false,
+    "outDir": "./dist",
+    "tsBuildInfoFile": null
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"],
+  "references": []
+}
