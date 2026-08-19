@@ -100,6 +100,7 @@ import {
   type AuthStatusRequest,
   type UsagePlanRequest,
   type UpdatesDismissRequest,
+  type SessionsTagRequest,
   type UpdatesSetChannelRequest,
   type UpdatesInstallRequest,
   type UpdatesRestartRequest,
@@ -1677,6 +1678,24 @@ export function validateSessionsDelete(raw: unknown): SessionsDeleteRequest {
     profileId: requireId(request['profileId'], 'profileId'),
     sessionId: requireId(request['sessionId'], 'sessionId'),
     cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+  });
+}
+
+/**
+ * The tag is passed through as an opaque string, or `null` to clear it.
+ *
+ * Bounded by `LIMITS.label` rather than free: it is written into the provider's
+ * own store, where a caller that could send a megabyte would be writing that
+ * megabyte into somebody else's file.
+ */
+export function validateSessionsTag(raw: unknown): SessionsTagRequest {
+  const request = requireRequest(raw);
+  const tag = request['tag'];
+  return compact<SessionsTagRequest>({
+    profileId: requireId(request['profileId'], 'profileId'),
+    sessionId: requireId(request['sessionId'], 'sessionId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+    tag: tag === null ? null : requireString(tag, 'tag', LIMITS.label),
   });
 }
 

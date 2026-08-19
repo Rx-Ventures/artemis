@@ -13,11 +13,34 @@
   are written without their leading dashes above. A version of this file that
   spelled them out parsed as a broken image and rasterised to a blank square.
 
+  THE ART IS FULL-BLEED AND SQUARE. THE SYSTEM OWNS THE SHAPE.
+
+  macOS 26 (Tahoe) runs every legacy `.icns` through its own mask before it
+  draws it, and that changes what this file has to contain. It must be a square
+  that reaches all four edges, with no rounding and no transparency of its own.
+
+  Both of the ways this has been wrong are worth writing down, because each
+  looks like a different bug and they have the same cause — arguing with the
+  system mask.
+
+  Rounding it ourselves at rx 180 put our corners *inside* the system's, which
+  are wider. The result is a tile that reads visibly squarer than every icon
+  beside it, which is how it showed up in Spotlight.
+
+  Insetting the art to 824 with transparent margins was worse. The system reads
+  large transparency as "this is a foreground glyph" and supplies a plate of its
+  own behind it — a light one — so a dark icon arrived in the Dock as a white
+  tile with the mark floating on it.
+
+  So: no radius, no margin. The system rounds it, shadows it, and produces the
+  light and dark variants. The mark is back at the 1.55 it was drawn at, which
+  is the proportion that survives the mask's corner crop.
+
   icon.png and icon.icns are generated from this file by ./icon-build.sh, which
   renders every iconset size at its true size rather than upscaling one.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" rx="180" fill="#0c0d0f"/>
+<rect width="1024" height="1024" fill="#0c0d0f"/>
 <g transform="translate(512 512) scale(1.55) translate(-256 -256)" stroke="#31eee8" fill="none">
   <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
   <path d="M256 140a116 116 0 0 0 0 232Z" fill="#31eee8" stroke="none"/>

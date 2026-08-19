@@ -28,6 +28,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   subagentTranscripts: "opening a subagent's transcript",
   renameSession: 'renaming a session',
   deleteSession: 'deleting a session',
+  tagSession: 'archiving a session',
   resumeSession: 'resuming a session',
   usageReporting: 'token usage reporting',
   costReporting: 'cost reporting',

@@ -83,6 +83,41 @@ Building it fixed a bug that had been there the whole time — the update
 comparator returned false for any version carrying a suffix, so a beta build
 could never have updated itself, not even to the release it was a rehearsal for.
 
+### The work gets handed on before the account runs out
+
+Running out of plan mid-conversation loses the expensive part — not the turn,
+but everything the agent had worked out: which files matter, what it had already
+tried, what it was about to do next. On, Artemis stops just short of the limit
+and spends the last of the budget asking for a briefing the next session can
+start from, written into `.artemis/` and shown as an artifact.
+
+It stops at **90% of the 5-hour window, 98% of the weekly, 95% of Fable** —
+different margins because the 5-hour window refills within the day and the
+weekly one does not. It interrupts a run in flight to do this, so it is **off
+unless you turn it on**, in Appearance → Handing over, and every conversation it
+stops offers a button to carry on regardless.
+
+Plan usage is now read every two minutes rather than every five, and between
+those sweeps only the accounts with a run on them are read — so an idle machine
+polls no harder than it used to.
+
+### Escape asks first
+
+Escape closes the palette, closes a dialog, denies a permission the agent is
+waiting on, and stops the run. Only the last of those is destructive, and it
+shares a key with three reflexes that are not: reaching for Escape to dismiss
+something that has already gone stopped the work instead. There is a switch in
+Appearance → Keyboard now. Off, Escape still does the other three; the Stop
+button is untouched.
+
+### A message no longer disappears into a run that just ended
+
+Sending a prompt as a turn finished could produce *"Run … has already ended"* —
+a red banner over a dimmed message, with nothing to do but type it again. The
+window and the main process simply disagreed for a few milliseconds about
+whether the run was still live. The prompt now starts a fresh turn instead,
+which is what it would have done had the two agreed.
+
 ### Also
 
 - `pnpm package` works from a clean checkout. It used to depend on `typecheck`

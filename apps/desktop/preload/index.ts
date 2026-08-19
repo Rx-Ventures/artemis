@@ -34,6 +34,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import {
   IPC,
+  PREFS_READ_CHANNEL,
+  PREFS_WRITE_CHANNEL,
   IPC_PUSH,
   ipcFail,
   AGENT_EVENT_TYPES,
@@ -75,6 +77,7 @@ import {
   type SharedConfigStatusRequest,
   type Unsubscribe,
   type SessionsDeleteRequest,
+  type SessionsTagRequest,
   type SessionsMessagesRequest,
   type SessionsSubagentMessagesRequest,
   type SessionsRenameRequest,
@@ -525,6 +528,7 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.sessionsSubagentMessages, request),
     rename: (request: SessionsRenameRequest) => invoke(IPC.sessionsRename, request),
     delete: (request: SessionsDeleteRequest) => invoke(IPC.sessionsDelete, request),
+    tag: (request: SessionsTagRequest) => invoke(IPC.sessionsTag, request),
   }),
 
   workspace: Object.freeze({
@@ -667,6 +671,31 @@ const bridge: ArtemisBridge = Object.freeze({
 
   menu: Object.freeze({
     onOpenSettings: menuOpenSettings.subscribe,
+  }),
+
+  /**
+   * The preferences blob, as stored text.
+   *
+   * The only synchronous call on this bridge, and the only one that is not an
+   * `invoke`. The renderer reads it in the same tick it decides the font scale
+   * and the palette, so an asynchronous read would paint the app at the default
+   * size in the default theme and correct it a frame later — a flash on every
+   * launch. `apps/desktop/main/prefs.ts` has the rest of the reasoning.
+   *
+   * Opaque here as it is in main: the shape belongs to `store.ts`, which
+   * validates every field on the way in because a hand-edited file has always
+   * been possible.
+   */
+  prefsFile: Object.freeze({
+    read: (): string | null => {
+      const stored: unknown = ipcRenderer.sendSync(PREFS_READ_CHANNEL);
+      return typeof stored === 'string' ? stored : null;
+    },
+    // Fire and forget. Preferences are a convenience, and a failed write must
+    // not surface as an error over the user's work; main logs it instead.
+    write: (json: string): void => {
+      ipcRenderer.send(PREFS_WRITE_CHANNEL, json);
+    },
   }),
 });
 

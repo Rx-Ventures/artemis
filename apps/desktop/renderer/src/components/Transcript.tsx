@@ -424,6 +424,7 @@ function Line({
   ts,
   align = 'start',
   avatar,
+  pinLabel = false,
   children,
   className,
 }: {
@@ -432,6 +433,19 @@ function Line({
   readonly ts?: number;
   readonly align?: 'start' | 'end';
   readonly avatar?: ReactNode;
+  /**
+   * Keep the label while the pointer is over the row, instead of trading it for
+   * the clock.
+   *
+   * The trade is right for most rows: the label repeats what the shape of the
+   * row already says, so hovering swaps a redundancy for something you cannot
+   * otherwise see. It is wrong for a row whose label is the *only* thing
+   * distinguishing it from ordinary output — reasoning in the thread reads as
+   * an answer without it, and it disappeared exactly when the reader pointed at
+   * the passage they were trying to identify. The clock still arrives; it just
+   * does not evict the one word that says what this is.
+   */
+  readonly pinLabel?: boolean;
   readonly children: ReactNode;
   readonly className?: string;
 }): ReactElement {
@@ -449,8 +463,9 @@ function Line({
             'flex flex-col items-end gap-0.5 transition-opacity group-data-[align=end]/message:items-start',
             // Only fade for a row that has a clock to arrive in its place. The
             // working row carries no `ts`, and fading it unconditionally would
-            // trade the mark for an empty gutter.
-            ts === undefined ? undefined : 'group-hover:opacity-0',
+            // trade the mark for an empty gutter. A pinned label never fades —
+            // see `pinLabel`.
+            ts === undefined || pinLabel ? undefined : 'group-hover:opacity-0',
           )}
         >
           {avatar}
@@ -463,7 +478,14 @@ function Line({
           )}
         </div>
         {ts === undefined ? null : (
-          <div className="pointer-events-none absolute top-px right-0 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60 group-data-[align=end]/message:right-auto group-data-[align=end]/message:left-0">
+          <div
+            className={cn(
+              'pointer-events-none absolute right-0 font-mono text-2xs text-ink-faint opacity-0 transition-opacity group-hover:opacity-60 group-data-[align=end]/message:right-auto group-data-[align=end]/message:left-0',
+              // Under a pinned label rather than over it: nothing is being
+              // swapped out, so the two need somewhere to sit side by side.
+              pinLabel ? 'top-4' : 'top-px',
+            )}
+          >
             {formatClock(ts)}
           </div>
         )}
@@ -516,7 +538,20 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
     <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2">
       <Bubble
         align="end"
-        variant="tinted"
+        /*
+         * A surface, not the accent.
+         *
+         * This was `tinted`, which derives its fill from `--primary` — the beam
+         * — at reduced chroma. That put the accent on the single most repeated
+         * element in the app: every prompt anyone has ever typed, stacked down
+         * the column. Sheet spends colour rarely and on things that mean
+         * something, and "the user said this" is structure rather than signal —
+         * the alignment and the tail already carry it.
+         *
+         * `ghost` because the fill is set below on `BubbleContent` from the
+         * surface tokens, and `tinted`'s own `bg-*` would win the cascade.
+         */
+        variant="ghost"
         // Dimmed means "Artemis has not confirmed delivery" — a prompt whose
         // call failed stays dimmed on purpose.
         className={cn(item.pending && 'opacity-70')}
@@ -536,7 +571,12 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             `rounded-br-sm` is the tail — the one square corner points back at
             the author, which is what makes an aligned bubble read as *from*
             someone rather than merely offset. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border-beam/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
+        {/* `raised` is the third of Sheet's four surfaces — one step off the
+            panel the transcript sits on, which is exactly the separation a
+            bubble needs to read as one. The hairline is `--line` for the same
+            reason the fill is a surface: `beam/25` was the accent again, one
+            layer out. */}
+        <BubbleContent className="rounded-2xl rounded-br-sm border border-line bg-raised px-3.5 py-2 text-sm text-ink whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -556,7 +596,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                     // Capped rather than full-bleed: a tall screenshot at full
                     // width would push the prompt it belongs to off the screen,
                     // and this is a record of what was sent, not a viewer.
-                    className="max-h-48 max-w-full rounded-md border border-beam/25 object-contain"
+                    className="max-h-48 max-w-full rounded-md border border-line object-contain"
                   />
                 ) : (
                   /* A file has no picture, so the record of it is its name and
@@ -567,7 +607,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                   <span
                     key={attachment.id}
                     title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
-                    className="flex max-w-full items-center gap-1.5 rounded-md border border-beam/25 px-2 py-1 font-mono text-2xs text-ink-muted"
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-line px-2 py-1 font-mono text-2xs text-ink-muted"
                   >
                     <PaperclipIcon className="size-3 shrink-0" />
                     <span className="truncate text-ink">{attachment.name}</span>
@@ -751,7 +791,7 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
   };
 
   return (
-    <Line label="thinking" tone="sage" ts={item.ts}>
+    <Line label="thinking" tone="sage" ts={item.ts} pinLabel>
       <Fold
         open={open}
         onOpenChange={toggle}

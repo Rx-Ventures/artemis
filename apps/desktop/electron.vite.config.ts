@@ -66,6 +66,20 @@ function stripDevCspMeta(): Plugin {
 export default defineConfig(async (): Promise<UserConfig> => ({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: ['@rx-artemis/core', '@rx-artemis/protocol'] })],
+    /*
+     * Which flavour of the app this bundle is — `''` for the real one, `Beta`
+     * for a copy meant to be installed beside it. See `appNames.ts`.
+     *
+     * Baked in at build time rather than read from the environment at runtime,
+     * because it decides `app.getPath('userData')` and therefore which
+     * profiles, sessions and single-instance lock the process uses. A runtime
+     * variable would make that a property of how the app was *launched*, so the
+     * same bundle opened from the Dock and from a shell could disagree about
+     * which installation it is — and the loser would write to the other's data.
+     */
+    define: {
+      __ARTEMIS_FLAVOUR__: JSON.stringify(process.env['ARTEMIS_FLAVOUR'] ?? ''),
+    },
     build: {
       outDir: 'out/main',
       rollupOptions: { input: here('./main/index.ts') },

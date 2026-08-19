@@ -249,6 +249,11 @@ const SCRATCH_SEGMENTS: ReadonlySet<string> = new Set([
   'target',
   '.cache',
   '.tmp',
+  // Artemis's own output directory inside a project. Automatic handoff writes
+  // its document here, and the rule this list encodes — generated things go in
+  // generated places — puts it squarely in scope: nothing in `.artemis/` is
+  // source, and a handoff is written to be read rather than diffed.
+  '.artemis',
 ]);
 
 function isScratchSegment(segment: string): boolean {

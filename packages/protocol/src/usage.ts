@@ -210,27 +210,49 @@ export function bindingWindow(usage: PlanUsage | null | undefined): PlanUsageWin
 /**
  * How often plan usage is re-read for every profile.
  *
- * Five minutes is a compromise between two real costs. A reading is only
- * meaningful for minutes — a long turn can move the 5-hour window several
- * points — so polling much slower would recommend an account on numbers that
- * have moved. But each reading spawns the provider's CLI, once per profile, so
- * polling much faster would put a steady drip of subprocesses on the machine
- * for a figure nobody is looking at most of the time.
+ * A compromise between two real costs. A reading is only meaningful for minutes
+ * — a long turn can move the 5-hour window several points — so polling slower
+ * recommends an account on numbers that have moved. But each reading spawns the
+ * provider's CLI, once per profile, so polling faster puts a steady drip of
+ * subprocesses on the machine for a figure nobody is looking at most of the
+ * time.
+ *
+ * Two minutes rather than the five it was. Automatic handoff reads these
+ * numbers to decide when to stop, and at five minutes a window could cross its
+ * threshold and stay uncrossed as far as Artemis knew for the length of several
+ * turns — which is long enough to hit the wall the feature exists to stop short
+ * of. The cost is paid where it is cheap: the sweep skips profiles nothing is
+ * running on, so an idle machine polls no harder than before.
  *
  * Lives here rather than in the poller because the renderer needs it too: it is
  * what {@link PLAN_USAGE_MAX_AGE_MS} is defined in terms of.
  */
-export const PLAN_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
+export const PLAN_USAGE_POLL_INTERVAL_MS = 2 * 60_000;
+
+/**
+ * How often the profile of a *live run* is re-read.
+ *
+ * The account being spent is the only one whose number can move on its own, and
+ * it is the one a handoff decision is about. Polling it on the full sweep's
+ * cadence means deciding on a reading up to two minutes old, taken before the
+ * turn that has been running ever since.
+ *
+ * Thirty seconds is affordable precisely because it is not the sweep: one CLI
+ * for the accounts with work on them, rather than one per profile. A machine
+ * with eight profiles and one live run pays for one reading, not eight.
+ */
+export const PLAN_USAGE_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
 /**
  * How old a reading may be and still be worth recommending on.
  *
- * Three missed polls. The poll is the only thing that keeps these figures
- * current, and it can stall for reasons the renderer cannot see — the machine
- * slept, a CLI hung, the provider stopped answering. A recommendation is a
- * claim about *right now*, so it expires rather than quietly ageing: an account
- * named on twenty-minute-old numbers may have been drained since by another
- * window, another machine, or the user's own terminal.
+ * Three missed polls, expressed as such rather than as a number of its own so
+ * that tightening the poll tightens this with it. The poll is the only thing
+ * that keeps these figures current, and it can stall for reasons the renderer
+ * cannot see — the machine slept, a CLI hung, the provider stopped answering. A
+ * recommendation is a claim about *right now*, so it expires rather than
+ * quietly ageing: an account named on numbers that old may have been drained
+ * since by another window, another machine, or the user's own terminal.
  *
  * Note this governs the *recommendation* only. A stale reading is still worth
  * showing in a meter, where it carries its own "4m ago" — the difference is

@@ -66,6 +66,8 @@ import {
   forgetFolders,
   setConversationWidth,
   setDockAutoOpen,
+  setAutoHandoff,
+  setEscapeStopsRun,
   setFontSize,
   setRunSummary,
   setShowThinking,
@@ -379,11 +381,13 @@ export function AppearanceSection(): ReactElement {
   const wordFade = useApp((s) => s.streamingWordFade);
   const showThinking = useApp((s) => s.showThinking);
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
+  const escapeStopsRun = useApp((s) => s.escapeStopsRun);
+  const autoHandoff = useApp((s) => s.autoHandoff);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, what Escape does, whether a nearly-spent account hands its work on, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -411,6 +415,15 @@ export function AppearanceSection(): ReactElement {
                 folded into the activity marker with the work it was reasoning about, one click
                 away. Either way a single block can be collapsed on its own, and moving this
                 rearranges the conversation already on screen rather than only the next one.
+                <br />
+                <br />
+                <span className="text-ink-muted">
+                  Some models do not return their reasoning at all.
+                </span>{' '}
+                The provider keeps the block and withholds its text, and there is nothing for this
+                switch to show — the conversation looks the same on and off. That is the provider’s
+                choice about that model, not a setting here, and it can differ between two models
+                on one account.
               </ItemDescription>
             </ItemContent>
             <ItemActions>
@@ -486,6 +499,69 @@ export function AppearanceSection(): ReactElement {
                 aria-label="Open the side pane on its own"
                 checked={dockAutoOpen}
                 onCheckedChange={setDockAutoOpen}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
+      <SettingsGroup label="Keyboard">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Escape stops the run</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Escape interrupts whatever the agent is doing. It is the fastest way to stop a run
+                and, for the same reason, the easiest to hit by accident — reaching for it to
+                dismiss something that is no longer on screen stops the work instead.
+                <br />
+                <br />
+                Off, Escape still closes dialogs and the command palette, and still denies a
+                permission the agent is waiting on. It simply stops short of stopping the run, which
+                the composer&rsquo;s Stop button still does.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-escape-stops-run"
+                aria-label="Escape stops the run"
+                checked={escapeStopsRun}
+                onCheckedChange={setEscapeStopsRun}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
+      <SettingsGroup label="Handing over">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Hand the work over before the limit</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Running out of plan mid-conversation loses the expensive part: not the turn, but
+                everything the agent had worked out — which files matter, what it had already
+                tried, what it was about to do. On, Artemis stops the conversation just short of
+                the limit and spends the last of the budget asking for a briefing another session
+                can start from, written to{' '}
+                <span className="font-mono text-ink-muted">.artemis/</span> in the working folder
+                and shown as an artifact.
+                <br />
+                <br />
+                It stops at{' '}
+                <span className="text-ink-muted">90% of the 5-hour window, 98% of the weekly, 95%
+                of Fable</span>{' '}
+                — different margins because the 5-hour window refills within the day and the weekly
+                one does not. A run in flight is interrupted to do it, so this is off unless you
+                ask for it; every conversation it stops offers a button to carry on regardless.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-auto-handoff"
+                aria-label="Hand the work over before the limit"
+                checked={autoHandoff}
+                onCheckedChange={setAutoHandoff}
               />
             </ItemActions>
           </Item>

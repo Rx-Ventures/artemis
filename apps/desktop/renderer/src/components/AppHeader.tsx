@@ -102,6 +102,7 @@ import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
 import {
+  focusWaitingPane,
   openSettings,
   toggleBrowser,
   toggleTasks,
@@ -111,6 +112,7 @@ import {
 } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
+import { StatusDot } from './primitives';
 import { ThemeToggle } from './ThemeToggle';
 
 /**
@@ -291,6 +293,8 @@ export function AppHeader(): ReactElement {
         forward — see the store for why repeating it does not stack up terminals
         nobody asked for.
       */}
+      <WaitingBadge />
+
       <IconButton
         label={`Terminal (${keyLabel('mod+j')})`}
         onClick={() => toggleTerminal(pane)}
@@ -355,5 +359,47 @@ export function AppHeader(): ReactElement {
 
       <WindowControls maximized={windowState.maximized} focused={windowState.focused} />
     </header>
+  );
+}
+
+/**
+ * How many conversations have stopped and are waiting on you.
+ *
+ * The one thing in this header that is about the *window* rather than the
+ * conversation in front of you, and it is here because that is the problem it
+ * solves: a pane parked on a permission in the other column, or behind the one
+ * you are reading, is invisible until you happen to look. The agent is not
+ * working, it is waiting, and nothing was saying so from anywhere you were
+ * likely to be looking.
+ *
+ * Renders nothing at zero. A badge that is always present and usually says "0"
+ * teaches the eye to skip it, which is the opposite of what an alert is for —
+ * and the header is narrow enough that a permanent slot would cost the title
+ * real width on every window that never needs it.
+ *
+ * Amber, matching the sidebar dot and the activity indicator: three surfaces,
+ * one colour, one meaning. Clicking focuses the first waiting pane; see
+ * `focusWaitingPane` for why "first" is layout order.
+ */
+function WaitingBadge(): ReactElement | null {
+  const waiting = useApp((s) => s.waitingSessions.length);
+  if (waiting === 0) return null;
+
+  const label =
+    waiting === 1 ? '1 conversation is waiting for you' : `${waiting} conversations are waiting for you`;
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        focusWaitingPane();
+      }}
+      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm bg-amber px-2 text-2xs font-medium text-abyss transition-opacity hover:opacity-90"
+    >
+      <StatusDot tone="neutral" className="bg-abyss/70" />
+      {waiting} waiting
+    </button>
   );
 }

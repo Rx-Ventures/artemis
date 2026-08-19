@@ -1012,6 +1012,17 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const activeKind = useApp(
     (s) => s.providers.find((p) => p.id === providerId)?.kind ?? 'hosted',
   );
+  /**
+   * Why the chosen provider's server is not answering, if it is not.
+   *
+   * Only meaningful for a local provider, and only as a note: see the picker
+   * below for why an unreachable local server does not stop a profile being
+   * made. `undefined` when the server answered, which is the ordinary case.
+   */
+  const chosenUnavailableReason = useApp((s) => {
+    const chosen = s.providers.find((p) => p.id === providerId);
+    return chosen?.available === false ? chosen.unavailableReason : undefined;
+  });
 
   /**
    * Whether the user has taken ownership of the path.
@@ -1182,7 +1193,30 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                             size="sm"
                             variant={option.id === providerId ? 'secondary' : 'outline'}
                             aria-pressed={option.id === providerId}
-                            disabled={!option.available}
+                            /*
+                             * A hosted provider that is not installed cannot
+                             * have a profile: there is a CLI to install and an
+                             * account to sign into, and neither can be done
+                             * from here. Disabling it and saying why is the
+                             * honest answer.
+                             *
+                             * A local one is the opposite. Its profile *is* an
+                             * address — nothing to install, nothing to sign
+                             * into — so whether the server happens to be
+                             * running is a fact about this second, not about
+                             * whether the profile can exist. Disabling it made
+                             * a dead end out of the ordinary case: the probe
+                             * only ever asks the *default* port, so anyone
+                             * running LM Studio on another port, or on the
+                             * machine next to them, could never reach the field
+                             * where they would say so. You had to already be
+                             * reachable at the address you were trying to
+                             * change.
+                             *
+                             * So local stays selectable and the probe's answer
+                             * becomes the hint under the group.
+                             */
+                            disabled={group.kind !== 'local' && !option.available}
                             disabledReason={option.unavailableReason}
                             onClick={() => setChosenProvider(option.id)}
                           >
@@ -1198,6 +1232,18 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                     ? 'Which server on this machine this profile talks to. There is nothing to sign in to — the profile is an address, and the server either answers or it does not.'
                     : "Which CLI this account belongs to. It cannot be changed afterwards — the config directory below is that CLI's, and its own sign-in is what writes into it."}
                 </FieldDescription>
+                {/*
+                  Reported rather than enforced. The profile is worth creating
+                  either way — you may be about to start the server, or to point
+                  it somewhere other than the port this was probed on — so this
+                  says what was found and leaves the decision alone.
+                */}
+                {activeKind === 'local' && chosenUnavailableReason !== undefined ? (
+                  <FieldDescription className="text-2xs text-amber">
+                    {chosenUnavailableReason} You can still create the profile — it is an address,
+                    not an installation.
+                  </FieldDescription>
+                ) : null}
               </Field>
             )}
 

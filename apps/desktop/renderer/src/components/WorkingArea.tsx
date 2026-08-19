@@ -312,7 +312,25 @@ function DockSplit({ children }: { readonly children: ReactNode }): ReactElement
         {children}
       </ResizablePanel>
       <ResizableHandle withHandle aria-label="Resize the dock" className={HANDLE} />
-      <ResizablePanel id={DOCK_PANEL} minSize={SPLIT_MIN_WIDTH} className="flex min-w-0">
+      {/*
+        The dock owns its left edge.
+
+        The handle between the two is transparent at rest — see `HANDLE`, which
+        is right for the dividers *inside* the grid, where each pane already
+        carries its own caption border and a rule between them would read as a
+        table. This boundary is a different kind: the conversation and the dock
+        are two surfaces rather than two of a kind, and with nothing between
+        them the transcript's text ran into the dock's without a seam.
+
+        On the panel rather than the handle, so it holds still. A border on the
+        handle would light up and move with the drag, which is the opposite of
+        what an edge should do.
+      */}
+      <ResizablePanel
+        id={DOCK_PANEL}
+        minSize={SPLIT_MIN_WIDTH}
+        className="flex min-w-0 border-l border-line"
+      >
         <DockPane />
       </ResizablePanel>
     </ResizablePanelGroup>

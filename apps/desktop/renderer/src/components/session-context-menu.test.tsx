@@ -52,6 +52,7 @@ Element.prototype.hasPointerCapture ??= function hasPointerCapture(): boolean {
 Element.prototype.releasePointerCapture ??= function releasePointerCapture(): void {};
 
 const ALL: Capabilities = {
+  tagSession: true,
   interactivePermissions: true,
   partialMessages: true,
   midRunSteering: true,
@@ -106,7 +107,11 @@ function descriptor(capabilities: Capabilities): ProviderDescriptor {
  * around. Per-test behaviour therefore lives in the variables below rather
  * than in a freshly-built stub.
  */
-const calls: { renamed: string[]; deleted: string[] } = { renamed: [], deleted: [] };
+const calls: { renamed: string[]; deleted: string[]; tagged: (string | null)[] } = {
+  renamed: [],
+  deleted: [],
+  tagged: [],
+};
 /** Run status `runs.list` reports for this session. `null` = no run at all. */
 let runStatus: 'running' | 'ended' | null = null;
 /** Whether the next delete succeeds. */
@@ -128,6 +133,21 @@ let deleteOk = true;
     onEvent: () => () => {},
   },
   sessions: {
+    // Archiving is a tag on the provider's own record now, so the menu action
+    // is an IPC call rather than a write to a local set. See
+    // `toggleSessionArchived`.
+    tag: async ({ tag }: { tag: string | null }) => {
+      calls.tagged.push(tag);
+      return { ok: true, value: { tagged: true } };
+    },
+    // Echoes what the store was seeded with. `toggleSessionArchived` refreshes
+    // after a successful tag — the provider's answer replaces the optimistic
+    // write — and a stub that answered "no sessions" would empty the sidebar
+    // and make every assertion after the click a test of the stub.
+    listAll: async () => ({
+      ok: true,
+      value: { sessions: useApp.getState().sessions, hasMore: false },
+    }),
     rename: async ({ title }: { title: string }) => {
       calls.renamed.push(title);
       // Trims, as the main process does — so a test can tell the stored title
@@ -189,6 +209,7 @@ function press(menu: HTMLElement, key: string, modifier?: 'metaKey' | 'ctrlKey' 
 beforeEach(() => {
   calls.renamed.length = 0;
   calls.deleted.length = 0;
+  calls.tagged.length = 0;
   runStatus = null;
   deleteOk = true;
   seedStore();
@@ -244,8 +265,10 @@ describe('session context menu', () => {
   });
 
   it('still offers archive when the provider can neither rename nor delete', async () => {
-    // Archiving is Artemis's own bookkeeping, so it must survive a provider
-    // that cannot write to its own session store at all.
+    // Archiving is its own capability, not a consequence of the other two. A
+    // provider that can tag but not rename or delete can still archive, and
+    // gating one mutation on another's flag would be inventing a dependency
+    // the adapter never declared.
     useApp.setState({
       providers: [descriptor({ ...ALL, renameSession: false, deleteSession: false })],
     });
@@ -292,10 +315,8 @@ describe('a scheduled run’s menu', () => {
 
     press(menu, 'a');
 
-    // A fired toggle would have written the canonical key into the archive
-    // list — a redundant entry today, and a stale one the day the rule learns
-    // exceptions.
-    expect(useApp.getState().archivedSessions).toEqual([]);
+    // A fired toggle would have asked the provider to write a tag.
+    expect(calls.tagged).toEqual([]);
   });
 });
 
@@ -308,8 +329,10 @@ describe('menu hotkeys', () => {
     mount(<SessionList />);
     press(await openMenu(), 'a');
 
+    // The tag goes to the provider, which is what makes an archive true of the
+    // session rather than of this installation. See `toggleSessionArchived`.
     await waitFor(() => {
-      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+      expect(calls.tagged).toEqual(['archived']);
     });
   });
 
@@ -345,7 +368,7 @@ describe('menu hotkeys', () => {
     press(await openMenu(), 'A');
 
     await waitFor(() => {
-      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+      expect(calls.tagged).toEqual(['archived']);
     });
   });
 
@@ -375,7 +398,7 @@ describe('menu hotkeys', () => {
     press(menu, 'a', 'ctrlKey');
 
     expect(screen.queryByLabelText(`Rename session: ${SESSION.title}`)).toBeNull();
-    expect(useApp.getState().archivedSessions).toEqual([]);
+    expect(calls.tagged).toEqual([]);
   });
 
   it('toggles back on the same letter, from a row that is already pinned', async () => {
@@ -465,8 +488,12 @@ describe('pin', () => {
     await screen.findByText('An earlier session');
     press(await openMenu(), 'a');
 
+    // The archive goes to the provider; the pin is Artemis's own, and is
+    // cleared in the same write so the row cannot be seen in two sections
+    // between the click and the refresh. See `toggleSessionArchived` for why
+    // one of these delegates and the other does not.
     await waitFor(() => {
-      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+      expect(calls.tagged).toEqual(['archived']);
     });
     expect(useApp.getState().pinnedSessions).toEqual([]);
   });
@@ -490,18 +517,50 @@ describe('pin', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('archive', () => {
-  it('moves the row into the Archived section without touching the provider', async () => {
+  it('tags the session rather than removing it', async () => {
+    /*
+     * This test used to be called "without touching the provider", and that was
+     * the bug rather than the contract.
+     *
+     * An archive kept in this window's preferences was true of one
+     * installation: invisible to a second build, absent on another machine, and
+     * gone when the window's storage was reset. So it moves to the provider's
+     * own record, beside rename and delete, which never had the problem.
+     *
+     * The distinction being drawn has not changed, only where it is drawn:
+     * archiving still does not *destroy* anything, and the row stays listed and
+     * resumable.
+     */
     mount(<SessionList />);
     await openMenu();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
 
     await waitFor(() => {
-      expect(useApp.getState().archivedSessions).toEqual([`p1:${SESSION.id}`]);
+      expect(calls.tagged).toEqual(['archived']);
     });
-    // The distinction that matters: nothing on disk was asked to change.
     expect(calls.deleted).toEqual([]);
     expect(useApp.getState().sessions).toHaveLength(1);
+  });
+
+  it('refuses where the provider keeps no tag, and says why', async () => {
+    // The capability bar's rule: true, or false for a documented upstream
+    // reason, and a control that cannot work is disabled and explains itself
+    // rather than vanishing. Codex threads have no tag to write.
+    useApp.setState({ providers: [descriptor({ ...ALL, tagSession: false })] });
+    mount(<SessionList />);
+    await openMenu();
+
+    // Asserted on behaviour and on the explanation rather than on a disabled
+    // attribute, which is the sibling delete test's rule too: the gate lives on
+    // the item and the keystroke goes through the item's own click path, so
+    // "nothing was asked" is the property that matters.
+    const item = screen.getByRole('menuitem', { name: 'Archive' });
+    expect(item.getAttribute('title')).toContain('does not support archiving a session');
+
+    fireEvent.click(item);
+    press(screen.getByRole('menu'), 'a');
+    expect(calls.tagged).toEqual([]);
   });
 
   it('gathers archived sessions under a collapsed Archived heading', async () => {

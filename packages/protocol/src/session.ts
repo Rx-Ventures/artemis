@@ -144,8 +144,30 @@ export interface SessionSummary {
   readonly sizeBytes?: number;
   /** Git branch the session was working on. */
   readonly gitBranch?: string;
-  /** Provider-side tag or label attached to the session. */
+  /**
+   * Provider-side tag or label attached to the session.
+   *
+   * What archiving is built on — see {@link ARCHIVED_TAG}. Artemis reads any
+   * other value through untouched: the field belongs to the provider's store,
+   * and a session someone tagged from the CLI should not be silently rewritten
+   * by a desktop app that understands one word of the vocabulary.
+   */
   readonly tag?: string;
   /** Model most recently used in the session. */
   readonly model?: string;
+}
+
+/**
+ * The tag Artemis writes to archive a session.
+ *
+ * A plain word rather than a namespaced key, because it is written into the
+ * provider's store where a person may well read it — `claude` shows tags of its
+ * own accord — and `artemis:archived` would be Artemis's filing system leaking
+ * into somebody else's file.
+ */
+export const ARCHIVED_TAG = 'archived';
+
+/** Whether this session has been archived, by Artemis or from the CLI. */
+export function isArchived(session: { readonly tag?: string }): boolean {
+  return session.tag === ARCHIVED_TAG;
 }

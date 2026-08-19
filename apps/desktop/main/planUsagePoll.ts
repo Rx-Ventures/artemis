@@ -29,9 +29,20 @@
  *
  * A cycle is **skipped while no window is open**. On macOS closing the last
  * window leaves the app running, and readings collected then can be observed by
- * nobody — they would be stale again by the time a window opened. The first
- * cycle after `start` runs immediately, so a freshly-opened app is not five
- * minutes behind.
+ * nobody — they would be stale again by the time a window opened.
+ *
+ * ## Two cadences, one timer
+ *
+ * The full sweep walks every profile, and that is what costs: one CLI per
+ * account. Between sweeps, a faster tick reads only the profiles that have a
+ * run on them — the only accounts whose numbers can move on their own, and the
+ * ones automatic handoff is deciding about. On an idle machine that tick reads
+ * nothing at all, so the faster cadence costs nothing until there is work to
+ * measure.
+ *
+ * One timer running at the fast cadence, deciding at each tick which kind of
+ * cycle is due, rather than two timers. Two would eventually fire together and
+ * start the same account's CLI twice.
  *
  * A failure is **per profile**. One account whose CLI is missing, wedged or
  * signed out must not stop the accounts behind it in the queue from being read,
@@ -42,6 +53,7 @@ import { BrowserWindow } from 'electron';
 
 import {
   IPC_PUSH,
+  PLAN_USAGE_ACTIVE_POLL_INTERVAL_MS,
   PLAN_USAGE_POLL_INTERVAL_MS,
   type PlanUsagePush,
   type ProfileId,
@@ -67,8 +79,10 @@ const log = createLogger('plan-usage');
 const FIRST_CYCLE_DELAY_MS = 15_000;
 
 export interface PlanUsagePollOptions {
-  /** Milliseconds between the end of one cycle and the start of the next. */
+  /** Milliseconds between the end of one full sweep and the start of the next. */
   readonly intervalMs?: number;
+  /** Milliseconds between reads of the profiles that have work on them. */
+  readonly activeIntervalMs?: number;
   /** Milliseconds before the first cycle. See {@link FIRST_CYCLE_DELAY_MS}. */
   readonly firstDelayMs?: number;
 }
@@ -87,10 +101,18 @@ export function startPlanUsagePolling(
   if (!engine.ready) return () => undefined;
 
   const intervalMs = options.intervalMs ?? PLAN_USAGE_POLL_INTERVAL_MS;
+  const activeIntervalMs = options.activeIntervalMs ?? PLAN_USAGE_ACTIVE_POLL_INTERVAL_MS;
   const firstDelayMs = options.firstDelayMs ?? FIRST_CYCLE_DELAY_MS;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
+  /**
+   * When the last full sweep finished, so the fast cycles in between it and the
+   * next one know whether one is due. A single timer runs at the fast cadence
+   * and decides at each tick which kind of cycle this is — two independent
+   * timers would let a sweep and a fast read start the same CLI at once.
+   */
+  let lastSweepAt = 0;
 
   const schedule = (delayMs: number): void => {
     if (stopped) return;
@@ -112,29 +134,66 @@ export function startPlanUsagePolling(
     broadcast(IPC_PUSH.planUsage, payload);
   };
 
+  /** Read one account and push what came back. Never throws. */
+  const readOne = async (profileId: ProfileId): Promise<void> => {
+    try {
+      const usage = await engine.require().refreshPlanUsage({ profileId });
+      if (stopped) return;
+      push(profileId, { profileId, usage });
+    } catch (error) {
+      // Routine: a profile pointed at a directory the CLI cannot read, a
+      // provider that has been uninstalled, an account signed out. The next
+      // account in the queue is unaffected, and so is the next cycle.
+      log.debug(`Could not read plan usage for profile ${profileId}`, error);
+    }
+  };
+
+  /**
+   * The profiles with a run on them right now.
+   *
+   * These are the only accounts whose numbers can move without anyone opening a
+   * window, which makes them the only ones worth reading between sweeps — and
+   * the ones an automatic handoff is deciding about. Deduplicated, because
+   * several panes commonly run on one account and reading it four times would
+   * cost four subprocesses to learn one number.
+   */
+  const busyProfiles = async (): Promise<readonly ProfileId[]> => {
+    try {
+      const runs = await engine.require().listRuns({});
+      return [...new Set(runs.map((run) => run.profileId))];
+    } catch (error) {
+      log.debug('Could not list runs for the active-profile read', error);
+      return [];
+    }
+  };
+
   const cycle = async (): Promise<void> => {
     if (stopped) return;
 
     // Nobody is looking. See the header: a reading collected now would be stale
     // before it could be read.
     if (BrowserWindow.getAllWindows().length === 0) {
-      schedule(intervalMs);
+      schedule(activeIntervalMs);
       return;
     }
 
+    const sweepDue = Date.now() - lastSweepAt >= intervalMs;
     try {
-      const profiles = await engine.require().listProfiles({});
-      for (const profile of profiles) {
-        if (stopped) return;
-        try {
-          const usage = await engine.require().refreshPlanUsage({ profileId: profile.id });
+      if (sweepDue) {
+        const profiles = await engine.require().listProfiles({});
+        for (const profile of profiles) {
           if (stopped) return;
-          push(profile.id, { profileId: profile.id, usage });
-        } catch (error) {
-          // Routine: a profile pointed at a directory the CLI cannot read, a
-          // provider that has been uninstalled, an account signed out. The next
-          // account in the queue is unaffected, and so is the next cycle.
-          log.debug(`Could not read plan usage for profile ${profile.id}`, error);
+          await readOne(profile.id);
+        }
+        lastSweepAt = Date.now();
+      } else {
+        // Between sweeps, only the accounts being spent. On an idle machine
+        // this reads nothing at all, which is what makes the faster tick
+        // affordable — the cost scales with work in flight, not with how many
+        // profiles happen to be configured.
+        for (const profileId of await busyProfiles()) {
+          if (stopped) return;
+          await readOne(profileId);
         }
       }
     } catch (error) {
@@ -143,7 +202,7 @@ export function startPlanUsagePolling(
       log.debug('Skipped a plan-usage cycle', error);
     }
 
-    schedule(intervalMs);
+    schedule(activeIntervalMs);
   };
 
   schedule(firstDelayMs);

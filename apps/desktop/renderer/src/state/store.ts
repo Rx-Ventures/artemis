@@ -34,6 +34,9 @@
 
 import { create } from 'zustand';
 import {
+  ARCHIVED_TAG,
+  isArchived,
+  isEndedRunError,
   isProfileAutoSelectable,
   isProfileEnabled,
   isSameModel,
@@ -42,6 +45,7 @@ import {
   resolvePlanWeight,
 } from '@rx-artemis/protocol';
 import type {
+  ArtemisBridge,
   AuthStatusInfo,
   AgentError,
   AgentEvent,
@@ -75,9 +79,18 @@ import type {
   SessionSummary,
   TerminalId,
   TokenUsage,
+  HandoffTrigger,
   UpdateChannel,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
+import { activityOf } from '../components/Activity';
+import {
+  handoffPrompt,
+  handoffReason,
+  handoffStamp,
+  setHandoff,
+  HANDOFF_BLOCK_DETAIL,
+} from './autoHandoff';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   describeWorkspace,
@@ -328,6 +341,18 @@ export interface AppState {
    * element-wise compare and the value is stable between real changes.
    */
   readonly runningSessions: readonly SessionId[];
+  /**
+   * Sessions that have stopped and are waiting on *you*.
+   *
+   * The same projection {@link runningSessions} is, computed in the same walk
+   * and for the same reason, but a strictly more urgent fact: a running
+   * conversation needs nothing from anybody, while one of these has parked and
+   * will stay parked until someone answers it. Kept apart rather than folded
+   * into a status enum because the two are read by different surfaces — the
+   * sidebar dot wants to know which of the two a row is, and the header badge
+   * only ever counts these.
+   */
+  readonly waitingSessions: readonly SessionId[];
   /**
    * Sessions the **main process** says are still working, as of the last poll.
    *
@@ -650,6 +675,19 @@ export interface AppState {
    * rather than destroying them.
    */
   readonly dockAutoOpen: boolean;
+  /**
+   * Whether Escape stops a run.
+   *
+   * Only that. Escape also dismisses the palette, closes a dialog and denies a
+   * parked permission, and none of those is "stopping the session" — turning
+   * this off must not take the key away from them. See the handler in `App.tsx`.
+   */
+  readonly escapeStopsRun: boolean;
+  /**
+   * Whether a conversation stops itself and writes a handover when the account
+   * it is running on gets close to a plan limit. See `autoHandoff.ts`.
+   */
+  readonly autoHandoff: boolean;
   /** Which releases this installation is willing to be offered. */
   readonly updateChannel: UpdateChannel;
 
@@ -1204,6 +1242,8 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  escapeStopsRun?: boolean;
+  autoHandoff?: boolean;
   /**
    * Persisted rather than derived: it is a standing choice about risk, and the
    * app must not quietly move someone between channels across a restart.
@@ -1369,10 +1409,57 @@ function numberMap(value: unknown): Record<string, number> | undefined {
   return out;
 }
 
+/**
+ * The stored preferences text, from the file, or from `localStorage` once.
+ *
+ * The file is where these live now — see `main/prefs.ts` for why they left
+ * `localStorage`, and what it cost while they were there. `localStorage` is
+ * kept as the *migration source* and nothing else: an installation that
+ * predates the move has its only copy there, and reading it once is the
+ * difference between carrying the user's archived sessions across and quietly
+ * resetting their sidebar.
+ *
+ * The migration is a read, not a move. The old copy is left where it is,
+ * because a build that has not been updated yet is still reading it, and taking
+ * it away would strand that build rather than upgrade it.
+ */
+function prefsFile(): ArtemisBridge['prefsFile'] | undefined {
+  /*
+   * Read off the global rather than through `resolveBridge`, and that is not a
+   * shortcut — it is the only correct way to reach it from here.
+   *
+   * `loadPrefs` runs at *module scope*, before anything else in this file, and
+   * `resolveBridge` memoises its binding the first time it is called. Calling it
+   * here would make preference loading the thing that decides, for the lifetime
+   * of the window, whether a bridge exists — and it would decide it earlier than
+   * any caller expects. Under test that is fatal and was: 48 of them install
+   * their stub after the module graph has loaded, and every one of them was
+   * being answered by a binding taken before their stub existed.
+   */
+  return (globalThis as { artemis?: ArtemisBridge }).artemis?.prefsFile;
+}
+
+function storedPrefsText(): string | null {
+  const file = prefsFile();
+  const stored = file?.read() ?? null;
+  if (stored !== null && stored !== '') return stored;
+
+  let legacy: string | null = null;
+  try {
+    legacy = globalThis.localStorage?.getItem(PREFS_KEY) ?? null;
+  } catch {
+    legacy = null;
+  }
+  // Written through immediately, so the next launch reads the file and this
+  // branch is never taken again.
+  if (legacy !== null && legacy !== '' && file !== undefined) file.write(legacy);
+  return legacy;
+}
+
 function loadPrefs(): Prefs {
   let raw: Record<string, unknown>;
   try {
-    const text = globalThis.localStorage?.getItem(PREFS_KEY);
+    const text = storedPrefsText();
     if (!text) return {};
     const parsed: unknown = JSON.parse(text);
     if (typeof parsed !== 'object' || parsed === null) return {};
@@ -1415,6 +1502,8 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
+    autoHandoff: boolOrUndefined(raw['autoHandoff']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1502,13 +1591,26 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    escapeStopsRun: s.escapeStopsRun,
+    autoHandoff: s.autoHandoff,
     updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
   };
+  const json = JSON.stringify(prefs);
+  const file = prefsFile();
+  if (file !== undefined) {
+    // One writer, and it is the file. Mirroring into `localStorage` as well
+    // would leave two copies that disagree the moment a second build wrote one
+    // of them, which is the whole problem the move exists to end.
+    file.write(json);
+    return;
+  }
+  // No bridge: a browser preview, or a window whose preload never loaded. There
+  // is no second process to share a file with, so the old home is still right.
   try {
-    globalThis.localStorage?.setItem(PREFS_KEY, JSON.stringify(prefs));
+    globalThis.localStorage?.setItem(PREFS_KEY, json);
   } catch {
     /* Preferences are a convenience; a full quota is not worth an error. */
   }
@@ -1592,6 +1694,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     dismissedTasks: [],
     tasksRequested: false,
     promptHistory: [],
+    handoff: 'none',
     draft: '',
     ...overrides,
   };
@@ -1650,6 +1753,7 @@ export const useApp = create<AppState>(() => ({
   grid: [createRow([firstPane])],
   background: [],
   runningSessions: [],
+  waitingSessions: [],
   sessionsHoldingWork: [],
   openSessions: [],
   sessionOrderHold: {},
@@ -1682,6 +1786,12 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  // Defaults on: this is how Escape has always behaved, and a preference that
+  // silently changed an existing reflex would be worse than not having one.
+  escapeStopsRun: prefs.escapeStopsRun ?? true,
+  // Off unless asked for. Stopping someone's work is the most intrusive thing
+  // this app does on its own, and it is not a default anyone opted into.
+  autoHandoff: prefs.autoHandoff ?? false,
   updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
@@ -1884,6 +1994,30 @@ function paneForSession(
 }
 
 /**
+ * Bring the first conversation that is waiting on an answer to the front.
+ *
+ * "First" is the order `syncRunningSessions` collected them in, which is the
+ * order the panes are laid out — so the badge walks left to right rather than
+ * by how long each has been parked. Either would be defensible; this one is
+ * predictable, and a control the user presses repeatedly should be predictable
+ * before it is clever.
+ *
+ * Returns `false` when nothing is waiting or the pane has since gone, so the
+ * caller can leave the badge alone rather than focusing something arbitrary.
+ */
+export function focusWaitingPane(): boolean {
+  const state = useApp.getState();
+  for (const sessionId of state.waitingSessions) {
+    const pane = paneForSession(sessionId, state);
+    if (pane !== undefined) {
+      focusPane(pane.id);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Recompute {@link AppState.runningSessions} from the conversations themselves.
  *
  * The sidebar needs to know which sessions are working, and "working" is a fact
@@ -1900,6 +2034,14 @@ function paneForSession(
  */
 function syncRunningSessions(): void {
   const ids: SessionId[] = [];
+  /*
+   * Collected in the same walk, deliberately.
+   *
+   * Waiting is a fact about the same pane stores this is already reading, and a
+   * second subscription over the same panes would double the work done on every
+   * keystroke in a composer for a value that changes on the same beat.
+   */
+  const waiting: SessionId[] = [];
   // The window value, read once for the whole walk — see `pruneBackground`.
   const holding = useApp.getState().sessionsHoldingWork;
   for (const pane of allLivePanes()) {
@@ -1916,6 +2058,25 @@ function syncRunningSessions(): void {
      * workflow that settled a row and carried on went unmarked — the sidebar
      * fell quiet while the work ran on. The main process is asked as well.
      */
+    /*
+     * Waiting is judged *before* the working check and never skipped by it.
+     *
+     * `activityOf` is the same function the foot of the transcript uses, so the
+     * sidebar and the pane cannot disagree about what a conversation is doing —
+     * and it already ranks a queued permission above a `running` status, which
+     * is the ordering that matters here: a provider that has asked for
+     * something is, to the person who has to answer, waiting rather than busy.
+     *
+     * Outside the `isWorking` guard because a pane can be parked on a
+     * permission while `isWorking` says no — the run reports
+     * `awaiting_permission` and nothing is being computed. That is precisely
+     * the conversation this badge exists to send you back to.
+     */
+    if (activityOf(state.run, state.permissionQueue.length).kind === 'waiting') {
+      if (state.run?.sessionId !== undefined) waiting.push(state.run.sessionId);
+      else if (state.resumeSessionId !== null) waiting.push(state.resumeSessionId);
+    }
+
     if (!isWorking(state, holding)) continue;
     /*
      * Both ids, not the better of the two.
@@ -1936,9 +2097,21 @@ function syncRunningSessions(): void {
     }
   }
 
-  const current = useApp.getState().runningSessions;
-  if (current.length === ids.length && ids.every((id, i) => current[i] === id)) return;
-  useApp.setState({ runningSessions: ids, sessionOrderHold: holdOrder(ids) });
+  const state = useApp.getState();
+  const sameRunning =
+    state.runningSessions.length === ids.length &&
+    ids.every((id, i) => state.runningSessions[i] === id);
+  const sameWaiting =
+    state.waitingSessions.length === waiting.length &&
+    waiting.every((id, i) => state.waitingSessions[i] === id);
+  // Both compared before writing either: this runs on every keystroke in a
+  // composer — the same store holds `draft` — and an unconditional `setState`
+  // would re-render the whole session list per character.
+  if (sameRunning && sameWaiting) return;
+  useApp.setState({
+    ...(sameRunning ? {} : { runningSessions: ids, sessionOrderHold: holdOrder(ids) }),
+    ...(sameWaiting ? {} : { waitingSessions: waiting }),
+  });
 }
 
 /**
@@ -4447,6 +4620,7 @@ export function installPlanUsageFeed(): () => void {
     useApp.setState((s) => ({
       planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
     }));
+    considerHandoff();
   });
 }
 
@@ -4518,10 +4692,144 @@ function refreshPlanUsageSoon(profileId: ProfileId): void {
       useApp.setState((s) => ({
         planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
       }));
+      // The moment this matters most. A run just ended, so this reading is the
+      // freshest one this account will have for minutes — and an idle pane is
+      // exactly where a handoff can be asked for without cutting anything off.
+      considerHandoff();
     })();
   }, PLAN_USAGE_SETTLE_MS);
 
   planUsageSoon.set(profileId, timer);
+}
+
+/**
+ * Longest the handoff will wait for an interrupted run to actually end.
+ *
+ * Bounded because the alternative is worse than being early. A provider that
+ * ignores the interrupt, or one whose `run.end` is lost, would otherwise leave
+ * the pane latched at `asked` with no document ever requested — the feature
+ * silently doing nothing at the one moment it was supposed to act. Going ahead
+ * after the deadline at least produces an attempt, and the attempt says what it
+ * is in the transcript.
+ */
+const HANDOFF_SETTLE_MS = 10_000;
+
+/** Resolve when the pane stops being live, or when `ms` has passed. */
+function settled(pane: Pane, ms: number): Promise<void> {
+  if (!isLive(paneState(pane))) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const unsubscribe = pane.store.subscribe((state) => {
+      if (!isLive(state)) finish();
+    });
+  });
+}
+
+/**
+ * Ask every conversation whether it should be handing its work over.
+ *
+ * Called after each write to `planUsageByProfile`, which is both places a
+ * reading can arrive: the poll's push, and the read taken a few seconds after a
+ * run ends. That single hook covers the two moments the feature is about — a
+ * turn finishing on a nearly-spent account, and an account crossing its
+ * threshold while a turn is still in flight — without either caller having to
+ * know it is what triggers a handoff.
+ *
+ * Every pane, not just the focused one. A conversation running in the other
+ * column is spending the same budget and is no less worth saving; a background
+ * pane is arguably the one you would rather not have to reconstruct.
+ */
+function considerHandoff(): void {
+  const state = useApp.getState();
+  if (!state.autoHandoff) return;
+  const now = Date.now();
+
+  for (const pane of allPanes(state)) {
+    const session = paneState(pane);
+    const trigger = handoffReason({
+      enabled: true,
+      session,
+      usageByProfile: state.planUsageByProfile,
+      now,
+    });
+    if (!trigger) continue;
+
+    // Latched before anything asynchronous, so a second reading landing while
+    // the interrupt is in flight cannot start a second handoff.
+    setHandoff(pane, 'stopping');
+    pane.transcript.note(
+      'warn',
+      `Handing this work over — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
+      'Artemis is asking for a handover document while there is still budget to write one. Turn this off in Appearance → Handing over.',
+    );
+
+    void requestHandoff(pane, trigger, now);
+  }
+}
+
+/**
+ * Stop whatever is running, then ask for the document.
+ *
+ * The interrupt comes first and is awaited: a provider mid-turn will not take
+ * the prompt as its own turn, and sending it anyway would either queue it
+ * behind the work being abandoned or fold it into that work as a steer. Neither
+ * produces a document.
+ *
+ * `submitPrompt` is used rather than a bespoke call so the handoff request is an
+ * ordinary turn in every respect — it appears in the transcript as a prompt, it
+ * is subject to the same capability gating, and the run it starts ends the way
+ * any other does.
+ */
+async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
+  if (isLive(paneState(pane))) {
+    await interruptRun(pane);
+    // And then wait for it to actually be over. `interruptRun` returns when
+    // main has *accepted* the interrupt; the pane does not settle until the
+    // `run.end` it causes arrives on the event stream. Sending in that gap is
+    // worse than not interrupting at all — `submitPrompt` would see a live run,
+    // take the steer path, and fold the request for a handover into the turn
+    // being abandoned, which produces no document and no clean stop.
+    await settled(pane, HANDOFF_SETTLE_MS);
+  }
+  if (isLive(paneState(pane))) {
+    // The run would not stop, so there is nowhere to put the request. Giving up
+    // is the only honest option left, and it must not block the conversation:
+    // no document was written, so refusing the user's next prompt would be
+    // punishing them for a provider that ignored an interrupt.
+    return abandonHandoff(pane, 'the run would not stop');
+  }
+  // Promoted only now, once the interrupted run's `run.end` is behind us: from
+  // here the next run to end is the one this prompt starts, which is exactly
+  // what `asked` means.
+  setHandoff(pane, 'asked');
+  const sent = await submitPrompt(handoffPrompt(trigger, handoffStamp(now)), undefined, pane);
+  // Same rule one step later. `submitPrompt` refuses for reasons of its own — a
+  // provider that cannot take a prompt, a directory that has gone away — and a
+  // refusal means no document exists. `done` would block the conversation over
+  // a handover that was never written.
+  if (!sent) abandonHandoff(pane, 'the prompt could not be sent');
+}
+
+/**
+ * Give up on this handoff without blocking the conversation.
+ *
+ * `dismissed` rather than `none`: nothing was written, so there is nothing to
+ * stop for — but retrying on the next reading would interrupt the same run
+ * again thirty seconds later, and again after that. One attempt, one
+ * explanation, then out of the way.
+ */
+function abandonHandoff(pane: Pane, because: string): void {
+  setHandoff(pane, 'dismissed');
+  pane.transcript.note(
+    'warn',
+    'Could not hand this work over automatically',
+    `Artemis tried to stop and ask for a handover document, but ${because}. Nothing has been blocked — this conversation carries on, and the account is still nearly spent.`,
+  );
 }
 
 /** Drop every pending settle timer. For tests. */
@@ -6065,6 +6373,31 @@ export function setDockAutoOpen(on: boolean): void {
   reconcileDock();
 }
 
+export function setEscapeStopsRun(on: boolean): void {
+  useApp.setState({ escapeStopsRun: on });
+  savePrefs();
+}
+
+export function setAutoHandoff(on: boolean): void {
+  useApp.setState({ autoHandoff: on });
+  savePrefs();
+  // Turning it on judges the readings already in hand rather than waiting for
+  // the next poll: someone who switches this on while sitting at 96% meant it
+  // to apply to the account they are looking at.
+  if (on) considerHandoff();
+}
+
+/**
+ * Let this conversation carry on despite the account being nearly spent.
+ *
+ * A one-way door on purpose — nothing re-arms it for the rest of the
+ * conversation. A safeguard that keeps re-asking after being told no is not a
+ * safeguard.
+ */
+export function dismissHandoff(pane: Pane = focusedPane()): void {
+  setHandoff(pane, 'dismissed');
+}
+
 /**
  * Record that the user has taken up — or backed out of — the shared
  * `~/.claude` arrangement.
@@ -6186,6 +6519,69 @@ function invalidateSessions(): void {
   sessionsGeneration += 1;
 }
 
+/**
+ * Carry the old local archive onto the provider's own records, once.
+ * ============================================================================
+ *
+ * Archiving used to be a set of keys in this window's preferences. It is a tag
+ * on the session now — see {@link toggleSessionArchived} — and this is what
+ * stops the change from reading, to anyone who had archived anything, as the
+ * app having forgotten all of it.
+ *
+ * Runs after a listing, because it needs the sessions to match keys against,
+ * and it only ever *adds* tags: a row the old set named is tagged, and the key
+ * is dropped. Nothing is untagged here. Somebody may have tagged a session from
+ * the CLI, and an entry missing from a set that never knew about it is not
+ * evidence of anything.
+ *
+ * Providers that cannot tag are skipped and their keys kept. Codex has no tag
+ * to write, so its archive stays local and stays working; discarding the keys
+ * would delete the only record of it. That is the one place the two halves
+ * still differ, and it is bounded by what the provider can actually do.
+ *
+ * Idempotent by construction: it consumes the set it reads from, so the second
+ * run has nothing to do.
+ */
+async function migrateArchivedSessions(): Promise<void> {
+  const state = useApp.getState();
+  if (state.archivedSessions.length === 0) return;
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const canTag = new Set(
+    state.providers.filter((provider) => provider.capabilities.tagSession).map((p) => p.id),
+  );
+  if (canTag.size === 0) return;
+
+  const migrated = new Set<string>();
+  for (const session of state.sessions) {
+    if (!canTag.has(session.providerId) || isArchived(session)) continue;
+    const hits = entriesFiling(session, state.archivedSessions);
+    if (hits.length === 0) continue;
+
+    const result = await call(() =>
+      bridge.sessions.tag({
+        profileId: session.profileId,
+        sessionId: session.id,
+        tag: ARCHIVED_TAG,
+        ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+      }),
+    );
+    // A failure keeps the key, so the row stays archived on the old mechanism
+    // and the next listing tries again. Silent: this is a background repair of
+    // something the user did not ask for, and a banner per failed row would be
+    // a wall of noise about work nobody requested.
+    if (result.ok) for (const hit of hits) migrated.add(hit);
+  }
+
+  if (migrated.size === 0) return;
+  useApp.setState((s) => ({
+    archivedSessions: s.archivedSessions.filter((entry) => !migrated.has(entry)),
+  }));
+  savePrefs();
+}
+
 export async function refreshSessions(): Promise<void> {
   const { bridge } = resolveBridge();
   const app = useApp.getState();
@@ -6269,6 +6665,11 @@ export async function refreshSessions(): Promise<void> {
     // these land and by project afterwards, and a listing should not wait on a
     // walk of the filesystem to put rows on screen. See `learnProjects`.
     void learnProjects(listing.sessions.map((session) => session.cwd));
+
+    // Also after the write, and for the same reason: it needs the rows this
+    // listing just produced to match its keys against, and it repairs history
+    // rather than deciding what is on screen now. See `migrateArchivedSessions`.
+    void migrateArchivedSessions();
   } finally {
     sessionsInFlight = false;
     /*
@@ -6348,36 +6749,86 @@ export async function renameSession(session: SessionSummary, title: string): Pro
 
 /**
  * Put a session away, or take it back out.
+ * ============================================================================
  *
- * Purely local — see {@link AppState.archivedSessions}. No IPC, nothing on
- * disk changes, and the session stays resumable the whole time; the row simply
- * moves from its project into the Archived section.
+ * A tag on the provider's own record, not a note Artemis keeps.
+ *
+ * This used to be a list of ids in the renderer's preferences, and that was
+ * wrong in a way that took three separate bug reports to see whole. An archive
+ * held here is a fact about *one installation*: invisible to a second build,
+ * absent on another machine reading the same `~/.claude`, and gone entirely the
+ * moment the window's storage is reset. All three happened. Meanwhile `delete`
+ * and `rename` had never had the problem, because both were always the
+ * provider's operation.
+ *
+ * So archiving is `tagSession`, beside them, and the tag comes back on every
+ * listing as {@link SessionSummary.tag}. There is no local set to keep in step
+ * with anything, which is what makes the whole class of bug unreachable rather
+ * than fixed.
+ *
+ * Optimistic, then corrected. The row moves the moment it is clicked — waiting
+ * on a subprocess to redraw a sidebar is the wrong trade — and `refreshSessions`
+ * replaces the guess with what the provider actually stored. A failure puts the
+ * row back and says why.
  *
  * Archiving unpins, always. The two are opposite claims about one row, and a
- * session that was both would have to be drawn in two places or arbitrarily in
- * one; clearing the other set at the point of the write means that state cannot
- * be reached at all rather than being tidied up wherever it is noticed.
+ * session that was both would have to be drawn twice or arbitrarily once.
+ * Pinning stays local: it is a claim about how *this* person wants their
+ * sidebar ordered, not a property of the conversation, and no provider has a
+ * concept to delegate it to.
  */
-export function toggleSessionArchived(session: SessionSummary): void {
-  const key = sessionKey(session);
-  useApp.setState((s) => {
-    // Read against every entry that files this session — its current keys, and
-    // for a shared row any profile's key on the same id — and write back only
-    // the canonical one, so an entry stored under a since-changed owner
-    // converges the first time it is toggled. See `entriesFiling` for why the
-    // stale ones must be removed too: an unarchive that left one behind would
-    // look done and be undone at the next listing.
-    const archivedHits = new Set(entriesFiling(session, s.archivedSessions));
-    const pinnedHits = new Set(entriesFiling(session, s.pinnedSessions));
-    return {
-      archivedSessions:
-        archivedHits.size > 0
-          ? s.archivedSessions.filter((entry) => !archivedHits.has(entry))
-          : [...s.archivedSessions, key],
-      pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
-    };
-  });
+export async function toggleSessionArchived(session: SessionSummary): Promise<void> {
+  const wasArchived = isArchived(session);
+  const tag = wasArchived ? null : ARCHIVED_TAG;
+
+  // Optimistic, and the pin is cleared in the same write so the row cannot be
+  // seen in two sections between here and the refresh below.
+  const pinnedHits = new Set(entriesFiling(session, useApp.getState().pinnedSessions));
+  useApp.setState((s) => ({
+    sessions: s.sessions.map((row) =>
+      row.id === session.id && row.profileId === session.profileId
+        ? withTag(row, tag)
+        : row,
+    ),
+    pinnedSessions: s.pinnedSessions.filter((entry) => !pinnedHits.has(entry)),
+  }));
   savePrefs();
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const result = await call(() =>
+    bridge.sessions.tag({
+      profileId: session.profileId,
+      sessionId: session.id,
+      tag,
+      ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+    }),
+  );
+
+  if (!result.ok) {
+    // Put it back. An archive that appeared to work and did not is worse than
+    // one that refused: the row would return at the next listing with no
+    // explanation, which is the report this whole change came from.
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((row) =>
+        row.id === session.id && row.profileId === session.profileId
+          ? withTag(row, wasArchived ? ARCHIVED_TAG : null)
+          : row,
+      ),
+    }));
+    reportFailure(wasArchived ? 'Could not restore that session' : 'Could not archive that session', result.error);
+    return;
+  }
+
+  // What the provider stored is the answer; the optimistic write was a guess.
+  void refreshSessions();
+}
+
+/** A copy of `session` carrying `tag`, or with the field absent for `null`. */
+function withTag(session: SessionSummary, tag: string | null): SessionSummary {
+  const { tag: _previous, ...rest } = session;
+  return tag === null ? rest : { ...rest, tag };
 }
 
 /**
@@ -6733,6 +7184,11 @@ export function newSession(
       tasks: [],
       dismissedTasks: [],
       tasksRequested: false,
+      // A new conversation is exactly what a handoff was asking for, so the
+      // latch comes off with everything else. Whether the account still has
+      // room is a question for the next reading, not a state to inherit — and a
+      // fresh session that opened already refusing prompts would be absurd.
+      handoff: 'none',
     });
   }
 
@@ -7122,6 +7578,21 @@ export async function submitPrompt(
     pushBanner('error', 'Set a working directory', 'The agent needs an absolute path to work in.');
     return false;
   }
+  /*
+   * The stop that automatic handoff exists to perform.
+   *
+   * `done` means the document has been written, and carrying on here would
+   * spend the runway it was bought with — which is the whole failure the
+   * feature is meant to prevent, arrived at one prompt later. So the turn is
+   * refused and the way out is named in the same breath.
+   *
+   * Returns false: nothing was written to the transcript, so the composer keeps
+   * the prompt and its attachments and one dismissal is enough to send it.
+   */
+  if (state.handoff === 'done') {
+    pushBanner('warn', 'This conversation has been handed over', HANDOFF_BLOCK_DETAIL);
+    return false;
+  }
 
   const live = isLive(state) ? state.run : null;
 
@@ -7133,45 +7604,89 @@ export async function submitPrompt(
   // Per kind, because a provider can plausibly take one and not the other, and
   // dropping the whole set because half of it is unsupported would lose files
   // the run could have carried.
-  const carrier = live ? live.capabilities : activeCapabilities(state);
-  const kept = (attachments ?? []).filter((attachment) =>
-    attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
-  );
-  const sending = kept.length > 0 ? kept : undefined;
+  const filterFor = (carrier: Capabilities): readonly Attachment[] | undefined => {
+    const kept = (attachments ?? []).filter((attachment) =>
+      attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
+    );
+    return kept.length > 0 ? kept : undefined;
+  };
+
+  /**
+   * The message, if it is already in the transcript when the new-run path
+   * starts. Set only by the steer path below, when the run it was steering
+   * turned out to have ended: the prompt is on screen already and pushing a
+   * second copy would show the user their own words twice.
+   */
+  let carriedOver: string | null = null;
 
   if (live) {
     if (!live.capabilities.midRunSteering) {
       pushBanner('warn', 'This provider cannot take input mid-run');
       return false;
     }
-    const steerId = pane.transcript.pushUserMessage(prompt, sending);
+    const steering = filterFor(live.capabilities);
+    const steerId = pane.transcript.pushUserMessage(prompt, steering);
     const result = await call(() =>
       bridge.runs.send({
         runId: live.runId,
         text: prompt,
-        ...(sending === undefined ? {} : { attachments: sending }),
+        ...(steering === undefined ? {} : { attachments: steering }),
       }),
     );
-    if (!result.ok) {
+    if (result.ok) {
+      pane.transcript.confirmUserMessage(steerId);
+      if (!result.value.deliveredImmediately) {
+        pane.transcript.note(
+          'info',
+          'Queued — the provider decides when this takes effect.',
+          'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
+        );
+      }
+      return true;
+    }
+
+    /*
+     * The run ended between the keystroke and the call landing.
+     *
+     * This is a race and not a mistake — `isLive` reads this window's copy of
+     * the run, which main has already retired — and the engine forgives the
+     * same race on `interrupt` for the same reason. Reporting it put a red
+     * banner under a message the user then had to type again, which is the
+     * worst of both: the send failed *and* the prompt was gone.
+     *
+     * So it falls through to the path it would have taken had the state
+     * arrived a moment earlier, carrying the message already on screen rather
+     * than pushing a second copy of it. Every other failure is still a failure.
+     */
+    if (!isEndedRunError(result.error)) {
       reportFailure('Could not deliver the message', result.error);
       // True: the message is in the transcript, dimmed, with its attachments. See
       // the note on this function for why that counts as sent from here.
       return true;
     }
-    pane.transcript.confirmUserMessage(steerId);
-    if (!result.value.deliveredImmediately) {
-      pane.transcript.note(
-        'info',
-        'Queued — the provider decides when this takes effect.',
-        'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
-      );
+    carriedOver = steerId;
+    /*
+     * Draw the ending main already performed — but only if it is still missing.
+     *
+     * The `run.end` for this run may have arrived while the send was in flight,
+     * in which case the transcript has its card and the pane is already settled;
+     * `localRunEnd` inserts unconditionally, so calling it anyway would show the
+     * turn ending twice. And it may never arrive: the new run replaces
+     * `state.run` a few lines below, after which `paneForRun` no longer resolves
+     * the old id and a straggling `run.end` is dropped. Between those two is the
+     * one case that needs this.
+     */
+    if (paneState(pane).run?.runId === live.runId && isLive(paneState(pane))) {
+      endRunLocally(live.runId, 'completed', pane);
     }
-    return true;
   }
 
   const runId = newId('run');
   const capabilities = activeCapabilities(state);
-  const promptId = pane.transcript.pushUserMessage(prompt, sending);
+  // Re-filtered: the fallback above crosses from the live run's capabilities to
+  // the active provider's, and after a mid-run provider switch those differ.
+  const sending = filterFor(capabilities);
+  const promptId = carriedOver ?? pane.transcript.pushUserMessage(prompt, sending);
   setPaneState(pane, {
     run: {
       runId,
@@ -8128,6 +8643,11 @@ function applyAgentEvent(event: AgentEvent): void {
       // the pane's current selection: a run bills the account it started on for
       // its whole life, and the pane may well have moved on by now.
       refreshPlanUsageSoon(run.profileId);
+      // The handoff turn is the one that just ended, so the document is written
+      // and this conversation is finished on this account. `done` is what makes
+      // the next prompt ask the user to move rather than silently spend the
+      // runway the handoff was bought with.
+      if (paneState(pane).handoff === 'asked') setHandoff(pane, 'done');
       break;
     }
 

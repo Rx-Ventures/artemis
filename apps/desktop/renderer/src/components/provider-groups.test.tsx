@@ -123,18 +123,49 @@ describe('the provider picker splits hosted from local', () => {
     expect(body.indexOf('Hosted —')).toBeLessThan(body.indexOf('Local —'));
   });
 
-  it('EXPLAINS: an unreachable local server is offered and explained, not hidden', () => {
-    // A missing row is not something a user can act on; "Ollama is not
-    // answering" is. Same rule the hosted half already follows.
-    //
-    // Asserted on `aria-disabled` rather than `disabled`, which is the point of
-    // `ReasonButton`: a genuinely disabled button fires no hover events, so an
-    // *explained* one stays focusable and keeps its reason reachable.
+  it('CHOOSABLE: an unreachable local server can still have a profile made for it', () => {
+    /*
+     * This used to assert the opposite, and the opposite was a dead end.
+     *
+     * A local profile *is* an address — nothing to install, nothing to sign
+     * into — so whether the server answers right now says nothing about
+     * whether the profile can exist. Worse, the availability probe only ever
+     * asks the provider's *default* port: anyone running LM Studio on another
+     * port, or on the machine beside them, could never reach the form where
+     * they would say so. You had to already be reachable at the address you
+     * were trying to change.
+     *
+     * The hosted half keeps the old rule, and correctly: a CLI that is not
+     * installed cannot have an account, and neither the install nor the sign-in
+     * can happen from this form.
+     */
     openForm();
     const ollama = screen.getByRole('button', { name: 'Ollama' });
 
-    expect(ollama.getAttribute('aria-disabled')).toBe('true');
+    expect(ollama.getAttribute('aria-disabled')).toBeNull();
     expect(ollama.hasAttribute('disabled')).toBe(false);
+
+    fireEvent.click(ollama);
+    expect(ollama.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('says what the probe found, without making it a wall', () => {
+    // Reported rather than enforced: the reason is worth reading — you may
+    // simply need to start the server — but it is not a refusal.
+    openForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Ollama' }));
+
+    expect(screen.getByText(/Ollama is not answering/)).toBeTruthy();
+    expect(screen.getByText(/it is an address, not an installation/)).toBeTruthy();
+  });
+
+  it('still refuses a hosted provider that is not installed', () => {
+    // The rule that has not changed, pinned beside the one that did.
+    seed([provider('codex', 'Codex', 'hosted', false)]);
+    openForm();
+    const codex = screen.getByRole('button', { name: 'Codex' });
+
+    expect(codex.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('describes a local profile as an address rather than an account', () => {

@@ -246,6 +246,30 @@ export interface SessionState extends MirroredState {
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
+   * Where this conversation is in an automatic handoff. See `autoHandoff.ts`.
+   *
+   * Per column rather than per profile, because a handoff is a document about
+   * *this* conversation's work — two panes on one account that cross the same
+   * threshold have two different things to write down.
+   *
+   *   none       nothing has crossed a threshold, or the feature is off.
+   *   stopping   a threshold was crossed and the turn in flight is being
+   *              interrupted to make room for the handoff.
+   *   asked      the handoff prompt has been sent; the agent is writing it.
+   *   done       it has been written. New turns are refused until the user
+   *              says otherwise, which is the point of stopping.
+   *   dismissed  the user overrode it. Nothing more is asked of them in this
+   *              conversation, however full the account gets.
+   *
+   * `stopping` is separate from `asked` for one specific reason: the run being
+   * interrupted emits its own `run.end`, and a single latch would read that as
+   * "the handoff document is written" before it had even been requested — which
+   * blocked the conversation without ever asking for a handover. Only `asked`
+   * is promoted by a run ending, and by then the only run that can end is the
+   * one that was started to write the document.
+   */
+  readonly handoff: 'none' | 'stopping' | 'asked' | 'done' | 'dismissed';
+  /**
    * What is typed into this column's composer and not yet sent.
    *
    * Here rather than in the composer's own `useState`, and the reason is

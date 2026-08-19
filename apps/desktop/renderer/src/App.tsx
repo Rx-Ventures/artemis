@@ -129,6 +129,58 @@ import {
   useApp,
 } from './state/store';
 
+/**
+ * What Escape does, in priority order.
+ *
+ * Exported and free-standing rather than written inline in the hotkey map,
+ * because the *order* is the whole design and an order is a thing worth
+ * asserting: each branch returns, so the list reads as "the most local thing
+ * first". Left inline it could only be exercised by mounting the entire app,
+ * which is a high price for a five-branch decision — and the branch at the
+ * bottom is the one under a user preference, so it has to be cheap to test.
+ *
+ * The composer has a handler of its own; see the note there. `useHotkeys`
+ * ignores text fields, and the composer is where the caret lives, so a key
+ * bound only here would do nothing exactly when the user needed it.
+ */
+export function pressEscape(): void {
+  const state = useApp.getState();
+  if (state.paletteOpen) {
+    setPalette(false);
+    return;
+  }
+  if (state.infoOpen) {
+    setInfo(false);
+    return;
+  }
+  const pane = focusedPane(state);
+  const session = paneState(pane);
+  // A parked prompt owns Escape. Denying is the safe answer and it unblocks
+  // the provider; interrupting a run that owes a decision would strand it.
+  //
+  // Only *this* pane's queue. A prompt parked in another pane is still
+  // answerable on its own card, and having Escape reach across a divider
+  // would deny a tool call the user is not looking at.
+  if (session.permissionQueue.length > 0) {
+    void denyPendingPermission(pane);
+    return;
+  }
+  if (state.screen === 'profiles') {
+    closeSettings();
+    return;
+  }
+  /*
+   * The last branch, and the only one the setting reaches.
+   *
+   * Everything above is Escape doing what Escape does everywhere — close the
+   * thing in front of you, answer the thing blocking you. Stopping a run is the
+   * one that is destructive and the one people asked to be able to switch off,
+   * so it is gated and the rest is not. Off, Escape simply stops here rather
+   * than doing something else instead.
+   */
+  if (state.escapeStopsRun && isLive(session)) void interruptRun(pane);
+}
+
 export function App(): ReactElement {
   const bridgeMode = useApp((s) => s.bridgeMode);
   const booted = useApp((s) => s.booted);
@@ -194,34 +246,7 @@ export function App(): ReactElement {
       if (paneState(focusedPane()).permissionQueue.length > 0) return;
       togglePalette();
     },
-    escape: () => {
-      const state = useApp.getState();
-      if (state.paletteOpen) {
-        setPalette(false);
-        return;
-      }
-      if (state.infoOpen) {
-        setInfo(false);
-        return;
-      }
-      const pane = focusedPane(state);
-      const session = paneState(pane);
-      // A parked prompt owns Escape. Denying is the safe answer and it unblocks
-      // the provider; interrupting a run that owes a decision would strand it.
-      //
-      // Only *this* pane's queue. A prompt parked in another pane is still
-      // answerable on its own card, and having Escape reach across a divider
-      // would deny a tool call the user is not looking at.
-      if (session.permissionQueue.length > 0) {
-        void denyPendingPermission(pane);
-        return;
-      }
-      if (state.screen === 'profiles') {
-        closeSettings();
-        return;
-      }
-      if (isLive(session)) void interruptRun(pane);
-    },
+    escape: pressEscape,
     'mod+n': () => newSession(focusedPane()),
     'mod+b': toggleSidebar,
     /*

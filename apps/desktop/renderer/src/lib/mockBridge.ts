@@ -109,6 +109,7 @@ const CLAUDE_CAPS: Capabilities = {
   subagentTranscripts: true,
   renameSession: true,
   deleteSession: true,
+  tagSession: true,
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true,
   usageReporting: true,
@@ -130,6 +131,7 @@ const CODEX_CAPS: Capabilities = {
   subagentTranscripts: false,
   renameSession: false,
   deleteSession: false,
+  tagSession: false,
   permissionModes: ['default', 'bypassPermissions'],
   resumeSession: true,
   usageReporting: true,
@@ -1106,6 +1108,23 @@ export function createMockBridge(): ArtemisBridge {
         );
         return ok({ deleted: seedSessions.length < before });
       },
+
+      /*
+       * Writes the tag onto the seeded row, which is what makes archiving
+       * behave in the browser preview: the sidebar reads `session.tag`, so a
+       * mock that swallowed the write would show a row that refused to move to
+       * the archive and give no reason.
+       */
+      tag: async ({ profileId, sessionId, tag }) => {
+        let tagged = false;
+        seedSessions = seedSessions.map((s) => {
+          if (s.id !== sessionId || s.profileId !== profileId) return s;
+          tagged = true;
+          const { tag: _dropped, ...rest } = s;
+          return tag === null ? rest : { ...rest, tag };
+        });
+        return ok({ tagged });
+      },
     },
 
     workspace: {
@@ -1811,7 +1830,22 @@ export function createMockBridge(): ArtemisBridge {
      * dev through `⌘,` and the header's own button, so nothing is lost by
      * leaving this silent.
      */
-    menu: {
+    prefsFile: {
+    // The dev mock keeps preferences in `localStorage`, which is exactly where
+    // the real bridge no longer puts them — see `main/prefs.ts`. In a browser
+    // there is no second process to share a file with, so the old home is the
+    // right one here.
+    read: () => globalThis.localStorage?.getItem('artemis.prefs.v1') ?? null,
+    write: (json: string) => {
+      try {
+        globalThis.localStorage?.setItem('artemis.prefs.v1', json);
+      } catch {
+        /* A full quota is not worth an error over a preference. */
+      }
+    },
+  },
+
+  menu: {
       onOpenSettings: (): Unsubscribe => () => undefined,
     },
   };

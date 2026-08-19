@@ -14,6 +14,7 @@
     "typecheck": "tsc -b",
     "package": "pnpm -w run build:libs && pnpm run build && electron-builder --dir",
     "dist": "pnpm -w run build:libs && pnpm run build && electron-builder --publish never",
+    "dist:beta": "ARTEMIS_FLAVOUR=Beta pnpm -w run build:libs && ARTEMIS_FLAVOUR=Beta pnpm run build && electron-builder --publish never --config.productName='Artemis (Beta)' --config.appId=dev.artemis.app.beta --config.directories.output=release-beta --config.mac.artifactName='Artemis-Beta-${version}-${arch}-mac.${ext}'",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "icon:build": "sh build/icon-build.sh"

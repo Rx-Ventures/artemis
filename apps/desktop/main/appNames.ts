@@ -47,6 +47,35 @@ export const APP_NAME = 'Artemis';
 export const PREVIOUS_APP_NAMES = ['Apollo', 'Libra'] as const;
 
 /**
+ * A build that installs beside the real one instead of replacing it.
+ * ============================================================================
+ *
+ * A flavour changes what the app is *called*, and that name decides one thing
+ * only: `app.getPath('userData')`, where Chromium keeps its caches, its cookie
+ * jar, `Local Storage` and the files that are the single-instance lock. Keeping
+ * those per-name is what lets both builds run at the same time without two
+ * processes writing one LevelDB.
+ *
+ * Artemis's own data — profiles, prompts, session ownership — is *not* keyed to
+ * the name. `index.ts` points a flavoured build at the release's directory for
+ * those, so a beta opens with the accounts and history you already have rather
+ * than as an empty app you would have to set up before you could test anything.
+ * See `artemisDataDir` there for the split and why it is drawn where it is.
+ *
+ * The suffix is parenthesised because it lands where a person reads it — the
+ * application menu, the Dock tooltip, the About box. "Artemis (Beta)" is a
+ * legible name; "Artemis-beta" reads like a build artefact and "ArtemisBeta"
+ * like a mistake.
+ *
+ * @param base    {@link APP_NAME}, the product's real name.
+ * @param flavour `''` for the ordinary build, or a short word like `Beta`.
+ */
+export function flavouredAppName(base: string, flavour: string): string {
+  const trimmed = flavour.trim();
+  return trimmed === '' ? base : `${base} (${trimmed})`;
+}
+
+/**
  * Which abandoned user-data directory to adopt, if any.
  *
  * Newest first: someone who ran Artemis *and* Apollo *and* Libra has stale Libra

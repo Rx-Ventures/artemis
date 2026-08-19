@@ -272,6 +272,13 @@ export const IPC = {
    */
   sessionsDelete: 'artemis:sessions:delete',
 
+  /**
+   * Write the provider's own tag onto a stored session, or clear it.
+   *
+   * What archiving is. See {@link SessionsTagRequest}.
+   */
+  sessionsTag: 'artemis:sessions:tag',
+
   /** Last-known plan usage for a profile, served from cache without fetching. */
   usagePlanCached: 'artemis:usage:plan-cached',
   /** Fetch fresh plan usage for a profile. Costs a subprocess, not tokens. */
@@ -406,6 +413,22 @@ export interface MenuOpenSettings {
  * Main → renderer push channels, used with `webContents.send` /
  * `ipcRenderer.on`.
  */
+/**
+ * The two synchronous preference channels.
+ *
+ * Deliberately outside {@link IPC} and {@link IPC_PUSH}, which are the
+ * validated request/response and broadcast surfaces. These are neither: one
+ * synchronous read of a local JSON file that must complete before the
+ * renderer's first paint, and its fire-and-forget write. See
+ * `apps/desktop/main/prefs.ts` for why that read cannot be asynchronous.
+ *
+ * Named here rather than in main so the preload and the main process cannot
+ * drift on the string, which is the same reason every other channel name lives
+ * in this file.
+ */
+export const PREFS_READ_CHANNEL = 'artemis:prefs:read-sync';
+export const PREFS_WRITE_CHANNEL = 'artemis:prefs:write';
+
 export const IPC_PUSH = {
   /** Carries a single {@link AgentEvent}. The renderer's whole live feed. */
   agentEvent: 'artemis:push:agent-event',
@@ -945,6 +968,33 @@ export interface SessionsRenameResponse {
  * Hiding a session without destroying it is a separate, renderer-side concept
  * (archiving), which deliberately does not come through this channel.
  */
+export interface SessionsTagRequest {
+  /** Whose history holds it. See {@link SessionsRenameRequest.profileId}. */
+  readonly profileId: ProfileId;
+  readonly sessionId: SessionId;
+  /** Narrowing hint, exactly as in {@link SessionsRenameRequest}. */
+  readonly cwd?: string;
+  /**
+   * The tag to write, or `null` to clear it.
+   *
+   * Artemis sends {@link ARCHIVED_TAG} and `null`, and passes anything else
+   * through untouched — the field is the provider's, and a session someone
+   * tagged from the CLI is not the desktop app's to rewrite.
+   */
+  readonly tag: string | null;
+}
+
+export interface SessionsTagResponse {
+  /**
+   * True when a session was found and written, false when there was nothing
+   * there to tag.
+   *
+   * The same rule {@link SessionsDeleteResponse} follows: "already gone" is a
+   * success, because the caller asked for a state of the world and got it.
+   */
+  readonly tagged: boolean;
+}
+
 export interface SessionsDeleteRequest {
   /** Whose history holds it. See {@link SessionsRenameRequest.profileId}. */
   readonly profileId: ProfileId;
@@ -1795,6 +1845,7 @@ export type IpcRequestMap = {
   [IPC.sessionsSubagentMessages]: SessionsSubagentMessagesRequest;
   [IPC.sessionsRename]: SessionsRenameRequest;
   [IPC.sessionsDelete]: SessionsDeleteRequest;
+  [IPC.sessionsTag]: SessionsTagRequest;
   [IPC.usagePlanCached]: UsagePlanRequest;
   [IPC.usagePlanRefresh]: UsagePlanRequest;
   [IPC.authStatus]: AuthStatusRequest;
@@ -1862,6 +1913,7 @@ export type IpcResponseMap = {
   [IPC.sessionsSubagentMessages]: SessionsSubagentMessagesResponse;
   [IPC.sessionsRename]: SessionsRenameResponse;
   [IPC.sessionsDelete]: SessionsDeleteResponse;
+  [IPC.sessionsTag]: SessionsTagResponse;
   [IPC.usagePlanCached]: UsagePlanResponse;
   [IPC.usagePlanRefresh]: UsagePlanResponse;
   [IPC.authStatus]: AuthStatusResponse;
@@ -2061,6 +2113,7 @@ export interface ArtemisBridge {
      * {@link SessionsDeleteRequest} for what this does and does not cover.
      */
     delete(request: SessionsDeleteRequest): Promise<IpcResult<SessionsDeleteResponse>>;
+    tag(request: SessionsTagRequest): Promise<IpcResult<SessionsTagResponse>>;
   };
 
   readonly workspace: {
@@ -2396,6 +2449,14 @@ export interface ArtemisBridge {
    * state in charge of app-level chrome. All that crosses is the news that a
    * user picked something.
    */
+  /**
+   * The preferences blob, as stored text — synchronous, and the only member of
+   * this bridge that is. See `apps/desktop/main/prefs.ts`.
+   */
+  readonly prefsFile: {
+    read(): string | null;
+    write(json: string): void;
+  };
   readonly menu: {
     /**
      * Subscribe to the menu bar's Settings… item. The listener runs on every

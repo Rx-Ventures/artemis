@@ -25,13 +25,23 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session } from 'electron';
 
-import { IPC_PUSH } from '@rx-artemis/protocol';
+import { IPC_PUSH, PREFS_READ_CHANNEL, PREFS_WRITE_CHANNEL } from '@rx-artemis/protocol';
 
 import { profilesRoot } from '@rx-artemis/core';
 
-import { APP_NAME, previousUserDataDir } from './appNames.js';
+import { APP_NAME, flavouredAppName, previousUserDataDir } from './appNames.js';
+import { configurePrefs, readPrefsSync, writePrefs } from './prefs.js';
+
+/**
+ * Which build this is: `''` for Artemis, `Beta` for a copy installed beside it.
+ *
+ * Injected by `electron.vite.config.ts` at build time. The fallback covers the
+ * unbundled paths — `electron-vite dev` and anything that imports this module
+ * without going through the bundler — where the define is not substituted.
+ */
+const FLAVOUR: string = typeof __ARTEMIS_FLAVOUR__ === 'string' ? __ARTEMIS_FLAVOUR__ : '';
 import { EngineHost } from './engine.js';
 import {
   broadcast,
@@ -71,13 +81,49 @@ const log = createLogger('main');
  * other, or Windows treats the running app and its installed shortcut as two
  * unrelated applications.
  */
-const APP_USER_MODEL_ID = 'dev.artemis.app';
+const APP_USER_MODEL_ID = FLAVOUR === '' ? 'dev.artemis.app' : `dev.artemis.app.${FLAVOUR.toLowerCase()}`;
 
 /**
  * Set before anything reads a path. See `appNames.ts` for why the name matters
  * and for the rule that governs changing it.
  */
-app.setName(APP_NAME);
+app.setName(flavouredAppName(APP_NAME, FLAVOUR));
+
+/**
+ * Where *Artemis's own* data lives — profiles, prompts, session ownership.
+ * ============================================================================
+ *
+ * Deliberately not the same question as `app.getPath('userData')`, and the
+ * distinction is the whole reason a flavoured build works at all.
+ *
+ * That directory holds two unrelated kinds of thing. Chromium owns most of it:
+ * the caches, the cookie jar, `Local Storage`, and the `Singleton*` files that
+ * *are* the single-instance lock. Artemis owns seven entries beside them —
+ * `profiles/`, `profiles.json`, `agent-prompts.json`, `cerebro.json`,
+ * `sessionOwners.json`, `update-settings.json`.
+ *
+ * A flavoured build wants the second set shared and the first set emphatically
+ * not. Sharing Chromium's half means sharing the lock, so the two builds cannot
+ * run at once — and it means two processes writing one LevelDB, which is how
+ * `Local Storage` gets corrupted rather than merged. Sharing Artemis's half is
+ * the entire point: a beta that opens with no accounts is a beta you have to
+ * set up before you can test anything.
+ *
+ * So `userData` stays per-name and only *this* points at the release's
+ * directory. Both builds run at the same time, on one set of profiles.
+ *
+ * ## Why not symlink the seven entries instead
+ *
+ * Because `profiles.json` and `agent-prompts.json` are written whole, to a temp
+ * file, and moved into place. An atomic rename *replaces* a symlink with a real
+ * file, so the first profile edit would quietly sever the link and leave two
+ * registries drifting apart with nothing on screen to say so. A directory
+ * symlink would survive; a file symlink would not, and the failure is invisible.
+ */
+function artemisDataDir(): string {
+  const own = app.getPath('userData');
+  return FLAVOUR === '' ? own : join(app.getPath('appData'), APP_NAME);
+}
 
 /**
  * Adopt the user data left behind by a previous name.
@@ -259,6 +305,11 @@ function reportEngineProblem(): void {
 /**
  * A second `artemis` process should raise the first one's window, not open a
  * second copy with a second engine writing the same profile file.
+ *
+ * The lock is keyed to `app.getPath('userData')`, which stays per-app-name —
+ * so a flavoured build has its own and is *not* refused while the release is
+ * open. That is deliberate; see `artemisDataDir` for what the two builds share
+ * and what they keep apart.
  */
 if (!app.requestSingleInstanceLock()) {
   log.info('Another Artemis instance is already running; exiting.');
@@ -300,7 +351,36 @@ async function bootstrap(): Promise<void> {
   // the request lockdown's preview exemption rather than racing it.
   servePreviews();
 
-  const userDataDir = app.getPath('userData');
+  // Artemis's own root, which for a flavoured build is the release's — see
+  // `artemisDataDir`. Everything below this line reads profiles and prompts,
+  // never Chromium state, which is exactly the split that function draws.
+  const userDataDir = artemisDataDir();
+  /*
+   * Before any window exists, because the renderer reads these synchronously in
+   * the same tick it decides the font scale and the palette — see `prefs.ts`.
+   */
+  configurePrefs(userDataDir);
+  /*
+   * Registered here rather than in `ipc.ts`, and it is the one channel that is
+   * not an `invoke`.
+   *
+   * `ipc.ts` is the validated request/response surface: every channel there is
+   * asynchronous, schema-checked and scanned for credentials on the way out.
+   * This is neither a request nor a response — it is one synchronous read of a
+   * local file that has to complete before the renderer's first paint, because
+   * what it returns decides the font scale and the palette. Routing it through
+   * the async surface would mean painting the app at the default size in the
+   * default theme and correcting it a frame later: a flash on every launch.
+   *
+   * The blob is opaque to main and never leaves the machine, so there is
+   * nothing here for the response scanner to check — see `prefs.ts`.
+   */
+  ipcMain.on(PREFS_READ_CHANNEL, (event) => {
+    event.returnValue = readPrefsSync();
+  });
+  ipcMain.on(PREFS_WRITE_CHANNEL, (_event, json: unknown) => {
+    if (typeof json === 'string') void writePrefs(json);
+  });
   // Where Artemis's *suggested* config directories live. A profile may point
   // anywhere, but the suggestions land here and hold real logins and
   // transcripts, so the root is created owner-only rather than inheriting the
