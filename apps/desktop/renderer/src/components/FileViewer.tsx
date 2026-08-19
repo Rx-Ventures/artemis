@@ -58,6 +58,7 @@ import { useApp } from '../state/store';
 import { highlightLines } from '../lib/highlight';
 import { formatBytes } from '../lib/attachments';
 import { CopyButton } from './primitives';
+import { DockHeader } from './DockHeader';
 import { cn } from '@/lib/utils';
 
 /**
@@ -125,7 +126,7 @@ function Caption({
   readonly text: string;
 }): ReactElement {
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
+    <DockHeader>
       <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint" title={path}>
         {path}
       </span>
@@ -157,7 +158,7 @@ function Caption({
           className="opacity-100"
         />
       )}
-    </div>
+    </DockHeader>
   );
 }
 

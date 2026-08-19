@@ -50,6 +50,7 @@ import type { BrowserId } from '@rx-artemis/protocol';
 
 import { commandBrowser, layoutBrowser, navigateBrowser, useApp } from '../state/store';
 import { cn } from '../lib/utils';
+import { DockHeader } from './DockHeader';
 import { Button } from './ui/button';
 
 /**
@@ -246,7 +247,7 @@ export function BrowserPane({ id, visible }: {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-line px-1.5 py-1">
+      <DockHeader inset="controls" className="gap-1">
         <NavButton
           label="Back"
           disabled={!canGoBack}
@@ -277,14 +278,19 @@ export function BrowserPane({ id, visible }: {
           )}
         </NavButton>
         <AddressBar id={id} url={url} loading={loading} />
-      </div>
+      </DockHeader>
 
       {failure === undefined ? null : (
         <div
           role="status"
-          className="flex shrink-0 items-start gap-1.5 border-b border-line bg-amber-500/10 px-2.5 py-1.5 text-xs text-ink"
+          // `--amber`, not Tailwind's `amber-500`. This was the only place in
+          // the renderer reaching past the design system into the framework
+          // palette, which meant one warning in the app was a different yellow
+          // from every other warning — and a colour nothing checks for gamut or
+          // contrast, since the palette test only knows about ours.
+          className="flex shrink-0 items-start gap-1.5 border-b border-line bg-amber/10 px-2.5 py-1.5 text-xs text-ink"
         >
-          <TriangleAlertIcon className="mt-0.5 size-3 shrink-0 text-amber-500" aria-hidden="true" />
+          <TriangleAlertIcon className="mt-0.5 size-3 shrink-0 text-amber" aria-hidden="true" />
           <span className="min-w-0">{failure}</span>
         </div>
       )}
