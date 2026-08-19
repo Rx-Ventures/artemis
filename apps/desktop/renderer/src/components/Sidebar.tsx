@@ -103,6 +103,7 @@ import {
   type RefObject,
 } from 'react';
 import {
+  FolderIcon,
   ListTreeIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
@@ -119,6 +120,7 @@ import {
   newSession,
   openSettings,
   togglePalette,
+  toggleFiles,
   toggleTasks,
   setSidebarCollapsed,
   setSidebarWidth,
@@ -310,6 +312,20 @@ function Rail({
         that is about the whole window, and a rail reporting only what is in
         front of you would be answering a question you can already see.
       */}
+      {/*
+        The folder the focused column is working in. On the rail rather than in
+        the header because it is a view you switch *to*, like the sessions list
+        above it — the header's controls act on the conversation in front of you.
+      */}
+      <IconButton
+        label="The working folder"
+        onClick={() => toggleFiles(pane)}
+        size="icon-sm"
+        className="text-ink-faint"
+      >
+        <FolderIcon />
+      </IconButton>
+
       <RailTasks pane={pane} />
 
       <div className="flex-1" />

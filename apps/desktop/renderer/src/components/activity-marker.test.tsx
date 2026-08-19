@@ -149,7 +149,7 @@ describe('the activity marker', () => {
     expect(screen.getAllByText('Bash').length).toBe(3);
   });
 
-  it('folds the thinking between two calls into the same marker', () => {
+  it('leaves the thinking between two calls on screen, and folds only the calls', () => {
     play(
       { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'where does this live' },
       ...call('c1', 'Grep'),
@@ -158,14 +158,15 @@ describe('the activity marker', () => {
     );
     render(<Transcript />);
 
+    // One marker for the work, and both blocks of reasoning readable without a
+    // click. Reasoning is what the model was working out and belongs in the
+    // conversation; the marker is the account of how, and belongs under it.
     expect(screen.getByText('Read a file, searched the code')).not.toBeNull();
-    // Both blocks are inside the fold. Either one on screen means the burst
-    // was cut in two and the marker is back to wrapping one call at a time.
-    expect(screen.queryByText('where does this live')).toBeNull();
-    expect(screen.queryByText('now the other file')).toBeNull();
+    expect(screen.getByText('where does this live')).not.toBeNull();
+    expect(screen.getByText('now the other file')).not.toBeNull();
   });
 
-  it('gives the thinking back too when the marker is opened', () => {
+  it('gives back the calls, and only the calls, when the marker is opened', () => {
     play(
       { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'where does this live' },
       ...call('c1', 'Grep'),
@@ -174,27 +175,35 @@ describe('the activity marker', () => {
     );
     render(<Transcript />);
 
+    // Counted before, so the assertion is about what opening the marker *adds*
+    // rather than about how many times a thinking row spells its own name.
+    const before = screen.getAllByText('thinking').length;
     fireEvent.click(screen.getByText('Read a file, searched the code'));
 
-    expect(screen.getAllByText('thinking').length).toBe(2);
-    expect(screen.getByText('where does this live')).not.toBeNull();
     expect(screen.getByText('Grep')).not.toBeNull();
     expect(screen.getByText('Read')).not.toBeNull();
+    // No reasoning came out of the fold, because none went in.
+    expect(screen.getAllByText('thinking').length).toBe(before);
   });
 
-  it('leaves thinking that did no work as its own row', () => {
+  it('puts thinking that did no work where the model wrote it', () => {
     play(
       { type: 'thinking.delta', messageId: 'm1', blockIndex: 0, text: 'the short answer will do' },
       { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'no' },
     );
     render(<Transcript />);
 
-    // Nothing to summarise, so nothing is hidden: the preview is on screen
-    // without a click, which a marker would have cost.
+    /*
+     * Reasoning, then answer, in that order — which is the order it happened in
+     * and the order it reads in. Both on screen without a click.
+     */
     expect(screen.getByText('the short answer will do')).not.toBeNull();
+    expect(screen.getByText('no')).not.toBeNull();
   });
 
-  it('starts a new marker when the agent says something mid-burst', () => {
+  it('keeps one marker when the agent says something mid-run', () => {
+    // The reported defect, inverted into a guarantee: a message no longer cuts
+    // the work in two. Both calls collect into one marker under the prose.
     play(
       ...call('c1', 'Bash'),
       { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'halfway there' },
@@ -202,9 +211,10 @@ describe('the activity marker', () => {
     );
     render(<Transcript />);
 
-    expect(screen.getByText('Ran a command')).not.toBeNull();
-    expect(screen.getByText('Read a file')).not.toBeNull();
     expect(screen.getByText('halfway there')).not.toBeNull();
+    // One summary covering both, rather than "Ran a command" and "Read a file"
+    // on either side of the sentence.
+    expect(screen.getByText('Ran a command, read a file')).not.toBeNull();
   });
 });
 

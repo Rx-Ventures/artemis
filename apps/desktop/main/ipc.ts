@@ -78,7 +78,7 @@ import {
 import { createLogger } from './log.js';
 import { grantPreview } from './preview.js';
 import type { BrowserHost } from './browser.js';
-import { checkFiles, readTextFile } from './files.js';
+import { checkFiles, listDirectory, readTextFile } from './files.js';
 import { readPullRequests } from './github.js';
 import {
   assertNoSecrets,
@@ -116,6 +116,7 @@ import {
   validateSharedConfigStatus,
   validateProfilesSuggestDir,
   validatePreviewOpen,
+  validateFilesList,
   validateFilesRead,
   validateFilesCheck,
   validateGithubPullRequests,
@@ -554,6 +555,18 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      * Never fails for a path's sake. A missing file is an answer here, not an
      * error — see `checkFiles`.
      */
+    /**
+     * List a directory.
+     *
+     * Same validator and same boundary as the read above, answering with
+     * strictly less: names and kinds, never contents. `files.ts` holds the
+     * ordering, the entry cap and what a symlink is reported as.
+     */
+    [IPC.filesList]: {
+      validate: validateFilesList,
+      handle: async (request) => listDirectory(request.path),
+    },
+
     [IPC.filesCheck]: {
       validate: validateFilesCheck,
       handle: async (request) => checkFiles(request.paths),

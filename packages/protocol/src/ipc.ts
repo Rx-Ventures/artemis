@@ -161,6 +161,16 @@ export const IPC = {
    * a string the renderer then owns, and main retains nothing to release.
    */
   filesRead: 'artemis:files:read',
+  /**
+   * List a directory.
+   *
+   * Tells the renderer strictly *less* than {@link filesRead} already does
+   * about the same reach — names and kinds, never contents — through the same
+   * boundary and the same validator. It is the same argument {@link filesCheck}
+   * makes for itself, and for the same reason it adds nothing to what
+   * `files.ts` records about how far this channel can see.
+   */
+  filesList: 'artemis:files:list',
 
   /**
    * Which of these paths are files that are actually there?
@@ -1252,6 +1262,44 @@ export type PreviewOpenResponse = PreviewFrame | PreviewMarkdown;
  * cannot, and it is worth stating in both directions — a `.html` file read
  * through *this* channel is source code to be looked at, not a page to be run.
  */
+export interface FilesListRequest {
+  /** Absolute path of the directory to list. */
+  readonly path: string;
+}
+
+/** One thing in a directory: what it is called and what it is. */
+export interface DirectoryEntry {
+  readonly name: string;
+  /**
+   * `other` covers sockets, devices and anything else that is neither a file
+   * nor a directory. It is kept rather than filtered so the list is a true
+   * account of what is there — a directory that quietly omits three of its ten
+   * entries is worse than one that shows them greyed.
+   *
+   * A symlink is reported as what it points *at*, because that is what
+   * clicking it will open. A broken one is `other`.
+   */
+  readonly kind: 'file' | 'directory' | 'other';
+  /** Size in bytes for a file. Absent for everything else. */
+  readonly bytes?: number;
+}
+
+/** A directory, listed. */
+export interface FilesListResponse {
+  /** The path as asked about, echoed. */
+  readonly path: string;
+  /** Directories first, then files, each alphabetically. See `files.ts`. */
+  readonly entries: readonly DirectoryEntry[];
+  /**
+   * True when the directory held more than the cap and the tail was dropped.
+   *
+   * Reported rather than silently truncated, on the same rule
+   * {@link FilesReadResponse.truncated} follows: a list that is quietly partial
+   * reads as a complete answer and is the worse of the two failures.
+   */
+  readonly truncated: boolean;
+}
+
 export interface FilesReadRequest {
   /** Absolute path. Relative ones are resolved by the caller, against a cwd. */
   readonly path: string;
@@ -1827,6 +1875,7 @@ export type IpcRequestMap = {
   [IPC.sharedConfigStatus]: SharedConfigStatusRequest;
   [IPC.previewOpen]: PreviewOpenRequest;
   [IPC.filesRead]: FilesReadRequest;
+  [IPC.filesList]: FilesListRequest;
   [IPC.filesCheck]: FilesCheckRequest;
   [IPC.githubPullRequests]: GithubPullRequestsRequest;
   [IPC.browserOpen]: BrowserOpenRequest;
@@ -1895,6 +1944,7 @@ export type IpcResponseMap = {
   [IPC.sharedConfigStatus]: SharedConfigStatusResponse;
   [IPC.previewOpen]: PreviewOpenResponse;
   [IPC.filesRead]: FilesReadResponse;
+  [IPC.filesList]: FilesListResponse;
   [IPC.filesCheck]: FilesCheckResponse;
   [IPC.githubPullRequests]: GithubPullRequestsResponse;
   [IPC.browserOpen]: BrowserOpenResponse;
@@ -2218,6 +2268,7 @@ export interface ArtemisBridge {
   readonly files: {
     /** The file at `path`, as text. Refuses anything that is not text. */
     read(request: FilesReadRequest): Promise<IpcResult<FilesReadResponse>>;
+    list(request: FilesListRequest): Promise<IpcResult<FilesListResponse>>;
     /**
      * Which of these paths are files. Answers a `boolean`'s worth about each and
      * nothing more — see {@link FilesCheckResponse} — because the caller is

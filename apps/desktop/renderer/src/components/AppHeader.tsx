@@ -102,12 +102,13 @@ import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpd
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import { ArrowDownIcon, SearchIcon } from 'lucide-react';
+import { ArrowDownIcon, FolderIcon, SearchIcon } from 'lucide-react';
 import {
   focusWaitingPane,
   openSettings,
   togglePalette,
   toggleBrowser,
+  toggleFiles,
   toggleTasks,
   toggleTerminal,
   toggleSidebar,
@@ -340,6 +341,22 @@ export function AppHeader(): ReactElement {
         className="no-drag shrink-0 text-ink-faint"
       >
         <UsersIcon />
+      </IconButton>
+      {/*
+        Last of the surfaces, before settings.
+
+        Settings ends the row because it is the only control here that is not
+        about the conversation in front of you, and everything that opens
+        something in the dock sits together on its near side. Never disabled:
+        unlike delegated work there is always a folder, so the question this
+        answers is always answerable.
+      */}
+      <IconButton
+        label="The working folder"
+        onClick={() => toggleFiles(pane)}
+        className="no-drag shrink-0 text-ink-faint"
+      >
+        <FolderIcon />
       </IconButton>
       <IconButton
         label={`Settings (${keyLabel('mod+,')})`}

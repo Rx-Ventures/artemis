@@ -79,10 +79,15 @@
  * *is* there; the honest thing is to link it and let the read say what it is.
  */
 
-import { open, stat } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { open, readdir, stat } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 
-import type { FilesCheckResponse, FilesReadResponse } from '@rx-artemis/protocol';
+import type {
+  DirectoryEntry,
+  FilesCheckResponse,
+  FilesListResponse,
+  FilesReadResponse,
+} from '@rx-artemis/protocol';
 
 /**
  * How much of a file is read.
@@ -200,4 +205,91 @@ export async function checkFiles(paths: readonly string[]): Promise<FilesCheckRe
   );
 
   return { reachable: results.filter((path): path is string => path !== null) };
+}
+
+/**
+ * How many entries one listing will report.
+ *
+ * A bound on work rather than on reach, exactly like `LIMITS.checkPaths`. The
+ * renderer draws a scrolling list, so the cap is generous enough that no
+ * ordinary project reaches it — and `node_modules` at the wrong moment is why
+ * there is one at all.
+ */
+export const MAX_ENTRIES = 2_000;
+
+/**
+ * List the directory at `path`.
+ * ============================================================================
+ *
+ * The other half of {@link readTextFile}, and deliberately the *smaller* half:
+ * it answers with names and kinds and never with contents. Whatever this can
+ * see, `readTextFile` could already read in full through the same validator —
+ * which is the same argument `checkFiles` makes for itself, and the reason this
+ * adds nothing to how far the channel reaches.
+ *
+ * ## What a symlink is reported as
+ *
+ * What it points at, because that is what clicking it will do. `withFileTypes`
+ * answers `isSymbolicLink()` for the link itself, which would put a symlinked
+ * directory in the file half of the list and open it as text. So links are
+ * resolved with a `stat`, and one that resolves to nothing is `other` rather
+ * than dropped: a broken link is a real thing in the directory and hiding it
+ * would make the list a lie about what is there.
+ *
+ * ## Order
+ *
+ * Directories first, then files, each alphabetically and case-insensitively.
+ * That is what every file browser on the machine does, and a listing in
+ * `readdir` order — which is the filesystem's, not anybody's — reads as
+ * unsorted rather than as differently sorted.
+ */
+export async function listDirectory(path: string): Promise<FilesListResponse> {
+  const info = await stat(path).catch(() => null);
+  if (info === null) throw new Error(`There is no folder at ${path}.`);
+  if (!info.isDirectory()) throw new Error(`${basename(path)} is a file, not a folder.`);
+
+  const raw = await readdir(path, { withFileTypes: true }).catch(() => {
+    // The message is for the person who clicked, and the only cause they can
+    // act on is permission — every other failure of `readdir` on a directory
+    // that just stat'ed is a race not worth naming.
+    throw new Error(`Could not read ${basename(path)}. Check its permissions.`);
+  });
+
+  const truncated = raw.length > MAX_ENTRIES;
+  const entries: DirectoryEntry[] = [];
+
+  for (const item of raw.slice(0, MAX_ENTRIES)) {
+    // A `stat` per entry only where it is needed: `withFileTypes` already
+    // answers for everything that is not a link, and a project of a thousand
+    // files should not cost a thousand syscalls to list.
+    let kind: DirectoryEntry['kind'];
+    let bytes: number | undefined;
+
+    if (item.isSymbolicLink()) {
+      const target = await stat(join(path, item.name)).catch(() => null);
+      kind = target === null ? 'other' : target.isDirectory() ? 'directory' : 'file';
+      if (target?.isFile() === true) bytes = target.size;
+    } else if (item.isDirectory()) {
+      kind = 'directory';
+    } else if (item.isFile()) {
+      kind = 'file';
+      // Deliberately not stat'ed. The size is a nicety on a row, and paying a
+      // syscall per file to caption one would make listing a large directory
+      // slower than reading a file in it.
+    } else {
+      kind = 'other';
+    }
+
+    entries.push({ name: item.name, kind, ...(bytes === undefined ? {} : { bytes }) });
+  }
+
+  entries.sort((a, b) => {
+    if (a.kind !== b.kind) {
+      if (a.kind === 'directory') return -1;
+      if (b.kind === 'directory') return 1;
+    }
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+
+  return { path, entries, truncated };
 }

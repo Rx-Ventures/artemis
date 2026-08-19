@@ -63,13 +63,13 @@ import {
   SquareArrowOutUpRightIcon,
   TerminalIcon,
   UsersIcon,
-  XIcon,
-} from 'lucide-react';
+  XIcon, FolderIcon,} from 'lucide-react';
 
 import {
   agentViewIsLive,
   closeAgentTab,
   closeFile,
+  closeFiles,
   closePreview,
   closeTasks,
   closeTerminal,
@@ -87,6 +87,7 @@ import {
 import { AgentPane } from './AgentPane';
 import { FileViewer } from './FileViewer';
 import { PreviewPane } from './PreviewPane';
+import { FilesPane } from './FilesPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
 import { BrowserPane } from './BrowserPane';
@@ -216,6 +217,11 @@ function DockTabButton({
   if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
   if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} />;
   if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
+  // Named rather than left to a fallthrough. The `default` case used to assume
+  // `agent` was the only kind left, which is true right up until it is not —
+  // adding `files` to the union turned a compile error into the only warning
+  // anyone got.
+  if (tab.kind === 'files') return <FilesTabButton paneId={tab.paneId} active={active} />;
   return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
 }
 
@@ -454,6 +460,27 @@ function BrowserTabButton({
  * `closeTasks` writes down what was on screen so it stays shut; the next thing
  * delegated brings it back, the same way the first one did.
  */
+/** The folder browser's tab. One per column, like the delegated list's. */
+function FilesTabButton({
+  paneId,
+  active,
+}: {
+  readonly paneId: string;
+  readonly active: boolean;
+}): ReactElement {
+  return (
+    <TabShell
+      active={active}
+      label="Files"
+      title="The working folder"
+      icon={<FolderIcon className="size-3.5 shrink-0" aria-hidden="true" />}
+      onSelect={() => focusDockTab({ kind: 'files', paneId })}
+      onClose={() => closeFiles(paneId)}
+      closeLabel="Close the folder browser"
+    />
+  );
+}
+
 function TasksTabButton({
   paneId,
   active,
@@ -558,6 +585,7 @@ function DockBody({
        * one — and so the jump to a `:line` runs again for the new file.
        */}
       {active?.kind === 'file' ? <FileViewer key={file?.path ?? ''} /> : null}
+      {active?.kind === 'files' ? <FilesPane paneId={active.paneId} /> : null}
       {active?.kind === 'tasks' ? <TasksPane paneId={active.paneId} /> : null}
       {/*
        * Only the active one, unlike the terminals below. An agent tab holds no

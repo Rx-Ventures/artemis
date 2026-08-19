@@ -103,6 +103,7 @@ import {
   BROWSER_EVENT_TYPES,
   type FilesCheckRequest,
   type GithubPullRequestsRequest,
+  type FilesListRequest,
   type FilesReadRequest,
   type TerminalCloseRequest,
   type TerminalEvent,
@@ -577,6 +578,7 @@ const bridge: ArtemisBridge = Object.freeze({
 
   files: Object.freeze({
     read: (request: FilesReadRequest) => invoke(IPC.filesRead, request),
+    list: (request: FilesListRequest) => invoke(IPC.filesList, request),
     check: (request: FilesCheckRequest) => invoke(IPC.filesCheck, request),
   }),
 

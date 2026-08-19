@@ -98,6 +98,15 @@ export type DockTab =
    * transcript, and it is the thing to revisit first if this surface grows.
    */
   | { readonly kind: 'file' }
+  /**
+   * The working directory, listed.
+   *
+   * Keyed by pane rather than being a constant: unlike the preview and the file
+   * tab — which are *one* thing the conversation put on screen — this is a view
+   * of a column's `cwd`, and two columns in different directories want two
+   * listings. It is the same reason the tasks tab carries a `paneId`.
+   */
+  | { readonly kind: 'files'; readonly paneId: PaneId }
   | { readonly kind: 'terminal'; readonly id: TerminalId }
   /**
    * A page the user opened, drawn by the main process behind this pane.
@@ -152,6 +161,8 @@ export function tabKey(tab: DockTab): string {
       return 'preview';
     case 'file':
       return 'file';
+    case 'files':
+      return `files:${tab.paneId}`;
     case 'terminal':
       return `terminal:${tab.id}`;
     case 'browser':
@@ -216,6 +227,15 @@ export interface ShownConversation {
    * stays out of the strip, which is the promise the setting makes.
    */
   readonly tasksRequested?: boolean;
+  /**
+   * Whether this column has asked for the folder browser.
+   *
+   * Unlike `hasTasks` there is no "is there anything to show" beside it: a
+   * working directory always exists, so asking is the only thing that can put
+   * the tab on the strip. Which also means `dockAutoOpen` has no say — nothing
+   * arrives here on its own for the dock to reveal.
+   */
+  readonly filesRequested?: boolean;
 }
 
 /**
@@ -403,6 +423,10 @@ export function visibleTabs(
     if (ownerIsShown(browser.owner, shown)) tabs.push({ kind: 'browser', id: browser.info.id });
   }
   for (const one of shown) {
+    // Before the delegated list, because it is a view of the *place* the column
+    // is working rather than of what it has done there — and a fixed order so
+    // opening one never shifts the other's ✕.
+    if (one.filesRequested === true) tabs.push({ kind: 'files', paneId: one.paneId });
     if (one.hasTasks === true && (agentSurfaces || one.tasksRequested === true)) {
       tabs.push({ kind: 'tasks', paneId: one.paneId });
     }
