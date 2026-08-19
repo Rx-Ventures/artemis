@@ -349,12 +349,31 @@ function declaredBump(
   return best;
 }
 
-/** Apply a bump to a semver string. `none` leaves it alone. */
-export function applyBump(version: string, bump: Bump): string {
+/**
+ * The three numbers, with `v` and any prerelease or build metadata dropped.
+ *
+ * `1.0.0-beta.1` is the same release as `1.0.0` as far as every judgement in
+ * this file is concerned — it is that version, arriving early. Splitting on `.`
+ * without this gave `[1, 0, NaN, NaN]`, and `NaN` compares false against
+ * everything, so a beta silently registered as no bump at all.
+ */
+function core(version: string): readonly [number, number, number] {
   const [major = 0, minor = 0, patch = 0] = version
     .replace(/^v/, '')
+    .replace(/[-+].*$/, '')
     .split('.')
     .map((part) => Number.parseInt(part, 10) || 0);
+  return [major, minor, patch];
+}
+
+/** Whether a version or tag names a prerelease: `1.0.0-beta.1`, `v2.0.0-rc.2`. */
+export function isPrerelease(version: string): boolean {
+  return version.replace(/^v/, '').includes('-');
+}
+
+/** Apply a bump to a semver string. `none` leaves it alone. */
+export function applyBump(version: string, bump: Bump): string {
+  const [major, minor, patch] = core(version);
 
   switch (bump) {
     case 'major':
@@ -376,23 +395,37 @@ export function applyBump(version: string, bump: Bump): string {
  * surface grew is the mistake worth catching.
  */
 export function satisfies(from: string, version: string, bump: Bump): boolean {
-  const base = from.replace(/^v/, '').split('.').map(Number);
-  const next = version.replace(/^v/, '').split('.').map(Number);
-  const [bMajor = 0, bMinor = 0, bPatch = 0] = base;
-  const [nMajor = 0, nMinor = 0, nPatch = 0] = next;
+  const [bMajor, bMinor, bPatch] = core(from);
+  const [nMajor, nMinor, nPatch] = core(version);
 
   const actual: Bump =
     nMajor > bMajor ? 'major' : nMinor > bMinor ? 'minor' : nPatch > bPatch ? 'patch' : 'none';
   return RANK[actual] >= RANK[bump];
 }
 
-/** The most recent version tag, or `null` in a repository that has none. */
+/**
+ * The most recent *stable* version tag, or `null` in a repository that has none.
+ *
+ * Prereleases are skipped on purpose, and it is the promotion that makes the
+ * case: cut `v1.0.0-beta.1`, fix nothing, then cut `v1.0.0`. Measured from the
+ * beta the range is empty, so the verdict is `none` and the release script
+ * refuses to ship the version the beta existed to rehearse. Measured from the
+ * last stable tag it is the same major it always was, and the beta is what it
+ * claims to be — that release, arriving early, judged against the same baseline.
+ *
+ * `--exclude '*-*'` rather than filtering a `git tag` listing: `describe` answers
+ * with the most recent tag *reachable from HEAD*, and a plain listing would
+ * answer with the highest version anywhere in the repository — including one on
+ * a branch this commit knows nothing about.
+ */
 export function lastTag(): string | null {
   try {
     return (
-      execFileSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*'], {
-        encoding: 'utf8',
-      }).trim() || null
+      execFileSync(
+        'git',
+        ['describe', '--tags', '--abbrev=0', '--match', 'v*', '--exclude', '*-*'],
+        { encoding: 'utf8' },
+      ).trim() || null
     );
   } catch {
     return null;

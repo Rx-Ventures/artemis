@@ -320,6 +320,7 @@ export const IPC = {
   updatesInstall: 'artemis:updates:install',
   updatesRestart: 'artemis:updates:restart',
   updatesDismiss: 'artemis:updates:dismiss',
+  updatesSetChannel: 'artemis:updates:setChannel',
 
   /**
    * Cerebro — the team's shared, agent-maintained memory bank.
@@ -1507,6 +1508,20 @@ export type UpdatesRestartRequest = Record<string, never>;
  * dismiss racing a new offer cannot silence the wrong one: dismissing 0.3.0
  * in the same instant 0.4.0 arrives leaves 0.4.0 offered.
  */
+/**
+ * Which releases this installation is willing to be offered.
+ *
+ * The renderer owns the *preference* — it is persisted with the rest of them —
+ * but the main process is what talks to GitHub, so it has to be told. Sent on
+ * change and again at startup, because the main process holds no preferences
+ * of its own and would otherwise default to stable on every launch.
+ */
+export type UpdateChannel = 'stable' | 'beta';
+
+export interface UpdatesSetChannelRequest {
+  readonly channel: UpdateChannel;
+}
+
 export interface UpdatesDismissRequest {
   readonly version: string;
 }
@@ -1792,6 +1807,7 @@ export type IpcRequestMap = {
   [IPC.updatesInstall]: UpdatesInstallRequest;
   [IPC.updatesRestart]: UpdatesRestartRequest;
   [IPC.updatesDismiss]: UpdatesDismissRequest;
+  [IPC.updatesSetChannel]: UpdatesSetChannelRequest;
   [IPC.cerebroStatus]: CerebroStatusRequest;
   [IPC.cerebroList]: CerebroListRequest;
   [IPC.cerebroPreflight]: CerebroPreflightRequest;
@@ -1858,6 +1874,7 @@ export type IpcResponseMap = {
   [IPC.updatesInstall]: UpdatesStateResponse;
   [IPC.updatesRestart]: UpdatesStateResponse;
   [IPC.updatesDismiss]: UpdatesStateResponse;
+  [IPC.updatesSetChannel]: UpdatesStateResponse;
   [IPC.cerebroStatus]: CerebroStatusResponse;
   [IPC.cerebroList]: CerebroListResponse;
   [IPC.cerebroPreflight]: CerebroPreflightResponse;
@@ -2353,6 +2370,15 @@ export interface ArtemisBridge {
     restart(request: UpdatesRestartRequest): Promise<IpcResult<UpdatesStateResponse>>;
     /** Silence the banner for one version. The next version offers again. */
     dismiss(request: UpdatesDismissRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /**
+     * Tell the main process which releases this installation will accept.
+     *
+     * The renderer owns the preference — it is persisted with the rest — but
+     * the main process is what talks to GitHub, so it is told on change and
+     * again at startup. It holds nothing of its own and would otherwise
+     * default to stable on every launch.
+     */
+    setChannel(request: UpdatesSetChannelRequest): Promise<IpcResult<UpdatesStateResponse>>;
     /**
      * Subscribe to updater-state changes. Call this before {@link state}, for
      * the reason {@link runs.onEvent} says: a change can land while the read

@@ -143,6 +143,7 @@ import {
   validateCerebroSync,
   validateUsagePlan,
   validateUpdatesDismiss,
+  validateUpdatesSetChannel,
   validateUpdatesInstall,
   validateUpdatesRestart,
   validateUpdatesState,
@@ -912,6 +913,11 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.updatesDismiss]: {
       validate: validateUpdatesDismiss,
       handle: async (request) => ({ state: await updater.dismiss(request.version) }),
+    },
+
+    [IPC.updatesSetChannel]: {
+      validate: validateUpdatesSetChannel,
+      handle: async (request) => ({ state: updater.setChannel(request.channel) }),
     },
   };
 

@@ -22,6 +22,8 @@
  * from the repository this build was published from).
  */
 
+import { compareVersions } from './updateChannel.js';
+
 /** What one feed file says, reduced to the fields the updater acts on. */
 export interface UpdateFeed {
   /** The version the feed offers, e.g. `0.2.0`. */
@@ -67,28 +69,28 @@ export function parseUpdateFeed(feed: string): UpdateFeed | null {
 /**
  * Is `candidate` strictly newer than `current`?
  *
- * Dotted numeric compare, tolerant of a leading `v`. Anything that does not
- * reduce to numbers compares as *not newer* — the updater must fail toward
- * silence, because the failure mode of "not offered" is a stale app that
- * still works, and the failure mode of a bad offer is an install loop.
+ * Semver precedence, tolerant of a leading `v`, and **prerelease-aware** —
+ * which it was not until the beta channel existed. The old comparison split on
+ * `.` and required every part to be an integer, so `1.0.0-beta.1` produced
+ * `Number('0-beta')`, which is NaN, which meant "not newer". Harmless while
+ * nothing carried a prerelease part; fatal the moment something did, because it
+ * failed in *both* directions: a beta was never offered, and a machine running
+ * one was never offered anything again. A beta build would have been stranded
+ * on the version it was installed at, permanently.
+ *
+ * The shape check stays, and stays strict. The updater must fail toward
+ * silence: "not offered" leaves a stale app that still works, while a bad
+ * offer is an install loop. So anything that is not a recognisable version
+ * compares as not newer rather than being coerced into one.
  */
 export function isNewerVersion(candidate: string, current: string): boolean {
-  const parse = (value: string): number[] | null => {
-    const parts = value.replace(/^v/, '').split('.');
-    const numbers = parts.map((part) => Number(part));
-    return numbers.length > 0 && numbers.every((n) => Number.isInteger(n) && n >= 0)
-      ? numbers
-      : null;
-  };
-  const a = parse(candidate);
-  const b = parse(current);
-  if (a === null || b === null) return false;
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    const left = a[i] ?? 0;
-    const right = b[i] ?? 0;
-    if (left !== right) return left > right;
-  }
-  return false;
+  if (!looksLikeVersion(candidate) || !looksLikeVersion(current)) return false;
+  return compareVersions(candidate.replace(/^v/, ''), current.replace(/^v/, '')) > 0;
+}
+
+/** `1.2.3`, optionally `-beta.1`, optionally `+build`, optionally `v`-prefixed. */
+function looksLikeVersion(value: string): boolean {
+  return /^v?\d+(\.\d+)*(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(value);
 }
 
 /**

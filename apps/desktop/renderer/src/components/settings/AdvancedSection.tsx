@@ -79,7 +79,7 @@ import type { SharedConfigDirStatus, SharedConfigStatus } from '@rx-artemis/prot
 import { useCopy } from '@/hooks/useCopy';
 import { CodeBlock, StatusDot, toneClasses, type Tone } from '../primitives';
 import { ChoiceList, SettingsGroup, SettingsPane } from './pane';
-import { setSharedClaudeConfig, useApp } from '../../state/store';
+import { setSharedClaudeConfig, setUpdateChannel, useApp } from '../../state/store';
 import { shortenPath } from '../../lib/paths';
 import {
   useSharedConfigStatus,
@@ -160,6 +160,7 @@ export function AdvancedSection(): ReactElement {
    * nothing-is-wrong.
    */
   const showStatus = dirs.length > 0 && (mode !== null || linked);
+  const channel = useApp((state) => state.updateChannel);
 
   return (
     <SettingsPane
@@ -223,6 +224,32 @@ export function AdvancedSection(): ReactElement {
         ) : (
           <ScriptBlock dirs={dirs} mode={mode} status={reading.status} />
         )}
+      </SettingsGroup>
+
+      <SettingsGroup label="Updates">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Offer beta releases</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                A beta is the same build as the release that follows it, offered days earlier and
+                with correspondingly more chance of being wrong. Beta means{' '}
+                <span className="text-ink-muted">earlier</span>, not{' '}
+                <span className="text-ink-muted">a different Artemis</span> — the version you are
+                offered still lands on the stable one. Turning this back off uninstalls nothing: a
+                beta you already have stays until the release it became ships.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-update-channel"
+                aria-label="Offer beta releases"
+                checked={channel === 'beta'}
+                onCheckedChange={(next) => setUpdateChannel(next ? 'beta' : 'stable')}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
       </SettingsGroup>
 
       <WarningDialog
