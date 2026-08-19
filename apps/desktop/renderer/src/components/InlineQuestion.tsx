@@ -377,7 +377,7 @@ function QuestionBlock({
       <div className="mt-2">
         <Label
           htmlFor={`${base}-notes`}
-          className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase"
+          className="mb-1 chrome-label text-ink-faint"
         >
           {selected.length > 0 ? 'add a note (optional)' : 'or answer in your own words'}
         </Label>

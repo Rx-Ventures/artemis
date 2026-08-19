@@ -183,7 +183,7 @@ function ToolPolicyField({
 }): ReactElement {
   return (
     <Field>
-      <FieldLabel htmlFor={id} className="text-2xs text-ink-faint uppercase">
+      <FieldLabel htmlFor={id} className="chrome-label text-ink-faint">
         {label}
       </FieldLabel>
       {/*

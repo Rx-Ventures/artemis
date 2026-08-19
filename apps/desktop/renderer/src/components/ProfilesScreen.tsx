@@ -688,7 +688,7 @@ function PlanField({
 
   return (
     <Field>
-      <FieldLabel htmlFor="profile-plan" className="text-2xs text-ink-faint uppercase">
+      <FieldLabel htmlFor="profile-plan" className="chrome-label text-ink-faint">
         Plan
       </FieldLabel>
       <Select
@@ -802,7 +802,7 @@ function AvailabilityField({
 }): ReactElement {
   return (
     <Field>
-      <FieldLabel className="text-2xs text-ink-faint uppercase">Availability</FieldLabel>
+      <FieldLabel className="chrome-label text-ink-faint">Availability</FieldLabel>
       <div className="flex flex-col gap-3 rounded-lg border border-line bg-inset/60 px-3 py-2.5">
         <AvailabilityToggle
           id="profile-auto-select"
@@ -1158,7 +1158,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             */}
             {editing ? null : (
               <Field>
-                <FieldLabel className="text-2xs text-ink-faint uppercase">Provider</FieldLabel>
+                <FieldLabel className="chrome-label text-ink-faint">Provider</FieldLabel>
                 {/*
                   Split by `ProviderKind` rather than by a list kept here, so a
                   new provider lands in the right half without this file being
@@ -1202,7 +1202,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             )}
 
             <Field>
-              <FieldLabel htmlFor="profile-label" className="text-2xs text-ink-faint uppercase">
+              <FieldLabel htmlFor="profile-label" className="chrome-label text-ink-faint">
                 Name
               </FieldLabel>
               <div className="flex items-center gap-2">
@@ -1227,7 +1227,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             <PlanField providerId={providerId} value={planId} onChange={setPlanId} />
 
             <Field>
-              <FieldLabel htmlFor="profile-config-dir" className="text-2xs text-ink-faint uppercase">
+              <FieldLabel htmlFor="profile-config-dir" className="chrome-label text-ink-faint">
                 Config directory
               </FieldLabel>
               <div className="flex items-center gap-2">
@@ -1299,7 +1299,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
             */}
             {editing ? (
               <Field>
-                <FieldLabel htmlFor="profile-env" className="text-2xs text-ink-faint uppercase">
+                <FieldLabel htmlFor="profile-env" className="chrome-label text-ink-faint">
                   Extra environment (optional)
                 </FieldLabel>
                 <Textarea

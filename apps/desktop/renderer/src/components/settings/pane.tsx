@@ -103,7 +103,7 @@ export function SettingsGroup({ label, children, className }: SettingsGroupProps
   return (
     <section className={cn('flex flex-col gap-2', className)}>
       {label ? (
-        <h3 className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">{label}</h3>
+        <h3 className="chrome-label text-ink-faint">{label}</h3>
       ) : null}
       {children}
     </section>

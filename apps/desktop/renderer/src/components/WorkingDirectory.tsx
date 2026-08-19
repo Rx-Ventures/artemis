@@ -150,7 +150,7 @@ export function DirectoryChooser({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="artemis-cwd" className="text-2xs tracking-wider text-ink-faint uppercase">
+        <Label htmlFor="artemis-cwd" className="chrome-label text-ink-faint">
           Working directory
         </Label>
         <Input

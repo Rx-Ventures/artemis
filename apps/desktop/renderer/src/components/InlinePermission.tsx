@@ -212,7 +212,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
           </p>
         ) : null}
 
-        <p className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase">arguments</p>
+        <p className="mb-1 chrome-label text-ink-faint">arguments</p>
         <CodeBlock text={formatJson(request.input)} className="max-h-56" />
 
         {suggestions.length > 0 ? (
@@ -232,7 +232,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
         <div className="mt-2.5">
           <Label
             htmlFor={`deny-reason-${request.id}`}
-            className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase"
+            className="mb-1 chrome-label text-ink-faint"
           >
             reason for denial (optional)
           </Label>

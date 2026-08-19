@@ -100,7 +100,7 @@ export function ToneBadge({ tone = 'neutral', children, className }: ToneBadgePr
     <Badge
       variant="outline"
       className={cn(
-        'h-[17px] gap-1 rounded-sm bg-transparent px-1.5 py-0 font-mono text-2xs tracking-wide uppercase',
+        'chrome-label h-[17px] gap-1 rounded-sm bg-transparent px-1.5 py-0',
         TONE_OUTLINE[tone],
         className,
       )}

@@ -1,5 +1,7 @@
 /**
- * Nothing in the normal flow may lift.
+ * Two rules of the design language, enforced rather than described.
+ *
+ * ## Nothing in the normal flow may lift.
  *
  * This is Sheet's one structural rule and the easiest thing in the design to
  * lose, because losing it takes no decision at all — a `shadow-md` copied from
@@ -21,6 +23,16 @@
  * requirement, not decoration, and Sheet has no opinion about them. Only the
  * two decorative spellings are checked: a drop shadow, and the hairline ring
  * drawn in `--foreground` that shadcn cards use to fake a lifted edge.
+ *
+ * ## Small caps are spelled one way.
+ *
+ * The chrome label — uppercase mono at 11px with wide tracking — was written
+ * twelve different ways before `.chrome-label` existed: `tracking-wider`,
+ * `tracking-[0.14em]`, `tracking-[0.16em]`, `tracking-wide` and nothing at all,
+ * with and without `font-mono`, sometimes at `font-semibold`. Each was a
+ * reasonable local choice; together they were an inconsistency you could see.
+ * Uppercase without tracking is the failure that matters — small caps crowd
+ * without it — so that is what this checks.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -120,5 +132,24 @@ describe('elevation is reserved for overlays', () => {
         true,
       );
     }
+  });
+});
+
+describe('small caps are spelled one way', () => {
+  const files = sourcesUnder(join(ROOT, 'components'), 'components');
+
+  it.each(files)('%s uses .chrome-label rather than its own tracking', (file) => {
+    const source = readFileSync(join(ROOT, file), 'utf8');
+    const offending = source
+      .split('\n')
+      .map((line, i) => [i + 1, line] as const)
+      // Only className strings; prose in a comment may say "uppercase" freely.
+      .filter(([, line]) => /className=/.test(line) && /\buppercase\b/.test(line))
+      .filter(([, line]) => !/chrome-label/.test(line));
+
+    expect(
+      offending.map(([n, line]) => `${file}:${n} ${line.trim().slice(0, 90)}`),
+      `${file} hand-rolls a small-caps label. Use .chrome-label — it carries the tracking.`,
+    ).toEqual([]);
   });
 });

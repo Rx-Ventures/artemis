@@ -84,7 +84,7 @@ import './index.css';
 function Section({ title, children }: { title: string; children: ReactNode }): ReactElement {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-2xs font-semibold tracking-[0.16em] text-ink-faint uppercase">{title}</h2>
+      <h2 className="chrome-label text-ink-faint">{title}</h2>
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel p-4">
         {children}
       </div>
@@ -318,7 +318,7 @@ function Gallery(): ReactElement {
           <div className="grid w-full grid-cols-2 gap-4">
             <div className="overflow-hidden rounded-lg border border-line bg-panel">
               <div className="flex h-8 shrink-0 items-center justify-between border-b border-line px-2.5">
-                <h3 className="text-2xs font-semibold tracking-[0.14em] text-ink-faint uppercase">
+                <h3 className="chrome-label text-ink-faint">
                   Run details
                 </h3>
                 <IconButton label="Copy">

@@ -456,7 +456,7 @@ function Line({
           {avatar}
           {label === '' ? null : (
             <div
-              className={cn('font-mono text-2xs tracking-wider uppercase', toneClasses.text[tone])}
+              className={cn('chrome-label', toneClasses.text[tone])}
             >
               {label}
             </div>
@@ -765,7 +765,7 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
                 in the prose face because it is prose, unlike a tool row's
                 preview, which is a real command. */}
             {open ? (
-              <span className="shrink-0 font-mono text-2xs tracking-wider uppercase">thinking</span>
+              <span className="shrink-0 chrome-label">thinking</span>
             ) : (
               <span className="truncate text-2xs">{thinkingPreview(item)}</span>
             )}
@@ -1341,7 +1341,7 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
             ) : (
               <SparklesIcon className="size-3 text-mint" aria-hidden="true" />
             )}
-            <span className="font-mono text-2xs tracking-wider text-ink-muted uppercase">
+            <span className="chrome-label text-ink-muted">
               {item.reason.replace(/_/g, ' ')}
             </span>
           </span>

@@ -353,7 +353,7 @@ function PromptEditor({
       ) : (
         <div className="flex items-end gap-2">
           <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">
+            <span className="chrome-label text-ink-faint">
               Name
             </span>
             <Input
@@ -463,7 +463,7 @@ function ScopePicker({
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel px-3 py-2.5">
-      <span className="font-mono text-2xs tracking-[0.14em] text-ink-faint uppercase">
+      <span className="chrome-label text-ink-faint">
         Applies to
       </span>
 

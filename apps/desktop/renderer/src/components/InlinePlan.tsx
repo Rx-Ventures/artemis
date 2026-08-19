@@ -269,7 +269,7 @@ function PendingPlan({
       <div className="px-2.5 py-2">
         <Label
           htmlFor={`plan-note-${request.id}`}
-          className="mb-1 font-mono text-2xs tracking-wider text-ink-faint uppercase"
+          className="mb-1 chrome-label text-ink-faint"
         >
           what to change (optional)
         </Label>

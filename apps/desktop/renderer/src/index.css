@@ -1113,6 +1113,43 @@
  * a single moving part.
  */
 /*
+ * The chrome label.
+ * ============================================================================
+ *
+ * Uppercase monospace at 11px with wide tracking: the app's own voice, used for
+ * section headings, field labels and the small caps that name a region. It is
+ * what separates what *Artemis* is saying from what the conversation is saying,
+ * and mono is doing that as a texture rather than because the text is machine
+ * output.
+ *
+ * It exists as one class because it was previously twelve. The same label was
+ * spelled `tracking-wider`, `tracking-[0.14em]`, `tracking-[0.16em]`,
+ * `tracking-wide` and nothing at all, sometimes with `font-mono` and sometimes
+ * without, sometimes at `font-semibold` — every one of them a reasonable local
+ * choice, and together an inconsistency you could see. Small caps need tracking
+ * or the letterforms crowd; leaving that to each call site guarantees the next
+ * one forgets.
+ *
+ * 0.14em is the value. Uppercase Archivo at 11px needs more than `tracking-wide`
+ * (0.025em) and less than `tracking-widest` (0.1em) — those are scaled for body
+ * text, and at this size and case they read as too tight and too loose
+ * respectively.
+ *
+ * Colour is *not* baked in. Most of these are `--ink-faint`, but a tone badge
+ * carries its own and a heading inside a coloured block carries that block's —
+ * so the class sets everything except the thing that legitimately varies.
+ */
+@layer components {
+  .chrome-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--text-2xs--line-height);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+}
+
+/*
  * The activity indicator.
  * ============================================================================
  *
