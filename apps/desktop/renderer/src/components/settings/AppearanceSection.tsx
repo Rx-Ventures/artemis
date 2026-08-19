@@ -415,6 +415,15 @@ export function AppearanceSection(): ReactElement {
                 folded into the activity marker with the work it was reasoning about, one click
                 away. Either way a single block can be collapsed on its own, and moving this
                 rearranges the conversation already on screen rather than only the next one.
+                <br />
+                <br />
+                <span className="text-ink-muted">
+                  Some models do not return their reasoning at all.
+                </span>{' '}
+                The provider keeps the block and withholds its text, and there is nothing for this
+                switch to show — the conversation looks the same on and off. That is the provider’s
+                choice about that model, not a setting here, and it can differ between two models
+                on one account.
               </ItemDescription>
             </ItemContent>
             <ItemActions>
