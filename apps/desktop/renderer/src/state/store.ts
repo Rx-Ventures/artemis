@@ -120,7 +120,6 @@ import {
   MAX_RESTORED_TERMINALS,
   parseDockLayout,
   type DockLayout,
-  FILE_TAB,
   learnSessionId,
   nextActiveTab,
   ownerIsShown,
@@ -275,6 +274,8 @@ export type PreviewState = PreviewOpenResponse & { readonly owner: PreviewOwner 
  * from two different links being two different reads.
  */
 export type FileState = FilesReadResponse & {
+  /** This tab's identity. Minted on open; the path is not it — see `openFile`. */
+  readonly id: string;
   readonly owner: DockOwner;
   /** 1-based, from a `path:line` reference. Absent when the link named no line. */
   readonly line?: number;
@@ -475,20 +476,19 @@ export interface AppState {
    */
   readonly preview: PreviewState | null;
   /**
-   * The file the dock is showing as text, or `null` when it is showing none.
+   * Every file the dock is showing as text, in the order they were opened.
    *
-   * Window-owned and one at a time, for every reason {@link preview} is — see
-   * the `file` variant of `DockTab`, which is where that argument is written
-   * out. The pair are siblings: one is "the page the agent wrote", the other is
-   * "the file the agent mentioned", and neither is part of the conversation in
-   * the way a transcript is.
+   * Window-owned, for the reason {@link preview} is. It used to be one at a
+   * time as well, and that half is gone: see the `file` variant of `DockTab`
+   * for why a vertical strip can afford a tab each, and why reading two files
+   * together is worth more than a strip that can never be crowded.
    *
-   * Deliberately not persisted, and here the reason is the plainest of the
-   * three: this is a copy of some bytes that were on disk at the moment someone
-   * clicked. Restoring it after a restart would show a file as it was last
-   * week under a caption implying it is current.
+   * The *contents* are still not persisted. What a restore reopens is the
+   * paths, read again from disk — see `DockLayout.files`. Restoring the bytes
+   * would show a file as it was last week under a caption implying it is
+   * current.
    */
-  readonly file: FileState | null;
+  readonly files: readonly FileState[];
   /**
    * Every terminal this window is holding, oldest first.
    *
@@ -1339,7 +1339,7 @@ function captureDockLayout(state: AppState): DockLayout {
       state.terminals.filter((record) => record.owner.paneId === paneId && !record.exited).length,
       MAX_RESTORED_TERMINALS,
     ),
-    file: state.file?.path ?? null,
+    files: state.files.filter((one) => one.owner.paneId === paneId).map((one) => one.path),
     preview: state.preview?.path ?? null,
     activeKind: state.activeDockTab?.kind ?? null,
   };
@@ -1771,7 +1771,7 @@ export const useApp = create<AppState>(() => ({
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
   preview: null,
-  file: null,
+  files: [],
   terminals: [],
   browsers: [],
   agentViews: [],
@@ -2447,18 +2447,40 @@ export async function openFile(
     return;
   }
 
-  useApp.setState({
-    file: {
-      ...res.value,
-      owner: ownerFor(pane),
-      ...(reference.line === undefined ? {} : { line: reference.line }),
-    },
+  const owner = ownerFor(pane);
+  const line = reference.line === undefined ? {} : { line: reference.line };
+
+  /*
+   * The same path, opened twice, is one tab.
+   *
+   * A link clicked again — or the same file reached from the browser and from
+   * the transcript — is a request to *look at* it, not to have two of it. So an
+   * open tab for this path in this conversation is re-read (the bytes may have
+   * moved on) and brought forward, keeping its id so the strip does not
+   * reshuffle under the click.
+   *
+   * Scoped by owner as well as by path, because two columns on two checkouts
+   * can hold the same relative path pointing at different files.
+   */
+  const open = useApp
+    .getState()
+    .files.find((one) => one.path === path && one.owner.paneId === owner.paneId);
+
+  const id = open?.id ?? `file${(fileCounter += 1)}`;
+  const next: FileState = { ...res.value, id, owner, ...line };
+
+  useApp.setState((s) => ({
+    files: open === undefined ? [...s.files, next] : s.files.map((one) => (one === open ? next : one)),
     // Clicking a path is a request to look at it. With a terminal already in the
     // rail the tab would otherwise open behind the one in front, and the click
     // would read as having done nothing.
-    activeDockTab: FILE_TAB,
-  });
+    activeDockTab: { kind: 'file', id },
+  }));
 }
+
+/** Tab ids, monotonic for the window's life. Never reused, so a closed tab's
+ *  id cannot be inherited by the next file opened into the same slot. */
+let fileCounter = 0;
 
 /**
  * Close the file tab. Nothing to tell the main process — it kept nothing.
@@ -2467,9 +2489,10 @@ export async function openFile(
  * gives: dropping the file is enough, and {@link reconcileDock} settles the strip
  * on the write.
  */
-export function closeFile(): void {
-  if (useApp.getState().file === null) return;
-  useApp.setState({ file: null });
+export function closeFile(id: string): void {
+  const { files } = useApp.getState();
+  if (!files.some((one) => one.id === id)) return;
+  useApp.setState({ files: files.filter((one) => one.id !== id) });
 }
 
 /**
@@ -3002,7 +3025,7 @@ function describeShown(): readonly ShownConversation[] {
  */
 function reconcileDock(): void {
   const state = useApp.getState();
-  const { preview, file, terminals, browsers, activeDockTab, visibleDockTabs, agentViews } =
+  const { preview, files, terminals, browsers, activeDockTab, visibleDockTabs, agentViews } =
     state;
 
   /*
@@ -3019,7 +3042,7 @@ function reconcileDock(): void {
    */
   if (
     preview === null &&
-    file === null &&
+    files.length === 0 &&
     terminals.length === 0 &&
     browsers.length === 0 &&
     visibleDockTabs.length === 0 &&
@@ -3045,7 +3068,7 @@ function reconcileDock(): void {
 
   const patch: {
     preview?: PreviewState | null;
-    file?: FileState | null;
+    files?: readonly FileState[];
     terminals?: readonly TerminalRecord[];
     browsers?: readonly BrowserRecord[];
     activeDockTab?: DockTab | null;
@@ -3065,16 +3088,18 @@ function reconcileDock(): void {
 
   // The same two moves, for the same reasons: adopt the session id once the run
   // learns it, and destroy the view when its conversation leaves the screen. The
-  // link in the transcript is the way back, exactly as the tile is for a preview.
-  let nextFile = file;
-  if (nextFile !== null) {
-    const learned = learnSessionId(nextFile.owner, shown);
-    if (learned !== null) {
-      nextFile = { ...nextFile, owner: { ...nextFile.owner, sessionId: learned } };
-    }
-    if (!ownerIsShown(nextFile.owner, shown)) nextFile = null;
-    if (nextFile !== file) patch.file = nextFile;
-  }
+  // path in the transcript — or in the folder browser — is the way back, exactly
+  // as the tile is for a preview.
+  const adoptedFiles = files.map((one) => {
+    const learned = learnSessionId(one.owner, shown);
+    return learned === null ? one : { ...one, owner: { ...one.owner, sessionId: learned } };
+  });
+  const keptFiles = adoptedFiles.filter((one) => ownerIsShown(one.owner, shown));
+  const nextFiles =
+    keptFiles.length === files.length && keptFiles.every((one, index) => one === files[index])
+      ? files
+      : keptFiles;
+  if (nextFiles !== files) patch.files = nextFiles;
 
   // Terminals are only ever *re-owned* here, never dropped: a shell whose
   // conversation has left the screen stops being drawn and goes on running.
@@ -3109,7 +3134,7 @@ function reconcileDock(): void {
     nextTerminals,
     shown,
     agentViews,
-    nextFile?.owner ?? null,
+    nextFiles,
     nextBrowsers,
     state.dockAutoOpen,
   );
@@ -4993,10 +5018,12 @@ async function restoreDockLayout(): Promise<void> {
   for (let i = 0; i < layout.terminals; i += 1) {
     await openTerminal(pane).catch(() => undefined);
   }
-  // A reference rather than a bare path: the viewer takes an optional line, and
-  // a restored file has no line to be at — the reader was not sent there, they
+  // References rather than bare paths: the viewer takes an optional line, and a
+  // restored file has no line to be at — the reader was not sent there, they
   // left it open.
-  if (layout.file !== null) await openFile({ path: layout.file }).catch(() => undefined);
+  for (const path of layout.files) {
+    await openFile({ path }).catch(() => undefined);
+  }
   if (layout.preview !== null) await openPreview(layout.preview, pane).catch(() => undefined);
 
   // Restored last, because every open above moves the front tab. The kind is

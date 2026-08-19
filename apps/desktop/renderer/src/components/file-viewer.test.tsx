@@ -117,7 +117,7 @@ beforeEach(() => {
   onDisk = new Set(['/Users/me/project/src/store.ts']);
   answer = fileAnswer();
   resetFileReach();
-  useApp.setState({ preview: null, file: null, terminals: [], activeDockTab: null, visibleDockTabs: [] });
+  useApp.setState({ preview: null, files: [], terminals: [], activeDockTab: null, visibleDockTabs: [] });
   setPaneState(focusedPane(), { cwd: '/Users/me/project', run: null, resumeSessionId: null });
 });
 
@@ -225,7 +225,7 @@ describe('opening a file into the dock', () => {
     });
     renderDock();
 
-    expect(useApp.getState().activeDockTab).toEqual({ kind: 'file' });
+    expect(useApp.getState().activeDockTab?.kind).toBe('file');
     expect(screen.getByRole('tab', { name: /store\.ts/ })).not.toBeNull();
     expect(screen.getByText('two')).not.toBeNull();
     // The gutter is drawn, and is its own element so a selection skips it.
@@ -260,7 +260,7 @@ describe('opening a file into the dock', () => {
       await openFile({ path: 'nope.ts' });
     });
 
-    expect(useApp.getState().file).toBeNull();
+    expect(useApp.getState().files).toEqual([]);
     const { container } = renderDock();
     // Nothing in the dock at all, rather than an empty tab named after a file
     // that is not there.
@@ -274,7 +274,7 @@ describe('opening a file into the dock', () => {
     renderDock();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close store.ts' }));
-    expect(useApp.getState().file).toBeNull();
+    expect(useApp.getState().files).toEqual([]);
   });
 
   /*
@@ -295,11 +295,17 @@ describe('opening a file into the dock', () => {
       setPaneState(focusedPane(), { resumeSessionId: 'sess-b' });
     });
 
-    expect(useApp.getState().file).toBeNull();
+    expect(useApp.getState().files).toEqual([]);
     expect(useApp.getState().visibleDockTabs).toHaveLength(0);
   });
 
-  it('replaces the file it was showing, rather than stacking tabs', async () => {
+  /*
+   * The claim this surface was rebuilt for. It used to replace: following a
+   * second link dropped the first file, so two could not be read together —
+   * which is most of what reading code is. The strip runs down the side now,
+   * so a second tab costs 34 vertical pixels in a column that scrolls.
+   */
+  it('opens a second file beside the first, rather than replacing it', async () => {
     await act(async () => {
       await openFile({ path: 'src/store.ts' });
     });
@@ -309,27 +315,72 @@ describe('opening a file into the dock', () => {
     });
     renderDock();
 
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(useApp.getState().files.map((one) => one.title)).toEqual(['store.ts', 'dock.ts']);
+    // The one just asked for is in front; the first is still a click away.
+    expect(screen.getByText('two')).not.toBeNull();
+  });
+
+  it('brings a file already open to the front instead of opening it twice', async () => {
+    await act(async () => {
+      await openFile({ path: 'src/store.ts' });
+    });
+    const first = useApp.getState().files[0]?.id;
+
+    answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
+    await act(async () => {
+      await openFile({ path: 'src/dock.ts' });
+    });
+
+    // Back to the first, by the path a link would carry.
+    answer = fileAnswer();
+    await act(async () => {
+      await openFile({ path: 'src/store.ts' });
+    });
+    renderDock();
+
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    // Same tab, same id: the strip must not reshuffle under a click that only
+    // asked to look at something.
+    expect(useApp.getState().files[0]?.id).toBe(first);
+    expect(useApp.getState().activeDockTab).toEqual({ kind: 'file', id: first });
+  });
+
+  it('closes one tab without touching the other', async () => {
+    await act(async () => {
+      await openFile({ path: 'src/store.ts' });
+    });
+    answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
+    await act(async () => {
+      await openFile({ path: 'src/dock.ts' });
+    });
+    renderDock();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close dock.ts' }));
+
+    expect(useApp.getState().files.map((one) => one.title)).toEqual(['store.ts']);
     expect(screen.getAllByRole('tab')).toHaveLength(1);
-    expect(useApp.getState().file?.title).toBe('dock.ts');
   });
 
   it('forgets the line when the next link names none', async () => {
     await act(async () => {
       await openFile({ path: 'src/store.ts', line: 2 });
     });
-    expect(useApp.getState().file?.line).toBe(2);
+    expect(useApp.getState().files[0]?.line).toBe(2);
 
     await act(async () => {
       await openFile({ path: 'src/store.ts' });
     });
     // Stale marks are worse than none: the reader would be told line 2 mattered
-    // for a link that said nothing about it.
-    expect(useApp.getState().file?.line).toBeUndefined();
+    // for a link that said nothing about it. Same tab either way — the line is
+    // a property of the *link*, not of the file being open.
+    expect(useApp.getState().files).toHaveLength(1);
+    expect(useApp.getState().files[0]?.line).toBeUndefined();
   });
 
-  it('closeFile is a no-op when nothing is open', () => {
+  it('closeFile is a no-op when that file is not open', () => {
     const before = useApp.getState();
-    closeFile();
+    closeFile('file-that-never-was');
     expect(useApp.getState()).toBe(before);
   });
 });

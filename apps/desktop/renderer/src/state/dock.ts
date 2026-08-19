@@ -84,20 +84,24 @@ import type { PaneId } from './pane';
 export type DockTab =
   | { readonly kind: 'preview' }
   /**
-   * A file the conversation named, shown as text.
+   * A file, shown as text. One tab each.
    *
-   * Keyed by nothing, exactly like {@link PREVIEW_TAB} and for the same three
-   * reasons: it is a snapshot rather than a process, reopening it is one click
-   * on the link that is still in the transcript, and one at a time is what keeps
-   * the affordance safe to put on *every* path in an answer. A tab per file
-   * would let a reader skimming one paragraph fill the strip with eight of them.
+   * This was keyed by nothing for a long time — one file at a time, like
+   * {@link PREVIEW_TAB} — on the grounds that a tab per file would let a reader
+   * skimming one paragraph fill the strip with eight of them. What that traded
+   * away turned out to be the more valuable half: following a second link
+   * *replaced* the first, so two files could not be read together, and reading
+   * two files together is most of what reading code is.
    *
-   * The consequence to be aware of is that following a second link replaces the
-   * first, so two files cannot be read side by side. That is the same limitation
-   * the preview has always had, it is the reason the link stays live in the
-   * transcript, and it is the thing to revisit first if this surface grows.
+   * The strip is the reason it is affordable now. It runs down the side rather
+   * than across the top, so a ninth tab costs 34 vertical pixels in a column
+   * that scrolls, not a slice of the composer's width.
+   *
+   * Opening a path that is already open focuses that tab instead of adding a
+   * second — see `openFile`, which is what keeps a link clicked twice from
+   * being two identical tabs.
    */
-  | { readonly kind: 'file' }
+  | { readonly kind: 'file'; readonly id: string }
   /**
    * The working directory, listed.
    *
@@ -151,16 +155,13 @@ export type DockTab =
 /** The preview tab. A constant, because there is only ever one. */
 export const PREVIEW_TAB: DockTab = { kind: 'preview' };
 
-/** The file tab. A constant, for {@link PREVIEW_TAB}'s reason. */
-export const FILE_TAB: DockTab = { kind: 'file' };
-
 /** A stable string for one tab. For React keys and set membership only. */
 export function tabKey(tab: DockTab): string {
   switch (tab.kind) {
     case 'preview':
       return 'preview';
     case 'file':
-      return 'file';
+      return `file:${tab.id}`;
     case 'files':
       return `files:${tab.paneId}`;
     case 'terminal':
@@ -379,11 +380,14 @@ export function visibleTabs(
    */
   agents: readonly { readonly paneId: PaneId; readonly taskId: string }[] = [],
   /**
-   * Whose file view is open, if one is. Follows the preview's rules exactly —
-   * it is drawn while its conversation is on screen and destroyed when that
-   * conversation leaves, because it is a snapshot and the link is the way back.
+   * The open files, in the order they were opened.
+   *
+   * Each is drawn while its conversation is on screen and destroyed when that
+   * conversation leaves, which is the preview's rule and holds for the same
+   * reason: it is a snapshot of some bytes, and the way back is the path — in
+   * the transcript, or in the folder browser.
    */
-  fileOwner: DockOwner | null = null,
+  files: readonly { readonly id: string; readonly owner: DockOwner }[] = [],
   /**
    * Pages this window has open, in the order they were opened.
    *
@@ -412,7 +416,9 @@ export function visibleTabs(
   // Beside the preview rather than at the end: both are "a file this
   // conversation put on screen", and the two arriving in different places would
   // make the strip's order look arbitrary.
-  if (fileOwner !== null && ownerIsShown(fileOwner, shown)) tabs.push(FILE_TAB);
+  for (const file of files) {
+    if (ownerIsShown(file.owner, shown)) tabs.push({ kind: 'file', id: file.id });
+  }
   for (const terminal of terminals) {
     if (ownerIsShown(terminal.owner, shown)) tabs.push({ kind: 'terminal', id: terminal.info.id });
   }
@@ -502,8 +508,8 @@ export interface DockLayout {
    * a terminal survives except that it existed — see the note above.
    */
   readonly terminals: number;
-  /** Path of the file that was open in the viewer, if any. */
-  readonly file: string | null;
+  /** Paths of the files that were open in the viewer, in tab order. */
+  readonly files: readonly string[];
   /** Path of the artifact that was previewed, if any. */
   readonly preview: string | null;
   /**
@@ -521,7 +527,7 @@ export interface DockLayout {
 export const EMPTY_DOCK_LAYOUT: DockLayout = {
   browsers: [],
   terminals: 0,
-  file: null,
+  files: [],
   preview: null,
   activeKind: null,
 };
@@ -542,6 +548,12 @@ export function parseDockLayout(value: unknown): DockLayout {
     ? raw['browsers'].filter((url): url is string => typeof url === 'string' && url.length > 0)
     : [];
 
+  // Bounded like the browsers and for the same reason: this is the one list a
+  // hand-edited preferences file can make the app read from disk on launch.
+  const files = Array.isArray(raw['files'])
+    ? raw['files'].filter((path): path is string => typeof path === 'string' && path.length > 0)
+    : [];
+
   const count = raw['terminals'];
   // Clamped rather than trusted: a hand-edited `terminals: 9999` would spawn
   // nine thousand shells on launch, which is a denial of service by typo.
@@ -559,7 +571,7 @@ export function parseDockLayout(value: unknown): DockLayout {
   return {
     browsers: browsers.slice(0, MAX_RESTORED_BROWSERS),
     terminals,
-    file: typeof raw['file'] === 'string' && raw['file'].length > 0 ? raw['file'] : null,
+    files: files.slice(0, MAX_RESTORED_FILES),
     preview: typeof raw['preview'] === 'string' && raw['preview'].length > 0 ? raw['preview'] : null,
     activeKind,
   };
@@ -574,6 +586,7 @@ export function parseDockLayout(value: unknown): DockLayout {
  */
 export const MAX_RESTORED_TERMINALS = 8;
 export const MAX_RESTORED_BROWSERS = 8;
+export const MAX_RESTORED_FILES = 8;
 
 /** Every tab kind, for validating a stored one. */
 const DOCK_TAB_KINDS = ['preview', 'file', 'terminal', 'browser', 'tasks', 'agent'] as const;

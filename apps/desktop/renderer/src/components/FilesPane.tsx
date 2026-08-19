@@ -10,13 +10,17 @@
  *
  * So: the folder the column is working in, and a click opens what is in it.
  *
- * ## It reuses the file tab rather than growing a reader
+ * ## It reuses the file reader rather than growing one
  *
  * Clicking a file calls `openFile`, which is the same path a link in the
- * transcript takes — same channel, same gates, same tab. Two readers for one
- * kind of thing would be two places to fix a bug in, and the tab already
- * handles the parts that are genuinely hard: binary refusal, the 2MB cap and
- * its caption, syntax highlighting.
+ * transcript takes — same channel, same gates, same kind of tab. Two readers
+ * for one kind of thing would be two places to fix a bug in, and that one
+ * already handles the parts that are genuinely hard: binary refusal, the 2MB
+ * cap and its caption, syntax highlighting.
+ *
+ * A tab each, so clicking through a folder builds up the files you are reading
+ * rather than replacing them one by one. Clicking the same file twice is still
+ * one tab — `openFile` brings the open one forward.
  *
  * ## Navigation is a stack, not a tree
  *

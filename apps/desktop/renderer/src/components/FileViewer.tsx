@@ -72,8 +72,10 @@ import { cn } from '@/lib/utils';
  */
 const MAX_LINES = 20_000;
 
-export function FileViewer(): ReactElement | null {
-  const file = useApp((s) => s.file);
+export function FileViewer({ id }: { readonly id: string }): ReactElement | null {
+  // By id rather than by "the open file": there are several now, and the tab
+  // that is in front decides which one this is.
+  const file = useApp((s) => s.files.find((one) => one.id === id));
 
   /*
    * Split once per file rather than per render. The dock re-renders on every
@@ -81,9 +83,9 @@ export function FileViewer(): ReactElement | null {
    * splitting two megabytes on each of those is the one genuinely expensive
    * thing this component could do.
    */
-  const lines = useMemo(() => (file === null ? [] : file.text.split('\n')), [file]);
+  const lines = useMemo(() => (file === undefined ? [] : file.text.split('\n')), [file]);
 
-  if (file === null) return null;
+  if (file === undefined) return null;
 
   const shown = lines.length > MAX_LINES ? lines.slice(0, MAX_LINES) : lines;
   const clipped = lines.length > MAX_LINES;
