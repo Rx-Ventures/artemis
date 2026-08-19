@@ -63,3 +63,27 @@ export interface AgentError {
   /** Structured extras for diagnostics. Must be JSON-cloneable. */
   readonly details?: JsonValue;
 }
+
+/**
+ * Did this fail only because the run had already ended?
+ *
+ * The engine refuses an unknown run id and a retired one with the same
+ * `invalid_request` code, and the two deserve opposite treatment. A retired id
+ * means the caller acted on a view of the world that was true when they acted —
+ * the run ended between the click and the IPC call landing — which is a race,
+ * not a mistake. An unknown id is a bug and should stay loud.
+ *
+ * The engine says which by putting `reason` in `details`; this reads it. The
+ * alternative is matching on the message, which would make an English sentence
+ * part of the API and break the first time someone improved the wording.
+ */
+export function isEndedRunError(error: AgentError | null | undefined): boolean {
+  if (!error || error.code !== 'invalid_request') return false;
+  const details = error.details;
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    !Array.isArray(details) &&
+    (details as Record<string, JsonValue | undefined>)['reason'] === 'run_ended'
+  );
+}

@@ -944,6 +944,27 @@ describe('RunRegistry — steering', () => {
     await expect(registry.send(handle.runId, 'hi')).rejects.toBeInstanceOf(RunError);
     await expect(registry.send('never-existed', 'hi')).rejects.toBeInstanceOf(RunError);
   });
+
+  it('says which refusal it is, because the two want opposite handling', async () => {
+    // Both are `invalid_request`, and a caller that cannot tell them apart has
+    // to treat a race like a bug. A retired id means the caller acted on a view
+    // that was true when they acted — the run ended between the keystroke and
+    // this call — and the renderer recovers by starting a fresh run with the
+    // same prompt. An unknown id has no such story and must stay loud.
+    //
+    // Asserted on `details` rather than on the message: matching the sentence
+    // would make the English part of the API.
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    firstRun(runs).emit(runEnd(handle.runId, 0));
+    await flush();
+
+    const ended = await registry.send(handle.runId, 'hi').catch((e: unknown) => e as RunError);
+    expect(ended.details).toEqual({ reason: 'run_ended', runId: handle.runId });
+
+    const unknown = await registry.send('never-existed', 'hi').catch((e: unknown) => e as RunError);
+    expect(unknown.details).toEqual({ reason: 'run_unknown', runId: 'never-existed' });
+  });
 });
 
 describe('RunRegistry — termination', () => {

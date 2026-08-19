@@ -66,6 +66,7 @@ import {
   forgetFolders,
   setConversationWidth,
   setDockAutoOpen,
+  setEscapeStopsRun,
   setFontSize,
   setRunSummary,
   setShowThinking,
@@ -379,11 +380,12 @@ export function AppearanceSection(): ReactElement {
   const wordFade = useApp((s) => s.streamingWordFade);
   const showThinking = useApp((s) => s.showThinking);
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
+  const escapeStopsRun = useApp((s) => s.escapeStopsRun);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, what Escape does, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -486,6 +488,34 @@ export function AppearanceSection(): ReactElement {
                 aria-label="Open the side pane on its own"
                 checked={dockAutoOpen}
                 onCheckedChange={setDockAutoOpen}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
+      <SettingsGroup label="Keyboard">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Escape stops the run</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Escape interrupts whatever the agent is doing. It is the fastest way to stop a run
+                and, for the same reason, the easiest to hit by accident — reaching for it to
+                dismiss something that is no longer on screen stops the work instead.
+                <br />
+                <br />
+                Off, Escape still closes dialogs and the command palette, and still denies a
+                permission the agent is waiting on. It simply stops short of stopping the run, which
+                the composer&rsquo;s Stop button still does.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-escape-stops-run"
+                aria-label="Escape stops the run"
+                checked={escapeStopsRun}
+                onCheckedChange={setEscapeStopsRun}
               />
             </ItemActions>
           </Item>

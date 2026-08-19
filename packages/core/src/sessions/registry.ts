@@ -861,13 +861,25 @@ export class RunRegistry {
     return this.#runs.get(runId) ?? this.#ended.get(runId);
   }
 
+  /**
+   * The run, or a refusal that says which of the two refusals it is.
+   *
+   * `details.reason` is the load-bearing part. "Already ended" and "never
+   * existed" arrive at the renderer as the same `invalid_request` code, and they
+   * call for opposite responses: an ended run is a *race* — the caller acted on
+   * a view of the world that was true when they clicked — while an unknown id is
+   * a bug. A caller that wants to recover from the first has to be able to tell
+   * them apart, and matching on the message text would make the sentence itself
+   * an API. See `interrupt`, which already forgives the same race silently.
+   */
   #requireActive(runId: RunId): RunEntry {
     const entry = this.#runs.get(runId);
     if (!entry) {
-      const retired = this.#ended.get(runId);
+      const retired = this.#ended.has(runId);
       throw new RunError(
         'invalid_request',
         retired ? `Run "${runId}" has already ended` : `Unknown run "${runId}"`,
+        { details: { reason: retired ? 'run_ended' : 'run_unknown', runId } },
       );
     }
     return entry;

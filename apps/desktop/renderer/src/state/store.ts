@@ -34,6 +34,7 @@
 
 import { create } from 'zustand';
 import {
+  isEndedRunError,
   isProfileAutoSelectable,
   isProfileEnabled,
   isSameModel,
@@ -650,6 +651,14 @@ export interface AppState {
    * rather than destroying them.
    */
   readonly dockAutoOpen: boolean;
+  /**
+   * Whether Escape stops a run.
+   *
+   * Only that. Escape also dismisses the palette, closes a dialog and denies a
+   * parked permission, and none of those is "stopping the session" — turning
+   * this off must not take the key away from them. See the handler in `App.tsx`.
+   */
+  readonly escapeStopsRun: boolean;
   /** Which releases this installation is willing to be offered. */
   readonly updateChannel: UpdateChannel;
 
@@ -1204,6 +1213,7 @@ interface Prefs {
   streamingWordFade?: boolean;
   showThinking?: boolean;
   dockAutoOpen?: boolean;
+  escapeStopsRun?: boolean;
   /**
    * Persisted rather than derived: it is a standing choice about risk, and the
    * app must not quietly move someone between channels across a restart.
@@ -1415,6 +1425,7 @@ function loadPrefs(): Prefs {
     streamingWordFade: boolOrUndefined(raw['streamingWordFade']),
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
+    escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1502,6 +1513,7 @@ function savePrefs(): void {
     streamingWordFade: s.streamingWordFade,
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
+    escapeStopsRun: s.escapeStopsRun,
     updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1682,6 +1694,9 @@ export const useApp = create<AppState>(() => ({
   showThinking: initialShowThinking,
   // Same rule: `false` is the deliberate state this pref exists to keep.
   dockAutoOpen: prefs.dockAutoOpen ?? true,
+  // Defaults on: this is how Escape has always behaved, and a preference that
+  // silently changed an existing reflex would be worse than not having one.
+  escapeStopsRun: prefs.escapeStopsRun ?? true,
   updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
@@ -6065,6 +6080,11 @@ export function setDockAutoOpen(on: boolean): void {
   reconcileDock();
 }
 
+export function setEscapeStopsRun(on: boolean): void {
+  useApp.setState({ escapeStopsRun: on });
+  savePrefs();
+}
+
 /**
  * Record that the user has taken up — or backed out of — the shared
  * `~/.claude` arrangement.
@@ -7133,45 +7153,89 @@ export async function submitPrompt(
   // Per kind, because a provider can plausibly take one and not the other, and
   // dropping the whole set because half of it is unsupported would lose files
   // the run could have carried.
-  const carrier = live ? live.capabilities : activeCapabilities(state);
-  const kept = (attachments ?? []).filter((attachment) =>
-    attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
-  );
-  const sending = kept.length > 0 ? kept : undefined;
+  const filterFor = (carrier: Capabilities): readonly Attachment[] | undefined => {
+    const kept = (attachments ?? []).filter((attachment) =>
+      attachment.kind === 'image' ? carrier.imageInput : carrier.fileInput,
+    );
+    return kept.length > 0 ? kept : undefined;
+  };
+
+  /**
+   * The message, if it is already in the transcript when the new-run path
+   * starts. Set only by the steer path below, when the run it was steering
+   * turned out to have ended: the prompt is on screen already and pushing a
+   * second copy would show the user their own words twice.
+   */
+  let carriedOver: string | null = null;
 
   if (live) {
     if (!live.capabilities.midRunSteering) {
       pushBanner('warn', 'This provider cannot take input mid-run');
       return false;
     }
-    const steerId = pane.transcript.pushUserMessage(prompt, sending);
+    const steering = filterFor(live.capabilities);
+    const steerId = pane.transcript.pushUserMessage(prompt, steering);
     const result = await call(() =>
       bridge.runs.send({
         runId: live.runId,
         text: prompt,
-        ...(sending === undefined ? {} : { attachments: sending }),
+        ...(steering === undefined ? {} : { attachments: steering }),
       }),
     );
-    if (!result.ok) {
+    if (result.ok) {
+      pane.transcript.confirmUserMessage(steerId);
+      if (!result.value.deliveredImmediately) {
+        pane.transcript.note(
+          'info',
+          'Queued — the provider decides when this takes effect.',
+          'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
+        );
+      }
+      return true;
+    }
+
+    /*
+     * The run ended between the keystroke and the call landing.
+     *
+     * This is a race and not a mistake — `isLive` reads this window's copy of
+     * the run, which main has already retired — and the engine forgives the
+     * same race on `interrupt` for the same reason. Reporting it put a red
+     * banner under a message the user then had to type again, which is the
+     * worst of both: the send failed *and* the prompt was gone.
+     *
+     * So it falls through to the path it would have taken had the state
+     * arrived a moment earlier, carrying the message already on screen rather
+     * than pushing a second copy of it. Every other failure is still a failure.
+     */
+    if (!isEndedRunError(result.error)) {
       reportFailure('Could not deliver the message', result.error);
       // True: the message is in the transcript, dimmed, with its attachments. See
       // the note on this function for why that counts as sent from here.
       return true;
     }
-    pane.transcript.confirmUserMessage(steerId);
-    if (!result.value.deliveredImmediately) {
-      pane.transcript.note(
-        'info',
-        'Queued — the provider decides when this takes effect.',
-        'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
-      );
+    carriedOver = steerId;
+    /*
+     * Draw the ending main already performed — but only if it is still missing.
+     *
+     * The `run.end` for this run may have arrived while the send was in flight,
+     * in which case the transcript has its card and the pane is already settled;
+     * `localRunEnd` inserts unconditionally, so calling it anyway would show the
+     * turn ending twice. And it may never arrive: the new run replaces
+     * `state.run` a few lines below, after which `paneForRun` no longer resolves
+     * the old id and a straggling `run.end` is dropped. Between those two is the
+     * one case that needs this.
+     */
+    if (paneState(pane).run?.runId === live.runId && isLive(paneState(pane))) {
+      endRunLocally(live.runId, 'completed', pane);
     }
-    return true;
   }
 
   const runId = newId('run');
   const capabilities = activeCapabilities(state);
-  const promptId = pane.transcript.pushUserMessage(prompt, sending);
+  // Re-filtered: the fallback above crosses from the live run's capabilities to
+  // the active provider's, and after a mid-run provider switch those differ.
+  const sending = filterFor(capabilities);
+  const promptId = carriedOver ?? pane.transcript.pushUserMessage(prompt, sending);
   setPaneState(pane, {
     run: {
       runId,

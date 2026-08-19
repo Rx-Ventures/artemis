@@ -56,6 +56,7 @@ import {
   pushBanner,
   setForkOnResume,
   submitPrompt,
+  useApp,
 } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { paneState, setPaneState } from '../state/pane';
@@ -488,10 +489,17 @@ export function Composer(): ReactElement {
                 // Escape from inside the composer, because the global handler
                 // deliberately ignores text fields and this is the one place the
                 // user is guaranteed to be typing.
+                //
+                // The stop is gated on the same preference as the global
+                // handler's, and denying a parked permission is not: this is the
+                // second half of the rule written out in `App.tsx`, and the two
+                // have to agree or Escape would mean one thing in the field and
+                // another an inch above it.
                 if (event.key === 'Escape') {
                   event.preventDefault();
                   void denyPendingPermission(pane).then((denied) => {
-                    if (!denied && paneState(pane).run?.status !== 'ended') void interruptRun(pane);
+                    if (denied || !useApp.getState().escapeStopsRun) return;
+                    if (paneState(pane).run?.status !== 'ended') void interruptRun(pane);
                   });
                   return;
                 }
