@@ -43,6 +43,7 @@ export * from './permissions.js';
 export * from './usage.js';
 export * from './planCapacity.js';
 export * from './planLoad.js';
+export * from './handoff.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './attachment.js';

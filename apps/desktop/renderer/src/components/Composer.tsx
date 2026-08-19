@@ -51,6 +51,7 @@ import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
 import {
   denyPendingPermission,
+  dismissHandoff,
   interruptRun,
   isLive,
   pushBanner,
@@ -58,6 +59,7 @@ import {
   submitPrompt,
   useApp,
 } from '../state/store';
+import { HANDOFF_BLOCK_DETAIL } from '../state/autoHandoff';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { paneState, setPaneState } from '../state/pane';
 import {
@@ -361,6 +363,8 @@ export function Composer(): ReactElement {
           <span className="runbar absolute inset-0 block" />
         </div>
       ) : null}
+
+      <HandoffStrip />
 
       {/*
         The directory, above the input and aligned to its left edge.
@@ -744,3 +748,42 @@ function AttachmentStrip({
   );
 }
 
+/**
+ * Why this composer will not send, and the one button that changes that.
+ *
+ * The refusal itself is in `submitPrompt`, where the decision belongs, and it
+ * puts a banner up — but a banner is a notification and this is a *state*. It
+ * persists until someone acts on it, so it needs somewhere it persists on
+ * screen, and the only honest place is directly above the field it is
+ * disabling. A block whose remedy is not next to it reads as the app being
+ * broken.
+ *
+ * Renders nothing in every other state, including `asked`: while the agent is
+ * writing the document the composer works normally, and a strip saying so would
+ * be an announcement rather than a control.
+ */
+function HandoffStrip(): ReactElement | null {
+  const pane = usePaneRef();
+  const state = usePane((s) => s.handoff);
+  if (state !== 'done') return null;
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-3 pt-1.5">
+      <div className="flex items-start gap-3 border border-amber/40 bg-panel px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-2xs font-medium text-amber">This conversation has been handed over</p>
+          <p className="mt-0.5 text-2xs leading-relaxed text-ink-faint">{HANDOFF_BLOCK_DETAIL}</p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-6 shrink-0 border-line px-2 text-2xs"
+          onClick={() => dismissHandoff(pane)}
+        >
+          Keep working here
+        </Button>
+      </div>
+    </div>
+  );
+}

@@ -76,9 +76,17 @@ import type {
   SessionSummary,
   TerminalId,
   TokenUsage,
+  HandoffTrigger,
   UpdateChannel,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
+import {
+  handoffPrompt,
+  handoffReason,
+  handoffStamp,
+  setHandoff,
+  HANDOFF_BLOCK_DETAIL,
+} from './autoHandoff';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   describeWorkspace,
@@ -659,6 +667,11 @@ export interface AppState {
    * this off must not take the key away from them. See the handler in `App.tsx`.
    */
   readonly escapeStopsRun: boolean;
+  /**
+   * Whether a conversation stops itself and writes a handover when the account
+   * it is running on gets close to a plan limit. See `autoHandoff.ts`.
+   */
+  readonly autoHandoff: boolean;
   /** Which releases this installation is willing to be offered. */
   readonly updateChannel: UpdateChannel;
 
@@ -1214,6 +1227,7 @@ interface Prefs {
   showThinking?: boolean;
   dockAutoOpen?: boolean;
   escapeStopsRun?: boolean;
+  autoHandoff?: boolean;
   /**
    * Persisted rather than derived: it is a standing choice about risk, and the
    * app must not quietly move someone between channels across a restart.
@@ -1426,6 +1440,7 @@ function loadPrefs(): Prefs {
     showThinking: boolOrUndefined(raw['showThinking']),
     dockAutoOpen: boolOrUndefined(raw['dockAutoOpen']),
     escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
+    autoHandoff: boolOrUndefined(raw['autoHandoff']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1514,6 +1529,7 @@ function savePrefs(): void {
     showThinking: s.showThinking,
     dockAutoOpen: s.dockAutoOpen,
     escapeStopsRun: s.escapeStopsRun,
+    autoHandoff: s.autoHandoff,
     updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1604,6 +1620,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     dismissedTasks: [],
     tasksRequested: false,
     promptHistory: [],
+    handoff: 'none',
     draft: '',
     ...overrides,
   };
@@ -1697,6 +1714,9 @@ export const useApp = create<AppState>(() => ({
   // Defaults on: this is how Escape has always behaved, and a preference that
   // silently changed an existing reflex would be worse than not having one.
   escapeStopsRun: prefs.escapeStopsRun ?? true,
+  // Off unless asked for. Stopping someone's work is the most intrusive thing
+  // this app does on its own, and it is not a default anyone opted into.
+  autoHandoff: prefs.autoHandoff ?? false,
   updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
@@ -4462,6 +4482,7 @@ export function installPlanUsageFeed(): () => void {
     useApp.setState((s) => ({
       planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
     }));
+    considerHandoff();
   });
 }
 
@@ -4533,10 +4554,144 @@ function refreshPlanUsageSoon(profileId: ProfileId): void {
       useApp.setState((s) => ({
         planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
       }));
+      // The moment this matters most. A run just ended, so this reading is the
+      // freshest one this account will have for minutes — and an idle pane is
+      // exactly where a handoff can be asked for without cutting anything off.
+      considerHandoff();
     })();
   }, PLAN_USAGE_SETTLE_MS);
 
   planUsageSoon.set(profileId, timer);
+}
+
+/**
+ * Longest the handoff will wait for an interrupted run to actually end.
+ *
+ * Bounded because the alternative is worse than being early. A provider that
+ * ignores the interrupt, or one whose `run.end` is lost, would otherwise leave
+ * the pane latched at `asked` with no document ever requested — the feature
+ * silently doing nothing at the one moment it was supposed to act. Going ahead
+ * after the deadline at least produces an attempt, and the attempt says what it
+ * is in the transcript.
+ */
+const HANDOFF_SETTLE_MS = 10_000;
+
+/** Resolve when the pane stops being live, or when `ms` has passed. */
+function settled(pane: Pane, ms: number): Promise<void> {
+  if (!isLive(paneState(pane))) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const unsubscribe = pane.store.subscribe((state) => {
+      if (!isLive(state)) finish();
+    });
+  });
+}
+
+/**
+ * Ask every conversation whether it should be handing its work over.
+ *
+ * Called after each write to `planUsageByProfile`, which is both places a
+ * reading can arrive: the poll's push, and the read taken a few seconds after a
+ * run ends. That single hook covers the two moments the feature is about — a
+ * turn finishing on a nearly-spent account, and an account crossing its
+ * threshold while a turn is still in flight — without either caller having to
+ * know it is what triggers a handoff.
+ *
+ * Every pane, not just the focused one. A conversation running in the other
+ * column is spending the same budget and is no less worth saving; a background
+ * pane is arguably the one you would rather not have to reconstruct.
+ */
+function considerHandoff(): void {
+  const state = useApp.getState();
+  if (!state.autoHandoff) return;
+  const now = Date.now();
+
+  for (const pane of allPanes(state)) {
+    const session = paneState(pane);
+    const trigger = handoffReason({
+      enabled: true,
+      session,
+      usageByProfile: state.planUsageByProfile,
+      now,
+    });
+    if (!trigger) continue;
+
+    // Latched before anything asynchronous, so a second reading landing while
+    // the interrupt is in flight cannot start a second handoff.
+    setHandoff(pane, 'stopping');
+    pane.transcript.note(
+      'warn',
+      `Handing this work over — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
+      'Artemis is asking for a handover document while there is still budget to write one. Turn this off in Appearance → Handing over.',
+    );
+
+    void requestHandoff(pane, trigger, now);
+  }
+}
+
+/**
+ * Stop whatever is running, then ask for the document.
+ *
+ * The interrupt comes first and is awaited: a provider mid-turn will not take
+ * the prompt as its own turn, and sending it anyway would either queue it
+ * behind the work being abandoned or fold it into that work as a steer. Neither
+ * produces a document.
+ *
+ * `submitPrompt` is used rather than a bespoke call so the handoff request is an
+ * ordinary turn in every respect — it appears in the transcript as a prompt, it
+ * is subject to the same capability gating, and the run it starts ends the way
+ * any other does.
+ */
+async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
+  if (isLive(paneState(pane))) {
+    await interruptRun(pane);
+    // And then wait for it to actually be over. `interruptRun` returns when
+    // main has *accepted* the interrupt; the pane does not settle until the
+    // `run.end` it causes arrives on the event stream. Sending in that gap is
+    // worse than not interrupting at all — `submitPrompt` would see a live run,
+    // take the steer path, and fold the request for a handover into the turn
+    // being abandoned, which produces no document and no clean stop.
+    await settled(pane, HANDOFF_SETTLE_MS);
+  }
+  if (isLive(paneState(pane))) {
+    // The run would not stop, so there is nowhere to put the request. Giving up
+    // is the only honest option left, and it must not block the conversation:
+    // no document was written, so refusing the user's next prompt would be
+    // punishing them for a provider that ignored an interrupt.
+    return abandonHandoff(pane, 'the run would not stop');
+  }
+  // Promoted only now, once the interrupted run's `run.end` is behind us: from
+  // here the next run to end is the one this prompt starts, which is exactly
+  // what `asked` means.
+  setHandoff(pane, 'asked');
+  const sent = await submitPrompt(handoffPrompt(trigger, handoffStamp(now)), undefined, pane);
+  // Same rule one step later. `submitPrompt` refuses for reasons of its own — a
+  // provider that cannot take a prompt, a directory that has gone away — and a
+  // refusal means no document exists. `done` would block the conversation over
+  // a handover that was never written.
+  if (!sent) abandonHandoff(pane, 'the prompt could not be sent');
+}
+
+/**
+ * Give up on this handoff without blocking the conversation.
+ *
+ * `dismissed` rather than `none`: nothing was written, so there is nothing to
+ * stop for — but retrying on the next reading would interrupt the same run
+ * again thirty seconds later, and again after that. One attempt, one
+ * explanation, then out of the way.
+ */
+function abandonHandoff(pane: Pane, because: string): void {
+  setHandoff(pane, 'dismissed');
+  pane.transcript.note(
+    'warn',
+    'Could not hand this work over automatically',
+    `Artemis tried to stop and ask for a handover document, but ${because}. Nothing has been blocked — this conversation carries on, and the account is still nearly spent.`,
+  );
 }
 
 /** Drop every pending settle timer. For tests. */
@@ -6085,6 +6240,26 @@ export function setEscapeStopsRun(on: boolean): void {
   savePrefs();
 }
 
+export function setAutoHandoff(on: boolean): void {
+  useApp.setState({ autoHandoff: on });
+  savePrefs();
+  // Turning it on judges the readings already in hand rather than waiting for
+  // the next poll: someone who switches this on while sitting at 96% meant it
+  // to apply to the account they are looking at.
+  if (on) considerHandoff();
+}
+
+/**
+ * Let this conversation carry on despite the account being nearly spent.
+ *
+ * A one-way door on purpose — nothing re-arms it for the rest of the
+ * conversation. A safeguard that keeps re-asking after being told no is not a
+ * safeguard.
+ */
+export function dismissHandoff(pane: Pane = focusedPane()): void {
+  setHandoff(pane, 'dismissed');
+}
+
 /**
  * Record that the user has taken up — or backed out of — the shared
  * `~/.claude` arrangement.
@@ -6753,6 +6928,11 @@ export function newSession(
       tasks: [],
       dismissedTasks: [],
       tasksRequested: false,
+      // A new conversation is exactly what a handoff was asking for, so the
+      // latch comes off with everything else. Whether the account still has
+      // room is a question for the next reading, not a state to inherit — and a
+      // fresh session that opened already refusing prompts would be absurd.
+      handoff: 'none',
     });
   }
 
@@ -7140,6 +7320,21 @@ export async function submitPrompt(
   }
   if (state.cwd.trim().length === 0) {
     pushBanner('error', 'Set a working directory', 'The agent needs an absolute path to work in.');
+    return false;
+  }
+  /*
+   * The stop that automatic handoff exists to perform.
+   *
+   * `done` means the document has been written, and carrying on here would
+   * spend the runway it was bought with — which is the whole failure the
+   * feature is meant to prevent, arrived at one prompt later. So the turn is
+   * refused and the way out is named in the same breath.
+   *
+   * Returns false: nothing was written to the transcript, so the composer keeps
+   * the prompt and its attachments and one dismissal is enough to send it.
+   */
+  if (state.handoff === 'done') {
+    pushBanner('warn', 'This conversation has been handed over', HANDOFF_BLOCK_DETAIL);
     return false;
   }
 
@@ -8192,6 +8387,11 @@ function applyAgentEvent(event: AgentEvent): void {
       // the pane's current selection: a run bills the account it started on for
       // its whole life, and the pane may well have moved on by now.
       refreshPlanUsageSoon(run.profileId);
+      // The handoff turn is the one that just ended, so the document is written
+      // and this conversation is finished on this account. `done` is what makes
+      // the next prompt ask the user to move rather than silently spend the
+      // runway the handoff was bought with.
+      if (paneState(pane).handoff === 'asked') setHandoff(pane, 'done');
       break;
     }
 

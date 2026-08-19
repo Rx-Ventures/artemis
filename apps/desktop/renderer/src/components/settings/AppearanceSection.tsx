@@ -66,6 +66,7 @@ import {
   forgetFolders,
   setConversationWidth,
   setDockAutoOpen,
+  setAutoHandoff,
   setEscapeStopsRun,
   setFontSize,
   setRunSummary,
@@ -381,11 +382,12 @@ export function AppearanceSection(): ReactElement {
   const showThinking = useApp((s) => s.showThinking);
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
   const escapeStopsRun = useApp((s) => s.escapeStopsRun);
+  const autoHandoff = useApp((s) => s.autoHandoff);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, what Escape does, and which folders the composer offers."
+      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, what Escape does, whether a nearly-spent account hands its work on, and which folders the composer offers."
     >
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
@@ -516,6 +518,41 @@ export function AppearanceSection(): ReactElement {
                 aria-label="Escape stops the run"
                 checked={escapeStopsRun}
                 onCheckedChange={setEscapeStopsRun}
+              />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
+      <SettingsGroup label="Handing over">
+        <ItemGroup className="gap-2">
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Hand the work over before the limit</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Running out of plan mid-conversation loses the expensive part: not the turn, but
+                everything the agent had worked out — which files matter, what it had already
+                tried, what it was about to do. On, Artemis stops the conversation just short of
+                the limit and spends the last of the budget asking for a briefing another session
+                can start from, written to{' '}
+                <span className="font-mono text-ink-muted">.artemis/</span> in the working folder
+                and shown as an artifact.
+                <br />
+                <br />
+                It stops at{' '}
+                <span className="text-ink-muted">90% of the 5-hour window, 98% of the weekly, 95%
+                of Fable</span>{' '}
+                — different margins because the 5-hour window refills within the day and the weekly
+                one does not. A run in flight is interrupted to do it, so this is off unless you
+                ask for it; every conversation it stops offers a button to carry on regardless.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Switch
+                id="settings-auto-handoff"
+                aria-label="Hand the work over before the limit"
+                checked={autoHandoff}
+                onCheckedChange={setAutoHandoff}
               />
             </ItemActions>
           </Item>
