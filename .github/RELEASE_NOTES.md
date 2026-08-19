@@ -1,6 +1,59 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.2.0
+
+Artemis can lend its accounts to other programs on your machine.
+
+Until now a profile was usable only from inside a window. **Settings → Server**
+opens a local HTTP server that publishes them — every account, every model, and
+what each model actually accepts — so an editor, a script or an agent can route
+a turn through them. Point any OpenAI SDK at it and it works; nothing needs to
+know what Artemis is.
+
+It is **off by default and reachable by nobody** until you say otherwise. There
+is no server-wide password. Starting it asks first, every time — this is not a
+preference, it is lending programs the ability to spend your plans, and the
+circumstances that make that reasonable differ each time it is asked.
+
+- **A model is addressed as `profile/model`.** Two accounts can both offer Opus
+  on different plans, so a bare model id names two things and Artemis would have
+  to guess which one to bill. `work-max/opus` says which. The catalogue also
+  publishes what OpenAI's schema has nowhere to put: which thinking levels a
+  model accepts, and whether fast mode or ultracode reach it at all. A client
+  that cannot see `fastMode: false` will believe a toggle took effect when the
+  run ignored it.
+
+- **Access is a connection, not a password.** Each one is a token bound, at the
+  moment you create it, to where its turns may run: a folder you pick, a scratch
+  directory Artemis creates and deletes, or nothing at all for a program that
+  only reads the catalogue. That choice is fixed when the token is issued and
+  never widens — re-scoping means issuing a new one — because a token whose
+  reach can grow after you have handed it to a program is one nobody can reason
+  about. You can narrow it further to named accounts and models, and revoking
+  one connection leaves every other alone.
+
+- **Turns run for real, whole or streamed.** A turn is not a completion, and
+  three things follow from that. Nobody is watching an HTTP request, so a
+  permission prompt is denied rather than left to hang — with a message written
+  for the model, so it adapts instead of stalling. The agent's own file reads
+  and commands are reported as activity rather than as tool calls no client
+  could perform. And a client that hangs up interrupts the run, because
+  otherwise the provider keeps spending your plan on output nobody will read.
+
+- **Settings that cannot be honoured are refused, not ignored.** A request that
+  sets `temperature: 0` is asking for determinism; answering it with a sampled
+  reply and saying nothing would let someone build a cache or a test on a
+  promise Artemis never made. Those parameters fail the request and say which.
+  Labels that change nothing — `user`, `store` — are accepted and reported back
+  as ignored.
+
+- **Conversations a program starts stay out of your sidebar.** They are written
+  to the provider's history exactly as your own are, under the account that ran
+  them, so the record is intact if you ever need to audit what a program did.
+  The history pane simply lists what *you* started — otherwise a script polling
+  every minute would bury your own work within the hour.
+
 ## What's new in 1.1.1
 
 Three fixes, all of them things that were quietly claiming something untrue.
