@@ -111,6 +111,14 @@ const calls: { renamed: string[]; deleted: string[]; tagged: (string | null)[] }
 let runStatus: 'running' | 'ended' | null = null;
 /** Whether the next delete succeeds. */
 let deleteOk = true;
+/**
+ * Whether the provider finds a record to tag.
+ *
+ * `{ tagged: false }` is a *successful* call that wrote nothing — the session's
+ * transcript was not where the provider looked. Kept separate from an error
+ * because the two arrive differently and only one of them used to be handled.
+ */
+let tagFound = true;
 
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   version: '0.0.0',
@@ -133,7 +141,7 @@ let deleteOk = true;
     // `toggleSessionArchived`.
     tag: async ({ tag }: { tag: string | null }) => {
       calls.tagged.push(tag);
-      return { ok: true, value: { tagged: true } };
+      return { ok: true, value: { tagged: tagFound } };
     },
     // Echoes what the store was seeded with. `toggleSessionArchived` refreshes
     // after a successful tag — the provider's answer replaces the optimistic
@@ -207,6 +215,7 @@ beforeEach(() => {
   calls.tagged.length = 0;
   runStatus = null;
   deleteOk = true;
+  tagFound = true;
   seedStore();
 });
 afterEach(cleanup);
@@ -536,6 +545,30 @@ describe('archive', () => {
     });
     expect(calls.deleted).toEqual([]);
     expect(useApp.getState().sessions).toHaveLength(1);
+  });
+
+  it('puts the row back when the provider found nothing to tag, and says so', async () => {
+    /*
+     * `{ tagged: false }` is the answer that unarchived a whole sidebar.
+     *
+     * It is a success — the caller asked for a state of the world and the
+     * provider reports the record was not there to write to — so the optimistic
+     * archive used to stand, the row vanished, and it returned at the next
+     * listing with no explanation. Which is the exact report archiving was
+     * moved to the provider to fix.
+     */
+    tagFound = false;
+    mount(<SessionList />);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
+
+    await waitFor(() => {
+      expect(useApp.getState().banners).toHaveLength(1);
+    });
+    expect(calls.tagged).toEqual(['archived']);
+    expect(useApp.getState().sessions[0]?.tag).toBeUndefined();
+    expect(useApp.getState().banners[0]?.message).toContain('Could not archive');
   });
 
   it('refuses where the provider keeps no tag, and says why', async () => {

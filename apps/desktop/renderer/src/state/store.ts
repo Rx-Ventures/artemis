@@ -6643,7 +6643,12 @@ async function migrateArchivedSessions(): Promise<void> {
     // and the next listing tries again. Silent: this is a background repair of
     // something the user did not ask for, and a banner per failed row would be
     // a wall of noise about work nobody requested.
-    if (result.ok) for (const hit of hits) migrated.add(hit);
+    //
+    // `tagged: false` keeps the key too. "Nothing there to tag" is a success
+    // for the caller who asked for a state of the world, but here it means no
+    // tag was written — consuming the key on that answer deletes the only
+    // record that the row was archived.
+    if (result.ok && result.value.tagged) for (const hit of hits) migrated.add(hit);
   }
 
   if (migrated.size === 0) return;
@@ -6877,10 +6882,12 @@ export async function toggleSessionArchived(session: SessionSummary): Promise<vo
     }),
   );
 
-  if (!result.ok) {
+  if (!result.ok || !result.value.tagged) {
     // Put it back. An archive that appeared to work and did not is worse than
     // one that refused: the row would return at the next listing with no
-    // explanation, which is the report this whole change came from.
+    // explanation, which is the report this whole change came from. That
+    // includes `tagged: false` — the provider found nothing to write to, so
+    // nothing was stored and the optimistic row is a lie.
     useApp.setState((s) => ({
       sessions: s.sessions.map((row) =>
         row.id === session.id && row.profileId === session.profileId
@@ -6888,7 +6895,12 @@ export async function toggleSessionArchived(session: SessionSummary): Promise<vo
           : row,
       ),
     }));
-    reportFailure(wasArchived ? 'Could not restore that session' : 'Could not archive that session', result.error);
+    const context = wasArchived ? 'Could not restore that session' : 'Could not archive that session';
+    if (!result.ok) {
+      reportFailure(context, result.error);
+    } else {
+      pushBanner('error', `${context}: the provider has no record of it`);
+    }
     return;
   }
 

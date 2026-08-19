@@ -114,6 +114,33 @@ describe('describe()', () => {
     });
   });
 
+  it('says which half of the picker every provider belongs to, registered or not', async () => {
+    /*
+     * The profile screen splits its picker on `kind`, and a local provider is
+     * selectable there while it is unreachable — its profile is an address, not
+     * an installation. None of that worked while this field was never set: an
+     * absent `kind` reads as `hosted`, so LM Studio, Ollama and llama.cpp were
+     * filed under an account they do not have and disabled for not being
+     * signed in to it. There was no way to create a profile for any of them.
+     */
+    const registry = createProviderRegistry([fakeAdapter({ id: 'claude' })]);
+    const kinds = Object.fromEntries(
+      (await registry.describe()).map((descriptor) => [descriptor.id, descriptor.kind]),
+    );
+
+    expect(kinds).toEqual({
+      claude: 'hosted',
+      codex: 'hosted',
+      // A server on this machine, but entered through its own sign-in and a
+      // config directory — which is what `hosted` names, rather than where the
+      // process runs.
+      opencode: 'hosted',
+      lmstudio: 'local',
+      ollama: 'local',
+      llamacpp: 'local',
+    });
+  });
+
   it('can be asked for registered providers only', async () => {
     const registry = createProviderRegistry([fakeAdapter({ id: 'claude' })]);
     const descriptors = await registry.describe({ includeUnregistered: false });

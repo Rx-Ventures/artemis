@@ -28,7 +28,7 @@
  * out rather than drop it.
  */
 
-import type { ProviderDescriptor, ProviderId } from '@rx-artemis/protocol';
+import type { ProviderDescriptor, ProviderId, ProviderKind } from '@rx-artemis/protocol';
 import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
 import { createClaudeAdapter } from './claude.js';
@@ -49,6 +49,26 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
   lmstudio: 'LM Studio',
   ollama: 'Ollama',
   llamacpp: 'llama.cpp',
+};
+
+/**
+ * Which half of the profile screen's picker each provider belongs to — see
+ * {@link ProviderKind}. Kept here beside {@link PROVIDER_LABELS} and for the
+ * same reason: the split is a fact about the provider, not about the UI, and
+ * it has to cover providers this build has no adapter for.
+ *
+ * OpenCode is `hosted` despite running on this machine: its profile is a
+ * config directory entered through the provider's own sign-in, which is the
+ * hosted entry model. The `local` half is for the raw endpoints — no account,
+ * just an address.
+ */
+const PROVIDER_KINDS: Readonly<Record<ProviderId, ProviderKind>> = {
+  claude: 'hosted',
+  codex: 'hosted',
+  opencode: 'hosted',
+  lmstudio: 'local',
+  ollama: 'local',
+  llamacpp: 'local',
 };
 
 /** Why a known provider is missing from this build. */
@@ -113,6 +133,7 @@ export function createProviderRegistry(
           if (!includeUnregistered) continue;
           descriptors.push({
             id,
+            kind: PROVIDER_KINDS[id],
             label: PROVIDER_LABELS[id],
             capabilities: NO_CAPABILITIES,
             // No adapter, so no sign-in instructions to give. The profile
@@ -129,6 +150,7 @@ export function createProviderRegistry(
         const availability = await resolveAvailability(adapter, availabilityCache);
         descriptors.push({
           id,
+          kind: PROVIDER_KINDS[id],
           label: adapter.label,
           capabilities: adapter.capabilities,
           // Published so the profile screen can explain the sign-in it is about
