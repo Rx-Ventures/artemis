@@ -391,7 +391,7 @@ export function SessionList(): ReactElement {
             <button
               type="button"
               onClick={() => void refreshSessions()}
-              className="mt-1 block text-2xs text-lunar underline-offset-2 hover:underline"
+              className="mt-1 block text-2xs text-beam underline-offset-2 hover:underline"
             >
               Try again
             </button>
@@ -501,7 +501,7 @@ const GroupHeading = memo(function GroupHeading({
         still marked — by the label beside this, which is a claim about
         which project you are in rather than about what kind of thing it is.
       */}
-      <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
+      <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-beam" />
       <span
         className={cn(
           'min-w-0 truncate text-2xs font-medium tracking-tight',
@@ -544,7 +544,7 @@ const GroupHeading = memo(function GroupHeading({
  * was added rather than growing a permanent "Pinned · 0" — a heading for a
  * folder you have put nothing in is furniture that teaches nothing.
  *
- * The pin is `text-lunar`, the accent this list already uses to mark the active
+ * The pin is `text-beam`, the accent this list already uses to mark the active
  * project, rather than the archive's `text-ink-faint`. The two sections are
  * opposite claims and should not be the same weight: one is the shelf you put
  * things on to keep seeing them, and drawing it in the colour of what has been
@@ -575,7 +575,7 @@ const PinnedHeading = memo(function PinnedHeading({
             collapsed && '-rotate-90',
           )}
         />
-        <PinIcon aria-hidden="true" className="size-2.5 shrink-0 text-lunar" />
+        <PinIcon aria-hidden="true" className="size-2.5 shrink-0 text-beam" />
         <span className="min-w-0 truncate text-2xs font-medium tracking-tight text-ink-muted">
           Pinned
         </span>
@@ -953,7 +953,7 @@ const Row = memo(function Row({
         onClick={() => resumeSession(session)}
         className={cn(
           'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
-          active && 'border-lunar/70 bg-raised/60',
+          active && 'border-beam/70 bg-raised/60',
           // Put away, and it should look it — but still legible, because these
           // rows are only on screen when the user went looking for them.
           archived && 'opacity-60',

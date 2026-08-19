@@ -76,7 +76,7 @@ import { cn } from '@/lib/utils';
 const STATE: Record<PullRequestState, { readonly label: string; readonly tone: string; readonly Icon: typeof GitMergeIcon }> = {
   open: { label: 'Open', tone: 'text-mint', Icon: GitPullRequestIcon },
   draft: { label: 'Draft', tone: 'text-ink-muted', Icon: GitPullRequestIcon },
-  merged: { label: 'Merged', tone: 'text-lunar', Icon: GitMergeIcon },
+  merged: { label: 'Merged', tone: 'text-beam', Icon: GitMergeIcon },
   closed: { label: 'Closed', tone: 'text-signal', Icon: XIcon },
 };
 

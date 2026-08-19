@@ -195,7 +195,7 @@ function useStoredLayout(
  * caption border. It lights up on hover and while dragging, which is the only
  * time a divider is worth seeing.
  */
-const HANDLE = 'bg-transparent transition-colors hover:bg-lunar/30 data-[state=drag]:bg-lunar/50';
+const HANDLE = 'bg-transparent transition-colors hover:bg-beam/30 data-[state=drag]:bg-beam/50';
 
 /* -------------------------------------------------------------------------- */
 /* The grid                                                                   */
@@ -574,7 +574,7 @@ function PaneCaption({
     <div
       className={cn(
         'flex h-7 shrink-0 items-center gap-1.5 border-b px-2.5',
-        focused ? 'border-lunar/40 bg-raised/60' : 'border-line',
+        focused ? 'border-beam/40 bg-raised/60' : 'border-line',
       )}
     >
       <span
@@ -735,7 +735,7 @@ function DropZone({
       onDrop={onDrop}
       className={cn(
         'pointer-events-auto flex items-center justify-center transition-colors',
-        over ? 'bg-lunar/15 ring-1 ring-lunar/50 ring-inset' : 'bg-transparent',
+        over ? 'bg-beam/15 ring-1 ring-beam/50 ring-inset' : 'bg-transparent',
         className,
       )}
     >
@@ -745,7 +745,7 @@ function DropZone({
         thing the user is trying to aim at.
       */}
       {over ? (
-        <span className="rounded-lg border border-dashed border-lunar/70 bg-panel px-3 py-1.5 text-2xs text-ink shadow-lg shadow-black/40">
+        <span className="rounded-lg border border-dashed border-beam/70 bg-panel px-3 py-1.5 text-2xs text-ink shadow-lg shadow-black/40">
           {label}
         </span>
       ) : null}

@@ -69,11 +69,11 @@ export function UpdateBanner(): ReactElement | null {
       {state.phase === 'error' ? (
         <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0 text-signal" />
       ) : state.phase === 'available' ? (
-        <DownloadIcon aria-hidden className="size-3.5 shrink-0 text-lunar" />
+        <DownloadIcon aria-hidden className="size-3.5 shrink-0 text-beam" />
       ) : state.phase === 'ready' ? (
-        <RefreshCwIcon aria-hidden className="size-3.5 shrink-0 text-lunar" />
+        <RefreshCwIcon aria-hidden className="size-3.5 shrink-0 text-beam" />
       ) : (
-        <LoaderCircleIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-lunar" />
+        <LoaderCircleIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-beam" />
       )}
 
       <span className="min-w-0 flex-1 truncate">
@@ -89,7 +89,7 @@ export function UpdateBanner(): ReactElement | null {
       {state.phase === 'available' && (
         <button
           type="button"
-          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-lunar hover:bg-lunar/10"
+          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-beam hover:bg-beam/10"
           onClick={installUpdate}
         >
           Update now
@@ -99,7 +99,7 @@ export function UpdateBanner(): ReactElement | null {
       {state.phase === 'ready' && (
         <button
           type="button"
-          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-lunar hover:bg-lunar/10"
+          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-beam hover:bg-beam/10"
           onClick={restartForUpdate}
         >
           Restart now
@@ -114,7 +114,7 @@ export function UpdateBanner(): ReactElement | null {
           href={state.releaseUrl}
           target="_blank"
           rel="noreferrer"
-          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-lunar hover:bg-lunar/10"
+          className="shrink-0 rounded-sm px-1.5 py-0.5 font-medium text-beam hover:bg-beam/10"
         >
           Open releases page
         </a>

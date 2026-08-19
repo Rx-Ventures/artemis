@@ -53,7 +53,7 @@
  *
  * `align` flips the whole row, gutter included, so a user turn puts its label
  * on the right where the bubble is. That is the back-and-forth: the user speaks
- * from the right in a filled lunar bubble, everything the agent does answers
+ * from the right in a filled beam bubble, everything the agent does answers
  * from the left.
  *
  * Four choices inside that worth stating, because each had an obvious
@@ -67,9 +67,9 @@
  *    the hooks `bubble.tsx` itself selects on — renaming the group would
  *    quietly break a vendored file's own styling.
  *  - **The user bubble is `tinted`, not `default`.** `default` fills with
- *    `--primary`, which here is lunar at 73% lightness. A one-line prompt would
+ *    `--primary`, which here is beam at 73% lightness. A one-line prompt would
  *    survive that; a pasted twenty-line spec is a floodlight in a dark room
- *    someone is sitting in for eight hours. `tinted` is the same lunar hue at
+ *    someone is sitting in for eight hours. `tinted` is the same beam hue at
  *    30% lightness — unmistakably "yours", legible in `--ink`, and quiet.
  *  - **The agent bubble is `ghost`.** Agent output here is code-heavy markdown
  *    — fenced blocks, tables, diff-adjacent prose — not chat banter. A filled
@@ -542,7 +542,7 @@ function AgentAvatar(): ReactElement {
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   return (
-    <Line label="you" tone="lunar" ts={item.ts} align="end" className="turn-in mt-2">
+    <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2">
       <Bubble
         align="end"
         variant="tinted"
@@ -565,7 +565,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             `rounded-br-sm` is the tail — the one square corner points back at
             the author, which is what makes an aligned bubble read as *from*
             someone rather than merely offset. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm border-lunar/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
+        <BubbleContent className="rounded-2xl rounded-br-sm border-beam/25 px-3.5 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -585,7 +585,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                     // Capped rather than full-bleed: a tall screenshot at full
                     // width would push the prompt it belongs to off the screen,
                     // and this is a record of what was sent, not a viewer.
-                    className="max-h-48 max-w-full rounded-md border border-lunar/25 object-contain"
+                    className="max-h-48 max-w-full rounded-md border border-beam/25 object-contain"
                   />
                 ) : (
                   /* A file has no picture, so the record of it is its name and
@@ -596,7 +596,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                   <span
                     key={attachment.id}
                     title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
-                    className="flex max-w-full items-center gap-1.5 rounded-md border border-lunar/25 px-2 py-1 font-mono text-2xs text-ink-muted"
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-beam/25 px-2 py-1 font-mono text-2xs text-ink-muted"
                   >
                     <PaperclipIcon className="size-3 shrink-0" />
                     <span className="truncate text-ink">{attachment.name}</span>
@@ -1420,7 +1420,7 @@ function Stat({
   return (
     <span className="flex items-baseline gap-1">
       <span className="font-mono text-2xs text-ink-faint">{label}</span>
-      <span className={cn('font-mono text-2xs', emphasis ? 'text-lunar' : 'text-ink-muted')}>
+      <span className={cn('font-mono text-2xs', emphasis ? 'text-beam' : 'text-ink-muted')}>
         {value}
       </span>
     </span>

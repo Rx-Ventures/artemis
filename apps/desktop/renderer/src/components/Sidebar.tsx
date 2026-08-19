@@ -307,7 +307,7 @@ function ResizeHandle({
           setSidebarWidth(width + KEYBOARD_STEP);
         }
       }}
-      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-lunar/30 focus-visible:bg-lunar/40"
+      className="absolute inset-y-2 right-0 z-20 w-2 cursor-col-resize touch-none rounded-full bg-transparent transition-colors hover:bg-beam/30 focus-visible:bg-beam/40"
     />
   );
 }

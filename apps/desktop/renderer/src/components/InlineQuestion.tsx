@@ -209,7 +209,7 @@ function PendingQuestion({
        * multiple-choice question. `--line-strong` still carries the emphasised
        * edge, so the card is as findable by scrolling as the amber one.
        */
-      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-lunar/50"
+      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
     >
       <div className="flex items-start gap-2 border-b border-line px-2.5 py-2">
         <MessageCircleQuestionMarkIcon

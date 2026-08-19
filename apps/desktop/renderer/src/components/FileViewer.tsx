@@ -22,7 +22,7 @@
  * waved away. A grammar set is shipped, but a chosen subset — sixteen languages
  * this repo and the projects it works on actually contain — not the megabyte
  * that registering everything costs. And the theme answers to both palettes by
- * being the app's own tokens: the classes map to `--ink`, `--lunar` and the
+ * being the app's own tokens: the classes map to `--ink`, `--beam` and the
  * rest in CSS, so a file's colours move with the palette instead of being a
  * second source of truth for what a string looks like.
  *

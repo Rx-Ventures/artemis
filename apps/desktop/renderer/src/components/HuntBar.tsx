@@ -46,10 +46,10 @@
  *
  * ## Moonlight, not machine-cyan
  *
- * The whole scene draws in `lunar` while anything is happening and `ink-faint`
+ * The whole scene draws in `beam` while anything is happening and `ink-faint`
  * at rest. The tone system (cyan for work, amber for approvals) grades rows —
  * badges, dots, labels — and this is not a row, it is the app's own mark;
- * `lunar` is the accent named for Artemis' light and the colour the runbar
+ * `beam` is the accent named for Artemis' light and the colour the runbar
  * sweeps in, and the two reading as one system matters more than the scene
  * joining a taxonomy it is not part of.
  *
@@ -108,7 +108,7 @@ export function HuntBar(): ReactElement {
         Mounted only while firing, so the other poses hold no invisible DOM.
       */}
       {pose === 'firing' ? (
-        <span className="hunt-flight absolute inset-0 text-lunar opacity-0">
+        <span className="hunt-flight absolute inset-0 text-beam opacity-0">
           <ArrowInFlight />
         </span>
       ) : null}
@@ -138,10 +138,10 @@ function Bow({ pose }: { readonly pose: Pose }): ReactElement {
       viewBox="0 0 16 16"
       className={cn(
         'absolute top-0 left-1 size-4',
-        // Lunar while anything is happening; faint ink at rest. A constant
+        // Beam while anything is happening; faint ink at rest. A constant
         // fixture has to earn its permanence by being quiet when idle, and
         // has room to be the accent when it is the thing reporting.
-        pose === 'rest' ? 'text-ink-faint' : 'text-lunar',
+        pose === 'rest' ? 'text-ink-faint' : 'text-beam',
       )}
       fill="none"
       stroke="currentColor"
@@ -197,7 +197,7 @@ function Stingray({ pose }: { readonly pose: Pose }): ReactElement {
       viewBox="0 0 24 16"
       className={cn(
         'absolute top-0 right-1 h-4 w-6',
-        pose === 'rest' ? 'text-ink-faint' : 'text-lunar',
+        pose === 'rest' ? 'text-ink-faint' : 'text-beam',
       )}
       fill="none"
       stroke="currentColor"

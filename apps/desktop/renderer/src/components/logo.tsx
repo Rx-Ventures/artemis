@@ -23,8 +23,8 @@
  * The only deliberate differences are the two that have to differ:
  *
  *   - `currentColor` instead of the icon's literal `#a39af4`, so the mark takes
- *     its colour from context — `--lunar` on a dark surface, `--lunar-ink` on a
- *     lunar fill. The hex in the icon file *is* `--lunar`; it is spelled out
+ *     its colour from context — `--beam` on a dark surface, `--beam-ink` on a
+ *     beam fill. The hex in the icon file *is* `--beam`; it is spelled out
  *     there only because an `.icns` has no cascade to inherit from.
  *   - A cropped `viewBox`. The icon's generous margin is tile inset, which macOS
  *     wants and a mark sat next to a line of text does not — uncropped, it
@@ -37,7 +37,7 @@
  * ## Why a bow, and why not lucide's
  *
  * The mark this replaced was a moon — the other read on the name, and the one
- * the `--lunar` accent is still named for. It went because a moon is a crowded
+ * the `--beam` accent is still named for. It went because a moon is a crowded
  * glyph: `moon` and `contrast` both ship in the icon set the app already
  * imports, so avoiding them cost a paragraph of geometry and still left a mark
  * that a tired user could mistake for the theme toggle. A drawn bow has no such

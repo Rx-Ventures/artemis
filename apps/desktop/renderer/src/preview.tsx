@@ -92,7 +92,7 @@ function Section({ title, children }: { title: string; children: ReactNode }): R
   );
 }
 
-const TONES: readonly Tone[] = ['neutral', 'lunar', 'cyan', 'sage', 'mint', 'amber', 'signal'];
+const TONES: readonly Tone[] = ['neutral', 'beam', 'cyan', 'sage', 'mint', 'amber', 'signal'];
 
 const SWATCHES: readonly (readonly [string, string])[] = [
   ['abyss', 'bg-abyss'],
@@ -101,7 +101,7 @@ const SWATCHES: readonly (readonly [string, string])[] = [
   ['float', 'bg-float'],
   ['inset', 'bg-inset'],
   ['line', 'bg-line'],
-  ['lunar', 'bg-lunar'],
+  ['beam', 'bg-beam'],
   ['cyan', 'bg-cyan'],
   ['sage', 'bg-sage'],
   ['mint', 'bg-mint'],
@@ -203,7 +203,7 @@ function Gallery(): ReactElement {
           {TONES.map((tone) => (
             <StatusDot key={tone} tone={tone} />
           ))}
-          <StatusDot tone="lunar" pulse />
+          <StatusDot tone="beam" pulse />
         </Section>
 
         <Section title="Form controls">

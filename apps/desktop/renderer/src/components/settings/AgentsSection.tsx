@@ -268,7 +268,7 @@ function PromptRow({
       className={cn(
         'flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors',
         selected
-          ? 'border-lunar/45 bg-lunar/5'
+          ? 'border-beam/45 bg-beam/5'
           : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
       )}
     >

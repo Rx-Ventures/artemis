@@ -27,7 +27,7 @@
  *
  * A neutral charcoal substrate (every surface sits at hue 285 with chroma at or
  * under 0.008 — cool enough to belong with the accent, far too low to read as a
- * colour) lit by one pastel blue-violet accent: `--lunar`, the moon, for
+ * colour) lit by one pastel blue-violet accent: `--beam`, the moon, for
  * "Artemis". Five semantic hues carry meaning and nothing else: cyan for
  * machine work, sage for the model's private thinking, mint/amber/signal for
  * the three outcomes.
@@ -87,7 +87,7 @@
  * TWO NAMING SYSTEMS, ON PURPOSE
  * ---------------------------------------------------------------------------
  *
- * Artemis names   (`--panel`, `--ink-muted`, `--lunar`, `--signal`)
+ * Artemis names   (`--panel`, `--ink-muted`, `--beam`, `--signal`)
  *     Physical. What the colour *is*. Use these for app chrome and for the
  *     transcript, where "the thinking block is sage" is the actual design
  *     intent and there is no generic role that captures it.
@@ -204,7 +204,7 @@
   --ink-faint: oklch(59% 0.005 285);
 
   /* ---- Accents --------------------------------------------------------
-     Lunar is the only accent that means "act". The rest are semantic and
+     Beam is the only accent that means "act". The rest are semantic and
      are never used decoratively.
 
      L 73% is a gamut ceiling, not a taste call — see the header. Chroma 0.128
@@ -212,9 +212,9 @@
      `color-mix` to lighten it without clipping. Past roughly 0.16 it stops
      reading as moonlight and starts reading as a neon violet, which is a
      different instruction entirely. */
-  --lunar: oklch(73% 0.128 287); /* primary action, focus ring      */
-  --lunar-dim: oklch(63% 0.113 287);
-  --lunar-ink: oklch(20% 0.035 287); /* text on a lunar fill         */
+  --beam: oklch(73% 0.128 287); /* primary action, focus ring      */
+  --beam-dim: oklch(63% 0.113 287);
+  --beam-ink: oklch(20% 0.035 287); /* text on a beam fill         */
   /* 235, not the 245 it was: at 245 this sat 42° off the accent and read as a
      paler version of it. See the header. */
   --cyan: oklch(76% 0.1 235); /* tools / machine activity         */
@@ -265,8 +265,8 @@
   --popover: var(--float);
   --popover-foreground: var(--ink);
 
-  --primary: var(--lunar);
-  --primary-foreground: var(--lunar-ink);
+  --primary: var(--beam);
+  --primary-foreground: var(--beam-ink);
 
   --secondary: var(--raised);
   --secondary-foreground: var(--ink);
@@ -284,13 +284,13 @@
 
   --border: var(--line);
   --input: var(--line);
-  --ring: var(--lunar);
+  --ring: var(--beam);
 
   /* Charts. Ordered so the first two are maximally distinguishable, and
      chosen from the semantic hues so a chart never introduces a colour the
      rest of the app does not already use. */
   --chart-1: var(--cyan);
-  --chart-2: var(--lunar);
+  --chart-2: var(--beam);
   --chart-3: var(--mint);
   --chart-4: var(--sage);
   --chart-5: var(--signal);
@@ -303,12 +303,12 @@
      surface, so the two would agree. */
   --sidebar: var(--panel);
   --sidebar-foreground: var(--ink);
-  --sidebar-primary: var(--lunar);
-  --sidebar-primary-foreground: var(--lunar-ink);
+  --sidebar-primary: var(--beam);
+  --sidebar-primary-foreground: var(--beam-ink);
   --sidebar-accent: var(--raised);
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
-  --sidebar-ring: var(--lunar);
+  --sidebar-ring: var(--beam);
 }
 
 /* ==========================================================================
@@ -321,7 +321,7 @@
  * Everything above is either a raw token or a semantic token defined *only* in
  * terms of one — `--card: var(--panel)`, never a literal — and every colour in
  * the rest of this file goes through those same names, down to the
- * `color-mix(in oklch, var(--lunar) 35%, transparent)` that draws a selection.
+ * `color-mix(in oklch, var(--beam) 35%, transparent)` that draws a selection.
  * That discipline is the whole reason this block is twenty values instead of
  * two hundred: `var()` resolves against the element a declaration lands on, not
  * the one it was written in, so redefining the raw tokens on `<html>` carries
@@ -361,7 +361,7 @@
  * separations argued for above still hold.
  *
  * Ratios against `--panel`, which is the worst case for the greys and the best
- * for nothing: ink 16.5, ink-muted 7.8, ink-faint 5.5, lunar 6.6, cyan 5.9,
+ * for nothing: ink 16.5, ink-muted 7.8, ink-faint 5.5, beam 6.6, cyan 5.9,
  * sage 6.3, mint 5.4, amber 5.1, signal 6.1. `--ink-faint` is the one to watch
  * for the same reason it is above — it is what 11px chrome labels use — and it
  * holds 4.6 even on `--raised`, the darkest surface it is ever set on.
@@ -394,11 +394,11 @@
   --ink-faint: oklch(52% 0.011 285);
 
   /* ---- Accents --------------------------------------------------------
-     `--lunar-ink` and `--signal-ink` swap ends: the fills they sit on are
+     `--beam-ink` and `--signal-ink` swap ends: the fills they sit on are
      now dark, so the text on them is near-white rather than near-black. */
-  --lunar: oklch(50% 0.2 287);
-  --lunar-dim: oklch(43% 0.19 287);
-  --lunar-ink: oklch(98% 0.005 287);
+  --beam: oklch(50% 0.2 287);
+  --beam-dim: oklch(43% 0.19 287);
+  --beam-ink: oklch(98% 0.005 287);
   --cyan: oklch(50% 0.1 235);
   --sage: oklch(48% 0.07 195);
   --mint: oklch(51% 0.115 155);
@@ -477,9 +477,9 @@
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-ink-faint: var(--ink-faint);
-  --color-lunar: var(--lunar);
-  --color-lunar-dim: var(--lunar-dim);
-  --color-lunar-ink: var(--lunar-ink);
+  --color-beam: var(--beam);
+  --color-beam-dim: var(--beam-dim);
+  --color-beam-ink: var(--beam-ink);
   --color-cyan: var(--cyan);
   --color-sage: var(--sage);
   --color-mint: var(--mint);
@@ -610,7 +610,7 @@
   }
 
   ::selection {
-    background: color-mix(in oklch, var(--lunar) 35%, transparent);
+    background: color-mix(in oklch, var(--beam) 35%, transparent);
     color: var(--ink);
   }
 
@@ -732,7 +732,7 @@
     font-size: 1em;
   }
   .md a {
-    color: var(--lunar);
+    color: var(--beam);
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -820,7 +820,7 @@
    */
   .md.ProseMirror {
     /* The caret is the only thing in the surface that needs the accent. */
-    caret-color: var(--lunar);
+    caret-color: var(--beam);
   }
   /*
    * The placeholder line.
@@ -873,7 +873,7 @@
     height: 1em;
     margin-left: 1px;
     vertical-align: text-bottom;
-    background: var(--lunar);
+    background: var(--beam);
     animation: artemis-blink 1.1s steps(1) infinite;
   }
 
@@ -907,7 +907,7 @@
     background: linear-gradient(
       90deg,
       transparent,
-      color-mix(in oklch, var(--lunar) 70%, transparent),
+      color-mix(in oklch, var(--beam) 70%, transparent),
       transparent
     );
     animation: artemis-sweep 1.5s linear infinite;
@@ -921,7 +921,7 @@
    *
    * It rides *with* the runbar above, not instead of it: the hairline is the
    * transient report (present only while a run is live), the bow is the
-   * constant fixture at the conversation's foot. The two share the lunar
+   * constant fixture at the conversation's foot. The two share the beam
    * accent so they read as one system saying one thing.
    *
    * One 2400ms cycle shared by all four classes, and the sharing is the
@@ -1217,7 +1217,7 @@
 .hljs-literal,
 .hljs-doctag,
 .hljs-name {
-  color: var(--color-lunar);
+  color: var(--color-beam);
 }
 
 .hljs-string,

@@ -318,7 +318,7 @@ function ProfileCard({
   }, [signedIn]);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-lunar/50' : 'ring-line')}>
+    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-beam/50' : 'ring-line')}>
       <CardContent className="flex flex-col gap-1.5">
         {/*
           Only problems get a badge.
@@ -329,7 +329,7 @@ function ProfileCard({
           the only badge that needs acting on, was sitting in a line of green
           and orange reassurance.
 
-          Neither fact is lost. Active is the card's lunar ring, which reads
+          Neither fact is lost. Active is the card's beam ring, which reads
           faster than a word and does not compete for the same slot; signed-in
           is the account line below, which names the account rather than
           asserting that one exists.
@@ -523,7 +523,7 @@ function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactEl
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
+    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
       <CardContent className="flex flex-col gap-3">
         <h2 className="text-sm font-medium text-ink">Sign in</h2>
         <SignInStep profileId={createdId} onDone={onDone} />
@@ -1139,7 +1139,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-lunar/35">
+    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">

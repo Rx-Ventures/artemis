@@ -185,12 +185,12 @@ function Phase({ phase }: { readonly phase: UpdateState['phase'] }): ReactElemen
     return <TriangleAlertIcon aria-hidden className="mt-px size-3.5 shrink-0 text-signal" />;
   }
   if (phase === 'available') {
-    return <DownloadIcon aria-hidden className="mt-px size-3.5 shrink-0 text-lunar" />;
+    return <DownloadIcon aria-hidden className="mt-px size-3.5 shrink-0 text-beam" />;
   }
   if (phase === 'ready') {
-    return <RefreshCwIcon aria-hidden className="mt-px size-3.5 shrink-0 text-lunar" />;
+    return <RefreshCwIcon aria-hidden className="mt-px size-3.5 shrink-0 text-beam" />;
   }
   return (
-    <LoaderCircleIcon aria-hidden className="mt-px size-3.5 shrink-0 animate-spin text-lunar" />
+    <LoaderCircleIcon aria-hidden className="mt-px size-3.5 shrink-0 animate-spin text-beam" />
   );
 }
