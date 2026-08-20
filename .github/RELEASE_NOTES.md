@@ -1,6 +1,61 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.4.0
+
+A conversation can be wound back to something you said, and reopening one no
+longer buries it.
+
+- **Rewind, or fork, from any of your own messages.** Hover a message you sent
+  and two controls appear under it. **Rewind** winds the conversation back to
+  just before it: everything after is dropped and your words go back into the
+  composer, ready to be said differently. **Fork** does the same to a *copy* —
+  the original conversation stays whole and intact, and the new direction
+  branches from that point.
+
+  This is the thing to reach for when a turn went somewhere you did not want.
+  Steering mid-run tells the agent to change course while it still carries every
+  wrong assumption it just made; rewinding removes them from the conversation
+  entirely, so the retry starts from the last point that was still right.
+
+  Both need a conversation that is sitting still — the controls are absent
+  during a run, because winding back work that is still happening is not a
+  well-defined thing to ask for. They are absent on Codex too, which has no
+  truncating resume to build them on.
+
+- **A reopened conversation reads the way it did live.** Opening a session from
+  the sidebar used to gather *every* tool call it ever made into one marker
+  parked below the last message — an hour of work in a single line at the foot
+  of the column, opened by default because something in it had failed, with the
+  conversation itself scrolled off the top. Each turn's work now sits under that
+  turn, exactly where it was while the turn was happening, and markers open when
+  you open them. A failure still says so on the line, in signal, and it stays a
+  line.
+
+  Closing a marker also *stays* closed now when you leave the session and come
+  back. It always claimed to; the ids it remembered them by never matched after
+  a reload.
+
+- **What you have typed stays with the conversation you typed it to.** Start a
+  new session, type half a prompt, click another conversation to check something
+  — the text used to follow you there, sitting in the composer looking like
+  something you had written *there*, and it went there on Enter. Or vanished, if
+  the conversation you clicked was one already running. Now every conversation
+  keeps its own unsent text: switch away, switch back, and it is where you left
+  it, in the right place.
+
+- **`#123` is a link.** A pull request named the way people name one — `#141`,
+  `owner/repo#141`, "see PR #98" — now links to it, with the same hover reading
+  a pasted URL has had: whether it merged, whether its checks pass, how big it
+  is. A bare number resolves against the repository your working directory
+  actually pushes to, so it points where you mean; if that remote is not GitHub,
+  nothing is invented and the text stays text. Numbers inside code, and inside
+  links you already wrote, are left alone.
+
+- **The effort menu opens onto the screen.** The thinking-level submenu inside
+  the model picker opened leftward and off the side of the window, which made
+  the levels unreachable at some window sizes.
+
 ## What's new in 1.3.0
 
 The skills and slash commands you have already installed now work inside Artemis.
