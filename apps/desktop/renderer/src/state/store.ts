@@ -1699,6 +1699,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     ultracode: prefs.ultracode ?? false,
     forkOnResume: false,
     resumeSessionId: null,
+    rewindToMessageId: null,
     models: [],
     modelsLoading: false,
     modelsError: null,
@@ -2762,6 +2763,7 @@ export function openAgentTab(paneId: PaneId, taskId: string): void {
     tasks: [],
     dismissedTasks: [],
     tasksRequested: false,
+    rewindToMessageId: null,
     draft: '',
     parkedDrafts: {},
   });
@@ -6303,6 +6305,50 @@ export function setForkOnResume(fork: boolean, pane: Pane = focusedPane()): void
   setPaneState(pane, { forkOnResume: fork });
 }
 
+/**
+ * Wind this conversation back to just before one of its user messages — or
+ * branch a fork there, leaving the original whole.
+ *
+ * The two are one move with one flag because they are the same move: the next
+ * run resumes the session truncated at that message (see
+ * `RunInput.rewindToMessageId`), and `fork` only decides whether the provider
+ * keeps writing under the same session id or mints a new one. What differs on
+ * screen is nothing — either way the transcript is cut back to the message and
+ * its text lands in the composer, ready to be retyped or resent.
+ *
+ * Refusals are silent no-ops rather than banners because every one of them is
+ * a state the controls are already hidden in: a live run, a message still
+ * pending, a conversation with no session on disk to wind back.
+ */
+export function rewindConversationTo(
+  itemId: string,
+  { fork }: { readonly fork: boolean },
+  pane: Pane = focusedPane(),
+): void {
+  const state = paneState(pane);
+  if (isLive(state)) return;
+  if (!activeCapabilities(state).rewind) return;
+  if (fork && !activeCapabilities(state).forkSession) return;
+
+  const sessionId = state.resumeSessionId ?? state.run?.sessionId ?? null;
+  if (sessionId === null) return;
+
+  const item = pane.transcript.getItem(itemId);
+  if (item?.kind !== 'user' || item.messageId === undefined || item.pending) return;
+
+  pane.transcript.truncateFrom(itemId);
+  pane.transcript.flush();
+  setPaneState(pane, {
+    resumeSessionId: sessionId,
+    rewindToMessageId: item.messageId,
+    forkOnResume: fork,
+    // The message being wound past goes back in the composer — a rewind is
+    // almost always "let me say that differently", and retyping it from
+    // memory is the cost this control exists to remove.
+    draft: item.text,
+  });
+}
+
 export function setScreen(screen: Screen): void {
   useApp.setState({ screen, paletteOpen: false });
 }
@@ -7417,6 +7463,7 @@ export function newSession(
     setPaneState(pane, {
       run: null,
       resumeSessionId: null,
+      rewindToMessageId: null,
       permissionQueue: [],
       tasks: [],
       dismissedTasks: [],
@@ -7583,6 +7630,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     cwd: session.cwd,
     resumeSessionId: session.id,
     forkOnResume: false,
+    rewindToMessageId: null,
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
@@ -7985,9 +8033,21 @@ export async function submitPrompt(
       ? {
           resumeSessionId: state.resumeSessionId,
           ...(state.forkOnResume && capabilities.forkSession ? { forkSession: true } : {}),
+          ...(state.rewindToMessageId !== null && capabilities.rewind
+            ? { rewindToMessageId: state.rewindToMessageId }
+            : {}),
         }
       : {}),
   };
+
+  // One-shot, like `forkOnResume` after a fork lands: the truncation happens on
+  // the run this prompt starts, and the prompt after that continues whatever
+  // the rewound conversation became. Cleared before the round-trip rather than
+  // after it so a failed start does not leave a stale rewind aimed at the next
+  // unrelated prompt.
+  if (state.rewindToMessageId !== null) {
+    setPaneState(pane, { rewindToMessageId: null });
+  }
 
   const result = await call(() => bridge.runs.start({ input }));
   if (!result.ok) {

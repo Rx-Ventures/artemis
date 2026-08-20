@@ -897,3 +897,57 @@ describe('flush scheduling', () => {
     expect(flush).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('rewind support', () => {
+  it('keeps the provider id on a user message, replayed or echoed', () => {
+    const model = build();
+    for (const event of stream(
+      { type: 'text.complete', messageId: 'uuid-1', role: 'user', text: 'stored', replay: true },
+    )) {
+      model.apply(event);
+    }
+    expect(model.getItem('u:1')).toMatchObject({ kind: 'user', messageId: 'uuid-1' });
+
+    // The live path: an optimistic insert has no provider id — the echo is
+    // where it learns one, and `rewindConversationTo` refuses a message that
+    // never did.
+    const pendingId = model.pushUserMessage('typed here');
+    expect(model.getItem(pendingId)).toMatchObject({ kind: 'user', pending: true });
+    model.apply({
+      type: 'text.complete',
+      messageId: 'uuid-2',
+      role: 'user',
+      text: 'typed here',
+      runId: RUN,
+      seq: 99,
+      ts: 2000,
+    } as AgentEvent);
+    expect(model.getItem(pendingId)).toMatchObject({ pending: false, messageId: 'uuid-2' });
+  });
+
+  it('truncateFrom drops the item and everything after it, and nothing before', () => {
+    const model = build();
+    for (const event of stream(
+      { type: 'text.complete', messageId: 'u1', role: 'user', text: 'first', replay: true },
+      { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'answer one' },
+      { type: 'text.complete', messageId: 'u2', role: 'user', text: 'second', replay: true },
+      { type: 'tool.start', toolCallId: 'c1', name: 'Bash', input: {} },
+      { type: 'tool.end', toolCallId: 'c1', status: 'ok' },
+      { type: 'text.complete', messageId: 'm2', role: 'assistant', text: 'answer two' },
+    )) {
+      model.apply(event);
+    }
+
+    const before = model.getListSnapshot();
+    const cut = before.find((id) => model.getItem(id)?.kind === 'user' && (model.getItem(id) as { text: string }).text === 'second') as string;
+    model.truncateFrom(cut);
+
+    const after = model.getListSnapshot();
+    expect(after).toEqual(before.slice(0, before.indexOf(cut)));
+    // The dropped tool call left the group index too — a marker summarising
+    // items that no longer exist would be a fold over nothing.
+    expect(model.getRowsSnapshot().filter((id) => id.startsWith('g:'))).toEqual([]);
+    expect(model.getItem(cut)).toBeUndefined();
+    expect(model.getItem('t:c1')).toBeUndefined();
+  });
+});

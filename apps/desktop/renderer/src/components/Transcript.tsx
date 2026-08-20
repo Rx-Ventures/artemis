@@ -145,6 +145,8 @@ import {
   SparklesIcon,
   SquareArrowOutUpRightIcon,
   TerminalIcon,
+  GitForkIcon,
+  Undo2Icon,
   PaperclipIcon,
   TriangleAlertIcon,
   WrenchIcon,
@@ -154,6 +156,7 @@ import {
 import { attachmentBytes, isImageAttachment } from '@rx-artemis/protocol';
 
 import { useFold } from '../hooks/useFold';
+import { useCapability } from '../hooks/useCapability';
 import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks/useTranscript';
 import { recallFold, rememberFold } from '../lib/foldMemory';
 import { formatBytes } from '../lib/attachments';
@@ -162,8 +165,10 @@ import { detectFileEdit } from '../lib/diff';
 import { previewablePath } from '../lib/preview';
 import {
   activeCapabilities,
+  isLive,
   openFile,
   openPreview,
+  rewindConversationTo,
   useApp,
   type ConversationWidth,
 } from '../state/store';
@@ -492,8 +497,22 @@ function Line({
 /* -------------------------------------------------------------------------- */
 
 function UserRow({ item }: { readonly item: UserItem }): ReactElement {
+  const pane = usePaneRef();
+  const live = usePane(isLive);
+  const rewind = useCapability('rewind');
+  const fork = useCapability('forkSession');
+  /*
+   * Only a message the provider has filed can be a rewind point — the id the
+   * run input names is the provider's, and a pending message does not have one
+   * yet. Live runs hide the controls entirely: winding back a conversation
+   * that is mid-thought is refused in the store anyway, and a button that is
+   * present-but-inert under every message of a running turn is noise exactly
+   * where the eye is.
+   */
+  const canRewind = !live && item.messageId !== undefined && !item.pending && rewind.supported;
+
   return (
-    <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2">
+    <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2 group/turn">
       <Bubble
         align="end"
         /*
@@ -581,6 +600,47 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
           {item.text}
         </BubbleContent>
       </Bubble>
+
+      {/*
+        Rewind and fork, under the turn they act on.
+
+        Hover-revealed rather than always drawn, because they repeat under
+        every settled user turn and are wanted at most once a conversation —
+        but revealed by *the row's* hover, not the buttons' own, so they are
+        discoverable by pointing anywhere near the message. Order matches
+        destructiveness read right-to-left toward the bubble's tail: fork (the
+        reversible one — the original survives) sits outward, rewind against
+        the tail.
+
+        Both put the message's text back in the composer; the difference is
+        what happens to everything after it. Fork leaves this conversation
+        whole and branches a new one; rewind winds this one back. See
+        `rewindConversationTo`.
+      */}
+      {canRewind ? (
+        <span className="mt-0.5 flex items-center gap-0.5 self-end opacity-0 transition-opacity group-hover/turn:opacity-100 focus-within:opacity-100">
+          {fork.supported ? (
+            <button
+              type="button"
+              title="Fork from here — branch a new conversation, keeping this one"
+              aria-label="Fork the conversation from this message"
+              onClick={() => rewindConversationTo(item.id, { fork: true }, pane)}
+              className="rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <GitForkIcon className="size-3" aria-hidden="true" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            title="Rewind to here — wind the conversation back to before this message"
+            aria-label="Rewind the conversation to before this message"
+            onClick={() => rewindConversationTo(item.id, { fork: false }, pane)}
+            className="rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <Undo2Icon className="size-3" aria-hidden="true" />
+          </button>
+        </span>
+      ) : null}
     </Line>
   );
 }

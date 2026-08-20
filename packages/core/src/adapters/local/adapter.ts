@@ -160,6 +160,7 @@ export const LOCAL_CAPABILITIES: Capabilities = {
   // persisting transcripts itself.
   listSessions: false,
   resumeSession: false,
+  rewind: false,
   forkSession: false,
   /**
    * Enforced by our own loop rather than by a provider, which is why the list

@@ -144,8 +144,8 @@ import {
 import type { ClaudeMapperState } from './mapper.js';
 import { recoverSessionCwds } from './claudeSessionCwd.js';
 import { findScheduledSpawns } from './claudeSessionSpawn.js';
-import { replayStoredSession } from './history.js';
-import type { StoredMessage } from './history.js';
+import { replayStoredSession, resolveRewindPoint } from './history.js';
+import type { RewindPoint, StoredMessage } from './history.js';
 import { readPlanUsage } from './planUsage.js';
 import { AsyncQueue, createDeferred } from './stream.js';
 import type { Deferred } from './stream.js';
@@ -217,6 +217,7 @@ export const CLAUDE_CAPABILITIES: Capabilities = {
 
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true, // `Options.resume`
+  rewind: true, // `Options.resumeSessionAt`, resolved from the stored chain
   usageReporting: true, // `result.usage` / `result.modelUsage`
   costReporting: true, // `total_cost_usd` / `ModelUsage.costUSD`
   planUsageReporting: true, // the SDK's structured `/usage` control request
@@ -931,6 +932,46 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
        */
       const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
       const alive = input.resumeSessionId === undefined ? undefined : live.get(input.resumeSessionId);
+
+      /*
+       * A rewind never attaches, and never coexists with a live process.
+       *
+       * Attaching would hand the truncation request to a CLI whose context
+       * already contains the turns being wound back — silently ignored at
+       * best. And starting a *second* CLI against a file the first is still
+       * appending to is the exact clobber the pool exists to prevent. So a
+       * conversation that still has work in flight refuses the rewind and
+       * says why, which is also the honest answer: winding back a session
+       * that is mid-thought is not a well-defined thing to ask for.
+       */
+      let rewind: RewindPoint | undefined;
+      if (input.rewindToMessageId !== undefined && input.resumeSessionId !== undefined) {
+        if (alive !== undefined) {
+          throw adapterError(
+            'invalid_request',
+            'This conversation still has work running — stop it before rewinding.',
+          );
+        }
+        let stored;
+        try {
+          stored = await withClaudeConfigDir(configDir, () =>
+            sdkGetSessionMessages(input.resumeSessionId as string, { dir: input.cwd }),
+          );
+        } catch (error) {
+          throw adapterError('unknown', `Could not read the session to rewind it: ${describe(error)}`, {
+            cause: error,
+          });
+        }
+        const point = resolveRewindPoint(stored as unknown as readonly StoredMessage[], input.rewindToMessageId);
+        if (point === null) {
+          throw adapterError(
+            'invalid_request',
+            'That message is not in the stored conversation, or nothing comes before it — a rewind to the very beginning is a new session.',
+          );
+        }
+        rewind = point;
+      }
+
       if (alive !== undefined && alive.canServe(input, configDir)) {
         diagnostic?.(
           `Run ${input.runId}: continuing on the process already serving session ${input.resumeSessionId ?? '—'}.`,
@@ -971,6 +1012,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             now,
             hostEnv,
             diagnostic,
+            ...(rewind === undefined ? {} : { rewind }),
             ...(options?.sdkExecutablePath === undefined
               ? {}
               : { sdkExecutablePath: options.sdkExecutablePath }),
@@ -1729,6 +1771,13 @@ function validateRunInput(input: ResolvedRunInput): void {
     );
   }
 
+  if (input.rewindToMessageId !== undefined && input.resumeSessionId === undefined) {
+    throw adapterError(
+      'invalid_request',
+      'rewindToMessageId requires resumeSessionId — there is nothing to rewind.',
+    );
+  }
+
   for (const plugin of input.plugins ?? []) {
     // The SDK accepts a relative plugin path and resolves it against the run's
     // `cwd`, so the same value would name a different directory in every
@@ -1759,6 +1808,12 @@ export interface BuildClaudeOptionsContext {
    * run by the time it reaches here, so this function stays pure.
    */
   readonly mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * The resolved truncation point for a rewinding resume. Resolved from the
+   * stored chain in `createRun` for the same reason `mcpServers` is: this
+   * function stays pure.
+   */
+  readonly rewind?: RewindPoint;
 }
 
 /**
@@ -1839,6 +1894,11 @@ export function buildClaudeOptions(
     // Only meaningful alongside `resume`; `validateRunInput` has already
     // rejected the combination that is not.
     forkSession: input.resumeSessionId !== undefined ? input.forkSession : undefined,
+    // A truncating resume. The uuid pair comes resolved from the stored chain
+    // — the SDK wants the last entry *kept*, the renderer knows the first one
+    // *dropped*, and `resolveRewindPoint` is the translation between them.
+    resumeSessionAt: context.rewind?.resumeSessionAt,
+    resumeDropsTurn: context.rewind?.dropsTurn,
 
     // `RunInput.allowedTools` is an allow-*list*: it narrows which tools exist.
     // The SDK's `Options.allowedTools` is a different knob with a confusingly
@@ -1993,6 +2053,14 @@ function startsTurn(message: SDKMessage): boolean {
 interface ClaudeRunDeps {
   readonly now: () => number;
   readonly hostEnv?: EnvBundle;
+  /**
+   * Where a truncating resume re-enters the chain, when this run is one.
+   *
+   * Resolved by `createRun` against the stored session *before* the process is
+   * constructed, because the resolution is a file read and everything from
+   * here down is synchronous by design. See {@link resolveRewindPoint}.
+   */
+  readonly rewind?: RewindPoint;
   readonly diagnostic?: (message: string, detail?: unknown) => void;
   /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
   readonly sdkExecutablePath?: string;
@@ -2626,6 +2694,7 @@ class ClaudeProcess {
           abortController: this.#abort,
           stderr: (data) => this.#captureStderr(data),
           hostEnv: this.#deps.hostEnv,
+          ...(this.#deps.rewind === undefined ? {} : { rewind: this.#deps.rewind }),
           ...(this.#deps.sdkExecutablePath === undefined
             ? {}
             : { sdkExecutablePath: this.#deps.sdkExecutablePath }),
