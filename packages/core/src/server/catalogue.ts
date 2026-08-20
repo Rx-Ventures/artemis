@@ -278,6 +278,7 @@ const EMPTY_CAPABILITIES = {
   tagSession: false,
   permissionModes: [],
   resumeSession: false,
+  rewind: false,
   usageReporting: false,
   costReporting: false,
   planUsageReporting: false,

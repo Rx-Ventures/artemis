@@ -1132,6 +1132,9 @@ function assertRunnable(input: RunInput, adapter: ProviderAdapter): void {
   if (input.forkSession === true && input.resumeSessionId !== undefined && !caps.forkSession) {
     throw new RunError('invalid_request', `Provider "${adapter.id}" cannot fork sessions`);
   }
+  if (input.rewindToMessageId !== undefined && input.resumeSessionId !== undefined && !caps.rewind) {
+    throw new RunError('invalid_request', `Provider "${adapter.id}" cannot rewind sessions`);
+  }
   // Refused rather than dropped, like every other unsupported setting here.
   // The composer will not let a user attach to a provider that cannot take
   // one, so the way to arrive here is to attach under one provider and switch

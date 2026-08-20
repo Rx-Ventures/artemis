@@ -247,6 +247,7 @@ export const OPENCODE_CAPABILITIES: Capabilities = {
   listSessions: true,
   // Verified: `session/load` replays the stored conversation as updates.
   resumeSession: true,
+  rewind: false,
   // Verified: real token counts on the `session/prompt` result, context
   // occupancy and cost on the `usage_update` notification.
   usageReporting: true,

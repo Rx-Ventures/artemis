@@ -170,6 +170,13 @@ export interface Capabilities {
   readonly resumeSession: boolean;
 
   /**
+   * A resumed session can be truncated to an earlier user message —
+   * `RunInput.rewindToMessageId` is honoured rather than ignored. What the UI
+   * gates the rewind and fork-from-here controls under a user turn on.
+   */
+  readonly rewind: boolean;
+
+  /**
    * The provider reports token usage, so `usage` events carry meaningful
    * numbers and the UI can show a usage readout.
    */
@@ -262,6 +269,7 @@ export const NO_CAPABILITIES: Capabilities = {
   tagSession: false,
   permissionModes: [],
   resumeSession: false,
+  rewind: false,
   usageReporting: false,
   costReporting: false,
   planUsageReporting: false,

@@ -229,3 +229,64 @@ describe('replayStoredSession', () => {
     expect(events.map((e) => (e as { blockIndex: number }).blockIndex)).toEqual([0, 1]);
   });
 });
+
+import { resolveRewindPoint } from '../history.js';
+
+/** A stored user prompt — text the person typed, no tool results. */
+function prompt(text: string, uuid: string): StoredMessage {
+  return { type: 'user', uuid, message: { role: 'user', content: [{ type: 'text', text }] } };
+}
+
+/** A stored tool result, which also travels in a user envelope. */
+function toolResult(uuid: string): StoredMessage {
+  return {
+    type: 'user',
+    uuid,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+  };
+}
+
+describe('resolveRewindPoint', () => {
+  const CHAIN: readonly StoredMessage[] = [
+    prompt('find it', 'u1'),
+    assistant([{ type: 'text', text: 'found it' }], 'a1'),
+    prompt('now fix it', 'u2'),
+    toolResult('r1'),
+    assistant([{ type: 'text', text: 'done' }], 'a2'),
+  ];
+
+  it('re-enters the chain at the entry before the prompt', () => {
+    expect(resolveRewindPoint(CHAIN, 'u2')).toEqual({
+      resumeSessionAt: 'a1',
+      // The dropped range is one turn — u2, its tool result, its answer — so
+      // the drops-turn acknowledgement can vouch for it.
+      dropsTurn: 'u2',
+    });
+  });
+
+  it('omits the drops-turn acknowledgement when the range spans turns', () => {
+    // Winding back past u1 drops u2's whole turn too, and the provider's
+    // acknowledgement names a single prompt. The point still resolves; the
+    // provider's own guard decides whether the deeper truncation is allowed.
+    expect(resolveRewindPoint(CHAIN, 'u1')).toBeNull();
+
+    const longer = [prompt('zeroth', 'u0'), assistant([{ type: 'text', text: 'ok' }], 'a0'), ...CHAIN];
+    expect(resolveRewindPoint(longer, 'u1')).toEqual({ resumeSessionAt: 'a0' });
+  });
+
+  it('answers null for a uuid the chain does not hold, and for the first entry', () => {
+    // Both mean the rewind cannot happen: no anchor to re-enter at. The very
+    // first prompt has nothing before it — rewinding past it is "start a new
+    // session", which is a different button.
+    expect(resolveRewindPoint(CHAIN, 'unknown')).toBeNull();
+    expect(resolveRewindPoint(CHAIN, 'u1')).toBeNull();
+  });
+
+  it('does not mistake a tool result for a turn boundary', () => {
+    // r1 rides a user envelope but nobody asked it — if it counted as a
+    // prompt, rewinding to u2 would drop "two turns" and lose the
+    // acknowledgement it is entitled to.
+    const point = resolveRewindPoint(CHAIN, 'u2');
+    expect(point?.dropsTurn).toBe('u2');
+  });
+});

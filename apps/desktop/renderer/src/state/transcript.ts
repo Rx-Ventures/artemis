@@ -68,6 +68,17 @@ export interface UserItem extends ItemBase {
    */
   readonly replay?: boolean;
   /**
+   * The provider's own id for this message — for Claude, the chain uuid the
+   * stored session files this entry under.
+   *
+   * This is the handle rewind and fork-from-here need: `rewindToMessageId` on
+   * a run input names a user prompt by exactly this id. Present on replayed
+   * history (the stored uuid) and on a live message once the provider echoes
+   * it back; absent only while a message is still {@link pending}, which is
+   * also the one state the rewind controls must not offer it in.
+   */
+  readonly messageId?: string;
+  /**
    * Images sent with the message.
    *
    * The full attachments, base64 and all, kept for as long as the transcript
@@ -662,6 +673,52 @@ export class TranscriptModel {
     this.lastSeq = null;
   }
 
+  /**
+   * Drop one item and everything after it. The local half of a rewind.
+   *
+   * The provider's file is wound back by the next run (see
+   * `RunInput.rewindToMessageId`); this winds back what is on screen, so the
+   * conversation reads as already-rewound while the retyped prompt is being
+   * written. Only called between runs — the store gates it on an idle pane —
+   * so there is no streaming block or open call to worry about mid-flight:
+   * anything of the kind in the dropped suffix is settled history.
+   *
+   * Indexes are cleaned by deletion rather than rebuilt from scratch so the
+   * surviving prefix keeps its object identity — the rows above the cut must
+   * not re-render because the rows below it left.
+   */
+  truncateFrom(id: string): void {
+    const at = this.ids.indexOf(id);
+    if (at < 0) return;
+
+    const dropped = this.ids.slice(at);
+    this.ids = this.ids.slice(0, at);
+
+    for (const droppedId of dropped) {
+      this.items.delete(droppedId);
+      this.buffers.delete(droppedId);
+      this.streaming.delete(droppedId);
+      this.openTools.delete(droppedId);
+      this.dirty.delete(droppedId);
+      this.artifactVerdicts.delete(droppedId);
+      const index = this.unconfirmedUser.indexOf(droppedId);
+      if (index >= 0) this.unconfirmedUser.splice(index, 1);
+    }
+    // Block routing is keyed by message id, not item id, so it cannot be
+    // trimmed entry-wise — but every entry that pointed into the dropped
+    // suffix now points at nothing, and `resolveAssistantBlock` treats a
+    // dangling entry as "make a new block", which is the right answer for a
+    // message id that comes back after a rewind.
+    for (const [messageId, blocks] of this.messageBlocks) {
+      if (blocks.some((blockId) => blockId !== undefined && !this.items.has(blockId))) {
+        this.messageBlocks.delete(messageId);
+      }
+    }
+
+    this.structural = true;
+    this.markPending();
+  }
+
   /** Drop everything. Used when starting a new session. */
   reset(): void {
     this.ids = [];
@@ -739,7 +796,7 @@ export class TranscriptModel {
 
       case 'text.complete': {
         if (event.role === 'user') {
-          this.completeUserText(event.text, event.replay === true, event.synthetic === true, event.ts);
+          this.completeUserText(event.text, event.replay === true, event.synthetic === true, event.ts, event.messageId);
           break;
         }
         const id = this.resolveAssistantBlock(event.messageId, event.blockIndex);
@@ -1297,19 +1354,41 @@ export class TranscriptModel {
    * Reconcile a provider-echoed user message with the optimistic one already
    * on screen, so the user's own prompt does not appear twice.
    */
-  private completeUserText(text: string, replay: boolean, synthetic: boolean, ts: number): void {
+  private completeUserText(
+    text: string,
+    replay: boolean,
+    synthetic: boolean,
+    ts: number,
+    messageId?: string,
+  ): void {
     if (!replay && !synthetic) {
       const pendingId = this.unconfirmedUser.shift();
       if (pendingId !== undefined) {
         const existing = this.items.get(pendingId);
         if (existing?.kind === 'user') {
-          this.replace(pendingId, { ...existing, text, pending: false });
+          // The echo is where a locally-typed message learns its provider id —
+          // the optimistic insert could not have known it. See
+          // {@link UserItem.messageId} for what the id buys.
+          this.replace(pendingId, {
+            ...existing,
+            text,
+            pending: false,
+            ...(messageId === undefined ? {} : { messageId }),
+          });
           return;
         }
       }
     }
     const id = `u:${++this.counter}`;
-    this.insert({ id, ts, kind: 'user', text, pending: false, ...(replay ? { replay } : {}) });
+    this.insert({
+      id,
+      ts,
+      kind: 'user',
+      text,
+      pending: false,
+      ...(replay ? { replay } : {}),
+      ...(messageId === undefined ? {} : { messageId }),
+    });
   }
 
   /** Mark every streaming block finished. Called when the turn moves on. */

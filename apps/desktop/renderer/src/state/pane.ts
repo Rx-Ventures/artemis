@@ -172,6 +172,13 @@ export interface SessionState extends MirroredState {
 
   readonly forkOnResume: boolean;
   readonly resumeSessionId: SessionId | null;
+  /**
+   * Truncate the resumed conversation to just before this user message on the
+   * next run, named by the provider's own id for it. Set by the rewind and
+   * fork-from-here controls under a user turn; one-shot, consumed by the run
+   * that starts, and cleared with `resumeSessionId` everywhere that clears.
+   */
+  readonly rewindToMessageId: string | null;
 
   /**
    * The model catalogue this pane's *account* actually offers, or `[]`.
