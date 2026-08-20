@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotation calculator — drain-v1 vs headroom</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --accent:         #2a78d6;   /* series-1 blue */
+    --meter-used:     #2a78d6;   /* sequential blue 450 */
+    --meter-reserved: #86b6ef;   /* sequential blue 250 */
+    --status-good:    #0ca30c;
+    --status-warning: #fab219;
+    --status-critical:#d03b3b;
+    --good-text:      #006300;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --accent:         #3987e5;
+    --meter-used:     #3987e5;
+    --meter-reserved: #1c5cab;
+    --status-good:    #0ca30c;
+    --status-warning: #fab219;
+    --status-critical:#d03b3b;
+    --good-text:      #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --accent:         #3987e5;
+      --meter-used:     #3987e5;
+      --meter-reserved: #1c5cab;
+      --good-text:      #0ca30c;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: var(--page); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .sub { color: var(--text-secondary); font-size: 12.5px; margin-top: 2px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; max-width: 1200px; margin: 0 auto 14px; }
+  .wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+  .toolbar .group { display: flex; gap: 8px; align-items: center; }
+  label { color: var(--text-secondary); font-size: 12.5px; }
+  select, button {
+    font: inherit; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--baseline); border-radius: 7px; padding: 4px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .presets { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .presets button { font-size: 12px; color: var(--text-secondary); }
+
+  /* verdict strip */
+  .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .verdict { display: flex; flex-direction: column; gap: 2px; }
+  .verdict .algo { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+  .verdict .pick { font-size: 19px; font-weight: 650; }
+  .verdict .why { color: var(--text-secondary); font-size: 12.5px; }
+  .disagree { font-size: 12px; color: var(--text-secondary); border-top: 1px solid var(--grid); margin-top: 10px; padding-top: 8px; }
+
+  .accounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .accounts { grid-template-columns: 1fr; } }
+  .acct h2 { font-size: 14px; margin: 0; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .acct.winner { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .acct-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
+  .acct-head .right { display: flex; gap: 8px; align-items: center; }
+  .badge {
+    font-size: 11px; font-weight: 650; border-radius: 5px; padding: 1px 7px;
+    border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap;
+  }
+  .badge.win { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tier { font-size: 11.5px; font-weight: 650; padding: 1px 7px; border-radius: 5px; color: #fff; white-space: nowrap; }
+  .tier.A { background: var(--status-good); }
+  .tier.B { background: var(--status-warning); color: #1a1a19; }
+  .tier.C { background: var(--status-critical); }
+
+  .win-row { margin: 9px 0 3px; }
+  .win-row .lbl { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-bottom: 3px; }
+  .win-row .lbl b { color: var(--text-primary); font-weight: 600; }
+  .win-row .val { font-variant-numeric: tabular-nums; }
+  .meter { height: 10px; border-radius: 4px; background: var(--grid); overflow: hidden; display: flex; }
+  .meter .used { background: var(--meter-used); height: 100%; }
+  .meter .res  { background: var(--meter-reserved); height: 100%; margin-left: 2px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
+  .resets { display: flex; gap: 10px; margin-top: 2px; }
+  .resets .r { flex: 1; }
+  .resets label { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
+  .runs { display: flex; gap: 14px; margin-top: 10px; border-top: 1px solid var(--grid); padding-top: 9px; }
+  .stepper { display: flex; align-items: center; gap: 6px; }
+  .stepper button { padding: 0 8px; font-size: 14px; line-height: 20px; }
+  .stepper .n { min-width: 14px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stepper span.cap { font-size: 11.5px; color: var(--text-secondary); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; }
+  td.name { font-weight: 600; }
+  .note { color: var(--text-muted); font-size: 11.5px; margin-top: 8px; }
+  .legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--text-secondary); align-items: center; }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Account-rotation calculator — <span style="color:var(--accent)">drain-v1</span> vs current (headroom)</h1>
+    <div class="sub">Mirrors docs/research/ACCOUNT-ROTATION-ALGORITHM.md · constants from planLoad.ts (BASELINE 0.75, FIVE_HOUR 8, fable 8× · effort ladder ×0.5–×4 · ultracode ×2)</div>
+  </div>
+  <button id="themeToggle">◐ Theme</button>
+</header>
+
+<div class="wrap">
+
+  <div class="card toolbar">
+    <div class="group"><label>Incoming workload</label>
+      <select id="wModel">
+        <option value="fable" selected>Fable</option>
+        <option value="opus">Opus</option>
+        <option value="sonnet">Sonnet</option>
+        <option value="haiku">Haiku</option>
+      </select>
+      <select id="wEffort">
+        <option value="low">low</option>
+        <option value="medium" selected>medium</option>
+        <option value="high">high</option>
+        <option value="xhigh">xhigh</option>
+        <option value="max">max</option>
+      </select>
+      <label><input type="checkbox" id="wUltra"> ultracode</label>
+    </div>
+    <div class="group legend">
+      <span><span class="chip" style="background:var(--meter-used)"></span>used</span>
+      <span><span class="chip" style="background:var(--meter-reserved)"></span>reserved by live runs</span>
+      <span><span class="chip" style="background:var(--grid)"></span>free</span>
+    </div>
+    <div class="presets">
+      <button data-preset="tenpct">Preset: 10% weekly + full Fable</button>
+      <button data-preset="drain">Preset: drain before reset</button>
+      <button data-preset="herd">Preset: live-run herd</button>
+      <button data-preset="reset">Reset</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="verdicts">
+      <div class="verdict">
+        <div class="algo">drain-v1 routes to</div>
+        <div class="pick" id="drainPick">—</div>
+        <div class="why" id="drainWhy"></div>
+      </div>
+      <div class="verdict">
+        <div class="algo">current (headroom) routes to</div>
+        <div class="pick" id="headroomPick">—</div>
+        <div class="why" id="headroomWhy"></div>
+      </div>
+    </div>
+    <div class="disagree" id="disagree"></div>
+  </div>
+
+  <div class="accounts" id="accounts"></div>
+
+  <div class="card">
+    <table id="results"></table>
+    <div class="note">Hs = min(general weekly, matching model bucket) − live-run reservations, in baseline points (headroom% × plan weight). Hf = 5-hour free × weight − 5-hour reservations. Session need: needSlow = loadFactor × 0.75, needFast = loadFactor × 8. Tier A ranks by Hs ÷ max(hours-to-reset, 6) — points per hour before they expire. Nothing is clamped; negative means over-committed.</div>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+
+/* ---- constants mirrored from packages/protocol/src/planLoad.ts ---- */
+const MODEL_LOAD  = { haiku: 0.25, sonnet: 1, opus: 4, fable: 8 };
+const EFFORT_LOAD = { low: 0.5, medium: 1, high: 2, xhigh: 3, max: 4 };
+const ULTRACODE_MULTIPLIER = 2;
+const BASELINE_RESERVATION_POINTS = 0.75;
+/* ---- drain-v1 proposal constants ---- */
+const FIVE_HOUR_RESERVATION_POINTS = 8;
+const URGENCY_FLOOR_H = 6;
+const FULL_PERIOD_H = 168;
+
+const PLANS = { pro: { label: "Pro", weight: 1 }, max5: { label: "Max 5×", weight: 5 }, max20: { label: "Max 20×", weight: 20 } };
+
+function modelLoadFactor(model) {
+  if (!model) return 1;
+  const id = model.toLowerCase();
+  const families = Object.keys(MODEL_LOAD).sort((a, b) => b.length - a.length);
+  for (const f of families) if (id.includes(f)) return MODEL_LOAD[f];
+  return 1;
+}
+function runLoadFactor(run) {
+  const base = modelLoadFactor(run.model) * (EFFORT_LOAD[(run.effort || "medium").toLowerCase()] ?? 1);
+  return run.ultracode ? base * ULTRACODE_MULTIPLIER : base;
+}
+function reservationFor(runs, perRunPoints) {
+  let t = 0;
+  for (const r of runs) t += runLoadFactor(r) * perRunPoints;
+  return t;
+}
+
+/* ---- state: three accounts ---- */
+const DEFAULTS = [
+  { name: "Account 1", plan: "max20", inPool: true, u5: 20, u7: 45, uF: 30, r5: 90, r7: 96, rF: 96, fableRuns: 0, otherRuns: 0 },
+  { name: "Account 2", plan: "max20", inPool: true, u5: 55, u7: 60, uF: 40, r5: 150, r7: 14, rF: 14, fableRuns: 0, otherRuns: 0 },
+  { name: "Account 3", plan: "max5",  inPool: true, u5: 10, u7: 25, uF: 10, r5: 30, r7: 120, rF: 120, fableRuns: 0, otherRuns: 0 },
+];
+let accounts = structuredClone(DEFAULTS);
+
+const PRESETS = {
+  tenpct: [ /* David's scenario: 10% weekly left, 3-day reset, Fable untouched */
+    { u5: 15, u7: 90, uF: 0,  r5: 120, r7: 72,  rF: 72,  plan: "max20", fableRuns: 0, otherRuns: 0 },
+    { u5: 30, u7: 40, uF: 35, r5: 60,  r7: 120, rF: 120, plan: "max20", fableRuns: 0, otherRuns: 0 },
+    { u5: 25, u7: 55, uF: 20, r5: 200, r7: 48,  rF: 48,  plan: "max20", fableRuns: 0, otherRuns: 0 },
+  ],
+  drain: [ /* equal-ish headroom, very different reset clocks */
+    { u5: 20, u7: 60, uF: 10, r5: 90, r7: 160, rF: 160, plan: "max20", fableRuns: 0, otherRuns: 0 },
+    { u5: 20, u7: 60, uF: 60, r5: 90, r7: 10,  rF: 10,  plan: "max20", fableRuns: 0, otherRuns: 0 },
+    { u5: 20, u7: 65, uF: 30, r5: 90, r7: 80,  rF: 80,  plan: "max20", fableRuns: 0, otherRuns: 0 },
+  ],
+  herd: [ /* emptiest account already carrying two Fable sessions */
+    { u5: 10, u7: 20, uF: 10, r5: 90, r7: 100, rF: 100, plan: "max20", fableRuns: 2, otherRuns: 0 },
+    { u5: 25, u7: 35, uF: 25, r5: 90, r7: 100, rF: 100, plan: "max20", fableRuns: 0, otherRuns: 0 },
+    { u5: 30, u7: 40, uF: 30, r5: 90, r7: 100, rF: 100, plan: "max20", fableRuns: 0, otherRuns: 1 },
+  ],
+};
+
+function workload() {
+  return { model: document.getElementById("wModel").value, effort: document.getElementById("wEffort").value, ultracode: document.getElementById("wUltra").checked };
+}
+function liveRuns(a) {
+  const runs = [];
+  for (let i = 0; i < a.fableRuns; i++) runs.push({ model: "fable", effort: "medium" });
+  for (let i = 0; i < a.otherRuns; i++) runs.push({ model: "sonnet", effort: "medium" });
+  return runs;
+}
+
+/* ---- current algorithm: recommendProfile (usage.ts:393), faithful ---- */
+function currentAlgorithm(accts) {
+  const ranked = accts.filter(a => a.inPool).map(a => {
+    const windows = [ { id: "five_hour", u: a.u5 }, { id: "seven_day", u: a.u7 }, { id: "model_scoped:Fable", u: a.uF } ];
+    let binding = windows[0];
+    for (const w of windows) if (w.u > binding.u) binding = w;
+    return { a, binding, headroom: 100 - binding.u };
+  });
+  if (ranked.length < 2) return { pick: null, ranked, basis: null };
+  const planIds = new Set(ranked.map(r => r.a.plan));
+  const basis = planIds.size === 1 ? "same-plan" : "weighted";
+  const score = r => r.headroom * PLANS[r.a.plan].weight - reservationFor(liveRuns(r.a), BASELINE_RESERVATION_POINTS);
+  let best = ranked[0];
+  for (const c of ranked.slice(1)) if (score(c) > score(best)) best = c;  /* strictly greater keeps first */
+  return { pick: best, ranked, basis, scoreOf: score };
+}
+
+/* ---- drain-v1, faithful to the proposal ---- */
+function drainV1(accts, w) {
+  const rlf = runLoadFactor(w);
+  const needSlow = rlf * BASELINE_RESERVATION_POINTS;
+  const needFast = rlf * FIVE_HOUR_RESERVATION_POINTS;
+  const family = ["fable", "opus", "sonnet", "haiku"].find(f => (w.model || "sonnet").toLowerCase().includes(f)) ?? "sonnet";
+
+  const rows = accts.filter(a => a.inPool).map((a, idx) => {
+    const weight = PLANS[a.plan].weight;
+    const runs = liveRuns(a);
+    const famRuns = runs.filter(r => modelLoadFactor(r.model) === MODEL_LOAD[family] && r.model.includes(family));
+    const resAllSlow = reservationFor(runs, BASELINE_RESERVATION_POINTS);
+    const resFamSlow = reservationFor(famRuns, BASELINE_RESERVATION_POINTS);
+    const resAllFast = reservationFor(runs, FIVE_HOUR_RESERVATION_POINTS);
+
+    const generalTerm = (100 - a.u7) * weight - resAllSlow;
+    /* only Fable ships a model bucket; other workloads have no matching bucket */
+    const modelTerm = family === "fable" ? (100 - a.uF) * weight - resFamSlow : null;
+    let Hs, hsWindow, tauS;
+    if (modelTerm !== null && modelTerm < generalTerm) { Hs = modelTerm; hsWindow = "Fable bucket"; tauS = a.rF; }
+    else { Hs = generalTerm; hsWindow = "general weekly"; tauS = a.r7; }
+    if (tauS == null) tauS = FULL_PERIOD_H;
+
+    const Hf = (100 - a.u5) * weight - resAllFast;
+    const tier = Hs >= needSlow ? (Hf >= needFast ? "A" : "B") : "C";
+    const drainScore = Hs / Math.max(tauS, URGENCY_FLOOR_H);
+    const hfMargin = Hf - needFast;
+    return { a, idx, weight, Hs, Hf, hsWindow, tauS, tier, drainScore, hfMargin, resAllSlow, resAllFast };
+  });
+  if (rows.length < 2) return { pick: null, rows, needSlow, needFast, family };
+
+  const byTier = t => rows.filter(r => r.tier === t);
+  let pool, cmp;
+  if (byTier("A").length) {
+    pool = byTier("A");
+    cmp = (x, y) => (y.drainScore - x.drainScore) || (y.hfMargin - x.hfMargin) || (x.idx - y.idx);
+  } else if (byTier("B").length) {
+    pool = byTier("B");
+    cmp = (x, y) => (x.a.r5 - y.a.r5) || (y.drainScore - x.drainScore) || (x.idx - y.idx);
+  } else {
+    pool = byTier("C");
+    cmp = (x, y) => (x.tauS - y.tauS) || (x.idx - y.idx);
+  }
+  const pick = pool.slice().sort(cmp)[0];
+  return { pick, rows, needSlow, needFast, family };
+}
+
+/* ---- rendering ---- */
+const fmt = (n, d = 1) => Number(n).toFixed(d).replace(/\.0$/, "");
+const hrs = h => h >= 48 ? fmt(h / 24) + "d" : fmt(h) + "h";
+
+function accountCard(a, i, drain, current) {
+  const row = drain.rows.find(r => r.a === a);
+  const isDrainPick = drain.pick && drain.pick.a === a;
+  const isCurrentPick = current.pick && current.pick.a === a;
+  const resPct5 = row ? row.resAllFast / row.weight : 0;   /* back to this account's % for the meter */
+  const resPct7 = row ? row.resAllSlow / row.weight : 0;
+  const meter = (used, resPct) => {
+    const u = Math.min(used, 100), r = Math.min(resPct, 100 - u);
+    return `<div class="meter"><div class="used" style="width:${u}%"></div>${r > 0.2 ? `<div class="res" style="width:${r}%"></div>` : ""}</div>`;
+  };
+  const winRow = (key, label, used, resetKey, resetVal, resetMax, resetStep, resPct) => `
+    <div class="win-row">
+      <div class="lbl"><b>${label}</b><span class="val">${used}% used${resPct > 0.2 ? ` · +${fmt(resPct)}% reserved` : ""}</span></div>
+      ${meter(used, resPct)}
+      <input type="range" min="0" max="100" value="${used}" data-i="${i}" data-k="${key}">
+      <div class="resets"><div class="r"><label><span>resets in</span><span class="val">${resetKey === "r5" ? fmt(resetVal / 60, 1) + "h" : hrs(resetVal)}</span></label>
+      <input type="range" min="0" max="${resetMax}" step="${resetStep}" value="${resetVal}" data-i="${i}" data-k="${resetKey}"></div></div>
+    </div>`;
+  return `<div class="card acct ${isDrainPick ? "winner" : ""}">
+    <div class="acct-head">
+      <h2>${a.name} ${row ? `<span class="tier ${row.tier}">Tier ${row.tier}</span>` : ""}</h2>
+      <div class="right">
+        ${isDrainPick ? `<span class="badge win">drain-v1 pick</span>` : ""}
+        ${isCurrentPick ? `<span class="badge">current pick</span>` : ""}
+        <select data-i="${i}" data-k="plan">${Object.entries(PLANS).map(([id, p]) => `<option value="${id}" ${a.plan === id ? "selected" : ""}>${p.label}</option>`).join("")}</select>
+        <label title="isProfileAutoSelectable"><input type="checkbox" data-i="${i}" data-k="inPool" ${a.inPool ? "checked" : ""}> pool</label>
+      </div>
+    </div>
+    ${winRow("u5", "5-hour", a.u5, "r5", a.r5, 300, 5, resPct5)}
+    ${winRow("u7", "Weekly (general)", a.u7, "r7", a.r7, 168, 1, resPct7)}
+    ${winRow("uF", "Fable weekly bucket", a.uF, "rF", a.rF, 168, 1, 0)}
+    <div class="runs">
+      <div class="stepper"><span class="cap">Live Fable runs</span>
+        <button data-i="${i}" data-k="fableRuns" data-d="-1">−</button><span class="n">${a.fableRuns}</span><button data-i="${i}" data-k="fableRuns" data-d="1">+</button></div>
+      <div class="stepper"><span class="cap">Live Sonnet runs</span>
+        <button data-i="${i}" data-k="otherRuns" data-d="-1">−</button><span class="n">${a.otherRuns}</span><button data-i="${i}" data-k="otherRuns" data-d="1">+</button></div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  const w = workload();
+  const drain = drainV1(accounts, w);
+  const current = currentAlgorithm(accounts);
+
+  document.getElementById("accounts").innerHTML = accounts.map((a, i) => accountCard(a, i, drain, current)).join("");
+
+  const dp = document.getElementById("drainPick"), dw = document.getElementById("drainWhy");
+  if (drain.pick) {
+    const r = drain.pick;
+    dp.textContent = r.a.name;
+    dw.textContent = r.tier === "A"
+      ? `Tier A — drains ${fmt(r.Hs)} pts of ${r.hsWindow} over ${hrs(r.tauS)} → ${fmt(r.drainScore, 2)} pts/h`
+      : r.tier === "B"
+        ? `Tier B (all throttled) — weekly can fund it, 5-hour resets in ${fmt(r.a.r5 / 60, 1)}h (shortest stall)`
+        : `Tier C (all exhausted) — nowhere good; first back in the game via ${r.hsWindow} in ${hrs(r.tauS)}`;
+  } else { dp.textContent = "no recommendation"; dw.textContent = "needs ≥ 2 candidates in the pool"; }
+
+  const hp = document.getElementById("headroomPick"), hw = document.getElementById("headroomWhy");
+  if (current.pick) {
+    const r = current.pick;
+    hp.textContent = r.a.name;
+    hw.textContent = `binding window ${r.binding.id} at ${r.binding.u}% → ${r.headroom}% free × ${PLANS[r.a.plan].weight} − reservations = ${fmt(current.scoreOf(r))} pts (${current.basis})`;
+  } else { hp.textContent = "no recommendation"; hw.textContent = "needs ≥ 2 candidates in the pool"; }
+
+  const dis = document.getElementById("disagree");
+  if (drain.pick && current.pick) {
+    dis.textContent = drain.pick.a === current.pick.a
+      ? "Both algorithms agree."
+      : `The algorithms disagree: current ranks on the single worst window of any kind (workload- and reset-blind); drain-v1 gates on what a ${drain.family} session needs (needSlow ${fmt(drain.needSlow)} · needFast ${fmt(drain.needFast)} baseline pts) and drains soonest-expiring weekly capacity first.`;
+  } else dis.textContent = "";
+
+  const rows = drain.rows.map(r => {
+    const cur = current.ranked?.find(c => c.a === r.a);
+    return `<tr>
+      <td class="name">${r.a.name}${drain.pick === r ? " ◀" : ""}</td>
+      <td><span class="tier ${r.tier}">Tier ${r.tier}</span></td>
+      <td>${fmt(r.Hs)}</td><td>${r.hsWindow} · ${hrs(r.tauS)}</td>
+      <td>${fmt(r.Hf)}</td>
+      <td>${fmt(drain.needSlow)} / ${fmt(drain.needFast)}</td>
+      <td>${r.tier === "A" ? fmt(r.drainScore, 2) : "—"}</td>
+      <td>${cur ? fmt(current.scoreOf(cur)) : "—"}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("results").innerHTML = `
+    <tr><th>Account</th><th>Tier</th><th>Hs (weekly pts)</th><th>set by · resets</th><th>Hf (5h pts)</th><th>need slow/fast</th><th>drain score (pts/h)</th><th>current score</th></tr>${rows}`;
+}
+
+/* ---- events ---- */
+document.addEventListener("input", e => {
+  const t = e.target, i = t.dataset.i, k = t.dataset.k;
+  if (i === undefined) { render(); return; }
+  if (k === "inPool") accounts[i][k] = t.checked;
+  else if (k === "plan") accounts[i][k] = t.value;
+  else accounts[i][k] = Number(t.value);
+  render();
+});
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.dataset.d !== undefined) {
+    const a = accounts[t.dataset.i], k = t.dataset.k;
+    a[k] = Math.max(0, Math.min(6, a[k] + Number(t.dataset.d)));
+    render();
+  } else if (t.dataset.preset) {
+    if (t.dataset.preset === "reset") accounts = structuredClone(DEFAULTS);
+    else PRESETS[t.dataset.preset].forEach((p, i) => Object.assign(accounts[i], p, { inPool: true }));
+    if (t.dataset.preset !== "reset") document.getElementById("wModel").value = "fable";
+    render();
+  } else if (t.id === "themeToggle") {
+    const cur = document.documentElement.dataset.theme;
+    const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+  }
+});
+
+render();
+</script>
+</body>
+</html>
