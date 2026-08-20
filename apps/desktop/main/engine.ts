@@ -85,6 +85,7 @@ import {
   signInCommand,
   signOut as cliSignOut,
   type EnvBundle,
+  type LocalPlugin,
   type ProviderCredentialSpec,
   type ProviderRegistry,
   type SessionListScope,
@@ -96,6 +97,7 @@ import { AgentPromptStore } from './agentPrompts.js';
 import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
+import { buildContentBridge, linkSkillsIntoCodexHome } from './contentBridge.js';
 
 const log = createLogger('engine');
 
@@ -629,15 +631,57 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     };
   };
 
+  /**
+   * Make this profile's own skills and commands reachable, and say how if the
+   * run needs to know.
+   *
+   * Both providers are handled, and only one of them has anything to hand back:
+   *
+   *  - **Claude** gates discovery behind `settingSources`, which Artemis keeps
+   *    empty, so its skills and slash commands arrive as a plugin directory —
+   *    the one channel that reaches a session past that gate. The run has to be
+   *    told about it, hence the return value.
+   *  - **Codex** reads `$CODEX_HOME/skills` itself. Nothing needs passing to the
+   *    run; the work is putting the links there, and the run picks them up
+   *    because Artemis already points `CODEX_HOME` at the profile. It has no
+   *    user-authored command surface at all, so there is no command half to
+   *    mirror — see `contentBridge.ts`.
+   *
+   * `contentBridge.ts` documents why each is shaped the way it is. Resolved per
+   * run rather than once at startup, because that is what makes something
+   * installed while the app is open work on the next message instead of the next
+   * launch.
+   */
+  const contentPluginsFor = async (
+    profileId: ProfileId,
+    providerId: ProviderId,
+  ): Promise<readonly LocalPlugin[]> => {
+    if (providerId !== 'claude' && providerId !== 'codex') return [];
+    const configDir = profileConfigDir(await profiles.require(profileId));
+
+    if (providerId === 'codex') {
+      await linkSkillsIntoCodexHome({ configDir });
+      return [];
+    }
+    return buildContentBridge({ configDir, dataDir: options.userDataDir });
+  };
+
   const runs = new RunRegistry({
     resolveAdapter: (id) => providers.get(id),
     // The only path a credential takes into a run. `providerId` is read, not
     // discarded: it selects which variable names the credential is written
     // into, so a non-Claude provider receives its own vocabulary rather than
     // an Anthropic-shaped bundle.
-    resolveRun: async ({ profileId, providerId }) => ({
-      env: await envFor(profileId, providerId),
-    }),
+    resolveRun: async ({ profileId, providerId }) => {
+      // Concurrent because they share only the profile record, which the store
+      // caches: the credential decryption and the content scan have no reason to
+      // wait for each other on the path of a run that is starting.
+      const [env, plugins] = await Promise.all([
+        envFor(profileId, providerId),
+        contentPluginsFor(profileId, providerId),
+      ]);
+      return { env, plugins };
+    },
     onError: (error, context) => {
       log.error(`Run ${context.runId} reported a swallowed error during ${context.phase}`, error);
     },

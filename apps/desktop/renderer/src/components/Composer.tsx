@@ -70,7 +70,9 @@ import {
   readAttachments,
   type AttachmentRejection,
 } from '../lib/attachments';
+import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
 import { ActivityRule } from './Activity';
+import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
 import { ReasonButton, WithReason } from './disabled-reason';
 import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
@@ -160,6 +162,53 @@ export function Composer(): ReactElement {
   const history = usePane((s) => s.promptHistory);
 
   const locked = live && !steering.supported;
+
+  /*
+   * The slash command menu.
+   *
+   * The list is whatever the run reported at `system.init` — the provider's own
+   * built-ins plus anything `contentBridge.ts` bridged in, which is where the
+   * user's own commands come from. Two consequences worth knowing:
+   *
+   *  - A provider that reports none (Codex, which has no user-authored command
+   *    surface) never opens the menu, with no check needed here.
+   *  - The list arrives *with a run*, so a pane that has never run has nothing to
+   *    offer and the menu stays shut until the first message. Recovering it
+   *    earlier would mean asking a provider to enumerate commands before the
+   *    user has asked for anything, which is a subprocess spawned on the chance
+   *    that a slash might be typed.
+   */
+  const commands = usePane((s) => s.run?.slashCommands);
+  /**
+   * Escape closed the menu for this draft.
+   *
+   * Needed because the menu is *derived* from the text rather than opened: with
+   * no flag, the only way to close it while `/cer` is still in the field would be
+   * to delete what the user typed, and a dismissal that eats the draft is worse
+   * than no dismissal. Cleared by the next edit, so typing on brings it back.
+   */
+  const [dismissed, setDismissed] = useState(false);
+  const menu = dismissed ? null : matchSlashCommands(commands, text);
+  const [highlight, setHighlight] = useState(0);
+  /*
+   * The highlight is clamped rather than reset on every keystroke.
+   *
+   * Typing narrows the list, and a list that got shorter than the highlight
+   * would leave Enter aiming past the end. Clamping keeps the selection near
+   * where the user left it instead of throwing them back to the top on every
+   * character.
+   */
+  const selected = menu === null ? 0 : Math.min(highlight, menu.matches.length - 1);
+
+  /** Accept a command: replace the draft with it and leave the caret after it. */
+  const acceptCommand = useCallback(
+    (name: string) => {
+      setText(applySlashCommand(name));
+      setHighlight(0);
+      textareaRef.current?.focus();
+    },
+    [setText],
+  );
 
   /**
    * Whether the field is holding a prompt that pressing the button would send.
@@ -435,6 +484,21 @@ export function Composer(): ReactElement {
         >
           <AttachmentStrip attachments={attachments} onRemove={removeAttachment} />
 
+          {/*
+            Above the field, not below it. The composer is already at the bottom
+            of the window, so a menu underneath would be clipped by the edge —
+            and growing upward keeps the row being typed in the same place
+            instead of pushing the whole field down as matches narrow.
+          */}
+          {menu !== null && (
+            <SlashCommandMenu
+              matches={menu.matches}
+              highlight={selected}
+              onAccept={acceptCommand}
+              onHighlight={setHighlight}
+            />
+          )}
+
           <WithReason
             reason={locked ? steering.reason : undefined}
             className="w-full"
@@ -447,6 +511,19 @@ export function Composer(): ReactElement {
               rows={1}
               spellCheck={false}
               aria-label="Prompt"
+              /*
+                Combobox semantics without moving focus. The textarea stays the
+                focused element — the user is typing — so the highlighted row is
+                announced through `aria-activedescendant` rather than by focusing
+                it, which is the pattern for an editable field that owns a list.
+              */
+              role="combobox"
+              aria-expanded={menu !== null}
+              aria-autocomplete="list"
+              aria-controls={SLASH_LISTBOX_ID}
+              {...(menu === null
+                ? {}
+                : { 'aria-activedescendant': slashOptionId(selected) })}
               placeholder={
                 locked
                   ? `Waiting for the run to finish — ${steering.reason}`
@@ -465,6 +542,9 @@ export function Composer(): ReactElement {
                 // Any edit leaves recall: the text on screen is no longer a
                 // history entry, so Up should start again from the newest.
                 setRecall(null);
+                // An edit also revives a menu Escape closed — the dismissal was
+                // about the draft as it stood, not a preference.
+                setDismissed(false);
               }}
               /*
                 Paste is the reason this feature exists.
@@ -483,6 +563,51 @@ export function Composer(): ReactElement {
               }}
               onKeyDown={(event) => {
                 const el = event.currentTarget;
+
+                /*
+                 * The menu goes first, and has to.
+                 *
+                 * Every key it wants is a key the composer already means
+                 * something else by: Enter sends, Escape stops the run, Up
+                 * recalls history. While the menu is open those meanings are all
+                 * wrong — Enter on a half-typed `/cer` would send the literal
+                 * text and get `Unknown command` back — so the menu claims them
+                 * and the handlers below only ever see the keys it did not want.
+                 *
+                 * It never claims Enter with a modifier: Shift+Enter is a
+                 * newline, and taking it would make a menu that is merely open
+                 * unable to be typed past.
+                 */
+                if (menu !== null) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const step = event.key === 'ArrowDown' ? 1 : -1;
+                    const count = menu.matches.length;
+                    // Wraps, because a menu of two entries is faster to cycle
+                    // than to walk to the end of.
+                    setHighlight((selected + step + count) % count);
+                    return;
+                  }
+                  if (
+                    (event.key === 'Enter' || event.key === 'Tab') &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    acceptCommand(menu.matches[selected]!.name);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    // Closes the menu and stops there — deliberately *not*
+                    // falling through to the run interrupt. One Escape should
+                    // dismiss one thing, and killing the run because a menu was
+                    // open would be a surprise the user cannot undo. The draft
+                    // survives: see `dismissed`.
+                    event.preventDefault();
+                    setDismissed(true);
+                    return;
+                  }
+                }
 
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
