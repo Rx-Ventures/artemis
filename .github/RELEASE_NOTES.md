@@ -1,6 +1,48 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.3.0
+
+The skills and slash commands you have already installed now work inside Artemis.
+
+Artemis keeps your `~/.claude` out of its sessions on purpose — a third-party app
+should not quietly adopt your hooks, your permission rules or your MCP servers.
+That isolation was also hiding the things you *did* want it to have. A skill
+installed months ago and a slash command you wrote yourself were sitting on disk,
+correctly filed, and never once read: a session could see 46 slash commands where
+the account had 49, and the three missing were yours.
+
+- **Your skills reach both providers.** Anything in `~/.claude/skills` is offered
+  to Claude sessions, and anything in `~/.codex/skills` to Codex ones. The
+  vendor-neutral `~/.agents/skills` counts for both, so a skill installed once is
+  available everywhere rather than in whichever half of the machine you happened
+  to install it on. Nothing to enable and nothing to copy — install a skill and
+  your next message has it.
+
+- **Your slash commands work, and the composer finds them.** Type `/` and the
+  commands available to that conversation are listed; keep typing to narrow it,
+  Enter or Tab to accept. Your own commands arrive under a prefix —
+  `/artemis-skills:cerebro` rather than `/cerebro` — because that is the only
+  form the provider will honour, so the menu inserts the full name for you and
+  you never type the prefix. Searching ignores it too: `/cer` finds it.
+  Arguments work as they always have.
+
+  The list also includes the commands the provider ships, like `/compact`, which
+  have been available in every session all along with no way to reach them. It
+  appears once a conversation has started, since it is the session that says what
+  it accepts.
+
+- **What Artemis still does not take is unchanged.** This is deliberately not
+  "load the user's configuration". Skills and commands are documents; hooks,
+  permission rules and MCP servers are not, and they stay out. The channel this
+  is built on can only carry the two — not by a filter that has to be maintained,
+  but because the folder Artemis hands the provider contains nothing else.
+
+- **Codex has no slash commands to bring across.** Its `/` shortcuts belong to
+  its own terminal interface rather than to your account, so there is nothing on
+  disk to make available and the menu stays closed there. Its skills are covered
+  above.
+
 ## What's new in 1.2.0
 
 Artemis can lend its accounts to other programs on your machine.
