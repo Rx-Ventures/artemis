@@ -1104,11 +1104,20 @@ const MAX_MARKER_ICONS = 3;
  * Two things are deliberately *not* summarised away:
  *
  *  - **Failures.** A group holding an error or a denial says so on the
- *    collapsed line, in signal, and opens itself. A marker that read the same
- *    whether or not something broke would be worse than no marker.
+ *    collapsed line, in signal. A marker that read the same whether or not
+ *    something broke would be worse than no marker.
  *  - **Work in flight.** While a call is still running the line reads in
  *    present tense with a pulsing dot, so a long `Bash` looks like progress
  *    rather than a thread that stopped.
+ *
+ * It says those things *on the line*, and stays shut. A failure used to open
+ * the marker, which sounds protective and was not: `defaultOpen` is read once
+ * per mount, so it could never catch the case it was written for — a group
+ * failing while the reader watches — and the case it did catch was the reader
+ * arriving. Opening a conversation dropped them at the foot of a marker holding
+ * every failed call in it, with the conversation itself scrolled off the top.
+ * The signal-toned count is what carries a failure now, and one click is what
+ * carries the reader into it.
  *
  * The gutter beside it carries no label. "work" only repeated the icons and the
  * sentence next to them, and the failure it used to colour is already on the
@@ -1133,15 +1142,10 @@ function ActivityMarker({ group }: { readonly group: ActivityGroup }): ReactElem
   return (
     <Line label="" ts={group.ts}>
       <Fold
-        // A failure opens itself, matching what a single tool card already does
-        // with its own error output. `defaultOpen` is read once, so a group that
-        // fails *after* being drawn does not spring open under the reader — the
-        // signal-toned count on the line is what catches that case.
-        defaultOpen={group.failed > 0}
-        // And read once *per mount*, which is how a failed group used to reopen
-        // itself every time the reader came back to the session having closed
-        // it. The group id keys the memory: it is `g:` + its first member's id,
-        // so it names the same burst after a replay. See `lib/foldMemory.ts`.
+        // Closed unless the reader opened it, whatever happened inside — see the
+        // note above. The group id keys that memory: it is `g:` + its first
+        // member's id, so it names the same burst after a replay, which is what
+        // makes a marker left open come back open. See `lib/foldMemory.ts`.
         rememberAs={group.id}
         triggerClassName="text-2xs"
         summary={

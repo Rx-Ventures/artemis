@@ -59,6 +59,15 @@ export interface UserItem extends ItemBase {
   readonly text: string;
   readonly pending: boolean;
   /**
+   * Read out of a stored session rather than typed here.
+   *
+   * Kept because it is the only run boundary a replay has. A live transcript
+   * learns where one piece of work ended from `run.end`; stored history has no
+   * such record — see {@link TranscriptModel.rebuildRows} — and a turn the user
+   * started is the same boundary written in the provider's own file.
+   */
+  readonly replay?: boolean;
+  /**
    * Images sent with the message.
    *
    * The full attachments, base64 and all, kept for as long as the transcript
@@ -1039,9 +1048,10 @@ export class TranscriptModel {
      * {@link ActivityGroup}. So a thinking block is an ordinary row here, in the
      * position it arrived in, and the marker below holds only calls.
      *
-     * A run's boundary is its `run-end` row, and the tail after the last one is
-     * the run in flight — which is why the flush happens both on that row and
-     * once at the end.
+     * A run's boundary is its `run-end` row — or, in a session read back from
+     * disk, the next thing the user said, because stored history has no
+     * `run-end` in it at all. The tail after the last boundary is the run in
+     * flight, which is why the flush happens on those rows and once at the end.
      */
     let machinery: string[] = [];
     let lifted: string[] = [];
@@ -1091,12 +1101,39 @@ export class TranscriptModel {
        * The flush comes before the row for the same reason it always did: the
        * account of a run reads above the line that ends it.
        */
-      const ending = this.items.get(id);
-      if (ending?.kind === 'run-end') {
-        if (ending.reason !== 'interrupted') flush();
+      const row = this.items.get(id);
+      if (row?.kind === 'run-end') {
+        if (row.reason !== 'interrupted') flush();
         rows.push(id);
         continue;
       }
+
+      /*
+       * The boundary a replay has instead of a `run.end`.
+       *
+       * Stored history is messages and nothing else — the provider's file
+       * records what was said, not that Artemis considered a run over — so a
+       * reopened conversation reaches here with no `run-end` row anywhere in
+       * it. Without this the loop above never flushes until the very end, and
+       * every call in the session collects into one marker parked beneath the
+       * last message: a hundred tool cards under a single line, sitting below
+       * the conversation instead of inside it, and named for the first call of
+       * the session rather than the first call of its run. That last part is
+       * what quietly broke `lib/foldMemory` — the ids a reload produced could
+       * not match the ids the live run had written, so every marker opened at
+       * its default again however the reader had left it.
+       *
+       * A turn the user started is the same boundary written in the provider's
+       * own words: the work above it is finished, the work below belongs to
+       * what they asked next. Flushing here puts each turn's marker under that
+       * turn, which is where the live run drew it.
+       *
+       * Only a *replayed* user row. A live one mid-run is steering, and
+       * splitting there would report the reader's redirection as a boundary in
+       * what the agent did — the same thing the interrupt case above refuses to
+       * do.
+       */
+      if (row?.kind === 'user' && row.replay === true) flush();
 
       rows.push(id);
     }
@@ -1272,7 +1309,7 @@ export class TranscriptModel {
       }
     }
     const id = `u:${++this.counter}`;
-    this.insert({ id, ts, kind: 'user', text, pending: false });
+    this.insert({ id, ts, kind: 'user', text, pending: false, ...(replay ? { replay } : {}) });
   }
 
   /** Mark every streaming block finished. Called when the turn moves on. */

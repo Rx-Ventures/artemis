@@ -5,10 +5,11 @@
  * A transcript's disclosures held their open state in `useState`, which lasts
  * exactly as long as the component. Switching sessions resets the pane's
  * transcript and rebuilds every row from its `defaultOpen`, so a work marker the
- * reader had collapsed came back open — and a marker containing a failure came
- * back open *every single time*, because `defaultOpen={group.failed > 0}` is a
- * rule that re-ran on every remount and quietly overruled the person who had
- * just closed it.
+ * reader had collapsed came back open — and one holding a failure came back open
+ * *every single time*, because the work marker's `defaultOpen` was
+ * `group.failed > 0`, a rule that re-ran on every remount and quietly overruled
+ * the person who had just closed it. That rule is gone; this memory is what
+ * replaced the half of it worth keeping.
  *
  * This is the memory that outlives the component. A key, a boolean, and nothing
  * else.

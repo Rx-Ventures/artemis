@@ -145,8 +145,12 @@ describe('the activity marker', () => {
     render(<Transcript />);
 
     expect(screen.getByText('· 2 failed')).not.toBeNull();
-    // And it opens itself, so the error output is on screen without a click.
-    expect(screen.getAllByText('Bash').length).toBe(3);
+    // Said on the line, and the line is all it does. A failure used to open the
+    // marker, which read as protective and was not: `defaultOpen` is consulted
+    // once per mount, so it never caught a group failing under a reader who was
+    // watching — only a reader arriving at a conversation, who was dropped at
+    // the foot of every failed call in it. See `ActivityMarker`.
+    expect(screen.queryByText('Bash')).toBeNull();
   });
 
   it('leaves the thinking between two calls on screen, and folds only the calls', () => {
@@ -247,17 +251,21 @@ describe('a fold the reader operated', () => {
     play(...burst);
     render(<Transcript />);
 
-    // It opened itself, which is right the first time it is seen.
-    expect(screen.getAllByText('Bash').length).toBe(2);
+    // Shut on arrival, failure and all — the reported bug read from the other
+    // end. Opening a conversation whose last turn had an error handed the
+    // reader a marker holding every call in it, with the conversation itself
+    // scrolled off the top of the column.
+    expect(screen.queryByText('Bash')).toBeNull();
 
+    // Opened by hand, then closed by hand: the two clicks are what makes this a
+    // fact about the reader rather than about the default.
+    fireEvent.click(screen.getByText('Ran 2 commands'));
+    expect(screen.getAllByText('Bash').length).toBe(2);
     fireEvent.click(screen.getByText('Ran 2 commands'));
     expect(screen.queryByText('Bash')).toBeNull();
 
     switchAway(...burst);
 
-    // The bug: `defaultOpen={group.failed > 0}` re-ran on the rebuilt row and
-    // handed back the marker the reader had just closed — every time, for as
-    // long as the group held a failure.
     expect(screen.getByText('· 1 failed')).not.toBeNull();
     expect(screen.queryByText('Bash')).toBeNull();
   });
@@ -285,9 +293,9 @@ describe('a fold the reader operated', () => {
     render(<Transcript />);
     switchAway(...burst);
 
-    // Memory is written by clicking, never by rendering, so a group that has
-    // only ever been looked at still opens itself on the failure.
-    expect(screen.getAllByText('Bash').length).toBe(2);
+    // Memory is written by clicking, never by rendering, so a group nobody has
+    // touched is still at its default — which is shut, whatever is inside it.
+    expect(screen.queryByText('Bash')).toBeNull();
   });
 
   it('remembers a tool card and its result fold separately from the marker', () => {

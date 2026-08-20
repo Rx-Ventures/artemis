@@ -144,6 +144,7 @@ import {
 import { setEventsDroppedHook, type PermissionItem, type TranscriptModel } from './transcript';
 import {
   MIRRORED_KEYS,
+  UNSTARTED_DRAFT,
   createPane,
   createRow,
   paneState,
@@ -1710,6 +1711,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     promptHistory: [],
     handoff: 'none',
     draft: '',
+    parkedDrafts: {},
     ...overrides,
   };
 }
@@ -2761,6 +2763,7 @@ export function openAgentTab(paneId: PaneId, taskId: string): void {
     dismissedTasks: [],
     tasksRequested: false,
     draft: '',
+    parkedDrafts: {},
   });
 
   useApp.setState((s) => ({
@@ -3657,6 +3660,35 @@ function pruneBackground(): void {
 }
 
 /**
+ * Point a column at another conversation, and let the draft stay with the one
+ * it was written to.
+ *
+ * Called by {@link newSession} and {@link resumeSession}, and by nothing else,
+ * because those are the only two places a *pane* changes conversation without
+ * the column itself changing hands. When a whole pane is swapped instead (see
+ * {@link handOver}) there is nothing to do here: each pane carries its own.
+ *
+ * Reads `resumeSessionId` as the conversation being left, so it has to run
+ * *before* the patch that moves it. An empty draft parks nothing and clears
+ * nothing — there is no difference between "typed nothing" and "was never
+ * here", and keeping the entry would only grow the map.
+ */
+function swapDraft(pane: Pane, to: string): void {
+  setPaneState(pane, (s) => {
+    const from = s.resumeSessionId ?? UNSTARTED_DRAFT;
+    if (from === to) return {};
+
+    const parked = { ...s.parkedDrafts };
+    if (s.draft.trim().length === 0) delete parked[from];
+    else parked[from] = s.draft;
+
+    const draft = parked[to] ?? '';
+    delete parked[to];
+    return { draft, parkedDrafts: parked };
+  });
+}
+
+/**
  * Give one conversation's column to another. The outgoing one keeps running.
  *
  * This is the single move behind every "leave this session" action — ⌘N,
@@ -3697,7 +3729,29 @@ function handOver(outgoing: Pane, incoming: Pane): void {
     ...(state.focusedPaneId === outgoing.id ? { focusedPaneId: incoming.id } : {}),
   });
 
-  if (!keep) retirePane(outgoing);
+  /*
+   * A blank column is thrown away; what was typed into it is not.
+   *
+   * `isDisposable` is true of exactly the pane ⌘N leaves behind — no run, no
+   * session — which is also the pane most likely to be holding an unsent
+   * sentence, because it has no conversation of its own to have sent it to. It
+   * goes to `retirePane` a line below and takes its state with it, so the one
+   * thing worth rescuing moves across first: the next new session in this
+   * column finds the prompt where it was left. Only into an empty slot, so a
+   * pane coming home with its own half-written prompt keeps it.
+   */
+  if (!keep) {
+    const orphan = paneState(outgoing).draft;
+    if (orphan.trim().length > 0) {
+      setPaneState(incoming, (s) =>
+        (s.parkedDrafts[UNSTARTED_DRAFT] ?? '').length > 0
+          ? {}
+          : { parkedDrafts: { ...s.parkedDrafts, [UNSTARTED_DRAFT]: orphan } },
+      );
+    }
+    retirePane(outgoing);
+  }
+
   pruneBackground();
   savePrefs();
 }
@@ -3711,6 +3765,28 @@ function handOver(outgoing: Pane, incoming: Pane): void {
  */
 function handOffToBlank(pane: Pane): Pane {
   const fresh = openPane(seedBeside(pane));
+
+  /*
+   * The one draft that belongs to the column rather than to a conversation.
+   *
+   * Every *started* conversation's half-written prompt travels with it — parked
+   * under its session id, handed back when the user returns to it. The
+   * unstarted one has no conversation to travel with: it is what was typed into
+   * this column's blank session, and the blank session this returns is the same
+   * blank session as far as anyone using it is concerned. So it comes across,
+   * and it leaves the pane it came from, because a draft in two columns at once
+   * is a prompt that can be sent twice.
+   */
+  const carried = paneState(pane).parkedDrafts[UNSTARTED_DRAFT];
+  if (carried !== undefined && carried.length > 0) {
+    setPaneState(fresh, { draft: carried });
+    setPaneState(pane, (s) => {
+      const parked = { ...s.parkedDrafts };
+      delete parked[UNSTARTED_DRAFT];
+      return { parkedDrafts: parked };
+    });
+  }
+
   handOver(pane, fresh);
   return fresh;
 }
@@ -7330,6 +7406,11 @@ export function newSession(
     target = handOffToBlank(pane);
   } else {
     pane.transcript.reset();
+    // Before the patch below moves `resumeSessionId` out from under it: what
+    // was half-written to the conversation being erased stays with that
+    // conversation, and whatever was left in this column's last new session
+    // comes back. See `swapDraft`.
+    swapDraft(pane, UNSTARTED_DRAFT);
     // `tasks` too: the rows belong to the conversation being erased, and a
     // fresh session inheriting the old one's settled list would open with a
     // Delegated tab full of work it never asked for.
@@ -7490,6 +7571,11 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // that now holds the column and everything below is done to it.
   const target = isLive(state) ? handOffToBlank(pane) : pane;
   target.transcript.reset();
+  // Same rule as `newSession`, and the same ordering requirement: the draft
+  // belongs to the conversation it was typed at, so it is parked under that
+  // conversation's id before `resumeSessionId` moves — and this session's own
+  // half-written prompt, if it has one, comes back out. See `swapDraft`.
+  swapDraft(target, session.id);
   setPaneState(target, {
     run: null,
     activeProviderId: session.providerId,

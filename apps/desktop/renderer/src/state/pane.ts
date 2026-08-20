@@ -290,9 +290,42 @@ export interface SessionState extends MirroredState {
    * It is also simply the right home. "What have I typed but not sent" is a
    * fact about this conversation in exactly the way `promptHistory` beside it
    * is, and neither outlives the window.
+   *
+   * A fact about the *conversation*, note, and not about the column — which is
+   * why it does not move when the column does. See {@link parkedDrafts}.
    */
   readonly draft: string;
+  /**
+   * The drafts of the other conversations this column has held, by session id.
+   *
+   * A column outlives the conversation in it: open something from the sidebar
+   * and the same pane is pointed at a different session, keeping every field
+   * above that is about the *setup* and dropping every field that is about the
+   * conversation. `draft` was on the wrong side of that line. Half a prompt
+   * typed at one session followed the column into the next one, sat in the
+   * composer looking like something the user had written *there*, and went to
+   * that conversation on Enter — or, if the column was handed over to a pane
+   * that came back from the background, was thrown away with the pane.
+   *
+   * So a session change parks the outgoing conversation's draft here under its
+   * id and takes the incoming one's back out. The unstarted conversation — the
+   * one ⌘N gives you, which has no session id until its first prompt lands — is
+   * keyed by {@link UNSTARTED_DRAFT}, so a prompt half-typed into a new session
+   * is still there after a detour into an old one.
+   *
+   * Bounded by the number of conversations one column has visited in one run of
+   * the app, and only the ones left mid-sentence: an empty draft parks nothing.
+   */
+  readonly parkedDrafts: Readonly<Record<string, string>>;
 }
+
+/**
+ * The key a column's *unstarted* conversation parks its draft under.
+ *
+ * Not a session id because there is no session yet — the provider mints one
+ * with the first run — and the empty string cannot collide with one.
+ */
+export const UNSTARTED_DRAFT = '';
 
 /**
  * A pane and its two stores.

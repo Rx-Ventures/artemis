@@ -63,6 +63,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   promptHistory: true,
   handoff: true,
   draft: true,
+  parkedDrafts: true,
 };
 
 /**

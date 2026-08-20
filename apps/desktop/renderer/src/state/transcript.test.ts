@@ -515,6 +515,64 @@ describe('TranscriptModel activity groups', () => {
 
       expect(model.getRowsSnapshot()).toEqual(['k:m1:0']);
     });
+
+    /*
+     * A conversation read back off disk has no `run.end` anywhere in it.
+     *
+     * The provider's file records what was said, not what Artemis considered a
+     * run — so `replayStoredSession` emits messages and calls and nothing else,
+     * and the loop that folds machinery had no boundary to flush at until the
+     * very end. Every call in the session collected into one marker under the
+     * last message: the work of an hour parked below the conversation instead
+     * of inside it, named for the first call of the *session* rather than the
+     * first call of its run, which is also why `lib/foldMemory` could not match
+     * a single key a live run had written.
+     */
+    it('reads a stored session back one marker per turn, not one per session', () => {
+      const model = build();
+      for (const event of stream(
+        { type: 'text.complete', messageId: 'u1', role: 'user', text: 'find it', replay: true },
+        ...call('c1', 'Grep'),
+        { type: 'text.complete', messageId: 'm1', role: 'assistant', text: 'found it', replay: true },
+        { type: 'text.complete', messageId: 'u2', role: 'user', text: 'now fix it', replay: true },
+        ...call('c2', 'Bash'),
+        { type: 'text.complete', messageId: 'm2', role: 'assistant', text: 'done', replay: true },
+      )) {
+        model.apply(event);
+      }
+
+      // The same shape the live run drew — compare the `run.end` case above,
+      // which produces exactly these two ids from the same two bursts. That
+      // equality is the point: it is what lets a marker the reader closed stay
+      // closed when they come back to the conversation.
+      const rows = model.getRowsSnapshot();
+      expect(rows.filter((id) => id.startsWith('g:'))).toEqual(['g:t:c1', 'g:t:c2']);
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1']);
+      expect(model.getGroup('g:t:c2')?.ids).toEqual(['t:c2']);
+      // And each one sits under its own turn rather than at the foot of the
+      // column: the first marker is above the second question, not below it.
+      expect(rows.indexOf('g:t:c1')).toBeLessThan(rows.indexOf('u:2'));
+    });
+
+    it('does not treat a live steer as the end of a piece of work', () => {
+      /*
+       * The same row shape without the replay flag, which is what steering a
+       * run mid-turn produces. It is the interruption case one level up: the
+       * calls either side of it are one piece of work, and splitting them would
+       * report the user's redirection as a boundary in what the agent did.
+       */
+      const model = build();
+      for (const event of stream(
+        ...call('c1', 'Grep'),
+        { type: 'text.complete', messageId: 'u2', role: 'user', text: 'no, the other file' },
+        ...call('c2', 'Read'),
+      )) {
+        model.apply(event);
+      }
+
+      expect(model.getRowsSnapshot().filter((id) => id.startsWith('g:'))).toEqual(['g:t:c1']);
+      expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
+    });
   });
 
   it('creates the block on the delta that first carries text', () => {
