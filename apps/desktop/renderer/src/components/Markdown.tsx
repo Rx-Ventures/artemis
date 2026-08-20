@@ -67,6 +67,7 @@ import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm';
 
 import { useReachableFile } from '../lib/fileReach';
+import { remarkPullRequestReferences, type RepositoryCoordinates } from '../lib/prReferences';
 import { parseFileReference, resolveFilePath, type FileReference } from '../lib/filePaths';
 import { hostPlatform } from '../state/pane';
 import { CopyButton } from './primitives';
@@ -222,7 +223,6 @@ function CodeSpan({
  * link in the app passes through.
  */
 const COMPONENTS: Components = { pre: CopyablePre, code: CodeSpan, a: PullRequestLink };
-const REMARK_PLUGINS = [remarkGfm];
 
 export interface MarkdownProps {
   readonly children: string;
@@ -239,6 +239,13 @@ export interface MarkdownProps {
    * inseparable in the type is cheaper than a comment asking for both.
    */
   readonly files?: FileLinks;
+  /**
+   * The GitHub repository bare `#123` references resolve against — the pane's
+   * working directory's `origin`, when it points at GitHub. Absent, bare
+   * references stay text and only the self-naming `owner/repo#123` form links.
+   * See `lib/prReferences.ts`.
+   */
+  readonly repo?: RepositoryCoordinates | null;
 }
 
 /**
@@ -249,7 +256,7 @@ export interface MarkdownProps {
  * identical tree is the most expensive thing on that path — so a caller passing
  * `files` should pass a stable object, which `AssistantRow` does.
  */
-export const Markdown = memo(function Markdown({ children, files }: MarkdownProps): ReactElement {
+export const Markdown = memo(function Markdown({ children, files, repo }: MarkdownProps): ReactElement {
   /*
    * One context for the whole block rather than a prop threaded through every
    * span. Note that the *reachability* subscription below it is per span and is
@@ -258,9 +265,20 @@ export const Markdown = memo(function Markdown({ children, files }: MarkdownProp
    */
   const links = useMemo(() => files ?? null, [files]);
 
+  /*
+   * One plugin array per repository, not per render. `react-markdown` re-parses
+   * when its plugin array changes identity, and the repository changes when the
+   * pane's directory does — which is exactly when a bare `#123` starts meaning
+   * a different pull request and the re-parse is owed anyway.
+   */
+  const plugins = useMemo(
+    () => [remarkGfm, remarkPullRequestReferences(repo ?? null)],
+    [repo],
+  );
+
   return (
     <Links.Provider value={links}>
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={plugins} components={COMPONENTS}>
         {children}
       </ReactMarkdown>
     </Links.Provider>

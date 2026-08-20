@@ -601,6 +601,11 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
     [cwd, pane],
   );
 
+  // Which repository a bare `#123` in the answer names — the directory's
+  // origin, read once per workspace change. Stable for the same reason `cwd`
+  // is: it moves only when the column points somewhere else.
+  const repo = usePane((s) => s.workspace?.github ?? null);
+
   return (
     <Line
       // No word for the main agent: the shape of the row already says whose
@@ -625,7 +630,7 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
             <div className={STREAMING_TEXT}>{item.text}</div>
           ) : (
             <div className="md text-ink">
-              <Markdown files={files}>{item.text}</Markdown>
+              <Markdown files={files} repo={repo}>{item.text}</Markdown>
             </div>
           )}
         </BubbleContent>
