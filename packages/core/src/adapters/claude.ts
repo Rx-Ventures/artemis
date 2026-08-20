@@ -1728,6 +1728,17 @@ function validateRunInput(input: ResolvedRunInput): void {
       'forkSession requires resumeSessionId — there is nothing to fork from.',
     );
   }
+
+  for (const plugin of input.plugins ?? []) {
+    // The SDK accepts a relative plugin path and resolves it against the run's
+    // `cwd`, so the same value would name a different directory in every
+    // repository — and would silently find nothing in most of them. Rejected
+    // here because a skill that is quietly absent is the failure this whole
+    // channel exists to end.
+    if (!isAbsolute(plugin.path)) {
+      throw adapterError('invalid_request', `Plugin path must be absolute: ${plugin.path}`);
+    }
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1786,6 +1797,24 @@ export function buildClaudeOptions(
 
     // Isolation. `[]` means "load no filesystem settings" — see the file header.
     settingSources: [...(input.settingSources ?? [])] as SettingSource[],
+
+    /*
+     * Skills, and only skills.
+     *
+     * Plugin discovery does not go through `settingSources`, which is what makes
+     * this the one way to hand a session the user's skills without also handing
+     * it their hooks, MCP servers and permission rules. Verified rather than
+     * assumed: `skills: 'all'` looks like the same switch and is not — it filters
+     * skills that were *already* discovered, so under `settingSources: []` it
+     * filters an empty set and changes nothing.
+     *
+     * `undefined` rather than `[]` when there are none, because an empty array
+     * still initialises the SDK's plugin machinery, and a run with no skills
+     * should be byte-identical to one from before this option existed.
+     */
+    plugins: input.plugins?.length
+      ? input.plugins.map(({ path }) => ({ type: 'local' as const, path }))
+      : undefined,
 
     includePartialMessages: input.includePartialMessages !== false,
 

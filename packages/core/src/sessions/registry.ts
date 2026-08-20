@@ -61,6 +61,7 @@ import type {
   ConfigSource,
   ContinuationContext,
   EnvBundle,
+  LocalPlugin,
   ProviderAdapter,
   ResolvedRunInput,
   Run,
@@ -96,6 +97,11 @@ export interface RunResolution {
   readonly inheritHostEnv?: boolean;
   /** On-disk configuration layers this run may inherit. */
   readonly settingSources?: readonly ConfigSource[];
+  /**
+   * Plugin directories this run loads — the channel the user's skills arrive
+   * on. Absolute paths, so they are resolved here and never sent by a renderer.
+   */
+  readonly plugins?: readonly LocalPlugin[];
   /** Cancels the run from the outside — window close, app shutdown. */
   readonly abortSignal?: AbortSignal;
 }

@@ -104,6 +104,35 @@ export type ConfigSource = 'user' | 'project' | 'local';
 /** Inherit nothing. The default value of {@link ResolvedRunInput.settingSources}. */
 export const NO_CONFIG_SOURCES: readonly ConfigSource[] = [];
 
+/**
+ * A plugin directory to load for a run.
+ *
+ * The narrow channel that lets *one* kind of user content — skills — reach a
+ * session without {@link ConfigSource} opening the rest. A provider that reads
+ * skills only from the layers `settingSources` gates will never see a skill the
+ * user installed, because the empty default is the right answer for hooks, MCP
+ * servers and permission rules and the wrong one for a document the user wrote
+ * on purpose. Plugins are discovered independently of that gate, so they are
+ * how the two are told apart.
+ *
+ * The safety property is *structural*, and it belongs to the directory rather
+ * than to this type: a plugin may contribute skills, commands, agents and
+ * hooks, so a plugin pointed at a directory that contains only `skills/`
+ * cannot contribute anything else. Whoever builds the directory owns that
+ * guarantee — see `skillBridge.ts` in the desktop app, which is why it
+ * assembles a directory of its own instead of pointing here at a config dir
+ * that also holds `commands/`.
+ *
+ * `path` must be absolute. A relative path would resolve against the provider
+ * subprocess's `cwd`, which is the *run's* working directory — so the same
+ * value would mean a different directory in every repository.
+ *
+ * An adapter whose provider has no plugin concept ignores this field.
+ */
+export interface LocalPlugin {
+  readonly path: string;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Run input                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -154,6 +183,16 @@ export interface ResolvedRunInput extends RunInput {
    * See {@link ConfigSource} for why.
    */
   readonly settingSources?: readonly ConfigSource[];
+
+  /**
+   * Plugin directories to load for this run — in practice, the user's skills.
+   * See {@link LocalPlugin}.
+   *
+   * Resolved rather than requested: these are absolute paths, and a renderer
+   * that could name one could point a run at any directory on the disk and have
+   * its `hooks/` executed.
+   */
+  readonly plugins?: readonly LocalPlugin[];
 
   /**
    * Cancels the run from the outside — app shutdown, window close, a global

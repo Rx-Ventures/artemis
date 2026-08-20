@@ -919,6 +919,16 @@ describe('createRun validation', () => {
     ).rejects.toThrow(/requires resumeSessionId/);
   });
 
+  // The SDK would resolve it against the run's `cwd`, so the same value would
+  // name a different directory in every repository and find nothing in most of
+  // them — a skill that is quietly absent.
+  it('rejects a relative plugin path', async () => {
+    installQuery();
+    await expect(
+      createClaudeAdapter().createRun({ ...BASE_INPUT, plugins: [{ path: 'skill-bridges/work' }] }),
+    ).rejects.toThrow(/Plugin path must be absolute/);
+  });
+
   it('accepts every mode the capability descriptor advertises', async () => {
     installQuery();
     for (const mode of ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'] as const) {
@@ -955,6 +965,28 @@ describe('buildClaudeOptions', () => {
       context,
     );
     expect(options.settingSources).toEqual(['project']);
+  });
+
+  /*
+   * The channel the user's skills arrive on, and the reason it is a separate
+   * knob: plugin discovery does not go through `settingSources`, so this is the
+   * one way a skill reaches a session that inherits no settings at all.
+   */
+  it('passes skill plugins through while inheriting no settings', () => {
+    const options = buildClaudeOptions(
+      { ...BASE_INPUT, plugins: [{ path: '/app/skill-bridges/work' }] },
+      context,
+    );
+    expect(options.plugins).toEqual([{ type: 'local', path: '/app/skill-bridges/work' }]);
+    expect(options.settingSources).toEqual([]);
+  });
+
+  // Not `[]`: an empty array still initialises the SDK's plugin machinery, so a
+  // run with no skills has to be byte-identical to one from before the option
+  // existed.
+  it('omits plugins entirely when there are none', () => {
+    expect(buildClaudeOptions(BASE_INPUT, context).plugins).toBeUndefined();
+    expect(buildClaudeOptions({ ...BASE_INPUT, plugins: [] }, context).plugins).toBeUndefined();
   });
 
   it('gives the provider the profile’s credentials, not the shell’s', () => {
