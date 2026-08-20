@@ -20,7 +20,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { describeWorkspace } from './repo.js';
+import { describeWorkspace, readGitHubRemote } from './repo.js';
 
 let root: string;
 /** A clone: `.git` is a directory at its root. */
@@ -239,5 +239,49 @@ describe('describeWorkspace', () => {
   it('survives a value that is not a string', async () => {
     expect(await describeWorkspace(undefined)).toEqual({ path: '', name: '' });
     expect(await describeWorkspace(42)).toEqual({ path: '', name: '' });
+  });
+});
+
+describe('readGitHubRemote', () => {
+  async function withRepo(config: string, run: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'artemis-remote-'));
+    try {
+      await mkdir(join(root, '.git'), { recursive: true });
+      await writeFile(join(root, '.git', 'config'), config);
+      await run(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ['https', 'https://github.com/Rx-Ventures/artemis.git'],
+    ['ssh scp-form', 'git@github.com:Rx-Ventures/artemis.git'],
+    ['ssh url-form', 'ssh://git@github.com/Rx-Ventures/artemis'],
+    ['no .git suffix', 'https://github.com/Rx-Ventures/artemis'],
+  ])('reads the origin coordinates from a %s remote', async (_kind, url) => {
+    await withRepo(`[core]\n\tbare = false\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`, async (root) => {
+      expect(await readGitHubRemote(root)).toEqual({ owner: 'Rx-Ventures', repo: 'artemis' });
+    });
+  });
+
+  it('answers nothing for another host, another remote name, or no repo at all', async () => {
+    // A GitLab origin must not become a github.com link; a repository whose
+    // only remote is `upstream` has no origin to read; a directory with no
+    // .git/config is the ordinary non-repository case.
+    await withRepo('[remote "origin"]\n\turl = https://gitlab.com/o/r.git\n', async (root) => {
+      expect(await readGitHubRemote(root)).toBeUndefined();
+    });
+    await withRepo('[remote "upstream"]\n\turl = https://github.com/o/r.git\n', async (root) => {
+      expect(await readGitHubRemote(root)).toBeUndefined();
+    });
+    expect(await readGitHubRemote(join(tmpdir(), 'artemis-no-such-dir'))).toBeUndefined();
+  });
+
+  it('lands on the describe result for a checkout with a GitHub origin', async () => {
+    await withRepo('[remote "origin"]\n\turl = git@github.com:owner/repo.git\n', async (root) => {
+      const described = await describeWorkspace(root);
+      expect(described.github).toEqual({ owner: 'owner', repo: 'repo' });
+    });
   });
 });

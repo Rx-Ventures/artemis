@@ -221,6 +221,12 @@ export interface WorkspaceNames {
    */
   readonly projectRoot?: string;
   /**
+   * The GitHub repository the project's `origin` remote names, when it names
+   * one. What the transcript's markdown uses to expand a bare `#123` into a
+   * pull-request link.
+   */
+  readonly github?: { readonly owner: string; readonly repo: string };
+  /**
    * Is that root a linked worktree rather than an ordinary checkout?
    *
    * Absent unless it is one — including when the answer cannot be had, which is
@@ -263,6 +269,6 @@ export async function describeWorkspace(path: string): Promise<WorkspaceNames | 
   const result = await call(() => bridge.workspace.describe({ path: trimmed }));
   if (!result.ok) return null;
 
-  const { name, repoName, repoRoot, projectRoot, worktree, temporary } = result.value;
-  return { name, repoName, repoRoot, projectRoot, worktree, temporary };
+  const { name, repoName, repoRoot, projectRoot, github, worktree, temporary } = result.value;
+  return { name, repoName, repoRoot, projectRoot, github, worktree, temporary };
 }

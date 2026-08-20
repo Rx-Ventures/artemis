@@ -102,6 +102,13 @@ export interface WorkspaceDescription {
    */
   readonly worktree?: boolean;
   /**
+   * The GitHub repository the project's `origin` remote points at, when it
+   * points at one. What lets a bare `#123` in a transcript become a link to
+   * the pull request it names — see {@link readGitHubRemote} for how it is
+   * read and why only GitHub produces an answer.
+   */
+  readonly github?: { readonly owner: string; readonly repo: string };
+  /**
    * Is {@link path} inside the machine's temporary directory?
    *
    * Absent unless it is. The same caller and the same reason as
@@ -145,6 +152,7 @@ export async function describeWorkspace(path: unknown): Promise<WorkspaceDescrip
   if (found === undefined) return { path: value, name, ...temporary };
 
   const { repoRoot, worktree, projectRoot } = found;
+  const github = await readGitHubRemote(projectRoot ?? repoRoot);
   return {
     path: value,
     name,
@@ -157,7 +165,55 @@ export async function describeWorkspace(path: unknown): Promise<WorkspaceDescrip
     // these fields existed.
     ...(worktree ? { worktree: true } : {}),
     ...temporary,
+    ...(github === undefined ? {} : { github }),
   };
+}
+
+/**
+ * The `origin` remote's GitHub coordinates, straight out of `.git/config`.
+ *
+ * Read from the file rather than `git remote get-url` for the reasons the
+ * module docs give for the whole walk: no `git` on PATH required, no process
+ * spawn on a UI-adjacent path, and no failure taxonomy — every unhappy shape
+ * is "no remote", which renders as exactly what rendered before.
+ *
+ * Read against the *project* root deliberately: a linked worktree's own
+ * `.git` is a pointer file with no config in it, and the remote it pushes to
+ * is the main checkout's. The one shape this leaves behind is a submodule,
+ * whose config lives in the superproject's `.git/modules/…` — it degrades to
+ * "no remote", which is honest enough for a link decoration.
+ *
+ * Only `github.com` produces an answer. The consumer turns `#123` into a
+ * pull-request URL, and that expansion is a GitHub convention — a GitLab or
+ * Gitea origin should produce no links rather than links to the wrong host.
+ */
+export async function readGitHubRemote(
+  root: string,
+): Promise<{ readonly owner: string; readonly repo: string } | undefined> {
+  let config: string;
+  try {
+    config = await readFile(join(root, '.git', 'config'), 'utf8');
+  } catch {
+    return undefined;
+  }
+
+  // The url line of the `[remote "origin"]` section, wherever it sits. Git's
+  // own format: sections in brackets, `key = value` lines beneath.
+  const section = /\[remote "origin"\]([^[]*)/.exec(config)?.[1];
+  const url = section === undefined ? undefined : /^\s*url\s*=\s*(.+?)\s*$/m.exec(section)?.[1];
+  if (url === undefined) return undefined;
+
+  // The three spellings git uses for one GitHub repository:
+  //   https://github.com/owner/repo(.git)
+  //   git@github.com:owner/repo(.git)
+  //   ssh://git@github.com/owner/repo(.git)
+  const match =
+    /^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url);
+  if (match === null) return undefined;
+
+  const [, owner, repo] = match;
+  if (owner === undefined || repo === undefined) return undefined;
+  return { owner, repo };
 }
 
 /** A repository root, and which of the two kinds it is. */
