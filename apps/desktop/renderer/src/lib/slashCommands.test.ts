@@ -113,6 +113,34 @@ describe('matchSlashCommands', () => {
     });
   });
 
+  describe('names that arrive wearing a slash', () => {
+    // Both forms are in this repository: the Claude CLI reports bare names, and
+    // `mockBridge.ts` and the mapper's fixtures report `/compact`.
+    const PREFIXED = ['/compact', '/artemis-skills:cerebro'];
+
+    it('strips it rather than offering //compact', () => {
+      expect(names('/comp', PREFIXED)).toEqual(['compact']);
+    });
+
+    it('inserts a draft with exactly one slash', () => {
+      const [match] = matchSlashCommands(PREFIXED, '/comp')!.matches;
+      expect(applySlashCommand(match!.name)).toBe('/compact ');
+    });
+
+    it('still finds a prefixed bridged command by its segment', () => {
+      expect(names('/cer', PREFIXED)).toEqual(['artemis-skills:cerebro']);
+    });
+
+    it('collapses the two forms of one command into a single row', () => {
+      // Otherwise the menu renders two identical rows sharing a React key.
+      expect(names('/comp', ['compact', '/compact'])).toEqual(['compact']);
+    });
+
+    it('canonicalises a raw provider string handed straight to apply', () => {
+      expect(applySlashCommand('/compact')).toBe('/compact ');
+    });
+  });
+
   it('inserts the canonical name and a space, so the menu closes', () => {
     const draft = applySlashCommand('artemis-skills:cerebro');
     expect(draft).toBe('/artemis-skills:cerebro ');

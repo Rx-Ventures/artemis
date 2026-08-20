@@ -72,6 +72,21 @@ export interface SlashMenu {
   readonly matches: readonly SlashMatch[];
 }
 
+/**
+ * The name without its slash, if it arrived wearing one.
+ *
+ * The field is whatever the provider put in `system.init`, and the two forms are
+ * both in this repository: the Claude CLI reports bare names (`compact`,
+ * `artemis-skills:cerebro`), while `mockBridge.ts` and the mapper's own fixtures
+ * use `/compact`. Nothing guarantees which a future provider sends, and the cost
+ * of guessing wrong is a menu offering `//compact` and inserting a draft the
+ * provider will reject — so the slash is stripped on the way in and added back
+ * exactly once on the way out.
+ */
+function canonical(name: string): string {
+  return name.startsWith('/') ? name.slice(1) : name;
+}
+
 /** Split `plugin:name` into its parts, tolerating a name with no prefix. */
 function split(name: string): { readonly label: string; readonly prefix?: string } {
   const at = name.lastIndexOf(':');
@@ -102,7 +117,14 @@ export function matchSlashCommands(
   const needle = query.toLowerCase();
 
   const matches: SlashMatch[] = [];
-  for (const name of commands) {
+  // Stripping the slash can collide two reported names onto one — `compact` and
+  // `/compact` are the same command — and the menu keys its rows by name, so a
+  // duplicate would be two identical rows sharing a React key.
+  const seen = new Set<string>();
+  for (const reported of commands) {
+    const name = canonical(reported);
+    if (seen.has(name)) continue;
+    seen.add(name);
     const { label, prefix } = split(name);
     const lower = name.toLowerCase();
     const rank =
@@ -135,5 +157,7 @@ export function matchSlashCommands(
  * slash token, which is what makes Enter send on the very next press.
  */
 export function applySlashCommand(name: string): string {
-  return `/${name} `;
+  // Canonicalised again rather than trusted: this is exported, and a caller
+  // passing the provider's raw string would otherwise send `//compact`.
+  return `/${canonical(name)} `;
 }
