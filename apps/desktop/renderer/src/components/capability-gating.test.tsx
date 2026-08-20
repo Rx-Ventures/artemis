@@ -283,6 +283,44 @@ describe('status line / model and effort', () => {
     await screen.findByRole('menu');
     expect(screen.getByText('Thinking')).toBeTruthy();
   });
+
+  /*
+   * REGRESSION. The effort ladder opened leftward, off the side of the window.
+   *
+   * jsdom computes no layout, so the *position* is not assertable here — but the
+   * cause is structural and is. The submenu was rendered inside the model menu,
+   * which animates with a transform: a transformed ancestor becomes the
+   * containing block for `position: fixed`, so the submenu was both clipped by
+   * that menu's `overflow-y-auto` and measured against its box rather than the
+   * window. Radix concluded there was no room to the right and flipped it into
+   * even less. Portaling it out of that ancestor is the fix, and "is it a
+   * descendant of the parent menu" is exactly the thing that regressed.
+   */
+  it('opens the thinking ladder outside the menu that owns it', async () => {
+    useProvider(ALL);
+    mount(<StatusLine />);
+    fireEvent.pointerDown(screen.getByLabelText('Model'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+
+    const menu = await screen.findByRole('menu');
+    const submenuTrigger = screen.getByText('Thinking').closest('[data-slot="dropdown-menu-sub-trigger"]');
+    expect(submenuTrigger).toBeTruthy();
+    fireEvent.pointerMove(submenuTrigger as Element, { pointerType: 'mouse' });
+
+    const ladder = await waitFor(() => {
+      const found = document.querySelector('[data-slot="dropdown-menu-sub-content"]');
+      if (!found) throw new Error('the thinking ladder never opened');
+      return found;
+    });
+
+    // The whole fix, stated as a fact about the tree: the ladder is on the page
+    // and is *not* inside the menu it belongs to.
+    expect(menu.contains(ladder)).toBe(false);
+    expect(document.body.contains(ladder)).toBe(true);
+  });
 });
 
 /**
