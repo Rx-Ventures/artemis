@@ -30,6 +30,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKey, string> = {
   deleteSession: 'deleting a session',
   tagSession: 'archiving a session',
   resumeSession: 'resuming a session',
+  rewind: 'rewinding a conversation',
   usageReporting: 'token usage reporting',
   costReporting: 'cost reporting',
   planUsageReporting: 'plan usage reporting',

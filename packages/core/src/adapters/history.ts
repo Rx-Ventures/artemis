@@ -224,3 +224,66 @@ export function replayStoredSession(
   for (const message of messages) events.push(...replayStoredMessage(message, context));
   return events;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Rewind                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** Where a truncating resume should re-enter the chain. */
+export interface RewindPoint {
+  /** The chain uuid of the last entry the resumed session keeps. */
+  readonly resumeSessionAt: string;
+  /**
+   * The prompt uuid of the turn being discarded — present only when the
+   * discarded range is that one turn, which is the only shape the provider's
+   * `--resume-drops-turn` acknowledgement can vouch for. A deeper rewind omits
+   * it and takes its chances with the provider's own guard.
+   */
+  readonly dropsTurn?: string;
+}
+
+/**
+ * Whether a stored entry is something the user actually asked — the start of a
+ * turn — as opposed to the other things that arrive in a user-typed envelope:
+ * tool results, and the harness notes {@link isHarnessNote} names.
+ */
+function isPromptEntry(stored: StoredMessage): boolean {
+  if (stored.type !== 'user') return false;
+  const blocks = contentBlocks(stored.message);
+  if (blocks.some((block) => block.type === 'tool_result')) return false;
+  return blocks.some(
+    (block) =>
+      block.type === 'text' && typeof block.text === 'string' && !isHarnessNote(block.text),
+  );
+}
+
+/**
+ * Resolve "rewind to just before this prompt" against the stored chain.
+ *
+ * The renderer knows which prompt the user pointed at — its uuid rides the
+ * transcript — but a truncating resume re-enters the chain at the entry
+ * *before* it, and only the stored file knows what that was. `null` when the
+ * uuid is not in the chain or has nothing before it; the caller turns that
+ * into an error worth reading, because both mean the rewind cannot happen.
+ */
+export function resolveRewindPoint(
+  messages: readonly StoredMessage[],
+  promptUuid: string,
+): RewindPoint | null {
+  const at = messages.findIndex((stored) => stored.uuid === promptUuid);
+  if (at <= 0) return null;
+
+  const before = messages[at - 1];
+  if (before === undefined) return null;
+
+  // One turn, or more? The provider's drops-turn acknowledgement names a
+  // single prompt, so a range holding a second prompt cannot be declared.
+  const laterPrompts = messages
+    .slice(at + 1)
+    .some((stored) => isPromptEntry(stored));
+
+  return {
+    resumeSessionAt: before.uuid,
+    ...(laterPrompts ? {} : { dropsTurn: promptUuid }),
+  };
+}

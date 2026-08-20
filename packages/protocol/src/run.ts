@@ -113,6 +113,21 @@ export interface RunInput {
    * {@link Capabilities.forkSession}, and is ignored without `resumeSessionId`.
    */
   readonly forkSession?: boolean;
+  /**
+   * Resume {@link resumeSessionId} with its history truncated to just before
+   * this user message, named by the provider-assigned id the transcript carries
+   * for it.
+   *
+   * The intent, not the mechanism. The provider's stored chain is the only
+   * place the entry *preceding* this one can be found, so the id here is the
+   * one thing the renderer actually knows — which prompt the user pointed at —
+   * and the adapter resolves it against the file. Requires
+   * {@link Capabilities.rewind}; ignored without `resumeSessionId`. With
+   * {@link forkSession} the original session is left whole and the truncation
+   * happens in the branch; without it the session itself is wound back, which
+   * providers may refuse for all but the most recent turn.
+   */
+  readonly rewindToMessageId?: string;
 
   /**
    * Model identifier, as the provider names it. Omit for the provider default.

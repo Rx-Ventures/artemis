@@ -181,6 +181,7 @@ export const CODEX_CAPABILITIES: Capabilities = {
   // could read.
   tagSession: false,
   resumeSession: true,
+  rewind: false,
   usageReporting: true,
   planUsageReporting: true,
   /**

@@ -116,6 +116,7 @@ const CLAUDE_CAPS: Capabilities = {
   tagSession: true,
   permissionModes: ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'],
   resumeSession: true,
+  rewind: true,
   usageReporting: true,
   costReporting: true,
   planUsageReporting: true,
@@ -138,6 +139,7 @@ const CODEX_CAPS: Capabilities = {
   tagSession: false,
   permissionModes: ['default', 'bypassPermissions'],
   resumeSession: true,
+  rewind: false,
   usageReporting: true,
   costReporting: false,
   // True, as the real adapter declares: Codex answers `account/rateLimits/read`
