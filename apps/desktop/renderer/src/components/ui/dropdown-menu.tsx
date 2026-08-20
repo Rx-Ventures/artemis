@@ -235,16 +235,44 @@ function DropdownMenuSubTrigger({
   )
 }
 
+/*
+  Two deliberate departures from the registry's version, both about a submenu
+  that opened the wrong way and fell off the screen.
+
+  **The portal.** `DropdownMenuContent` above is wrapped in one and the registry
+  leaves this one bare, which is fine until the parent menu animates. The parent
+  carries `zoom-in-95` — a transform — and a transformed ancestor becomes the
+  containing block for `position: fixed` descendants, so the submenu stopped
+  escaping the parent's `overflow-y-auto` and started being clipped by it. It
+  also stopped being measured against the viewport: Radix asked the parent's box
+  whether there was room to the right, decided there was not, and flipped left,
+  where there was even less. Portaling puts it back outside the transform, which
+  is what both the clipping and the flip were about.
+
+  **The collision padding.** A menu that does have to flip should stop short of
+  the window edge rather than sit flush against it — with none, the flipped
+  position is exactly the frame's edge.
+
+  Both are props on the primitive rather than classes, so a future `shadcn add`
+  overwriting this file takes the fix out. If a submenu ever opens leftward into
+  nothing again, this comment is why.
+*/
 function DropdownMenuSubContent({
   className,
+  sideOffset = 2,
+  collisionPadding = 8,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
-    <DropdownMenuPrimitive.SubContent
-      data-slot="dropdown-menu-sub-content"
-      className={cn("z-50 min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
-      {...props}
-    />
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        data-slot="dropdown-menu-sub-content"
+        sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
+        className={cn("z-50 min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   )
 }
 
