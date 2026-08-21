@@ -1,6 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.6.0
+
+The plugins you install reach your sessions, and an update in flight says what
+it is doing instead of spinning.
+
+- **A plugin you installed from a marketplace shows up.** Install one with
+  `/plugin install` and its skills and slash commands are on offer in Artemis —
+  type `/` and they are in the menu, under the plugin's own name. They were
+  never loading before, and it read as a broken menu rather than as a missing
+  plugin, because the menu is exactly the list the provider reports. What was
+  missing was not the files but the switch: a plugin is enabled by a key in
+  `~/.claude/settings.json`, which is the layer Artemis deliberately does not
+  read. That one key is read now, and nothing else in the file is. A plugin
+  installed while a conversation is open appears in the next one.
+
+- **The slash-command menu keeps up.** When the provider revises what it
+  offers mid-session — a skill found in a directory the agent moved into, a
+  plugin reloaded — the menu follows, instead of showing what was true when the
+  session opened.
+
+- **An update in flight says what it is doing.** Installing an update used to
+  be a small spinner over one unchanging sentence, for minutes: around 196MB
+  downloaded, checksummed and unpacked with nothing on screen to tell any of it
+  from a hang. It names the step it is on now, with a real progress bar and a
+  byte count, and the header chip counts a percent. Where a step genuinely
+  cannot know its total, the bar says "still working" rather than inventing a
+  position.
+
+- **A determinate progress bar reads as one.** Every bar in the app was
+  reporting itself to screen readers as indeterminate, whatever it was showing.
+
 ## What's new in 1.5.0
 
 The agent can browse with your browser instead of its own, and the numbers
