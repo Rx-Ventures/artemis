@@ -179,6 +179,7 @@ function harness(
     capabilities?: Capabilities;
     disposeTimeoutMs?: number;
     historyLimit?: number;
+    endedRetention?: number;
     adapter?: Partial<{ createRun: () => Promise<FakeRun> }>;
     /** Build runs that can be released without being torn down — see {@link FakeTurn}. */
     releasable?: boolean;
@@ -225,6 +226,7 @@ function harness(
     newRunId: () => `run-${runs.length + 1}`,
     disposeTimeoutMs: options.disposeTimeoutMs ?? 50,
     historyLimit: options.historyLimit,
+    endedRetention: options.endedRetention,
     onError: (error, context) => errors.push({ error, phase: context.phase }),
   });
 
@@ -962,6 +964,34 @@ describe('RunRegistry — steering', () => {
     const ended = await registry.send(handle.runId, 'hi').catch((e: unknown) => e as RunError);
     expect(ended.details).toEqual({ reason: 'run_ended', runId: handle.runId });
 
+    const unknown = await registry.send('never-existed', 'hi').catch((e: unknown) => e as RunError);
+    expect(unknown.details).toEqual({ reason: 'run_unknown', runId: 'never-existed' });
+  });
+
+  it('still says run_ended after the entry has been evicted from retention', async () => {
+    // The distinction above must not have a shelf life. `#ended` keeps whole
+    // entries and is deliberately small, so a run that finished hours ago has
+    // usually been evicted by the time a stale window comes back — a machine
+    // that slept through the `run.end` is the ordinary way this happens. If
+    // eviction downgraded the answer to `run_unknown`, the renderer's recovery
+    // path would treat its own stale-but-real id as a bug and refuse to carry
+    // the user's message into a fresh run: typed words, lost, precisely
+    // because the user was away long enough.
+    const { registry, runs } = harness({ endedRetention: 1 });
+    const first = await registry.start(input());
+    firstRun(runs).emit(runEnd(first.runId, 0));
+    await flush();
+
+    // A second run ends after it, evicting the first from the entry map.
+    const second = await registry.start(input());
+    runs[1]?.emit(runEnd(second.runId, 0));
+    await flush();
+
+    const evicted = await registry.send(first.runId, 'hi').catch((e: unknown) => e as RunError);
+    expect(evicted.details).toEqual({ reason: 'run_ended', runId: first.runId });
+
+    // The honest refusal for a foreign id is unchanged — eviction must widen
+    // nothing.
     const unknown = await registry.send('never-existed', 'hi').catch((e: unknown) => e as RunError);
     expect(unknown.details).toEqual({ reason: 'run_unknown', runId: 'never-existed' });
   });

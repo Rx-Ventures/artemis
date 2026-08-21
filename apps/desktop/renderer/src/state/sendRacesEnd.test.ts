@@ -44,13 +44,23 @@ let sendAnswer: () => unknown = () => ({
 });
 
 /** Every `runs.start` input main was handed, in order. */
-let started: { prompt: string; runId: string }[] = [];
+let started: { prompt: string; runId: string; resumeSessionId?: string }[] = [];
 
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   runs: {
     send: async () => sendAnswer(),
-    start: async ({ input }: { input: { prompt: string; runId: string } }) => {
-      started.push({ prompt: input.prompt, runId: input.runId });
+    start: async ({
+      input,
+    }: {
+      input: { prompt: string; runId: string; resumeSessionId?: string };
+    }) => {
+      started.push({
+        prompt: input.prompt,
+        runId: input.runId,
+        ...(input.resumeSessionId === undefined
+          ? {}
+          : { resumeSessionId: input.resumeSessionId }),
+      });
       return {
         ok: true,
         value: {
@@ -187,6 +197,42 @@ describe('a send that races the end of its run', () => {
     expect(run?.runId).toBe(started[0]?.runId);
     expect(run?.runId).not.toBe('r1');
     expect(run?.status).not.toBe('ended');
+  });
+
+  it('continues the conversation whose id lived only on the run', async () => {
+    /*
+     * The sharpest version of the race: a conversation *started* in this pane,
+     * so its session id exists nowhere but `run.sessionId` — `resumeSessionId`
+     * is still null, because only a real `run.end` used to promote it. The
+     * fall-through draws that end locally, and if the local end does not
+     * promote too, the recovery run resumes nothing: the user's words arrive
+     * in a brand-new provider session, under a transcript showing a
+     * conversation the provider has never heard of.
+     */
+    const resumable = { ...STEERABLE, resumeSession: true };
+    useApp.setState({
+      providers: [{ id: 'claude', label: 'Claude', capabilities: resumable, models: [] }] as never,
+    });
+    setPaneState(focusedPane(), {
+      resumeSessionId: null,
+      run: {
+        runId: 'r1',
+        status: 'running',
+        providerId: 'claude',
+        profileId: 'p1',
+        cwd: '/repo',
+        capabilities: resumable,
+        startedAt: 1,
+        sessionId: 'sess-1',
+      },
+      permissionQueue: [],
+    } as never);
+    sendAnswer = () => ENDED;
+
+    await submitPrompt('carry on then');
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.resumeSessionId).toBe('sess-1');
   });
 
   it('still reports a refusal that is not this race', async () => {

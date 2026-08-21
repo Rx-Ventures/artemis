@@ -262,6 +262,16 @@ interface RunEntry {
 const DEFAULT_HISTORY_LIMIT = 1000;
 const DEFAULT_ENDED_RETENTION = 32;
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000;
+/**
+ * How many finalized run *ids* to remember after their entries are evicted.
+ *
+ * Generous where {@link DEFAULT_ENDED_RETENTION} is tight, because the costs
+ * are three orders of magnitude apart: an ended entry holds its event history,
+ * a retired id is a string. The bound exists only so a process that runs for
+ * months cannot grow without limit, and it is sized so that falling off the
+ * end takes longer than any window plausibly sits stale.
+ */
+const RETIRED_ID_RETENTION = 10_000;
 
 /**
  * In-memory index of active runs.
@@ -283,6 +293,25 @@ export class RunRegistry {
   readonly #runs = new Map<RunId, RunEntry>();
   /** Recently finished runs, kept for late replay and idempotent dispose. */
   readonly #ended = new Map<RunId, RunEntry>();
+  /**
+   * Every run id this registry ever finalized, long after its entry is gone.
+   *
+   * `#ended` keeps whole entries — event buffers included — so it is small by
+   * necessity, and an entry falling off its end used to take the *fact that
+   * the run existed* with it. That mattered because "already ended" and "never
+   * existed" are different refusals with opposite recoveries — see
+   * {@link #requireActive} — and a renderer that missed a `run.end` (a machine
+   * asleep, a dropped event) would come back hours later, steer the run it
+   * still believed live, and be told `run_unknown`: the one refusal its
+   * recovery path rightly refuses to forgive. The user's message went nowhere.
+   *
+   * Ids are a few dozen bytes, so remembering them costs nothing worth
+   * counting: this holds the last {@link RETIRED_ID_RETENTION} of them,
+   * insertion-ordered, evicted oldest-first. A stale send now gets
+   * `run_ended` — the race it actually is — for as long as any plausible
+   * window sits stale.
+   */
+  readonly #retired = new Set<RunId>();
   /** Run ids reserved by an in-flight `start()`, to close the race window. */
   readonly #starting = new Set<RunId>();
   /** Subscribers to every run. */
@@ -419,8 +448,9 @@ export class RunRegistry {
     // still answers `eventsSince` and `dispose` for that id, so a new run
     // wearing it would replay a finished transcript ahead of its own events
     // and hand its teardown to the old entry. Ids are minted fresh; reuse is
-    // a caller bug worth failing loudly.
-    if (this.#ended.has(runId)) {
+    // a caller bug worth failing loudly — and `#retired` keeps the refusal
+    // standing after the entry itself has been evicted.
+    if (this.#ended.has(runId) || this.#retired.has(runId)) {
       throw new RunError('invalid_request', `Run "${runId}" has already ended; run ids are not reusable`);
     }
 
@@ -523,7 +553,12 @@ export class RunRegistry {
       throw new RunError('cancelled', 'The engine is shutting down and cannot adopt runs');
     }
     const runId = run.runId;
-    if (this.#runs.has(runId) || this.#starting.has(runId) || this.#ended.has(runId)) {
+    if (
+      this.#runs.has(runId) ||
+      this.#starting.has(runId) ||
+      this.#ended.has(runId) ||
+      this.#retired.has(runId)
+    ) {
       throw new RunError('invalid_request', `Run "${runId}" is already known`);
     }
 
@@ -881,7 +916,10 @@ export class RunRegistry {
   #requireActive(runId: RunId): RunEntry {
     const entry = this.#runs.get(runId);
     if (!entry) {
-      const retired = this.#ended.has(runId);
+      // `#retired` outlives `#ended` on purpose: the entry's eviction must not
+      // turn a stale-but-real id into "never existed", because the caller's
+      // recovery paths fork on exactly that distinction.
+      const retired = this.#ended.has(runId) || this.#retired.has(runId);
       throw new RunError(
         'invalid_request',
         retired ? `Run "${runId}" has already ended` : `Unknown run "${runId}"`,
@@ -1072,6 +1110,15 @@ export class RunRegistry {
     const { runId } = entry.handle;
     this.#runs.delete(runId);
     entry.listeners.clear();
+
+    // Remembered even when entry retention is disabled: the id is the part
+    // whose loss misclassifies a later caller, and it costs nothing to keep.
+    this.#retired.add(runId);
+    while (this.#retired.size > RETIRED_ID_RETENTION) {
+      const oldest = this.#retired.values().next();
+      if (oldest.done === true) break;
+      this.#retired.delete(oldest.value);
+    }
 
     if (this.#endedRetention === 0) return;
     this.#ended.set(runId, entry);
