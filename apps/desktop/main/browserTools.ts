@@ -413,6 +413,109 @@ const INSTRUCTIONS =
   'usually enough. Reach for a screenshot when the question is about ' +
   'layout, styling, or something that went wrong visually.';
 
+/* -------------------------------------------------------------------------- */
+/* The external variant                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The browser tools for a user who prefers their own browser.
+ *
+ * One tool, same name, same server name. The name is the contract: permission
+ * rules and skills address `mcp__artemisBrowser__browser_open`, and a user
+ * flipping a preference must not invalidate an allow-list they built under the
+ * other mode. What changes is what the tool *does* — the page opens in the
+ * user's default browser, with their logins and their password manager —
+ * and what is no longer offered: `browser_read`, `browser_screenshot`,
+ * `browser_click` and `browser_type` only make sense against a page this
+ * process owns, and registering them just to refuse would spend context
+ * teaching the model tools it must not use. Absent tools are the honest
+ * signal, and the open tool's own description says what became of them.
+ */
+export function externalBrowserToolServer(
+  openExternal: (url: string) => void | Promise<void>,
+): McpServerConfig {
+  return createSdkMcpServer({
+    name: 'artemis-browser',
+    version: '1',
+    instructions: EXTERNAL_INSTRUCTIONS,
+    tools: externalBrowserTools(openExternal),
+  });
+}
+
+/** The external variant's tool definitions. Addressable for the same reason {@link browserTools} is. */
+export function externalBrowserTools(openExternal: (url: string) => void | Promise<void>) {
+  return [
+    tool(
+      'browser_open',
+      'Open an address in the user’s own browser, in a new tab they can see. ' +
+        'You cannot read, screenshot, or interact with that page — the user has ' +
+        'chosen to browse with their own logins. To verify a page yourself, use ' +
+        'other means (logs, tests, curl for public pages) or ask the user what ' +
+        'they see.',
+      { url: z.string().describe('Address to open, e.g. http://localhost:5173') },
+      async ({ url }) => {
+        // The same gate the embedded browser applies, for the same reason —
+        // and with more riding on it: this URL leaves the sandbox for the
+        // user's real browser, so a scheme like file: or javascript: must
+        // stop here, not there.
+        if (browserUrlFor(url) === null) {
+          return refuse(`“${url}” is not an http or https address.`);
+        }
+        try {
+          await openExternal(url);
+          return say(
+            `Opened ${url} in the user’s browser. You cannot see that page; ` +
+              'ask the user if you need to know what it shows.',
+          );
+        } catch (error) {
+          return refuse(messageOf(error));
+        }
+      },
+    ),
+  ];
+}
+
+/** What the model is told when the user prefers their own browser. */
+const EXTERNAL_INSTRUCTIONS =
+  'Opens pages in the user’s own browser — their logins, their tabs. ' +
+  'The page is visible to the user, not to you: there is no way to read or ' +
+  'screenshot it from here. Open a page when the user should look at ' +
+  'something; verify your own work through logs and tests instead.';
+
+/* -------------------------------------------------------------------------- */
+/* Which tools a run gets                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one decision table for a run's browser tools.
+ *
+ * | `chromeBrowser` | `externalBrowser` | The agent gets                      |
+ * |-----------------|-------------------|-------------------------------------|
+ * | true            | —                 | nothing from Artemis — the CLI's own Chrome bridge |
+ * | false           | true              | the open-only external server       |
+ * | false           | false             | the embedded dock browser           |
+ *
+ * Chrome wins over external because it is the stronger form of the same
+ * preference: both mean "the user's own browser", and the bridge can also read
+ * what it opened. Handing the CLI's tool set a sibling `browser_open` would
+ * give the model two tools with one name's worth of purpose and let it pick
+ * the one that cannot see.
+ *
+ * A function of the input rather than inline in the composition root so the
+ * table is testable without Electron — the builders are injected precisely so
+ * a test can hand in markers and assert which one was asked for.
+ */
+export function agentBrowserServers(
+  input: { readonly chromeBrowser?: boolean; readonly externalBrowser?: boolean },
+  build: {
+    readonly embedded: () => McpServerConfig;
+    readonly external: () => McpServerConfig;
+  },
+): Record<string, McpServerConfig> | undefined {
+  if (input.chromeBrowser === true) return undefined;
+  return { artemisBrowser: input.externalBrowser === true ? build.external() : build.embedded() };
+}
+
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message;
   log.debug('A browser tool failed with a non-Error', error);

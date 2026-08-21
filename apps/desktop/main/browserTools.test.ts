@@ -23,7 +23,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { BrowserId, BrowserState, RunId } from '@rx-artemis/protocol';
 
-import { browserTools, type BrowserToolContext } from './browserTools';
+import {
+  agentBrowserServers,
+  browserTools,
+  externalBrowserTools,
+  type BrowserToolContext,
+} from './browserTools';
 
 const RUN = 'run-1' as RunId;
 const ID = 'browser-1' as BrowserId;
@@ -227,5 +232,151 @@ describe('reading a page', () => {
     const result = (await read({} as never)) as { content: { text: string }[] };
     expect(result.content[0]?.text).toContain('https://example.com');
     expect(result.content[0]?.text).toContain('the page text');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Which browser a run gets                                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('which browser a run gets', () => {
+  /** Builders that record being asked and return tell-apart markers. */
+  function builders(): {
+    asked: string[];
+    build: { embedded: () => never; external: () => never };
+  } {
+    const asked: string[] = [];
+    return {
+      asked,
+      build: {
+        embedded: () => {
+          asked.push('embedded');
+          return 'the embedded server' as never;
+        },
+        external: () => {
+          asked.push('external');
+          return 'the external server' as never;
+        },
+      },
+    };
+  }
+
+  it('hands a run with no preference the embedded browser, under the contracted name', () => {
+    const { asked, build } = builders();
+
+    const servers = agentBrowserServers({}, build);
+
+    // The key is the contract: permission rules and skills address
+    // `mcp__artemisBrowser__…`, whatever the mode.
+    expect(servers).toEqual({ artemisBrowser: 'the embedded server' });
+    expect(asked).toEqual(['embedded']);
+  });
+
+  it('hands a run that prefers the user’s browser the open-only server', () => {
+    const { asked, build } = builders();
+
+    const servers = agentBrowserServers({ externalBrowser: true }, build);
+
+    expect(servers).toEqual({ artemisBrowser: 'the external server' });
+    expect(asked).toEqual(['external']);
+  });
+
+  it('hands a Chrome-bridge run nothing at all, and builds nothing', () => {
+    const { asked, build } = builders();
+
+    const servers = agentBrowserServers({ chromeBrowser: true }, build);
+
+    // The CLI brings its own tool set; a sibling `browser_open` from the host
+    // would be a second tool with one name's worth of purpose.
+    expect(servers).toBeUndefined();
+    // Laziness is part of the contract: a run that gets the bridge must not
+    // stand up the embedded server it will never use.
+    expect(asked).toEqual([]);
+  });
+
+  it('lets Chrome win when both preferences are set', () => {
+    const { asked, build } = builders();
+
+    const servers = agentBrowserServers({ chromeBrowser: true, externalBrowser: true }, build);
+
+    expect(servers).toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The external open tool                                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('the external open tool', () => {
+  function externalHandler(openExternal: (url: string) => void | Promise<void>): {
+    open: (args: never) => Promise<unknown>;
+    tools: readonly { name: string }[];
+  } {
+    const tools = externalBrowserTools(openExternal);
+    const found = tools.find((one) => one.name === 'browser_open');
+    if (found === undefined) throw new Error('No external browser_open');
+    return { open: found.handler as (args: never) => Promise<unknown>, tools };
+  }
+
+  it('offers exactly one tool, named as the embedded browser_open is', () => {
+    // Same name so a permission allow-list built under one mode survives the
+    // other; nothing else, because read/screenshot/click/type only make sense
+    // against a page this process owns, and registering them just to refuse
+    // would teach the model tools it must not use.
+    const { tools } = externalHandler(() => undefined);
+    expect(tools.map((one) => one.name)).toEqual(['browser_open']);
+  });
+
+  it('refuses a file: URL without touching the user’s browser', async () => {
+    // More riding on this gate than on the embedded one: the URL leaves the
+    // sandbox for the user's real browser, so file: stops here, not there.
+    const opened: string[] = [];
+    const { open } = externalHandler((url) => void opened.push(url));
+
+    const result = (await open({ url: 'file:///etc/passwd' } as never)) as { isError?: true };
+
+    expect(result.isError).toBe(true);
+    expect(opened).toEqual([]);
+  });
+
+  it('refuses javascript: rather than handing it to the shell', async () => {
+    const opened: string[] = [];
+    const { open } = externalHandler((url) => void opened.push(url));
+
+    const result = (await open({ url: 'javascript:alert(1)' } as never)) as { isError?: true };
+
+    expect(result.isError).toBe(true);
+    expect(opened).toEqual([]);
+  });
+
+  it('opens an ordinary https address in the user’s browser', async () => {
+    const opened: string[] = [];
+    const { open } = externalHandler((url) => void opened.push(url));
+
+    const result = (await open({ url: 'https://example.com' } as never)) as {
+      isError?: true;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBeUndefined();
+    expect(opened).toEqual(['https://example.com']);
+    // The model is told, in the reply, that it cannot see what it opened —
+    // the description says so too, but the reply is what survives context.
+    expect(result.content[0]?.text).toContain('cannot see');
+  });
+
+  it('reports a failed open as an answer, not an exception', async () => {
+    const { open } = externalHandler(() => {
+      throw new Error('the shell refused');
+    });
+
+    const result = (await open({ url: 'https://example.com' } as never)) as {
+      isError?: true;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('the shell refused');
   });
 });

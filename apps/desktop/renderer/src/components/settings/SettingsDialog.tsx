@@ -50,6 +50,7 @@ import {
   BotIcon,
   BoxesIcon,
   BrainIcon,
+  GlobeIcon,
   KeyRoundIcon,
   PaletteIcon,
   ServerIcon,
@@ -61,6 +62,7 @@ import { ProfilesSection } from '../ProfilesScreen';
 import { AdvancedSection } from './AdvancedSection';
 import { AgentsSection } from './AgentsSection';
 import { AppearanceSection } from './AppearanceSection';
+import { BrowserSection } from './BrowserSection';
 import { CerebroSection } from './CerebroSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
@@ -110,6 +112,16 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Appearance',
     hint: 'Width and layout',
     icon: <PaletteIcon aria-hidden="true" />,
+  },
+  // After appearance and before permissions on purpose: whose browser the
+  // agent drives is a comfort question until it is a permission question, and
+  // meeting it beside the pane that decides what runs without asking keeps the
+  // two in the same breath.
+  {
+    id: 'browser',
+    label: 'Browser',
+    hint: 'Whose browser pages open in',
+    icon: <GlobeIcon aria-hidden="true" />,
   },
   {
     id: 'permissions',
@@ -261,6 +273,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <ModelsSection />;
     case 'appearance':
       return <AppearanceSection />;
+    case 'browser':
+      return <BrowserSection />;
     case 'permissions':
       return <PermissionsSection />;
     case 'agents':

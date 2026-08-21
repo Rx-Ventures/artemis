@@ -219,6 +219,40 @@ describe('run lifecycle', () => {
     await run.dispose();
   });
 
+  it('hands agentToolServers the run input, and its servers to the SDK', async () => {
+    // Which tools a run gets is the input's to say — a run browsing with the
+    // user's own Chrome must not also carry the embedded browser — so the
+    // factory sees the same input the run was started with, not just its id.
+    const { harness } = installQuery();
+    const seen: { runId: string; chromeBrowser?: boolean }[] = [];
+    const marker = { type: 'sdk', name: 'artemis-browser' } as never;
+    const adapter = createClaudeAdapter({
+      agentToolServers: (runId, input) => {
+        seen.push({ runId, ...(input.chromeBrowser === undefined ? {} : { chromeBrowser: input.chromeBrowser }) });
+        return { artemisBrowser: marker };
+      },
+    });
+
+    const run = await adapter.createRun({ ...BASE_INPUT, chromeBrowser: true });
+
+    expect(seen).toEqual([{ runId: 'run-1', chromeBrowser: true }]);
+    expect((harness().options.mcpServers as Record<string, unknown>).artemisBrowser).toBe(marker);
+    await run.dispose();
+  });
+
+  it('passes no mcpServers when the factory declines', async () => {
+    // `undefined` from the factory means "this run gets nothing from the
+    // host" — the Chrome-bridge case. An empty object here instead would still
+    // establish the MCP plumbing in the SDK.
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter({ agentToolServers: () => undefined });
+
+    const run = await adapter.createRun({ ...BASE_INPUT, chromeBrowser: true });
+
+    expect(harness().options.mcpServers).toBeUndefined();
+    await run.dispose();
+  });
+
   it('reports a transport failure as run.end rather than rejecting the stream', async () => {
     const { harness } = installQuery();
     // A cwd that really exists, so the launch-failure diagnosis below confirms
@@ -1101,6 +1135,24 @@ describe('buildClaudeOptions', () => {
       model: 'claude-opus-4',
       fallbackModel: 'claude-sonnet-4',
     });
+  });
+
+  it('asks the CLI for the Chrome bridge as a bare --chrome flag', () => {
+    // The bridge has no SDK option; `extraArgs: {chrome: null}` is the SDK's
+    // spelling of a valueless flag. Anything else — `true`, `'true'` — would
+    // reach the CLI as `--chrome true` and be read as a positional argument.
+    const options = buildClaudeOptions({ ...BASE_INPUT, chromeBrowser: true }, context);
+    expect(options.extraArgs).toEqual({ chrome: null });
+  });
+
+  it('sends no extraArgs at all when the bridge was not asked for', () => {
+    // The flag loads the whole `claude-in-chrome` tool set into context every
+    // turn, and the CLI reads an absent flag as off — so a run that never
+    // asked must be byte-identical to one from before the option existed.
+    expect(buildClaudeOptions(BASE_INPUT, context).extraArgs).toBeUndefined();
+    expect(
+      buildClaudeOptions({ ...BASE_INPUT, chromeBrowser: false }, context).extraArgs,
+    ).toBeUndefined();
   });
 });
 

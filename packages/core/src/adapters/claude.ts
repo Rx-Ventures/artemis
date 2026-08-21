@@ -103,6 +103,7 @@ import type {
   QuestionPrompt,
   RunEndReason,
   RunId,
+  RunInput,
   RunStatus,
   SessionDelegatedWork,
   SessionId,
@@ -753,10 +754,20 @@ export interface ClaudeAdapterOptions {
    * happened to be open. The factory closes over the run id; nothing about the
    * targeting travels through the model.
    *
+   * The run input rides along because *which* tools a run should get is the
+   * input's to say: a run browsing with the user's own Chrome
+   * ({@link RunInput.chromeBrowser}) must not also carry the embedded browser,
+   * and one that prefers the user's browser ({@link RunInput.externalBrowser})
+   * gets an open-only surface. The factory decides; this only delivers the
+   * facts it decides with.
+   *
    * Absent — the default, and what a smoke script or a test gets — means the
    * agent has no such tools, and every other capability is unchanged.
    */
-  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
+  readonly agentToolServers?: (
+    runId: RunId,
+    input: RunInput,
+  ) => Record<string, McpServerConfig> | undefined;
 }
 
 /**
@@ -1884,6 +1895,19 @@ export function buildClaudeOptions(
     // object here is not inert — it is a flag-settings layer that exists, and
     // the layer has the highest priority among user-controlled settings.
     settings: buildFlagSettings(input),
+    /*
+     * The Chrome bridge has no SDK option — it is a CLI flag — so it rides
+     * `extraArgs`, which exists for exactly this. Passed only when asked for:
+     * the flag loads the whole `claude-in-chrome` tool set into context on
+     * every turn, which is a real cost a run that never browses should not pay,
+     * and the CLI treats an absent flag as off, so there is nothing to negate.
+     *
+     * A request, not a guarantee — the CLI keeps the integration off for
+     * API-key credentials and when the extension is not connected. Deliberately
+     * not pre-checked here: the CLI owns that decision and its rules move with
+     * its releases, so second-guessing them would only age badly.
+     */
+    ...(input.chromeBrowser === true ? { extraArgs: { chrome: null } } : {}),
     permissionMode,
     // The SDK gates `bypassPermissions` behind an explicit opt-in. Passing it
     // only when the user picked that mode keeps the dangerous flag tied to a
@@ -2065,7 +2089,10 @@ interface ClaudeRunDeps {
   /** See {@link ClaudeAdapterOptions.sdkExecutablePath}. */
   readonly sdkExecutablePath?: string;
   /** See {@link ClaudeAdapterOptions.agentToolServers}. */
-  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
+  readonly agentToolServers?: (
+    runId: RunId,
+    input: RunInput,
+  ) => Record<string, McpServerConfig> | undefined;
   /**
    * Called the first time the process learns which provider session it is
    * writing to, and again when it goes away.
@@ -2698,7 +2725,7 @@ class ClaudeProcess {
     // Resolved once per launch rather than per turn: the server instance holds
     // the handlers, and rebuilding it mid-conversation would hand the SDK a
     // different tool set for the same run.
-    const hostServers = this.#deps.agentToolServers?.(this.#state.runId);
+    const hostServers = this.#deps.agentToolServers?.(this.#state.runId, this.#input);
 
     let sdkQuery: Query;
     try {

@@ -181,6 +181,7 @@ export type SettingsSection =
   | 'profiles'
   | 'models'
   | 'appearance'
+  | 'browser'
   | 'permissions'
   | 'agents'
   | 'cerebro'
@@ -734,6 +735,27 @@ export interface AppState {
    * it is running on gets close to a plan limit. See `autoHandoff.ts`.
    */
   readonly autoHandoff: boolean;
+  /**
+   * Whether the agent browses with the user's own Chrome.
+   *
+   * Rides every Claude run as {@link RunInput.chromeBrowser}: the CLI connects
+   * the run to the Claude-in-Chrome extension, the agent works in real tabs in
+   * the user's browser — their logins, their password manager — and the
+   * embedded dock browser is not offered to that run at all.
+   *
+   * A window preference rather than a pane one, because "whose browser is
+   * this" is not a per-conversation question: the extension bridges one
+   * browser to one session at a time, and a per-pane switch would invite two
+   * columns to fight over it.
+   */
+  readonly agentChrome: boolean;
+  /**
+   * Whether pages the agent opens for the user land in their default browser
+   * rather than the embedded dock one. See {@link RunInput.externalBrowser} —
+   * the agent keeps a way to *show* the user a page and loses the tools that
+   * only make sense against a page Artemis owns.
+   */
+  readonly openWebExternally: boolean;
   /** Which releases this installation is willing to be offered. */
   readonly updateChannel: UpdateChannel;
 
@@ -1207,6 +1229,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'profiles',
   'models',
   'appearance',
+  'browser',
   'permissions',
   'agents',
   'cerebro',
@@ -1303,6 +1326,8 @@ interface Prefs {
   dockScope?: 'pane' | 'all';
   escapeStopsRun?: boolean;
   autoHandoff?: boolean;
+  agentChrome?: boolean;
+  openWebExternally?: boolean;
   /**
    * Persisted rather than derived: it is a standing choice about risk, and the
    * app must not quietly move someone between channels across a restart.
@@ -1564,6 +1589,8 @@ function loadPrefs(): Prefs {
     dockScope: raw['dockScope'] === 'all' ? 'all' : undefined,
     escapeStopsRun: boolOrUndefined(raw['escapeStopsRun']),
     autoHandoff: boolOrUndefined(raw['autoHandoff']),
+    agentChrome: boolOrUndefined(raw['agentChrome']),
+    openWebExternally: boolOrUndefined(raw['openWebExternally']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1719,6 +1746,8 @@ function savePrefs(): void {
     dockScope: s.dockScope,
     escapeStopsRun: s.escapeStopsRun,
     autoHandoff: s.autoHandoff,
+    agentChrome: s.agentChrome,
+    openWebExternally: s.openWebExternally,
     updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1924,6 +1953,10 @@ export const useApp = create<AppState>(() => ({
   // Off unless asked for. Stopping someone's work is the most intrusive thing
   // this app does on its own, and it is not a default anyone opted into.
   autoHandoff: prefs.autoHandoff ?? false,
+  // Both off by default: each hands the agent a browser the user is signed
+  // into, which is a grant nobody should discover was made for them.
+  agentChrome: prefs.agentChrome ?? false,
+  openWebExternally: prefs.openWebExternally ?? false,
   updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
@@ -6777,6 +6810,22 @@ export function setEscapeStopsRun(on: boolean): void {
   savePrefs();
 }
 
+/**
+ * Let the agent browse with the user's own Chrome. Applies from the next run —
+ * a run already in flight keeps the tools it started with, which is the same
+ * rule every setting in the dialog follows.
+ */
+export function setAgentChrome(on: boolean): void {
+  useApp.setState({ agentChrome: on });
+  savePrefs();
+}
+
+/** Prefer the user's default browser for pages the agent opens. */
+export function setOpenWebExternally(on: boolean): void {
+  useApp.setState({ openWebExternally: on });
+  savePrefs();
+}
+
 export function setAutoHandoff(on: boolean): void {
   useApp.setState({ autoHandoff: on });
   savePrefs();
@@ -8275,6 +8324,8 @@ export async function submitPrompt(
    * conversation the provider never had.
    */
   const continuation = paneState(pane);
+  // The browser preferences are the window's, not the pane's — see `AppState`.
+  const windowState = useApp.getState();
 
   const input: RunInput = {
     providerId: state.activeProviderId,
@@ -8288,6 +8339,16 @@ export async function submitPrompt(
     ...(effort ? { effort: effort.id } : {}),
     ...(supportsFast ? { fastMode: state.fastMode } : {}),
     ...(supportsUltra ? { ultracode: state.ultracode } : {}),
+    // Only for the provider whose CLI has the bridge. The flag is a request the
+    // provider may still decline (API-key auth, no extension) — but sending it
+    // to a provider that has never heard of Chrome would be asking the wrong
+    // party a question whose silence looks like an answer.
+    ...(windowState.agentChrome && state.activeProviderId === 'claude'
+      ? { chromeBrowser: true }
+      : {}),
+    // Unconditionally when set: this describes what the *host's* browser tools
+    // do, and the host is the same host whichever provider is running.
+    ...(windowState.openWebExternally ? { externalBrowser: true } : {}),
     ...(capabilities.permissionModes.includes(state.permissionMode)
       ? { permissionMode: state.permissionMode }
       : {}),
