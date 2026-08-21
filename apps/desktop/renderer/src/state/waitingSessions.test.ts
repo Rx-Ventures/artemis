@@ -25,13 +25,33 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import type { PermissionDecision } from '@rx-artemis/protocol';
 
-import { focusedPane, useApp } from './store';
+import { focusedPane, toggleSessionArchived, useApp } from './store';
 import { paneState, setPaneState } from './pane';
 
+/** Every decision the window sent back to main, in order. */
+let decisions: { requestId: string; decision: PermissionDecision }[] = [];
+
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
-  runs: { list: async () => ({ ok: true, value: { runs: [] } }), onEvent: () => () => undefined },
-  sessions: { listAll: async () => ({ ok: true, value: { sessions: [], hasMore: false } }) },
+  runs: {
+    list: async () => ({ ok: true, value: { runs: [] } }),
+    onEvent: () => () => undefined,
+    respondToPermission: async ({
+      requestId,
+      decision,
+    }: {
+      requestId: string;
+      decision: PermissionDecision;
+    }) => {
+      decisions.push({ requestId, decision });
+      return { ok: true, value: {} };
+    },
+  },
+  sessions: {
+    listAll: async () => ({ ok: true, value: { sessions: [], hasMore: false } }),
+    tag: async () => ({ ok: true, value: { tagged: true } }),
+  },
   providers: { models: async () => ({ ok: true, value: { models: [], live: false } }) },
 };
 
@@ -139,5 +159,51 @@ describe('the waiting projection', () => {
     const before = paneState(focusedPane());
     expect(waiting()).toEqual(['sess-1']);
     expect(paneState(focusedPane())).toBe(before);
+  });
+});
+
+describe('archiving a waiting conversation', () => {
+  const summary = { id: 'sess-1', providerId: 'claude', profileId: 'p1', cwd: '/repo' } as never;
+
+  beforeEach(() => {
+    decisions = [];
+    useApp.setState({ sessions: [], pinnedSessions: [], banners: [] } as never);
+  });
+
+  it('answers what it was waiting on, and the badge clears', async () => {
+    /*
+     * Putting a conversation away is an answer. The waiting marker is derived
+     * from the parked prompt, so an archive that only tagged the row left the
+     * session "waiting" — in the section whose whole meaning is "put away" —
+     * over a run parked on a reply that was never going to come. Archiving now
+     * denies the parked prompts, the run finishes the way any denial ends it,
+     * and the marker clears through the same derivation that raised it.
+     */
+    setPaneState(focusedPane(), {
+      run: run({}),
+      permissionQueue: [{ id: 'perm-1' }, { id: 'perm-2' }],
+    } as never);
+    expect(waiting()).toEqual(['sess-1']);
+
+    await toggleSessionArchived(summary);
+
+    expect(decisions.map((d) => d.requestId)).toEqual(['perm-1', 'perm-2']);
+    expect(decisions.every((d) => d.decision.behavior === 'deny')).toBe(true);
+    expect(paneState(focusedPane()).permissionQueue).toEqual([]);
+    expect(waiting()).toEqual([]);
+  });
+
+  it('unarchiving restores a row, not a prompt', async () => {
+    // The deny is one-way on purpose: pulling a conversation back out of the
+    // archive must not invent answers to questions nobody is being asked.
+    setPaneState(focusedPane(), {
+      run: run({}),
+      permissionQueue: [{ id: 'perm-1' }],
+    } as never);
+
+    await toggleSessionArchived({ ...(summary as object), tag: 'archived' } as never);
+
+    expect(decisions).toEqual([]);
+    expect(waiting()).toEqual(['sess-1']);
   });
 });

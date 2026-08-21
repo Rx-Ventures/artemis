@@ -6981,6 +6981,37 @@ export async function toggleSessionArchived(session: SessionSummary): Promise<vo
   const wasArchived = isArchived(session);
   const tag = wasArchived ? null : ARCHIVED_TAG;
 
+  /*
+   * Archiving answers what the conversation was waiting on.
+   *
+   * A parked permission or question keeps the session in `waitingSessions` —
+   * the amber marker, the header badge — and the archive tag changes none of
+   * that, because waiting is derived from the panes and the pane still holds
+   * the prompt. So a conversation archived mid-question stayed "waiting" in a
+   * section whose whole meaning is "put away", indefinitely, over a run parked
+   * on an answer that was never going to come.
+   *
+   * Putting a conversation away *is* the answer: the user has declined to
+   * respond. Each parked prompt is denied with a reason the model can act on,
+   * the run finishes its turn the way any denial ends it, and the waiting
+   * state clears through the same derivation that raised it. Deliberately only
+   * on the way *into* the archive — unarchiving restores a row, not a prompt.
+   */
+  if (!wasArchived) {
+    const parked = paneForSession(session.id);
+    if (parked !== undefined) {
+      for (const request of paneState(parked).permissionQueue) {
+        // Sequential on purpose: these share one control channel, and a
+        // failure reports through `respondToPermission`'s own path.
+        await respondToPermission(
+          request.id,
+          { behavior: 'deny', message: 'The user archived this conversation without answering.' },
+          parked,
+        );
+      }
+    }
+  }
+
   // Optimistic, and the pin is cleared in the same write so the row cannot be
   // seen in two sections between here and the refresh below.
   const pinnedHits = new Set(entriesFiling(session, useApp.getState().pinnedSessions));
