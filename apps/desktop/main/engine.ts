@@ -97,7 +97,11 @@ import { AgentPromptStore } from './agentPrompts.js';
 import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
-import { buildContentBridge, linkSkillsIntoCodexHome } from './contentBridge.js';
+import {
+  buildContentBridge,
+  discoverMarketplacePlugins,
+  linkSkillsIntoCodexHome,
+} from './contentBridge.js';
 
 const log = createLogger('engine');
 
@@ -643,7 +647,10 @@ function createEngine(options: EngineOptions): ArtemisEngine {
    *  - **Claude** gates discovery behind `settingSources`, which Artemis keeps
    *    empty, so its skills and slash commands arrive as a plugin directory —
    *    the one channel that reaches a session past that gate. The run has to be
-   *    told about it, hence the return value.
+   *    told about it, hence the return value. A plugin the user installed from a
+   *    marketplace is behind the same gate for a different reason — its
+   *    enablement is a settings key — and rides the same channel, passed through
+   *    whole rather than bridged.
    *  - **Codex** reads `$CODEX_HOME/skills` itself. Nothing needs passing to the
    *    run; the work is putting the links there, and the run picks them up
    *    because Artemis already points `CODEX_HOME` at the profile. It has no
@@ -666,7 +673,14 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await linkSkillsIntoCodexHome({ configDir });
       return [];
     }
-    return buildContentBridge({ configDir, dataDir: options.userDataDir });
+
+    // Concurrent, and independent: one assembles a directory, the other only
+    // reads two files to find directories that already exist.
+    const [bridged, marketplace] = await Promise.all([
+      buildContentBridge({ configDir, dataDir: options.userDataDir }),
+      discoverMarketplacePlugins({ configDir }),
+    ]);
+    return [...bridged, ...marketplace];
   };
 
   const runs = new RunRegistry({
