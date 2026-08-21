@@ -236,7 +236,7 @@ function DropdownMenuSubTrigger({
 }
 
 /*
-  Two deliberate departures from the registry's version, both about a submenu
+  Three deliberate departures from the registry's version, all about a submenu
   that opened the wrong way and fell off the screen.
 
   **The portal.** `DropdownMenuContent` above is wrapped in one and the registry
@@ -253,9 +253,22 @@ function DropdownMenuSubTrigger({
   the window edge rather than sit flush against it — with none, the flipped
   position is exactly the frame's edge.
 
-  Both are props on the primitive rather than classes, so a future `shadcn add`
-  overwriting this file takes the fix out. If a submenu ever opens leftward into
-  nothing again, this comment is why.
+  **The size clamp.** The portal alone was not enough, and shipping it proved
+  that. Radix positions the submenu but never *sizes* it: the box takes its
+  max-content width, and rows that carry sentences — the effort ladder's notes —
+  took it to ~570px. A box wider than either side of its trigger cannot be
+  placed; `avoidCollisions` flips to whichever side has more room and the menu
+  still hangs off the window edge, which read as "opens the wrong way and gets
+  cut off" and survived the portal fix entirely. Radix publishes how much room
+  it actually measured in the `-available-width/height` variables, and clamping
+  to those (with scroll for the tall case, wrapping for the wide one) makes
+  falling off the screen structurally impossible rather than merely unlikely.
+  `DropdownMenuContent` above clamps its height the same way; this extends the
+  same rule to the axis submenus actually overflow on.
+
+  All are props or classes on the primitive rather than the call sites, so a
+  future `shadcn add` overwriting this file takes the fix out. If a submenu ever
+  opens leftward into nothing again, this comment is why.
 */
 function DropdownMenuSubContent({
   className,
@@ -269,7 +282,7 @@ function DropdownMenuSubContent({
         data-slot="dropdown-menu-sub-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className={cn("z-50 min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
+        className={cn("z-50 min-w-[96px] max-w-(--radix-dropdown-menu-content-available-width) max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
         {...props}
       />
     </DropdownMenuPrimitive.Portal>

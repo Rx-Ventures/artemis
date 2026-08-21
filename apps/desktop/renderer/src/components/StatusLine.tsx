@@ -1029,7 +1029,16 @@ function ThinkingRow(): ReactElement | null {
         <span className="text-ink-faint">Thinking</span>
         <span className="ml-auto text-ink">{label}</span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="min-w-56">
+      {/*
+        `w-64`, not `min-w-56`. A min-width lets the box take its max-content
+        width, and the rung notes are sentences — the ladder measured ~570px
+        wide, which fits on neither side of the trigger and is what "opens the
+        wrong way, cut off" actually was (the primitive now clamps to the
+        measured space as the backstop; this sets the width the notes *wrap*
+        at). Fixed rather than min so the menu is the same shape on every
+        window that can fit it.
+      */}
+      <DropdownMenuSubContent className="w-64">
         <DropdownMenuRadioGroup
           value={current ?? ''}
           onValueChange={(value) => setThinkingLevel(value, pane)}
