@@ -2091,6 +2091,35 @@ describe('attaching to a live process', () => {
     // force — which would make turning fast mode off between turns do nothing.
     expect(first.fake.flags).toEqual([{ fastMode: null, ultracode: null, effortLevel: 'low' }]);
   });
+
+  it('fails the turn loudly when the process dies while it is being prepared', async () => {
+    /*
+     * `canServe` runs before `continueWith`'s awaits, and the process is free
+     * to die during them — a control request to a dying CLI is exactly what
+     * that looks like. The prompt is pushed onto the process's own queue, and
+     * `push` on a closed queue is a documented no-op: without a re-check, the
+     * turn would come back as started with its message silently discarded and
+     * its `run.end` owed by a pump that has already exited. A user who left a
+     * conversation idle long enough for its process to die is the person this
+     * happens to.
+     */
+    const { adapter, first } = await firstTurn({ model: 'sonnet' });
+
+    // The model differs, so `continueWith` sends a control request — and the
+    // process dies underneath it, deterministically: the fake holds the reply
+    // until the prompt queue it was handed reports closed.
+    first.fake.setModel = async () => {
+      first.fake.close();
+      await vi.waitFor(() => {
+        expect((first.prompt as { closed?: boolean }).closed).toBe(true);
+      });
+    };
+
+    await expect(adapter.createRun(nextTurn({ model: 'opus' }))).rejects.toMatchObject({
+      name: 'AdapterError',
+      agentError: { code: 'transport' },
+    });
+  });
 });
 
 /* -------------------------------------------------------------------------- */

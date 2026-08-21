@@ -8014,6 +8014,16 @@ export async function submitPrompt(
   const supportsFast = model?.supportsFastMode === true;
   const supportsUltra = model?.supportsUltracode === true;
 
+  /*
+   * Read again, not reused: `state` was captured before the steer fall-through
+   * above, and that path has since performed a local `run.end` — which, like
+   * the real one, may have just promoted the ended run's session id into
+   * `resumeSessionId`. Building the input off the stale capture would resume
+   * nothing and open a fresh provider session under a transcript that shows a
+   * conversation the provider never had.
+   */
+  const continuation = paneState(pane);
+
   const input: RunInput = {
     providerId: state.activeProviderId,
     profileId: state.activeProfileId,
@@ -8029,12 +8039,12 @@ export async function submitPrompt(
     ...(capabilities.permissionModes.includes(state.permissionMode)
       ? { permissionMode: state.permissionMode }
       : {}),
-    ...(state.resumeSessionId && capabilities.resumeSession
+    ...(continuation.resumeSessionId && capabilities.resumeSession
       ? {
-          resumeSessionId: state.resumeSessionId,
-          ...(state.forkOnResume && capabilities.forkSession ? { forkSession: true } : {}),
-          ...(state.rewindToMessageId !== null && capabilities.rewind
-            ? { rewindToMessageId: state.rewindToMessageId }
+          resumeSessionId: continuation.resumeSessionId,
+          ...(continuation.forkOnResume && capabilities.forkSession ? { forkSession: true } : {}),
+          ...(continuation.rewindToMessageId !== null && capabilities.rewind
+            ? { rewindToMessageId: continuation.rewindToMessageId }
             : {}),
         }
       : {}),
@@ -8045,7 +8055,7 @@ export async function submitPrompt(
   // the rewound conversation became. Cleared before the round-trip rather than
   // after it so a failed start does not leave a stale rewind aimed at the next
   // unrelated prompt.
-  if (state.rewindToMessageId !== null) {
+  if (continuation.rewindToMessageId !== null) {
     setPaneState(pane, { rewindToMessageId: null });
   }
 
@@ -8093,11 +8103,31 @@ function endRunLocally(
   pane: Pane,
   error?: AgentError,
 ): void {
-  setPaneState(pane, (s) =>
-    s.run && s.run.runId === runId
-      ? { run: { ...s.run, status: 'ended', endReason: reason, ...(error ? { error } : {}) } }
-      : {},
-  );
+  setPaneState(pane, (s) => {
+    if (!s.run || s.run.runId !== runId) return {};
+    /*
+     * The same promotion the real `run.end` performs, under the same
+     * conditions, because this *is* a `run.end` — one this window had to draw
+     * for itself. It was missing here, and the miss had teeth on exactly the
+     * paths that use this function: a steer that fell through to a new run, or
+     * a stuck run reconciled away, would build its next `RunInput` off a
+     * `resumeSessionId` that was still null for any conversation whose id was
+     * minted mid-run — and a resume of nothing is a brand-new provider
+     * session. The words survived; the conversation they continued did not.
+     *
+     * A failed *start* passes through here too, harmlessly: its run never got
+     * a session id, so the condition below leaves everything alone.
+     */
+    const resumable =
+      s.run.capabilities.resumeSession &&
+      s.run.sessionId !== undefined &&
+      s.cwd === s.run.cwd &&
+      s.activeProfileId === s.run.profileId;
+    return {
+      ...(resumable ? { resumeSessionId: s.run.sessionId, forkOnResume: false } : {}),
+      run: { ...s.run, status: 'ended', endReason: reason, ...(error ? { error } : {}) },
+    };
+  });
   pane.transcript.localRunEnd(reason, error);
 }
 

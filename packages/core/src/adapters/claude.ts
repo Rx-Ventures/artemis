@@ -2424,6 +2424,21 @@ class ClaudeProcess {
     const turn = this.beginTurn(input);
     await this.#applySettings(turnSettings(input));
     const staged = await this.#stage(input.attachments);
+    /*
+     * Re-checked after the awaits above, not just at `canServe`: the process
+     * can close while settings are being applied to it — that is precisely
+     * what a control request to a dying CLI looks like — and `push` on a
+     * closed queue is a documented no-op. Without this, the turn would be
+     * handed back as started, its prompt silently discarded, and its `run.end`
+     * owed by a pump that has already exited: a spinner over a message that
+     * went nowhere. `send` carries the same guard for the same window.
+     */
+    if (this.#closed || this.#disposing !== undefined || this.#promptQueue.closed) {
+      throw adapterError(
+        'transport',
+        'The process serving this conversation closed while the turn was being prepared. Send again to start fresh.',
+      );
+    }
     this.#promptQueue.push(this.#userMessage(input.prompt, input.attachments, staged));
     return turn;
   }
