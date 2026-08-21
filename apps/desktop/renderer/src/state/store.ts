@@ -615,6 +615,40 @@ export interface AppState {
    */
   readonly quickModelIdsByProfile: Readonly<Record<ProfileId, readonly string[]>>;
   /**
+   * The model choice each conversation was last left on, newest key last.
+   *
+   * `model`, `effort`, `fastMode` and `ultracode` live in the pane, which is
+   * right — they describe what the next prompt in *this column* will do. But a
+   * pane outlives the conversation inside it: clicking a row in the sidebar
+   * points the same column at a different session, and every one of these came
+   * along. That made the model a property of the column rather than of the
+   * work, and returning to a long conversation run on Opus put it on whatever
+   * the last thing you looked at was using — a change of model, mid-thread,
+   * that nothing on screen marked.
+   *
+   * So the choice is filed under the conversation it was made for, exactly as
+   * {@link SessionState.parkedDrafts} files a half-written prompt, and handed
+   * back when the column returns. A session with no entry changes nothing: the
+   * column keeps what it was using, because blanking the picker on every first
+   * open would be a worse answer than carrying the obvious one forward.
+   *
+   * Window-owned rather than per pane — unlike the drafts, which stay with
+   * their column — because the same conversation opened in the other column is
+   * the same conversation, and it is not mirrored into panes because nothing
+   * reads it through a selector. {@link resumeSession} is the only reader.
+   *
+   * Keyed by bare session id rather than the `profileId:id` of
+   * {@link archivedSessions}, and for the case that key exists to handle: when
+   * profiles share a store, one conversation is reachable from several
+   * accounts, and it is one conversation with one model. Ids are the
+   * provider's own UUIDs, so the collision the compound key guards against
+   * does not arise here.
+   *
+   * Capped at {@link MODEL_MEMORY_LIMIT}, oldest first — see
+   * {@link rememberModelChoice}.
+   */
+  readonly modelBySession: Readonly<Record<string, ModelChoice>>;
+  /**
    * The dock's arrangement as it was when the app last closed.
    *
    * Read once at boot by `restoreDockLayout` and otherwise inert — it is the
@@ -1245,6 +1279,17 @@ interface Prefs {
   pinnedCollapsed?: boolean;
   settingsSection?: SettingsSection;
   quickModelIdsByProfile?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The model choice each conversation was left on. See
+   * {@link AppState.modelBySession}.
+   *
+   * Persisted for the reason the whole feature exists: a conversation returned
+   * to tomorrow is the same conversation, and the model it was being run on is
+   * a fact about it rather than about this launch. The `model` field above
+   * stays what it has always been — the seed for the *first, blank* session of
+   * the next launch, which has no id to be looked up under.
+   */
+  modelBySession?: Record<string, ModelChoice>;
   dockLayout?: unknown;
   fastMode?: boolean;
   ultracode?: boolean;
@@ -1543,7 +1588,71 @@ function loadPrefs(): Prefs {
     // a non-string surviving into the menu would reach `lastSegment` and throw
     // on a control the user opens to get *out* of a bad directory.
     recentFolders: stringList(raw['recentFolders']),
+    modelBySession: modelChoiceMap(raw['modelBySession']),
   };
+}
+
+/**
+ * How many conversations' choices to keep.
+ *
+ * An entry is four short values and the cost of losing one is a conversation
+ * that reopens on the column's model instead of its own — the behaviour
+ * everything had before this existed, so the floor is the old ceiling. The cap
+ * is here because this rides in the preferences file, which is read
+ * synchronously at boot before the first paint: unbounded, it would grow by an
+ * entry per conversation for as long as the app is installed.
+ *
+ * Declared up here beside {@link loadPrefs} rather than beside
+ * {@link rememberModelChoice}, which is the other caller. `loadPrefs` runs at
+ * *module scope*, so a `const` declared further down the file is still in its
+ * temporal dead zone when the boot read reaches it — a crash on the second
+ * launch and only the second, because the first has no entries to prune.
+ */
+const MODEL_MEMORY_LIMIT = 400;
+
+/** Drop the oldest entries past the cap. Insertion order is the age order. */
+function capModelMemory(map: Record<string, ModelChoice>): Record<string, ModelChoice> {
+  const keys = Object.keys(map);
+  if (keys.length <= MODEL_MEMORY_LIMIT) return map;
+
+  const kept: Record<string, ModelChoice> = {};
+  for (const key of keys.slice(keys.length - MODEL_MEMORY_LIMIT)) {
+    kept[key] = map[key] as ModelChoice;
+  }
+  return kept;
+}
+
+/**
+ * The per-conversation model choices out of the preferences blob, cleaned.
+ *
+ * Every field is re-derived rather than trusted: these are spread straight into
+ * a pane, so a number where `model` should be would reach the picker's label
+ * and the run's `RunInput` alike. An entry that survives is a whole choice —
+ * a half-read one would restore a model without the effort it was being run at,
+ * which is a combination the user never chose.
+ *
+ * Truncated on the way in as well as on the way out, so a file grown large by
+ * an older build does not stay large for as long as the app is open.
+ */
+function modelChoiceMap(value: unknown): Record<string, ModelChoice> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+
+  const map: Record<string, ModelChoice> = {};
+  for (const [sessionId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const one = entry as Record<string, unknown>;
+    const model = one['model'];
+    const effort = one['effort'];
+    if (model !== null && typeof model !== 'string') continue;
+    if (effort !== null && typeof effort !== 'string') continue;
+    map[sessionId] = {
+      model: model ?? null,
+      effort: effort ?? null,
+      fastMode: one['fastMode'] === true,
+      ultracode: one['ultracode'] === true,
+    };
+  }
+  return capModelMemory(map);
 }
 
 /**
@@ -1598,6 +1707,7 @@ function savePrefs(): void {
     pinnedCollapsed: s.pinnedCollapsed,
     settingsSection: s.settingsSection,
     quickModelIdsByProfile: s.quickModelIdsByProfile,
+    modelBySession: s.modelBySession,
     dockLayout: captureDockLayout(s),
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
@@ -1790,6 +1900,7 @@ export const useApp = create<AppState>(() => ({
   planUsageByProfile: {},
 
   quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
+  modelBySession: prefs.modelBySession ?? {},
   conversationWidth: prefs.conversationWidth ?? DEFAULT_CONVERSATION_WIDTH,
   runSummary: prefs.runSummary ?? DEFAULT_RUN_SUMMARY,
   fontSize: initialFontSize,
@@ -4503,6 +4614,7 @@ export function setThinkingLevel(id: string, pane: Pane = focusedPane()): void {
   } else {
     setPaneState(pane, { effort: id, ultracode: false });
   }
+  rememberModelChoice(pane);
   savePrefs();
 }
 
@@ -5325,6 +5437,12 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
       const model = before.model === null ? null : carryModelId(before.model, outgoing, models);
 
       setPaneState(pane, { models, modelsError: null, model });
+      // The conversation's own record is stored in whichever vocabulary was
+      // current when it was made, so it needs the same migration the pins and
+      // the pane's selection just had — otherwise reopening it restores an id
+      // this catalogue has never heard of and the bar reads "(unavailable)"
+      // until the next refresh repairs the pane but not the record.
+      if (model !== before.model) rememberModelChoice(pane);
       const moved = carried !== (pins[profileId] ?? undefined) && carried.length > 0;
       if (moved) useApp.setState({ quickModelIdsByProfile: { ...pins, [profileId]: carried } });
       // Only when something actually moved. Persisting the carried ids is what
@@ -6289,15 +6407,99 @@ export function setPermissionMode(mode: PermissionMode, pane: Pane = focusedPane
   savePrefs();
 }
 
+/* -------------------------------------------------------------------------- */
+/* The model choice, and the conversation it was made for                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything the model popover decides, as one value.
+ *
+ * One type rather than four fields passed around separately, because the status
+ * line already presents them as one choice — model, thinking rung, fast mode —
+ * and remembering a subset would hand a conversation back on its own model at
+ * someone else's effort. See {@link AppState.modelBySession}.
+ */
+export interface ModelChoice {
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly fastMode: boolean;
+  readonly ultracode: boolean;
+}
+
+/**
+ * File this column's model choice under the conversation showing in it.
+ *
+ * Called from every setter that moves one of the four, and again from
+ * {@link resumeSession} and {@link newSession} on the way out of a
+ * conversation. The second is not belt and braces: a new session has no id
+ * until its first run reports one, so a model picked before the first prompt is
+ * chosen at a moment there is nothing to file it under. Recording again as the
+ * column is repointed catches it, by which time the id has arrived.
+ *
+ * A column showing no conversation records nothing. There is no key for it, and
+ * the blank session's choice is already the column's own — which is what the
+ * next one inherits.
+ *
+ * Re-inserted rather than assigned in place, so the key order stays the age
+ * order {@link capModelMemory} prunes by: a conversation touched today must not
+ * be evicted because it was first opened a year ago.
+ */
+function rememberModelChoice(pane: Pane): void {
+  const state = paneState(pane);
+  const sessionId = sessionShownBy(state);
+  if (sessionId === null) return;
+
+  const choice: ModelChoice = {
+    model: state.model,
+    effort: state.effort,
+    fastMode: state.fastMode,
+    ultracode: state.ultracode,
+  };
+
+  useApp.setState((s) => {
+    const before = s.modelBySession[sessionId];
+    if (
+      before !== undefined &&
+      before.model === choice.model &&
+      before.effort === choice.effort &&
+      before.fastMode === choice.fastMode &&
+      before.ultracode === choice.ultracode
+    ) {
+      // Identity preserved on the common path — every setter calls this, and a
+      // fresh object each time would rewrite the preferences file on a click
+      // that changed nothing.
+      return {};
+    }
+
+    const next = { ...s.modelBySession };
+    delete next[sessionId];
+    next[sessionId] = choice;
+    return { modelBySession: capModelMemory(next) };
+  });
+}
+
+/**
+ * What a conversation was last left running on, or `undefined`.
+ *
+ * `undefined` — no entry — is the ordinary state for every conversation that
+ * predates this, and it means "no preference", never "the default". The caller
+ * leaves the column on what it was using rather than blanking the picker.
+ */
+function recalledModelChoice(sessionId: SessionId): ModelChoice | undefined {
+  return useApp.getState().modelBySession[sessionId];
+}
+
 /** Choose the model for the next run. `null` means the provider's default. */
 export function setModel(model: string | null, pane: Pane = focusedPane()): void {
   setPaneState(pane, { model });
+  rememberModelChoice(pane);
   savePrefs();
 }
 
 /** Choose the reasoning effort for the next run. `null` means the default. */
 export function setEffort(effort: string | null, pane: Pane = focusedPane()): void {
   setPaneState(pane, { effort });
+  rememberModelChoice(pane);
   savePrefs();
 }
 
@@ -6482,12 +6684,14 @@ function writeQuickModels(profileId: ProfileId, ids: readonly string[]): void {
  */
 export function setFastMode(on: boolean, pane: Pane = focusedPane()): void {
   setPaneState(pane, on ? { fastMode: true, ultracode: false } : { fastMode: false });
+  rememberModelChoice(pane);
   savePrefs();
 }
 
 /** The same, for ultracode. @see setFastMode for why the two are exclusive. */
 export function setUltracode(on: boolean, pane: Pane = focusedPane()): void {
   setPaneState(pane, on ? { ultracode: true, fastMode: false } : { ultracode: false });
+  rememberModelChoice(pane);
   savePrefs();
 }
 
@@ -7441,6 +7645,12 @@ export function newSession(
   pane: Pane = focusedPane(),
   { adoptRecommendedProfile = true }: { readonly adoptRecommendedProfile?: boolean } = {},
 ): Pane {
+  // Before anything moves, for the reason `resumeSession` does the same: the
+  // choice this column is set to belongs to the conversation being left, and a
+  // new one made before its first run reported an id has had no key to be filed
+  // under until now. See `rememberModelChoice`.
+  rememberModelChoice(pane);
+
   // A working conversation moves aside intact; an idle one is simply cleared,
   // which avoids remounting the column — and the composer the user is typing in
   // — for what is, in that case, nothing more than an erase.
@@ -7580,6 +7790,12 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     return;
   }
 
+  // Before anything moves: what this column is set to belongs to the
+  // conversation it is set *for*. The setters have already filed every choice
+  // made while an id was known; this catches the one made before the first run
+  // reported one. See `rememberModelChoice`.
+  rememberModelChoice(pane);
+
   /*
    * Open somewhere already? Then this is a return, not a resume.
    *
@@ -7639,6 +7855,11 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
     ...(state.activeProviderId === session.providerId ? {} : { models: [], modelsError: null }),
+    // The model this conversation was last being run on, where it has ever said.
+    // Spread last so it wins, and spread as a whole or not at all: half a choice
+    // is a combination nobody picked. No entry leaves the column on what it was
+    // using — see `AppState.modelBySession`.
+    ...(recalledModelChoice(session.id) ?? {}),
   });
   // Opening a session is a deliberate act on one column, so that column takes
   // the focus — which is what makes ⌘K, the run inspector and settings point

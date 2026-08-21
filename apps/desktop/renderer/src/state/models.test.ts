@@ -148,6 +148,24 @@ describe('refreshModels', () => {
     expect(activeModel(session())?.label).toBe('Fable 5');
   });
 
+  it('carries the id in the conversation’s own record too', async () => {
+    bridgeReturning(LIVE);
+    booted([], 'fable');
+    // A column showing a conversation, which is what gives the record a key.
+    setSession({ resumeSessionId: 'sess-a' });
+    useApp.setState({
+      modelBySession: { 'sess-a': { model: 'fable', effort: null, fastMode: false, ultracode: false } },
+    });
+
+    await refreshModels();
+
+    // The record is stored in whichever vocabulary was current when it was
+    // written, so it goes stale the same way the pins and the selection do.
+    // Left alone, reopening this conversation would restore an id the live
+    // catalogue has never heard of and the bar would read "(unavailable)".
+    expect(useApp.getState().modelBySession['sess-a']?.model).toBe('claude-fable-5[1m]');
+  });
+
   it('persists the carried ids, so the migration runs once', async () => {
     bridgeReturning(LIVE);
     booted(['fable']);
