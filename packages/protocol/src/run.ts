@@ -184,6 +184,41 @@ export interface RunInput {
   readonly ultracode?: boolean;
 
   /**
+   * Let the agent drive the user's own Chrome instead of the host's embedded
+   * browser, via the provider's browser-extension bridge.
+   *
+   * Claude-specific today: the adapter passes the CLI's `--chrome` flag, which
+   * connects the run to the Claude-in-Chrome extension and gives the agent the
+   * `claude-in-chrome` tool set — real tabs in the user's browser, with the
+   * user's own logins. The host suppresses its embedded browser tools for such
+   * a run, because two browser tool sets answering the same questions from two
+   * different cookie jars is a recipe for an agent confidently reading the
+   * wrong one.
+   *
+   * A request rather than a guarantee, like {@link fastMode}: the CLI keeps
+   * the integration off when the profile is authenticated with an API key
+   * rather than a sign-in, and the extension may simply not be installed. The
+   * run still starts; the agent just browses with whatever it was given.
+   *
+   * Ignored — not rejected — by providers without such a bridge, so a stored
+   * preference does not become an error when the user switches provider.
+   */
+  readonly chromeBrowser?: boolean;
+
+  /**
+   * Open pages in the user's default browser instead of the host's embedded
+   * one.
+   *
+   * This changes what the *host's* browser tools do, not the provider: the
+   * embedded tool set shrinks to "open a URL for the user", pages land in the
+   * browser the user actually lives in (their logins, their password manager),
+   * and the read-back tools that only make sense against an embedded page are
+   * not offered. Meaningless alongside {@link chromeBrowser}, which replaces
+   * the embedded tools with a richer bridge to the same browser.
+   */
+  readonly externalBrowser?: boolean;
+
+  /**
    * Permission mode to start in. Must be one of the provider's
    * {@link Capabilities.permissionModes}; adapters reject anything else rather
    * than silently downgrading, because silently downgrading a permission mode

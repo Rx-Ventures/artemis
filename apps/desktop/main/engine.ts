@@ -189,7 +189,10 @@ export interface EngineOptions {
    * Optional so that a smoke script or a test gets an engine with no such
    * tools, and every other capability unchanged.
    */
-  readonly agentToolServers?: (runId: RunId) => Record<string, McpServerConfig> | undefined;
+  readonly agentToolServers?: (
+    runId: RunId,
+    input: RunInput,
+  ) => Record<string, McpServerConfig> | undefined;
 }
 
 /**

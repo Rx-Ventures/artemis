@@ -59,6 +59,7 @@ import {
   CpuIcon,
   FolderIcon,
   GitForkIcon,
+  GlobeIcon,
   HistoryIcon,
   InfoIcon,
   KeyRoundIcon,
@@ -452,6 +453,13 @@ function RootPage({
         >
           <PaintbrushIcon />
           Appearance…
+        </CommandItem>
+        <CommandItem
+          value="settings browser chrome preview external default logins"
+          onSelect={() => openSettings('browser')}
+        >
+          <GlobeIcon />
+          Browser…
         </CommandItem>
         <CommandItem
           value="settings permissions tools allow deny directories"

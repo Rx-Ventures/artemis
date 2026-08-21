@@ -57,7 +57,11 @@ import { startPlanUsagePolling } from './planUsagePoll.js';
 import { clearPreviews, registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
 import { BrowserHost } from './browser.js';
-import { browserToolServer } from './browserTools.js';
+import {
+  agentBrowserServers,
+  browserToolServer,
+  externalBrowserToolServer,
+} from './browserTools.js';
 import { createServerHost, type ServerHost } from './server.js';
 import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
@@ -65,6 +69,7 @@ import {
   applySessionPolicy,
   hardenWebContents,
   installNetworkAuthGuard,
+  openExternalSafely,
   windowSecurityPreferences,
   type SecurityPolicy,
 } from './security.js';
@@ -404,13 +409,25 @@ async function bootstrap(): Promise<void> {
      * `WebContentsView` is Electron all the way down. So the factory is handed
      * across the wall here, closing over the host that owns the views.
      */
-    agentToolServers: (runId) => ({
-      artemisBrowser: browserToolServer(runId, {
-        ensure: (run, url) => browsers.openForAgent(run, url),
-        current: (run) => browsers.agentBrowserFor(run),
-        host: browsers,
+    agentToolServers: (runId, input) =>
+      /*
+       * Which browser the agent gets is the run input's call — see the
+       * decision table on `agentBrowserServers`. The builders are lazy so a
+       * run that gets the Chrome bridge (or the external opener) never
+       * constructs the embedded server it will not use.
+       */
+      agentBrowserServers(input, {
+        embedded: () =>
+          browserToolServer(runId, {
+            ensure: (run, url) => browsers.openForAgent(run, url),
+            current: (run) => browsers.agentBrowserFor(run),
+            host: browsers,
+          }),
+        // The same guarded door every other external open goes through: the
+        // tool has already vetted the scheme, and this vets it again on the
+        // way out because model output does not get a second-chance rule.
+        external: () => externalBrowserToolServer((url) => openExternalSafely(url)),
       }),
-    }),
   });
 
   // The updater exists before the IPC layer because the layer's handlers
