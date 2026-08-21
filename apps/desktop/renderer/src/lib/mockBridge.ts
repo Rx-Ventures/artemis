@@ -2076,12 +2076,21 @@ export function createMockBridge(): ArtemisBridge {
         ? null
         : new URLSearchParams(globalThis.location.search).get('update');
     const phase = MOCK_UPDATE_PHASES.find((candidate) => candidate === asked);
-    if (phase === undefined) return { phase: 'idle', version: null, message: null, releaseUrl: null };
+    if (phase === undefined) {
+      return { phase: 'idle', version: null, message: null, releaseUrl: null, progress: null };
+    }
     return {
       phase,
       version: '0.4.0',
       message: phase === 'error' ? 'The download could not be verified.' : null,
       releaseUrl: phase === 'error' ? 'https://github.com/Rx-Ventures/artemis/releases' : null,
+      // Mid-download, with a total: the browser preview is where the bar's
+      // determinate state is looked at, and an indeterminate one is the case
+      // that needs no preview to reason about.
+      progress:
+        phase === 'working'
+          ? { step: 'downloading', transferred: 84_000_000, total: 196_000_000 }
+          : null,
     };
   }
 

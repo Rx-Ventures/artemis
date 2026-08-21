@@ -41,7 +41,22 @@ Element.prototype.scrollIntoView ??= function scrollIntoView(): void {};
 
 const ok = <T,>(value: T) => ({ ok: true as const, value });
 
-const IDLE: UpdateState = { phase: 'idle', version: null, message: null, releaseUrl: null };
+const IDLE: UpdateState = {
+  phase: 'idle',
+  version: null,
+  message: null,
+  releaseUrl: null,
+  progress: null,
+};
+
+/** A `working` state, with whatever the step is reporting. */
+const working = (progress: UpdateState['progress']): UpdateState => ({
+  phase: 'working',
+  version: '0.4.0',
+  message: null,
+  releaseUrl: null,
+  progress,
+});
 
 /** The listener the component registered, for pushing states mid-test. */
 let pushState: ((state: UpdateState) => void) | null = null;
@@ -106,7 +121,13 @@ describe('UpdateCard', () => {
   it('offers an available version with install and dismiss', async () => {
     renderCard();
     await act(async () => {
-      pushState?.({ phase: 'available', version: '0.4.0', message: null, releaseUrl: null });
+      pushState?.({
+        phase: 'available',
+        version: '0.4.0',
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
     });
     expect(screen.getByText(/is available/)).toBeTruthy();
     expect(screen.getByText('Artemis 0.4.0')).toBeTruthy();
@@ -121,17 +142,67 @@ describe('UpdateCard', () => {
   it('shows progress with no actions while working', async () => {
     renderCard();
     await act(async () => {
-      pushState?.({ phase: 'working', version: '0.4.0', message: null, releaseUrl: null });
+      pushState?.(working(null));
     });
     expect(screen.getByText(/keep Artemis open/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
   });
 
+  /*
+   * The reported bug: the archive is ~196MB, so `working` lasts minutes, and a
+   * spinner over a static sentence is indistinguishable from a hang — the user
+   * clicked Update three times. These three pin the cure.
+   */
+  it('names the step and counts the bytes while downloading', async () => {
+    renderCard();
+    await act(async () => {
+      pushState?.(working({ step: 'downloading', transferred: 84_000_000, total: 196_000_000 }));
+    });
+
+    expect(screen.getByText(/Downloading/)).toBeTruthy();
+    expect(screen.getByText('84.0 MB of 196.0 MB')).toBeTruthy();
+    // Determinate: the bar carries the number, not just motion.
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('43');
+  });
+
+  it('follows the install through its later steps', async () => {
+    // Verifying and unpacking are seconds each on a 196MB archive — long
+    // enough that a surface still saying "Downloading" reads as stuck at 100%.
+    renderCard();
+    await act(async () => {
+      pushState?.(working({ step: 'verifying', transferred: 98_000_000, total: 196_000_000 }));
+    });
+    expect(screen.getByText(/Verifying/)).toBeTruthy();
+
+    await act(async () => {
+      pushState?.(working({ step: 'unpacking', transferred: null, total: null }));
+    });
+    expect(screen.getByText(/Unpacking/)).toBeTruthy();
+  });
+
+  it('draws a bar without a number when the step cannot count', async () => {
+    // `ditto` reports nothing and the `gh` fallback shells out. The bar says
+    // "still working" without claiming a position it does not know.
+    renderCard();
+    await act(async () => {
+      pushState?.(working({ step: 'unpacking', transferred: null, total: null }));
+    });
+
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
+    expect(screen.queryByText(/ MB/)).toBeNull();
+  });
+
   it('parks at ready with a restart that is the only path forward', async () => {
     renderCard();
     await act(async () => {
-      pushState?.({ phase: 'ready', version: '0.4.0', message: null, releaseUrl: null });
+      pushState?.({
+        phase: 'ready',
+        version: '0.4.0',
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
     });
     expect(screen.getByText(/Restart to finish/)).toBeTruthy();
     // No dismiss and no install: the one action is the user's restart.
@@ -161,7 +232,13 @@ describe('UpdateCard', () => {
   it('disappears when a push returns it to idle', async () => {
     const { container } = renderCard();
     await act(async () => {
-      pushState?.({ phase: 'available', version: '0.4.0', message: null, releaseUrl: null });
+      pushState?.({
+        phase: 'available',
+        version: '0.4.0',
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
     });
     expect(container.querySelector('[role="status"]')).not.toBeNull();
     await act(async () => {
@@ -204,7 +281,13 @@ describe('the foot of the sidebar', () => {
       </TooltipProvider>,
     );
     await act(async () => {
-      pushState?.({ phase: 'ready', version: '0.4.0', message: null, releaseUrl: null });
+      pushState?.({
+        phase: 'ready',
+        version: '0.4.0',
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
     });
 
     expect(screen.queryByRole('status')).toBeNull();

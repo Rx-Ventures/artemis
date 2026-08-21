@@ -47,15 +47,15 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
 // No `rm`: removing a tree that can hold an app bundle goes through
 // `removeTree` below, for a reason documented there.
-import { mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 import { app } from 'electron';
-import type { UpdateState } from '@rx-artemis/protocol';
+import type { UpdateProgress, UpdateState, UpdateStep } from '@rx-artemis/protocol';
 
 import { createLogger } from './log.js';
 import { tagForChannel, type ReleaseSummary, type UpdateChannel } from './updateChannel.js';
@@ -118,7 +118,51 @@ const ZIP_FETCH_TIMEOUT_MS = 10 * 60 * 1000;
 /** Where `gh` tends to live when a GUI launch doesn't inherit the shell's PATH. */
 const EXTRA_BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local', 'bin')];
 
-const IDLE: UpdateState = { phase: 'idle', version: null, message: null, releaseUrl: null };
+const IDLE: UpdateState = {
+  phase: 'idle',
+  version: null,
+  message: null,
+  releaseUrl: null,
+  progress: null,
+};
+
+/**
+ * How often a step in flight may push a new state, in milliseconds.
+ *
+ * The download hands over a chunk every few hundred kilobytes — some thousands
+ * of them across a 196MB archive — and every push crosses the IPC boundary to
+ * every open window and re-renders two surfaces. At ten a second the bar is
+ * smooth to the eye and the traffic is nothing; unthrottled it is a flood in
+ * service of frames nobody can see.
+ */
+const PROGRESS_INTERVAL_MS = 100;
+
+/**
+ * Wrap `emit` so it fires at most every `intervalMs` — plus always on the
+ * first reading, and always on the one that completes the step.
+ *
+ * Those two ends are not an optimisation, they are the readings that carry the
+ * meaning: the first is what replaces "nothing is happening" with a bar, and
+ * the last is what leaves it full rather than stranded at 97% while the next
+ * step runs. `clock` is a parameter so the rule can be tested without waiting.
+ */
+export function throttleProgress(
+  emit: (progress: UpdateProgress) => void,
+  intervalMs: number = PROGRESS_INTERVAL_MS,
+  clock: () => number = Date.now,
+): (progress: UpdateProgress) => void {
+  let last: number | null = null;
+  return (progress) => {
+    const now = clock();
+    const done =
+      progress.total !== null &&
+      progress.transferred !== null &&
+      progress.transferred >= progress.total;
+    if (last !== null && !done && now - last < intervalMs) return;
+    last = now;
+    emit(progress);
+  };
+}
 
 /**
  * What one check found — the answer to a question somebody asked out loud.
@@ -255,6 +299,7 @@ export async function fetchAsset(
   tag: string,
   dir: string,
   timeoutMs: number,
+  onProgress?: (transferred: number, total: number | null) => void,
 ): Promise<string> {
   // `name` is feed-controlled when it is the zip's `path`. The feed comes from
   // the repository this build was published from, so a hostile value here
@@ -270,7 +315,7 @@ export async function fetchAsset(
       ? `${RELEASES_URL}/latest/download/${asset}`
       : `${RELEASES_URL}/download/${tag}/${asset}`;
   try {
-    await fetchAnonymously(url, destination, timeoutMs);
+    await fetchAnonymously(url, destination, timeoutMs, onProgress);
     return destination;
   } catch (error) {
     const gh = resolveGh();
@@ -278,6 +323,9 @@ export async function fetchAsset(
     // Worth a line: a machine that quietly updates through `gh` every time is
     // a machine whose plain HTTPS route is broken, and nothing else would say
     // so until the day `gh` is uninstalled.
+    // Nothing counts bytes on this route — it shells out — so the caller's
+    // last reading stands and the surface keeps an indeterminate bar. A bar
+    // that stops moving is better than one that invents movement.
     log.debug(`Anonymous download of ${asset} failed; falling back to gh.`, error);
     const args = ['release', 'download'];
     if (tag !== '') args.push(tag);
@@ -307,12 +355,42 @@ export async function fetchAnonymously(
   url: string,
   destination: string,
   timeoutMs: number,
+  onProgress?: (transferred: number, total: number | null) => void,
 ): Promise<void> {
   const signal = AbortSignal.timeout(timeoutMs);
   const response = await fetch(url, { redirect: 'follow', signal });
   if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   if (response.body === null) throw new Error(`GET ${url} answered without a body`);
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(destination), { signal });
+  /*
+   * Counted by a transform in the middle of the pipeline rather than by a
+   * `data` listener on the source: a listener switches the stream to flowing
+   * mode and would race `pipeline`'s own consumption of it. A transform sees
+   * every chunk on its way past and changes nothing about the transfer.
+   *
+   * `content-length` is absent often enough to matter — a chunked response, a
+   * proxy that re-encodes — and is reported as `null` rather than guessed at,
+   * so the surface can draw an honest indeterminate bar instead of one that
+   * lies. See `updatePercent`.
+   */
+  const total = totalFromHeader(response.headers.get('content-length'));
+  let transferred = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      transferred += chunk.length;
+      onProgress?.(transferred, total);
+      done(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(response.body), counter, createWriteStream(destination), {
+    signal,
+  });
+}
+
+/** A `content-length` worth believing, or `null`. */
+function totalFromHeader(header: string | null): number | null {
+  if (header === null) return null;
+  const total = Number(header);
+  return Number.isFinite(total) && total > 0 ? total : null;
 }
 
 /**
@@ -323,10 +401,36 @@ export async function fetchAnonymously(
  * whole of it in the privileged process's heap for the sake of one digest —
  * the exact spike the streamed download just avoided.
  */
-export async function sha512Of(file: string): Promise<string> {
+export async function sha512Of(
+  file: string,
+  onProgress?: (transferred: number, total: number | null) => void,
+): Promise<string> {
   const hash = createHash('sha512');
-  await pipeline(createReadStream(file), hash);
+  /*
+   * Unlike the download, this step can always count: the total is the file's
+   * own size. Worth counting, too — hashing 196MB is seconds during which a
+   * surface reporting the download would otherwise sit frozen at 100%.
+   */
+  const total = onProgress === undefined ? null : await sizeOf(file);
+  let transferred = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      transferred += chunk.length;
+      onProgress?.(transferred, total);
+      done(null, chunk);
+    },
+  });
+  await pipeline(createReadStream(file), counter, hash);
   return hash.digest('base64');
+}
+
+/** A file's size, or `null` if it cannot be read — a denominator is never worth failing over. */
+async function sizeOf(file: string): Promise<number | null> {
+  try {
+    return (await stat(file)).size;
+  } catch {
+    return null;
+  }
 }
 
 export function createUpdater(options: UpdaterOptions): Updater {
@@ -353,6 +457,19 @@ export function createUpdater(options: UpdaterOptions): Updater {
     current = next;
     broadcast(next);
     return next;
+  }
+
+  /**
+   * Publish a reading of the install in flight.
+   *
+   * Ignored unless the phase is still `working`, which is what keeps a chunk
+   * that lands late — an aborted transfer's last callback, a hash finishing
+   * after the swap failed — from overwriting an error the user is reading with
+   * a progress bar for work that is no longer happening.
+   */
+  function report(progress: UpdateProgress): void {
+    if (current.phase !== 'working') return;
+    setState({ ...current, progress });
   }
 
   /* ----------------------------------------------------------------------- */
@@ -470,7 +587,13 @@ export function createUpdater(options: UpdaterOptions): Updater {
       }
       offered = feed;
       log.info(`Update available: ${feed.version} (running ${app.getVersion()}).`);
-      setState({ phase: 'available', version: feed.version, message: null, releaseUrl: null });
+      setState({
+        phase: 'available',
+        version: feed.version,
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
       return { kind: 'offered', version: feed.version };
     } finally {
       checking = false;
@@ -503,14 +626,41 @@ export function createUpdater(options: UpdaterOptions): Updater {
 
   async function runInstall(feed: UpdateFeed, bundle: string): Promise<void> {
     const staging = await mkdtemp(join(tmpdir(), 'artemis-update-'));
-    try {
-      const zip = await fetchAsset(feed.zipPath, `v${feed.version}`, staging, ZIP_FETCH_TIMEOUT_MS);
+    /*
+     * Every step announces itself before it starts and counts while it runs.
+     * The announcement matters as much as the count: `unpacking` cannot report
+     * bytes, and a surface that says what it is doing is not frozen even when
+     * the bar cannot move.
+     */
+    const step = (next: UpdateStep): void => {
+      report({ step: next, transferred: null, total: null });
+    };
+    const counted = (next: UpdateStep): ((transferred: number, total: number | null) => void) => {
+      const emit = throttleProgress((progress) => {
+        report(progress);
+      });
+      return (transferred, total) => {
+        emit({ step: next, transferred, total });
+      };
+    };
 
-      const digest = await sha512Of(zip);
+    try {
+      step('downloading');
+      const zip = await fetchAsset(
+        feed.zipPath,
+        `v${feed.version}`,
+        staging,
+        ZIP_FETCH_TIMEOUT_MS,
+        counted('downloading'),
+      );
+
+      step('verifying');
+      const digest = await sha512Of(zip, counted('verifying'));
       if (digest !== feed.sha512) {
         throw new Error('the downloaded archive did not match the published checksum');
       }
 
+      step('unpacking');
       const extracted = join(staging, 'extracted');
       await execFileAsync('/usr/bin/ditto', ['-x', '-k', zip, extracted], {
         timeout: 5 * 60 * 1000,
@@ -519,6 +669,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
       const appName = entries.find((entry) => entry.endsWith('.app'));
       if (appName === undefined) throw new Error('the archive did not contain an app bundle');
       const newBundle = join(extracted, appName);
+
+      step('installing');
 
       // The swap. Two renames on one volume; the first is undone if the
       // second cannot happen. From here on the failure modes are narrow and
@@ -537,7 +689,13 @@ export function createUpdater(options: UpdaterOptions): Updater {
       // a state that is entirely fine to stay in: quitting normally from here
       // launches into the update anyway. The relaunch belongs to the user's
       // click on the banner (updates.restart), never to this code path.
-      setState({ phase: 'ready', version: feed.version, message: null, releaseUrl: null });
+      setState({
+        phase: 'ready',
+        version: feed.version,
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
       log.info(`Updated to ${feed.version} on disk; waiting for the user to restart.`);
     } finally {
       // The staging tree holds the extracted bundle, asar and all — see
@@ -598,10 +756,20 @@ export function createUpdater(options: UpdaterOptions): Updater {
           version: feed.version,
           message: 'This copy of Artemis cannot update itself. Download the new version from the releases page and replace the app.',
           releaseUrl: RELEASES_URL,
+          progress: null,
         });
       }
       installing = true;
-      setState({ phase: 'working', version: feed.version, message: null, releaseUrl: null });
+      // Opens on the first step rather than on a bare spinner: the click and
+      // the word "Downloading" should land in the same frame, because the gap
+      // between them is exactly the moment that reads as nothing happening.
+      setState({
+        phase: 'working',
+        version: feed.version,
+        message: null,
+        releaseUrl: null,
+        progress: { step: 'downloading', transferred: null, total: null },
+      });
       void runInstall(feed, bundle)
         .catch((error: unknown) => {
           log.error('Update failed; the installed app is untouched.', error);
@@ -610,6 +778,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
             version: feed.version,
             message: 'The update could not be installed. The app you are running is untouched — try again later, or download it from the releases page.',
             releaseUrl: RELEASES_URL,
+            progress: null,
           });
         })
         .finally(() => {
@@ -620,7 +789,13 @@ export function createUpdater(options: UpdaterOptions): Updater {
 
     restart(): UpdateState {
       if (current.phase !== 'ready') return current;
-      setState({ phase: 'restarting', version: current.version, message: null, releaseUrl: null });
+      setState({
+        phase: 'restarting',
+        version: current.version,
+        message: null,
+        releaseUrl: null,
+        progress: null,
+      });
       log.info('Restarting into the installed update at the user\'s request.');
       // The parked old bundle is swept by the next launch's start(), not here:
       // this process is still running out of it.

@@ -58,5 +58,6 @@ export * from './openai.js';
 export * from './server.js';
 export * from './sharedConfig.js';
 export * from './github.js';
+export * from './update.js';
 export * from './agentPrompts.js';
 export * from './ipc.js';

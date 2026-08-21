@@ -85,6 +85,7 @@ import { type ReactElement } from 'react';
 import {
   ChevronRightIcon,
   CopyIcon,
+  LoaderCircleIcon,
   MinusIcon,
   PanelLeftCloseIcon,
   PanelLeftIcon,
@@ -99,6 +100,7 @@ import {
 import { keyLabel } from '../hooks/useHotkeys';
 import { useWindowState } from '../hooks/useWindowState';
 import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpdateState';
+import { updatePercent } from '@rx-artemis/protocol';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
@@ -454,12 +456,23 @@ function UpdateChip(): ReactElement | null {
   const failed = state.phase === 'error';
   const busy = state.phase === 'working' || state.phase === 'restarting';
 
+  /*
+   * While busy the chip counts rather than merely dimming. It is the surface a
+   * user sees when the sidebar is hidden, and 60% opacity is not a signal that
+   * anything is happening — it is what made an install indistinguishable from
+   * a dead button, and got Update clicked three times.
+   */
+  const percent = state.phase === 'working' ? updatePercent(state.progress) : null;
+  const step = state.phase === 'working' ? (state.progress?.step ?? null) : null;
+
   const label = failed
     ? 'The update could not be installed'
     : ready
       ? `Artemis ${version} is ready — restart to use it`.trim()
       : busy
-        ? `Working on Artemis ${version}`.trim()
+        ? step === null
+          ? `Working on Artemis ${version}`.trim()
+          : `${step} Artemis ${version}${percent === null ? '' : ` — ${String(percent)}%`}`.trim()
         : `Artemis ${version} is available`.trim();
 
   return (
@@ -480,8 +493,20 @@ function UpdateChip(): ReactElement | null {
         busy && 'opacity-60',
       )}
     >
-      <ArrowDownIcon className="size-3" aria-hidden="true" />
-      {failed ? 'update failed' : ready ? `restart for ${version}` : version}
+      {busy ? (
+        <LoaderCircleIcon className="size-3 animate-spin" aria-hidden="true" />
+      ) : (
+        <ArrowDownIcon className="size-3" aria-hidden="true" />
+      )}
+      {failed
+        ? 'update failed'
+        : ready
+          ? `restart for ${version}`
+          : busy
+            ? percent === null
+              ? (step ?? 'working')
+              : `${String(percent)}%`
+            : version}
     </button>
   );
 }
