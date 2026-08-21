@@ -76,6 +76,37 @@ export const DEFAULT_HANDOFF_THRESHOLDS: readonly HandoffThreshold[] = [
   { id: 'fable', label: 'Fable', at: 95, match: { kind: 'model', name: 'fable' } },
 ];
 
+/**
+ * The shipped rules, with the user's percentages applied.
+ *
+ * `overrides` is keyed by {@link HandoffThreshold.id} — the stable key that
+ * exists for exactly this — and holds a percent per rule the user has moved.
+ * The header's "defaults rather than constants" cashes out here, and the
+ * shape encodes two decisions:
+ *
+ *  - **A rule absent from `overrides` keeps its default**, so an installation
+ *    that never moved a slider follows a later release's judgement instead of
+ *    being pinned to the numbers it happened to install under.
+ *  - **Unknown keys are ignored, not invented into rules.** The overrides ride
+ *    a preferences file, and a stale key from a removed rule (or a hand edit)
+ *    must not conjure a window to watch.
+ *
+ * Values are rounded and clamped to [1, 100] — the file is hand-editable, and
+ * a threshold of 400 would be a rule that can never fire wearing the clothes
+ * of one that can. Anything that is not a finite number is ignored the same
+ * way every other malformed preference is: the default stands.
+ */
+export function handoffThresholdsWith(
+  overrides: Readonly<Record<string, number>> | undefined,
+): readonly HandoffThreshold[] {
+  if (overrides === undefined) return DEFAULT_HANDOFF_THRESHOLDS;
+  return DEFAULT_HANDOFF_THRESHOLDS.map((threshold) => {
+    const at = overrides[threshold.id];
+    if (typeof at !== 'number' || !Number.isFinite(at)) return threshold;
+    return { ...threshold, at: Math.min(100, Math.max(1, Math.round(at))) };
+  });
+}
+
 /** A rule that has been met, and the reading that met it. */
 export interface HandoffTrigger {
   readonly threshold: HandoffThreshold;

@@ -35,6 +35,8 @@
 import { create } from 'zustand';
 import {
   ARCHIVED_TAG,
+  DEFAULT_HANDOFF_THRESHOLDS,
+  handoffThresholdsWith,
   isArchived,
   isEndedRunError,
   isProfileAutoSelectable,
@@ -756,6 +758,15 @@ export interface AppState {
    * only make sense against a page Artemis owns.
    */
   readonly openWebExternally: boolean;
+  /**
+   * Where each handoff rule fires, as percent overrides keyed by
+   * `HandoffThreshold.id`. Only rules the user has moved appear here — an
+   * absent key keeps *following* the shipped default rather than pinning it,
+   * so a later release's judgement reaches everyone who never expressed one
+   * of their own. Read through `handoffThresholdsWith`, which is also where a
+   * hand-edited value is clamped; this map is stored as given.
+   */
+  readonly handoffThresholds: Readonly<Record<string, number>>;
   /** Which releases this installation is willing to be offered. */
   readonly updateChannel: UpdateChannel;
 
@@ -1328,6 +1339,7 @@ interface Prefs {
   autoHandoff?: boolean;
   agentChrome?: boolean;
   openWebExternally?: boolean;
+  handoffThresholds?: Record<string, number>;
   /**
    * Persisted rather than derived: it is a standing choice about risk, and the
    * app must not quietly move someone between channels across a restart.
@@ -1591,6 +1603,7 @@ function loadPrefs(): Prefs {
     autoHandoff: boolOrUndefined(raw['autoHandoff']),
     agentChrome: boolOrUndefined(raw['agentChrome']),
     openWebExternally: boolOrUndefined(raw['openWebExternally']),
+    handoffThresholds: numberMap(raw['handoffThresholds']),
     updateChannel: raw['updateChannel'] === 'beta' ? 'beta' : undefined,
     sharedClaudeConfig: boolOrUndefined(raw['sharedClaudeConfig']),
     sharedClaudeConfigAcknowledged: boolOrUndefined(raw['sharedClaudeConfigAcknowledged']),
@@ -1748,6 +1761,7 @@ function savePrefs(): void {
     autoHandoff: s.autoHandoff,
     agentChrome: s.agentChrome,
     openWebExternally: s.openWebExternally,
+    handoffThresholds: s.handoffThresholds,
     updateChannel: s.updateChannel,
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
@@ -1957,6 +1971,7 @@ export const useApp = create<AppState>(() => ({
   // into, which is a grant nobody should discover was made for them.
   agentChrome: prefs.agentChrome ?? false,
   openWebExternally: prefs.openWebExternally ?? false,
+  handoffThresholds: prefs.handoffThresholds ?? {},
   updateChannel: prefs.updateChannel ?? 'stable',
 
   // Both default to false, and the second is what keeps a fresh install from
@@ -5048,6 +5063,9 @@ function considerHandoff(): void {
   const state = useApp.getState();
   if (!state.autoHandoff) return;
   const now = Date.now();
+  // Resolved once for the sweep rather than per pane: the rules are a window
+  // preference, and every conversation is held to the same ones.
+  const thresholds = handoffThresholdsWith(state.handoffThresholds);
 
   for (const pane of allPanes(state)) {
     const session = paneState(pane);
@@ -5056,6 +5074,7 @@ function considerHandoff(): void {
       session,
       usageByProfile: state.planUsageByProfile,
       now,
+      thresholds,
     });
     if (!trigger) continue;
 
@@ -6833,6 +6852,31 @@ export function setAutoHandoff(on: boolean): void {
   // the next poll: someone who switches this on while sitting at 96% meant it
   // to apply to the account they are looking at.
   if (on) considerHandoff();
+}
+
+/**
+ * Move one handoff rule's threshold.
+ *
+ * Stored only while it differs from the shipped default — parking a slider
+ * back on the default removes the override, so the rule resumes following
+ * whatever a later release ships rather than a snapshot of it. An id that
+ * names no rule is dropped outright: the map would otherwise accumulate keys
+ * nothing can ever read.
+ *
+ * Lowering a threshold re-judges the readings already in hand, for the same
+ * reason turning the feature on does: someone dragging the slider under the
+ * needle meant it to apply to the account they are looking at.
+ */
+export function setHandoffThreshold(id: string, at: number): void {
+  const rule = DEFAULT_HANDOFF_THRESHOLDS.find((one) => one.id === id);
+  if (rule === undefined) return;
+  const clamped = Math.min(100, Math.max(1, Math.round(at)));
+  const next = { ...useApp.getState().handoffThresholds };
+  if (clamped === rule.at) delete next[id];
+  else next[id] = clamped;
+  useApp.setState({ handoffThresholds: next });
+  savePrefs();
+  if (useApp.getState().autoHandoff) considerHandoff();
 }
 
 /**

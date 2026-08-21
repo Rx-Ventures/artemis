@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_HANDOFF_THRESHOLDS,
+  handoffThresholdsWith,
   handoffTrigger,
   windowFor,
   type HandoffThreshold,
@@ -116,5 +117,52 @@ describe('handoffTrigger', () => {
   it('rounds the reading it reports, because it is going into a sentence', () => {
     expect(handoffTrigger(usage(window('five_hour', 90.4)))?.utilization).toBe(90);
     expect(handoffTrigger(usage(window('five_hour', 90.6)))?.utilization).toBe(91);
+  });
+});
+
+describe('handoffThresholdsWith', () => {
+  const at = (rules: readonly HandoffThreshold[], id: string): number | undefined =>
+    rules.find((rule) => rule.id === id)?.at;
+
+  it('moves only the rule that was moved', () => {
+    const rules = handoffThresholdsWith({ five_hour: 70 });
+    expect(at(rules, 'five_hour')).toBe(70);
+    // The others keep their defaults — and keep *following* them: an absent
+    // key is "no opinion", not "the default as of when I last saved".
+    expect(at(rules, 'seven_day')).toBe(98);
+    expect(at(rules, 'fable')).toBe(95);
+  });
+
+  it('changes what fires, end to end', () => {
+    const reading = usage(window('five_hour', 75));
+    expect(handoffTrigger(reading)).toBeNull();
+    expect(
+      handoffTrigger(reading, handoffThresholdsWith({ five_hour: 70 }))?.threshold.id,
+    ).toBe('five_hour');
+  });
+
+  it('returns the defaults themselves when there are no overrides', () => {
+    expect(handoffThresholdsWith(undefined)).toBe(DEFAULT_HANDOFF_THRESHOLDS);
+  });
+
+  it('ignores a key that names no rule rather than inventing one', () => {
+    // Preferences outlive releases: a rule removed in a later version leaves
+    // its key behind in the file, and that residue must not become a window.
+    const rules = handoffThresholdsWith({ retired_rule: 10 });
+    expect(rules.map((rule) => rule.id)).toEqual(['five_hour', 'seven_day', 'fable']);
+    expect(rules).toEqual(DEFAULT_HANDOFF_THRESHOLDS);
+  });
+
+  it('clamps and rounds a hand-edited value into [1, 100]', () => {
+    expect(at(handoffThresholdsWith({ five_hour: 400 }), 'five_hour')).toBe(100);
+    expect(at(handoffThresholdsWith({ five_hour: -3 }), 'five_hour')).toBe(1);
+    expect(at(handoffThresholdsWith({ five_hour: 92.6 }), 'five_hour')).toBe(93);
+  });
+
+  it('lets a malformed value mean the default, like every malformed preference', () => {
+    expect(at(handoffThresholdsWith({ five_hour: Number.NaN }), 'five_hour')).toBe(90);
+    expect(
+      at(handoffThresholdsWith({ five_hour: '85' as unknown as number }), 'five_hour'),
+    ).toBe(90);
   });
 });

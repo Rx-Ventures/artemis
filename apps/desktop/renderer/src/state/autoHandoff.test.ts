@@ -24,7 +24,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { NO_CAPABILITIES, type PlanUsage } from '@rx-artemis/protocol';
+import { handoffThresholdsWith, NO_CAPABILITIES, type PlanUsage } from '@rx-artemis/protocol';
 
 import {
   dismissHandoff,
@@ -32,6 +32,7 @@ import {
   handleAgentEvent,
   installPlanUsageFeed,
   setAutoHandoff,
+  setHandoffThreshold,
   submitPrompt,
   useApp,
 } from './store';
@@ -133,6 +134,9 @@ beforeEach(() => {
   } as never);
   useApp.setState({
     banners: [],
+    // Explicitly, not by trusting a fresh module: under `--localstorage-file`
+    // the prefs blob survives between local runs and seeds the store.
+    handoffThresholds: {},
     planUsageByProfile: {},
     providers: [{ id: 'claude', label: 'Claude', capabilities: NO_CAPABILITIES, models: [] }] as never,
     profiles: [{ id: 'p1', label: 'Personal', providerId: 'claude' }] as never,
@@ -190,6 +194,15 @@ describe('handoffReason', () => {
     expect(
       handoffReason({ ...base, enabled: false, usageByProfile: { p1: usage(99) } }),
     ).toBeNull();
+  });
+
+  it('holds the reading to the thresholds it is given, not the shipped ones', () => {
+    const lowered = handoffThresholdsWith({ five_hour: 70 });
+    expect(handoffReason({ ...base, usageByProfile: { p1: usage(75) } })).toBeNull();
+    expect(
+      handoffReason({ ...base, usageByProfile: { p1: usage(75) }, thresholds: lowered })
+        ?.threshold.id,
+    ).toBe('five_hour');
   });
 });
 
@@ -353,5 +366,76 @@ describe('once the document is written', () => {
     reading(usage(99));
     await vi.waitFor(() => expect(handoff()).toBe('dismissed'));
     expect(started).toHaveLength(2);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Where the thresholds are set                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('the threshold sliders', () => {
+  const overrides = (): Readonly<Record<string, number>> => useApp.getState().handoffThresholds;
+
+  it('moves where the feed hands over', async () => {
+    setAutoHandoff(true);
+    setHandoffThreshold('five_hour', 60);
+
+    // Under the moved threshold: still nothing to say.
+    reading(usage(55));
+    await vi.waitFor(() => expect(handoff()).toBe('none'));
+    expect(started).toEqual([]);
+
+    // Over it — far under the shipped 90 — and the handover fires, naming the
+    // number it actually judged by.
+    reading(usage(65));
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    expect(started[0]).toContain('65%');
+  });
+
+  it('dragging the slider under the needle judges the readings already in hand', async () => {
+    // The same courtesy `setAutoHandoff(true)` extends, for the same reason:
+    // someone lowering the threshold below where the account already sits
+    // meant it to apply to that account, not to the one after the next poll.
+    setAutoHandoff(true);
+    reading(usage(80));
+    await vi.waitFor(() => expect(handoff()).toBe('none'));
+
+    setHandoffThreshold('five_hour', 75);
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+  });
+
+  it('clamps what it stores, so a wild value cannot disable the rule', () => {
+    setHandoffThreshold('five_hour', 400);
+    expect(overrides()).toEqual({ five_hour: 100 });
+  });
+
+  it('parked on the default, the override is removed rather than pinned', () => {
+    // The rule goes back to *following* the default: an installation that
+    // returns a slider to 90 should pick up a later release's judgement, not
+    // freeze the number that happened to ship today.
+    setHandoffThreshold('five_hour', 60);
+    expect(overrides()).toEqual({ five_hour: 60 });
+
+    setHandoffThreshold('five_hour', 90);
+    expect(overrides()).toEqual({});
+  });
+
+  it('drops an id that names no rule', () => {
+    setHandoffThreshold('a_rule_that_never_was', 60);
+    expect(overrides()).toEqual({});
+  });
+
+  it('persists the move on its own, so it survives a relaunch', () => {
+    // The blob is removed first: every other setter also saves the whole
+    // state, and without this a setter that forgot to persist would hide
+    // behind whichever save ran before it.
+    globalThis.localStorage.removeItem('artemis.prefs.v1');
+
+    setHandoffThreshold('five_hour', 60);
+
+    const blob = JSON.parse(globalThis.localStorage.getItem('artemis.prefs.v1') ?? '{}') as {
+      handoffThresholds?: Record<string, number>;
+    };
+    expect(blob.handoffThresholds).toEqual({ five_hour: 60 });
   });
 });

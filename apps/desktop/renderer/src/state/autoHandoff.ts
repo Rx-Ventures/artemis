@@ -44,6 +44,7 @@
 import {
   handoffTrigger,
   PLAN_USAGE_MAX_AGE_MS,
+  type HandoffThreshold,
   type HandoffTrigger,
   type PlanUsage,
   type ProfileId,
@@ -77,8 +78,10 @@ export function handoffReason(input: {
   readonly session: Pick<SessionState, 'handoff' | 'activeProfileId'>;
   readonly usageByProfile: Readonly<Record<ProfileId, PlanUsage>>;
   readonly now: number;
+  /** The rules to hold the reading to; absent means the shipped defaults. */
+  readonly thresholds?: readonly HandoffThreshold[];
 }): HandoffTrigger | null {
-  const { enabled, session, usageByProfile, now } = input;
+  const { enabled, session, usageByProfile, now, thresholds } = input;
   if (!enabled) return null;
   // Every state but `none` has already had its say. See the header: the latch is
   // what stops the handoff turn from triggering another handoff.
@@ -87,7 +90,7 @@ export function handoffReason(input: {
 
   const usage = usageByProfile[session.activeProfileId];
   if (!actionable(usage, now)) return null;
-  return handoffTrigger(usage);
+  return handoffTrigger(usage, thresholds);
 }
 
 /**
