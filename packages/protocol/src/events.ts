@@ -43,6 +43,7 @@ import type { UsageSnapshot } from './usage.js';
 /** Discriminator values of {@link AgentEvent}. */
 export type AgentEventType =
   | 'session.started'
+  | 'session.commands'
   | 'text.delta'
   | 'text.complete'
   | 'thinking.delta'
@@ -57,6 +58,7 @@ export type AgentEventType =
 /** Every {@link AgentEventType}. Useful for validation at the IPC boundary. */
 export const AGENT_EVENT_TYPES = [
   'session.started',
+  'session.commands',
   'text.delta',
   'text.complete',
   'thinking.delta',
@@ -110,6 +112,37 @@ export interface SessionStartedEvent extends AgentEventBase {
   readonly forked?: boolean;
   /** Provider version string, for the diagnostics pane. */
   readonly providerVersion?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* session.commands                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The provider has revised the slash commands it offers.
+ *
+ * `session.started` carries the set the session opened with, and that set is not
+ * fixed for the life of the session: the provider discovers commands as it goes
+ * — a skill found in a subdirectory the agent moved into, a plugin reloaded —
+ * and pushes the whole list again when it does.
+ *
+ * The payload is the *complete* list and replaces what was known, rather than
+ * adding to it. That is the provider's own contract and it is the property that
+ * matters: a command the user uninstalled has to be able to leave the menu, and
+ * a merge could only ever grow it.
+ *
+ * Mid-run like any other event, and unordered with respect to everything except
+ * `session.started` before it and `run.end` after.
+ */
+export interface SessionCommandsEvent extends AgentEventBase {
+  readonly type: 'session.commands';
+  /**
+   * Every command now on offer, named exactly as the provider names them.
+   *
+   * The same spelling {@link SessionStartedEvent.slashCommands} uses, so the
+   * composer's menu reads one shape and does not care which event it came from.
+   */
+  readonly slashCommands: readonly string[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -640,6 +673,7 @@ export interface BackgroundTasksEvent extends AgentEventBase {
  */
 export type AgentEvent =
   | SessionStartedEvent
+  | SessionCommandsEvent
   | TextDeltaEvent
   | TextCompleteEvent
   | ThinkingDeltaEvent

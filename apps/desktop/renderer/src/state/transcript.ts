@@ -947,6 +947,13 @@ export class TranscriptModel {
         // keeps it and the detail panel renders it live.
         break;
 
+      case 'session.commands':
+        // What the provider *can* be asked to do, which is a fact about the run
+        // and not something that was said. `handleAgentEvent` folds it into the
+        // pane's run state, where `session.started` already put the first list
+        // and where the composer's menu reads it from.
+        break;
+
       case 'run.end': {
         this.settleStreaming();
         this.failOpenToolCalls(event.reason);

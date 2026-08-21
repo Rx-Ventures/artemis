@@ -9228,6 +9228,21 @@ function applyAgentEvent(event: AgentEvent): void {
       refreshSessionsSoon();
       break;
 
+    /*
+     * The command list, revised under a session that is already open.
+     *
+     * Replaced wholesale rather than merged, which is the event's contract:
+     * a command the user uninstalled has to be able to leave the menu.
+     *
+     * `run.status` is deliberately untouched. This says nothing about whether
+     * the turn is running, and an ended run whose provider process is still
+     * alive can still push one — reviving it here would unlock a composer on a
+     * conversation that has finished.
+     */
+    case 'session.commands':
+      setPaneState(pane, { run: { ...run, slashCommands: event.slashCommands } });
+      break;
+
     case 'permission.request':
       setPaneState(pane, (s) => ({
         permissionQueue: [...s.permissionQueue, event.request],

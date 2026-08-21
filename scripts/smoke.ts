@@ -108,6 +108,8 @@ function describeEvent(event: AgentEvent): string {
       return event.tasks.length === 0
         ? 'no background tasks left running'
         : `${String(event.tasks.length)} background task(s): ${event.tasks.map((t) => t.description).join(', ')}`;
+    case 'session.commands':
+      return `${String(event.slashCommands.length)} slash command(s) now on offer`;
     case 'run.end':
       return `${event.reason}${event.error ? ` — ${event.error.code}: ${event.error.message}` : ''}${
         event.sessionId ? ` (resume with ${event.sessionId})` : ''

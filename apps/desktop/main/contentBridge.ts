@@ -92,6 +92,42 @@
  * such help.
  *
  * ---------------------------------------------------------------------------
+ * MARKETPLACE PLUGINS ARE A THIRD THING, AND THEY ARE PASSED THROUGH WHOLE
+ * ---------------------------------------------------------------------------
+ *
+ * A plugin the user installed with `/plugin install` is not reachable by either
+ * arrangement above, and the reason is worth stating exactly because it is not
+ * where anyone looks. The plugin's *files* are already reachable — every profile
+ * symlinks `plugins` at `~/.claude/plugins`, so `installed_plugins.json` and the
+ * cached plugin directories are right there. What is missing is the *enablement*,
+ * which lives under `enabledPlugins` in `~/.claude/settings.json` — the user
+ * settings layer, which is exactly what `settingSources: []` refuses. Measured
+ * on 2026-08-21 against SDK 0.3.226: a session sees 50 slash commands under
+ * `settingSources: []` and 76 under `['user']`, and the 26 missing are one
+ * marketplace plugin's skills.
+ *
+ * So the enablement is read here — one key, not the layer — and each enabled
+ * plugin is handed to the run by its own install path. The SDK's `plugins`
+ * option does not go through the `settingSources` gate, which is the same seam
+ * {@link buildContentBridge} uses and the reason this works at all.
+ *
+ * **These are passed through whole, and that is a deliberate departure.** The
+ * bridge above is safe structurally: it is a directory Artemis assembles, so it
+ * cannot contribute an agent or a hook because it does not contain one. A
+ * marketplace plugin directory belongs to its author and may contain all four
+ * surfaces plus an `.mcp.json`, and every one of them is loaded. The argument
+ * for that is the one the whole module rests on: `settingSources: []` exists so
+ * an app does not *silently* inherit configuration the user set up for something
+ * else, and a plugin the user went and installed by name is not that. It is a
+ * thing they chose, and half of it loading would be the harder failure to
+ * explain — a plugin whose skills work and whose commands do not.
+ *
+ * The narrower option exists if that ever needs revisiting: `skipMcpDiscovery`
+ * on the SDK's plugin config withholds the MCP half. There is no equivalent for
+ * hooks, so anything stricter than this means going back to assembling a
+ * directory, with the renaming and the lost agents that implies.
+ *
+ * ---------------------------------------------------------------------------
  * WHAT THIS COSTS, AND WHAT IT NEVER DOES
  * ---------------------------------------------------------------------------
  *
@@ -106,9 +142,19 @@
  */
 
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import type { LocalPlugin } from '@rx-artemis/core';
 
@@ -375,6 +421,168 @@ export async function buildContentBridge(
   } catch (error) {
     log.warn(
       `Could not bridge content for ${options.configDir}; the run continues without it`,
+      error,
+    );
+    return [];
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Claude: plugins the user installed from a marketplace                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where the CLI records what a `/plugin install` put on disk, under a config
+ * directory. Reached through the profile's `plugins` symlink, so a profile that
+ * shares `~/.claude` sees the user's real installs.
+ */
+const INSTALLED_PLUGINS = ['plugins', 'installed_plugins.json'] as const;
+
+/**
+ * The user's own Claude settings, relative to `$HOME`.
+ *
+ * Read for one key — see the header. The profile's own `settings.json` is read
+ * too and wins, but this is the file the CLI actually writes when the user
+ * enables a plugin, so it is the one that matters in practice.
+ */
+const USER_SETTINGS = ['.claude', 'settings.json'] as const;
+
+/** Parse a JSON file into an object, or nothing at all. Never throws. */
+async function readJson(file: string): Promise<Record<string, unknown> | null> {
+  const text = await readFile(file, 'utf8').catch(() => null);
+  if (text === null) return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    // A settings file the user is mid-edit in, or a truncated write. The run
+    // proceeds without their plugins rather than failing to start.
+    return null;
+  }
+}
+
+/**
+ * Which plugins the user has switched on, as `<plugin>@<marketplace>` keys.
+ *
+ * Two files, because two are plausible and only one is likely: the CLI writes
+ * `~/.claude/settings.json`, and a profile's own `settings.json` is a file a
+ * person may reasonably edit to say something different for this account. The
+ * profile's answer wins on a key both name, being the more specific statement —
+ * and when a profile *is* `~/.claude`, they are one file read once.
+ *
+ * A value of `false` disables. Anything else present enables: the field also
+ * takes an extended object form carrying a version constraint, and treating an
+ * unrecognised shape as "on" matches what the user did — they enabled it — where
+ * treating it as "off" would silently drop a plugin over a syntax this function
+ * does not need to understand.
+ */
+async function enabledPluginKeys(configDir: string, home: string): Promise<ReadonlySet<string>> {
+  const files = [join(home, ...USER_SETTINGS), join(configDir, 'settings.json')];
+  const enabled = new Set<string>();
+
+  for (const file of new Set(files.map((path) => resolve(path)))) {
+    const settings = await readJson(file);
+    const declared = settings?.['enabledPlugins'];
+    if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) continue;
+    for (const [key, value] of Object.entries(declared as Record<string, unknown>)) {
+      if (value === false) enabled.delete(key);
+      else enabled.add(key);
+    }
+  }
+  return enabled;
+}
+
+/**
+ * One install record, as `installed_plugins.json` writes it.
+ *
+ * Only `installPath` is read. The file also carries a scope, a version and a git
+ * sha, none of which change the answer to "where is it": scope decided whether
+ * the install happened, which it did, and the version is already pinned by the
+ * path.
+ */
+interface InstallRecord {
+  readonly installPath?: unknown;
+}
+
+/** Every install path recorded for a key, newest-first as the file lists them. */
+function installPaths(entry: unknown): readonly string[] {
+  const records: readonly InstallRecord[] = Array.isArray(entry)
+    ? (entry as InstallRecord[])
+    : typeof entry === 'object' && entry !== null
+      ? // Not the shape the current file uses. Tolerated because this module
+        // reads a file another program owns, and a single record where a list
+        // was expected is the cheapest version skew to survive.
+        [entry as InstallRecord]
+      : [];
+
+  return records
+    .map((record) => record.installPath)
+    .filter((path): path is string => typeof path === 'string' && path.length > 0);
+}
+
+export interface MarketplacePluginOptions {
+  /** The profile's Claude config directory — its `plugins/` is the install record. */
+  readonly configDir: string;
+  /** Stand-in for `$HOME`. Overridden only by tests. */
+  readonly home?: string;
+}
+
+/**
+ * The marketplace plugins this profile has enabled, ready to hand to a run.
+ *
+ * Passed through whole rather than bridged — see the header for why, and for
+ * what that means the run is trusting.
+ *
+ * Returns an empty list for every ordinary absence: no install record, no
+ * enabled plugins, a plugin enabled whose files have since been deleted. A
+ * plugin that cannot be found is left out rather than reported, for the reason
+ * the header gives: nothing here may cost the user a session.
+ */
+export async function discoverMarketplacePlugins(
+  options: MarketplacePluginOptions,
+): Promise<readonly LocalPlugin[]> {
+  const home = options.home ?? homedir();
+
+  try {
+    const enabled = await enabledPluginKeys(options.configDir, home);
+    if (enabled.size === 0) return [];
+
+    const installed = await readJson(join(options.configDir, ...INSTALLED_PLUGINS));
+    const byKey = installed?.['plugins'];
+    if (typeof byKey !== 'object' || byKey === null || Array.isArray(byKey)) return [];
+
+    const plugins: LocalPlugin[] = [];
+    const seen = new Set<string>();
+    for (const key of enabled) {
+      for (const path of installPaths((byKey as Record<string, unknown>)[key])) {
+        // A relative path would resolve against the *run's* working directory
+        // and so name a different place in every repository — the adapter
+        // rejects one outright, which would fail the run. Dropped here instead.
+        if (!isAbsolute(path)) continue;
+        if (seen.has(path)) continue;
+
+        // The manifest is the plugin: a cache directory pruned since the install
+        // was recorded leaves the record behind, and pointing a run at it would
+        // trade a missing plugin for a louder failure.
+        const loadable = await stat(join(path, '.claude-plugin', 'plugin.json'))
+          .then((info) => info.isFile())
+          .catch(() => false);
+        if (!loadable) continue;
+
+        seen.add(path);
+        plugins.push({ path });
+        // One directory per enabled plugin. The records past the first are the
+        // same plugin installed at another scope, and loading two copies would
+        // offer every skill in it twice.
+        break;
+      }
+    }
+    return plugins;
+  } catch (error) {
+    log.warn(
+      `Could not read marketplace plugins for ${options.configDir}; the run continues without them`,
       error,
     );
     return [];

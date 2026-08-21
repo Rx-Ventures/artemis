@@ -43,7 +43,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildContentBridge, linkSkillsIntoCodexHome } from './contentBridge.js';
+import {
+  buildContentBridge,
+  discoverMarketplacePlugins,
+  linkSkillsIntoCodexHome,
+} from './contentBridge.js';
 
 const describeIfSymlinks = process.platform === 'win32' ? describe.skip : describe;
 
@@ -322,6 +326,172 @@ describeIfSymlinks('buildContentBridge (Claude)', () => {
 
       await expect(buildContentBridge({ configDir, dataDir: blocked, home })).resolves.toEqual([]);
     });
+  });
+});
+
+describeIfSymlinks('discoverMarketplacePlugins', () => {
+  /**
+   * Write the two files a `/plugin install` leaves behind.
+   *
+   * `installed_plugins.json` goes under the *config* directory, because that is
+   * where the CLI reads it from and where the profile's `plugins` symlink puts
+   * the user's real one. `settings.json` goes under `$HOME`, because that is the
+   * file the CLI writes `enabledPlugins` into — the split this function exists
+   * to reconcile.
+   */
+  function seedInstall(options: {
+    readonly configDir: string;
+    readonly home: string;
+    readonly key: string;
+    readonly installPath: string;
+    /** Omit to write no `enabledPlugins` entry at all. */
+    readonly enabled?: boolean | Record<string, unknown>;
+    /** Skip writing the plugin manifest, standing in for a pruned cache. */
+    readonly withoutManifest?: boolean;
+  }): void {
+    if (!options.withoutManifest) {
+      mkdirSync(path.join(options.installPath, '.claude-plugin'), { recursive: true });
+      writeFileSync(
+        path.join(options.installPath, '.claude-plugin', 'plugin.json'),
+        JSON.stringify({ name: options.key.split('@')[0], version: '1.0.0' }),
+      );
+    }
+
+    const record = path.join(options.configDir, 'plugins', 'installed_plugins.json');
+    mkdirSync(path.dirname(record), { recursive: true });
+    writeFileSync(
+      record,
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          [options.key]: [
+            { scope: 'user', installPath: options.installPath, version: '1.0.0' },
+          ],
+        },
+      }),
+    );
+
+    if (options.enabled === undefined) return;
+    const settings = path.join(options.home, '.claude', 'settings.json');
+    mkdirSync(path.dirname(settings), { recursive: true });
+    writeFileSync(settings, JSON.stringify({ enabledPlugins: { [options.key]: options.enabled } }));
+  }
+
+  it('hands a run the plugin the user enabled, by its own install path', async () => {
+    const { configDir, home } = sandbox();
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'mattpocock', '1.2.3');
+    seedInstall({
+      configDir,
+      home,
+      key: 'mattpocock-skills@claude-plugins-official',
+      installPath,
+      enabled: true,
+    });
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([
+      { path: installPath },
+    ]);
+  });
+
+  it('reads enabledPlugins from ~/.claude even though settings.json is not shared', async () => {
+    // The whole bug: the profile has its own `settings.json` and it will never
+    // hold `enabledPlugins`, because the CLI writes the user's file. A version
+    // of this that read only the profile's would find nothing, every time.
+    const { configDir, home } = sandbox();
+    writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ hooks: {} }));
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'plugin', '1.0.0');
+    seedInstall({ configDir, home, key: 'plugin@market', installPath, enabled: true });
+
+    const plugins = await discoverMarketplacePlugins({ configDir, home });
+
+    expect(plugins).toEqual([{ path: installPath }]);
+  });
+
+  it('lets the profile turn off a plugin the user enabled globally', async () => {
+    const { configDir, home } = sandbox();
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'plugin', '1.0.0');
+    seedInstall({ configDir, home, key: 'plugin@market', installPath, enabled: true });
+    writeFileSync(
+      path.join(configDir, 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'plugin@market': false } }),
+    );
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
+  });
+
+  it('takes an extended enablement value as "on", not as unrecognised', async () => {
+    // The field also accepts an object carrying a version constraint. Reading it
+    // as anything but enabled would drop a plugin over a syntax this function
+    // does not need to understand.
+    const { configDir, home } = sandbox();
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'plugin', '1.0.0');
+    seedInstall({
+      configDir,
+      home,
+      key: 'plugin@market',
+      installPath,
+      enabled: { version: '^1.0.0' },
+    });
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([
+      { path: installPath },
+    ]);
+  });
+
+  it('ignores an installed plugin nobody enabled', async () => {
+    const { configDir, home } = sandbox();
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'plugin', '1.0.0');
+    seedInstall({ configDir, home, key: 'plugin@market', installPath });
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
+  });
+
+  it('drops an enabled plugin whose files are gone rather than pointing a run at them', async () => {
+    const { configDir, home } = sandbox();
+    const installPath = path.join(home, '.claude', 'plugins', 'cache', 'pruned', '1.0.0');
+    seedInstall({
+      configDir,
+      home,
+      key: 'plugin@market',
+      installPath,
+      enabled: true,
+      withoutManifest: true,
+    });
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
+  });
+
+  it('drops a relative install path, which the adapter would refuse outright', async () => {
+    const { configDir, home } = sandbox();
+    mkdirSync(path.join(configDir, 'plugins'), { recursive: true });
+    writeFileSync(
+      path.join(configDir, 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        version: 2,
+        plugins: { 'plugin@market': [{ scope: 'user', installPath: './somewhere' }] },
+      }),
+    );
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.claude', 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'plugin@market': true } }),
+    );
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
+  });
+
+  it('survives settings a user is mid-edit in', async () => {
+    const { configDir, home } = sandbox();
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+    writeFileSync(path.join(home, '.claude', 'settings.json'), '{ "enabledPlugins": {');
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
+  });
+
+  it('returns nothing at all on a machine that has never installed a plugin', async () => {
+    const { configDir, home } = sandbox();
+
+    await expect(discoverMarketplacePlugins({ configDir, home })).resolves.toEqual([]);
   });
 });
 

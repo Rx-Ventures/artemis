@@ -502,9 +502,27 @@ function mapSystemMessage(
       return [];
 
     case 'commands_changed':
-      // Updated slash-command list. `session.started` carries the initial set
-      // and the union has no way to revise it.
-      return [];
+      /*
+       * The slash-command list, revised.
+       *
+       * `session.started` reports the set the session opened with, and the CLI
+       * pushes this when that set changes under it — a skill discovered in a
+       * directory the agent moved into, a plugin reloaded. The payload is the
+       * whole list and replaces what was known; see {@link SessionCommandsEvent}.
+       *
+       * Mapped to names alone because that is the shape `session.started`
+       * already reports and the composer's menu already reads. The push also
+       * carries a description and an argument hint per command, which the menu
+       * has nowhere to put today — when it grows a place for them, both events
+       * should start carrying them together rather than one of them alone.
+       */
+      return [
+        {
+          type: 'session.commands',
+          ...stamp(state),
+          slashCommands: message.commands.map((command) => command.name),
+        },
+      ];
 
     case 'notification':
     case 'informational':

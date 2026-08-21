@@ -1163,7 +1163,6 @@ describe('deliberately dropped messages', () => {
     ['system/thinking_tokens', { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 10, estimated_tokens_delta: 2, uuid: 'u', session_id: 's' }],
     ['system/notification', { type: 'system', subtype: 'notification', key: 'k', text: 't', priority: 'low', uuid: 'u', session_id: 's' }],
     ['system/informational', { type: 'system', subtype: 'informational', content: 'fyi', level: 'info', uuid: 'u', session_id: 's' }],
-    ['system/commands_changed', { type: 'system', subtype: 'commands_changed', commands: [], uuid: 'u', session_id: 's' }],
     ['system/session_state_changed', { type: 'system', subtype: 'session_state_changed', state: 'idle', uuid: 'u', session_id: 's' }],
     ['system/memory_recall', { type: 'system', subtype: 'memory_recall', mode: 'select', memories: [], uuid: 'u', session_id: 's' }],
   ];
@@ -1175,6 +1174,61 @@ describe('deliberately dropped messages', () => {
   it('drops an unknown future message type instead of throwing', () => {
     expect(mapSdkMessage(sdk({ type: 'something_new_in_2027', uuid: 'u' }), makeState())).toEqual([]);
     expect(mapSdkMessage(sdk({ type: 'system', subtype: 'brand_new', uuid: 'u' }), makeState())).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* session.commands                                                           */
+/* -------------------------------------------------------------------------- */
+
+describe('session.commands', () => {
+  /** One `commands_changed` push, shaped the way the CLI sends it. */
+  function commandsChanged(names: readonly string[]): unknown {
+    return {
+      type: 'system',
+      subtype: 'commands_changed',
+      commands: names.map((name) => ({
+        name,
+        description: `does ${name}`,
+        argumentHint: '',
+      })),
+      uuid: 'uuid-commands',
+      session_id: 'sess-abc',
+    };
+  }
+
+  it('carries the revised list, named exactly as session.started names them', () => {
+    const state = makeState();
+    const events = run(state, [INIT, commandsChanged(['compact', 'artemis-skills:cerebro'])]);
+
+    expect(events[1]).toMatchObject({
+      type: 'session.commands',
+      runId: 'run-1',
+      seq: 1,
+      slashCommands: ['compact', 'artemis-skills:cerebro'],
+    });
+  });
+
+  it('reports an empty list rather than nothing, so the last command can leave', () => {
+    // The push replaces; a plugin the user removed is announced by its absence,
+    // and dropping the empty push would leave the menu offering it forever.
+    const state = makeState();
+    const events = run(state, [INIT, commandsChanged([])]);
+
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ type: 'session.commands', slashCommands: [] });
+  });
+
+  it('does not disturb the seq the rest of the turn is counting on', () => {
+    const state = makeState();
+    const events = run(state, [
+      INIT,
+      commandsChanged(['compact']),
+      resultMessage({ result: 'done' }),
+    ]);
+
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    expect(events.at(-1)?.type).toBe('run.end');
   });
 });
 
