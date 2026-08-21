@@ -40,8 +40,12 @@
  *
  *  - `idle`       → nothing.
  *  - `available`  → the offer: version, install, dismiss.
- *  - `working`    → a spinner and "keep Artemis open". No actions; there is
- *                   nothing to decide and nothing safely cancellable.
+ *  - `working`    → what it is doing, how far in, and "keep Artemis open". No
+ *                   actions; there is nothing to decide and nothing safely
+ *                   cancellable. The bar is the point: the archive is ~196MB,
+ *                   so this phase is minutes long, and a spinner alone had a
+ *                   user clicking Update three times because nothing on screen
+ *                   distinguished a download from a hang.
  *  - `ready`      → the installed version, waiting on the one decision that is
  *                   the user's alone: restart now, or keep working and pick it
  *                   up on the next launch. Nothing here happens on a timer, and
@@ -61,7 +65,7 @@ import {
   XIcon,
 } from 'lucide-react';
 
-import type { UpdateState } from '@rx-artemis/protocol';
+import { updatePercent, type UpdateProgress, type UpdateState } from '@rx-artemis/protocol';
 
 import {
   dismissUpdate,
@@ -72,6 +76,7 @@ import {
 } from '../hooks/useUpdateState';
 import { IconButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 
 export function UpdateCard(): ReactElement | null {
   const state = useUpdateState();
@@ -105,7 +110,11 @@ export function UpdateCard(): ReactElement | null {
                 <span className="font-medium">Artemis {version}</span> is available.
               </>
             )}
-            {state.phase === 'working' && <>Updating to {version}… keep Artemis open.</>}
+            {state.phase === 'working' && (
+              <>
+                {stepLabel(state.progress)} {version}… keep Artemis open.
+              </>
+            )}
             {state.phase === 'ready' && (
               <>
                 <span className="font-medium">Artemis {version}</span> is installed. Restart to
@@ -131,6 +140,30 @@ export function UpdateCard(): ReactElement | null {
             </IconButton>
           )}
         </div>
+
+        {/*
+          The bar, and only while there is something to be partway through.
+
+          Determinate when the step can count and indeterminate when it cannot
+          — see `updatePercent`. The byte line sits under it rather than in the
+          sentence above because it changes ten times a second: text that
+          rewrites itself mid-sentence is harder to read than a number in a
+          place the eye can rest on.
+        */}
+        {state.phase === 'working' && (
+          <div className="flex flex-col gap-1">
+            <Progress
+              value={updatePercent(state.progress) ?? undefined}
+              aria-label={`${stepLabel(state.progress)} ${version}`}
+              className={updatePercent(state.progress) === null ? 'animate-pulse' : undefined}
+            />
+            {byteLine(state.progress) !== null && (
+              <div className="text-right font-mono text-3xs text-ink-faint tabular-nums">
+                {byteLine(state.progress)}
+              </div>
+            )}
+          </div>
+        )}
 
         {/*
           One action, full width, and only for the two phases that have one. The
@@ -177,6 +210,37 @@ export function UpdateCard(): ReactElement | null {
       </div>
     </div>
   );
+}
+
+/**
+ * What to call the step, in the sentence.
+ *
+ * Present participles, so the line reads as something in progress rather than
+ * as a label: "Downloading 1.5.0… keep Artemis open." An absent reading falls
+ * back to the old wording, which is still true of every step.
+ */
+function stepLabel(progress: UpdateProgress | null): string {
+  switch (progress?.step) {
+    case 'downloading':
+      return 'Downloading';
+    case 'verifying':
+      return 'Verifying';
+    case 'unpacking':
+      return 'Unpacking';
+    case 'installing':
+      return 'Installing';
+    default:
+      return 'Updating to';
+  }
+}
+
+/** `84.2 MB of 196.0 MB`, or null when this step cannot count. */
+function byteLine(progress: UpdateProgress | null): string | null {
+  if (progress?.transferred == null) return null;
+  const mb = (bytes: number): string => `${(bytes / 1_000_000).toFixed(1)} MB`;
+  return progress.total === null
+    ? mb(progress.transferred)
+    : `${mb(progress.transferred)} of ${mb(progress.total)}`;
 }
 
 /** The phase's icon: a state's worth of colour, in 14 pixels. */

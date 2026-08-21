@@ -21,6 +21,7 @@ export const IDLE_UPDATE: UpdateState = {
   version: null,
   message: null,
   releaseUrl: null,
+  progress: null,
 };
 
 /**

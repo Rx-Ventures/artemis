@@ -29,6 +29,8 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { UpdateProgress } from '@rx-artemis/protocol';
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: true,
@@ -38,7 +40,8 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { createUpdater, fetchAnonymously, fetchAsset, sha512Of } = await import('./updater');
+const { createUpdater, fetchAnonymously, fetchAsset, sha512Of, throttleProgress } =
+  await import('./updater');
 
 const servers: Server[] = [];
 
@@ -151,4 +154,159 @@ describe('dismiss', () => {
       });
     },
   );
+});
+
+/* -------------------------------------------------------------------------- */
+/* Progress                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The reason this exists at all: the archive is ~196MB, `working` was one
+ * static sentence for the minutes that takes, and a user who could not tell a
+ * download from a hang clicked Update three times. What follows pins the two
+ * halves of the fix — that the bytes are actually counted, and that counting
+ * them does not turn into an IPC flood.
+ */
+
+describe('download progress', () => {
+  it('counts bytes to the total the server promised', async () => {
+    const payload = randomBytes(96 * 1024);
+    const origin = await serve((_request, response) => {
+      response.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(payload.length),
+      });
+      response.end(payload);
+    });
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-progress-'));
+    const file = join(dir, 'big.zip');
+    const readings: { transferred: number; total: number | null }[] = [];
+
+    await fetchAnonymously(`${origin}/big.zip`, file, 5_000, (transferred, total) => {
+      readings.push({ transferred, total });
+    });
+
+    expect(readings.length).toBeGreaterThan(0);
+    // Monotonic, ending exactly on the total: a bar that goes backwards or
+    // stops short is the thing a user reads as stuck.
+    expect(readings.map((r) => r.transferred)).toEqual(
+      [...readings.map((r) => r.transferred)].sort((a, b) => a - b),
+    );
+    expect(readings.at(-1)).toEqual({ transferred: payload.length, total: payload.length });
+    // And the file still arrived whole — the counter is in the pipeline, so a
+    // mistake here would corrupt the download rather than merely misreport it.
+    expect((await readFile(file)).equals(payload)).toBe(true);
+  });
+
+  it('reports an unknown total rather than guessing one', async () => {
+    // No `content-length`: chunked, or a proxy that re-encoded. `null` is what
+    // lets the surface draw an indeterminate bar instead of a lie.
+    const origin = await serve((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      response.write(randomBytes(1024));
+      response.end(randomBytes(1024));
+    });
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-progress-'));
+    const totals: (number | null)[] = [];
+
+    await fetchAnonymously(`${origin}/x.zip`, join(dir, 'x.zip'), 5_000, (_transferred, total) => {
+      totals.push(total);
+    });
+
+    expect(totals.length).toBeGreaterThan(0);
+    expect(totals.every((total) => total === null)).toBe(true);
+  });
+});
+
+describe('verify progress', () => {
+  it('counts the hash against the file’s own size, and still digests correctly', async () => {
+    // Hashing 196MB is seconds of a surface that would otherwise sit at a
+    // finished download — so this step counts too, and its total is knowable.
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-sha-progress-'));
+    const file = join(dir, 'blob.bin');
+    const payload = randomBytes(128 * 1024);
+    await writeFile(file, payload);
+    const readings: { transferred: number; total: number | null }[] = [];
+
+    const digest = await sha512Of(file, (transferred, total) => {
+      readings.push({ transferred, total });
+    });
+
+    expect(digest).toBe(createHash('sha512').update(payload).digest('base64'));
+    expect(readings.at(-1)).toEqual({ transferred: payload.length, total: payload.length });
+  });
+
+  it('digests without a callback exactly as it always did', async () => {
+    // The no-progress path must not pay for the feature: no stat, no counter.
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-sha-plain-'));
+    const file = join(dir, 'blob.bin');
+    const payload = randomBytes(4 * 1024);
+    await writeFile(file, payload);
+
+    expect(await sha512Of(file)).toBe(createHash('sha512').update(payload).digest('base64'));
+  });
+});
+
+describe('throttleProgress', () => {
+  const reading = (transferred: number, total: number | null = 100): UpdateProgress => ({
+    step: 'downloading',
+    transferred,
+    total,
+  });
+
+  it('lets the first reading through immediately', () => {
+    // The first is what replaces "nothing is happening" with a bar. Holding it
+    // for an interval is holding the only frame that matters.
+    const seen: UpdateProgress[] = [];
+    const emit = throttleProgress((p) => seen.push(p), 100, () => 1_000);
+
+    emit(reading(1));
+
+    expect(seen).toEqual([reading(1)]);
+  });
+
+  it('drops the flood between intervals', () => {
+    // ~3000 chunks over a 196MB archive, each crossing IPC to every window.
+    let now = 1_000;
+    const seen: UpdateProgress[] = [];
+    const emit = throttleProgress((p) => seen.push(p), 100, () => now);
+
+    emit(reading(1));
+    now = 1_050;
+    emit(reading(2));
+    now = 1_099;
+    emit(reading(3));
+    now = 1_100;
+    emit(reading(4));
+
+    expect(seen.map((p) => p.transferred)).toEqual([1, 4]);
+  });
+
+  it('always emits the reading that completes the step', () => {
+    // Otherwise the bar rests at 97% while the next step runs, which reads as
+    // the stall this whole feature exists to remove.
+    let now = 1_000;
+    const seen: UpdateProgress[] = [];
+    const emit = throttleProgress((p) => seen.push(p), 100, () => now);
+
+    emit(reading(1));
+    now = 1_001;
+    emit(reading(100));
+
+    expect(seen.map((p) => p.transferred)).toEqual([1, 100]);
+  });
+
+  it('does not mistake an uncountable step for a finished one', () => {
+    // `null` totals mean "cannot say", and treating that as complete would
+    // exempt every reading of an indeterminate step from the throttle.
+    let now = 1_000;
+    const seen: UpdateProgress[] = [];
+    const emit = throttleProgress((p) => seen.push(p), 100, () => now);
+
+    emit(reading(1, null));
+    now = 1_050;
+    emit(reading(2, null));
+
+    expect(seen).toHaveLength(1);
+  });
 });

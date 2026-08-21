@@ -35,6 +35,7 @@ import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js'
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RunHandle, RunInput } from './run.js';
+import type { UpdateProgress } from './update.js';
 import type {
   ServerAllowance,
   ServerProfile,
@@ -1758,9 +1759,10 @@ export interface UpdatesDismissRequest {
  *
  *  - `idle`        — nothing to say; the banner does not render.
  *  - `available`   — `version` is downloadable. The banner offers it.
- *  - `working`     — download / verify / swap in progress. One phase, because
- *                    the renderer draws all three the same way: a spinner and
- *                    a "don't quit yet". The steps are main's business.
+ *  - `working`     — download / verify / unpack / swap in progress. One phase
+ *                    carrying a {@link UpdateProgress}, because the steps take
+ *                    minutes over a ~196MB archive and a surface that cannot
+ *                    tell a download from a hang gets clicked again.
  *  - `ready`       — installed, and *nothing more happens on its own*. The
  *                    swap has landed on disk, but the running process is the
  *                    old version and stays so until the user says restart —
@@ -1783,6 +1785,11 @@ export interface UpdateState {
    * whenever the automatic path is expected to work.
    */
   readonly releaseUrl: string | null;
+  /**
+   * What the `working` phase is doing, and how far in. Null in every other
+   * phase — there is no progress to report about an offer or a failure.
+   */
+  readonly progress: UpdateProgress | null;
 }
 
 /**
