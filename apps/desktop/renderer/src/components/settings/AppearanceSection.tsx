@@ -54,6 +54,7 @@
 
 import { useMemo, useState, type ReactElement } from 'react';
 import { MinusIcon, PlusIcon, XIcon } from 'lucide-react';
+import { handoffThresholdsWith, type HandoffThreshold } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
@@ -69,6 +70,7 @@ import {
   setAutoHandoff,
   setEscapeStopsRun,
   setFontSize,
+  setHandoffThreshold,
   setRunSummary,
   setShowThinking,
   setSidebarCollapsed,
@@ -89,7 +91,55 @@ import {
   ItemGroup,
   ItemTitle,
 } from '@/components/ui/item';
+import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+
+/**
+ * One handoff rule's slider.
+ *
+ * The dragged value lives in local state until the pointer releases, and only
+ * the release commits: `setHandoffThreshold` re-judges the readings already in
+ * hand, so committing every intermediate value would let a drag *through* the
+ * needle latch a handoff the user's finger was still on its way past. The
+ * label tracks the drag, because a number that lags the thumb reads as broken.
+ *
+ * The floor is 50 rather than 1: the store accepts anything, but a slider is
+ * an instrument for the usable range, and "hand off when half the budget
+ * remains" is already the extreme of what the feature means. The default is
+ * always inside [50, 100], so the floor can never hide a shipped value.
+ */
+function ThresholdSlider({
+  rule,
+  disabled,
+}: {
+  readonly rule: HandoffThreshold;
+  readonly disabled: boolean;
+}): ReactElement {
+  const [dragging, setDragging] = useState<number | null>(null);
+  const shown = dragging ?? rule.at;
+
+  return (
+    <div className="flex w-full items-center gap-3">
+      <span className="w-14 shrink-0 text-2xs text-ink-muted">{rule.label}</span>
+      <Slider
+        value={[shown]}
+        min={50}
+        max={100}
+        step={1}
+        disabled={disabled}
+        aria-label={`${rule.label} handoff threshold`}
+        onValueChange={(values) => setDragging(values[0] ?? null)}
+        onValueCommit={(values) => {
+          setDragging(null);
+          if (values[0] !== undefined) setHandoffThreshold(rule.id, values[0]);
+        }}
+      />
+      <span className="w-9 shrink-0 text-right font-mono text-2xs tabular-nums text-ink-muted">
+        {shown}%
+      </span>
+    </div>
+  );
+}
 
 /**
  * The three reading modes.
@@ -383,6 +433,11 @@ export function AppearanceSection(): ReactElement {
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
   const escapeStopsRun = useApp((s) => s.escapeStopsRun);
   const autoHandoff = useApp((s) => s.autoHandoff);
+  const handoffOverrides = useApp((s) => s.handoffThresholds);
+  // The resolved rules rather than the raw overrides, so the sliders show the
+  // numbers the feature will actually act on — defaults included, hand-edited
+  // values clamped the same way `considerHandoff` clamps them.
+  const handoffRules = useMemo(() => handoffThresholdsWith(handoffOverrides), [handoffOverrides]);
 
   return (
     <SettingsPane
@@ -548,12 +603,9 @@ export function AppearanceSection(): ReactElement {
                 and shown as an artifact.
                 <br />
                 <br />
-                It stops at{' '}
-                <span className="text-ink-muted">90% of the 5-hour window, 98% of the weekly, 95%
-                of Fable</span>{' '}
-                — different margins because the 5-hour window refills within the day and the weekly
-                one does not. A run in flight is interrupted to do it, so this is off unless you
-                ask for it; every conversation it stops offers a button to carry on regardless.
+                Where it stops is set below, per window. A run in flight is interrupted to do
+                it, so this is off unless you ask for it; every conversation it stops offers a
+                button to carry on regardless.
               </ItemDescription>
             </ItemContent>
             <ItemActions>
@@ -564,6 +616,25 @@ export function AppearanceSection(): ReactElement {
                 onCheckedChange={setAutoHandoff}
               />
             </ItemActions>
+          </Item>
+
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent className="w-full">
+              <ItemTitle className="text-xs text-ink">Where each window hands over</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                Percent full at which the handover fires. The defaults are deliberately uneven:
+                the 5-hour window refills within the working day, so margin there is cheap; the
+                weekly one is gone for days once spent, so it is ridden closer to the edge; Fable
+                sits between, because its exhaustion takes one model away rather than the
+                account. How much runway a handover needs depends on how you work — the numbers
+                are yours to move.
+              </ItemDescription>
+              <div className="mt-2 flex w-full flex-col gap-2.5">
+                {handoffRules.map((rule) => (
+                  <ThresholdSlider key={rule.id} rule={rule} disabled={!autoHandoff} />
+                ))}
+              </div>
+            </ItemContent>
           </Item>
         </ItemGroup>
       </SettingsGroup>

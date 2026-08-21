@@ -26,8 +26,16 @@
  * `pnpm typecheck` never sees this one and the assertions are behavioural.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+
+/* Radix's slider (the handoff thresholds) needs an observer jsdom lacks. */
+class NoopObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+vi.stubGlobal('ResizeObserver', NoopObserver);
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AppearanceSection } from '@/components/settings/AppearanceSection';
