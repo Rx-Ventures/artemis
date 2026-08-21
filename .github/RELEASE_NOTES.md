@@ -1,6 +1,63 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.5.0
+
+The agent can browse with your browser instead of its own, and the numbers
+that hand work off a nearly-spent account are yours to move.
+
+- **The agent can drive your own Chrome.** Turn on *Agent browses with your
+  Chrome* in the new Settings → Browser pane and Claude conversations connect
+  to the Claude-in-Chrome extension: real tabs in your Chrome, your logins,
+  your password manager, a tab group beside the tabs you keep using. Artemis
+  stops offering its embedded dock browser to those runs — two browsers
+  answering the same questions from two different cookie jars is how an agent
+  confidently reads the wrong one. It takes a signed-in profile and the
+  extension installed; an API-key profile keeps the bridge off and the run
+  simply browses with whatever it was given. One conversation drives the
+  bridge at a time.
+
+- **Pages can open in your default browser.** A second toggle, for a smaller
+  preference: the agent keeps a way to *show* you a page, and the page lands
+  in the browser you actually live in rather than the sandboxed dock tab. The
+  reading and clicking tools that only make sense against a page Artemis owns
+  are not offered at all — the agent is told to ask you what the page shows —
+  and permission rules built under one mode survive the other, because the
+  open tool keeps its name.
+
+- **The handoff thresholds are yours.** Handing work over before the limit
+  used to fire at fixed numbers. Each rule is a slider now, under Appearance →
+  Handing over: 5-hour, weekly and Fable, each with its own margin, live in
+  the label as you drag. Dragging a threshold under where the account already
+  sits hands over immediately — you meant it to apply to the account you are
+  looking at. A slider parked back on its default keeps following future
+  releases' defaults rather than freezing today's number.
+
+- **A model choice stays with the conversation it was made for.** Switch
+  conversations, change the model there, come back: the first conversation is
+  on the model you chose *for it* — effort, fast mode and ultracode included —
+  not whatever the column last used. The record survives a relaunch.
+
+- **A message to an idle conversation arrives.** Leaving a conversation idle
+  long enough could swallow the next thing you said: a spinner over a message
+  that went nowhere, or a reply that opened a fresh session under the old
+  transcript. Four separate holes lined up behind that one failure — how long
+  a finished conversation is remembered, what a locally-drawn end promotes,
+  which state a retry reads, and a process dying at exactly the wrong moment —
+  and all four are closed. A message that cannot be delivered now fails
+  loudly and asks to be sent again instead of pretending it arrived.
+
+- **Archiving a waiting conversation answers it.** A conversation archived
+  while it sat on a permission prompt used to keep its amber "waiting" marker
+  lit indefinitely — in the section whose whole meaning is "put away".
+  Putting a conversation away is the answer: its parked prompts are declined
+  on the way in, the run ends the way any declined prompt ends it, and the
+  marker clears. Unarchiving restores the row, not the questions.
+
+- **The effort ladder fits the window that has to show it.** On a small
+  window the reasoning-effort submenu could clip off-screen; it now sizes
+  itself to the space the window actually has.
+
 ## What's new in 1.4.0
 
 A conversation can be wound back to something you said, and reopening one no
