@@ -37,8 +37,6 @@ import type { ReactElement, SVGProps } from 'react';
 import { SquareTerminalIcon } from 'lucide-react';
 import type { ProviderId } from '@rx-artemis/protocol';
 
-import { LogoMark } from './logo';
-
 export interface ProviderMarkProps extends SVGProps<SVGSVGElement> {
   readonly size?: number;
   /** Accessible name. Omit to render the mark as decoration. */
@@ -103,26 +101,6 @@ export function TerminalMark({ size = 14, title, ...props }: ProviderMarkProps):
 /** Kept as a name so existing imports keep reading naturally. */
 export const OpencodeMark = TerminalMark;
 
-/**
- * Artemis's own mark, for the provider that *is* another Artemis.
- *
- * The one row exempt from the borrowed-identity rule above: the remote end is
- * this app, so the app's mark is the honest answer rather than an appropriated
- * one. Reuses `LogoMark` so the drawing stays the icon's — see `logo.tsx` on
- * why that file and the icon must not drift apart.
- */
-export function ArtemisMark({ size = 14, title, ...props }: ProviderMarkProps): ReactElement {
-  return (
-    <LogoMark
-      size={size}
-      {...(title === undefined
-        ? {}
-        : { role: 'img', 'aria-hidden': false, 'aria-label': title })}
-      {...props}
-    />
-  );
-}
-
 const MARKS: Readonly<Record<ProviderId, (props: ProviderMarkProps) => ReactElement>> = {
   claude: AnthropicMark,
   codex: OpenAiMark,
@@ -134,7 +112,18 @@ const MARKS: Readonly<Record<ProviderId, (props: ProviderMarkProps) => ReactElem
   lmstudio: TerminalMark,
   ollama: TerminalMark,
   llamacpp: TerminalMark,
-  artemis: ArtemisMark,
+  /*
+   * The one provider whose identity is genuinely ours — the remote end *is*
+   * this app — and it still gets the generic glyph, because `LogoMark` cannot
+   * be drawn here. The bow's string is 15/512 of its box, so it thins under a
+   * device pixel below about 20px, and these marks render at 14. `logo.tsx`
+   * states the rule outright: a small version needs a redrawn mark, not this
+   * one scaled down. A bow that arrives as a bare arc beside a legible
+   * Anthropic `A` would read as a rendering fault rather than as us, so until
+   * that small mark exists the honest answer is the same glyph every other
+   * unbranded endpoint gets.
+   */
+  artemis: TerminalMark,
 };
 
 export interface ProviderLogoProps extends ProviderMarkProps {
