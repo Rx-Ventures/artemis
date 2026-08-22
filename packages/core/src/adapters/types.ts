@@ -495,6 +495,31 @@ export interface ModelListQuery {
 }
 
 /**
+ * Everything an enumeration of slash commands depends on.
+ *
+ * Shaped like {@link ModelListQuery} and one field wider, and the extra field is
+ * the point: the commands a session offers are partly the provider's own and
+ * partly whatever the plugins contribute, so a query that omitted
+ * {@link plugins} would confidently report a list missing exactly the commands
+ * the user installed — the ones they are most likely to be reaching for. The
+ * caller passes what a run in the same place would be given.
+ */
+export interface CommandListQuery {
+  /** The profile's resolved environment — this is what selects the account. */
+  readonly env: EnvBundle;
+  /**
+   * Where to run the query. Providers discover commands relative to a working
+   * directory, so this changes the answer; it must exist, so callers pass
+   * somewhere known-good rather than an unset workspace.
+   */
+  readonly cwd: string;
+  /** See {@link ResolvedRunInput.inheritHostEnv}. */
+  readonly inheritHostEnv?: boolean;
+  /** The plugins a run started here would load. See {@link LocalPlugin}. */
+  readonly plugins?: readonly LocalPlugin[];
+}
+
+/**
  * A model catalogue, plus whether the provider actually confirmed it.
  *
  * The flag is not decoration. {@link ProviderAdapter.listModels} is required to
@@ -1043,6 +1068,37 @@ export interface ProviderAdapter {
    * is worse than absent.
    */
   listModels?(query: ModelListQuery): Promise<ModelCatalogue>;
+
+  /**
+   * The slash commands a session started here would offer.
+   *
+   * Exists so the composer's menu can open before the first message. The list
+   * otherwise arrives only on `session.started`, which means it arrives only
+   * after a run — and a slash command is a thing people reach for at the *start*
+   * of a conversation, so the one moment the menu was reliably shut was the one
+   * moment it was most wanted.
+   *
+   * Present **iff** the provider can enumerate its commands, on the same rule as
+   * {@link listModels}: a provider that cannot omits the property rather than
+   * stubbing it. There is no fallback list to stub *with* — unlike models, an
+   * unenumerable provider has nothing static to offer — so an absent method and
+   * an empty array mean the same thing to the caller (no menu), which is exactly
+   * what happened before this existed.
+   *
+   * The same two obligations {@link listModels} carries, for the same reasons:
+   *
+   *  1. **Must not consume model tokens.** This runs when a column settles on an
+   *     account, which is often, and on a directory change. Implementations use
+   *     a control channel, never a turn.
+   *  2. **Must resolve rather than reject.** A missing binary or credential is
+   *     an ordinary state of a desktop machine, and the honest answer is an
+   *     empty list — a menu that does not open, which is where this started.
+   *
+   * Names are returned exactly as the provider spells them, matching
+   * `SessionStartedEvent.slashCommands`, so a consumer cannot tell which of the
+   * two told it and does not have to care.
+   */
+  listCommands?(query: CommandListQuery): Promise<readonly string[]>;
 
   /**
    * Start a run.

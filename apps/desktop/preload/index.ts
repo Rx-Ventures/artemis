@@ -53,6 +53,7 @@ import {
   type ProfilesListRequest,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
+  type ProvidersCommandsRequest,
   type ProvidersModelsRequest,
   type RunsDisposeRequest,
   type RunsInterruptRequest,
@@ -548,13 +549,15 @@ const bridge: ArtemisBridge = Object.freeze({
   }),
 
   /**
-   * Two channels, for the same reason `usagePlan` has two: `list` is answered
-   * out of the registry and is instant, `models` spawns a provider subprocess.
-   * A picker that opened on the slow one would stall on every render.
+   * Three channels, for the same reason `usagePlan` has two: `list` is answered
+   * out of the registry and is instant, while `models` and `commands` each spawn
+   * a provider subprocess. A picker that opened on a slow one would stall on
+   * every render.
    */
   providers: Object.freeze({
     list: (request: ProvidersListRequest) => invoke(IPC.providersList, request),
     models: (request: ProvidersModelsRequest) => invoke(IPC.providersModels, request),
+    commands: (request: ProvidersCommandsRequest) => invoke(IPC.providersCommands, request),
   }),
 
   runs: Object.freeze({

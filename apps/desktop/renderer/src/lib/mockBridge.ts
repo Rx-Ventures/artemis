@@ -182,6 +182,24 @@ const CODEX_CAPS: Capabilities = {
  * A module constant so the reference is stable: the store keeps this array in
  * state and derives selectors from it by identity.
  */
+/**
+ * What a Claude session would say it offers, asked before the session exists.
+ *
+ * Deliberately not the same two names the mock run reports at `session.started`:
+ * one list is what a column knows *before* its first message and the other is
+ * what the run itself said, and a mock where they were identical would hide
+ * every wiring mistake that confuses the two.
+ *
+ * A module constant for the same reason {@link MOCK_LIVE_MODELS} is: the store
+ * holds the array and selectors compare by identity.
+ */
+const MOCK_SLASH_COMMANDS: readonly string[] = [
+  'clear',
+  'compact',
+  'context',
+  'artemis-skills:cerebro',
+];
+
 const MOCK_LIVE_MODELS: readonly ProviderModelOption[] = [
   {
     id: 'fable',
@@ -956,6 +974,20 @@ export function createMockBridge(): ArtemisBridge {
         providerId === 'claude'
           ? ok({ models: MOCK_LIVE_MODELS, live: true })
           : ok({ models: providers.find((p) => p.id === providerId)?.models ?? [], live: false }),
+
+      /**
+       * Answers with {@link MOCK_SLASH_COMMANDS} for Claude, nothing for Codex.
+       *
+       * The split matters more than the contents: this is what the composer's
+       * menu opens from before a run exists, so a mock that answered for every
+       * provider would hide the branch where a provider has no command surface
+       * and the menu is correctly shut. One prefixed name is in the list on
+       * purpose — it is the shape a bridged or marketplace command arrives in,
+       * and the only way the menu's segment-match ranking is visible in a
+       * browser.
+       */
+      commands: async ({ providerId }) =>
+        ok({ commands: providerId === 'claude' ? MOCK_SLASH_COMMANDS : [] }),
     },
 
     runs: {

@@ -1856,6 +1856,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     models: [],
     modelsLoading: false,
     modelsError: null,
+    commands: null,
     run: null,
     permissionQueue: [],
     tasks: [],
@@ -3756,6 +3757,7 @@ export function splitPane(
   });
 
   void refreshModels(pane);
+  void refreshCommands(pane);
   return pane;
 }
 
@@ -5212,6 +5214,11 @@ export async function bootstrap(): Promise<void> {
   // would trade a working window for a slightly better-labelled model picker,
   // and the picker has the descriptor's list to render in the meantime.
   void refreshModels(focusedPane());
+  // Same reasoning, same subprocess cost: the composer's menu is shut until this
+  // lands, which is where it was permanently before the call existed. Worth
+  // paying at boot rather than on the first `/`, because that is the keystroke
+  // where a stall is a stall in front of someone typing.
+  void refreshCommands(focusedPane());
   // Same reasoning, cheaper call: the sidebar header renders the directory's
   // own name until this lands, which is a correct label either way.
   void refreshWorkspace(focusedPane());
@@ -5510,6 +5517,58 @@ export async function refreshModels(pane: Pane = focusedPane()): Promise<void> {
     // stop the indicator for a fetch that is still running.
     if (token === modelsRequestToken.get(pane.id)) setPaneState(pane, { modelsLoading: false });
   }
+}
+
+/** Newest command request per pane. Same job `modelsRequestToken` does. */
+const commandsRequestToken = new Map<string, number>();
+
+/**
+ * Fetch the slash commands a run in this pane would offer.
+ *
+ * The reason this exists at all is that the menu's list used to arrive only with
+ * a run, so a column between conversations had nothing to offer and the menu
+ * stayed shut — at exactly the moment a slash command is most likely to be
+ * typed. This is the standing answer for that gap.
+ *
+ * Called on the settles `refreshModels` is called on, plus a directory change,
+ * which `refreshModels` does not care about and this does: commands are
+ * discovered relative to a working directory.
+ *
+ * Never throws, and never clears a list it already has. A failure keeps the
+ * previous answer for the same reason `refreshModels` does — a transient one
+ * that emptied the list would take the menu away mid-conversation and replace it
+ * with a state that is not true. The main process caches by (provider, profile,
+ * directory), so calling this more often than strictly necessary costs a message
+ * and not a subprocess.
+ */
+export async function refreshCommands(pane: Pane = focusedPane()): Promise<void> {
+  const { bridge } = resolveBridge();
+  const state = paneState(pane);
+
+  // No profile, no credential, and the command list is partly a property of the
+  // account — the plugins it loads are. Nothing to ask as whom.
+  const profileId = state.activeProfileId;
+  if (!bridge || !profileId) return;
+
+  // Per pane, not per window: two columns on two accounts ask two questions, and
+  // a shared counter would have whichever asked second discard the other.
+  const token = (commandsRequestToken.get(pane.id) ?? 0) + 1;
+  commandsRequestToken.set(pane.id, token);
+
+  const result = await call(() =>
+    bridge.providers.commands({
+      providerId: state.activeProviderId,
+      profileId,
+      ...(state.cwd.trim().length > 0 ? { cwd: state.cwd } : {}),
+    }),
+  );
+
+  if (token !== commandsRequestToken.get(pane.id)) return;
+  // No banner and no error field. There is no surface that would show one: the
+  // failure a user experiences is a menu that does not open, which is what
+  // happened for every provider before this call existed.
+  if (!result.ok) return;
+  setPaneState(pane, { commands: result.value.commands });
 }
 
 /**
@@ -5965,6 +6024,9 @@ export function setProvider(providerId: ProviderId, pane: Pane = focusedPane()):
   invalidateSessions();
   void refreshSessions();
   void refreshModels(pane);
+  // The commands are the account's too — its plugins are what contribute most
+  // of the ones the user cares about. See `refreshCommands`.
+  void refreshCommands(pane);
   // The account moved, so "is it signed in" is a different question now.
   refreshAuth(pane);
 }
@@ -6006,6 +6068,9 @@ function applyProfile(pane: Pane, profile: ProfileMetadata): void {
   invalidateSessions();
   void refreshSessions();
   void refreshModels(pane);
+  // The commands are the account's too — its plugins are what contribute most
+  // of the ones the user cares about. See `refreshCommands`.
+  void refreshCommands(pane);
   // The account moved, so "is it signed in" is a different question now.
   refreshAuth(pane);
 }
@@ -6142,6 +6207,13 @@ export function setCwd(cwd: string, pane: Pane = focusedPane()): void {
   invalidateSessions();
   void refreshSessions();
   void refreshWorkspace(pane);
+  // The directory is half of what decides the command list — a provider
+  // discovers commands relative to where it runs — so this is the one settle the
+  // model catalogue does not share. Not cleared first, unlike the workspace name
+  // above: a stale command list is a menu with the wrong rows in it for a
+  // moment, where an empty one is a menu that does not open at all, and the
+  // second is the failure this whole call exists to end.
+  void refreshCommands(pane);
 
   // After `newSession`, which resets the very transcript this is written into.
   if (leaving) {
@@ -8039,6 +8111,10 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   invalidateSessions();
   void refreshSessions();
   void refreshModels(target);
+  // Resuming can move the directory as well as the account, and the command list
+  // depends on both — this is the one settle where it can change for a reason
+  // `refreshModels` does not share.
+  void refreshCommands(target);
   refreshAuth(target);
   // This function writes `cwd` itself rather than going through `setCwd`, and
   // must keep doing so: `setCwd` clears `resumeSessionId` on the way past,
@@ -9044,8 +9120,10 @@ export async function createProfile(draft: ProfileDraft): Promise<ProfileId | nu
   }
   // A new profile is a new account, and the catalogue is a property of the
   // account — the freshly created one may well be the first that can answer at
-  // all, since `refreshModels` no-ops without a profile.
+  // all, since `refreshModels` no-ops without a profile. Same for the commands,
+  // whose most interesting rows come from that account's own plugins.
   void refreshModels(pane);
+  void refreshCommands(pane);
   return created.id;
 }
 

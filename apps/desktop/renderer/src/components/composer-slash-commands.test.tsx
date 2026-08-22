@@ -41,10 +41,15 @@ Element.prototype.scrollIntoView ??= function scrollIntoView(): void {};
 
 const interruptRun = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const submitPrompt = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+// Stubbed rather than let through: the real one reaches for the bridge, and
+// what these tests assert about it is *whether* it was called, not what it
+// answers — the answer's effect is `state.commands`, which they seed directly.
+const refreshCommands = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock('@/state/store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/state/store')>()),
   interruptRun,
   submitPrompt,
+  refreshCommands,
 }));
 
 const CAPABILITIES = {
@@ -72,6 +77,10 @@ function setUp({
   // opposite of what the caller asked for.
   slashCommands = COMMANDS as readonly string[] | null,
   promptHistory = [] as readonly string[],
+  /** `false` seeds a column that has never run — the case the menu used to miss. */
+  hasRun = true,
+  /** What `refreshCommands` had already put on the pane. `null` is "not asked". */
+  commands = null as readonly string[] | null,
 } = {}): void {
   seedApp({
     providers: [
@@ -92,18 +101,21 @@ function setUp({
     permissionQueue: [],
     banners: [],
     promptHistory,
+    commands,
     // A run that has ended still carries the command list it reported at init,
     // which is what makes the menu usable between turns.
-    run: {
-      runId: 'r1',
-      status: 'ended' as const,
-      providerId: 'claude',
-      profileId: 'p1',
-      cwd: '/w',
-      capabilities: CAPABILITIES,
-      startedAt: 0,
-      ...(slashCommands === null ? {} : { slashCommands }),
-    },
+    run: hasRun
+      ? {
+          runId: 'r1',
+          status: 'ended' as const,
+          providerId: 'claude',
+          profileId: 'p1',
+          cwd: '/w',
+          capabilities: CAPABILITIES,
+          startedAt: 0,
+          ...(slashCommands === null ? {} : { slashCommands }),
+        }
+      : null,
   });
 }
 
@@ -123,6 +135,7 @@ const selected = (): string | undefined =>
 beforeEach(() => {
   interruptRun.mockClear();
   submitPrompt.mockClear();
+  refreshCommands.mockClear();
   setUp();
 });
 
@@ -165,6 +178,83 @@ describe('when the menu appears', () => {
     type('/');
 
     expect(menu()).toBeNull();
+  });
+
+  it('opens in a column that has never run, which is where a command is typed', () => {
+    // The failure this half of the feature exists for: the list used to come
+    // only from a run, so the first message of every conversation — the most
+    // likely place to reach for a command — was the one place the menu was shut.
+    setUp({ hasRun: false, commands: COMMANDS });
+    mount(<Composer />);
+
+    type('/');
+
+    expect(menu()).not.toBeNull();
+    expect(options()).toHaveLength(COMMANDS.length);
+  });
+
+  it('prefers the run over the prefetch once there is one', () => {
+    // The run's list is what the session really loaded, and `session.commands`
+    // keeps it current; the prefetch is a claim about a run that never started.
+    setUp({ slashCommands: ['compact'], commands: ['compact', 'stale-and-wrong'] });
+    mount(<Composer />);
+
+    type('/');
+
+    expect(options()).toEqual(['/compact']);
+  });
+
+  it('stays shut in a column whose provider answered with nothing', () => {
+    // `[]` is a settled answer, not a missing one — a Codex column, asked and
+    // told there are none.
+    setUp({ hasRun: false, commands: [] });
+    mount(<Composer />);
+
+    type('/');
+
+    expect(menu()).toBeNull();
+  });
+});
+
+describe('asking for the list when nobody has yet', () => {
+  it('asks on the first slash typed into a column with no answer', () => {
+    setUp({ hasRun: false, commands: null });
+    mount(<Composer />);
+    expect(refreshCommands).not.toHaveBeenCalled();
+
+    type('/');
+
+    // The prefetch normally beats the user here. This is the race — a fresh
+    // split, a slow launch — and without it a column that lost it would keep a
+    // shut menu for the rest of its life.
+    expect(refreshCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not ask for prose that merely contains a slash', () => {
+    setUp({ hasRun: false, commands: null });
+    mount(<Composer />);
+
+    type('fix /this typo');
+
+    expect(refreshCommands).not.toHaveBeenCalled();
+  });
+
+  it('does not ask again once the column has an answer, even an empty one', () => {
+    setUp({ hasRun: false, commands: [] });
+    mount(<Composer />);
+
+    type('/');
+
+    expect(refreshCommands).not.toHaveBeenCalled();
+  });
+
+  it('does not ask when a run has already reported a list', () => {
+    setUp({ commands: null });
+    mount(<Composer />);
+
+    type('/');
+
+    expect(refreshCommands).not.toHaveBeenCalled();
   });
 
   it('closes once the name is complete', () => {

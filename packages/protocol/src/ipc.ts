@@ -102,6 +102,8 @@ export const IPC = {
   providersList: 'artemis:providers:list',
   /** Ask one provider's installed CLI what models it actually offers. */
   providersModels: 'artemis:providers:models',
+  /** Enumerate the slash commands a session would offer, before there is one. */
+  providersCommands: 'artemis:providers:commands',
 
   /** Start a run. */
   runsStart: 'artemis:runs:start',
@@ -770,6 +772,36 @@ export interface ProvidersModelsResponse {
    * hard-coded lineup as though the account had confirmed it.
    */
   readonly live: boolean;
+}
+
+/**
+ * Which slash commands a session started here would offer.
+ *
+ * Same three fields as {@link ProvidersModelsRequest} and for the same reasons.
+ * `cwd` earns its place twice over here: providers discover commands relative to
+ * a working directory, so it changes the answer rather than merely being allowed
+ * to.
+ */
+export interface ProvidersCommandsRequest {
+  readonly providerId: ProviderId;
+  /** Whose credential to ask with. Decides which account the CLI answers as. */
+  readonly profileId: ProfileId;
+  /** An absolute directory to run the query in. See {@link ProvidersModelsRequest.cwd}. */
+  readonly cwd?: string;
+}
+
+export interface ProvidersCommandsResponse {
+  /**
+   * Every command on offer, named exactly as the provider spells them — the
+   * same shape `SessionStartedEvent.slashCommands` carries, so the composer's
+   * menu reads one thing and does not care which told it.
+   *
+   * Empty is an ordinary answer and not a failure: a provider with no command
+   * surface, a machine with no CLI, an account that could not be reached. All
+   * of them mean the menu stays shut until the first message, which is what it
+   * did before this channel existed.
+   */
+  readonly commands: readonly string[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2093,6 +2125,7 @@ export type IpcRequestMap = {
   [IPC.profilesSuggestDir]: ProfilesSuggestDirRequest;
   [IPC.providersList]: ProvidersListRequest;
   [IPC.providersModels]: ProvidersModelsRequest;
+  [IPC.providersCommands]: ProvidersCommandsRequest;
   [IPC.runsStart]: RunsStartRequest;
   [IPC.runsSend]: RunsSendRequest;
   [IPC.runsInterrupt]: RunsInterruptRequest;
@@ -2170,6 +2203,7 @@ export type IpcResponseMap = {
   [IPC.profilesSuggestDir]: ProfilesSuggestDirResponse;
   [IPC.providersList]: ProvidersListResponse;
   [IPC.providersModels]: ProvidersModelsResponse;
+  [IPC.providersCommands]: ProvidersCommandsResponse;
   [IPC.runsStart]: RunsStartResponse;
   [IPC.runsSend]: RunsSendResponse;
   [IPC.runsInterrupt]: RunsInterruptResponse;
@@ -2337,6 +2371,16 @@ export interface ArtemisBridge {
      * find out whether the account confirmed the list.
      */
     models(request: ProvidersModelsRequest): Promise<IpcResult<ProvidersModelsResponse>>;
+    /**
+     * The slash commands a session would offer, asked before there is one.
+     *
+     * Off {@link list} for the same reason {@link models} is: it spawns a
+     * provider subprocess. Resolves with an empty list rather than failing when
+     * the provider cannot be reached — the menu not opening is the state this
+     * call exists to improve on, so falling back to it is not an error worth
+     * reporting to anyone.
+     */
+    commands(request: ProvidersCommandsRequest): Promise<IpcResult<ProvidersCommandsResponse>>;
   };
 
   readonly runs: {
