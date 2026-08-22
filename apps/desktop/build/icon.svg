@@ -1,7 +1,7 @@
 <!--
-  The app icon, and the same three elements as renderer/src/components/logo.tsx
-  with the same coordinates and stroke widths. Edit them together or not at all:
-  two drawings of one idea drift the first time either is touched.
+  The app icon, and the same four paths as renderer/src/components/logo.tsx with
+  the same coordinates and stroke widths. Edit them together or not at all: two
+  drawings of one idea drift the first time either is touched.
 
   Colours are literal because an .icns has no cascade to inherit from. They are
   the design tokens resolved to sRGB, not chosen here. #31eee8 is the accent
@@ -12,6 +12,14 @@
   Note for editors: XML forbids a double hyphen inside a comment, so token names
   are written without their leading dashes above. A version of this file that
   spelled them out parsed as a broken image and rasterised to a blank square.
+
+  THE ART IS A BOW, AND ITS STRING DOES NOT SURVIVE THE 16px TILE.
+
+  The string is 15/512 of the art box, which lands near a third of a pixel once
+  the tile is 16 square, so the smallest dock and Finder sizes show the limb, the
+  shaft and the head and no string. That is a known cost of this mark and is
+  written up in logo.tsx. The fix, if it is ever wanted, is to thicken the string
+  toward the shaft's 30 rather than to scale the drawing up inside the tile.
 
   THE TILE IS INSET AND ROUNDED, AND THE MARGIN MUST BE TRANSPARENT.
 
@@ -39,14 +47,29 @@
       iconutil, converting to an iconset, then read the PNG header
       # PNG colour type 6 is RGBA; 2 is RGB and means the alpha was lost.
 
+  The mark is centred on its own bounding box rather than on the 512 grid, which
+  the bow is not centred in: the group is translated by the centre of the art box
+  logo.tsx crops to, (252.5 259.5), which lands the drawn ink dead centre on the
+  canvas. The bow that shipped before the moon sat 6px low and left of centre,
+  because it was scaled with no such correction.
+
+  The scale is chosen by measuring rather than by arithmetic on the viewBox: that
+  box is padded so the round caps are not flush with its edge, so the ink inside
+  it is 299 units and not 319. At 1.652 the ink renders 494 square, which is what
+  the moon before it occupied inside the same 824 body, and within a couple of
+  percent of the proportion the original bow had inside its own tile.
+
   icon.png and icon.icns are generated from this file by ./icon-build.sh, which
   renders every iconset size at its true size rather than upscaling one.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
 <rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0c0d0f"/>
-<g transform="translate(512 512) scale(1.245) translate(-256 -256)" stroke="#31eee8" fill="none">
-  <rect x="72" y="72" width="368" height="368" stroke-width="28"/>
-  <path d="M256 140a116 116 0 0 0 0 232Z" fill="#31eee8" stroke="none"/>
-  <circle cx="256" cy="256" r="116" stroke-width="24"/>
+<g transform="translate(512 512) scale(1.652) translate(-252.5 -259.5)">
+  <g transform="translate(36 -36) rotate(-45 256 256)" stroke="#31eee8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M176 96C220 104 272 176 272 256C272 336 220 408 176 416" stroke-width="38"/>
+    <path d="M176 96L72 256L176 416" stroke-width="15"/>
+    <path d="M72 256H326" stroke-width="30"/>
+    <path d="M412 256L318 210L318 302Z" fill="#31eee8" stroke="none"/>
+  </g>
 </g>
 </svg>
