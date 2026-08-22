@@ -43,7 +43,12 @@ import type {
   SessionId,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
-import { NO_CAPABILITIES } from '@rx-artemis/protocol';
+import {
+  defaultBaseUrlFor,
+  LOCAL_API_KEY_ENV,
+  LOCAL_BASE_URL_ENV,
+  NO_CAPABILITIES,
+} from '@rx-artemis/protocol';
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -95,7 +100,7 @@ export interface LocalFlavour {
 export const LM_STUDIO: LocalFlavour = {
   id: 'lmstudio',
   label: 'LM Studio',
-  defaultBaseUrl: 'http://127.0.0.1:1234',
+  defaultBaseUrl: defaultBaseUrlFor('lmstudio'),
   // Verified live: the native endpoint reports type and state, and the OpenAI
   // one under-reports. See `lmstudio/catalogue.ts`.
   cataloguePath: '/api/v0/models',
@@ -106,7 +111,7 @@ export const LM_STUDIO: LocalFlavour = {
 export const OLLAMA: LocalFlavour = {
   id: 'ollama',
   label: 'Ollama',
-  defaultBaseUrl: 'http://127.0.0.1:11434',
+  defaultBaseUrl: defaultBaseUrlFor('ollama'),
   cataloguePath: '/api/tags',
   parseCatalogue: parseOllamaTags,
   fallback: { path: '/v1/models', parse: parseOpenAiCatalogue },
@@ -115,7 +120,7 @@ export const OLLAMA: LocalFlavour = {
 export const LLAMA_CPP: LocalFlavour = {
   id: 'llamacpp',
   label: 'llama.cpp',
-  defaultBaseUrl: 'http://127.0.0.1:8080',
+  defaultBaseUrl: defaultBaseUrlFor('llamacpp'),
   cataloguePath: '/v1/models',
   parseCatalogue: parseLlamaServerModels,
 };
@@ -130,7 +135,17 @@ export const LLAMA_CPP: LocalFlavour = {
  * that is a protocol change and this is not, so it waits until the shape has
  * been used enough to know what it should look like.
  */
-export const BASE_URL_ENV = 'ARTEMIS_LOCAL_BASE_URL';
+export const BASE_URL_ENV = LOCAL_BASE_URL_ENV;
+
+/**
+ * The key for this profile's endpoint, when the server wants one.
+ *
+ * Set by `resolveEnv` from the encrypted store and by nothing else — see
+ * `profiles/secrets.ts` for why Artemis holds this one secret when it holds
+ * none of the others. Absent is the ordinary case: a `llama-server` started
+ * without `--api-key` refuses nothing.
+ */
+export const API_KEY_ENV = LOCAL_API_KEY_ENV;
 
 /**
  * Phase 1 capabilities.
@@ -181,7 +196,15 @@ function localCredentials(): ProviderCredentialSpec {
     // Nothing is spawned, so nothing reads this — but the field is required and
     // an inert, clearly-named variable is more honest than borrowing a vendor's.
     configDirVar: 'ARTEMIS_LOCAL_PROFILE_DIR',
-    credentialEnvKeys: [],
+    /*
+     * Not a credential in the sense the other providers mean — nothing here
+     * signs in to an account — but exactly a credential in the sense this list
+     * governs: both names are set by Artemis from the profile, so both must be
+     * removed from whatever the user happens to have exported. An ambient
+     * `ARTEMIS_LOCAL_BASE_URL` would otherwise send a profile's key to a
+     * different machine than the profile names.
+     */
+    credentialEnvKeys: [LOCAL_BASE_URL_ENV, LOCAL_API_KEY_ENV],
     signIn: {
       executable: 'true',
       loginArgs: [],
@@ -201,6 +224,25 @@ function baseUrl(flavour: LocalFlavour, env: Readonly<Record<string, string | un
   const declared = env[BASE_URL_ENV];
   const chosen = declared !== undefined && declared.trim() !== '' ? declared.trim() : flavour.defaultBaseUrl;
   return chosen.replace(/\/+$/, '');
+}
+
+/**
+ * Headers for a request to that endpoint.
+ *
+ * `Bearer`, because that is what every one of these servers reads:
+ * `llama-server --api-key` compares against `Authorization: Bearer`, and the
+ * OpenAI-compatible surface the others expose is specified the same way. Sent
+ * on the catalogue call as well as the chat call — a server started with a key
+ * refuses `/v1/models` too, and a model picker that came back empty was one of
+ * the ways this failed silently.
+ *
+ * No header at all when there is no key. An empty `Authorization` is not the
+ * same as its absence: some proxies answer 401 to the former and pass the
+ * latter straight through.
+ */
+function authHeaders(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const key = env[API_KEY_ENV];
+  return key !== undefined && key.trim() !== '' ? { authorization: `Bearer ${key.trim()}` } : {};
 }
 
 /** Token counts in the shape the seam expects. */
@@ -383,7 +425,7 @@ class LocalRun implements Run {
     const url = `${baseUrl(this.#flavour, this.#input.env)}/v1/chat/completions`;
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(this.#input.env) },
       signal: this.#abort.signal,
       body: JSON.stringify({
         ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
@@ -614,21 +656,42 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
       };
     },
 
-    async checkAvailability() {
+    /*
+     * Probes the address the *profile* names, not the flavour's default.
+     *
+     * Reading the default here was the defect that made a configured profile
+     * unusable: a server on any other port reported that nothing was answering
+     * at 127.0.0.1:8080 while `listModels` — which did honour the profile —
+     * happily listed its models. Two answers to one question, and the wrong
+     * one was the one on screen.
+     *
+     * The query is optional because the probe runs before any profile is
+     * chosen, in `providers:list`. With nothing to go on the default is still
+     * the right guess; what matters is that a profile's address is used when
+     * there is one.
+     */
+    async checkAvailability(query) {
+      const root = baseUrl(flavour, query?.env ?? {});
       try {
-        const response = await fetch(`${flavour.defaultBaseUrl}/v1/models`, {
+        const response = await fetch(`${root}/v1/models`, {
+          headers: authHeaders(query?.env ?? {}),
           signal: AbortSignal.timeout(2000),
         });
-        return response.ok
-          ? { available: true as const }
-          : {
-              available: false as const,
-              reason: `The ${flavour.label} server answered ${response.status}.`,
-            };
+        if (response.ok) return { available: true as const };
+        // 401 and 403 are the server working correctly and refusing *us*,
+        // which is a different problem from a server that is not there — and
+        // the one a user with `--api-key` set hits. Saying "start the server"
+        // to someone whose server is running is how they end up restarting it
+        // instead of filling in the key field.
+        const reason =
+          response.status === 401 || response.status === 403
+            ? `${flavour.label} at ${root} refused the request (${response.status}). Check this profile's API key.`
+            : `The ${flavour.label} server at ${root} answered ${response.status}.`;
+        return { available: false as const, reason };
       } catch {
         return {
           available: false as const,
-          reason: `Nothing is answering at ${flavour.defaultBaseUrl}. Start ${flavour.label} and try again.`,
+          reason: `Nothing is answering at ${root}. Start ${flavour.label} and try again.`,
         };
       }
     },
@@ -651,6 +714,7 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
       for (const attempt of attempts) {
         try {
           const response = await fetch(`${root}${attempt.path}`, {
+            headers: authHeaders(query.env ?? {}),
             signal: AbortSignal.timeout(5000),
           });
           if (!response.ok) continue;

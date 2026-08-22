@@ -61,6 +61,8 @@ import {
   isProfileEnabled,
   normalizeProfileColor,
   normalizeProfilePlanId,
+  baseUrlProblem,
+  defaultBaseUrlFor,
   plansForProvider,
   profileColorProblem,
 } from '@rx-artemis/protocol';
@@ -991,6 +993,22 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   const [color, setColor] = useState(profile?.color ?? '');
   const [planId, setPlanId] = useState(profile?.planId ?? '');
   /*
+   * Seeded from the profile, which is the whole point of the field being on
+   * `ProfileMetadata` at all: the address used to live in `publicEnv`, which
+   * the renderer may not read, so it could be typed once and never seen again
+   * — not to confirm it, not to correct a typo in it.
+   */
+  const [baseUrl, setBaseUrl] = useState(profile?.baseUrl ?? '');
+  /*
+   * Two pieces of state for one secret, because "a key is stored" and "the
+   * user typed a new one" are different facts and the editor needs both. The
+   * stored key itself is never here — the renderer is told a boolean and no
+   * more — so an untouched field must mean "leave it alone" rather than
+   * "clear it", which is exactly what `undefined` means to the patch.
+   */
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  /*
     Held as the *positive* of what is stored, which is what lets both switches
     read "on means available". Absent is the ordinary state for each — see
     `Profile.autoSelect` — so the seeds are the two comparisons that make an
@@ -1101,6 +1119,15 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       return;
     }
 
+    // Checked here as well as at the IPC boundary and in the store: this is
+    // the one of the three that can put the message under the field while the
+    // user is still looking at what they typed.
+    const addressTrouble = baseUrl.trim() === '' ? null : baseUrlProblem(baseUrl);
+    if (addressTrouble !== null) {
+      setError(addressTrouble);
+      return;
+    }
+
     const env = parseEnv();
     if (typeof env === 'string') {
       setError(env);
@@ -1125,6 +1152,16 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
         // The store collapses the default back to absent on the way to disk.
         autoSelect,
         disabled: !enabled,
+        // Always sent, empty string included — the same reason as the colour
+        // and the plan above: that is how a patch says "back to the provider's
+        // default", and this field, unlike `publicEnv` below, is one the
+        // editor can actually see and therefore may safely overwrite.
+        baseUrl: baseUrl.trim(),
+        // Sent only when the user typed in the field. An untouched key box
+        // means "leave the stored key alone", which is the only thing it can
+        // honestly mean: the renderer is never told what that key is, so it
+        // has nothing to send back.
+        ...(apiKeyTouched ? { apiKey } : {}),
         ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
       });
       setBusy(false);
@@ -1138,6 +1175,8 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
       configDir: configDir.trim(),
       ...(normalizeProfileColor(color) === null ? {} : { color }),
       ...(normalizeProfilePlanId(planId, providerId) === null ? {} : { planId }),
+      ...(baseUrl.trim() === '' ? {} : { baseUrl: baseUrl.trim() }),
+      ...(apiKey === '' ? {} : { apiKey }),
       ...(Object.keys(env).length > 0 ? { publicEnv: env } : {}),
     });
     setBusy(false);
@@ -1335,6 +1374,91 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                 onAutoSelectChange={setAutoSelect}
                 onEnabledChange={setEnabled}
               />
+            ) : null}
+
+            {/*
+              The two fields a server-backed profile is actually made of.
+
+              Shown on the create path as well as the edit one, unlike the
+              environment box below: for a local provider this *is* the
+              profile — a hosted account is identified by a directory it has
+              signed into, and one of these is identified by an address. A
+              user whose server is not on the default port cannot make a
+              working profile without it, which is the definition of a field
+              that belongs on the first screen.
+            */}
+            {activeKind === 'local' ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="profile-base-url" className="chrome-label text-ink-faint">
+                    Server address
+                  </FieldLabel>
+                  <Input
+                    id="profile-base-url"
+                    value={baseUrl}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder={defaultBaseUrlFor(providerId)}
+                    onChange={(event) => setBaseUrl(event.target.value)}
+                    className="font-mono text-xs md:text-xs"
+                  />
+                  <FieldDescription className="text-2xs">
+                    Where {providerLabel} is listening. Include http:// or https://. Leave it
+                    empty for {defaultBaseUrlFor(providerId)}. Another machine, a tunnel or a
+                    reverse proxy all work — this is the address, not the machine.
+                  </FieldDescription>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="profile-api-key" className="chrome-label text-ink-faint">
+                    API key (optional)
+                  </FieldLabel>
+                  <Input
+                    id="profile-api-key"
+                    type="password"
+                    value={apiKey}
+                    spellCheck={false}
+                    autoComplete="off"
+                    /*
+                      The placeholder carries the only thing the renderer knows
+                      about a stored key: that there is one. It cannot show the
+                      value — nothing sends it back — so an empty box with no
+                      hint would read as "no key set" to someone who set one.
+                    */
+                    placeholder={
+                      profile?.hasApiKey === true && !apiKeyTouched
+                        ? 'A key is stored — type to replace it'
+                        : 'Only if your server needs one'
+                    }
+                    onChange={(event) => {
+                      setApiKey(event.target.value);
+                      setApiKeyTouched(true);
+                    }}
+                    className="font-mono text-xs md:text-xs"
+                  />
+                  <FieldDescription className="text-2xs">
+                    For a server started with <span className="font-mono">--api-key</span>, or
+                    behind something that authenticates. Stored encrypted by the operating
+                    system, never shown again, and sent only to the address above.
+                    {profile?.hasApiKey === true ? (
+                      <>
+                        {' '}
+                        <button
+                          type="button"
+                          className="underline underline-offset-2 hover:text-ink"
+                          onClick={() => {
+                            setApiKey('');
+                            setApiKeyTouched(true);
+                          }}
+                        >
+                          Remove the stored key
+                        </button>
+                        {apiKeyTouched && apiKey === '' ? ' — it goes when you save.' : '.'}
+                      </>
+                    ) : null}
+                  </FieldDescription>
+                </Field>
+              </>
             ) : null}
 
             {/*

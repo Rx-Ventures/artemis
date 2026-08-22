@@ -102,6 +102,31 @@ export interface Profile {
   readonly publicEnv: Readonly<Record<string, string>>;
 
   /**
+   * Where this profile's server is, for providers that are an endpoint rather
+   * than an account — LM Studio, Ollama, llama.cpp's `llama-server`.
+   *
+   * A first-class field rather than a `publicEnv` entry, which is what it was.
+   * The adapter's own note called that the honest short-term answer and said a
+   * profile whose identity *is* an endpoint deserves its own field once the
+   * shape had been used enough to know what it should look like. It has: an
+   * env bundle the renderer is not allowed to read (see {@link ProfileMetadata})
+   * made the setting write-only, so the address could be typed and never seen,
+   * corrected or confirmed — and the availability probe read the flavour's
+   * default instead, so a profile on any other port reported that nothing was
+   * answering while its model list loaded fine.
+   *
+   * Absolute `http:` or `https:` origin, no trailing slash, validated by
+   * {@link baseUrlProblem}. Absent means the flavour's default — which is what
+   * an unconfigured local profile has always meant.
+   *
+   * Not a credential-routing hazard in the sense {@link isCredentialRoutingEnvKey}
+   * guards against: these providers hold no account, Artemis sends them no
+   * vendor token, and the only thing that travels here is whatever key the user
+   * set for this endpoint themselves.
+   */
+  readonly baseUrl?: string;
+
+  /**
    * A colour the user picked for this profile, as `#rrggbb`, or absent.
    *
    * Purely a display hint, and deliberately so: it is the only field on a
@@ -235,6 +260,18 @@ export interface ProfileMetadata {
    * {@link Profile.disabled}.
    */
   readonly disabled?: boolean;
+  /** The server this profile talks to, or absent for the default. See {@link Profile.baseUrl}. */
+  readonly baseUrl?: string;
+  /**
+   * Whether a key is stored for this endpoint — never the key.
+   *
+   * A boolean is the whole of what the renderer may know, and the field is
+   * named for the question rather than the value on purpose: `apiKey` is one
+   * of the key names the outbound leak scanner refuses outright, and it should
+   * keep refusing it. The editor needs to render "a key is set, replace or
+   * clear it" and nothing more, which this answers.
+   */
+  readonly hasApiKey?: boolean;
 }
 
 /** Fields the renderer supplies when creating a profile. */
@@ -256,6 +293,18 @@ export interface ProfileDraft {
    */
   readonly configDir: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
+  /** The server to talk to. Omit for the provider's default. See {@link Profile.baseUrl}. */
+  readonly baseUrl?: string;
+  /**
+   * A key for that endpoint, when it wants one — `llama-server --api-key`, a
+   * reverse proxy, a tunnel that authenticates.
+   *
+   * Inbound only, and the asymmetry is deliberate: this travels renderer →
+   * main once, when the user types it, and never comes back. What comes back
+   * is {@link ProfileMetadata.hasApiKey}. Stored encrypted and apart from
+   * `profiles.json`, which stays a file with nothing secret in it.
+   */
+  readonly apiKey?: string;
   /** Pinned plan id. Omit to let the provider's reported family stand. */
   readonly planId?: string;
   /**
@@ -289,6 +338,21 @@ export interface ProfilePatch {
   readonly configDir?: string;
   readonly publicEnv?: Readonly<Record<string, string>>;
   /**
+   * Repoint the profile at a different server, or **the empty string** to go
+   * back to the provider's default — the same convention `color` and `planId`
+   * use, and for the same reason: a patch needs a way to say "back to absent"
+   * that is not a second field.
+   */
+  readonly baseUrl?: string;
+  /**
+   * Set, replace, or remove the endpoint's key. The **empty string clears it**.
+   *
+   * Omitted leaves the stored key alone, which is what lets the editor save
+   * every other field without the user retyping a secret it is not allowed to
+   * show them.
+   */
+  readonly apiKey?: string;
+  /**
    * Set, change, or remove the swatch colour.
    *
    * Omitted leaves it alone, as with every other field here. The **empty
@@ -314,6 +378,103 @@ export interface ProfilePatch {
   readonly autoSelect?: boolean;
   /** Hide this account from the picker, or show it again. */
   readonly disabled?: boolean;
+}
+
+/**
+ * The variable a local profile's address is emitted as.
+ *
+ * Named here rather than in the adapter because two layers have to agree on
+ * it: `resolveEnv` writes it and `local/adapter.ts` reads it, and a constant
+ * owned by one of them would make the other import an implementation to learn
+ * a name. Both are also in the local provider's managed-key list, which is
+ * what stops an ambient value in the user's shell from redirecting a run.
+ */
+export const LOCAL_BASE_URL_ENV = 'ARTEMIS_LOCAL_BASE_URL';
+
+/**
+ * The variable a local endpoint's key is emitted as.
+ *
+ * Set only from the encrypted store, never from `publicEnv` — the name
+ * matches {@link isSecretEnvKey}, so a profile file that tried to carry it
+ * would have it stripped on the way through, which is the intended outcome
+ * rather than an obstacle.
+ */
+export const LOCAL_API_KEY_ENV = 'ARTEMIS_LOCAL_API_KEY';
+
+/**
+ * Why this string is unusable as a server address, or `null` if it is fine.
+ *
+ * A message rather than a boolean, for the reason {@link configDirProblem}
+ * gives: the editor renders it under the field and the IPC boundary returns it
+ * as an error, and neither should invent wording for a rule defined here.
+ *
+ * The rules are few, and each one is something that cannot work rather than a
+ * preference about how someone runs their server:
+ *
+ *  - **Parseable, with a scheme.** A bare `127.0.0.1:8080` is the likeliest
+ *    thing to be typed and is refused by name rather than silently prefixed:
+ *    guessing `http:` for something the user meant to be `https:` would send
+ *    their key in clear.
+ *  - **`http:` or `https:` only.** Nothing else reaches `fetch`.
+ *  - **A host.** `http:///v1` parses and names no machine.
+ *  - **No credentials in the URL.** `http://user:pass@host` would put a secret
+ *    into a field that is displayed, logged, and stored in plain JSON — the
+ *    one place this design is careful to keep secrets out of.
+ *
+ * Not checked: whether anything is listening. That is the availability probe's
+ * job, and refusing to save the address of a server that happens to be off
+ * would be the same mistake as refusing a config directory that does not exist
+ * yet.
+ */
+export function baseUrlProblem(value: unknown): string | null {
+  if (typeof value !== 'string') return 'An address is required.';
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return 'An address is required.';
+
+  /*
+   * Parsed by hand rather than with `URL`, which this package cannot name: the
+   * protocol's types are consumed by main, renderer and the SDK, so its
+   * `tsconfig` includes neither the DOM nor Node's globals and an emitted
+   * `.d.ts` that mentioned either would break a consumer that has the other.
+   */
+  const parts = /^(https?):\/\/(.*)$/i.exec(trimmed);
+  if (parts === null) {
+    // A wrong scheme is named rather than folded into "no scheme": `ws://` and
+    // a bare `127.0.0.1:8080` are different mistakes with different fixes.
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed)?.[1];
+    return scheme === undefined
+      ? 'Give the full address, including http:// or https://.'
+      : `“${scheme}” is not an address this can reach. Use http:// or https://.`;
+  }
+
+  const authority = (parts[2] ?? '').split(/[/?#]/)[0] ?? '';
+  if (authority === '') return 'The address names no host.';
+  if (authority.includes('@')) {
+    return 'Put the key in the API key field rather than in the address.';
+  }
+
+  // `[::1]:8080` keeps its brackets: the colons inside them are the address,
+  // not a port separator, which is the whole reason the brackets are there.
+  const bracketed = /^\[([^\]]*)\](?::(.*))?$/.exec(authority);
+  const host = bracketed === null ? (authority.split(':')[0] ?? '') : (bracketed[1] ?? '');
+  const port = bracketed === null ? authority.split(':')[1] : bracketed[2];
+  if (host === '') return 'The address names no host.';
+  if (port !== undefined && !/^\d+$/.test(port)) {
+    return `“${port}” is not a port number.`;
+  }
+  return null;
+}
+
+/**
+ * The address as it is stored: trimmed, with any trailing slash removed.
+ *
+ * One spelling on disk, so `http://host:8080` and `http://host:8080/` are the
+ * same profile rather than two that differ by a character nobody can see. The
+ * adapter appends `/v1/...`, and a doubled slash is the sort of thing a strict
+ * proxy answers 404 to.
+ */
+export function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
 }
 
 /**

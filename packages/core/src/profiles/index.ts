@@ -13,9 +13,15 @@
  * // host-env scrub. PATH, HOME and the rest pass through.
  * ```
  *
- * There is no secret store here. The profile names a config directory, the
- * provider's own CLI login puts a credential inside it, and Artemis's part is to
- * set one variable and read a boolean back — see `checkAuthStatus`.
+ * There is no secret store here for an *account*. The profile names a config
+ * directory, the provider's own CLI login puts a credential inside it, and
+ * Artemis's part is to set one variable and read a boolean back — see
+ * `checkAuthStatus`.
+ *
+ * The one exception is a local server's API key, which belongs to an endpoint
+ * rather than to an account and has none of the billing ambiguity that got the
+ * old credential store deleted. `secrets.ts` holds the rules; the encryption
+ * itself is injected, because it is Electron's.
  *
  * The only shape from this module that may cross into the renderer is
  * `ProfileMetadata`, produced by {@link toMetadata} / `ProfileStore.describe`.
@@ -23,4 +29,5 @@
 
 export * from './errors.js';
 export * from './env.js';
+export * from './secrets.js';
 export * from './store.js';

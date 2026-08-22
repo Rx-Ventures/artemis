@@ -97,6 +97,7 @@ import { AgentPromptStore } from './agentPrompts.js';
 import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
+import { createProfileSecrets } from './profileSecrets.js';
 import {
   buildContentBridge,
   discoverMarketplacePlugins,
@@ -517,7 +518,15 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     ...new Set(providers.list().flatMap((adapter) => managedEnvKeys(adapter.credentials))),
   ];
 
-  const profiles = new ProfileStore({ userDataDir, managedEnvKeys: managed });
+  /*
+   * The one secret Artemis stores again — a local server's API key. See
+   * `core/profiles/secrets.ts` for why this one is different from the
+   * credential store that was deleted, and `profileSecrets.ts` for the
+   * encryption. Injected here for the reason everything Electron-shaped is:
+   * core must never import `electron`.
+   */
+  const secrets = createProfileSecrets(userDataDir);
+  const profiles = new ProfileStore({ userDataDir, managedEnvKeys: managed, secrets });
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
@@ -602,10 +611,17 @@ function createEngine(options: EngineOptions): ArtemisEngine {
    * `process.env` here would duplicate that work against a second, separately
    * maintained list of managed keys.
    */
-  const envFor = async (profileId: ProfileId, providerId: ProviderId): Promise<EnvBundle> =>
-    resolveEnv(await profiles.require(profileId), {
+  const envFor = async (profileId: ProfileId, providerId: ProviderId): Promise<EnvBundle> => {
+    const profile = await profiles.require(profileId);
+    // Read here rather than inside `resolveEnv`, which is core's and cannot
+    // decrypt. This is the single path a credential takes to a provider, and
+    // the endpoint key travels it like everything else.
+    const apiKey = await profiles.readApiKey(profileId);
+    return resolveEnv(profile, {
       credentials: credentialsFor(providerId),
+      ...(apiKey === null ? {} : { apiKey }),
     });
+  };
 
   /**
    * Profile → just enough environment to *find* its history.
@@ -806,7 +822,34 @@ function createEngine(options: EngineOptions): ArtemisEngine {
   });
 
   return {
-    listProviders: (query) => providers.describe({ refresh: query.refresh }),
+    listProviders: (query) =>
+      providers.describe({
+        refresh: query.refresh,
+        /*
+         * Probes a local provider at the address one of its profiles names.
+         * Any profile of that provider will do — the question is whether the
+         * *provider* is usable, and a user with two llama.cpp profiles has two
+         * addresses either of which answering means yes. The first enabled one
+         * is the one a fresh session would pick anyway.
+         *
+         * Costs nothing for the other providers: they ignore the argument, and
+         * a provider with no profiles resolves to `undefined` without touching
+         * the filesystem.
+         */
+        envFor: async (id) => {
+          const candidates = await profiles.list(id);
+          const chosen = candidates.find((p) => p.disabled !== true) ?? candidates[0];
+          if (chosen === undefined) return undefined;
+          try {
+            return await envFor(chosen.id, id);
+          } catch {
+            // A profile with an unusable config directory is the profile
+            // screen's problem to report, not a reason to fail the whole
+            // provider list.
+            return undefined;
+          }
+        },
+      }),
 
     /**
      * Ask a provider what models this account really has.

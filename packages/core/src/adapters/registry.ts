@@ -39,7 +39,12 @@ import { createOpencodeAdapter } from './opencode.js';
 import { createLocalAdapter, LLAMA_CPP, LM_STUDIO, OLLAMA } from './local/adapter.js';
 import type { OpencodeAdapterOptions } from './opencode.js';
 import { adapterError } from './types.js';
-import type { AdapterAvailability, ProviderAdapter, ProviderRegistry } from './types.js';
+import type {
+  AdapterAvailability,
+  EnvBundle,
+  ProviderAdapter,
+  ProviderRegistry,
+} from './types.js';
 
 /** Display names for every known provider, including ones not yet implemented. */
 export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
@@ -147,7 +152,11 @@ export function createProviderRegistry(
           continue;
         }
 
-        const availability = await resolveAvailability(adapter, availabilityCache);
+        const availability = await resolveAvailability(
+          adapter,
+          availabilityCache,
+          await options?.envFor?.(id),
+        );
         descriptors.push({
           id,
           kind: PROVIDER_KINDS[id],
@@ -188,6 +197,7 @@ export function createProviderRegistry(
 async function resolveAvailability(
   adapter: ProviderAdapter,
   cache: Map<ProviderId, AdapterAvailability>,
+  env: EnvBundle | undefined,
 ): Promise<AdapterAvailability> {
   const cached = cache.get(adapter.id);
   if (cached !== undefined) return cached;
@@ -198,7 +208,7 @@ async function resolveAvailability(
     availability = { available: true };
   } else {
     try {
-      availability = await adapter.checkAvailability();
+      availability = await adapter.checkAvailability(env === undefined ? undefined : { env });
     } catch (error) {
       // A probe that throws is itself evidence the provider is not usable, and
       // it must never take down the whole `providers:list` call.
