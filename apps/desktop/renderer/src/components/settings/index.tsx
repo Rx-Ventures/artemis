@@ -21,5 +21,6 @@ export { PermissionsSection } from './PermissionsSection';
 export { AgentsSection } from './AgentsSection';
 export { CerebroSection } from './CerebroSection';
 export { ServerSection } from './ServerSection';
+export { RoutinesSection } from './RoutinesSection';
 export { AdvancedSection } from './AdvancedSection';
 export { ProfilesSection } from '../ProfilesScreen';

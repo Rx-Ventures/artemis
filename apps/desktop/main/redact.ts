@@ -176,8 +176,20 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
     'credentials',
   ]),
   // Session titles and first prompts are user text; a user may have pasted a
-  // key into a prompt and we still have to list their history.
-  contentKeys: new Set(['title', 'firstprompt', 'message', 'description', 'reason', 'unavailablereason']),
+  // key into a prompt and we still have to list their history. `name` and
+  // `instructions` are a routine's own prose — the instructions are a whole
+  // prompt, and refusing to list routines because one mentions a token shape
+  // would hide exactly the row the user needs to edit.
+  contentKeys: new Set([
+    'title',
+    'firstprompt',
+    'message',
+    'description',
+    'reason',
+    'unavailablereason',
+    'name',
+    'instructions',
+  ]),
   // `metadata` is echoed straight back from the renderer's own `RunInput`.
   opaqueKeys: new Set(['metadata']),
   maxDepth: 12,

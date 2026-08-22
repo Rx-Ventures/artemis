@@ -50,6 +50,7 @@ import {
   BotIcon,
   BoxesIcon,
   BrainIcon,
+  CalendarClockIcon,
   GlobeIcon,
   KeyRoundIcon,
   PaletteIcon,
@@ -67,6 +68,7 @@ import { CerebroSection } from './CerebroSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
 import { ServerSection } from './ServerSection';
+import { RoutinesSection } from './RoutinesSection';
 import { closeSettings, setSettingsSection, useApp, type SettingsSection } from '../../state/store';
 import { Button } from '@/components/ui/button';
 import {
@@ -153,6 +155,15 @@ const SECTIONS: readonly SectionEntry[] = [
     label: 'Server',
     hint: 'Lend models to other apps',
     icon: <ServerIcon aria-hidden="true" />,
+  },
+  // Beside the server on purpose: both panes are the app acting without a
+  // person at the keyboard — one lends the accounts out, this one spends them
+  // on a schedule. A user weighing one has the vocabulary for the other.
+  {
+    id: 'routines',
+    label: 'Routines',
+    hint: 'Runs on a schedule',
+    icon: <CalendarClockIcon aria-hidden="true" />,
   },
   // Last, and last on purpose: nothing above it depends on anything in it, and
   // what it holds are arrangements Artemis hands to the user to perform rather
@@ -283,6 +294,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <CerebroSection />;
     case 'server':
       return <ServerSection />;
+    case 'routines':
+      return <RoutinesSection />;
     case 'advanced':
       return <AdvancedSection />;
     case 'profiles':

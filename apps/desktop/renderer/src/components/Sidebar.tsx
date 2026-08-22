@@ -129,6 +129,7 @@ import {
 import type { Pane } from '../state/pane';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
+import { ScheduledStrip } from './ScheduledStrip';
 import { BugReportCard } from './BugReportCard';
 import { UpdateCard } from './UpdateCard';
 import { useUpdateState } from '../hooks/useUpdateState';
@@ -209,6 +210,12 @@ export function Sidebar(): ReactElement {
               </span>
             </Button>
           </div>
+
+          {/*
+            Appointments above the record of what they produced. The strip
+            renders nothing at all until a routine exists — see its header.
+          */}
+          <ScheduledStrip />
 
           <SessionList />
 
