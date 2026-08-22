@@ -1,6 +1,42 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.9.0
+
+One Artemis can drive another, the app keeps its own appointments, and the
+sidebar works from any account.
+
+- **Point Artemis at another Artemis.** A new "Artemis Server" provider row:
+  give a profile the serving machine's address and one of its connection
+  tokens, and its accounts' models appear in your picker. Turns run *over
+  there* — in the directory the connection token pins, with permission
+  prompts declined because nobody is present to answer them — and the reply
+  streams back here. Conversations continue across turns: the server keeps
+  the session, which is the one thing a raw model endpoint cannot offer.
+
+- **Routines — runs on a schedule.** Settings → Routines holds prompts with
+  appointments: hourly, daily, weekdays, weekly, or a cron line, at
+  one-minute resolution in your local time. Each firing is an ordinary
+  conversation with a full transcript, billed to the profile you chose, and
+  the sidebar's new Scheduled strip shows what is due next. Firings finish
+  with a desktop notification; a due minute that finds the previous firing
+  still running skips with a note instead of stacking a copy; and a machine
+  that slept through an appointment fires the newest missed one — once,
+  within seven days — when it wakes. Pause, run-now, and the last firings'
+  outcomes live on each routine's card.
+
+- **The sidebar works from any account.** Selecting a local-model profile
+  used to disable every other conversation in the list — each row was asking
+  the *active* provider for permission to resume, and a llama.cpp endpoint
+  honestly answers that it cannot. Rows now answer to the provider they
+  belong to, so a Claude conversation is clickable from anywhere, and a row
+  that genuinely cannot be resumed names the provider that cannot do it.
+
+- **Local server profiles say what is actually wrong.** The availability
+  probe's sentence — "Nothing is answering at that address", "check this
+  profile's API key" — now reaches the profile screen, where a bare
+  "Unavailable." used to stand in for all of them.
+
 ## What's new in 1.8.0
 
 The slash-command menu works at the start of a conversation, where you
