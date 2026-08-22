@@ -34,6 +34,7 @@ import type { PermissionDecision } from './permissions.js';
 import type { PermissionRequestId, ProfileId, RunId, SessionId } from './ids.js';
 import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
+import type { RoutineDraft, RoutineId, RoutinePatch, RoutinesState } from './routine.js';
 import type { RunHandle, RunInput } from './run.js';
 import type { UpdateProgress } from './update.js';
 import type {
@@ -478,6 +479,23 @@ export const IPC = {
    * to start it is owed a look at what starting it would publish.
    */
   serverCatalogue: 'artemis:server:catalogue',
+
+  /** The routines and their firing history, for the first paint. */
+  routinesList: 'artemis:routines:list',
+  /** Create a routine. */
+  routinesCreate: 'artemis:routines:create',
+  /** Edit a routine — schedule, prompt, pause, any of it. */
+  routinesUpdate: 'artemis:routines:update',
+  /** Delete a routine and its history. */
+  routinesDelete: 'artemis:routines:delete',
+  /**
+   * Fire one routine immediately, schedule and pause notwithstanding.
+   *
+   * Still overlap-guarded in main: a second click while a firing is running
+   * records a skip rather than stacking a copy — the same rule the scheduler
+   * applies to a due minute.
+   */
+  routinesRunNow: 'artemis:routines:run-now',
 } as const;
 
 /**
@@ -598,6 +616,16 @@ export const IPC_PUSH = {
    * request would put an IPC message on every poll an editor extension makes.
    */
   serverState: 'artemis:push:server-state',
+  /**
+   * Carries a {@link RoutinesState} whenever a routine or its history changes.
+   *
+   * Pushed for the reason {@link serverState} is, doubled: the interesting
+   * changes happen when nobody asked. A schedule fires while the user is in
+   * another app entirely, and the pane they open afterwards has to already
+   * know how it went — polling would mean the history is stale precisely when
+   * it is the thing being checked.
+   */
+  routinesState: 'artemis:push:routines-state',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -2113,6 +2141,43 @@ export interface ServerStateResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Routines                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** @see RoutinesStateResponse */
+export interface RoutinesListRequest {}
+
+/** Create a routine. Main mints the id and the timestamps. */
+export interface RoutinesCreateRequest {
+  readonly draft: RoutineDraft;
+}
+
+/** Edit a routine. Absent fields are left alone. */
+export interface RoutinesUpdateRequest {
+  readonly id: RoutineId;
+  readonly patch: RoutinePatch;
+}
+
+/** Delete a routine, history and all. */
+export interface RoutinesDeleteRequest {
+  readonly id: RoutineId;
+}
+
+/** Fire one routine now. @see IPC.routinesRunNow */
+export interface RoutinesRunNowRequest {
+  readonly id: RoutineId;
+}
+
+/**
+ * The whole routines surface, for every routines channel — the same
+ * one-response rule {@link ServerStateResponse} follows, for the same reason:
+ * a firing changes the history, the running flag and `lastFiredAt` at once.
+ */
+export interface RoutinesStateResponse {
+  readonly state: RoutinesState;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Channel → payload maps                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -2192,6 +2257,11 @@ export type IpcRequestMap = {
   [IPC.serverRenameConnection]: ServerRenameConnectionRequest;
   [IPC.serverDeleteConnection]: ServerDeleteConnectionRequest;
   [IPC.serverCatalogue]: ServerCatalogueRequest;
+  [IPC.routinesList]: RoutinesListRequest;
+  [IPC.routinesCreate]: RoutinesCreateRequest;
+  [IPC.routinesUpdate]: RoutinesUpdateRequest;
+  [IPC.routinesDelete]: RoutinesDeleteRequest;
+  [IPC.routinesRunNow]: RoutinesRunNowRequest;
 };
 
 /** Success payload for each channel — the `value` inside {@link IpcOk}. */
@@ -2270,6 +2340,11 @@ export type IpcResponseMap = {
   [IPC.serverRenameConnection]: ServerStateResponse;
   [IPC.serverDeleteConnection]: ServerStateResponse;
   [IPC.serverCatalogue]: ServerCatalogueResponse;
+  [IPC.routinesList]: RoutinesStateResponse;
+  [IPC.routinesCreate]: RoutinesStateResponse;
+  [IPC.routinesUpdate]: RoutinesStateResponse;
+  [IPC.routinesDelete]: RoutinesStateResponse;
+  [IPC.routinesRunNow]: RoutinesStateResponse;
 };
 
 /** Request type for a channel. */
@@ -2305,6 +2380,7 @@ export type IpcPushMap = {
   [IPC_PUSH.browserEvent]: BrowserEvent;
   [IPC_PUSH.menuOpenSettings]: MenuOpenSettings;
   [IPC_PUSH.serverState]: ServerState;
+  [IPC_PUSH.routinesState]: RoutinesState;
 };
 
 /** Payload type for a push channel. */
@@ -2868,6 +2944,18 @@ export interface ArtemisBridge {
     catalogue(request: ServerCatalogueRequest): Promise<IpcResult<ServerCatalogueResponse>>;
     /** Subscribe to phase and configuration changes. */
     onChange(listener: (state: ServerState) => void): Unsubscribe;
+  };
+
+  readonly routines: {
+    /** The routines and their history, for the first paint. */
+    list(request: RoutinesListRequest): Promise<IpcResult<RoutinesStateResponse>>;
+    create(request: RoutinesCreateRequest): Promise<IpcResult<RoutinesStateResponse>>;
+    update(request: RoutinesUpdateRequest): Promise<IpcResult<RoutinesStateResponse>>;
+    remove(request: RoutinesDeleteRequest): Promise<IpcResult<RoutinesStateResponse>>;
+    /** Fire one now — pause and schedule notwithstanding, overlap still guarded. */
+    runNow(request: RoutinesRunNowRequest): Promise<IpcResult<RoutinesStateResponse>>;
+    /** Subscribe to routine and history changes, including firings. */
+    onChange(listener: (state: RoutinesState) => void): Unsubscribe;
   };
 }
 
