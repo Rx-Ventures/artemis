@@ -22,6 +22,12 @@ import { defineConfig } from 'vitest/config';
  * per file with a `@vitest-environment jsdom` docblock.
  */
 export default defineConfig({
+  test: {
+    // A hermetic, per-worker localStorage — see the setup file for the two
+    // failure modes the shared `--localstorage-file` store had. With it, a
+    // bare `npx vitest` behaves like CI and the NODE_OPTIONS flag is obsolete.
+    setupFiles: ['./vitest.setup.ts'],
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./renderer/src', import.meta.url)),

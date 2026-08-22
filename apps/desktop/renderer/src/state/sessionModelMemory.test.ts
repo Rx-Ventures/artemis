@@ -31,8 +31,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Capabilities, ProviderDescriptor, SessionSummary } from '@rx-artemis/protocol';
 
 import {
-  newSession,
   focusedPane,
+  newSession,
+  resetRunStreamState,
   resumeSession,
   setFastMode,
   setModel,
@@ -120,6 +121,9 @@ function endedRun(sessionId: string) {
 }
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   globalThis.localStorage?.clear();
   seedApp({
     providers: [CLAUDE],

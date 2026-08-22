@@ -31,6 +31,7 @@ import {
   focusedPane,
   handleAgentEvent,
   installPlanUsageFeed,
+  resetRunStreamState,
   setAutoHandoff,
   setHandoffThreshold,
   submitPrompt,
@@ -116,6 +117,9 @@ const handoff = (): string => paneState(focusedPane()).handoff;
 let stopFeed: () => void = () => undefined;
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   vi.setSystemTime(NOW);
   stopFeed();
   stopFeed = installPlanUsageFeed();
