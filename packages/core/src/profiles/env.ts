@@ -37,6 +37,8 @@ import {
   configDirProblem,
   isCredentialRoutingEnvKey,
   isSecretEnvKey,
+  LOCAL_API_KEY_ENV,
+  LOCAL_BASE_URL_ENV,
 } from '@rx-artemis/protocol';
 import type { Profile, ProfileMetadata } from '@rx-artemis/protocol';
 
@@ -191,12 +193,21 @@ export function suggestConfigDir(
  * or withhold, which is why this is a plain field selection rather than the
  * careful redaction it used to be.
  */
-export function toMetadata(profile: Profile): ProfileMetadata {
+export function toMetadata(profile: Profile, hasApiKey = false): ProfileMetadata {
   return {
     id: profile.id,
     label: profile.label,
     providerId: profile.providerId,
     configDir: profile.configDir,
+    /*
+     * Carried, and the key is not — which is the whole shape of this feature.
+     * The address is something the user typed and must be able to read back:
+     * it lived in `publicEnv` before, which the renderer may not see, so the
+     * setting could be written and never confirmed. A boolean is all the
+     * editor needs about the key, and all it is allowed.
+     */
+    baseUrl: profile.baseUrl,
+    hasApiKey: hasApiKey ? true : undefined,
     color: profile.color,
     planId: profile.planId,
     // Both carried: the renderer owns every surface these decide — the picker
@@ -209,6 +220,16 @@ export function toMetadata(profile: Profile): ProfileMetadata {
 
 /** Options for {@link resolveEnv}. */
 export interface ResolveEnvOptions {
+  /**
+   * The key for this profile's endpoint, when it has one — read from the
+   * secret store by the caller, because core cannot decrypt it itself.
+   *
+   * Travels the same path as every other environment value on purpose: this
+   * module is documented as the one place a profile becomes an environment,
+   * and a second channel for the one secret Artemis holds would be exactly the
+   * kind of side door the old credential design was deleted for.
+   */
+  readonly apiKey?: string;
   /**
    * The provider's environment vocabulary — normally
    * `providers.require(input.providerId).credentials`.
@@ -368,6 +389,22 @@ export async function resolveEnv(
     env,
     await buildXdgFarm(credentials.xdgRoots ?? [], configDir, options.baseEnv ?? {}),
   );
+
+  /*
+   * The endpoint and its key, for the providers that are an endpoint rather
+   * than an account. Written last, after both scrub loops, for the reason the
+   * config directory is: both names are in the provider's managed list, so an
+   * ambient `ARTEMIS_LOCAL_BASE_URL` in the user's shell — or one that
+   * survived in `publicEnv` from an older build — is removed first and the
+   * profile's own value is what remains. A profile with no address set emits
+   * neither variable and the adapter falls back to the flavour's default.
+   */
+  if (profile.baseUrl !== undefined && profile.baseUrl !== '') {
+    env[LOCAL_BASE_URL_ENV] = profile.baseUrl;
+  }
+  if (options.apiKey !== undefined && options.apiKey !== '') {
+    env[LOCAL_API_KEY_ENV] = options.apiKey;
+  }
 
   return env;
 }

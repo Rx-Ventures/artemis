@@ -469,6 +469,18 @@ export interface PlanUsageQuery {
  * launching shell. Passing the run's setting through means the query reaches
  * the same account the next run will, instead of a differently-configured one.
  */
+/**
+ * What a provider may be told when its availability is probed.
+ *
+ * A subset of {@link ModelListQuery}, and deliberately every field optional:
+ * the probe runs in places where no profile has been picked yet, and a shape
+ * that demanded an environment would push every caller into inventing one.
+ */
+export interface AvailabilityQuery {
+  /** The profile's resolved environment, when a profile is in hand. */
+  readonly env?: EnvBundle;
+}
+
 export interface ModelListQuery {
   /** The profile's resolved environment — this is what selects the account. */
   readonly env: EnvBundle;
@@ -1308,8 +1320,14 @@ export interface ProviderAdapter {
    * `{ available: false, unavailableReason }`. Omit the method entirely if the
    * provider is always available once registered; the registry then treats it
    * as available.
+   *
+   * The query is optional and often absent: `providers:list` asks before any
+   * profile is chosen, and most providers answer the same way regardless —
+   * a binary is on `PATH` or it is not. It matters for the providers that
+   * *are* an endpoint, where "is this usable" is a question about the address
+   * a profile names rather than about the machine.
    */
-  checkAvailability?(): Promise<AdapterAvailability>;
+  checkAvailability?(query?: AvailabilityQuery): Promise<AdapterAvailability>;
 
   /**
    * How much of a plan's capacity this profile has consumed.
@@ -1365,6 +1383,20 @@ export interface ProviderRegistry {
     readonly refresh?: boolean;
     /** Include known-but-unregistered providers. Defaults to true. */
     readonly includeUnregistered?: boolean;
+    /**
+     * An environment to probe a provider with, when one is worth having.
+     *
+     * Exists for the providers that *are* an endpoint: "is llama.cpp usable"
+     * is a question about the address a profile names, and probing the
+     * flavour's default instead reports that nothing is answering on 8080 to
+     * a user whose server is on 9090 and working.
+     *
+     * A callback rather than a map because resolving an environment touches
+     * the filesystem and the secret store, and every provider but these three
+     * answers the same without one. The registry stays profile-agnostic: it
+     * knows how to ask, not which profile to ask about.
+     */
+    readonly envFor?: (id: ProviderId) => Promise<EnvBundle | undefined>;
   }): Promise<readonly ProviderDescriptor[]>;
 }
 

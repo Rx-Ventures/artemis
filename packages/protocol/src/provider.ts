@@ -510,6 +510,43 @@ export interface ProviderEffortOption {
  */
 export type ProviderKind = 'hosted' | 'local';
 
+/**
+ * Where each local server listens when nobody has said otherwise.
+ *
+ * Here rather than in the adapter that connects, because three places need the
+ * same numbers and only one of them can import core: the adapter falls back to
+ * it, the profile editor shows it as the placeholder under an empty address
+ * field, and the editor's help text names it. A default the user is *told* is
+ * a default they can confirm their server matches.
+ *
+ * Each is the port that server ships with — LM Studio's 1234, Ollama's 11434,
+ * `llama-server`'s 8080 — and loopback rather than `localhost`, which can
+ * resolve to an IPv6 address the server did not bind.
+ */
+export const DEFAULT_LOCAL_BASE_URLS: Readonly<Record<string, string>> = {
+  lmstudio: 'http://127.0.0.1:1234',
+  ollama: 'http://127.0.0.1:11434',
+  llamacpp: 'http://127.0.0.1:8080',
+};
+
+/** The address a local provider uses when a profile names none. */
+export function defaultBaseUrlFor(providerId: ProviderId): string {
+  return DEFAULT_LOCAL_BASE_URLS[providerId] ?? '';
+}
+
+/**
+ * Whether this provider is a server the user runs rather than an account they
+ * sign in to.
+ *
+ * Derived from the table above rather than declared twice: a local provider is
+ * exactly one that has a default address to fall back to. Used to decide which
+ * profiles get an address and a key at all — offering either for a hosted
+ * account would be storing a secret nothing will ever send.
+ */
+export function isLocalProviderId(providerId: ProviderId): boolean {
+  return providerId in DEFAULT_LOCAL_BASE_URLS;
+}
+
 export interface ProviderDescriptor {
   readonly id: ProviderId;
   /**

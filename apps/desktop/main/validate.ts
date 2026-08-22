@@ -37,13 +37,16 @@ import {
   isBuiltInPromptId,
   IMAGE_MEDIA_TYPES,
   isCredentialRoutingEnvKey,
+  baseUrlProblem,
   isImageAttachment,
+  isLocalProviderId,
   isImageMediaType,
   isPermissionMode,
   isProviderEffort,
   isProviderId,
   isSecretEnvKey,
   isValidServerPort,
+  normalizeBaseUrl,
   normalizeWorkspace,
   MAX_SERVER_PORT,
   MIN_SERVER_PORT,
@@ -737,11 +740,66 @@ function validateProfileDraft(value: unknown, field: string): ProfileDraft {
     providerId,
     configDir: requireConfigDir(draft['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(draft['publicEnv'], `${field}.publicEnv`),
+    /*
+      Both only for a provider that is an address. A hosted account is reached
+      through its own CLI's login, so a key sent with one would be a secret
+      stored and encrypted for something that will never send it — and the
+      whole reason Artemis stopped holding vendor credentials is that holding
+      one it does not need is how the wrong account gets billed.
+
+      Dropped rather than refused, unlike a malformed address: the renderer
+      does not offer these fields for a hosted provider, so anything arriving
+      here is a caller's confusion rather than a user's typo.
+    */
+    baseUrl: isLocalProviderId(providerId)
+      ? optionalBaseUrl(draft['baseUrl'], `${field}.baseUrl`)
+      : undefined,
+    apiKey: isLocalProviderId(providerId)
+      ? optionalApiKey(draft['apiKey'], `${field}.apiKey`)
+      : undefined,
     color: optionalColor(draft['color'], `${field}.color`),
     planId: optionalPlanId(draft['planId'], providerId, `${field}.planId`),
     autoSelect: optionalBoolean(draft['autoSelect'], `${field}.autoSelect`),
     disabled: optionalBoolean(draft['disabled'], `${field}.disabled`),
   });
+}
+
+/**
+ * Validate a local server's address.
+ *
+ * Rejected rather than dropped, for the reason the colour below is — this
+ * boundary's job is to say what the renderer got wrong — and with more riding
+ * on it: a dropped address would save a profile pointed at the flavour's
+ * default while the editor showed the one the user typed.
+ *
+ * The empty string survives, as it does for the colour: it is how a patch says
+ * "back to the default".
+ */
+function optionalBaseUrl(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === '') return '';
+  const address = requireString(value, field, LIMITS.path);
+  const problem = baseUrlProblem(address);
+  if (problem !== null) throw new ValidationError(field, problem);
+  return normalizeBaseUrl(address);
+}
+
+/**
+ * Validate an endpoint's key.
+ *
+ * The one plaintext secret this surface carries, and it carries it in one
+ * direction only: renderer → main, once, when the user types it. Nothing sends
+ * it back — the renderer is told `hasApiKey` and no more — and `redact.ts`
+ * refuses the key name outright on anything outbound.
+ *
+ * Not trimmed. A key is whatever the server was started with, and quietly
+ * removing whitespace from a secret is how a value that looks right fails to
+ * authenticate. The empty string survives as the way to clear it.
+ */
+function optionalApiKey(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === '') return '';
+  return requireString(value, field, LIMITS.path);
 }
 
 /**
@@ -817,6 +875,8 @@ function validateProfilePatch(value: unknown, field: string): ProfilePatch {
     label: optionalString(patch['label'], `${field}.label`, LIMITS.label),
     configDir: optionalConfigDir(patch['configDir'], `${field}.configDir`),
     publicEnv: optionalPublicEnv(patch['publicEnv'], `${field}.publicEnv`),
+    baseUrl: optionalBaseUrl(patch['baseUrl'], `${field}.baseUrl`),
+    apiKey: optionalApiKey(patch['apiKey'], `${field}.apiKey`),
     color: optionalColor(patch['color'], `${field}.color`),
     /*
       No provider to check against here, unlike the draft: a patch names only

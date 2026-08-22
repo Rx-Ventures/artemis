@@ -505,10 +505,62 @@ describe('validateProfilesCreate', () => {
         label: 'W',
         providerId: 'claude',
         configDir: '/Users/me/.claude',
+        somethingElse: 'nope',
+      },
+    });
+    expect('somethingElse' in result.draft).toBe(false);
+  });
+
+  it('drops a key sent for a provider that signs in to an account', () => {
+    /*
+     * `apiKey` is a real field now — a local server's key, for the providers
+     * that are an address rather than an account. It stays impossible for the
+     * hosted ones, and this is the same guard the old assertion made when the
+     * field did not exist at all: Artemis holds no vendor credential, and one
+     * accepted here would be encrypted, stored, and never sent by anything.
+     */
+    const result = validateProfilesCreate({
+      draft: {
+        label: 'W',
+        providerId: 'claude',
+        configDir: '/Users/me/.claude',
         apiKey: 'sk-ant-nope',
+        baseUrl: 'http://attacker.example',
       },
     });
     expect('apiKey' in result.draft).toBe(false);
+    expect('baseUrl' in result.draft).toBe(false);
+  });
+
+  it('keeps both for a provider that is an address', () => {
+    const result = validateProfilesCreate({
+      draft: {
+        label: 'Local',
+        providerId: 'llamacpp',
+        configDir: '/Users/me/.artemis-local',
+        baseUrl: 'http://192.168.1.40:9090/',
+        apiKey: 'hunter2',
+      },
+    });
+    // Stored in one spelling, so a trailing slash cannot make two profiles
+    // that differ by a character nobody can see.
+    expect(result.draft.baseUrl).toBe('http://192.168.1.40:9090');
+    expect(result.draft.apiKey).toBe('hunter2');
+  });
+
+  it('refuses an address that cannot work rather than saving a profile that cannot connect', () => {
+    for (const baseUrl of ['127.0.0.1:8080', 'ws://x', 'http://user:pw@host']) {
+      expect(() =>
+        validateProfilesCreate({
+          draft: {
+            label: 'Local',
+            providerId: 'llamacpp',
+            configDir: '/Users/me/.artemis-local',
+            baseUrl,
+          },
+        }),
+      ).toThrow(ValidationError);
+    }
   });
 });
 

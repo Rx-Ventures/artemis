@@ -32,9 +32,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import {
+  baseUrlProblem,
   isCredentialRoutingEnvKey,
+  isLocalProviderId,
   isProviderId,
   isSecretEnvKey,
+  normalizeBaseUrl,
   normalizeProfileColor,
   normalizeProfilePlanId,
 } from '@rx-artemis/protocol';
@@ -48,6 +51,7 @@ import type {
 } from '@rx-artemis/protocol';
 
 import { ProfileError } from './errors.js';
+import type { ProfileSecrets } from './secrets.js';
 import {
   assertConfigDir,
   isArtemisOwnedConfigDir,
@@ -108,6 +112,17 @@ export interface ProfileStoreOptions {
   readonly now?: () => number;
   /** Id generator, injectable for deterministic tests. */
   readonly newId?: () => ProfileId;
+  /**
+   * Where per-endpoint keys are kept. Injected for the reason everything
+   * Electron-shaped is: encryption is `safeStorage` and core cannot import it.
+   *
+   * Absent means a build that stores no keys at all. That is a real state —
+   * a test, a headless run — and it must degrade honestly rather than
+   * pretending: a draft carrying a key is refused rather than saved without
+   * one, because a profile that reports a key it does not have sends every
+   * request unauthenticated and blames the server.
+   */
+  readonly secrets?: ProfileSecrets;
 }
 
 /** Options for {@link ProfileStore.delete}. */
@@ -142,6 +157,7 @@ export class ProfileStore {
   readonly #managedEnvKeys: readonly string[];
   readonly #now: () => number;
   readonly #newId: () => ProfileId;
+  readonly #secrets: ProfileSecrets | undefined;
 
   /** Parsed document, or null when it has not been read yet. */
   #cache: readonly Profile[] | null = null;
@@ -160,6 +176,7 @@ export class ProfileStore {
     this.#managedEnvKeys = options.managedEnvKeys ?? [];
     this.#now = options.now ?? (() => Date.now());
     this.#newId = options.newId ?? (() => randomUUID());
+    this.#secrets = options.secrets;
   }
 
   /** Artemis's user-data directory, as given. */
@@ -226,12 +243,59 @@ export class ProfileStore {
   /** Renderer-safe projection of one profile. */
   async describe(profile: Profile | ProfileId): Promise<ProfileMetadata> {
     const resolved = typeof profile === 'string' ? await this.require(profile) : profile;
-    return toMetadata(resolved);
+    return toMetadata(resolved, await this.#hasKey(resolved.id));
   }
 
   /** Renderer-safe projections of every profile. What `profiles:list` returns. */
   async listMetadata(providerId?: ProviderId): Promise<readonly ProfileMetadata[]> {
-    return (await this.list(providerId)).map(toMetadata);
+    const profiles = await this.list(providerId);
+    // Asked per profile rather than once for all of them: `has` does not
+    // decrypt, so this is a map lookup or a stat, and a bulk API would exist
+    // only to save what it does not cost.
+    return Promise.all(profiles.map(async (p) => toMetadata(p, await this.#hasKey(p.id))));
+  }
+
+  /** Whether a key is stored, tolerating a store that cannot answer. */
+  async #hasKey(id: ProfileId): Promise<boolean> {
+    if (this.#secrets === undefined) return false;
+    try {
+      return await this.#secrets.has(id);
+    } catch {
+      // A store that cannot be read reports no key, which is the honest answer
+      // for the editor: "set one". The run path fails loudly instead — there,
+      // silence would mean an unauthenticated request.
+      return false;
+    }
+  }
+
+  /** The key for a profile's endpoint, or null. **Main process only.** */
+  async readApiKey(id: ProfileId): Promise<string | null> {
+    return (await this.#secrets?.read(id)) ?? null;
+  }
+
+  /**
+   * Apply a draft's or patch's `apiKey` to the secret store.
+   *
+   * Three inputs, three meanings, and they are not interchangeable:
+   * `undefined` leaves the stored key alone — which is what lets the editor
+   * save a profile without making the user retype a secret it is not allowed
+   * to show them — the empty string clears it, and anything else replaces it.
+   *
+   * Failures throw. A key the user believes is saved and is not turns every
+   * later request into a 401 the server gets blamed for.
+   */
+  async #storeKey(id: ProfileId, apiKey: string | undefined): Promise<void> {
+    if (apiKey === undefined) return;
+    const secrets = this.#secrets;
+    if (secrets === undefined) {
+      if (apiKey === '') return;
+      throw new ProfileError(
+        'unknown',
+        'This build cannot store an API key: no secure storage is available.',
+      );
+    }
+    if (apiKey === '') await secrets.clear(id);
+    else await secrets.write(id, apiKey);
   }
 
   /* ---------------------------------------------------------------------- */
@@ -278,6 +342,11 @@ export class ProfileStore {
         // known plan decides nothing except how a menu sorts, so it is dropped
         // rather than made a reason to refuse creating the account.
         planId: normalizeProfilePlanId(draft.planId, draft.providerId) ?? undefined,
+        // Refused rather than dropped, unlike the colour and the plan: an
+        // address that does not parse is the difference between reaching the
+        // server and not, so saving the profile without it would hand back a
+        // profile that cannot work and no reason why.
+        baseUrl: isLocalProviderId(draft.providerId) ? assertBaseUrl(draft.baseUrl) : undefined,
         // Only the opt-out is written. Both fields default to the ordinary
         // state when absent, so storing the default would fill every record
         // with a line that says nothing — and would make a profile written by
@@ -289,6 +358,9 @@ export class ProfileStore {
       };
 
       await this.#write([...existing, profile]);
+      // After the record, deliberately: a key written first and then a failed
+      // `#write` would leave a secret filed under an id no profile has.
+      await this.#storeKey(profile.id, keyFor(profile.providerId, draft.apiKey));
       return profile;
     });
   }
@@ -319,6 +391,13 @@ export class ProfileStore {
         // Omitted leaves the colour alone; anything that does not normalise —
         // the empty string being the one a caller sends on purpose — removes
         // it. See `ProfilePatch.color`.
+        // Omitted leaves the address alone; the empty string goes back to the
+        // provider's default. Same convention as the colour below, and the
+        // same reason: a patch needs one way to say "back to absent".
+        baseUrl:
+          patch.baseUrl === undefined || !isLocalProviderId(current.providerId)
+            ? current.baseUrl
+            : assertBaseUrl(patch.baseUrl),
         color:
           patch.color === undefined
             ? current.color
@@ -350,6 +429,7 @@ export class ProfileStore {
 
       profiles[index] = next;
       await this.#write(profiles);
+      await this.#storeKey(next.id, keyFor(next.providerId, patch.apiKey));
       return next;
     });
   }
@@ -389,6 +469,11 @@ export class ProfileStore {
 
       profiles.splice(index, 1);
       await this.#write(profiles);
+      // The key goes with the profile. Left behind it would be a secret filed
+      // under an id nothing can reach, and a later profile minted with the
+      // same id — a restored backup, a hand-edited file — would silently
+      // inherit it.
+      await this.#secrets?.clear(id).catch(() => undefined);
 
       let configDirDeleted = false;
       if (configDir !== undefined) {
@@ -621,6 +706,15 @@ function parseProfile(
     // hand-editable, the value ends up in a `style` attribute, and a record
     // written by an older build predates the field entirely. A colour that
     // does not parse simply is not one.
+    /*
+     * Re-validated on the way out like the colour, and migrated on the way
+     * past: before this field existed the address lived in `publicEnv` as
+     * `ARTEMIS_LOCAL_BASE_URL`, which is where every profile written by an
+     * older build still keeps it. Adopting it here means those profiles keep
+     * working — and keep working *better*, since the value is now visible in
+     * the editor and honoured by the availability probe.
+     */
+    baseUrl: readBaseUrl(raw),
     color: normalizeProfileColor(raw['color']) ?? undefined,
     // Re-checked on the way out for the same reasons as the colour, plus one
     // of its own: the plan table changes as providers rename tiers, so a pin
@@ -668,6 +762,51 @@ function isNotFound(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === 'ENOENT'
   );
+}
+
+/**
+ * The key to apply, or `undefined` to leave the store alone.
+ *
+ * A hosted profile never stores one. The renderer does not offer the field and
+ * the IPC boundary already drops it, so reaching here with a key means a
+ * caller inside the process got it wrong — and the answer is the same either
+ * way: a secret nothing will ever send is a secret not worth keeping.
+ */
+function keyFor(providerId: ProviderId, apiKey: string | undefined): string | undefined {
+  return isLocalProviderId(providerId) ? apiKey : undefined;
+}
+
+/**
+ * The address to store, or `undefined` for the provider's default.
+ *
+ * Refuses rather than drops, which is the opposite of how the colour and the
+ * plan are treated and deliberately so: those decide how a menu looks, and
+ * this decides whether the profile can reach its server at all. `BASE_URL_ENV`
+ * is the variable the value is eventually emitted as; see `local/adapter.ts`.
+ */
+function assertBaseUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.trim() === '') return undefined;
+  const problem = baseUrlProblem(value);
+  if (problem !== null) throw new ProfileError('invalid_request', problem);
+  return normalizeBaseUrl(value);
+}
+
+/** Where a stored profile's address lives now, and where it used to. */
+function readBaseUrl(raw: Record<string, unknown>): string | undefined {
+  const declared = raw['baseUrl'];
+  if (typeof declared === 'string' && baseUrlProblem(declared) === null) {
+    return normalizeBaseUrl(declared);
+  }
+  const env = raw['publicEnv'];
+  const legacy =
+    typeof env === 'object' && env !== null
+      ? (env as Record<string, unknown>)['ARTEMIS_LOCAL_BASE_URL']
+      : undefined;
+  if (typeof legacy === 'string' && baseUrlProblem(legacy) === null) {
+    return normalizeBaseUrl(legacy);
+  }
+  return undefined;
 }
 
 function describe(error: unknown): string {
