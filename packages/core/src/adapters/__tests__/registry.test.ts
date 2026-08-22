@@ -104,6 +104,7 @@ describe('describe()', () => {
       'lmstudio',
       'ollama',
       'llamacpp',
+      'artemis',
     ]);
     expect(descriptors[1]).toMatchObject({
       id: 'codex',
@@ -138,6 +139,9 @@ describe('describe()', () => {
       lmstudio: 'local',
       ollama: 'local',
       llamacpp: 'local',
+      // The remote end may be another machine entirely; `local` here names the
+      // entry model — an address and a token, no account.
+      artemis: 'local',
     });
   });
 

@@ -23,7 +23,14 @@ import type { PermissionMode } from './permissions.js';
  * Only `claude` is implemented today; the other two are declared here so the
  * seam is designed against three transports rather than retrofitted to them.
  */
-export type ProviderId = 'claude' | 'codex' | 'opencode' | 'lmstudio' | 'ollama' | 'llamacpp';
+export type ProviderId =
+  | 'claude'
+  | 'codex'
+  | 'opencode'
+  | 'lmstudio'
+  | 'ollama'
+  | 'llamacpp'
+  | 'artemis';
 
 /** Every {@link ProviderId}, in display order. */
 export const PROVIDER_IDS = [
@@ -33,6 +40,7 @@ export const PROVIDER_IDS = [
   'lmstudio',
   'ollama',
   'llamacpp',
+  'artemis',
 ] as const satisfies readonly ProviderId[];
 
 /** Runtime type guard for {@link ProviderId}. */
@@ -522,11 +530,19 @@ export type ProviderKind = 'hosted' | 'local';
  * Each is the port that server ships with — LM Studio's 1234, Ollama's 11434,
  * `llama-server`'s 8080 — and loopback rather than `localhost`, which can
  * resolve to an IPv6 address the server did not bind.
+ *
+ * `artemis` is another Artemis's own server, so its entry is
+ * `DEFAULT_SERVER_PORT` from `server.ts` — written out literally because this
+ * module must not import that one (`server.ts` already imports this file). A
+ * profile usually names a non-default address anyway: the remote Artemis binds
+ * loopback only, so reaching one on another machine means a forwarded address,
+ * not this fallback.
  */
 export const DEFAULT_LOCAL_BASE_URLS: Readonly<Record<string, string>> = {
   lmstudio: 'http://127.0.0.1:1234',
   ollama: 'http://127.0.0.1:11434',
   llamacpp: 'http://127.0.0.1:8080',
+  artemis: 'http://127.0.0.1:6472',
 };
 
 /** The address a local provider uses when a profile names none. */
