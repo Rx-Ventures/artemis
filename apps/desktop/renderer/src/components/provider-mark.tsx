@@ -112,6 +112,18 @@ const MARKS: Readonly<Record<ProviderId, (props: ProviderMarkProps) => ReactElem
   lmstudio: TerminalMark,
   ollama: TerminalMark,
   llamacpp: TerminalMark,
+  /*
+   * The one provider whose identity is genuinely ours — the remote end *is*
+   * this app — and it still gets the generic glyph, because `LogoMark` cannot
+   * be drawn here. The bow's string is 15/512 of its box, so it thins under a
+   * device pixel below about 20px, and these marks render at 14. `logo.tsx`
+   * states the rule outright: a small version needs a redrawn mark, not this
+   * one scaled down. A bow that arrives as a bare arc beside a legible
+   * Anthropic `A` would read as a rendering fault rather than as us, so until
+   * that small mark exists the honest answer is the same glyph every other
+   * unbranded endpoint gets.
+   */
+  artemis: TerminalMark,
 };
 
 export interface ProviderLogoProps extends ProviderMarkProps {

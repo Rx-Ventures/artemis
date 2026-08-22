@@ -1053,6 +1053,24 @@ async function* streamTurn(input: {
         continue;
       }
 
+      // The session id, the moment the run reports one — an empty delta with
+      // only the Artemis namespace filled in. OpenAI clients append nothing and
+      // move on; an Artemis client resumes from it, and a stream that dies
+      // mid-turn has still told its caller where the conversation lives. The
+      // final chunk repeats it, which is what pre-existing clients read.
+      if (event.kind === 'session') {
+        yield sseEvent(
+          chatChunk({
+            id,
+            model: model.route,
+            created,
+            delta: {},
+            artemis: { sessionId: event.sessionId },
+          }),
+        );
+        continue;
+      }
+
       if (event.kind === 'done') {
         const { result } = event;
         yield sseEvent(

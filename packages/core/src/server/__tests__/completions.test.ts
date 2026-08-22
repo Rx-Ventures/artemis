@@ -193,6 +193,45 @@ describe('a turn', () => {
     expect(done.result.sessionId).toBe('sess-9');
   });
 
+  it('announces a fresh session the moment it exists, not only on done', async () => {
+    // A client whose stream dies mid-turn would otherwise learn the id never —
+    // and the Artemis-driving-Artemis adapter builds its `session.started`
+    // from this announcement.
+    const source = fakeRuns([
+      { type: 'session.started', sessionId: 'sess-9' },
+      { type: 'text.delta', text: 'Hi' },
+      { type: 'run.end', reason: 'completed', sessionId: 'sess-9' },
+    ] as Partial<AgentEvent>[]);
+
+    const events = await drain(source);
+    const kinds = events.map((event) => event.kind);
+    expect(kinds).toEqual(['session', 'text', 'done']);
+    expect(events[0]).toEqual({ kind: 'session', sessionId: 'sess-9' });
+  });
+
+  it('does not re-announce a session its caller already named', async () => {
+    // A resumed turn's caller sent the id in; telling them again is noise.
+    const source = fakeRuns([
+      { type: 'session.started', sessionId: 'sess-9' },
+      { type: 'run.end', reason: 'completed', sessionId: 'sess-9' },
+    ] as Partial<AgentEvent>[]);
+
+    const events = await drain(source, turn({ extensions: { sessionId: 'sess-9' } }));
+    expect(events.map((event) => event.kind)).toEqual(['done']);
+  });
+
+  it('announces the new id when a resumed run lands in a different session', async () => {
+    // Providers may branch on resume; the caller must learn where the
+    // conversation actually went.
+    const source = fakeRuns([
+      { type: 'session.started', sessionId: 'sess-fork' },
+      { type: 'run.end', reason: 'completed', sessionId: 'sess-fork' },
+    ] as Partial<AgentEvent>[]);
+
+    const events = await drain(source, turn({ extensions: { sessionId: 'sess-9' } }));
+    expect(events[0]).toEqual({ kind: 'session', sessionId: 'sess-fork' });
+  });
+
   it('maps usage into OpenAI’s three numbers', async () => {
     const source = fakeRuns([
       {
@@ -501,6 +540,48 @@ describe('POST /v1/chat/completions', () => {
       expect(content).toBe('one two');
       expect(JSON.parse(chunks.at(-2)!).choices[0].finish_reason).toBe('stop');
       expect(chunks.at(-1)).toBe('[DONE]');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('announces a fresh session on an early chunk, before the text', async () => {
+    // The chunk an OpenAI client ignores (empty delta, extra namespace) and an
+    // Artemis client builds its `session.started` from. Without it, a caller
+    // whose stream died mid-turn learned the id never.
+    const source = fakeRuns([
+      { type: 'session.started', sessionId: 'sess-early' },
+      { type: 'text.delta', text: 'hi' },
+      { type: 'run.end', reason: 'completed', sessionId: 'sess-early' },
+    ] as Partial<AgentEvent>[]);
+
+    const { server, url } = await serve(source);
+    try {
+      const response = await post(url, {
+        model: 'work-max/opus',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      });
+
+      const chunks = (await response.text())
+        .split('\n\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice(6))
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk) as Record<string, any>);
+
+      const sessionAt = chunks.findIndex((chunk) => chunk.artemis?.sessionId === 'sess-early');
+      const textAt = chunks.findIndex((chunk) => chunk.choices?.[0]?.delta?.content !== undefined);
+
+      expect(sessionAt).toBeGreaterThan(-1);
+      expect(sessionAt).toBeLessThan(textAt);
+      // Harmless to a strict OpenAI client: a well-formed chunk, empty delta,
+      // no finish reason.
+      expect(chunks[sessionAt]!.choices[0].delta).toEqual({});
+      expect(chunks[sessionAt]!.choices[0].finish_reason).toBeNull();
+      // And the final chunk still repeats it, which is what pre-existing
+      // clients read.
+      expect(chunks.at(-1)!.artemis.sessionId).toBe('sess-early');
     } finally {
       await server.close();
     }

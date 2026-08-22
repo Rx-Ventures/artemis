@@ -95,7 +95,7 @@ describe('the address a profile names', () => {
     });
 
     expect(availability?.available).toBe(false);
-    expect(availability?.reason).toContain('http://127.0.0.1:9');
+    expect(availability?.unavailableReason).toContain('http://127.0.0.1:9');
   });
 
   it('falls back to the default when no profile has been chosen', async () => {
@@ -186,8 +186,8 @@ describe('a server that wants a key', () => {
     const availability = await adapter.checkAvailability?.({ env: { [BASE_URL_ENV]: origin } });
 
     expect(availability?.available).toBe(false);
-    expect(availability?.reason).toContain('API key');
-    expect(availability?.reason).not.toContain('Start');
+    expect(availability?.unavailableReason).toContain('API key');
+    expect(availability?.unavailableReason).not.toContain('Start');
   });
 
   it('still reports an ordinary error as one', async () => {
@@ -197,7 +197,7 @@ describe('a server that wants a key', () => {
     const availability = await adapter.checkAvailability?.({ env: { [BASE_URL_ENV]: origin } });
 
     expect(availability?.available).toBe(false);
-    expect(availability?.reason).toContain('500');
-    expect(availability?.reason).not.toContain('API key');
+    expect(availability?.unavailableReason).toContain('500');
+    expect(availability?.unavailableReason).not.toContain('API key');
   });
 });

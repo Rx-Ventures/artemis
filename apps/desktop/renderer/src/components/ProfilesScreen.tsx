@@ -144,7 +144,10 @@ const POLL_INTERVAL_MS = 2_000;
  */
 const PROVIDER_GROUPS: readonly { readonly kind: ProviderKind; readonly heading: string }[] = [
   { kind: 'hosted', heading: 'Hosted — signed in to an account' },
-  { kind: 'local', heading: 'Local — a server on this machine' },
+  // "You run", not "this machine": the Artemis row in this half is usually a
+  // server on another machine, reached through a tunnel. What the group really
+  // shares is the entry model — an address and maybe a key, no account.
+  { kind: 'local', heading: 'Local — a server you run' },
 ];
 
 const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
@@ -163,6 +166,9 @@ const CONVENTIONAL_CONFIG_DIR: Readonly<Record<ProviderId, string>> = {
   lmstudio: '',
   ollama: '',
   llamacpp: '',
+  // Same rule as the three above: the profile is an endpoint, not an account
+  // on this disk. The serving Artemis keeps the sessions on its own machine.
+  artemis: '',
 };
 
 export function ProfilesSection(): ReactElement {
@@ -1267,9 +1273,11 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                   );
                 })}
                 <FieldDescription className="text-2xs">
-                  {activeKind === 'local'
-                    ? 'Which server on this machine this profile talks to. There is nothing to sign in to — the profile is an address, and the server either answers or it does not.'
-                    : "Which CLI this account belongs to. It cannot be changed afterwards — the config directory below is that CLI's, and its own sign-in is what writes into it."}
+                  {providerId === 'artemis'
+                    ? 'Another Artemis, serving. Turns run on that machine, in the workspace its connection token pins — not in the directory this pane shows — and permission prompts are answered there by nobody, so they are refused. What streams back is the reply.'
+                    : activeKind === 'local'
+                      ? 'Which server on this machine this profile talks to. There is nothing to sign in to — the profile is an address, and the server either answers or it does not.'
+                      : "Which CLI this account belongs to. It cannot be changed afterwards — the config directory below is that CLI's, and its own sign-in is what writes into it."}
                 </FieldDescription>
                 {/*
                   Reported rather than enforced. The profile is worth creating
@@ -1406,12 +1414,15 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                     Where {providerLabel} is listening. Include http:// or https://. Leave it
                     empty for {defaultBaseUrlFor(providerId)}. Another machine, a tunnel or a
                     reverse proxy all work — this is the address, not the machine.
+                    {providerId === 'artemis'
+                      ? ' An Artemis server answers only its own loopback, so another machine is reached through whatever forwards to it — a Tailscale serve, an SSH tunnel — not by the server opening a port.'
+                      : null}
                   </FieldDescription>
                 </Field>
 
                 <Field>
                   <FieldLabel htmlFor="profile-api-key" className="chrome-label text-ink-faint">
-                    API key (optional)
+                    {providerId === 'artemis' ? 'API key — a connection token' : 'API key (optional)'}
                   </FieldLabel>
                   <Input
                     id="profile-api-key"
@@ -1428,7 +1439,9 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                     placeholder={
                       profile?.hasApiKey === true && !apiKeyTouched
                         ? 'A key is stored — type to replace it'
-                        : 'Only if your server needs one'
+                        : providerId === 'artemis'
+                          ? 'Paste a connection token from the server'
+                          : 'Only if your server needs one'
                     }
                     onChange={(event) => {
                       setApiKey(event.target.value);
@@ -1437,9 +1450,19 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
                     className="font-mono text-xs md:text-xs"
                   />
                   <FieldDescription className="text-2xs">
-                    For a server started with <span className="font-mono">--api-key</span>, or
-                    behind something that authenticates. Stored encrypted by the operating
-                    system, never shown again, and sent only to the address above.
+                    {providerId === 'artemis' ? (
+                      <>
+                        One of the serving Artemis&rsquo;s connection tokens — it refuses every
+                        request without one. Stored encrypted by the operating system, never shown
+                        again, and sent only to the address above.
+                      </>
+                    ) : (
+                      <>
+                        For a server started with <span className="font-mono">--api-key</span>, or
+                        behind something that authenticates. Stored encrypted by the operating
+                        system, never shown again, and sent only to the address above.
+                      </>
+                    )}
                     {profile?.hasApiKey === true ? (
                       <>
                         {' '}

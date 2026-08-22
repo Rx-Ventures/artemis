@@ -204,6 +204,21 @@ export interface TurnResult {
 export type TurnEvent =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'activity'; readonly activity: ArtemisActivity }
+  | {
+      /**
+       * The session this turn is writing to, announced as soon as it is known
+       * rather than only on `done`.
+       *
+       * Exists for the client that wants to resume a conversation the moment it
+       * can — an Artemis driving another Artemis emits its own
+       * `session.started` from this — and for the caller whose stream dies
+       * mid-turn, who would otherwise learn the id never. Emitted at most once
+       * per id: a resumed turn's caller already holds it, so nothing is
+       * announced unless the provider reports a different one.
+       */
+      readonly kind: 'session';
+      readonly sessionId: string;
+    }
   | { readonly kind: 'done'; readonly result: TurnResult };
 
 /**
@@ -261,6 +276,12 @@ export async function* runTurn(
    * overwrites it.
    */
   let sessionId: string | undefined = turn.extensions.sessionId;
+  /*
+   * The id the caller has already been told, so a fresh session is announced
+   * exactly once and a resumed one — whose caller sent the id in — not at all.
+   * See the `session` member of {@link TurnEvent}.
+   */
+  let announced: string | undefined = turn.extensions.sessionId;
   let usage: OpenAiUsage | undefined;
   let deniedPermission = false;
 
@@ -298,6 +319,10 @@ export async function* runTurn(
 
     runId = handle.runId;
     if (handle.sessionId !== undefined) sessionId = String(handle.sessionId);
+    if (sessionId !== undefined && sessionId !== announced) {
+      announced = sessionId;
+      yield { kind: 'session', sessionId };
+    }
 
     // Events that arrived while `startRun` was in flight were queued with no
     // filter; drop any that turned out to belong to another run.
@@ -327,6 +352,10 @@ export async function* runTurn(
       switch (event.type) {
         case 'session.started':
           sessionId = String(event.sessionId);
+          if (sessionId !== announced) {
+            announced = sessionId;
+            yield { kind: 'session', sessionId };
+          }
           break;
 
         case 'text.delta':
