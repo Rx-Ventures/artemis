@@ -1,6 +1,32 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.7.0
+
+A conversation that goes quiet heals itself, and a local model server is
+something you can actually point Artemis at.
+
+- **No more reloading a stuck conversation.** The long-standing failure — a
+  pane saying "starting", "thinking" or "running" forever while the agent had
+  quietly finished, fixable only by ⌘R — is closed structurally. The window no
+  longer trusts the live event stream alone: any conversation that looks busy
+  but has said nothing for twenty seconds is checked against the engine, which
+  always knew the truth, and healed from its retained events — the missed
+  messages, and the real ending with the real reason. Worst case, a stuck pane
+  now corrects itself in about half a minute, with nothing lost. A genuinely
+  quiet stretch — a long command, a slow tool — is recognised as such and left
+  alone.
+
+- **llama.cpp, LM Studio and Ollama profiles have a server address and an API
+  key.** Both fields live on the profile itself, visible and editable — the
+  address used to be write-only and the key impossible. Any http or https
+  address works: another port, another machine, a tunnel, a reverse proxy. The
+  key is sent as a bearer token on every call, stored encrypted by the
+  operating system, and never shown or sent anywhere but the address you
+  typed. A server that refuses the key now says so, instead of claiming
+  nothing is running. Profiles from older builds pick up their stored address
+  automatically.
+
 ## What's new in 1.6.0
 
 The plugins you install reach your sessions, and an update in flight says what
