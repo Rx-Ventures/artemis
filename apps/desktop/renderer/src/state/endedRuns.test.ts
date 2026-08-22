@@ -25,7 +25,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
-import { focusedPane, handleAgentEvent, isLive, useApp } from './store';
+import {
+  focusedPane,
+  handleAgentEvent,
+  isLive,
+  resetRunStreamState,
+  useApp,
+} from './store';
 import { paneState, setPaneState } from './pane';
 
 /* -------------------------------------------------------------------------- */
@@ -109,6 +115,9 @@ const asked = (runId: string, seq: number) =>
 const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 8));
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   globalThis.localStorage?.clear();
   mainProcessRuns = [];
   listCalls = 0;

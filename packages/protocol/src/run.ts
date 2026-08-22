@@ -306,6 +306,20 @@ export interface RunHandle {
    * caller should read as "no seam is known", not as zero.
    */
   readonly historyOffset?: number;
+  /**
+   * The highest event `seq` the registry has ingested for this run, or absent
+   * when no event has arrived yet.
+   *
+   * This is what lets a window notice it has fallen behind the stream without
+   * fetching the stream: a pane holding `lastSeq` 3 against a handle reporting
+   * 9 has provably missed six events, while equal numbers mean the quiet is
+   * real — a long tool call, not a lost feed. The distinction is the whole
+   * economics of the renderer's stall sweep: `runs.list` is an in-memory read
+   * and can be asked freely; `runs.events` re-reads a turn's entire retained
+   * history and should be asked only when this number says there is something
+   * to collect.
+   */
+  readonly lastSeq?: number;
   /** Start time, ms since epoch. */
   readonly startedAt: number;
   /** Echoed from {@link RunInput.metadata}. */

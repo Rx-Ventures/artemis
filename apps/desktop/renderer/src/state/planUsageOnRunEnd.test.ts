@@ -25,7 +25,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
-import { focusedPane, handleAgentEvent, resetPlanUsageSoon, useApp } from './store';
+import {
+  focusedPane,
+  handleAgentEvent,
+  resetPlanUsageSoon,
+  resetRunStreamState,
+  useApp,
+} from './store';
 import { paneState, setPaneState } from './pane';
 
 /** Every profile the app asked to have re-read, in order. */
@@ -76,6 +82,9 @@ const ended = (runId: string) =>
   ({ type: 'run.end', runId, seq: 1, ts: 0, reason: 'completed' }) as never;
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   vi.useFakeTimers();
   refreshed = [];
   refreshAnswer = {

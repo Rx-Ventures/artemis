@@ -133,6 +133,22 @@ export type WorkingDirectoryChecker = (
   cwd: string,
 ) => WorkingDirectoryCheck | Promise<WorkingDirectoryCheck>;
 
+/**
+ * A handle as the outside world reads it: the stored snapshot, stamped with
+ * how far the stream has got.
+ *
+ * Stamped at read time rather than kept on the stored handle, because the
+ * stored handle is replaced only on *transitions* — start, session id, end —
+ * while `maxSeq` moves on every event. Rebuilding the handle per event to
+ * carry one number would turn the hottest path in the registry into an
+ * allocator; reading the number when somebody asks costs one property. What
+ * the number buys is written on {@link RunHandle.lastSeq}: a window can tell
+ * a quiet stream from a lost one without fetching the stream.
+ */
+function snapshot(entry: RunEntry): RunHandle {
+  return entry.maxSeq < 0 ? entry.handle : { ...entry.handle, lastSeq: entry.maxSeq };
+}
+
 /** Receives every event of the runs it is subscribed to. */
 export type RunEventListener = (event: AgentEvent) => void;
 
@@ -390,13 +406,14 @@ export class RunRegistry {
 
   /** Live runs, optionally narrowed to one working directory. */
   list(cwd?: string): readonly RunHandle[] {
-    const handles = [...this.#runs.values()].map((entry) => entry.handle);
+    const handles = [...this.#runs.values()].map((entry) => snapshot(entry));
     return cwd === undefined ? handles : handles.filter((handle) => handle.cwd === cwd);
   }
 
   /** One run's handle — live or recently finished — or `undefined`. */
   get(runId: RunId): RunHandle | undefined {
-    return this.#find(runId)?.handle;
+    const entry = this.#find(runId);
+    return entry === undefined ? undefined : snapshot(entry);
   }
 
   /** True when the run is live (it has not emitted `run.end`). */

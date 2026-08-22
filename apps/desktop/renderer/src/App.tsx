@@ -111,6 +111,7 @@ import {
   focusedPane,
   installEventBridge,
   installPlanUsageFeed,
+  installRunWatchdog,
   installSettingsMenuFeed,
   installBrowserFeed,
   installTerminalFeed,
@@ -213,12 +214,18 @@ export function App(): ReactElement {
     // The macOS menu bar's Settings… item. Nothing races here — the click can
     // only arrive after the app is up — but it is torn down with the rest.
     const stopSettingsMenuFeed = installSettingsMenuFeed();
+    // The stall sweep: a live pane whose feed has gone quiet is checked
+    // against main and healed from its retained events, so a lost stream costs
+    // seconds instead of a ⌘R. Installed with the feeds because it is one — the
+    // pull-shaped half of the push channel above.
+    const stopWatchdog = installRunWatchdog();
     if (!started.current) {
       started.current = true;
       void bootstrap();
     }
     return () => {
       unsubscribe();
+      stopWatchdog();
       stopFeed();
       stopUsageFeed();
       stopTerminalFeed();

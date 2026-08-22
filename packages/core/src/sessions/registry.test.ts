@@ -767,6 +767,34 @@ describe('RunRegistry — prompts in the replay buffer', () => {
 });
 
 describe('RunRegistry — handle state', () => {
+  it('stamps every read handle with how far the stream has got', async () => {
+    /*
+     * `lastSeq` is what lets a window tell a quiet stream from a lost one
+     * without fetching the stream — the whole economics of the renderer's
+     * stall sweep. Absent before the first event, because a number here is a
+     * claim, and `-1` would be a claim about an event that never happened.
+     */
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+    const { runId } = handle;
+
+    expect(registry.get(runId)?.lastSeq).toBeUndefined();
+    expect(registry.list()[0]?.lastSeq).toBeUndefined();
+
+    const run = firstRun(runs);
+    run.emit(sessionStarted(runId));
+    run.emit(textComplete(runId, 1, 'one'));
+    await flush();
+    expect(registry.get(runId)?.lastSeq).toBe(1);
+    expect(registry.list()[0]?.lastSeq).toBe(1);
+
+    run.emit(runEnd(runId, 2));
+    await flush();
+    // Recently ended runs still answer `get`, and the stamp survives — the
+    // sweep reads it to know the replay it is about to fetch has an end in it.
+    expect(registry.get(runId)?.lastSeq).toBe(2);
+  });
+
   it('tracks starting → running → awaiting_permission → running → ended', async () => {
     const { registry, runs } = harness();
     const handle = await registry.start(input());

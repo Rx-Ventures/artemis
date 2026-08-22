@@ -30,6 +30,7 @@ import {
   handleAgentEvent,
   newSession,
   paneCount,
+  resetRunStreamState,
   splitPane,
   startSessionFeed,
   useApp,
@@ -87,6 +88,9 @@ const ended = (seq: number) =>
   ({ type: 'run.end', runId: 'run-1', seq, ts: 0, reason: 'completed', sessionId: 'sess-1' }) as never;
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   globalThis.localStorage?.clear();
   // Collapse whatever grid a previous test left behind, the way
   // `continuationRuns.test.ts` does, so the focused pane is the only one.

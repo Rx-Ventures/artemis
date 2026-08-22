@@ -5761,6 +5761,10 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
       previous.run?.sessionId === handle.sessionId);
 
   replayBuffers.set(handle.runId, []);
+  // The transcript is about to be rebuilt from the first retained event, so
+  // the gate's memory of this run belongs to a drawing that no longer exists.
+  // Left in place it would silently drop the whole replay.
+  appliedSeqs.delete(handle.runId);
   pane.transcript.reset();
   setPaneState(pane, {
     run: fromHandle(handle),
@@ -8542,6 +8546,161 @@ function reconcileDroppedRun(runId: RunId): void {
 // no reason to leave the gap.
 setEventsDroppedHook(reconcileDroppedRun);
 
+/*
+ * The stall sweep: the window stops trusting the push stream for liveness.
+ * ----------------------------------------------------------------------------
+ *
+ * `reconcileDroppedRun` above heals a *detected* hole — a seq gap noticed
+ * because a later event arrived. It is helpless against the failure users
+ * actually report: the stream going silent. A pane stuck at "starting" while
+ * the agent works and finishes, a spinner over a turn that ended minutes ago —
+ * every one of those is a run whose remaining events never reached this
+ * window, and with no later event there is no gap, no hook, and nothing to
+ * notice. The one recovery was ⌘R, which works because a reload rebuilds the
+ * conversation from the main process — which had everything all along.
+ *
+ * This sweep is that reload, automatic and scoped to one run. Every pane whose
+ * run reads live but has said nothing for a while is checked against main:
+ * `runs.list` says whether the run still exists and how far its stream has
+ * really got ({@link RunHandle.lastSeq}); a pane that is provably behind
+ * fetches the retained events and applies the tail it missed — including, when
+ * the run is over, the real `run.end` with the real reason. A pane that is
+ * merely *quiet* — `lastSeq` equal to what it has drawn, which is what a long
+ * tool call looks like — is left entirely alone: no fetch, no synthesis, no
+ * guess.
+ *
+ * Evidence-based on purpose. Nothing here acts on silence itself; silence only
+ * prompts the question, and main's answer is what acts. That is why the sweep
+ * is safe to run forever at a low tick: for a healthy window every pass is a
+ * handful of map reads, and for a healthy-but-quiet run it is one in-memory
+ * IPC read. It does not matter *which* layer lost the events — a scan-dropped
+ * payload, a throw mid-apply, a wake-from-sleep hiccup, a latch this code has
+ * not met yet — the sweep converges the window on main's truth regardless,
+ * which is exactly the property ⌘R had and the push path never will.
+ */
+
+/** How long a live pane may say nothing before the window checks on it. */
+const RUN_STALL_MS = 20_000;
+
+/** How often stalled panes are looked for. */
+const STALL_SWEEP_MS = 15_000;
+
+/** Runs with a reconcile replay in flight; the sweep must not stack a second. */
+const stallReconciles = new Set<RunId>();
+
+/**
+ * Start the sweep. Call once at bootstrap, beside {@link installEventBridge}.
+ *
+ * `setInterval` rather than anything frame-derived, per the standing rule from
+ * the transcript's own latch defect: a window Chromium has stopped compositing
+ * gets no frames, and `backgroundThrottling: false` keeps timers honest. The
+ * sweep must run precisely when the window is at its most neglected.
+ */
+export function installRunWatchdog(): () => void {
+  const timer = setInterval(() => {
+    void sweepStalledRuns();
+  }, STALL_SWEEP_MS);
+  return () => clearInterval(timer);
+}
+
+/** One pass: find the quiet-but-live panes and reconcile each against main. */
+export async function sweepStalledRuns(now: number = Date.now()): Promise<void> {
+  const stalled: { pane: Pane; runId: RunId }[] = [];
+  for (const pane of allPanes()) {
+    const run = paneState(pane).run;
+    if (!run || run.status === 'ended') continue;
+    // A run being adopted or already being reconciled is mid-surgery; its
+    // buffer hold makes it *look* silent, and a second replay would race the
+    // first for the same buffer.
+    if (replayBuffers.has(run.runId) || stallReconciles.has(run.runId)) continue;
+    const heard = appliedSeqs.get(run.runId)?.at ?? run.startedAt;
+    if (now - heard < RUN_STALL_MS) continue;
+    stalled.push({ pane, runId: run.runId });
+  }
+  if (stalled.length === 0) return;
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+  const listed = await call(() => bridge.runs.list({}));
+  if (!listed.ok) return;
+  const byId = new Map(listed.value.runs.map((handle) => [handle.runId, handle]));
+
+  await Promise.all(
+    stalled.map(({ pane, runId }) => {
+      const handle = byId.get(runId);
+      const applied = appliedSeqs.get(runId)?.seq ?? -1;
+      /*
+       * The quiet-but-healthy case, and the reason `lastSeq` exists: the
+       * registry has ingested nothing this window has not drawn, and the run
+       * is still going. A long `Bash` call spends minutes exactly here. The
+       * clock is advanced so the next sweep does not re-ask main the same
+       * question every tick for as long as the tool runs.
+       */
+      if (handle !== undefined && handle.status !== 'ended' && (handle.lastSeq ?? -1) <= applied) {
+        const tracked = appliedSeqs.get(runId);
+        if (tracked !== undefined) appliedSeqs.set(runId, { ...tracked, at: now });
+        return Promise.resolve();
+      }
+      return replayMissedTail(pane, runId, handle !== undefined && handle.status !== 'ended');
+    }),
+  );
+}
+
+/**
+ * Fetch what a run has really said and apply whatever this window missed.
+ *
+ * The same two-phase shape as {@link attachRun} — hold the live stream, read,
+ * apply, release what arrived meanwhile — but *without* resetting anything:
+ * the pane keeps its transcript, and the gate in {@link applyAgentEvent} is
+ * what makes re-fetching events the window already drew cost nothing.
+ *
+ * When the registry no longer holds the run and its events cannot say how it
+ * ended — retired past the retention window, or an id main never heard of,
+ * which is what a `runs.start` whose reply was lost looks like — the pane is
+ * settled through the same local end a failed start takes. A guess, and an
+ * honest one: the alternative is the spinner forever.
+ */
+async function replayMissedTail(pane: Pane, runId: RunId, stillLive: boolean): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  stallReconciles.add(runId);
+  replayBuffers.set(runId, []);
+  try {
+    const replay = await call(() => bridge.runs.events({ runId }));
+    if (replay.ok) {
+      // No filtering here, on purpose: the gate in `applyAgentEvent` is the
+      // one authority on what has been drawn, and a second copy of that
+      // arithmetic — this function used to keep one — is a place for the two
+      // to disagree. Unlike `attachRun`, nothing was reset, so the gate's
+      // memory of this run is exactly the truth.
+      for (const event of replay.value.events) applyAgentEvent(event);
+    }
+
+    const current = paneState(pane).run;
+    if (current?.runId === runId && current.status !== 'ended' && !stillLive) {
+      // The registry has let go of this run and the replay did not carry its
+      // end — or the id was never there at all. Either way nothing more is
+      // coming, and the pane must not wait for it.
+      pane.transcript.note(
+        'warn',
+        'This window lost the end of the run',
+        replay.ok
+          ? 'The engine finished it and the events had already been dropped. Everything above is what it did.'
+          : 'The engine has no record of it. If your message went unanswered, send it again.',
+      );
+      endRunLocally(runId, replay.ok ? 'completed' : 'error', pane);
+    }
+  } finally {
+    const pending = replayBuffers.get(runId) ?? [];
+    replayBuffers.delete(runId);
+    // Through the gate like everything else: whatever the replay already
+    // covered is dropped, whatever is genuinely new applies in order.
+    for (const event of pending) applyAgentEvent(event);
+    stallReconciles.delete(runId);
+  }
+}
+
 export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
   const run = paneState(pane).run;
@@ -9063,6 +9222,59 @@ function mergeUsage(previous: UsageSnapshot | undefined, next: UsageSnapshot): U
  */
 const replayBuffers = new Map<RunId, AgentEvent[]>();
 
+/**
+ * The highest `seq` this window has applied per run, and when it applied it.
+ *
+ * Two jobs, one map:
+ *
+ *  - **A gate.** Events are strictly ordered per run by one producer, so
+ *    anything at or below the recorded seq has already been drawn — and with
+ *    the stall sweep below able to *re-fetch* a run's events while pushes are
+ *    still arriving, "already drawn" is now an ordinary thing for an incoming
+ *    event to be. The gate is what makes a replay idempotent instead of a
+ *    source of doubled text.
+ *  - **A clock.** `at` is when this run last said anything this window heard.
+ *    The stall sweep reads it to tell a conversation that is quietly working
+ *    from one whose feed has died — a distinction nothing else in the window
+ *    can make, because a dead feed and a long tool call look identical from
+ *    here.
+ *
+ * Entries are pruned oldest-first past a cap rather than deleted on `run.end`,
+ * because the gate matters *most* after the end: a late duplicate of the
+ * terminal event is the one that would draw a second "ended" card.
+ */
+const appliedSeqs = new Map<RunId, { seq: number; at: number }>();
+
+/** Runs this window ever heard of; far above any real window's lifetime. */
+const APPLIED_SEQS_LIMIT = 512;
+
+/**
+ * Forget every stream this window has drawn. **Test harnesses only.**
+ *
+ * In production a run id is never reused — the registry retires ids for good,
+ * and refuses a newcomer wearing one — so the gate's memory can only ever be
+ * about the run it says it is about, and clearing it would only open the door
+ * to double-drawn events. Test fixtures are the one place that rule does not
+ * hold: they reuse short ids like `r1` across cases as a readability
+ * convenience, and a gate remembering the previous case's `r1` silently drops
+ * the next case's events at seq 1. Harnesses call this beside their transcript
+ * reset, for the same reason they reset the transcript.
+ */
+export function resetRunStreamState(): void {
+  appliedSeqs.clear();
+  stallReconciles.clear();
+}
+
+function recordApplied(runId: RunId, seq: number): void {
+  appliedSeqs.delete(runId);
+  appliedSeqs.set(runId, { seq, at: Date.now() });
+  while (appliedSeqs.size > APPLIED_SEQS_LIMIT) {
+    const oldest = appliedSeqs.keys().next();
+    if (oldest.done === true) break;
+    appliedSeqs.delete(oldest.value);
+  }
+}
+
 export function handleAgentEvent(event: AgentEvent): void {
   const held = replayBuffers.get(event.runId);
   if (held !== undefined) {
@@ -9143,6 +9355,12 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
 }
 
 function applyAgentEvent(event: AgentEvent): void {
+  // The gate. See `appliedSeqs`: at or below the recorded seq means this event
+  // has already been drawn, whichever door it came through this time.
+  const tracked = appliedSeqs.get(event.runId);
+  if (tracked !== undefined && event.seq <= tracked.seq) return;
+  recordApplied(event.runId, event.seq);
+
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;
   const run = paneState(pane).run;

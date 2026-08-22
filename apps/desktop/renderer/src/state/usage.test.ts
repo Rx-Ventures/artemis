@@ -8,7 +8,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import type { AgentEvent, RunId, UsageSnapshot } from '@rx-artemis/protocol';
 
-import { focusedPane, handleAgentEvent, useApp, type RunState } from './store';
+import {
+  focusedPane,
+  handleAgentEvent,
+  resetRunStreamState,
+  type RunState,
+  useApp,
+} from './store';
 import { paneState, setPaneState } from './pane';
 
 /*
@@ -44,6 +50,9 @@ const TOKENS = { inputTokens: 10, outputTokens: 5 };
 
 describe('usage / context readout', () => {
   beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
     useApp.setState({ contextWindows: {} });
     setSession({ run: { ...BASE } });
   });

@@ -26,7 +26,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 
-import { closePane, focusedPane, handleAgentEvent, paneCount, allPanes, useApp } from './store';
+import {
+  allPanes,
+  closePane,
+  focusedPane,
+  handleAgentEvent,
+  paneCount,
+  resetRunStreamState,
+  useApp,
+} from './store';
 import { paneState, setPaneState } from './pane';
 import { seedApp } from './testkit';
 
@@ -68,6 +76,9 @@ const said = (runId: string, text: string, seq = 1) =>
   }) as never;
 
 beforeEach(() => {
+  // Fixture run ids repeat across cases; production ids never do. See the
+  // helper's own note in `store.ts`.
+  resetRunStreamState();
   for (let guard = 0; guard < 20 && paneCount() > 1; guard += 1) {
     const last = allPanes()[paneCount() - 1];
     if (last) closePane(last.id);
