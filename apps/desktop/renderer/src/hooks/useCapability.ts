@@ -8,7 +8,7 @@
  * control renders disabled *with an explanation*, never silently missing.
  */
 
-import type { Capabilities, PermissionMode } from '@rx-artemis/protocol';
+import type { Capabilities, PermissionMode, ProviderId } from '@rx-artemis/protocol';
 import { activeCapabilities, activeProviderLabel } from '../state/store';
 import { usePane } from '../state/paneContext';
 
@@ -66,6 +66,37 @@ export function useCapability(key: CapabilityKey): CapabilityStatus {
     reason: hasProvider
       ? `${provider} does not support ${label}.`
       : `No provider is available yet, so ${label} is unavailable.`,
+  };
+}
+
+/**
+ * Answered for a *named* provider, not the active one.
+ *
+ * {@link useCapability} degrades controls that act through the column's
+ * current selection — the composer, the mode picker. This one is for controls
+ * that act on something which carries its own provider: a session row resumes
+ * under `session.providerId` whatever the column is pointed at, so gating it
+ * on the active provider asks the wrong party entirely. That is how selecting
+ * a llama.cpp profile disabled every Claude conversation in the sidebar —
+ * llama.cpp cannot resume sessions, and nobody was asking it to.
+ */
+export function useProviderCapability(
+  providerId: ProviderId,
+  key: CapabilityKey,
+): CapabilityStatus {
+  // `find` answers with a stable element reference, so the subscription only
+  // fires when the descriptor list itself is replaced.
+  const descriptor = usePane((s) => s.providers.find((p) => p.id === providerId));
+  const label = CAPABILITY_LABELS[key];
+
+  if (descriptor?.capabilities[key] === true) return { supported: true, reason: '', label };
+  return {
+    supported: false,
+    label,
+    reason:
+      descriptor === undefined
+        ? `No provider is available yet, so ${label} is unavailable.`
+        : `${descriptor.label} does not support ${label}.`,
   };
 }
 
