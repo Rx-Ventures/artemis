@@ -1,6 +1,30 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.8.0
+
+The slash-command menu works at the start of a conversation, where you
+actually use it, and the mark is the bow again.
+
+- **Type `/` before you have sent anything and the menu opens.** It used to
+  need a run first, so the first message of every conversation — the most
+  likely place to reach for a command — was the one place nothing happened.
+  Artemis now asks the provider what a session there would offer, on launch
+  and whenever a column settles on an account or changes directory, so the
+  list is waiting by the time you type. Costs no tokens: it is a control-channel
+  question, not a turn.
+
+- **The menu keeps up with the directory.** Commands are discovered relative to
+  where the agent runs, so moving the working directory re-reads them rather
+  than leaving the previous project's list in the menu.
+
+- **The mark is the bow again**, in the current accent. The moon in a square
+  frame was a near neighbour of every contrast and theme toggle ever drawn,
+  which the frame alone was doing all the work to prevent. At the very smallest
+  Finder and dock sizes the bow's string falls under a pixel and the mark reads
+  as a bow without one; everywhere else in the app it is drawn well clear of
+  that.
+
 ## What's new in 1.7.0
 
 A conversation that goes quiet heals itself, and a local model server is
