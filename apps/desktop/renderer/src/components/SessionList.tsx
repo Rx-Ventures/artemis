@@ -165,7 +165,7 @@ import {
 } from 'lucide-react';
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
-import { useCapability } from '../hooks/useCapability';
+import { useCapability, useProviderCapability } from '../hooks/useCapability';
 import { condenseTitle } from '../lib/format';
 import { lastSegment } from '../lib/paths';
 import {
@@ -191,7 +191,7 @@ import {
   useApp,
 } from '../state/store';
 import { usePane } from '../state/paneContext';
-import { CapabilityButton } from './capability-button';
+import { ReasonButton } from './disabled-reason';
 import { ProfileSwatch, StatusDot } from './primitives';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { ProjectTooltip, SessionTooltip } from './SessionTooltip';
@@ -243,7 +243,6 @@ export function SessionList(): ReactElement {
   const pinnedSessions = useApp((s) => s.pinnedSessions);
   const pinnedCollapsed = useApp((s) => s.pinnedCollapsed);
   const listing = useCapability('listSessions');
-  const resuming = useCapability('resumeSession');
 
   const [query, setQuery] = useState('');
 
@@ -363,8 +362,8 @@ export function SessionList(): ReactElement {
 
       <>
         {/*
-         * Both capability notes sit *above* the rows rather than replacing
-         * them, and neither ever empties the list.
+         * The capability note sits *above* the rows rather than replacing
+         * them, and never empties the list.
          *
          * `listSessions` used to blank it: selecting an account whose CLI
          * cannot enumerate history removed every other provider's sessions
@@ -373,20 +372,18 @@ export function SessionList(): ReactElement {
          * what is *missing* from it, not whether there is anything to show —
          * and the sentence says exactly that much.
          *
-         * `resumeSession` never emptied it; the rows are still worth reading
-         * when they cannot be clicked.
+         * A `resumeSession` banner used to hang beneath this one, and it was
+         * the same wrong scope one step further: it declared every row
+         * unclickable because the *active* provider could not resume, when
+         * each row resumes under its own. Selecting a llama.cpp profile
+         * turned the whole sidebar off. The rows now gate themselves on the
+         * provider they actually belong to, which leaves nothing true for a
+         * blanket banner to say.
          */}
         {!listing.supported ? (
           <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
             {listing.reason} Its own sessions are not in this list; everything below belongs to the
             other accounts.
-          </p>
-        ) : null}
-
-        {!resuming.supported ? (
-          <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
-            {resuming.reason} These are listed for reference; picking one would not carry the
-            conversation forward.
           </p>
         ) : null}
 
@@ -855,9 +852,21 @@ const Row = memo(function Row({
    */
   const waiting = useApp((s) => s.waitingSessions.includes(session.id));
   const profile = useApp((s) => s.profiles.find((p) => p.id === session.profileId));
-  const renaming = useCapability('renameSession');
-  const deleting = useCapability('deleteSession');
-  const tagging = useCapability('tagSession');
+  /*
+   * Asked of the *session's* provider, never the column's active one.
+   *
+   * Every control on this row acts on the conversation under
+   * `session.providerId` — resuming switches the column to it, rename, delete
+   * and archive write to its store — so the provider whose capabilities govern
+   * is the row's, whatever the column is currently pointed at. Gating on the
+   * active provider is how selecting a llama.cpp profile disabled the entire
+   * sidebar: llama.cpp cannot resume a session, and none of these rows was
+   * asking it to.
+   */
+  const resuming = useProviderCapability(session.providerId, 'resumeSession');
+  const renaming = useProviderCapability(session.providerId, 'renameSession');
+  const deleting = useProviderCapability(session.providerId, 'deleteSession');
+  const tagging = useProviderCapability(session.providerId, 'tagSession');
 
   /*
    * Whether this row is allowed to name an account at all.
@@ -948,14 +957,15 @@ const Row = memo(function Row({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div className="h-full w-full">
-      <CapabilityButton
-        capability="resumeSession"
+      <ReasonButton
         variant="ghost"
-        disabled={orphaned}
+        disabled={orphaned || !resuming.supported}
         disabledReason={
           orphaned
             ? 'No profile still points at the config directory holding this session, so its transcript cannot be reached.'
-            : undefined
+            : resuming.supported
+              ? undefined
+              : resuming.reason
         }
         /*
          * Everything the two truncated lines cannot afford to show — the whole
@@ -1062,7 +1072,7 @@ const Row = memo(function Row({
             </span>
           )}
         </span>
-      </CapabilityButton>
+      </ReasonButton>
           </div>
         </ContextMenuTrigger>
 
