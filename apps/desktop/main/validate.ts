@@ -80,6 +80,7 @@ import {
   type ProviderId,
   type ProfilesUpdateRequest,
   type ProvidersListRequest,
+  type ProvidersCommandsRequest,
   type ProvidersModelsRequest,
   type QuestionAnswer,
   type RunInput,
@@ -1160,6 +1161,24 @@ export function validateProvidersModels(raw: unknown): ProvidersModelsRequest {
   const providerId = request['providerId'];
   if (!isProviderId(providerId)) throw new ValidationError('providerId', 'is not a known provider');
   return compact<ProvidersModelsRequest>({
+    providerId,
+    profileId: requireId(request['profileId'], 'profileId'),
+    cwd: optionalAbsolutePath(request['cwd'], 'cwd'),
+  });
+}
+
+/**
+ * The slash commands a session would offer.
+ *
+ * Field for field the same request as {@link validateProvidersModels}, with the
+ * same reasoning behind each check — the two channels differ in what they ask
+ * the provider, not in what they are told.
+ */
+export function validateProvidersCommands(raw: unknown): ProvidersCommandsRequest {
+  const request = requireRequest(raw);
+  const providerId = request['providerId'];
+  if (!isProviderId(providerId)) throw new ValidationError('providerId', 'is not a known provider');
+  return compact<ProvidersCommandsRequest>({
     providerId,
     profileId: requireId(request['profileId'], 'profileId'),
     cwd: optionalAbsolutePath(request['cwd'], 'cwd'),

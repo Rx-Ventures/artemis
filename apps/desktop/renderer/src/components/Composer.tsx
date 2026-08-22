@@ -55,6 +55,7 @@ import {
   interruptRun,
   isLive,
   pushBanner,
+  refreshCommands,
   setForkOnResume,
   submitPrompt,
   useApp,
@@ -166,19 +167,42 @@ export function Composer(): ReactElement {
   /*
    * The slash command menu.
    *
-   * The list is whatever the run reported at `system.init` — the provider's own
-   * built-ins plus anything `contentBridge.ts` bridged in, which is where the
-   * user's own commands come from. Two consequences worth knowing:
+   * Two sources, and the run wins when there is one. A run's list is what the
+   * session actually loaded — the provider's built-ins plus anything
+   * `contentBridge.ts` bridged in, kept current by `session.commands` — while
+   * `state.commands` is what the provider *said* it would offer, asked by
+   * `refreshCommands` when the column settled on an account and a directory.
    *
-   *  - A provider that reports none (Codex, which has no user-authored command
-   *    surface) never opens the menu, with no check needed here.
-   *  - The list arrives *with a run*, so a pane that has never run has nothing to
-   *    offer and the menu stays shut until the first message. Recovering it
-   *    earlier would mean asking a provider to enumerate commands before the
-   *    user has asked for anything, which is a subprocess spawned on the chance
-   *    that a slash might be typed.
+   * The second source is the point. The list used to arrive only with a run, so
+   * a column between conversations had nothing to offer and the menu stayed shut
+   * until the first message — which is exactly where a slash command is most
+   * often typed. It costs a subprocess spawned before anyone has asked for
+   * anything, which was the original reason not to; it buys the menu at the
+   * start of a conversation, which is where it was wanted all along.
+   *
+   * A provider that enumerates none — Codex, which has no user-authored command
+   * surface — still never opens the menu, with no check needed here.
    */
-  const commands = usePane((s) => s.run?.slashCommands);
+  const commands = usePane((s) => s.run?.slashCommands ?? s.commands ?? undefined);
+  /*
+   * The fallback for typing faster than the prefetch.
+   *
+   * `refreshCommands` runs at boot and on every settle, so by the time anyone
+   * reaches for a command the list is nearly always already there. Nearly: a
+   * fresh split, an account just added, or a launch slow enough to be typed over
+   * all arrive here with `null` — and a menu that stayed shut for the rest of
+   * the session because of a race would be indistinguishable from the bug this
+   * replaced. Asking again is idempotent and the main process caches by
+   * (provider, profile, directory), so being wrong costs one message.
+   *
+   * Keyed on the draft becoming a slash rather than on mount, so a column nobody
+   * types a `/` into never spawns anything on this path.
+   */
+  const unasked = usePane((s) => s.run === null && s.commands === null);
+  const reaching = text.startsWith('/');
+  useEffect(() => {
+    if (unasked && reaching) void refreshCommands(pane);
+  }, [unasked, reaching, pane]);
   /**
    * Escape closed the menu for this draft.
    *

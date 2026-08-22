@@ -166,9 +166,11 @@ import type {
   AdapterAvailability,
   AggregatedSessionList,
   AllSessionsQuery,
+  CommandListQuery,
   ContinuationContext,
   EnvBundle,
   InterruptResult,
+  LocalPlugin,
   ModelCatalogue,
   ModelListQuery,
   PlanUsageQuery,
@@ -555,6 +557,119 @@ export async function fetchClaudeModels(
   }
 }
 
+/** What {@link fetchClaudeCommands} needs in order to reach the CLI. */
+export interface ClaudeCommandQuery extends ClaudeModelQuery {
+  /** The plugins a run started here would load. See {@link CommandListQuery}. */
+  readonly plugins?: readonly LocalPlugin[];
+}
+
+/**
+ * Ask the CLI which slash commands a session here would offer.
+ *
+ * The same manoeuvre {@link fetchClaudeModels} makes, for the same reason:
+ * `supportedCommands()` is a control request, the SDK serves control requests
+ * only over a streaming session, and there is no one-shot way to ask. So a
+ * query is opened whose prompt stream never yields, the question is asked on the
+ * control channel, and the subprocess is torn down. **No turn is started and
+ * nothing is billed** — which is what makes it affordable to run whenever a
+ * column settles on an account or changes directory.
+ *
+ * ## Why the plugins have to be passed
+ *
+ * The whole point of doing this before the first message is to offer the user's
+ * *own* commands, and those arrive as plugins — see `contentBridge.ts`. A query
+ * without them enumerates the built-ins perfectly and misses everything the user
+ * installed, which would put the menu's most-wanted rows in the one state that
+ * looks like a bug rather than an absence. So this takes the same plugin list
+ * the run would get, and `settingSources: []` stays empty here exactly as it is
+ * on a run: the answer has to describe the session Artemis would actually start,
+ * not a more permissive one.
+ *
+ * ## It resolves rather than throws
+ *
+ * Every failure path returns an empty list. A machine with no CLI, no credential
+ * or no network is a machine where the menu simply does not open before the
+ * first message — which is precisely the behaviour this function exists to
+ * improve on, so failing back to it costs nothing that was not already lost.
+ */
+export async function fetchClaudeCommands(
+  request: ClaudeCommandQuery,
+  onDiagnostic?: (message: string, detail?: unknown) => void,
+): Promise<readonly string[]> {
+  const abort = new AbortController();
+
+  // Parks until `abort` tears it down, for the reason `fetchClaudeModels` gives:
+  // returning would close the input channel and let the CLI decide the session
+  // is over before the control request lands.
+  const idlePrompt = (async function* (): AsyncGenerator<SDKUserMessage> {
+    await new Promise<void>((resolve) => {
+      if (abort.signal.aborted) {
+        resolve();
+        return;
+      }
+      abort.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+  })();
+
+  let sdkQuery: Query | undefined;
+  try {
+    const env = composeProviderEnv(request.env, {
+      inheritHostEnv: request.inheritHostEnv,
+      hostEnv: request.hostEnv,
+      scrubKeys: CLAUDE_ENV_SCRUB_KEYS,
+    });
+    env['CLAUDE_AGENT_SDK_CLIENT_APP'] ??= 'artemis';
+
+    sdkQuery = query({
+      prompt: idlePrompt,
+      options: {
+        ...(request.sdkExecutablePath === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: request.sdkExecutablePath }),
+        cwd: request.cwd,
+        env,
+        abortController: abort,
+        // Same isolation rule as a run — see the note above on describing the
+        // session Artemis would actually start.
+        settingSources: [],
+        // `undefined` rather than `[]` when there are none, matching
+        // `buildClaudeOptions`: an empty array still initialises the SDK's
+        // plugin machinery.
+        ...(request.plugins?.length
+          ? { plugins: request.plugins.map(({ path }) => ({ type: 'local' as const, path })) }
+          : {}),
+        includePartialMessages: false,
+      },
+    });
+
+    const commands = await withTimeout(
+      sdkQuery.supportedCommands(),
+      request.timeoutMs ?? MODEL_FETCH_TIMEOUT_MS,
+    );
+
+    // Names only. The push carries a description and an argument hint too, and
+    // the menu has nowhere to put them — see the `commands_changed` note in
+    // `mapper.ts`, which drops the same fields for the same reason and should
+    // stop doing so at the same time this does.
+    return commands.map((command) => command.name).filter((name) => name.length > 0);
+  } catch (error) {
+    onDiagnostic?.(
+      `Could not read the slash-command list from the Claude CLI: ${describe(error)}`,
+      error,
+    );
+    return [];
+  } finally {
+    abort.abort();
+    // Best-effort, and must not mask the result above: `return` on a query that
+    // never ran a turn can itself throw.
+    try {
+      await sdkQuery?.return?.(undefined);
+    } catch {
+      /* the abort above is what actually reclaims the subprocess */
+    }
+  }
+}
+
 /**
  * Translate one SDK `ModelInfo` into the descriptor the UI builds pickers from.
  *
@@ -870,6 +985,29 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           cwd: query.cwd,
           inheritHostEnv: query.inheritHostEnv,
           hostEnv,
+          ...(options?.sdkExecutablePath === undefined
+            ? {}
+            : { sdkExecutablePath: options.sdkExecutablePath }),
+        },
+        diagnostic,
+      );
+    },
+
+    /*
+     * What the composer's menu offers before there is a run to ask.
+     *
+     * Same shape as `listModels` above and the same two obligations; see
+     * `fetchClaudeCommands` for why it opens a query it never prompts, and why
+     * it has to be handed the plugins rather than working them out.
+     */
+    async listCommands(query: CommandListQuery): Promise<readonly string[]> {
+      return fetchClaudeCommands(
+        {
+          env: query.env,
+          cwd: query.cwd,
+          inheritHostEnv: query.inheritHostEnv,
+          hostEnv,
+          ...(query.plugins === undefined ? {} : { plugins: query.plugins }),
           ...(options?.sdkExecutablePath === undefined
             ? {}
             : { sdkExecutablePath: options.sdkExecutablePath }),

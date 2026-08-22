@@ -228,6 +228,28 @@ export interface ArtemisEngine {
     readonly cwd?: string;
   }): Promise<{ readonly models: readonly ProviderModelOption[]; readonly live: boolean }>;
 
+  /**
+   * The slash commands a session started here would offer.
+   *
+   * Separate from {@link listProviders} on the same grounds as
+   * {@link listProviderModels}, and slower than it looks worth being: this
+   * spawns a provider subprocess to ask a question about a run nobody has
+   * started. It buys the composer's menu the ability to open on the *first*
+   * message of a conversation, which is where a slash command is most often
+   * wanted and was the one place the menu was reliably shut.
+   *
+   * Takes `cwd` and means it: commands are discovered relative to a working
+   * directory, so this is not merely allowed to differ per project, it does.
+   *
+   * Never throws. A provider with no command surface answers with an empty
+   * list, which is the same thing the composer did before this existed.
+   */
+  listProviderCommands(options: {
+    readonly providerId: ProviderId;
+    readonly profileId: ProfileId;
+    readonly cwd?: string;
+  }): Promise<{ readonly commands: readonly string[] }>;
+
   listProfiles(options: { readonly providerId?: ProviderId }): Promise<readonly ProfileMetadata[]>;
   createProfile(draft: ProfileDraft): Promise<ProfileMetadata>;
   updateProfile(id: ProfileId, patch: ProfilePatch): Promise<ProfileMetadata>;
@@ -723,6 +745,14 @@ function createEngine(options: EngineOptions): ArtemisEngine {
    * falls back to the adapter's static list rather than spawning a subprocess
    * on the path of a run that is starting.
    */
+  /**
+   * The command list per (provider, profile, directory), promise and all.
+   *
+   * Promises rather than values so that concurrent asks share one subprocess
+   * — see `listProviderCommands`, which is where the reasoning lives.
+   */
+  const commandLists = new Map<string, Promise<{ readonly commands: readonly string[] }>>();
+
   const modelCatalogues = new Map<string, readonly ProviderModelOption[]>();
   const catalogueKey = (providerId: ProviderId, profileId: ProfileId): string =>
     `${providerId}:${profileId}`;
@@ -858,6 +888,64 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         log.error(`Provider "${query.providerId}" threw while listing models`, error);
         return { models: fallback, live: false };
       }
+    },
+
+    /*
+     * The command list, asked of the provider and remembered for a moment.
+     *
+     * The cache is the load-bearing part. A column settling on an account asks
+     * for this, and so does the composer the first time a `/` is typed with
+     * nothing loaded — so two columns on one account, or one column asked twice
+     * in the same second, would otherwise each spawn a CLI to be told the same
+     * thing. In flight requests are shared rather than merely their results,
+     * because the overlap that matters is the one that happens while the first
+     * answer is still coming back.
+     *
+     * Keyed by directory as well as account: commands are discovered relative to
+     * a working directory, so two projects on one profile are two questions.
+     *
+     * Deliberately never invalidated on a timer. It is dropped when the process
+     * is, which is the same lifetime `modelCatalogues` has; a plugin installed
+     * mid-session is a case the renderer handles by asking again on the next
+     * settle, and one installed with Artemis closed is a new launch anyway.
+     */
+    listProviderCommands: async (query) => {
+      const adapter = providers.get(query.providerId);
+      // Bound here rather than called through `adapter` below: the narrowing
+      // does not survive into the async closure, and re-reading the property
+      // there would be a second lookup that could in principle differ.
+      const listCommands = adapter?.listCommands?.bind(adapter);
+      if (listCommands === undefined) return { commands: [] };
+
+      // The query has to start somewhere that exists — the same substitution
+      // `listProviderModels` makes, and for the same reason.
+      const cwd = query.cwd ?? userDataDir;
+      const key = `${query.providerId}:${query.profileId}:${cwd}`;
+      const cached = commandLists.get(key);
+      if (cached !== undefined) return cached;
+
+      const pending = (async (): Promise<{ readonly commands: readonly string[] }> => {
+        // The same plugins a run here would load, which is the whole point: the
+        // user's own commands arrive on that channel, and a list without them
+        // would be missing exactly the rows they are reaching for. See
+        // `contentPluginsFor`.
+        const [env, plugins] = await Promise.all([
+          envFor(query.profileId, query.providerId),
+          contentPluginsFor(query.profileId, query.providerId),
+        ]);
+        const commands = await listCommands({ env, cwd, plugins });
+        return { commands };
+      })().catch((error: unknown) => {
+        // The contract says it should not reject; if one does, that is a bug in
+        // the adapter and not a reason to wedge the menu shut forever — so the
+        // failure is dropped from the cache and the next ask tries again.
+        log.error(`Provider "${query.providerId}" threw while listing commands`, error);
+        commandLists.delete(key);
+        return { commands: [] as readonly string[] };
+      });
+
+      commandLists.set(key, pending);
+      return pending;
     },
 
     listProfiles: (query) => profiles.listMetadata(query.providerId),

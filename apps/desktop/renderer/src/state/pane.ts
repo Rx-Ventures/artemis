@@ -190,6 +190,25 @@ export interface SessionState extends MirroredState {
   readonly modelsLoading: boolean;
   readonly modelsError: string | null;
 
+  /**
+   * The slash commands a run started here *would* offer, or `null` for "not
+   * asked yet".
+   *
+   * Exists so the composer's menu can open before the first message. Once a run
+   * exists, `RunState.slashCommands` is the better answer and wins — that list
+   * is what the session really loaded and is kept current by `session.commands`
+   * — so this is the standing answer for a column between conversations, which
+   * is where a slash command is most often typed.
+   *
+   * Per pane for the same reason `models` is: it is a property of the profile
+   * and the directory, and two columns can differ in both. `null` rather than
+   * `[]` because the two mean different things to the fetch — nobody has asked
+   * versus the provider answered with nothing — even though the menu treats
+   * them alike. Never persisted; a spawned subprocess is cheap enough to repeat
+   * on launch and a stale list is worse than a late one.
+   */
+  readonly commands: readonly string[] | null;
+
   readonly run: RunState | null;
   /**
    * Permission requests still awaiting an answer, for this column's run.

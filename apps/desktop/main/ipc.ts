@@ -97,6 +97,7 @@ import {
   validateProfilesList,
   validateProfilesUpdate,
   validateProvidersList,
+  validateProvidersCommands,
   validateProvidersModels,
   validateRunsDispose,
   validateRunsInterrupt,
@@ -338,6 +339,31 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
         } catch (error) {
           log.error(`Could not read the model list for provider "${request.providerId}"`, error);
           return { models: [], live: false };
+        }
+      },
+    },
+
+    /*
+     * The slash commands a session here would offer, before there is one.
+     *
+     * Swallows like `providersModels` above and lands somewhere gentler: an
+     * empty list is what the composer had before this channel existed, so a
+     * provider that cannot be reached costs the menu nothing it was not already
+     * missing. Logged rather than reported, for the same reason — there is no
+     * user-facing failure to explain.
+     */
+    [IPC.providersCommands]: {
+      validate: validateProvidersCommands,
+      handle: async (request) => {
+        try {
+          return await engine.require().listProviderCommands({
+            providerId: request.providerId,
+            profileId: request.profileId,
+            ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+          });
+        } catch (error) {
+          log.error(`Could not read the command list for provider "${request.providerId}"`, error);
+          return { commands: [] };
         }
       },
     },
