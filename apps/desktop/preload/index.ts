@@ -72,6 +72,12 @@ import {
   type ServerStartRequest,
   type ServerState,
   type ServerStatusRequest,
+  type RoutinesState,
+  type RoutinesListRequest,
+  type RoutinesCreateRequest,
+  type RoutinesUpdateRequest,
+  type RoutinesDeleteRequest,
+  type RoutinesRunNowRequest,
   type ServerStopRequest,
   type SessionsListAllRequest,
   type SessionsListRequest,
@@ -318,6 +324,24 @@ function isUpdateState(value: unknown): value is UpdateState {
  * payload, and a length or charset rule here would be a second definition of
  * what a token is that could disagree with the one that issues them.
  */
+/**
+ * The routines push, held to the same bar as the server's: enough structure to
+ * refuse a stray message, no more — the renderer re-validates what it renders.
+ */
+function isRoutinesState(value: unknown): value is RoutinesState {
+  if (typeof value !== 'object' || value === null) return false;
+  const routines = (value as { routines?: unknown }).routines;
+  return (
+    Array.isArray(routines) &&
+    routines.every(
+      (routine) =>
+        typeof routine === 'object' &&
+        routine !== null &&
+        typeof (routine as { id?: unknown }).id === 'string',
+    )
+  );
+}
+
 function isServerState(value: unknown): value is ServerState {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as {
@@ -477,6 +501,12 @@ const serverStates = createPushChannel<ServerState>({
   isValid: isServerState,
 });
 
+const routineStates = createPushChannel<RoutinesState>({
+  channel: IPC_PUSH.routinesState,
+  label: 'artemis.routines.onChange',
+  isValid: isRoutinesState,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
@@ -494,6 +524,7 @@ window.addEventListener('beforeunload', () => {
   updateStates.reset();
   menuOpenSettings.reset();
   serverStates.reset();
+  routineStates.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -745,6 +776,16 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.serverDeleteConnection, request),
     catalogue: (request: ServerCatalogueRequest) => invoke(IPC.serverCatalogue, request),
     onChange: serverStates.subscribe,
+  }),
+
+  /** Scheduled runs. Five verbs and a push; the scheduler itself is main's. */
+  routines: Object.freeze({
+    list: (request: RoutinesListRequest) => invoke(IPC.routinesList, request),
+    create: (request: RoutinesCreateRequest) => invoke(IPC.routinesCreate, request),
+    update: (request: RoutinesUpdateRequest) => invoke(IPC.routinesUpdate, request),
+    remove: (request: RoutinesDeleteRequest) => invoke(IPC.routinesDelete, request),
+    runNow: (request: RoutinesRunNowRequest) => invoke(IPC.routinesRunNow, request),
+    onChange: routineStates.subscribe,
   }),
 
   /**

@@ -88,6 +88,7 @@ import {
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
 import type { ServerHost } from './server.js';
+import type { RoutineHost } from './routines.js';
 import { readSharedConfigStatus } from './sharedConfig.js';
 import type { TerminalHost } from './terminal.js';
 import type { Updater } from './updater.js';
@@ -109,6 +110,11 @@ import {
   validateRunsSend,
   validateRunsStart,
   validateServerCatalogue,
+  validateRoutinesList,
+  validateRoutinesCreate,
+  validateRoutinesUpdate,
+  validateRoutinesDelete,
+  validateRoutinesRunNow,
   validateServerConfigure,
   validateServerCreateConnection,
   validateServerDeleteConnection,
@@ -209,6 +215,7 @@ export interface IpcLayerOptions {
   readonly terminals: TerminalHost;
   readonly browsers: BrowserHost;
   readonly server: ServerHost;
+  readonly routines: RoutineHost;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -223,7 +230,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy, updater, terminals, browsers, server } = options;
+  const { engine, policy, updater, terminals, browsers, server, routines } = options;
 
   /**
    * Drop the conversations a program started, leaving the person's own.
@@ -674,6 +681,40 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async (request) => ({
         profiles: await server.catalogue({ refresh: request.refresh === true }),
       }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Routines                                                         */
+    /* ---------------------------------------------------------------- */
+
+    /*
+     * Every routines channel answers with the whole state, exactly as the
+     * server channels do and for the same reason: a firing moves the history,
+     * the running flag and the next appointment at once.
+     */
+    [IPC.routinesList]: {
+      validate: validateRoutinesList,
+      handle: async () => ({ state: routines.state() }),
+    },
+
+    [IPC.routinesCreate]: {
+      validate: validateRoutinesCreate,
+      handle: async (request) => ({ state: await routines.create(request.draft) }),
+    },
+
+    [IPC.routinesUpdate]: {
+      validate: validateRoutinesUpdate,
+      handle: async (request) => ({ state: await routines.update(request.id, request.patch) }),
+    },
+
+    [IPC.routinesDelete]: {
+      validate: validateRoutinesDelete,
+      handle: async (request) => ({ state: await routines.remove(request.id) }),
+    },
+
+    [IPC.routinesRunNow]: {
+      validate: validateRoutinesRunNow,
+      handle: async (request) => ({ state: await routines.runNow(request.id) }),
     },
 
     /* ---------------------------------------------------------------- */

@@ -29,6 +29,8 @@ import type {
   ProviderModelOption,
   RunEndReason,
   RunHandle,
+  Routine,
+  RoutinesState,
   ServerState,
   SharedConfigEntryState,
   UpdateState,
@@ -43,6 +45,7 @@ import {
   assignProfileSlugs,
   browserUrlFor,
   DEFAULT_SERVER_PORT,
+  nextFireAt,
   modelRoute,
   NO_CAPABILITIES,
   SHARED_ENTRIES,
@@ -857,6 +860,52 @@ export function createMockBridge(): ArtemisBridge {
     traffic: { total: 0, rejected: 0 },
   };
   const serverListeners = new Set<(state: ServerState) => void>();
+
+  /** One example routine, so the pane never opens empty in dev. */
+  let mockRoutines: Routine[] = [
+    {
+      id: 'routine-morning',
+      name: 'Morning triage',
+      instructions: 'Read the overnight alerts, summarise anything on fire, and file the rest.',
+      cwd: '/Users/demo/code/kronos',
+      profileId: 'prof-1',
+      providerId: 'claude',
+      schedule: { kind: 'weekdays', at: '09:00' },
+      paused: false,
+      createdAt: Date.now() - 6 * 86_400_000,
+      lastFiredAt: Date.now() - 3 * 3_600_000,
+      history: [
+        {
+          firedAt: Date.now() - 3 * 3_600_000,
+          runId: 'routine-run-1',
+          sessionId: 'sess-routine-1',
+          outcome: 'completed',
+        },
+        {
+          firedAt: Date.now() - 27 * 3_600_000,
+          outcome: 'skipped',
+          skipReason: 'overlap',
+        },
+      ],
+    },
+  ];
+  const mockRunningRoutines = new Set<string>();
+  const routineListeners = new Set<(state: RoutinesState) => void>();
+
+  const routinesState = (): RoutinesState => ({
+    routines: mockRoutines.map((routine) => {
+      const next = routine.paused ? undefined : nextFireAt(routine.schedule, Date.now());
+      return {
+        ...routine,
+        ...(next === undefined ? {} : { nextFireAt: next }),
+        running: mockRunningRoutines.has(routine.id),
+      };
+    }),
+  });
+
+  const pushRoutinesState = (): void => {
+    for (const listener of routineListeners) listener(routinesState());
+  };
 
   const pushServerState = (): void => {
     for (const listener of serverListeners) listener(serverState);
@@ -2098,6 +2147,100 @@ export function createMockBridge(): ArtemisBridge {
       onChange: (listener): Unsubscribe => {
         serverListeners.add(listener);
         return () => serverListeners.delete(listener);
+      },
+    },
+
+    /*
+     * Routines, held in this mock's memory: enough behaviour to develop the
+     * pane against — create, edit, pause, delete, a run-now that "runs" for a
+     * few seconds and settles as completed — without a scheduler behind it.
+     */
+    routines: {
+      list: async () => ok({ state: routinesState() }),
+      create: async ({ draft }) => {
+        mockRoutines = [
+          ...mockRoutines,
+          {
+            id: `routine-${mockRoutines.length + 1}`,
+            name: draft.name,
+            instructions: draft.instructions,
+            cwd: draft.cwd,
+            profileId: draft.profileId,
+            providerId: draft.providerId,
+            ...(draft.model === undefined ? {} : { model: draft.model }),
+            schedule: draft.schedule,
+            paused: draft.paused === true,
+            createdAt: Date.now(),
+            history: [],
+          },
+        ];
+        pushRoutinesState();
+        return ok({ state: routinesState() });
+      },
+      update: async ({ id, patch }) => {
+        mockRoutines = mockRoutines.map((routine) =>
+          routine.id === id
+            ? {
+                ...routine,
+                ...(patch.name === undefined ? {} : { name: patch.name }),
+                ...(patch.instructions === undefined ? {} : { instructions: patch.instructions }),
+                ...(patch.cwd === undefined ? {} : { cwd: patch.cwd }),
+                ...(patch.profileId === undefined ? {} : { profileId: patch.profileId }),
+                ...(patch.providerId === undefined ? {} : { providerId: patch.providerId }),
+                ...(patch.model === undefined
+                  ? {}
+                  : patch.model === ''
+                    ? { model: undefined }
+                    : { model: patch.model }),
+                ...(patch.schedule === undefined ? {} : { schedule: patch.schedule }),
+                ...(patch.paused === undefined ? {} : { paused: patch.paused }),
+              }
+            : routine,
+        );
+        pushRoutinesState();
+        return ok({ state: routinesState() });
+      },
+      remove: async ({ id }) => {
+        mockRoutines = mockRoutines.filter((routine) => routine.id !== id);
+        pushRoutinesState();
+        return ok({ state: routinesState() });
+      },
+      runNow: async ({ id }) => {
+        const firedAt = Date.now();
+        const runId = `routine-run-${firedAt}`;
+        mockRunningRoutines.add(id);
+        mockRoutines = mockRoutines.map((routine) =>
+          routine.id === id
+            ? {
+                ...routine,
+                lastFiredAt: firedAt,
+                history: [
+                  { firedAt, runId, outcome: 'running' as const },
+                  ...routine.history,
+                ].slice(0, 50),
+              }
+            : routine,
+        );
+        pushRoutinesState();
+        setTimeout(() => {
+          mockRunningRoutines.delete(id);
+          mockRoutines = mockRoutines.map((routine) =>
+            routine.id === id
+              ? {
+                  ...routine,
+                  history: routine.history.map((row) =>
+                    row.runId === runId ? { ...row, outcome: 'completed' as const } : row,
+                  ),
+                }
+              : routine,
+          );
+          pushRoutinesState();
+        }, 4_000);
+        return ok({ state: routinesState() });
+      },
+      onChange: (listener): Unsubscribe => {
+        routineListeners.add(listener);
+        return () => routineListeners.delete(listener);
       },
     },
   };

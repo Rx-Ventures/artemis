@@ -38,6 +38,22 @@ export function formatRelative(ts: number | undefined, now = Date.now()): string
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/**
+ * Coarse "when", pointed forward — for appointments rather than history.
+ *
+ * {@link formatRelative}'s clamp reads every future moment as "just now",
+ * which is the right lie for a session list and the wrong one for a schedule.
+ */
+export function formatUntil(ts: number | undefined, now = Date.now()): string {
+  if (ts === undefined) return '';
+  const delta = Math.max(0, ts - now);
+  if (delta < 90_000) return 'within a minute';
+  if (delta < 3_600_000) return `in ${Math.round(delta / 60_000)}m`;
+  if (delta < 86_400_000) return `in ${Math.round(delta / 3_600_000)}h`;
+  if (delta < 7 * 86_400_000) return `in ${Math.round(delta / 86_400_000)}d`;
+  return `on ${new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+
 /** Clock time, for transcript gutters. */
 export function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, {

@@ -27,6 +27,17 @@
 
 import { isAbsolute } from 'node:path';
 
+import type {
+  RoutineDraft,
+  RoutinePatch,
+  RoutinesCreateRequest,
+  RoutinesDeleteRequest,
+  RoutinesListRequest,
+  RoutinesRunNowRequest,
+  RoutinesUpdateRequest,
+} from '@rx-artemis/protocol';
+import { readSchedule } from './routines.js';
+
 import {
   AGENT_PROMPTS_VERSION,
   AGENT_PROMPT_LIMITS,
@@ -2191,4 +2202,121 @@ export function validateServerCatalogue(raw: unknown): ServerCatalogueRequest {
   const request = requireRequest(raw);
   const refresh = optionalBoolean(request['refresh'], 'refresh');
   return refresh === undefined ? {} : { refresh };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Routines                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Limits for the free-text fields a routine carries.
+ *
+ * Instructions get room — a routine's prompt is a real prompt — and the rest
+ * are labels. Enforced here rather than trusted from the form, because the
+ * file these end up in is read on every boot.
+ */
+const ROUTINE_NAME_MAX = 200;
+const ROUTINE_INSTRUCTIONS_MAX = 20_000;
+
+function requireSchedule(value: unknown, field: string) {
+  const schedule = readSchedule(value);
+  if (schedule === undefined) {
+    throw new ValidationError(field, 'is not a usable schedule');
+  }
+  return schedule;
+}
+
+export function validateRoutinesList(raw: unknown): RoutinesListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+export function validateRoutinesCreate(raw: unknown): RoutinesCreateRequest {
+  const request = requireRequest(raw);
+  const draft = requireObject(request['draft'], 'draft');
+
+  const cwd = requireString(draft['cwd'], 'draft.cwd', 4_096);
+  if (!isAbsolute(cwd)) throw new ValidationError('draft.cwd', 'must be an absolute path');
+
+  const providerId = draft['providerId'];
+  if (!isProviderId(providerId)) throw new ValidationError('draft.providerId', 'is not a provider');
+
+  const model = optionalString(draft['model'], 'draft.model', 200);
+  const paused = optionalBoolean(draft['paused'], 'draft.paused');
+
+  const built: RoutineDraft = {
+    name: requireString(draft['name'], 'draft.name', ROUTINE_NAME_MAX),
+    instructions: requireString(draft['instructions'], 'draft.instructions', ROUTINE_INSTRUCTIONS_MAX),
+    cwd,
+    profileId: requireString(draft['profileId'], 'draft.profileId', 200),
+    providerId,
+    ...(model === undefined ? {} : { model }),
+    schedule: requireSchedule(draft['schedule'], 'draft.schedule'),
+    ...(paused === undefined ? {} : { paused }),
+  };
+  return { draft: built };
+}
+
+export function validateRoutinesUpdate(raw: unknown): RoutinesUpdateRequest {
+  const request = requireRequest(raw);
+  const id = requireString(request['id'], 'id', 100);
+  const patch = requireObject(request['patch'], 'patch');
+
+  const cwd = optionalString(patch['cwd'], 'patch.cwd', 4_096);
+  if (cwd !== undefined && !isAbsolute(cwd)) {
+    throw new ValidationError('patch.cwd', 'must be an absolute path');
+  }
+  const providerId = patch['providerId'];
+  if (providerId !== undefined && providerId !== null && !isProviderId(providerId)) {
+    throw new ValidationError('patch.providerId', 'is not a provider');
+  }
+  const name = optionalString(patch['name'], 'patch.name', ROUTINE_NAME_MAX);
+  const instructions = optionalString(
+    patch['instructions'],
+    'patch.instructions',
+    ROUTINE_INSTRUCTIONS_MAX,
+  );
+  const profileId = optionalString(patch['profileId'], 'patch.profileId', 200);
+  const paused = optionalBoolean(patch['paused'], 'patch.paused');
+
+  /*
+   * `model: ''` is the one empty string this file lets through: it is the
+   * documented "clear the model" form, the same convention `ProfilePatch`
+   * carries. `optionalString` refuses empties, so it is read by hand.
+   */
+  let model: string | undefined;
+  if (patch['model'] !== undefined && patch['model'] !== null) {
+    if (typeof patch['model'] !== 'string') {
+      throw new ValidationError('patch.model', 'must be a string');
+    }
+    if (patch['model'].length > 200) {
+      throw new ValidationError('patch.model', 'must be at most 200 characters');
+    }
+    model = patch['model'];
+  }
+
+  const built: RoutinePatch = {
+    ...(name === undefined ? {} : { name }),
+    ...(instructions === undefined ? {} : { instructions }),
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(profileId === undefined ? {} : { profileId }),
+    ...(providerId === undefined || providerId === null ? {} : { providerId }),
+    ...(model === undefined ? {} : { model }),
+    ...(patch['schedule'] === undefined || patch['schedule'] === null
+      ? {}
+      : { schedule: requireSchedule(patch['schedule'], 'patch.schedule') }),
+    ...(paused === undefined ? {} : { paused }),
+  };
+  return { id, patch: built };
+}
+
+export function validateRoutinesDelete(raw: unknown): RoutinesDeleteRequest {
+  const request = requireRequest(raw);
+  return { id: requireString(request['id'], 'id', 100) };
+}
+
+/** @see validateRoutinesDelete */
+export function validateRoutinesRunNow(raw: unknown): RoutinesRunNowRequest {
+  const request = requireRequest(raw);
+  return { id: requireString(request['id'], 'id', 100) };
 }

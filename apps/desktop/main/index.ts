@@ -25,7 +25,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, session } from 'electron';
 
 import { IPC_PUSH, PREFS_READ_CHANNEL, PREFS_WRITE_CHANNEL } from '@rx-artemis/protocol';
 
@@ -53,6 +53,7 @@ import {
 } from './ipc.js';
 import { createLogger } from './log.js';
 import { installApplicationMenu } from './menu.js';
+import { assertNoSecrets, RESPONSE_SCAN_POLICY } from './redact.js';
 import { startPlanUsagePolling } from './planUsagePoll.js';
 import { clearPreviews, registerPreviewScheme, servePreviews } from './preview.js';
 import { adoptLoginShellPath } from './shellPath.js';
@@ -63,6 +64,7 @@ import {
   externalBrowserToolServer,
 } from './browserTools.js';
 import { createServerHost, type ServerHost } from './server.js';
+import { createRoutineHost, type RoutineHost } from './routines.js';
 import { createTerminalHost, type TerminalHost } from './terminal.js';
 import { createUpdater } from './updater.js';
 import {
@@ -205,6 +207,7 @@ let stopBrowserForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
 let stopUpdater: (() => void) | null = null;
 let serverHost: ServerHost | null = null;
+let routineHost: RoutineHost | null = null;
 let terminals: TerminalHost | null = null;
 const browsers = new BrowserHost();
 const engineHost = new EngineHost();
@@ -463,6 +466,30 @@ async function bootstrap(): Promise<void> {
     broadcast: (state) => broadcast(IPC_PUSH.serverState, state),
   });
 
+  // Same construction order as the server host, for the same reason: the IPC
+  // layer's handlers close over it. Notifications are wired here because the
+  // host itself must stay runnable outside Electron.
+  routineHost = createRoutineHost({
+    engine: engineHost,
+    userDataDir,
+    // Scanned before it goes out, the way the plan-usage poller scans its own
+    // pushes: a push is not a weaker boundary than an invoke reply. A failing
+    // state is dropped and logged rather than sent.
+    broadcast: (state) => {
+      try {
+        assertNoSecrets(state, IPC_PUSH.routinesState, RESPONSE_SCAN_POLICY);
+      } catch (error) {
+        log.error('Dropped a routines push: it failed its credential-safety check', error);
+        return;
+      }
+      broadcast(IPC_PUSH.routinesState, state);
+    },
+    notify: (title, body) => {
+      if (!Notification.isSupported()) return;
+      new Notification({ title, body }).show();
+    },
+  });
+
   ipcLayer = registerIpcHandlers({
     engine: engineHost,
     policy,
@@ -470,6 +497,7 @@ async function bootstrap(): Promise<void> {
     terminals,
     browsers,
     server: serverHost,
+    routines: routineHost,
   });
   stopEventForwarding = forwardAgentEvents(engineHost);
   stopTerminalForwarding = forwardTerminalEvents(terminals);
@@ -495,6 +523,16 @@ async function bootstrap(): Promise<void> {
    */
   void serverHost.start().catch((error: unknown) => {
     log.error('Could not start the local server', error);
+  });
+
+  /*
+   * The routines host reads its file, fires any make-up run the closed app
+   * owed, and starts the minute tick. After the window for the server host's
+   * reason — a catch-up firing is news the sidebar renders — and un-awaited
+   * for the same one: the schedule is not something startup waits on.
+   */
+  void routineHost.start().catch((error: unknown) => {
+    log.error('Could not start the routines host', error);
   });
 
   reportEngineProblem();
@@ -567,6 +605,9 @@ app.on('before-quit', (event) => {
   // "address already in use" from the copy that is exiting. `dispose` drops
   // live connections rather than waiting for clients to hang up.
   void serverHost?.dispose();
+  // Stops the minute tick and flushes the ledger's write chain, so the firing
+  // the user just watched is on disk before the process exits.
+  void routineHost?.dispose();
   ipcLayer?.dispose();
   // Synchronous, and before the race below: a shell is a child of *this*
   // process, so anything still alive when `app.exit` fires is reparented to
