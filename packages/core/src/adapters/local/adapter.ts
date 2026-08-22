@@ -687,11 +687,14 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
           response.status === 401 || response.status === 403
             ? `${flavour.label} at ${root} refused the request (${response.status}). Check this profile's API key.`
             : `The ${flavour.label} server at ${root} answered ${response.status}.`;
-        return { available: false as const, reason };
+        // `unavailableReason`, as the seam spells it — this was `reason` once,
+        // which the descriptor path reads right past, so every one of these
+        // sentences reached the screen as a bare "Unavailable."
+        return { available: false as const, unavailableReason: reason };
       } catch {
         return {
           available: false as const,
-          reason: `Nothing is answering at ${root}. Start ${flavour.label} and try again.`,
+          unavailableReason: `Nothing is answering at ${root}. Start ${flavour.label} and try again.`,
         };
       }
     },

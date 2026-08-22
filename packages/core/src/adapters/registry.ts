@@ -31,6 +31,7 @@
 import type { ProviderDescriptor, ProviderId, ProviderKind } from '@rx-artemis/protocol';
 import { NO_CAPABILITIES, PROVIDER_IDS } from '@rx-artemis/protocol';
 
+import { createArtemisAdapter } from './artemis/adapter.js';
 import { createClaudeAdapter } from './claude.js';
 import type { ClaudeAdapterOptions } from './claude.js';
 import { createCodexAdapter } from './codex.js';
@@ -54,6 +55,7 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = {
   lmstudio: 'LM Studio',
   ollama: 'Ollama',
   llamacpp: 'llama.cpp',
+  artemis: 'Artemis Server',
 };
 
 /**
@@ -74,6 +76,9 @@ const PROVIDER_KINDS: Readonly<Record<ProviderId, ProviderKind>> = {
   lmstudio: 'local',
   ollama: 'local',
   llamacpp: 'local',
+  // Another Artemis's server: no account, just an address and a connection
+  // token — the `local` entry model, even when the machine is elsewhere.
+  artemis: 'local',
 };
 
 /** Why a known provider is missing from this build. */
@@ -256,5 +261,8 @@ export function createDefaultProviderRegistry(
     createLocalAdapter(LM_STUDIO),
     createLocalAdapter(OLLAMA),
     createLocalAdapter(LLAMA_CPP),
+    // And the endpoint that is another Artemis — its own adapter, because the
+    // remote end runs the whole agent turn. See `artemis/adapter.ts`.
+    createArtemisAdapter(),
   ]);
 }

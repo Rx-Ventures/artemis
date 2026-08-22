@@ -97,7 +97,7 @@ describe('the provider picker splits hosted from local', () => {
     openForm();
 
     expect(screen.getByText(/Hosted — signed in to an account/)).toBeTruthy();
-    expect(screen.getByText(/Local — a server on this machine/)).toBeTruthy();
+    expect(screen.getByText(/Local — a server you run/)).toBeTruthy();
   });
 
   it('DEFAULT: a descriptor with no kind is hosted, not dropped', () => {
@@ -187,6 +187,6 @@ describe('the provider picker splits hosted from local', () => {
     seed([provider('claude', 'Claude', 'hosted')]);
     openForm();
 
-    expect(screen.queryByText(/Local — a server on this machine/)).toBeNull();
+    expect(screen.queryByText(/Local — a server you run/)).toBeNull();
   });
 });
