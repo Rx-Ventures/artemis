@@ -452,7 +452,9 @@ describe('command palette / forkSession', () => {
       .getByText('Fork the current session on the next prompt')
       .closest('[role="option"]');
     expect(item?.getAttribute('aria-disabled')).toBe('true');
-    expect(screen.getByText(/does not support forking a session/)).toBeTruthy();
+    // Two commands now explain the same missing capability — the toggle and
+    // fork-from-your-last-message — and both saying why is the point.
+    expect(screen.getAllByText(/does not support forking a session/).length).toBeGreaterThan(0);
   });
 
   it('distinguishes "cannot fork" from "nothing to fork yet"', () => {

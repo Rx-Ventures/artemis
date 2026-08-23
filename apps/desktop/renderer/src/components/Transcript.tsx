@@ -173,6 +173,7 @@ import {
   type ConversationWidth,
 } from '../state/store';
 import type { FileReference } from '../lib/filePaths';
+import { ReasonButton } from './disabled-reason';
 import { usePane, usePaneRef } from '../state/paneContext';
 import {
   formatClock,
@@ -502,14 +503,17 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
   const rewind = useCapability('rewind');
   const fork = useCapability('forkSession');
   /*
-   * Only a message the provider has filed can be a rewind point — the id the
-   * run input names is the provider's, and a pending message does not have one
-   * yet. Live runs hide the controls entirely: winding back a conversation
-   * that is mid-thought is refused in the store anyway, and a button that is
-   * present-but-inert under every message of a running turn is noise exactly
-   * where the eye is.
+   * A settled message is a rewind point; the provider's id for it is resolved
+   * when the control is used, not required before it appears — see
+   * `resolveRewindAnchor` for why a live-typed row cannot have learned it.
+   * Live runs and pending sends still hide the controls entirely: winding
+   * back a conversation that is mid-thought is refused in the store anyway,
+   * and a button that is present-but-inert under every message of a running
+   * turn is noise exactly where the eye is. An unsupported *capability*, by
+   * contrast, renders disabled-with-reason below — the app's standing rule —
+   * so a Codex pane says why the control does nothing rather than lacking it.
    */
-  const canRewind = !live && item.messageId !== undefined && !item.pending && rewind.supported;
+  const showControls = !live && !item.pending;
 
   return (
     <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2 group/turn">
@@ -617,28 +621,30 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
         whole and branches a new one; rewind winds this one back. See
         `rewindConversationTo`.
       */}
-      {canRewind ? (
+      {showControls ? (
         <span className="mt-0.5 flex items-center gap-0.5 self-end opacity-0 transition-opacity group-hover/turn:opacity-100 focus-within:opacity-100">
-          {fork.supported ? (
-            <button
-              type="button"
-              title="Fork from here — branch a new conversation, keeping this one"
-              aria-label="Fork the conversation from this message"
-              onClick={() => rewindConversationTo(item.id, { fork: true }, pane)}
-              className="rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
-            >
-              <GitForkIcon className="size-3" aria-hidden="true" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            title="Rewind to here — wind the conversation back to before this message"
+          <ReasonButton
+            variant="ghost"
+            disabled={!fork.supported}
+            disabledReason={fork.reason}
+            tooltip="Fork from here — branch a new conversation, keeping this one"
+            aria-label="Fork the conversation from this message"
+            onClick={() => void rewindConversationTo(item.id, { fork: true }, pane)}
+            className="size-auto rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <GitForkIcon className="size-3" aria-hidden="true" />
+          </ReasonButton>
+          <ReasonButton
+            variant="ghost"
+            disabled={!rewind.supported}
+            disabledReason={rewind.reason}
+            tooltip="Rewind to here — wind the conversation back to before this message"
             aria-label="Rewind the conversation to before this message"
-            onClick={() => rewindConversationTo(item.id, { fork: false }, pane)}
-            className="rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+            onClick={() => void rewindConversationTo(item.id, { fork: false }, pane)}
+            className="size-auto rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <Undo2Icon className="size-3" aria-hidden="true" />
-          </button>
+          </ReasonButton>
         </span>
       ) : null}
     </Line>

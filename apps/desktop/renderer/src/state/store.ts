@@ -6652,11 +6652,28 @@ export function setForkOnResume(fork: boolean, pane: Pane = focusedPane()): void
  * a state the controls are already hidden in: a live run, a message still
  * pending, a conversation with no session on disk to wind back.
  */
-export function rewindConversationTo(
+/**
+ * The most recent settled user message in a pane's transcript — the palette's
+ * keyboard path resolves against this at select time, so "rewind to your last
+ * message" acts on whatever is true when Enter lands rather than when the
+ * palette opened.
+ */
+export function lastSettledUserItemId(pane: Pane = focusedPane()): string | null {
+  const rows = pane.transcript.getListSnapshot();
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const id = rows[index];
+    if (id === undefined) continue;
+    const item = pane.transcript.getItem(id);
+    if (item?.kind === 'user' && !item.pending) return item.id;
+  }
+  return null;
+}
+
+export async function rewindConversationTo(
   itemId: string,
   { fork }: { readonly fork: boolean },
   pane: Pane = focusedPane(),
-): void {
+): Promise<void> {
   const state = paneState(pane);
   if (isLive(state)) return;
   if (!activeCapabilities(state).rewind) return;
@@ -6666,19 +6683,123 @@ export function rewindConversationTo(
   if (sessionId === null) return;
 
   const item = pane.transcript.getItem(itemId);
-  if (item?.kind !== 'user' || item.messageId === undefined || item.pending) return;
+  if (item?.kind !== 'user' || item.pending) return;
+
+  /*
+   * Resolved before anything is cut, so a refusal has no side effects: the
+   * transcript is only truncated once there is an anchor the provider will
+   * actually honour. The resolution can take a round-trip — see
+   * {@link resolveRewindAnchor} — and the checks re-run after it, because the
+   * pane can move to another conversation while the read is in flight.
+   */
+  const anchor = await resolveRewindAnchor(pane, sessionId, itemId, item);
+  if (anchor === null) return;
+
+  const after = paneState(pane);
+  if (isLive(after)) return;
+  if ((after.resumeSessionId ?? after.run?.sessionId ?? null) !== sessionId) return;
+  if (pane.transcript.getItem(itemId)?.kind !== 'user') return;
 
   pane.transcript.truncateFrom(itemId);
   pane.transcript.flush();
   setPaneState(pane, {
     resumeSessionId: sessionId,
-    rewindToMessageId: item.messageId,
+    rewindToMessageId: anchor,
     forkOnResume: fork,
     // The message being wound past goes back in the composer — a rewind is
     // almost always "let me say that differently", and retyping it from
     // memory is the cost this control exists to remove.
     draft: item.text,
   });
+}
+
+/**
+ * The provider's own id for a user turn, found however it can be.
+ *
+ * A row replayed from stored history already carries it. A row the user typed
+ * *this window session* does not, and cannot: the CLI never echoes a live
+ * prompt back on the stream (measured, not assumed — the turn goes
+ * `system(init) → assistant → result` with no user message in it), so there is
+ * no moment the renderer could have learned the stored chain's uuid. What the
+ * registry stamps instead — its own `${runId}:prompt:${n}` retention id — is
+ * an Artemis-internal name the stored chain has never heard of, and sending it
+ * would only buy the adapter's "not in the stored conversation" refusal.
+ *
+ * So the id is read from the source of truth at the moment it is needed: the
+ * stored session, replayed through the same mapper that draws history. The
+ * clicked row is matched by *tail-anchored ordinal* — it is the m-th user
+ * message counting back from the end of the screen, and the stored chain's
+ * m-th-from-last user turn is the same message. Counting from the end is what
+ * survives a replay that returns only the most recent part of a long session.
+ * The text is compared as a belt against drift; any mismatch refuses with a
+ * banner rather than cutting the conversation at the wrong turn.
+ */
+async function resolveRewindAnchor(
+  pane: Pane,
+  sessionId: SessionId,
+  itemId: string,
+  item: { readonly messageId?: string; readonly text: string },
+): Promise<string | null> {
+  // `:prompt:` marks the registry's retention ids — see `#recordPrompt` — and
+  // is unmintable by the provider, whose uuids have no colons.
+  if (item.messageId !== undefined && !item.messageId.includes(':prompt:')) {
+    return item.messageId;
+  }
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const state = paneState(pane);
+  const profileId = state.activeProfileId;
+  if (profileId === null) return null;
+
+  const res = await call(() =>
+    bridge.sessions.messages({
+      profileId,
+      sessionId,
+      // Stamped but never applied — these events are read, not drawn.
+      runId: `rewind:${sessionId}` as RunId,
+      cwd: state.cwd,
+    }),
+  );
+  if (!res.ok) {
+    pushBanner('warn', 'Could not check the stored conversation', res.error.message);
+    return null;
+  }
+
+  const rows = pane.transcript.getListSnapshot();
+  const userRows: { id: string; text: string }[] = [];
+  for (const rowId of rows) {
+    const row = pane.transcript.getItem(rowId);
+    if (row?.kind === 'user') userRows.push({ id: row.id, text: row.text });
+  }
+  const position = userRows.findIndex((row) => row.id === itemId);
+  if (position < 0) return null;
+  const fromEnd = userRows.length - position;
+
+  const stored: { messageId: string; text: string }[] = [];
+  for (const event of res.value.events) {
+    if (event.type === 'text.complete' && event.role === 'user' && event.messageId !== undefined) {
+      stored.push({ messageId: event.messageId, text: event.text });
+    }
+  }
+  const target = stored[stored.length - fromEnd];
+  if (target === undefined) {
+    pushBanner(
+      'warn',
+      'That message is not in the stored conversation yet',
+      'The provider may still be writing the last turn. Try again in a moment.',
+    );
+    return null;
+  }
+  if (target.text !== item.text) {
+    pushBanner(
+      'warn',
+      'The stored conversation does not match what is on screen',
+      'Rewinding here could cut the wrong turn, so nothing was changed.',
+    );
+    return null;
+  }
+  return target.messageId;
 }
 
 export function setScreen(screen: Screen): void {
