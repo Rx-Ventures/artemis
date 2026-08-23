@@ -56,6 +56,26 @@ describe('validateRunsStart', () => {
     expect(() => validateRunsStart({ input: { ...VALID_RUN, permissionMode: 'yolo' } })).toThrow(ValidationError);
   });
 
+  it('carries the whole resume surface through, field for field', () => {
+    // `compact` copies exactly the keys written in the whitelist — an absent
+    // line is a field that silently vanishes on its way through IPC. That is
+    // precisely how rewind shipped broken: `rewindToMessageId` survived the
+    // renderer, died here, and the run resumed the full conversation while
+    // the screen showed the cut. This pin is the one that would have caught
+    // it, so every sibling field rides along.
+    const result = validateRunsStart({
+      input: {
+        ...VALID_RUN,
+        resumeSessionId: 'sess-abc',
+        forkSession: true,
+        rewindToMessageId: 'a4f0c2d1-9b8e-4c1d-9f00-1234567890ab',
+      },
+    });
+    expect(result.input.resumeSessionId).toBe('sess-abc');
+    expect(result.input.forkSession).toBe(true);
+    expect(result.input.rewindToMessageId).toBe('a4f0c2d1-9b8e-4c1d-9f00-1234567890ab');
+  });
+
   it('drops fields the contract does not define', () => {
     // The interesting case: a renderer trying to reach past the contract into
     // the Claude Agent SDK's own `Options`.

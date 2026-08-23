@@ -1080,7 +1080,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
        * grows, and the model's own prompt cache is still warm.
        */
       const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
-      const alive = input.resumeSessionId === undefined ? undefined : live.get(input.resumeSessionId);
+      let alive = input.resumeSessionId === undefined ? undefined : live.get(input.resumeSessionId);
 
       /*
        * A rewind never attaches, and never coexists with a live process.
@@ -1088,18 +1088,29 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
        * Attaching would hand the truncation request to a CLI whose context
        * already contains the turns being wound back — silently ignored at
        * best. And starting a *second* CLI against a file the first is still
-       * appending to is the exact clobber the pool exists to prevent. So a
-       * conversation that still has work in flight refuses the rewind and
-       * says why, which is also the honest answer: winding back a session
-       * that is mid-thought is not a well-defined thing to ask for.
+       * appending to is the exact clobber the pool exists to prevent.
+       *
+       * But "there is a process" is not "there is work". The pool retains a
+       * process for grace windows too — a settling task's follow-up turn, a
+       * prediction still being generated — and a conversation in one of those
+       * is idle in every sense the user can see. Refusing those made the
+       * control fail for the length of a timer nobody knew was running. So:
+       * work in flight refuses and says why; a merely-retained process is
+       * closed and the rewind spawns fresh against a file no one is writing.
        */
       let rewind: RewindPoint | undefined;
       if (input.rewindToMessageId !== undefined && input.resumeSessionId !== undefined) {
         if (alive !== undefined) {
-          throw adapterError(
-            'invalid_request',
-            'This conversation still has work running — stop it before rewinding.',
-          );
+          if (alive.busyWithWork) {
+            throw adapterError(
+              'invalid_request',
+              'This conversation still has work running — stop it before rewinding.',
+            );
+          }
+          alive.release();
+          // Not attachable from here on, whatever `canServe` would say — the
+          // transport is going down, and its pump may not have noticed yet.
+          alive = undefined;
         }
         let stored;
         try {
@@ -2518,6 +2529,38 @@ class ClaudeProcess {
    */
   get holdsWork(): boolean {
     return this.#holdsWork();
+  }
+
+  /**
+   * Whether the conversation has *real* work in flight — a running task or a
+   * registered schedule — as opposed to merely being retained through a grace
+   * window (a settling task's follow-up turn, a prediction still being
+   * generated). {@link holdsWork} answers "should the pool keep this process";
+   * this answers "is there something a rewind would destroy". The two differ
+   * exactly on the grace windows, where the honest answer to a rewind is to
+   * let go, not to refuse for the length of a timer nobody can see.
+   */
+  get busyWithWork(): boolean {
+    return this.#liveTasks.length > 0 || this.#registeredSchedule;
+  }
+
+  /**
+   * Take the transport down because a caller needs this conversation fresh.
+   *
+   * For the rewind path: an idle process is only being *retained* — a grace
+   * timer waiting on a turn or a prediction — and handing a truncating resume
+   * to a context that already holds the turns being cut is not a thing the
+   * CLI can do. Closing is safe exactly because the turn has ended: the
+   * pump's `finally` runs, the pool entry goes with it, and the fresh spawn
+   * resumes a file nobody is writing. Callers must not attach to this process
+   * afterwards — the pump may not have noticed the closure yet.
+   */
+  release(): void {
+    try {
+      this.#query?.close();
+    } catch {
+      // Already gone.
+    }
   }
 
   /**

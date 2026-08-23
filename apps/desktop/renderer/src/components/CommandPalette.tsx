@@ -72,6 +72,7 @@ import {
   ShieldIcon,
   SparklesIcon,
   SquareTerminalIcon,
+  Undo2Icon,
   ZapIcon,
 } from 'lucide-react';
 import type { ProviderId, SessionSummary } from '@rx-artemis/protocol';
@@ -86,8 +87,10 @@ import {
   newSession,
   openSettings,
   openTerminal,
+  lastSettledUserItemId,
   refreshProviders,
   refreshSessions,
+  rewindConversationTo,
   providerOffersFastMode,
   resumeSession,
   selectedModelOption,
@@ -106,7 +109,7 @@ import {
   ultracodeAvailable,
   useApp,
 } from '../state/store';
-import { usePane } from '../state/paneContext';
+import { usePane, usePaneRef } from '../state/paneContext';
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
@@ -222,6 +225,8 @@ function RootPage({
   const listing = useCapability('listSessions');
   const resuming = useCapability('resumeSession');
   const forking = useCapability('forkSession');
+  const rewinding = useCapability('rewind');
+  const pane = usePaneRef();
   const resumeId = usePane((s) => s.resumeSessionId);
   const forkOnResume = usePane((s) => s.forkOnResume);
   const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
@@ -321,6 +326,50 @@ function RootPage({
           {forkOnResume
             ? 'Continue the session in place instead of forking'
             : 'Fork the current session on the next prompt'}
+        </GatedItem>
+
+        {/*
+         * The keyboard path to the controls under a user turn — resolved at
+         * select time against whatever the last settled user message is then,
+         * because the palette can stay open while a transcript moves. "Last
+         * message" rather than a picker: winding back one exchange is the
+         * overwhelmingly common ask, and the per-message buttons cover the
+         * rest.
+         */}
+        <GatedItem
+          supported={rewinding.supported && resumeId !== null}
+          reason={
+            !rewinding.supported
+              ? rewinding.reason
+              : 'There is no session to rewind yet — start or resume one first.'
+          }
+          onSelect={() => {
+            const target = lastSettledUserItemId(pane);
+            if (target !== null) void rewindConversationTo(target, { fork: false }, pane);
+            onClose();
+          }}
+        >
+          <Undo2Icon />
+          Rewind to your last message
+        </GatedItem>
+
+        <GatedItem
+          supported={forking.supported && rewinding.supported && resumeId !== null}
+          reason={
+            !forking.supported
+              ? forking.reason
+              : !rewinding.supported
+                ? rewinding.reason
+                : 'There is no session to fork from yet — start or resume one first.'
+          }
+          onSelect={() => {
+            const target = lastSettledUserItemId(pane);
+            if (target !== null) void rewindConversationTo(target, { fork: true }, pane);
+            onClose();
+          }}
+        >
+          <GitForkIcon />
+          Fork from your last message
         </GatedItem>
 
         <GatedItem
