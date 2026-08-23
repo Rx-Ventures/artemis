@@ -474,7 +474,7 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      * account's history", which is a different question with a truthful answer
      * that includes these; the app's history pane asks "what did I start", and
      * that is the one being answered at this boundary. Nothing is deleted — see
-     * `serverSessions.ts`.
+     * the core session ledger (`server/ledger.ts` in `@rx-artemis/core`).
      */
     [IPC.sessionsList]: {
       validate: validateSessionsList,

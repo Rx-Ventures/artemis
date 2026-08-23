@@ -889,6 +889,22 @@ export interface ProviderCredentialSpec {
   readonly configDirVar: string;
 
   /**
+   * Where this provider's session history physically lives.
+   *
+   * `'local'` — the default, and every filesystem-backed provider — means
+   * history reads get a *store* environment: the config directory and
+   * nothing else, because reading files must not decrypt a credential.
+   *
+   * `'remote'` means the history is on the other end of a network call and
+   * the credential *is* the read path — an Artemis server's session list is
+   * unreachable without the connection token. History reads for these
+   * providers get the same credential-bearing environment a run gets. The
+   * local rule's spirit survives: nothing is decrypted to read a *file*;
+   * it is decrypted to authenticate a request.
+   */
+  readonly sessionStore?: 'local' | 'remote';
+
+  /**
    * Credential variables Artemis strips from the inherited environment and
    * refuses in `publicEnv` — **and never sets**.
    *

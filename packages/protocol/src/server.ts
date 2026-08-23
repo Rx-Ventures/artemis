@@ -67,6 +67,7 @@
  * "yes, something is listening" and nothing else.
  */
 
+import type { AgentEvent } from './events.js';
 import type { ProfileId } from './ids.js';
 import type { Capabilities, ProviderId, ProviderKind } from './provider.js';
 
@@ -348,6 +349,52 @@ export interface ServerProfilesBody {
 export interface ServerModelsBody {
   readonly object: 'artemis.models';
   readonly models: readonly ServerModel[];
+}
+
+/**
+ * One stored server conversation, as `GET /api/v0/sessions` reports it.
+ *
+ * Only conversations *this connection's pin created* appear — the server's
+ * session surface is scoped to the token that asks, and the serving user's
+ * own desktop history is structurally invisible to it. See the ledger in
+ * `@rx-artemis/core` for the rule.
+ *
+ * Ids here are the provider's own session ids — the same value a completions
+ * call carries in `artemis.sessionId` to continue the conversation — so a
+ * client can go from this list straight to a resume with no mapping step.
+ */
+export interface ServerSessionSummary {
+  readonly id: string;
+  /** Best available label, resolved the way the desktop sidebar's is. */
+  readonly title: string;
+  /** The opening message, when the store kept one. */
+  readonly firstPrompt?: string;
+  /** Epoch ms of the last activity the store recorded. */
+  readonly updatedAt: number;
+  /** The serving profile's slug — the same value model routes carry. */
+  readonly profileSlug: string;
+  /** Where the conversation ran, on the serving machine. */
+  readonly cwd: string;
+}
+
+/** Body of `GET /api/v0/sessions`. */
+export interface ServerSessionsBody {
+  readonly object: 'artemis.sessions';
+  readonly sessions: readonly ServerSessionSummary[];
+}
+
+/**
+ * Body of `GET /api/v0/sessions/{id}/messages`.
+ *
+ * `events` are the same provider-agnostic `AgentEvent`s a live run emits —
+ * one rendering path on the client, not two. They are stamped with a
+ * server-side replay run id; a consumer re-stamps them into whatever
+ * transcript it is building.
+ */
+export interface ServerSessionMessagesBody {
+  readonly object: 'artemis.session.messages';
+  readonly events: readonly AgentEvent[];
+  readonly hasMore: boolean;
 }
 
 /** One row of `GET /v1/models`, in OpenAI's shape. */

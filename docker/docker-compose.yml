@@ -1,0 +1,47 @@
+# Headless Artemis, composed.
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# First-time setup, all inside the running container:
+#
+#   # 1. Register the serving account and sign it in:
+#   docker compose -f docker/docker-compose.yml exec artemis \
+#     node /app/dist/main.js profile add --label work
+#   docker compose -f docker/docker-compose.yml exec -it \
+#     -e CLAUDE_CONFIG_DIR=/data/profiles/work artemis claude login
+#
+#   # 2. Mint a connection token pinned to a mounted repository:
+#   docker compose -f docker/docker-compose.yml exec artemis \
+#     node /app/dist/main.js connection create --label laptop --directory /work/my-repo
+#
+#   # 3. On each laptop: add an "Artemis Server" profile, address
+#   #    http://<server-tailscale-ip>:6472, and paste the token as its API key.
+#
+# Reachability is this file's `ports` plus whatever network sits in front
+# (Tailscale, a firewall). Every request still authenticates per connection
+# token, and each token sees only the sessions its own scope created.
+
+services:
+  artemis:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: artemis-server
+    restart: unless-stopped
+    ports:
+      - '6472:6472'
+    volumes:
+      # Everything the server is: profiles, credentials, tokens, the session
+      # ledger. Back this up; treat it as secret material.
+      - artemis-data:/data
+      # The work. Mount each repository you want connections to pin.
+      # - /srv/repos:/work
+    environment:
+      ARTEMIS_DATA_DIR: /data
+      ARTEMIS_BIND_HOST: 0.0.0.0
+      # Uncomment to name the hosts this server answers to instead of `any`
+      # (the default for a non-loopback bind):
+      # ARTEMIS_ALLOWED_HOSTS: 'artemis.tailnet.example,100.101.102.103'
+
+volumes:
+  artemis-data:
