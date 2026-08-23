@@ -93,6 +93,16 @@ export interface RunState {
   readonly usage?: UsageSnapshot;
   readonly endReason?: RunEndReason;
   readonly error?: AgentError;
+  /**
+   * How many prompts this window has pushed into the run — the opening
+   * message plus every steer. Mirrors the registry's own count, which is what
+   * lets an optimistic steer row claim the `${runId}:prompt:${n}` identity the
+   * registry will retain it under (see `TranscriptModel.pushUserMessage`).
+   * Only on runs this window started: a run adopted after a reload does not
+   * know how many prompts it missed, and a steer into one goes unclaimed
+   * rather than claiming a number that may be wrong.
+   */
+  readonly promptsSent?: number;
 }
 
 /**

@@ -8343,7 +8343,27 @@ export async function submitPrompt(
       return false;
     }
     const steering = filterFor(live.capabilities);
-    const steerId = pane.transcript.pushUserMessage(prompt, steering);
+    /*
+     * Claim the identity the registry will retain this steer under, counted
+     * optimistically at push: `#recordPrompt` numbers prompts in send order,
+     * and this window is the only one sending into its own run. A steer into
+     * a run adopted after a reload goes unclaimed instead — see
+     * `RunState.promptsSent` — which merely forfeits the merge, never
+     * mislabels a row.
+     */
+    const steerClaim =
+      live.promptsSent === undefined
+        ? undefined
+        : `${live.runId}:prompt:${String(live.promptsSent + 1)}`;
+    if (steerClaim !== undefined) {
+      setPaneState(pane, (s) => ({
+        run:
+          s.run && s.run.runId === live.runId
+            ? { ...s.run, promptsSent: (live.promptsSent ?? 1) + 1 }
+            : s.run,
+      }));
+    }
+    const steerId = pane.transcript.pushUserMessage(prompt, steering, steerClaim);
     const result = await call(() =>
       bridge.runs.send({
         runId: live.runId,
@@ -8404,7 +8424,18 @@ export async function submitPrompt(
   // Re-filtered: the fallback above crosses from the live run's capabilities to
   // the active provider's, and after a mid-run provider switch those differ.
   const sending = filterFor(capabilities);
-  const promptId = carriedOver ?? pane.transcript.pushUserMessage(prompt, sending);
+  /*
+   * The opening prompt is always the run's first — claim `${runId}:prompt:1`
+   * so the registry's retained copy merges onto this row when a heal replays
+   * it. A carried-over steer already has a row on screen; it is re-claimed
+   * onto the new run's identity, because the old run's entry never recorded
+   * the send that failed.
+   */
+  const promptId =
+    carriedOver ?? pane.transcript.pushUserMessage(prompt, sending, `${runId}:prompt:1`);
+  if (carriedOver !== null) {
+    pane.transcript.claimUserMessage(carriedOver, `${runId}:prompt:1`);
+  }
   setPaneState(pane, {
     run: {
       runId,
@@ -8415,6 +8446,8 @@ export async function submitPrompt(
       capabilities,
       startedAt: Date.now(),
       permissionMode: state.permissionMode,
+      // The opening prompt, counted so the first steer can claim `:prompt:2`.
+      promptsSent: 1,
     },
     permissionQueue: [],
     // Not `tasks`. A subagent launched last turn is still running as this one
@@ -9439,7 +9472,20 @@ function applyAgentEvent(event: AgentEvent): void {
   // has already been drawn, whichever door it came through this time.
   const tracked = appliedSeqs.get(event.runId);
   if (tracked !== undefined && event.seq <= tracked.seq) return;
-  recordApplied(event.runId, event.seq);
+  /*
+   * The registry's retained prompt is the one event whose `seq` is borrowed,
+   * not owned: `#recordPrompt` deliberately reuses the run's current position
+   * rather than consuming a slot from the adapter's dense numbering. Recording
+   * that borrowed value here would spend the slot on the prompt's behalf — on
+   * a fresh replay the prompt sits at seq 0 *ahead of* `session.started` at
+   * seq 0, and a gate that remembered the prompt swallowed the run's own
+   * opening: the healed pane lost its sessionId, model, and tool list.
+   * The prompt itself needs no gate entry; its idempotence is identity-based —
+   * see `TranscriptModel.completeUserText`.
+   */
+  const borrowedSeq =
+    event.type === 'text.complete' && event.role === 'user' && event.replay === true;
+  if (!borrowedSeq) recordApplied(event.runId, event.seq);
 
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;

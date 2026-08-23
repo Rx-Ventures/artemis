@@ -951,3 +951,118 @@ describe('rewind support', () => {
     expect(model.getItem('t:c1')).toBeUndefined();
   });
 });
+
+describe('user-row identity', () => {
+  /** Every user row, reduced to what the eye checks. */
+  function userRows(model: TranscriptModel): Array<{ text: string; pending: boolean }> {
+    return model
+      .getListSnapshot()
+      .map((id) => model.getItem(id))
+      .filter((item): item is NonNullable<typeof item> => item?.kind === 'user')
+      .map((item) => ({
+        text: (item as { text?: string }).text ?? '',
+        pending: (item as { pending?: boolean }).pending === true,
+      }));
+  }
+
+  it('merges a replayed prompt onto the optimistic row that claimed its id', () => {
+    const model = build();
+    const attachments = [
+      { kind: 'image', mediaType: 'image/png', data: 'aGk=', name: 'shot.png' },
+    ] as never;
+    const id = model.pushUserMessage('hello?', attachments, 'run_1:prompt:1');
+    model.confirmUserMessage(id);
+
+    // The stall sweep re-applies the registry's retained copy — same identity,
+    // borrowed seq, replay flag set. One row, and it keeps what only the
+    // optimistic insert had.
+    model.apply({
+      type: 'text.complete',
+      messageId: 'run_1:prompt:1',
+      role: 'user',
+      text: 'hello?',
+      replay: true,
+      runId: RUN,
+      seq: 0,
+      ts: 2000,
+    } as AgentEvent);
+
+    expect(userRows(model)).toEqual([{ text: 'hello?', pending: false }]);
+    expect(model.getItem(id)).toMatchObject({ attachments, messageId: 'run_1:prompt:1' });
+  });
+
+  it('merges even while the row is still pending, and twice is once', () => {
+    const model = build();
+    model.pushUserMessage('hello?', undefined, 'run_1:prompt:1');
+
+    const replayed = {
+      type: 'text.complete',
+      messageId: 'run_1:prompt:1',
+      role: 'user',
+      text: 'hello?',
+      replay: true,
+      runId: RUN,
+      seq: 0,
+      ts: 2000,
+    } as AgentEvent;
+    model.apply(replayed);
+    model.apply(replayed);
+
+    expect(userRows(model)).toEqual([{ text: 'hello?', pending: false }]);
+  });
+
+  it('re-claims a carried-over steer onto the new run it opens', () => {
+    const model = build();
+    // A steer pushed against a run that turned out to be over: its claim names
+    // the old run, which never recorded the failed send.
+    const id = model.pushUserMessage('carry me', undefined, 'run_old:prompt:2');
+    model.claimUserMessage(id, 'run_new:prompt:1');
+
+    model.apply({
+      type: 'text.complete',
+      messageId: 'run_new:prompt:1',
+      role: 'user',
+      text: 'carry me',
+      replay: true,
+      runId: RUN,
+      seq: 0,
+      ts: 2000,
+    } as AgentEvent);
+    // The old name must be gone: nothing will ever replay under it, and a
+    // stale claim would catch the wrong message.
+    model.apply({
+      type: 'text.complete',
+      messageId: 'run_old:prompt:2',
+      role: 'user',
+      text: 'someone else entirely',
+      replay: true,
+      runId: RUN,
+      seq: 1,
+      ts: 2001,
+    } as AgentEvent);
+
+    expect(userRows(model)).toEqual([
+      { text: 'carry me', pending: false },
+      { text: 'someone else entirely', pending: false },
+    ]);
+  });
+
+  it('does not resurrect a claim across reset', () => {
+    const model = build();
+    model.pushUserMessage('before the reset', undefined, 'run_1:prompt:1');
+    model.reset();
+
+    model.apply({
+      type: 'text.complete',
+      messageId: 'run_1:prompt:1',
+      role: 'user',
+      text: 'before the reset',
+      replay: true,
+      runId: RUN,
+      seq: 0,
+      ts: 2000,
+    } as AgentEvent);
+
+    expect(userRows(model)).toEqual([{ text: 'before the reset', pending: false }]);
+  });
+});
