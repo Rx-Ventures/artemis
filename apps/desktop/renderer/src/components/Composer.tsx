@@ -38,6 +38,7 @@ import {
   GitForkIcon,
   PaperclipIcon,
   SendHorizontalIcon,
+  SparklesIcon,
   XIcon,
 } from 'lucide-react';
 import {
@@ -50,10 +51,13 @@ import {
 import { useCapability } from '../hooks/useCapability';
 import { keyLabel } from '../hooks/useHotkeys';
 import {
+  acceptSuggestion,
   denyPendingPermission,
   dismissHandoff,
+  dismissSuggestion,
   interruptRun,
   isLive,
+  offeredSuggestion,
   pushBanner,
   refreshCommands,
   setForkOnResume,
@@ -161,6 +165,13 @@ export function Composer(): ReactElement {
   const resuming = usePane((s) => s.resumeSessionId);
   const fork = usePane((s) => s.forkOnResume);
   const history = usePane((s) => s.promptHistory);
+  /*
+   * The provider's guess at the next prompt, already gated for staleness —
+   * `offeredSuggestion` is the one place that decides whether the pair in the
+   * pane still describes the turn on screen. Null the moment a new run starts,
+   * so nothing here needs to watch for that.
+   */
+  const suggestion = usePane(offeredSuggestion);
 
   const locked = live && !steering.supported;
 
@@ -451,6 +462,50 @@ export function Composer(): ReactElement {
         <WorkingDirectoryChip />
       </div>
 
+      {/*
+        The provider's predicted next prompt, offered above the field.
+
+        A chip and not a ghost inside the textarea, because the field already
+        has a resident ghost — the placeholder — and a prediction painted as
+        pre-typed text reads as something the app decided rather than offered.
+        Clicking it (or Tab from an empty field) puts the text *into the draft*
+        to be edited or sent; it is never sent on the user's behalf. The row
+        occupies no space when there is nothing to offer, and it retires itself
+        the moment the next run starts — see `offeredSuggestion`.
+      */}
+      {suggestion !== null && (
+        <div className="mx-auto flex w-full max-w-4xl items-center px-3 pt-1">
+          {/*
+            The same ghost language as the directory chip above — this row is
+            chrome making an offer, not content. The text is faint until the
+            pointer says it is being considered.
+          */}
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              acceptSuggestion(pane);
+              textareaRef.current?.focus();
+            }}
+            title={`Use this suggestion (${keyLabel('tab')} from an empty field)`}
+            className="h-5 min-w-0 gap-1.5 px-1.5 text-2xs font-normal text-ink-faint hover:text-ink"
+          >
+            <SparklesIcon className="size-3 shrink-0" aria-hidden="true" />
+            <span className="truncate text-ink-muted">{suggestion}</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => dismissSuggestion(pane)}
+            aria-label="Dismiss the suggestion"
+            title="Dismiss the suggestion"
+            className="size-5 shrink-0 p-0 text-ink-faint hover:text-ink"
+          >
+            <XIcon className="size-3" aria-hidden="true" />
+          </Button>
+        </div>
+      )}
+
       {/* One child now that Stop has moved inside the field; the row is what
           centres the composer and gives it its margins. */}
       <div className="mx-auto flex w-full max-w-4xl items-end px-3 pt-1 pb-1">
@@ -631,6 +686,27 @@ export function Composer(): ReactElement {
                     setDismissed(true);
                     return;
                   }
+                }
+
+                /*
+                 * Tab accepts the suggestion, and only from an empty field.
+                 *
+                 * Empty is the honest scope: with text in the field Tab may be
+                 * the user tabbing away, and accepting would replace what they
+                 * wrote with a machine's guess. The slash menu cannot collide —
+                 * it claims Tab only while the draft starts with `/`, which is
+                 * never the empty field this requires.
+                 */
+                if (
+                  event.key === 'Tab' &&
+                  !event.shiftKey &&
+                  suggestion !== null &&
+                  text.length === 0 &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  acceptSuggestion(pane);
+                  return;
                 }
 
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {

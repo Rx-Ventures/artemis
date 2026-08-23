@@ -73,6 +73,7 @@ import {
   type ServerState,
   type ServerStatusRequest,
   type RoutinesState,
+  type RunSuggestion,
   type RoutinesListRequest,
   type RoutinesCreateRequest,
   type RoutinesUpdateRequest,
@@ -328,6 +329,24 @@ function isUpdateState(value: unknown): value is UpdateState {
  * The routines push, held to the same bar as the server's: enough structure to
  * refuse a stray message, no more — the renderer re-validates what it renders.
  */
+/**
+ * A pushed {@link RunSuggestion}, checked the way every other push is: the
+ * discriminator, the id it is addressed by, and that the prose is a non-empty
+ * string. Nothing about the prose's *content* — it is model output on its way
+ * to a composer, and main already scanned it.
+ */
+function isRunSuggestion(value: unknown): value is RunSuggestion {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { kind?: unknown; runId?: unknown; suggestion?: unknown };
+  return (
+    candidate.kind === 'run-suggestion' &&
+    typeof candidate.runId === 'string' &&
+    candidate.runId !== '' &&
+    typeof candidate.suggestion === 'string' &&
+    candidate.suggestion !== ''
+  );
+}
+
 function isRoutinesState(value: unknown): value is RoutinesState {
   if (typeof value !== 'object' || value === null) return false;
   const routines = (value as { routines?: unknown }).routines;
@@ -507,6 +526,12 @@ const routineStates = createPushChannel<RoutinesState>({
   isValid: isRoutinesState,
 });
 
+const runSuggestions = createPushChannel<RunSuggestion>({
+  channel: IPC_PUSH.runSuggestion,
+  label: 'artemis.runs.onSuggestion',
+  isValid: isRunSuggestion,
+});
+
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
@@ -525,6 +550,7 @@ window.addEventListener('beforeunload', () => {
   menuOpenSettings.reset();
   serverStates.reset();
   routineStates.reset();
+  runSuggestions.reset();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -603,6 +629,7 @@ const bridge: ArtemisBridge = Object.freeze({
     liveWork: (request: RunsLiveWorkRequest) => invoke(IPC.runsLiveWork, request),
     events: (request: RunsEventsRequest) => invoke(IPC.runsEvents, request),
     onEvent: agentEvents.subscribe,
+    onSuggestion: runSuggestions.subscribe,
   }),
 
   sessions: Object.freeze({

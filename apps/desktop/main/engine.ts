@@ -57,6 +57,7 @@ import type {
   ProviderModelOption,
   RunHandle,
   RunId,
+  RunSuggestion,
   SessionDelegatedWork,
   SessionId,
   RunInput,
@@ -470,6 +471,16 @@ export interface ArtemisEngine {
    */
   subscribe(listener: (event: AgentEvent) => void): Unsubscribe;
 
+  /**
+   * Subscribe to predicted next prompts — one per finished turn, at most.
+   *
+   * A second stream rather than more {@link subscribe} events because a
+   * suggestion is generated *after* the turn's `run.end`, and the event
+   * contract keeps `run.end` last on a run's stream. See
+   * {@link IPC_PUSH.runSuggestion} for the renderer's half.
+   */
+  subscribeSuggestions(listener: (suggestion: RunSuggestion) => void): Unsubscribe;
+
   /** Tear down every live run. Called on quit. */
   dispose(): Promise<void>;
 }
@@ -487,11 +498,36 @@ export interface ArtemisEngine {
 function createEngine(options: EngineOptions): ArtemisEngine {
   const { userDataDir } = options;
 
+  /**
+   * Whoever asked to hear predictions. Declared before the registry because
+   * the adapter option below closes over it; the set is what makes wiring
+   * order irrelevant — the adapter can speak before anyone subscribes and it
+   * costs one no-op loop.
+   */
+  const suggestionListeners = new Set<(suggestion: RunSuggestion) => void>();
+
   // `createDefaultProviderRegistry` — not `createProviderRegistry` — is what
   // actually registers the Claude adapter. An empty registry typechecks
   // perfectly and then reports every provider as unavailable at runtime.
   const providers: ProviderRegistry = createDefaultProviderRegistry({
     claude: {
+      /*
+       * Fan a prediction out to the windows. Wiring this is also the opt-in:
+       * the adapter only asks the SDK to predict when someone is listening —
+       * see `ClaudeAdapterOptions.onSuggestion` — and this callback exists,
+       * so Artemis always asks. Failures are contained per listener; this is
+       * called from inside the adapter's own event pump, where a throw would
+       * take down a live stream to complain about a garnish.
+       */
+      onSuggestion: (suggestion) => {
+        for (const listener of suggestionListeners) {
+          try {
+            listener(suggestion);
+          } catch (error) {
+            log.error('A suggestion subscriber threw', error);
+          }
+        }
+      },
       ...(options.sdkExecutablePath === undefined
         ? {}
         : { sdkExecutablePath: options.sdkExecutablePath }),
@@ -1449,6 +1485,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
 
     subscribe: (listener) => runs.subscribe(listener),
+
+    subscribeSuggestions: (listener) => {
+      suggestionListeners.add(listener);
+      return () => suggestionListeners.delete(listener);
+    },
 
     // All three, and in parallel: a half-written title is not worth delaying
     // quit for, and `SessionNamer.dispose` aborts rather than waits.

@@ -105,6 +105,7 @@ import type {
   RunId,
   RunInput,
   RunStatus,
+  RunSuggestion,
   SessionDelegatedWork,
   SessionId,
   SessionSummary,
@@ -883,6 +884,21 @@ export interface ClaudeAdapterOptions {
     runId: RunId,
     input: RunInput,
   ) => Record<string, McpServerConfig> | undefined;
+  /**
+   * The provider's predicted next user prompt, for the turn that just ended.
+   *
+   * A callback rather than an event because of when it exists: the SDK
+   * generates the prediction *after* the turn's `result`, and by then the
+   * run's stream has already carried its `run.end` and closed. Wiring this is
+   * also the opt-in — when it is absent the SDK is never asked to predict and
+   * the process is released at the turn boundary exactly as before.
+   *
+   * At most one call per turn, and none at all for turns the provider skips
+   * (the first turn of a fresh conversation, plan mode, error endings). The
+   * text is the prediction verbatim: prose for a composer, never a command to
+   * execute.
+   */
+  readonly onSuggestion?: (suggestion: RunSuggestion) => void;
 }
 
 /**
@@ -1176,6 +1192,9 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
             ...(options?.onContinuation === undefined
               ? {}
               : { onContinuation: options.onContinuation }),
+            ...(options?.onSuggestion === undefined
+              ? {}
+              : { onSuggestion: options.onSuggestion }),
             newRunId: options?.newRunId ?? (() => randomUUID() as RunId),
             onSession: (sessionId, process) => live.set(sessionId, process),
             onClosed: (process) => {
@@ -1963,6 +1982,14 @@ export interface BuildClaudeOptionsContext {
    * function stays pure.
    */
   readonly rewind?: RewindPoint;
+  /**
+   * Ask the SDK to predict the user's next prompt after each turn.
+   *
+   * Set exactly when someone is wired to receive it — see
+   * {@link ClaudeRunDeps.onSuggestion}. Off by default so a headless caller's
+   * process is byte-identical to one from before this option existed.
+   */
+  readonly promptSuggestions?: boolean;
 }
 
 /**
@@ -2021,6 +2048,12 @@ export function buildClaudeOptions(
       : undefined,
 
     includePartialMessages: input.includePartialMessages !== false,
+
+    // Only when a listener exists — the flag makes the CLI spend a (cheap,
+    // cache-riding) model call after every turn, which a run nobody is
+    // watching should not pay for. The CLI still applies its own suppressions
+    // on top: first turn, plan mode, error endings, the user's settings.json.
+    ...(context.promptSuggestions === true ? { promptSuggestions: true } : {}),
 
     model: input.model,
     fallbackModel: input.fallbackModel,
@@ -2198,6 +2231,16 @@ const SCHEDULING_TOOLS = new Set(['CronCreate', 'ScheduleWakeup', 'CronUpdate'])
 const SETTLE_GRACE_MS = 2_000;
 
 /**
+ * How long a finished turn's process waits for the provider's predicted next
+ * prompt before being released. The prediction is a model call — cheap and
+ * cache-riding, but a real network round-trip — so this is minutes-scale
+ * generous compared to {@link SETTLE_GRACE_MS} while still bounding the idle
+ * process. Expiry costs nothing visible: the turn's `run.end` shipped long
+ * before this clock started.
+ */
+const SUGGESTION_GRACE_MS = 10_000;
+
+/**
  * Does this message open a turn?
  *
  * `init` does, once per turn — the CLI emits one at the head of every turn in
@@ -2255,6 +2298,8 @@ interface ClaudeRunDeps {
    * registry. So it builds the run and hands it up.
    */
   readonly onContinuation?: (run: Run, context: ContinuationContext) => void;
+  /** See {@link ClaudeAdapterOptions.onSuggestion}. Also the opt-in. */
+  readonly onSuggestion?: (suggestion: RunSuggestion) => void;
   /** Ids for those turns. Injected so tests do not depend on `randomUUID`. */
   readonly newRunId?: () => RunId;
 }
@@ -2369,6 +2414,9 @@ class ClaudeProcess {
   /** A task settled and the turn about it has not arrived yet. See `#awaitSettleTurn`. */
   #settling = false;
   #settleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The turn ended and its predicted next prompt has not arrived yet. See `#awaitSuggestion`. */
+  #awaitingSuggestion = false;
+  #suggestionTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -2465,6 +2513,11 @@ class ClaudeProcess {
     // Whatever opens a turn is what the settle grace was holding the process for.
     this.#settling = false;
     clearTimeout(this.#settleTimer);
+    // And a new turn makes the old one's prediction moot: the user has already
+    // said their next thing. Stop waiting; if the prediction still arrives it
+    // is delivered and the renderer decides whether it is stale.
+    this.#awaitingSuggestion = false;
+    clearTimeout(this.#suggestionTimer);
 
     if (!this.#state.ended) return true;
     if (this.#deps.onContinuation === undefined) return false;
@@ -2792,6 +2845,76 @@ class ClaudeProcess {
     });
   }
 
+  /**
+   * Hold the process briefly for the prediction that follows a finished turn.
+   *
+   * The SDK generates it *after* the turn's `result` — see
+   * {@link ClaudeRunDeps.onSuggestion} — so a pump that left at the turn
+   * boundary would close the transport before the one message this feature
+   * exists for could arrive. Same shape as {@link #awaitSettleTurn}: a flag the
+   * pump's exit condition respects, and a timer that releases the process when
+   * nothing comes. Longer grace than the settle turn's, because this wait is an
+   * API round-trip rather than a local bookkeeping beat.
+   *
+   * Armed only for turns that could produce one: somebody listening, and not
+   * plan mode — the CLI never predicts after a plan turn, so waiting on one
+   * would be ten seconds of nothing after every plan. The CLI's other
+   * suppressions (a conversation's first turn, the user's own settings) are
+   * invisible from here; the timer absorbs them.
+   */
+  #awaitSuggestion(): void {
+    if (this.#deps.onSuggestion === undefined) return;
+    if (this.#settings.permissionMode === 'plan') return;
+    this.#awaitingSuggestion = true;
+    clearTimeout(this.#suggestionTimer);
+    this.#suggestionTimer = setTimeout(() => {
+      this.#awaitingSuggestion = false;
+      // Nothing came. Release the way the settle grace does.
+      if (this.#state.ended && !this.#holdsWork()) {
+        this.#deps.diagnostic?.(
+          `Run ${this.runId}: no predicted prompt arrived; releasing the process.`,
+        );
+        try {
+          this.#query?.close();
+        } catch {
+          // Already gone.
+        }
+      }
+    }, SUGGESTION_GRACE_MS);
+    // Never a reason to keep a Node process alive on its own.
+    this.#suggestionTimer.unref?.();
+  }
+
+  /**
+   * A prediction arrived — stop waiting and hand it up.
+   *
+   * Trusted as far as prose can be: it is model output bound for a composer,
+   * so the only handling here is a trim and a refusal to deliver emptiness.
+   * The listener runs inside the pump, so its failures are contained the same
+   * way the mapper's are.
+   */
+  #deliverSuggestion(suggestion: string): void {
+    this.#awaitingSuggestion = false;
+    clearTimeout(this.#suggestionTimer);
+    const onSuggestion = this.#deps.onSuggestion;
+    const text = suggestion.trim();
+    if (onSuggestion === undefined || text.length === 0) return;
+    const sessionId = this.#sessionId;
+    try {
+      onSuggestion({
+        kind: 'run-suggestion',
+        runId: this.#state.runId,
+        ...(sessionId === undefined ? {} : { sessionId }),
+        suggestion: text,
+      });
+    } catch (error) {
+      this.#deps.diagnostic?.(
+        `Run ${this.#state.runId}: a suggestion listener threw.`,
+        describe(error),
+      );
+    }
+  }
+
   /** Hold the process briefly for a turn about work that just finished. */
   #awaitSettleTurn(): void {
     this.#settling = true;
@@ -2799,8 +2922,9 @@ class ClaudeProcess {
     this.#settleTimer = setTimeout(() => {
       this.#settling = false;
       // Nothing came. Release the way a turn boundary would have, by taking the
-      // transport down — the pump's own `finally` does the rest.
-      if (this.#state.ended && !this.#holdsWork()) {
+      // transport down — the pump's own `finally` does the rest. Unless the
+      // suggestion grace is still holding: its own timer will do this.
+      if (this.#state.ended && !this.#holdsWork() && !this.#awaitingSuggestion) {
         this.#deps.diagnostic?.(
           `Run ${this.runId}: background work settled with no turn about it; releasing the process.`,
         );
@@ -2874,6 +2998,7 @@ class ClaudeProcess {
           abortController: this.#abort,
           stderr: (data) => this.#captureStderr(data),
           hostEnv: this.#deps.hostEnv,
+          ...(this.#deps.onSuggestion === undefined ? {} : { promptSuggestions: true }),
           ...(this.#deps.rewind === undefined ? {} : { rewind: this.#deps.rewind }),
           ...(this.#deps.sdkExecutablePath === undefined
             ? {}
@@ -3124,6 +3249,19 @@ class ClaudeProcess {
     try {
       for await (const message of sdkQuery) {
         /*
+         * Before everything, because it belongs to no turn: the prediction is
+         * generated after the turn it follows has ended, and the mapper would
+         * rightly drop it as events on a closed state. Handled, then the exit
+         * the arrival un-blocks is taken here rather than waiting for a next
+         * message that may never come.
+         */
+        if (message.type === 'prompt_suggestion') {
+          this.#deliverSuggestion(message.suggestion);
+          if (this.#state.ended && !this.#holdsWork()) break;
+          continue;
+        }
+
+        /*
          * Before mapping, and deliberately not from the mapped events.
          *
          * `mapSdkMessage` returns nothing once a turn's state is `ended` — it is
@@ -3195,10 +3333,18 @@ class ClaudeProcess {
          * something opens one.
          */
         if (this.#state.ended) {
-          if (!this.#holdsWork()) break;
-          this.#deps.diagnostic?.(
-            `Run ${this.runId}: turn ended with ${this.#describeHeld()} still live; keeping the process.`,
-          );
+          // A successful ending is the one kind the provider predicts after —
+          // it skips errors and interruptions itself, so waiting on those
+          // would hold a process for a message that is not coming.
+          if (message.type === 'result' && message.subtype === 'success' && !message.is_error) {
+            this.#awaitSuggestion();
+          }
+          if (!this.#holdsWork() && !this.#awaitingSuggestion) break;
+          if (this.#holdsWork()) {
+            this.#deps.diagnostic?.(
+              `Run ${this.runId}: turn ended with ${this.#describeHeld()} still live; keeping the process.`,
+            );
+          }
         }
       }
 
@@ -3223,6 +3369,8 @@ class ClaudeProcess {
       this.#closed = true;
       this.#settling = false;
       clearTimeout(this.#settleTimer);
+      this.#awaitingSuggestion = false;
+      clearTimeout(this.#suggestionTimer);
       this.#deps.onClosed?.(this);
 
       try {

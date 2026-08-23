@@ -110,6 +110,7 @@ import {
   denyPendingPermission,
   focusedPane,
   installEventBridge,
+  installSuggestionFeed,
   installPlanUsageFeed,
   installRunWatchdog,
   installSettingsMenuFeed,
@@ -219,6 +220,9 @@ export function App(): ReactElement {
     // seconds instead of a ⌘R. Installed with the feeds because it is one — the
     // pull-shaped half of the push channel above.
     const stopWatchdog = installRunWatchdog();
+    // Predictions arrive seconds after a run ends — well after `bootstrap` —
+    // so ordering is relaxed here; it rides with the feeds because it is one.
+    const stopSuggestionFeed = installSuggestionFeed();
     if (!started.current) {
       started.current = true;
       void bootstrap();
@@ -226,6 +230,7 @@ export function App(): ReactElement {
     return () => {
       unsubscribe();
       stopWatchdog();
+      stopSuggestionFeed();
       stopFeed();
       stopUsageFeed();
       stopTerminalFeed();

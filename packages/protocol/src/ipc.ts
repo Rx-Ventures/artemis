@@ -511,6 +511,23 @@ export interface MenuOpenSettings {
 }
 
 /**
+ * Payload for {@link IPC_PUSH.runSuggestion}: a provider-predicted next user
+ * prompt for the conversation a run just finished.
+ *
+ * Addressed by `runId` — the one id that names exactly one turn in exactly one
+ * pane — with `sessionId` beside it for a consumer whose pane has already let
+ * go of the run and kept only the conversation. `suggestion` is the predicted
+ * prompt verbatim; it is a *prediction of the user's own next message*, so it
+ * belongs in the composer as editable text, never auto-sent.
+ */
+export interface RunSuggestion {
+  readonly kind: 'run-suggestion';
+  readonly runId: RunId;
+  readonly sessionId?: SessionId;
+  readonly suggestion: string;
+}
+
+/**
  * Main → renderer push channels, used with `webContents.send` /
  * `ipcRenderer.on`.
  */
@@ -626,6 +643,19 @@ export const IPC_PUSH = {
    * it is the thing being checked.
    */
   routinesState: 'artemis:push:routines-state',
+  /**
+   * Carries a {@link RunSuggestion}: the provider's predicted next prompt for a
+   * conversation whose turn just ended.
+   *
+   * A push, and deliberately not an {@link AgentEvent}, because of *when* it
+   * exists: the provider generates it after the turn's own `result`, and the
+   * event contract says `run.end` is the last thing a run's stream carries.
+   * Holding `run.end` back until the prediction arrived would keep every pane
+   * spinning — and the composer locked — for a guess. So the run ends on time,
+   * and the guess arrives here when it arrives, addressed by the run it
+   * followed.
+   */
+  runSuggestion: 'artemis:push:run-suggestion',
 } as const;
 
 /** Union of every request/response channel name. */
@@ -2381,6 +2411,7 @@ export type IpcPushMap = {
   [IPC_PUSH.menuOpenSettings]: MenuOpenSettings;
   [IPC_PUSH.serverState]: ServerState;
   [IPC_PUSH.routinesState]: RoutinesState;
+  [IPC_PUSH.runSuggestion]: RunSuggestion;
 };
 
 /** Payload type for a push channel. */
@@ -2492,6 +2523,14 @@ export interface ArtemisBridge {
      * {@link start}; events can arrive before the start response resolves.
      */
     onEvent(listener: (event: AgentEvent) => void): Unsubscribe;
+    /**
+     * Subscribe to predicted next prompts, one per finished turn at most.
+     *
+     * Off {@link onEvent} because a suggestion is not part of any run's stream:
+     * it is generated after the turn's `run.end`, for a conversation that has
+     * already stopped. See {@link IPC_PUSH.runSuggestion}.
+     */
+    onSuggestion(listener: (suggestion: RunSuggestion) => void): Unsubscribe;
   };
 
   readonly sessions: {

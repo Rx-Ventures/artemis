@@ -1860,6 +1860,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     modelsError: null,
     commands: null,
     run: null,
+    suggestion: null,
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
@@ -2921,6 +2922,7 @@ export function openAgentTab(paneId: PaneId, taskId: string): void {
   const pane = createPane({
     ...ownerState,
     run: null,
+    suggestion: null,
     permissionQueue: [],
     tasks: [],
     dismissedTasks: [],
@@ -4764,6 +4766,69 @@ export function installEventBridge(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
   return bridge.runs.onEvent(handleAgentEvent);
+}
+
+/**
+ * Subscribe to predicted next prompts. Call alongside {@link installEventBridge}.
+ *
+ * Routing is {@link paneForRun} — the prediction is addressed by the run it
+ * followed, and a pane keeps its ended run on screen, which is exactly the
+ * window in which a prediction is worth offering. Everything else drops
+ * without ceremony: another window's run (push channels broadcast), a pane
+ * that already started its next turn (the run id no longer matches), a pane
+ * that was closed. Requiring `status === 'ended'` is the honest reading of
+ * what a prediction is — the provider's guess at the *next* message — so one
+ * arriving for a turn still visibly running is refused rather than parked.
+ */
+export function installSuggestionFeed(): () => void {
+  const { bridge } = resolveBridge();
+  if (!bridge) return () => undefined;
+  return bridge.runs.onSuggestion((suggestion) => {
+    const pane = paneForRun(suggestion.runId);
+    if (pane === undefined) return;
+    const state = paneState(pane);
+    if (state.run?.runId !== suggestion.runId || state.run.status !== 'ended') return;
+    setPaneState(pane, {
+      suggestion: { runId: suggestion.runId, text: suggestion.suggestion },
+    });
+  });
+}
+
+/**
+ * Whether the composer should offer this pane's suggestion right now.
+ *
+ * The gate *is* the invalidation model — see the field's own doc. Live in one
+ * place so the chip and the keyboard path cannot disagree about staleness.
+ */
+export function offeredSuggestion(state: SessionState): string | null {
+  const { suggestion, run } = state;
+  if (suggestion === null || run === null) return null;
+  // The id match is the entire gate. A status check would be decoration: the
+  // write side only ever stores against an *ended* run, an ended run never
+  // runs again, and every later turn carries a new id — which this catches.
+  if (run.runId !== suggestion.runId) return null;
+  return suggestion.text;
+}
+
+/**
+ * Accept the pane's suggestion into its draft, replacing what is there.
+ *
+ * Replacing rather than appending because the prediction is a whole message,
+ * and the one-shot clear is what makes accepting it twice impossible. The
+ * text lands in the draft for the user to edit or send — never sent for them:
+ * it is a *prediction of their own next message*, and predictions are offers.
+ */
+export function acceptSuggestion(pane: Pane): void {
+  const state = paneState(pane);
+  const text = offeredSuggestion(state);
+  if (text === null) return;
+  setPaneState(pane, { draft: text, suggestion: null });
+}
+
+/** Put the pane's suggestion away without using it. */
+export function dismissSuggestion(pane: Pane): void {
+  if (paneState(pane).suggestion === null) return;
+  setPaneState(pane, { suggestion: null });
 }
 
 /**

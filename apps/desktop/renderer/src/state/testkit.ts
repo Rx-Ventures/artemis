@@ -57,6 +57,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   modelsError: true,
   commands: true,
   run: true,
+  suggestion: true,
   permissionQueue: true,
   tasks: true,
   dismissedTasks: true,
