@@ -72,10 +72,11 @@ export interface UserItem extends ItemBase {
    * stored session files this entry under.
    *
    * This is the handle rewind and fork-from-here need: `rewindToMessageId` on
-   * a run input names a user prompt by exactly this id. Present on replayed
-   * history (the stored uuid) and on a live message once the provider echoes
-   * it back; absent only while a message is still {@link pending}, which is
-   * also the one state the rewind controls must not offer it in.
+   * a run input names a user prompt by exactly this id. Replayed history
+   * carries the provider's stored uuid; a locally-typed message carries the
+   * registry's predictable `${runId}:prompt:${n}` from the moment it is
+   * pushed — which doubles as the identity a re-delivered copy merges on. See
+   * {@link TranscriptModel.pushUserMessage}.
    */
   readonly messageId?: string;
   /**
@@ -447,6 +448,17 @@ export class TranscriptModel {
   private unconfirmedUser: string[] = [];
 
   /**
+   * User rows by the message identity they claim, so a re-delivered prompt
+   * merges instead of duplicating.
+   *
+   * Two id spaces land here and never collide: the registry's predictable
+   * `${runId}:prompt:${n}` (claimed by the optimistic row at push time, and
+   * what the stall sweep's heal replays), and the provider's own uuids
+   * (learned from echoes and stored history). See {@link completeUserText}.
+   */
+  private userClaims = new Map<string, string>();
+
+  /**
    * Indexes of open work, so settling a turn is O(open) rather than O(items).
    * A long transcript should not get slower every time a tool starts.
    */
@@ -582,8 +594,18 @@ export class TranscriptModel {
 
   /* ---- writes --------------------------------------------------------- */
 
-  /** Add the user's message optimistically, before the round-trip returns. */
-  pushUserMessage(text: string, attachments?: readonly Attachment[]): string {
+  /**
+   * Add the user's message optimistically, before the round-trip returns.
+   *
+   * `messageId` is the identity the registry will file this prompt under —
+   * `${runId}:prompt:${n}`, predictable because the renderer mints the run id
+   * itself and counts what it sends. Claiming it here is what makes a later
+   * replay of the retained prompt *merge onto this row* instead of drawing a
+   * second copy: the stall sweep heals a quiet window by re-applying the
+   * run's retained events into a transcript that was never reset, and the
+   * retained prompt is one of them. See {@link completeUserText}.
+   */
+  pushUserMessage(text: string, attachments?: readonly Attachment[], messageId?: string): string {
     const id = `u:${++this.counter}`;
     this.insert({
       id,
@@ -591,10 +613,33 @@ export class TranscriptModel {
       kind: 'user',
       text,
       pending: true,
+      ...(messageId === undefined ? {} : { messageId }),
       ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
     });
+    if (messageId !== undefined) this.userClaims.set(messageId, id);
     this.unconfirmedUser.push(id);
     return id;
+  }
+
+  /**
+   * Move a user row onto a different message identity.
+   *
+   * For exactly one caller: the steer that raced the end of its run. The row
+   * was pushed claiming the old run's next prompt slot; the send came back
+   * "that run is over" and the prompt is being carried into a fresh run as its
+   * opening message — which the registry will file under the *new* run's id.
+   * The old claim is dropped rather than kept as an alias, because the old
+   * registry entry never recorded the failed send: nothing will ever replay
+   * under that name.
+   */
+  claimUserMessage(id: string, messageId: string): void {
+    const existing = this.items.get(id);
+    if (existing?.kind !== 'user') return;
+    if (existing.messageId !== undefined && this.userClaims.get(existing.messageId) === id) {
+      this.userClaims.delete(existing.messageId);
+    }
+    this.userClaims.set(messageId, id);
+    this.replace(id, { ...existing, messageId });
   }
 
   /**
@@ -704,6 +749,11 @@ export class TranscriptModel {
       const index = this.unconfirmedUser.indexOf(droppedId);
       if (index >= 0) this.unconfirmedUser.splice(index, 1);
     }
+    // A claim pointing at a dropped row must not catch a later replay and
+    // resurrect it as a "merge" onto nothing.
+    for (const [messageId, itemId] of this.userClaims) {
+      if (!this.items.has(itemId)) this.userClaims.delete(messageId);
+    }
     // Block routing is keyed by message id, not item id, so it cannot be
     // trimmed entry-wise — but every entry that pointed into the dropped
     // suffix now points at nothing, and `resolveAssistantBlock` treats a
@@ -730,6 +780,7 @@ export class TranscriptModel {
     this.buffers = new Map();
     this.messageBlocks = new Map();
     this.unconfirmedUser = [];
+    this.userClaims = new Map();
     this.streaming.clear();
     this.openTools.clear();
     this.dirty.clear();
@@ -1368,6 +1419,29 @@ export class TranscriptModel {
     ts: number,
     messageId?: string,
   ): void {
+    /*
+     * Identity first, whichever door the event came through.
+     *
+     * A user event naming a message this transcript already holds is the same
+     * message coming back — the registry's retained prompt re-applied by the
+     * stall sweep, or the same replay delivered twice — and the only correct
+     * number of rows for it is one. The merge keeps what only the optimistic
+     * row has (its attachments, its place in the order) and takes the event's
+     * word for the rest. Without this, the sweep's heal drew the prompt again
+     * under the copy the user watched themselves type: the optimistic row has
+     * a local id, the replayed prompt minted another, and nothing could ever
+     * collapse the two.
+     */
+    if (messageId !== undefined) {
+      const claimedId = this.userClaims.get(messageId);
+      if (claimedId !== undefined) {
+        const claimed = this.items.get(claimedId);
+        if (claimed?.kind === 'user') {
+          this.replace(claimedId, { ...claimed, text, pending: false, messageId });
+          return;
+        }
+      }
+    }
     if (!replay && !synthetic) {
       const pendingId = this.unconfirmedUser.shift();
       if (pendingId !== undefined) {
@@ -1376,6 +1450,7 @@ export class TranscriptModel {
           // The echo is where a locally-typed message learns its provider id —
           // the optimistic insert could not have known it. See
           // {@link UserItem.messageId} for what the id buys.
+          if (messageId !== undefined) this.userClaims.set(messageId, pendingId);
           this.replace(pendingId, {
             ...existing,
             text,
@@ -1387,6 +1462,7 @@ export class TranscriptModel {
       }
     }
     const id = `u:${++this.counter}`;
+    if (messageId !== undefined) this.userClaims.set(messageId, id);
     this.insert({
       id,
       ts,

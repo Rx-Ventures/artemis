@@ -380,3 +380,123 @@ describe('the replay and the live stream', () => {
     expect(run()?.status).toBe('running');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The retained prompt, healed exactly once                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The registry retains the user's own prompt alongside the run's events —
+ * `#recordPrompt` files it under `${runId}:prompt:${n}` on a *borrowed* seq
+ * (the run's current position, deliberately not a slot of its own; the
+ * registry's tests pin the resulting [0, 0, 1] shape). The fixtures above
+ * predate that and start at `session.started(seq 1)`, which is exactly how
+ * both defects hid: a heal that re-applies the real retained shape used to
+ * draw the prompt a second time under the optimistic row, and its borrowed
+ * seq 0 spent the gate slot `session.started` needed, so the healed pane lost
+ * its session id.
+ */
+describe('the retained prompt in the heal', () => {
+  const retainedPrompt = (runId: string, n: number, body: string, seq: number) => ({
+    type: 'text.complete',
+    runId,
+    seq,
+    ts: 1,
+    messageId: `${runId}:prompt:${String(n)}`,
+    role: 'user',
+    text: body,
+    replay: true,
+  });
+
+  /** Every user row on screen, reduced to what the eye checks. */
+  function userRows(): { text: string; pending: boolean }[] {
+    const transcript = focusedPane().transcript;
+    transcript.flush();
+    return transcript
+      .getListSnapshot()
+      .map((id) => transcript.getItem(id))
+      .filter((item): item is NonNullable<typeof item> => item?.kind === 'user')
+      .map((item) => ({
+        text: (item as { text?: string }).text ?? '',
+        pending: (item as { pending?: boolean }).pending === true,
+      }));
+  }
+
+  it('draws the user message once, and the opening still lands', async () => {
+    // The reported bug: send a message, watch it appear twice ~20-35s later,
+    // reload and see it once. The window heard nothing, so the sweep replays
+    // the whole retained buffer into a transcript that already holds the
+    // optimistic row.
+    const runId = await startSilently();
+    mainProcessRuns = [liveHandle(runId, 1)];
+    retainedEvents = {
+      [runId]: [
+        retainedPrompt(runId, 1, 'hello?', 0),
+        started(runId, 0),
+        text(runId, 1, 'the answer'),
+      ],
+    };
+
+    vi.setSystemTime(LATER);
+    await sweepStalledRuns(LATER);
+
+    expect(userRows()).toEqual([{ text: 'hello?', pending: false }]);
+    expect(assistantTexts()).toEqual(['the answer']);
+    // The prompt's borrowed seq 0 must not spend the slot session.started
+    // owns: the healed pane keeps its session id, not just its words.
+    expect(run()?.sessionId).toBe(`sess-${runId}`);
+    expect(run()?.status).toBe('running');
+  });
+
+  it('stays at one row when the heal runs twice', async () => {
+    const runId = await startSilently();
+    mainProcessRuns = [liveHandle(runId, 1)];
+    retainedEvents = {
+      [runId]: [
+        retainedPrompt(runId, 1, 'hello?', 0),
+        started(runId, 0),
+        text(runId, 1, 'the answer'),
+      ],
+    };
+
+    vi.setSystemTime(LATER);
+    await sweepStalledRuns(LATER);
+    await sweepStalledRuns(LATER + 40_000);
+
+    expect(userRows()).toEqual([{ text: 'hello?', pending: false }]);
+    expect(assistantTexts()).toEqual(['the answer']);
+  });
+
+  it('draws a steer once when the heal replays the whole run', async () => {
+    const runId = await startSilently();
+    // The window heard the opening, the user steered, and then the stream died.
+    handleAgentEvent(started(runId, 0) as never);
+    handleAgentEvent(text(runId, 1, 'first half') as never);
+    // Steering needs the capability; grant it on the live run the way a real
+    // Claude handle carries it, without disturbing the shared fixtures.
+    setPaneState(focusedPane(), (s) => ({
+      run: s.run ? { ...s.run, capabilities: { ...RESUMABLE, midRunSteering: true } } : s.run,
+    }));
+    await submitPrompt('also check the tests');
+
+    mainProcessRuns = [liveHandle(runId, 2)];
+    retainedEvents = {
+      [runId]: [
+        retainedPrompt(runId, 1, 'hello?', 0),
+        started(runId, 0),
+        text(runId, 1, 'first half'),
+        retainedPrompt(runId, 2, 'also check the tests', 1),
+        text(runId, 2, 'second half'),
+      ],
+    };
+
+    vi.setSystemTime(LATER);
+    await sweepStalledRuns(LATER);
+
+    expect(userRows()).toEqual([
+      { text: 'hello?', pending: false },
+      { text: 'also check the tests', pending: false },
+    ]);
+    expect(assistantTexts()).toEqual(['first half', 'second half']);
+  });
+});
