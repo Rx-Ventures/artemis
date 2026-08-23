@@ -180,6 +180,9 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
   // `instructions` are a routine's own prose — the instructions are a whole
   // prompt, and refusing to list routines because one mentions a token shape
   // would hide exactly the row the user needs to edit.
+  // `suggestion` is the provider's predicted next prompt — model prose bound
+  // for the composer, and a prediction of user text can quote whatever the
+  // user themselves pasted.
   contentKeys: new Set([
     'title',
     'firstprompt',
@@ -189,6 +192,7 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
     'unavailablereason',
     'name',
     'instructions',
+    'suggestion',
   ]),
   // `metadata` is echoed straight back from the renderer's own `RunInput`.
   opaqueKeys: new Set(['metadata']),

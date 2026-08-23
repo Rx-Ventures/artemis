@@ -54,6 +54,7 @@ import {
   type IpcPushChannel,
   type IpcRequest,
   type IpcResponse,
+  type RunSuggestion,
   type Unsubscribe,
   type WorkspacePickDirectoryRequest,
 } from '@rx-artemis/protocol';
@@ -84,6 +85,7 @@ import {
   assertNoSecrets,
   assertResponseSafe,
   EVENT_SCAN_POLICY,
+  RESPONSE_SCAN_POLICY,
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
@@ -1363,6 +1365,33 @@ export function forwardAgentEvents(engine: EngineHost): Unsubscribe {
   };
 
   return engine.require().subscribe(send);
+}
+
+/**
+ * Push predicted next prompts at every open window.
+ *
+ * The same shape and failure rule as {@link forwardAgentEvents} — scan, then
+ * broadcast, dropping anything that fails rather than throwing — under the
+ * strict response policy with `suggestion` on its content exemptions: the
+ * text is model prose bound for a composer, exactly the kind of field the
+ * content exemption exists for, while every other key on the payload is an
+ * id and stays fully scanned.
+ */
+export function forwardRunSuggestions(engine: EngineHost): Unsubscribe {
+  if (!engine.ready) return () => undefined;
+
+  const send = (suggestion: RunSuggestion): void => {
+    try {
+      assertNoSecrets(suggestion, IPC_PUSH.runSuggestion, RESPONSE_SCAN_POLICY);
+    } catch (error) {
+      log.error('Dropped a predicted prompt that failed its credential-safety check', error);
+      return;
+    }
+
+    broadcast(IPC_PUSH.runSuggestion, suggestion);
+  };
+
+  return engine.require().subscribeSuggestions(send);
 }
 
 /**

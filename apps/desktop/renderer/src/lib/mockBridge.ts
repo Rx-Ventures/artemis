@@ -29,6 +29,7 @@ import type {
   ProviderModelOption,
   RunEndReason,
   RunHandle,
+  RunSuggestion,
   Routine,
   RoutinesState,
   ServerState,
@@ -389,6 +390,7 @@ export function createMockBridge(): ArtemisBridge {
   /** Profiles a `refresh` has been run for — what fills the real cache. */
   const refreshedProfiles = new Set<string>();
   const listeners = new Set<(event: AgentEvent) => void>();
+  const suggestionListeners = new Set<(suggestion: RunSuggestion) => void>();
   const runs = new Map<string, MockRun>();
   const handles = new Map<string, RunHandle>();
 
@@ -455,6 +457,22 @@ export function createMockBridge(): ArtemisBridge {
         ? { error: { code: 'provider_unavailable' as const, message: 'Mock provider fell over.' } }
         : {}),
     });
+    // The real provider predicts only after a *successful* ending, and after a
+    // beat — the prediction is a model call that starts when the turn's result
+    // lands. The delay is what makes the chip's arrival animation visible in
+    // dev rather than being painted in the same frame as the answer.
+    if (reason === 'completed') {
+      const runId = run.runId as RunSuggestion['runId'];
+      void sleep(900).then(() => {
+        for (const listener of suggestionListeners) {
+          listener({
+            kind: 'run-suggestion',
+            runId,
+            suggestion: 'Now wire the smoke test into CI so this stays fixed',
+          });
+        }
+      });
+    }
   }
 
   async function script(run: MockRun, request: RunsStartRequest): Promise<void> {
@@ -1144,6 +1162,12 @@ export function createMockBridge(): ArtemisBridge {
         listeners.add(listener);
         return () => {
           listeners.delete(listener);
+        };
+      },
+      onSuggestion: (listener): Unsubscribe => {
+        suggestionListeners.add(listener);
+        return () => {
+          suggestionListeners.delete(listener);
         };
       },
     },

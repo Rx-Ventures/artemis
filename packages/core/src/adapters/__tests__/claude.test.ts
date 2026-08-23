@@ -2389,3 +2389,133 @@ describe('a turn nobody asked for', () => {
     });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Predicted next prompts                                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('prompt suggestions', () => {
+  const SUGGESTION_MESSAGE = {
+    type: 'prompt_suggestion',
+    suggestion: '  Now run the tests and fix what breaks  ',
+    uuid: 'uuid-sugg',
+    session_id: 'sess-abc',
+  } as unknown as SDKMessage;
+
+  it('asks the SDK to predict only when someone is listening', async () => {
+    const first = installQuery();
+    await createClaudeAdapter().createRun(BASE_INPUT);
+    expect(first.harness().options['promptSuggestions']).toBeUndefined();
+
+    const second = installQuery();
+    await createClaudeAdapter({ onSuggestion: () => undefined }).createRun(BASE_INPUT);
+    expect(second.harness().options['promptSuggestions']).toBe(true);
+  });
+
+  it('delivers the prediction trimmed, then releases the process', async () => {
+    const heard: unknown[] = [];
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter({
+      onSuggestion: (suggestion) => heard.push(suggestion),
+    }).createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The turn is over and its stream has closed, and the process is still
+    // here — held for exactly the message that has not arrived yet.
+    expect(fake.closed).toBe(false);
+
+    fake.messages.push(SUGGESTION_MESSAGE);
+    await vi.waitFor(() => expect(heard).toHaveLength(1));
+    expect(heard[0]).toEqual({
+      kind: 'run-suggestion',
+      runId: 'run-1',
+      sessionId: 'sess-abc',
+      suggestion: 'Now run the tests and fix what breaks',
+    });
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('releases the process when no prediction arrives', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const heard: unknown[] = [];
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter({
+        onSuggestion: (suggestion) => heard.push(suggestion),
+      }).createRun(BASE_INPUT);
+      const { fake } = harness();
+
+      fake.messages.push(INIT_MESSAGE);
+      fake.messages.push(RESULT_MESSAGE);
+      await drain(run.events);
+      expect(fake.closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_500);
+      expect(fake.closed).toBe(true);
+      expect(heard).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not wait after an ending the provider never predicts for', async () => {
+    // Errors and interruptions get no prediction from the CLI, so holding the
+    // process for one would be ten seconds of nothing after every failure.
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter({ onSuggestion: () => undefined }).createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push({
+      ...(RESULT_MESSAGE as unknown as Record<string, unknown>),
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['the API fell over'],
+    } as unknown as SDKMessage);
+    await drain(run.events);
+
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('does not wait after a plan-mode turn', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter({ onSuggestion: () => undefined }).createRun({
+      ...BASE_INPUT,
+      permissionMode: 'plan',
+    });
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('drops an empty prediction and still releases', async () => {
+    const heard: unknown[] = [];
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter({
+      onSuggestion: (suggestion) => heard.push(suggestion),
+    }).createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    fake.messages.push({
+      type: 'prompt_suggestion',
+      suggestion: '   ',
+      uuid: 'uuid-blank',
+      session_id: 'sess-abc',
+    } as unknown as SDKMessage);
+
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+    expect(heard).toHaveLength(0);
+  });
+});

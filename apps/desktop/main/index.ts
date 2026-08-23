@@ -47,6 +47,7 @@ import {
   broadcast,
   forwardAgentEvents,
   forwardBrowserEvents,
+  forwardRunSuggestions,
   forwardTerminalEvents,
   registerIpcHandlers,
   type IpcLayer,
@@ -202,6 +203,7 @@ const devServerUrl = process.env['ELECTRON_RENDERER_URL'] ?? null;
 
 let ipcLayer: IpcLayer | null = null;
 let stopEventForwarding: (() => void) | null = null;
+let stopSuggestionForwarding: (() => void) | null = null;
 let stopTerminalForwarding: (() => void) | null = null;
 let stopBrowserForwarding: (() => void) | null = null;
 let stopPlanUsagePolling: (() => void) | null = null;
@@ -500,6 +502,7 @@ async function bootstrap(): Promise<void> {
     routines: routineHost,
   });
   stopEventForwarding = forwardAgentEvents(engineHost);
+  stopSuggestionForwarding = forwardRunSuggestions(engineHost);
   stopTerminalForwarding = forwardTerminalEvents(terminals);
   stopBrowserForwarding = forwardBrowserEvents(browsers);
   // Reads every profile's plan limits on a timer, so the profile menu can say
@@ -596,6 +599,7 @@ app.on('before-quit', (event) => {
   // adapter make the app unquittable.
   event.preventDefault();
   stopEventForwarding?.();
+  stopSuggestionForwarding?.();
   stopTerminalForwarding?.();
   stopBrowserForwarding?.();
   stopPlanUsagePolling?.();

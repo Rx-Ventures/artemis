@@ -221,6 +221,21 @@ export interface SessionState extends MirroredState {
 
   readonly run: RunState | null;
   /**
+   * The provider's predicted next prompt for the turn in {@link run}, or
+   * `null` when there is none.
+   *
+   * Kept *with the run id it followed* rather than as bare text, and that pair
+   * is the whole invalidation story: the composer offers it only while
+   * `run.runId` still equals `suggestion.runId` — see `offeredSuggestion` — so
+   * a new turn starting, a session switch, or a column reset all retire it by
+   * making the gate false — no clearing choreography at any of those sites.
+   * The feed only ever writes it against a run that has already ended.
+   * Explicit clears exist in exactly two places: accepting it into the draft
+   * and dismissing it, both one-shot by nature. Never persisted; a prediction
+   * about a conversation is stale the moment the app that made it closed.
+   */
+  readonly suggestion: { readonly runId: RunId; readonly text: string } | null;
+  /**
    * Permission requests still awaiting an answer, for this column's run.
    *
    * Drives that run's `awaiting_permission` status and its status-line counter,
