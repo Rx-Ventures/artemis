@@ -6,8 +6,15 @@
 # Each target builds on its own architecture's runner on purpose: the Claude
 # Agent SDK ships per-platform binaries as optional dependencies and pnpm only
 # installs the host's, so a native runner per target is what guarantees every
-# artifact contains the binary it needs. (macos-15-intel is GitHub's Intel
-# image, available through August 2027.)
+# artifact contains the binary it needs.
+#
+# There is deliberately no mac x64 target. Nobody in the company runs an
+# Intel Mac, and the build cost real minutes on GitHub's slower Intel image
+# every release. An existing Intel install polls `latest-mac-x64.yml`, finds
+# no feed, and simply stops being offered updates — quiet, not broken. If an
+# Intel machine ever matters again, restore the matrix entry from the
+# v1.10.0 tag of this file (runner was `macos-15-intel`, available through
+# August 2027).
 
 name: Release
 
@@ -83,11 +90,6 @@ jobs:
             build-args: --mac --arm64
             feed-rename: latest-mac-arm64.yml
             app-binary: apps/desktop/release/mac-arm64/Artemis.app/Contents/MacOS/Artemis
-          - name: macos-x64
-            runs-on: macos-15-intel
-            build-args: --mac --x64
-            feed-rename: latest-mac-x64.yml
-            app-binary: apps/desktop/release/mac/Artemis.app/Contents/MacOS/Artemis
           - name: windows-x64
             runs-on: windows-latest
             build-args: --win --x64
