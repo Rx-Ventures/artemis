@@ -154,6 +154,19 @@ describe('UpdateCard', () => {
    * spinner over a static sentence is indistinguishable from a hang — the user
    * clicked Update three times. These three pin the cure.
    */
+  it('says what the pre-flight check is doing, without naming a version', async () => {
+    // The step before the download re-reads the feed, because the offer on the
+    // card can be days old and the release it named can have been superseded.
+    // Naming a version here would name the one thing that is about to change.
+    renderCard();
+    await act(async () => {
+      pushState?.(working({ step: 'checking', transferred: null, total: null }));
+    });
+
+    expect(screen.getByText(/Checking for the latest version/)).toBeTruthy();
+    expect(screen.queryByText(/0\.4\.0/)).toBeNull();
+  });
+
   it('names the step and counts the bytes while downloading', async () => {
     renderCard();
     await act(async () => {

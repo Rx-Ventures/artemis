@@ -111,9 +111,7 @@ export function UpdateCard(): ReactElement | null {
               </>
             )}
             {state.phase === 'working' && (
-              <>
-                {stepLabel(state.progress)} {version}… keep Artemis open.
-              </>
+              <>{workingLine(state.progress, version)}… keep Artemis open.</>
             )}
             {state.phase === 'ready' && (
               <>
@@ -154,7 +152,7 @@ export function UpdateCard(): ReactElement | null {
           <div className="flex flex-col gap-1">
             <Progress
               value={updatePercent(state.progress) ?? undefined}
-              aria-label={`${stepLabel(state.progress)} ${version}`}
+              aria-label={workingLine(state.progress, version)}
               className={updatePercent(state.progress) === null ? 'animate-pulse' : undefined}
             />
             {byteLine(state.progress) !== null && (
@@ -213,6 +211,21 @@ export function UpdateCard(): ReactElement | null {
 }
 
 /**
+ * The whole of what the sentence says while an install runs: the step, and the
+ * version it is working on.
+ *
+ * `checking` is why this is a function rather than a label and a version set
+ * side by side. It runs *before* the version is settled — its entire job is to
+ * find out whether the offer has been superseded since the card appeared — so
+ * naming one there would name the one thing that is about to change, and then
+ * change it a second later.
+ */
+function workingLine(progress: UpdateProgress | null, version: string): string {
+  if (progress?.step === 'checking') return 'Checking for the latest version';
+  return `${stepLabel(progress)} ${version}`.trim();
+}
+
+/**
  * What to call the step, in the sentence.
  *
  * Present participles, so the line reads as something in progress rather than
@@ -221,6 +234,11 @@ export function UpdateCard(): ReactElement | null {
  */
 function stepLabel(progress: UpdateProgress | null): string {
   switch (progress?.step) {
+    case 'checking':
+      // Unreachable in practice: `workingLine` answers for this step before it
+      // reaches here, because the step has no version to name. Kept so the
+      // switch covers the union rather than falling through to "Updating to".
+      return 'Checking for';
     case 'downloading':
       return 'Downloading';
     case 'verifying':

@@ -59,7 +59,7 @@ import type { UpdateProgress, UpdateState, UpdateStep } from '@rx-artemis/protoc
 
 import { createLogger } from './log.js';
 import { tagForChannel, type ReleaseSummary, type UpdateChannel } from './updateChannel.js';
-import { parseUpdateFeed, shouldOffer, type UpdateFeed } from './updateFeed.js';
+import { decideOffer, isNewerVersion, parseUpdateFeed, type UpdateFeed } from './updateFeed.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -180,7 +180,13 @@ export type CheckOutcome =
   | { readonly kind: 'current' }
   /** No `gh`, no network, no access. Indistinguishable from here, and the same advice. */
   | { readonly kind: 'unreachable' }
-  /** An offer, install or restart is already under way; the card is already saying so. */
+  /**
+   * An install or restart is already under way; the card is already saying so.
+   *
+   * No longer what a standing offer answers with — that is re-read now — so
+   * this means work in flight, including work that started while this very
+   * check was reading the feed.
+   */
   | { readonly kind: 'busy' }
   /** Nothing a check could act on: a dev build, or a platform the swap is not written for. */
   | { readonly kind: 'unsupported' };
@@ -204,9 +210,21 @@ export interface Updater {
    * failed check is a state worth leaving so `error` is a valid phase to check
    * from, and the outcome comes back to the caller instead of only ever
    * reaching the screen when it is good news.
+   *
+   * What it does *not* differ in, any more, is re-reading: both checks replace
+   * a standing offer with what the feed says now. "Check for updates" means the
+   * newest release that exists, not the newest one this process has heard of,
+   * and the timer means the same thing four hours later.
    */
   checkNow(): Promise<CheckOutcome>;
-  /** Begin download → verify → swap, parking at `ready`. Resolves once underway. */
+  /**
+   * Begin check → download → verify → swap, parking at `ready`. Resolves once
+   * underway.
+   *
+   * The check at the front re-reads the feed, so what is installed is the
+   * newest release at the moment of the click rather than the one the card has
+   * been showing since it appeared — see `supersede`.
+   */
   install(): UpdateState;
   /** Relaunch into an installed update. A read unless the phase is `ready`. */
   restart(): UpdateState;
@@ -424,6 +442,25 @@ export async function sha512Of(
   return hash.digest('base64');
 }
 
+/**
+ * Which release an install should actually fetch: the one that was offered, or
+ * a newer one the feed has picked up since.
+ *
+ * The rule, in the one place it can be read without following a download
+ * through four steps of side effects:
+ *
+ *   - a feed that did not parse, or was not there, changes nothing — the offer
+ *     stands, because a failed re-read is not evidence against it
+ *   - only strictly newer supersedes, so the install can move forward and
+ *     never back
+ *
+ * See `supersede` for why the re-read happens at all.
+ */
+export function feedToInstall(offer: UpdateFeed, latest: UpdateFeed | null): UpdateFeed {
+  if (latest === null) return offer;
+  return isNewerVersion(latest.version, offer.version) ? latest : offer;
+}
+
 /** A file's size, or `null` if it cannot be read — a denominator is never worth failing over. */
 async function sizeOf(file: string): Promise<number | null> {
   try {
@@ -541,33 +578,65 @@ export function createUpdater(options: UpdaterOptions): Updater {
     }
   }
 
-  async function check(options: { readonly manual: boolean }): Promise<CheckOutcome> {
-    // Never check over an active offer or install: an offer mid-download must
-    // not be replaced under the banner's feet. A manual check may leave an
-    // `error` behind, though — retrying is the whole reason to ask again.
-    if (checking || installing) return { kind: 'busy' };
-    if (current.phase !== 'idle' && !(options.manual && current.phase === 'error')) {
-      return current.phase === 'available' && current.version !== null
-        ? { kind: 'offered', version: current.version }
-        : { kind: 'busy' };
+  /**
+   * Read the feed for the channel this installation is on.
+   *
+   * Throws when it could not be reached and answers `null` when what came back
+   * did not parse. Extracted from `check` when the install grew a read of its
+   * own: the feed's name, its deadline and the temp directory it lands in are
+   * one decision, and two copies of it would be two things to keep in step.
+   */
+  async function readFeed(): Promise<UpdateFeed | null> {
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
+    try {
+      const file = await fetchAsset(FEED_NAME, await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS);
+      return parseUpdateFeed(await readFile(file, 'utf8'));
+    } finally {
+      await removeTree(dir);
     }
+  }
+
+  /**
+   * May a check write what it finds to the state?
+   *
+   * `idle` and `available` both yes, and `available` is the one that changed.
+   * A standing offer used to turn every later check around at the door — the
+   * answer was the version already on the card — so a machine that saw 1.10.1
+   * went on being told 1.10.1 long after 1.11.0 shipped, and the only way out
+   * was to dismiss the card. An offer is a snapshot of one moment; a check is
+   * how that moment is brought up to date, whether a person asked for it or
+   * the timer did.
+   *
+   * `error` is manual-only, and stays that way: a failure is worth leaving on
+   * screen until someone asks again, which is the difference between a state
+   * the user is reading and one the timer is free to clear.
+   *
+   * `working`, `ready` and `restarting` are nobody's to write. Bytes are
+   * moving, or a bundle is already swapped on disk waiting for a relaunch, and
+   * neither can be re-pointed at a different version from here.
+   *
+   * Asked twice per check — before the feed is read and again before anything
+   * is written — because the read is a network round trip with a thirty-second
+   * deadline, which is ample time for the user to click Update on the very card
+   * being re-read. Without the second ask, a check that started while the card
+   * was up would land on top of a download in flight and put the offer back.
+   */
+  function mayWrite(manual: boolean): boolean {
+    if (installing) return false;
+    if (current.phase === 'idle' || current.phase === 'available') return true;
+    return manual && current.phase === 'error';
+  }
+
+  async function check(options: { readonly manual: boolean }): Promise<CheckOutcome> {
+    if (checking) return { kind: 'busy' };
+    if (!mayWrite(options.manual)) return { kind: 'busy' };
     if (!supported()) return { kind: 'unsupported' };
 
     checking = true;
     try {
       let feed: UpdateFeed | null = null;
       try {
-        const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
-        try {
-          feed = parseUpdateFeed(
-            await readFile(
-              await fetchAsset(FEED_NAME, await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS),
-              'utf8',
-            ),
-          );
-        } finally {
-          await removeTree(dir);
-        }
+        feed = await readFeed();
       } catch (error) {
         // No gh, no network, no access: all mean "no banner today", not an error
         // surface. The manual path (the releases page) always remains.
@@ -578,11 +647,39 @@ export function createUpdater(options: UpdaterOptions): Updater {
         log.warn('The update feed did not parse; staying quiet.');
         return { kind: 'unreachable' };
       }
+      // Both failures above return before touching the state, which is what
+      // makes re-reading over a standing offer safe: a check that cannot reach
+      // the feed leaves the card exactly as it found it. The offer is only ever
+      // replaced by a better answer, never by the absence of one.
+      //
       // A dismissal silences the timer, not the person asking: choosing to
       // check is the opposite of having declined, and re-offering is the only
       // way back to a version dismissed by accident.
       const dismissed = options.manual ? null : await readDismissed();
-      if (!shouldOffer({ feedVersion: feed.version, currentVersion: app.getVersion(), dismissedVersion: dismissed })) {
+      const decision = decideOffer({
+        feedVersion: feed.version,
+        currentVersion: app.getVersion(),
+        dismissedVersion: dismissed,
+      });
+      // Everything above this line only read. The state may have moved while
+      // the feed was in flight, so the right to write it is asked for again.
+      if (!mayWrite(options.manual)) return { kind: 'busy' };
+      if (decision !== 'offer') {
+        // `withdraw`: the feed lists nothing newer than what is running, so a
+        // card that is up is offering a release that is gone — pulled after it
+        // was published, or a channel that moved back under it — and it comes
+        // down rather than standing there offering to fetch nothing.
+        //
+        // `silence` leaves the screen alone, deliberately. Its causes are a
+        // version the user declined and a feed too malformed to reason about,
+        // and neither is grounds for taking back an offer already made.
+        if (decision === 'withdraw' && current.phase === 'available') {
+          log.info(
+            `The offer of ${current.version ?? '?'} is no longer in the feed; withdrawing it.`,
+          );
+          offered = null;
+          setState(IDLE);
+        }
         return { kind: 'current' };
       }
       offered = feed;
@@ -624,7 +721,41 @@ export function createUpdater(options: UpdaterOptions): Updater {
     return bundle;
   }
 
-  async function runInstall(feed: UpdateFeed, bundle: string): Promise<void> {
+  /**
+   * Re-read the feed at the moment of the install and answer with whichever
+   * release should actually be fetched.
+   *
+   * The offer and the click are two different moments, and the gap between them
+   * is not theoretical: the card sits at the foot of the sidebar until someone
+   * deals with it, which can be days. Without this, a machine that was offered
+   * 1.10.1 downloaded 1.10.1 forever — including after 1.11.0 shipped, because
+   * the offer had already been made and nothing ever revisited it. The user who
+   * left the notice up longest was the one handed the most out-of-date build.
+   *
+   * A feed that cannot be read leaves the offer standing. The re-read is an
+   * improvement on the offer, never a precondition for it, and a transient 5xx
+   * between a click and a download should not become an error the user has to
+   * click through — the offer was good enough a moment ago and is good enough
+   * now.
+   *
+   * Strictly newer, so this only ever moves forward. An older feed than the
+   * offer means the channel moved backwards under it (a yanked release, a beta
+   * user switched to stable), and the download failing on a release that is
+   * gone is a better answer than quietly fetching something behind what was
+   * agreed to.
+   */
+  async function supersede(offer: UpdateFeed): Promise<UpdateFeed> {
+    let latest: UpdateFeed | null = null;
+    try {
+      latest = await readFeed();
+    } catch (error) {
+      log.debug('Could not re-read the feed before installing; the offer stands.', error);
+      return offer;
+    }
+    return feedToInstall(offer, latest);
+  }
+
+  async function runInstall(offer: UpdateFeed, bundle: string): Promise<void> {
     const staging = await mkdtemp(join(tmpdir(), 'artemis-update-'));
     /*
      * Every step announces itself before it starts and counts while it runs.
@@ -645,6 +776,20 @@ export function createUpdater(options: UpdaterOptions): Updater {
     };
 
     try {
+      step('checking');
+      const feed = await supersede(offer);
+      if (feed.version !== offer.version) {
+        log.info(
+          `The offer of ${offer.version} was superseded by ${feed.version} before the download began.`,
+        );
+        // The card names the version it is fetching, so it has to change with
+        // it — before the first byte, not after the swap. `offered` moves too:
+        // it is what a dismissal is checked against, and what a second click
+        // would install.
+        offered = feed;
+        setState({ ...current, version: feed.version });
+      }
+
       step('downloading');
       const zip = await fetchAsset(
         feed.zipPath,
@@ -760,22 +905,25 @@ export function createUpdater(options: UpdaterOptions): Updater {
         });
       }
       installing = true;
-      // Opens on the first step rather than on a bare spinner: the click and
-      // the word "Downloading" should land in the same frame, because the gap
-      // between them is exactly the moment that reads as nothing happening.
+      // Opens on the first step rather than on a bare spinner: the click and a
+      // word for what is happening should land in the same frame, because the
+      // gap between them is exactly the moment that reads as nothing happening.
       setState({
         phase: 'working',
         version: feed.version,
         message: null,
         releaseUrl: null,
-        progress: { step: 'downloading', transferred: null, total: null },
+        progress: { step: 'checking', transferred: null, total: null },
       });
       void runInstall(feed, bundle)
         .catch((error: unknown) => {
           log.error('Update failed; the installed app is untouched.', error);
           setState({
             phase: 'error',
-            version: feed.version,
+            // `current`, not the offer this started from: the re-read may have
+            // moved the install onto a newer release, and the error belongs to
+            // the version that was actually being fetched.
+            version: current.version,
             message: 'The update could not be installed. The app you are running is untouched — try again later, or download it from the releases page.',
             releaseUrl: RELEASES_URL,
             progress: null,

@@ -17,6 +17,11 @@
  *  - `dismiss` must persist only a version that is actually on offer — the
  *    renderer-supplied string used to be written down unconditionally, which
  *    let a compromised renderer pre-silence a release nobody had seen.
+ *  - a manual check must *re-read* the feed over an offer already on screen,
+ *    and `feedToInstall` must let a newer release supersede one. An offer used
+ *    to be final: a machine that saw 1.10.1 kept being handed 1.10.1 after
+ *    1.11.0 shipped, because both the menu's check and the install trusted the
+ *    version they already had.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -31,6 +36,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { UpdateProgress } from '@rx-artemis/protocol';
 
+import type { UpdateFeed } from './updateFeed.js';
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: true,
@@ -40,7 +47,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { createUpdater, fetchAnonymously, fetchAsset, sha512Of, throttleProgress } =
+const { createUpdater, feedToInstall, fetchAnonymously, fetchAsset, sha512Of, throttleProgress } =
   await import('./updater');
 
 const servers: Server[] = [];
@@ -154,6 +161,121 @@ describe('dismiss', () => {
       });
     },
   );
+});
+
+/* -------------------------------------------------------------------------- */
+/* Staying on the newest release                                              */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The bug both of these come from: an offer was made once and then believed
+ * forever. Running 1.10.0 and offered 1.10.1, a machine went on downloading
+ * 1.10.1 after 1.11.0 had shipped — the menu's check answered with the version
+ * on the card instead of reading the feed, and the install fetched whatever the
+ * card had been holding since it appeared.
+ */
+
+describe('feedToInstall', () => {
+  const feed = (version: string): UpdateFeed => ({
+    version,
+    zipPath: `Artemis-${version}-arm64-mac.zip`,
+    sha512: `sha-${version}`,
+  });
+
+  it('takes a release that has appeared since the offer was made', () => {
+    const latest = feed('1.11.0');
+    expect(feedToInstall(feed('1.10.1'), latest)).toBe(latest);
+  });
+
+  it('keeps the offer when the re-read produced nothing usable', () => {
+    // A feed that did not parse is not evidence against the offer, and turning
+    // a transient failure into a dead Update button would be a worse bug than
+    // the stale version this re-read exists to fix.
+    expect(feedToInstall(feed('1.10.1'), null)).toEqual(feed('1.10.1'));
+  });
+
+  it('never moves the install backwards', () => {
+    // A feed *older* than the offer means the channel moved under it — a pulled
+    // release, or a beta user switched to stable. Downgrading silently is the
+    // one outcome nobody clicked Update for.
+    const offer = feed('1.10.1');
+    expect(feedToInstall(offer, feed('1.10.0'))).toBe(offer);
+    expect(feedToInstall(offer, feed('1.10.1'))).toBe(offer);
+  });
+});
+
+// Each of these drives a real check against a stubbed feed, so they need the
+// platform the updater actually supports.
+describe.runIf(process.platform === 'darwin')('checking again over a standing offer', () => {
+  const feedFor = (version: string): string =>
+    `version: ${version}\npath: Artemis-${version}-arm64-mac.zip\nsha512: irrelevant\n`;
+
+  const updaterInTemp = async (): Promise<ReturnType<typeof createUpdater>> =>
+    createUpdater({
+      userDataDir: await mkdtemp(join(tmpdir(), 'artemis-test-recheck-')),
+      broadcast: () => undefined,
+    });
+
+  it('replaces the offer when a newer release has shipped since', async () => {
+    const updater = await updaterInTemp();
+    stubFetchWith(feedFor('9.9.9'));
+    await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '9.9.9' });
+
+    stubFetchWith(feedFor('10.0.0'));
+    await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '10.0.0' });
+    expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
+  });
+
+  it('leaves the card exactly as it was when the feed cannot be read', async () => {
+    const updater = await updaterInTemp();
+    stubFetchWith(feedFor('9.9.9'));
+    await updater.checkNow();
+
+    // A proxy's error page, or anything else that is not a feed.
+    stubFetchWith('<html><body>404</body></html>');
+    await expect(updater.checkNow()).resolves.toEqual({ kind: 'unreachable' });
+    expect(updater.state()).toMatchObject({ phase: 'available', version: '9.9.9' });
+  });
+
+  /*
+   * The periodic check, driven for real: `start()` puts the first one 15
+   * seconds out, so the clock is faked to get there. Nothing else in the path
+   * is timer-driven — the stubbed fetch, `mkdtemp` and `/bin/rm` all run on the
+   * event loop — which is why `waitFor` can pick up the result afterwards.
+   */
+  it('refreshes a card nobody has touched when a newer release ships', async () => {
+    vi.useFakeTimers();
+    const updater = await updaterInTemp();
+    try {
+      stubFetchWith(feedFor('9.9.9'));
+      await updater.checkNow();
+      expect(updater.state().version).toBe('9.9.9');
+
+      // The card sits there. A newer release ships, and the timer is the only
+      // thing that notices — which is the case this whole path exists for.
+      stubFetchWith(feedFor('10.0.0'));
+      updater.start();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.waitFor(() => {
+        expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
+      });
+    } finally {
+      updater.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes the card down when the feed no longer offers anything newer', async () => {
+    // The offered release was pulled after it was published: the card is
+    // holding a version that would 404 at the download, so it comes down.
+    const updater = await updaterInTemp();
+    stubFetchWith(feedFor('9.9.9'));
+    await updater.checkNow();
+
+    stubFetchWith(feedFor('0.1.0')); // …which is the running version.
+    await expect(updater.checkNow()).resolves.toEqual({ kind: 'current' });
+    expect(updater.state().phase).toBe('idle');
+  });
 });
 
 /* -------------------------------------------------------------------------- */
