@@ -23,11 +23,13 @@ import { seedApp, ALL_CAPABILITIES } from './testkit';
 const pane = (): Pane => focusedPane();
 
 let started: Array<Record<string, unknown>> = [];
+/** What the stored session holds, for the lazy anchor resolution. */
+let storedEvents: unknown[] = [];
 
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   sessions: {
     listAll: async () => ({ ok: true, value: { sessions: [], hasMore: false } }),
-    messages: async () => ({ ok: true, value: { events: [], hasMore: false } }),
+    messages: async () => ({ ok: true, value: { events: storedEvents, hasMore: false } }),
   },
   providers: { models: async () => ({ ok: true, value: { models: [], live: false } }) },
   runs: {
@@ -92,13 +94,14 @@ function twoTurns(): string {
 
 beforeEach(() => {
   started = [];
+  storedEvents = [];
   seed();
 });
 
 describe('rewindConversationTo', () => {
-  it('cuts the transcript, refills the composer, and arms the next run', () => {
+  it('cuts the transcript, refills the composer, and arms the next run', async () => {
     const cut = twoTurns();
-    rewindConversationTo(cut, { fork: false }, pane());
+    await rewindConversationTo(cut, { fork: false }, pane());
 
     expect(paneState(pane()).rewindToMessageId).toBe('uuid-2');
     expect(paneState(pane()).forkOnResume).toBe(false);
@@ -109,14 +112,14 @@ describe('rewindConversationTo', () => {
     expect(texts).toEqual(['first ask', 'first answer']);
   });
 
-  it('forks with the same cut when asked to', () => {
-    rewindConversationTo(twoTurns(), { fork: true }, pane());
+  it('forks with the same cut when asked to', async () => {
+    await rewindConversationTo(twoTurns(), { fork: true }, pane());
     expect(paneState(pane()).forkOnResume).toBe(true);
     expect(paneState(pane()).rewindToMessageId).toBe('uuid-2');
   });
 
   it('sends the truncation with the next prompt, exactly once', async () => {
-    rewindConversationTo(twoTurns(), { fork: false }, pane());
+    await rewindConversationTo(twoTurns(), { fork: false }, pane());
 
     expect(await submitPrompt('say it differently', undefined, pane())).toBe(true);
     expect(started[0]).toMatchObject({
@@ -132,19 +135,19 @@ describe('rewindConversationTo', () => {
     expect(started[1]).not.toHaveProperty('rewindToMessageId');
   });
 
-  it('refuses without the capability, without touching anything', () => {
+  it('refuses without the capability, without touching anything', async () => {
     seed({ rewind: false });
     const cut = twoTurns();
     const before = pane().transcript.getListSnapshot();
 
-    rewindConversationTo(cut, { fork: false }, pane());
+    await rewindConversationTo(cut, { fork: false }, pane());
 
     expect(paneState(pane()).rewindToMessageId).toBeNull();
     expect(paneState(pane()).draft).toBe('');
     expect(pane().transcript.getListSnapshot()).toBe(before);
   });
 
-  it('refuses while a run is live', () => {
+  it('refuses while a run is live', async () => {
     const cut = twoTurns();
     setPaneState(pane(), {
       run: {
@@ -159,16 +162,83 @@ describe('rewindConversationTo', () => {
       },
     } as never);
 
-    rewindConversationTo(cut, { fork: false }, pane());
+    await rewindConversationTo(cut, { fork: false }, pane());
     expect(paneState(pane()).rewindToMessageId).toBeNull();
   });
 
-  it('refuses a message the provider has not filed yet', () => {
+  it('refuses a message still pending, before any lookup', async () => {
     twoTurns();
-    const pendingId = pane().transcript.pushUserMessage('not yet echoed');
+    const pendingId = pane().transcript.pushUserMessage('not yet delivered');
     pane().transcript.flush();
 
-    rewindConversationTo(pendingId, { fork: false }, pane());
+    await rewindConversationTo(pendingId, { fork: false }, pane());
     expect(paneState(pane()).rewindToMessageId).toBeNull();
+  });
+
+  it('resolves the provider id from the stored session for a live-typed row', async () => {
+    // The CLI never echoes a live prompt back, so a row typed this window
+    // session has no provider uuid — the control reads the stored chain and
+    // matches the row by tail-anchored ordinal instead.
+    twoTurns();
+    const typedId = pane().transcript.pushUserMessage('typed here');
+    pane().transcript.confirmUserMessage(typedId);
+    pane().transcript.flush();
+
+    storedEvents = [
+      { type: 'text.complete', runId: 'r', seq: 0, ts: 1, messageId: 'uuid-1', role: 'user', text: 'first ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 1, ts: 2, messageId: 'uuid-2', role: 'user', text: 'second ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 2, ts: 3, messageId: 'uuid-9', role: 'user', text: 'typed here', replay: true },
+    ];
+
+    await rewindConversationTo(typedId, { fork: false }, pane());
+
+    expect(paneState(pane()).rewindToMessageId).toBe('uuid-9');
+    expect(paneState(pane()).draft).toBe('typed here');
+  });
+
+  it('refuses when the stored chain does not hold the message yet', async () => {
+    twoTurns();
+    const typedId = pane().transcript.pushUserMessage('typed here');
+    pane().transcript.confirmUserMessage(typedId);
+    pane().transcript.flush();
+    storedEvents = [];
+    const before = pane().transcript.getListSnapshot();
+
+    await rewindConversationTo(typedId, { fork: false }, pane());
+
+    expect(paneState(pane()).rewindToMessageId).toBeNull();
+    expect(pane().transcript.getListSnapshot()).toBe(before);
+  });
+
+  it('refuses when the stored text disagrees with the screen', async () => {
+    twoTurns();
+    const typedId = pane().transcript.pushUserMessage('typed here');
+    pane().transcript.confirmUserMessage(typedId);
+    pane().transcript.flush();
+    storedEvents = [
+      { type: 'text.complete', runId: 'r', seq: 0, ts: 1, messageId: 'uuid-9', role: 'user', text: 'something else entirely', replay: true },
+    ];
+
+    await rewindConversationTo(typedId, { fork: false }, pane());
+
+    expect(paneState(pane()).rewindToMessageId).toBeNull();
+  });
+
+  it('never sends a registry retention id to the provider', async () => {
+    // A row claimed under `${runId}:prompt:${n}` — the dedup identity — is not
+    // a provider id; the anchor must come from the stored chain.
+    twoTurns();
+    const claimedId = pane().transcript.pushUserMessage('typed here', undefined, 'run_x:prompt:1');
+    pane().transcript.confirmUserMessage(claimedId);
+    pane().transcript.flush();
+    storedEvents = [
+      { type: 'text.complete', runId: 'r', seq: 0, ts: 1, messageId: 'uuid-1', role: 'user', text: 'first ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 1, ts: 2, messageId: 'uuid-2', role: 'user', text: 'second ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 2, ts: 3, messageId: 'uuid-9', role: 'user', text: 'typed here', replay: true },
+    ];
+
+    await rewindConversationTo(claimedId, { fork: false }, pane());
+
+    expect(paneState(pane()).rewindToMessageId).toBe('uuid-9');
   });
 });

@@ -1130,6 +1130,17 @@ function validateRunInput(value: unknown, field: string): RunInput {
     runId: optionalId(input['runId'], `${field}.runId`),
     resumeSessionId: optionalId(input['resumeSessionId'], `${field}.resumeSessionId`),
     forkSession: optionalBoolean(input['forkSession'], `${field}.forkSession`),
+    /*
+     * An opaque provider id, not one of Artemis's own — Claude names stored
+     * messages by chain uuid — so this is `optionalString` where its
+     * neighbours are `optionalId`. Its absence from this whitelist was the
+     * whole of the rewind bug: `compact` copies only the keys written here,
+     * the field vanished on its way through IPC, and a "rewound" run silently
+     * resumed the *full* conversation while the transcript on screen showed
+     * the cut. The adapter validates the id against the stored chain; this
+     * boundary only proves it is a short string.
+     */
+    rewindToMessageId: optionalString(input['rewindToMessageId'], `${field}.rewindToMessageId`, LIMITS.model),
     model: optionalString(input['model'], `${field}.model`, LIMITS.model),
     fallbackModel: optionalString(input['fallbackModel'], `${field}.fallbackModel`, LIMITS.model),
     permissionMode: permissionMode === null ? undefined : (permissionMode as RunInput['permissionMode']),

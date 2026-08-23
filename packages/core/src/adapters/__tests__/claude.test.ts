@@ -2519,3 +2519,102 @@ describe('prompt suggestions', () => {
     expect(heard).toHaveLength(0);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Rewind                                                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('rewind', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  it('maps the resolved point onto the SDK options', () => {
+    const options = buildClaudeOptions(
+      { ...BASE_INPUT, resumeSessionId: 'sess-old' },
+      {
+        canUseTool: async () => ({ behavior: 'deny', message: 'x' }) as never,
+        abortController: new AbortController(),
+        stderr: () => undefined,
+        rewind: { resumeSessionAt: 'uuid-cut', dropsTurn: true },
+      },
+    );
+    expect(options).toMatchObject({
+      resume: 'sess-old',
+      resumeSessionAt: 'uuid-cut',
+      resumeDropsTurn: true,
+    });
+  });
+
+  it('releases a grace-held idle process and rewinds fresh', async () => {
+    // A process lingering on a grace window — here, the settle beat after its
+    // last task finished — is idle in every sense the user can see. The
+    // rewind must not refuse for the length of a timer nobody knows is
+    // running: the retained transport is closed and the truncating resume
+    // spawns fresh.
+    const first = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = first.harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'brief work' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    // The work settles; the process is retained for the turn about it.
+    fake.messages.push(tasksChanged([]));
+    await vi.waitFor(() => expect(fake.closed).toBe(false));
+
+    sdkMock.onListSessions = () => Promise.resolve([]);
+    const second = installQuery();
+    const rewound = await adapter
+      .createRun({
+        ...BASE_INPUT,
+        runId: 'run-2',
+        resumeSessionId: 'sess-abc',
+        rewindToMessageId: 'uuid-anywhere',
+      })
+      .catch((error: unknown) => error);
+
+    // The retained process was released rather than refused-behind…
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+    // …and the rewind proceeded past the refusal into the stored-chain read —
+    // which is the assertion that matters. The module mock exports no session
+    // reader, so the read itself fails with the resolver's own wrapper; a
+    // refusal would have said "still has work running" instead.
+    expect(String((rewound as Error).message)).toContain('Could not read the session to rewind');
+    void second;
+  });
+
+  it('still refuses while the conversation holds real work', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'still going' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    await expect(
+      adapter.createRun({
+        ...BASE_INPUT,
+        runId: 'run-2',
+        resumeSessionId: 'sess-abc',
+        rewindToMessageId: 'uuid-anywhere',
+      }),
+    ).rejects.toThrow(/still has work running/);
+    expect(fake.closed).toBe(false);
+  });
+});
