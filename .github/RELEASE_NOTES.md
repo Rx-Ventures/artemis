@@ -1,6 +1,42 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.10.0
+
+The composer suggests what you might say next, a message you send appears
+once, and rewind and fork finally do what they say.
+
+- **Suggested next prompts.** When a turn finishes, Claude predicts what you
+  are likely to ask next and offers it above the composer. Click it — or
+  press Tab from an empty field — and the text lands in the draft, yours to
+  edit or send. It is never sent for you: it is a guess at *your* next
+  message, which makes it an offer rather than an instruction. The
+  suggestion retires itself the moment the next turn starts, and the
+  provider skips predicting after plan-mode turns, failures, and the first
+  message of a conversation.
+
+- **A message you send appears once.** Sending a message could show it
+  twice, with a reload collapsing it back to one. The window heals a lost
+  stream by replaying what the engine retained — including your own prompt —
+  and that replayed copy had no way to recognise the message already on
+  screen, so it drew a second one. Your messages now carry an identity from
+  the moment you send them, and a re-delivered copy merges onto the row you
+  are already looking at. The same fix restores something that healing used
+  to quietly lose: a recovered conversation keeps its session, model, and
+  tool list instead of coming back anonymous.
+
+- **Rewind and fork actually rewind.** Both controls under a settled message
+  shipped in 1.9.0 and neither worked. "Rewind to here" cut the transcript
+  on screen while the model kept every turn you thought you had removed, and
+  "fork from here" branched the whole conversation rather than branching at
+  that message — silently, in both cases. They work now: the message is
+  located in the provider's own stored conversation when you click, checked
+  against what is on screen, and nothing is cut unless the two agree. The
+  controls are also findable — they appear under any settled message rather
+  than only in reopened sessions, they explain themselves on providers that
+  cannot rewind instead of vanishing, and the command palette carries
+  "Rewind to your last message" and "Fork from your last message".
+
 ## What's new in 1.9.0
 
 One Artemis can drive another, the app keeps its own appointments, and the
