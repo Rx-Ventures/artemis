@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isNewerVersion, parseUpdateFeed, shouldOffer } from './updateFeed';
+import { decideOffer, isNewerVersion, parseUpdateFeed } from './updateFeed';
 
 /** Verbatim shape of what electron-builder published for v0.1.0. */
 const REAL_FEED = `version: 0.1.0
@@ -92,28 +92,53 @@ describe('isNewerVersion', () => {
   });
 });
 
-describe('shouldOffer', () => {
+describe('decideOffer', () => {
   it('offers a newer, undismissed version', () => {
     expect(
-      shouldOffer({ feedVersion: '0.3.0', currentVersion: '0.2.0', dismissedVersion: null }),
-    ).toBe(true);
+      decideOffer({ feedVersion: '0.3.0', currentVersion: '0.2.0', dismissedVersion: null }),
+    ).toBe('offer');
   });
 
   it('stays silent on the dismissed version but offers the next one', () => {
     expect(
-      shouldOffer({ feedVersion: '0.3.0', currentVersion: '0.2.0', dismissedVersion: '0.3.0' }),
-    ).toBe(false);
+      decideOffer({ feedVersion: '0.3.0', currentVersion: '0.2.0', dismissedVersion: '0.3.0' }),
+    ).toBe('silence');
     expect(
-      shouldOffer({ feedVersion: '0.4.0', currentVersion: '0.2.0', dismissedVersion: '0.3.0' }),
-    ).toBe(true);
+      decideOffer({ feedVersion: '0.4.0', currentVersion: '0.2.0', dismissedVersion: '0.3.0' }),
+    ).toBe('offer');
   });
 
-  it('never offers the running version or older', () => {
+  /*
+   * `silence` and `withdraw` are both "say nothing", and the difference between
+   * them is what happens to a card that is already up. Every check re-reads the
+   * feed now, so a card outlives the check that put it there and the two
+   * answers have to be told apart.
+   */
+  it('withdraws when the feed has nothing newer than what is running', () => {
+    // The release was pulled after it was published: a card offering it would
+    // 404 at the download, so it is worth taking down.
     expect(
-      shouldOffer({ feedVersion: '0.2.0', currentVersion: '0.2.0', dismissedVersion: null }),
-    ).toBe(false);
+      decideOffer({ feedVersion: '0.2.0', currentVersion: '0.2.0', dismissedVersion: null }),
+    ).toBe('withdraw');
     expect(
-      shouldOffer({ feedVersion: '0.1.0', currentVersion: '0.2.0', dismissedVersion: null }),
-    ).toBe(false);
+      decideOffer({ feedVersion: '0.1.0', currentVersion: '0.2.0', dismissedVersion: null }),
+    ).toBe('withdraw');
+  });
+
+  it('stays silent rather than withdrawing over a version it cannot parse', () => {
+    // A feed nobody can read is the same answer as a feed that never arrived,
+    // and one malformed release must not take down a good offer.
+    expect(
+      decideOffer({ feedVersion: 'nightly', currentVersion: '0.2.0', dismissedVersion: null }),
+    ).toBe('silence');
+  });
+
+  it('does not withdraw over a dismissal', () => {
+    // A card can only be up because someone asked for one — a manual check
+    // re-offers a dismissed version deliberately — and a decision recorded
+    // before that ask must not quietly undo it.
+    expect(
+      decideOffer({ feedVersion: '0.3.0', currentVersion: '0.2.0', dismissedVersion: '0.3.0' }),
+    ).not.toBe('withdraw');
   });
 });

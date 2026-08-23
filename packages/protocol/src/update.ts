@@ -25,8 +25,19 @@
  * {@link updatePercent} is the one place that decision is made.
  */
 
-/** Which part of the install is running. */
-export type UpdateStep = 'downloading' | 'verifying' | 'unpacking' | 'installing';
+/**
+ * Which part of the install is running.
+ *
+ * `checking` is the odd one: it is not part of the install so much as the
+ * question the install asks before it starts — *is the version on this card
+ * still the newest one?* An offer can sit at the foot of the sidebar for days,
+ * and the release it names can be superseded in that time, so the answer is
+ * re-read at the moment of the click rather than trusted from whenever the card
+ * appeared. It is a few hundred bytes and usually over before it is seen, but a
+ * step that can fail slowly (an unreachable feed waits out its deadline) is a
+ * step the surface has to be able to name.
+ */
+export type UpdateStep = 'checking' | 'downloading' | 'verifying' | 'unpacking' | 'installing';
 
 /**
  * One reading of an install in flight.

@@ -94,17 +94,43 @@ function looksLikeVersion(value: string): boolean {
 }
 
 /**
- * The one decision the periodic check makes: offer, or stay silent.
+ * What a check should do about the version it just read.
+ *
+ * This was a boolean — `shouldOffer` — and a boolean turned out to be one bit
+ * short. It could say "stay quiet" but not *why*, and the two reasons for quiet
+ * want opposite things from a card that is already on screen: a version the
+ * user declined should leave it exactly where it is, while a feed with nothing
+ * newer in it at all means the card is offering a release that no longer exists
+ * and should come down. That distinction did not matter while a standing offer
+ * was never re-read. It is the whole point now that every check re-reads.
+ */
+export type OfferDecision =
+  /** Newer, and not declined: put it up, or replace what is up with it. */
+  | 'offer'
+  /** Nothing to say, and nothing to correct: leave the screen as it is. */
+  | 'silence'
+  /** Nothing here is newer than what is running: a standing offer is stale. */
+  | 'withdraw';
+
+/**
+ * Offer, stay silent, or take back what is on screen.
  *
  * Dismissal is per-version and sticky — declining 0.3.0 keeps 0.3.0 quiet
- * forever, and 0.4.0 starts a fresh conversation.
+ * forever, and 0.4.0 starts a fresh conversation — and it is `silence` rather
+ * than `withdraw` on purpose: a card can only be up because someone asked for
+ * one, and a decision recorded before that ask must not undo it.
  */
-export function shouldOffer(options: {
+export function decideOffer(options: {
   readonly feedVersion: string;
   readonly currentVersion: string;
   readonly dismissedVersion: string | null;
-}): boolean {
+}): OfferDecision {
   const { feedVersion, currentVersion, dismissedVersion } = options;
-  if (!isNewerVersion(feedVersion, currentVersion)) return false;
-  return feedVersion !== dismissedVersion;
+  // A version neither side can parse is a feed that cannot be reasoned about,
+  // which is the same answer as a feed that never arrived: say nothing, change
+  // nothing. Withdrawing here would let one malformed release take down a
+  // perfectly good offer.
+  if (!looksLikeVersion(feedVersion) || !looksLikeVersion(currentVersion)) return 'silence';
+  if (!isNewerVersion(feedVersion, currentVersion)) return 'withdraw';
+  return feedVersion === dismissedVersion ? 'silence' : 'offer';
 }

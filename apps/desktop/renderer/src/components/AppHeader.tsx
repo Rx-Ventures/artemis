@@ -100,7 +100,7 @@ import {
 import { keyLabel } from '../hooks/useHotkeys';
 import { useWindowState } from '../hooks/useWindowState';
 import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpdateState';
-import { updatePercent } from '@rx-artemis/protocol';
+import { updatePercent, type UpdateStep } from '@rx-artemis/protocol';
 import { resolveBridge } from '../lib/bridge';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
@@ -470,9 +470,7 @@ function UpdateChip(): ReactElement | null {
     : ready
       ? `Artemis ${version} is ready — restart to use it`.trim()
       : busy
-        ? step === null
-          ? `Working on Artemis ${version}`.trim()
-          : `${step} Artemis ${version}${percent === null ? '' : ` — ${String(percent)}%`}`.trim()
+        ? busyLabel(step, version, percent)
         : `Artemis ${version} is available`.trim();
 
   return (
@@ -509,6 +507,19 @@ function UpdateChip(): ReactElement | null {
             : version}
     </button>
   );
+}
+
+/**
+ * What the chip says, at length, while an install runs.
+ *
+ * `checking` is the one step that does not name a version: it runs before the
+ * download to find out whether the offer has been superseded, so the version
+ * beside it would be the one thing it might be about to change.
+ */
+function busyLabel(step: UpdateStep | null, version: string, percent: number | null): string {
+  if (step === 'checking') return 'Checking for a newer version';
+  if (step === null) return `Working on Artemis ${version}`.trim();
+  return `${step} Artemis ${version}${percent === null ? '' : ` — ${String(percent)}%`}`.trim();
 }
 
 /**
