@@ -1,6 +1,30 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.11.0
+
+The update you are offered is the one that exists now, rather than the one
+the notice remembered, and releases stop building for Intel Macs.
+
+- **Updates no longer get stuck on a version.** An offer used to be made
+  once and then believed forever. A copy running 1.10.0 that was offered
+  1.10.1 went on being offered 1.10.1 after 1.11.0 shipped — and went on
+  downloading it, too — because the notice was already up and nothing ever
+  revisited it. The only way out was to dismiss it. Clicking **Update now**
+  now re-reads the release feed before it fetches anything, so what installs
+  is the newest release at the moment of the click. *Check for Updates…* and
+  the four-hourly background check do the same, replacing what is on the
+  notice with what the feed says now, and a notice for a release that has
+  since been pulled comes down on its own. When the feed cannot be reached,
+  whatever is on screen is left exactly as it was: a check that fails
+  changes nothing.
+
+- **Intel Macs are no longer built.** Releases ship for Apple Silicon and
+  Windows. An installed Intel copy keeps working and simply stops being
+  offered updates — it polls a feed that is no longer published, finds
+  nothing, and stays where it is. The build matrix entry is preserved at the
+  v1.10.0 tag if an Intel machine ever matters again.
+
 ## What's new in 1.10.0
 
 The composer suggests what you might say next, a message you send appears
