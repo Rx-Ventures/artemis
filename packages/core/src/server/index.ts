@@ -32,6 +32,15 @@ export {
 } from './workspaces.js';
 
 export {
+  createSessionLedger,
+  SERVER_LEDGER_FILE,
+  workspaceKeyFor,
+  type LedgerEntry,
+  type LedgerScope,
+  type SessionLedger,
+} from './ledger.js';
+
+export {
   chatChunk,
   chatResponse,
   finishReasonFor,
@@ -53,4 +62,5 @@ export {
   type ServerReply,
   type ServerRequestInfo,
   type ServerStreamReply,
+  type SessionSource,
 } from './http.js';

@@ -84,7 +84,7 @@ import {
 import type { EngineHost } from './engine.js';
 import { createLogger } from './log.js';
 import { looksLikeSecretValue } from './redact.js';
-import { createServerSessions } from './serverSessions.js';
+import { createSessionLedger } from '@rx-artemis/core';
 
 const log = createLogger('server');
 
@@ -169,7 +169,7 @@ export interface ServerHost {
    *
    * Read by the sessions list, which hides them: the sidebar is a list of
    * conversations *the user* started, and a script polling every minute would
-   * otherwise bury their own work. See `serverSessions.ts`.
+   * otherwise bury their own work. See the core session ledger (`@rx-artemis/core`, `server/ledger.ts`).
    */
   isServerSession(sessionId: string): boolean;
   /** Stop listening, for app shutdown. Safe to call when never started. */
@@ -204,17 +204,46 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
    * A run started here writes a transcript indistinguishable from one the user
    * typed — same provider, same directory — so the only moment the difference
    * is knowable is now, as it starts. Recorded here and read by the sessions
-   * list; see `serverSessions.ts` for why the record lives beside the app's
+   * list; see the core session ledger for why the record lives beside the app's
    * data rather than as a tag on the provider's own file.
    */
-  const ownRuns = new Set<string>();
+  const ledger = createSessionLedger(options.userDataDir);
 
-  const sessions = createServerSessions(options.userDataDir);
+  /**
+   * The engine's session store, reduced to the two reads the server's routes
+   * make. Authorisation is not here — the routes consult the ledger before
+   * either call — this only answers with what the provider stored.
+   */
+  const sessionSource = {
+    list: async (query: {
+      readonly providerId: string;
+      readonly profileId: string;
+      readonly cwd: string;
+      readonly limit?: number;
+    }) =>
+      options.engine.require().listSessions({
+        providerId: query.providerId as never,
+        profileId: query.profileId as never,
+        cwd: query.cwd,
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
+      }),
+    messages: async (query: {
+      readonly profileId: string;
+      readonly sessionId: string;
+      readonly runId: string;
+      readonly cwd?: string;
+    }) =>
+      options.engine.require().getSessionMessages({
+        profileId: query.profileId as never,
+        sessionId: query.sessionId as never,
+        runId: query.runId as never,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      }),
+  };
 
   const runs: RunSource = {
     startRun: async (input) => {
-      const engine = options.engine.require();
-      return engine.startRun({
+      return options.engine.require().startRun({
         providerId: input.providerId as ServerConnection['id'] as never,
         profileId: input.profileId as never,
         cwd: input.cwd,
@@ -226,32 +255,9 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         ...(input.resumeSessionId === undefined
           ? {}
           : { resumeSessionId: input.resumeSessionId as never }),
-      } as never)
-      .then((handle) => {
-        ownRuns.add(String(handle.runId));
-        // A resumed conversation is already known; a new one is learned from
-        // the events below. Both paths record, because a caller may resume a
-        // session this ledger has never seen — one from a previous launch.
-        if (input.resumeSessionId !== undefined) sessions.add(input.resumeSessionId);
-        if (handle.sessionId !== undefined) sessions.add(String(handle.sessionId));
-        return handle;
-      });
+      } as never);
     },
-    subscribe: (listener) =>
-      options.engine.require().subscribe((event) => {
-        /*
-         * A new session announces itself mid-run, so the id is only knowable
-         * here — `startRun` resolves before the provider has opened one. Every
-         * event carrying one is checked rather than just `session.started`,
-         * because an adapter that only reports it on `run.end` would otherwise
-         * leave the conversation in the sidebar.
-         */
-        if (ownRuns.has(String(event.runId))) {
-          const sessionId = (event as { sessionId?: unknown }).sessionId;
-          if (typeof sessionId === 'string') sessions.add(sessionId);
-        }
-        listener(event);
-      }),
+    subscribe: (listener) => options.engine.require().subscribe(listener),
     interrupt: async (runId) => {
       await options.engine.require().interruptRun(runId);
     },
@@ -500,6 +506,11 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       // have nowhere to run it.
       runs,
       workspaces,
+      // Ownership and history. The router records into the ledger as sessions
+      // announce themselves and reads back through the source — see the core's
+      // `describeScopedSessions` and the resume gate.
+      ledger,
+      sessions: sessionSource,
       onRequest: ({ rejected, connectionId }) => {
         // Counters only, never a log of what was asked — see `ServerTraffic`.
         traffic = {
@@ -563,7 +574,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     workspaces,
 
     async start() {
-      await Promise.all([load(), sessions.load()]);
+      await Promise.all([load(), ledger.load()]);
 
       /*
        * Clear out what a previous life left behind.
@@ -662,7 +673,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     catalogue: (readOptions) =>
       catalogue.read(readOptions?.refresh === true ? { refresh: true } : {}),
 
-    isServerSession: (sessionId) => sessions.has(sessionId),
+    isServerSession: (sessionId) => ledger.has(sessionId),
 
     invalidateCatalogue() {
       catalogue.invalidate();

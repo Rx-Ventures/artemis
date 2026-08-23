@@ -53,7 +53,10 @@ import type {
   RunEndReason,
   RunId,
   RunStatus,
+  ServerSessionMessagesBody,
+  ServerSessionsBody,
   SessionId,
+  SessionSummary,
   ToolCallId,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
@@ -68,12 +71,18 @@ import {
 import { AsyncQueue } from '../stream.js';
 import { AdapterError, adapterError } from '../types.js';
 import type {
+  AggregatedSessionList,
+  AllSessionsQuery,
   InterruptResult,
   ProviderAdapter,
   ProviderCredentialSpec,
   ResolvedRunInput,
   Run,
   SendResult,
+  SessionListPage,
+  SessionListQuery,
+  SessionMessagesQuery,
+  SessionTranscript,
 } from '../types.js';
 import { splitEvents } from '../local/stream.js';
 import { parseServerModels } from './catalogue.js';
@@ -101,6 +110,10 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // The server stores real sessions; `artemis.sessionId` continues one. The
   // raw local endpoints cannot say this — their server remembers nothing.
   resumeSession: true,
+  // The server lists the sessions this connection's scope created — see its
+  // ledger — and replays their stored messages. This is what makes the same
+  // conversations reachable from every machine holding the token.
+  listSessions: true,
   // Permission prompts are auto-denied at the server (nobody is present
   // there), so offering an approval surface or a mode picker here would be
   // claiming a control that does not exist. Empty modes, no interactivity.
@@ -118,6 +131,10 @@ function artemisCredentials(): ProviderCredentialSpec {
     // Nothing is spawned, so nothing reads this — but the field is required
     // and an inert, clearly-named variable is more honest than borrowing one.
     configDirVar: 'ARTEMIS_LOCAL_PROFILE_DIR',
+    // History lives on the server, behind the same token runs use — a history
+    // read here is an authenticated request, not a file read, so the engine
+    // hands it the credential-bearing environment. See the spec's own doc.
+    sessionStore: 'remote',
     // Both are set by Artemis from the profile, so both must be scrubbed from
     // whatever the user's shell happens to export — the same reasoning as the
     // local adapter, whose variables these are.
@@ -463,6 +480,48 @@ function toError(error: unknown): AgentError {
 }
 
 /** Build the adapter. */
+/**
+ * `GET /api/v0/sessions`, mapped to the shape the sidebar renders.
+ *
+ * Every row is stamped with the asking profile — on this machine the identity
+ * is "the Artemis-server profile", whatever account served it over there —
+ * and with the *server's* working directory, which is the only directory the
+ * conversation has.
+ */
+async function fetchServerSessions(
+  env: Readonly<Record<string, string | undefined>>,
+  profileId: SessionListQuery['profileId'],
+): Promise<SessionSummary[]> {
+  const root = baseUrl(env);
+  const response = await fetch(`${root}${API_PREFIX}/sessions`, {
+    headers: authHeaders(env),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw adapterError(
+      'provider_unavailable',
+      `The Artemis server answered ${String(response.status)} listing sessions.`,
+    );
+  }
+  const body = (await response.json()) as Partial<ServerSessionsBody>;
+  if (!Array.isArray(body.sessions)) return [];
+  const rows: SessionSummary[] = [];
+  for (const row of body.sessions) {
+    if (typeof row !== 'object' || row === null) continue;
+    if (typeof row.id !== 'string' || row.id.length === 0) continue;
+    rows.push({
+      id: row.id as SessionId,
+      providerId: ARTEMIS_PROVIDER_ID,
+      profileId,
+      cwd: typeof row.cwd === 'string' ? row.cwd : '',
+      title: typeof row.title === 'string' && row.title.length > 0 ? row.title : row.id,
+      ...(typeof row.firstPrompt === 'string' ? { firstPrompt: row.firstPrompt } : {}),
+      updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : 0,
+    });
+  }
+  return rows;
+}
+
 export function createArtemisAdapter(): ProviderAdapter {
   return {
     id: ARTEMIS_PROVIDER_ID,
@@ -520,6 +579,78 @@ export function createArtemisAdapter(): ProviderAdapter {
         /* fall through to the not-confirmed answer */
       }
       return { models: [], live: false };
+    },
+
+    /**
+     * The sessions this connection's scope created, as the server tells it.
+     *
+     * `cwd` is deliberately not sent: the server scopes the answer by the
+     * *token*, whose workspace was fixed when it was minted, and a local
+     * directory means nothing on another machine. What comes back carries the
+     * serving machine's own paths, and those are what the rows show — a
+     * conversation's home is where it ran.
+     *
+     * Rejects on an unreachable or refusing server, exactly as the contract
+     * asks: an error names the problem where an empty page would silently
+     * claim there is no history.
+     */
+    async listSessions(query: SessionListQuery): Promise<SessionListPage> {
+      const sessions = await fetchServerSessions(query.env, query.profileId);
+      const offset = query.offset ?? 0;
+      const limit = query.limit ?? sessions.length;
+      return {
+        sessions: sessions.slice(offset, offset + limit),
+        hasMore: offset + limit < sessions.length,
+      };
+    },
+
+    /**
+     * The same list, for the every-project sidebar. One server, one scope —
+     * so "every project" is the connection's whole visible history, and each
+     * profile in the query is one server to ask. A server that cannot be
+     * reached contributes nothing and is named, per the aggregation contract.
+     */
+    async listAllSessions(query: AllSessionsQuery): Promise<AggregatedSessionList> {
+      const collected: SessionSummary[] = [];
+      const unreadable: string[] = [];
+      for (const scope of query.profiles) {
+        try {
+          collected.push(...(await fetchServerSessions(scope.env, scope.profileId)));
+        } catch {
+          unreadable.push(String(scope.profileId));
+        }
+      }
+      collected.sort((a, b) => b.updatedAt - a.updatedAt);
+      return { sessions: collected, unreadableProfiles: unreadable };
+    },
+
+    /**
+     * One stored conversation, replayed as events.
+     *
+     * The server already speaks `AgentEvent` — its replay is the engine's own
+     * — so the only translation is the run id: events are re-stamped with the
+     * caller's, which is what lands them in the transcript that asked.
+     */
+    async getSessionMessages(query: SessionMessagesQuery): Promise<SessionTranscript> {
+      const root = baseUrl(query.env);
+      const response = await fetch(
+        `${root}${API_PREFIX}/sessions/${encodeURIComponent(String(query.sessionId))}/messages`,
+        { headers: authHeaders(query.env), signal: AbortSignal.timeout(15_000) },
+      );
+      if (!response.ok) {
+        throw adapterError(
+          response.status === 404 ? 'invalid_request' : 'provider_unavailable',
+          response.status === 404
+            ? 'The server has no such conversation for this connection.'
+            : `The Artemis server answered ${String(response.status)} reading the conversation.`,
+        );
+      }
+      const body = (await response.json()) as Partial<ServerSessionMessagesBody>;
+      const events = Array.isArray(body.events) ? body.events : [];
+      return {
+        events: events.map((event) => ({ ...event, runId: query.runId })),
+        hasMore: body.hasMore === true,
+      };
     },
 
     createRun(input: ResolvedRunInput): Promise<Run> {

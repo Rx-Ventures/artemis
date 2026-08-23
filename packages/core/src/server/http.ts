@@ -58,6 +58,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 
 import type {
+  AgentEvent,
   OpenAiChatRequest,
   OpenAiModelList,
   ServerErrorBody,
@@ -67,6 +68,10 @@ import type {
   ServerConnection,
   ServerProfile,
   ServerProfilesBody,
+  ServerSessionMessagesBody,
+  ServerSessionsBody,
+  ServerSessionSummary,
+  SessionSummary,
 } from '@rx-artemis/protocol';
 import {
   SERVER_API_VERSION,
@@ -89,6 +94,7 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
@@ -168,6 +174,49 @@ export interface ServerContext {
   readonly runs?: RunSource;
   /** Where a connection's turns run. Required alongside {@link runs}. */
   readonly workspaces?: WorkspaceResolver;
+  /**
+   * Who owns which server-created session. Required for the session surface
+   * and for the resume gate; absent means this build has no session history
+   * to offer and no resumes to referee (a catalogue-only server).
+   */
+  readonly ledger?: SessionLedger;
+  /** How to read stored sessions. Required alongside {@link ledger}. */
+  readonly sessions?: SessionSource;
+  /**
+   * Host-header names this server answers to, besides the loopback set.
+   *
+   * The Host check is DNS-rebinding protection for a loopback-bound server: a
+   * hostile page can make a browser send requests to 127.0.0.1, but not with
+   * an arbitrary `Host`. A server deliberately bound to a reachable address —
+   * the headless deployment behind Tailscale — is asked for by other names,
+   * and its operator says which. `'any'` disables the check entirely, for a
+   * bind whose reachability is already governed elsewhere (a container's
+   * published port, a VPN); it never weakens auth, which every request still
+   * carries per-connection.
+   */
+  readonly allowedHosts?: readonly string[] | 'any';
+}
+
+/**
+ * The host's session store, reduced to the two reads the routes make.
+ *
+ * The same narrowing discipline as {@link RunSource}: the server may read
+ * exactly what its ledger authorises, so the surface holds no delete, no
+ * rename, and no cross-profile listing.
+ */
+export interface SessionSource {
+  list(query: {
+    readonly providerId: string;
+    readonly profileId: string;
+    readonly cwd: string;
+    readonly limit?: number;
+  }): Promise<{ readonly sessions: readonly SessionSummary[]; readonly hasMore: boolean }>;
+  messages(query: {
+    readonly profileId: string;
+    readonly sessionId: string;
+    readonly runId: string;
+    readonly cwd?: string;
+  }): Promise<{ readonly events: readonly AgentEvent[]; readonly hasMore: boolean }>;
 }
 
 /** True when this reply is written incrementally rather than as one body. */
@@ -248,11 +297,11 @@ export async function handleServerRequest(
     return { status: 204, headers: { ...CORS_HEADERS }, body: null };
   }
 
-  if (!hostIsLocal(request.headers['host'])) {
+  if (!hostAllowed(request.headers['host'], context.allowedHosts)) {
     // Deliberately curt. A caller that reached this branch is either a
     // rebinding attempt or a proxy misconfiguration, and neither deserves a
     // description of what the server would have accepted.
-    return fail(403, 'invalid_request_error', 'forbidden_host', 'This server only answers on loopback.');
+    return fail(403, 'invalid_request_error', 'forbidden_host', 'This server does not answer to that host name.');
   }
 
   // Parsed against a fixed base: `request.url` is a path, not an absolute URL,
@@ -418,6 +467,69 @@ export async function handleServerRequest(
     return answer(body);
   }
 
+  /*
+   * The session surface. Everything under it is scoped to the connection that
+   * asks — see the ledger for the rule — and both routes answer through the
+   * same gate, so "not yours" and "not there" are one indistinguishable 404.
+   * A token must not be able to sound out which session ids exist.
+   */
+  if (path === `${apiPrefix}/sessions`) {
+    if (context.ledger === undefined || context.sessions === undefined) {
+      return fail(
+        501,
+        'invalid_request_error',
+        'not_implemented',
+        'This Artemis build serves its catalogue but keeps no session history.',
+      );
+    }
+    const profiles = await visibleProfiles();
+    const scope = scopeFor(connection, profiles);
+    const body: ServerSessionsBody = {
+      object: 'artemis.sessions',
+      sessions: await describeScopedSessions(context.sessions, context.ledger, scope, profiles),
+    };
+    return answer(body);
+  }
+
+  if (path.startsWith(`${apiPrefix}/sessions/`) && path.endsWith('/messages')) {
+    if (context.ledger === undefined || context.sessions === undefined) {
+      return fail(
+        501,
+        'invalid_request_error',
+        'not_implemented',
+        'This Artemis build serves its catalogue but keeps no session history.',
+      );
+    }
+    const middle = path.slice(`${apiPrefix}/sessions/`.length, -'/messages'.length);
+    let sessionId: string;
+    try {
+      sessionId = decodeURIComponent(middle);
+    } catch {
+      return fail(400, 'invalid_request_error', 'invalid_url', 'The session id could not be parsed.');
+    }
+    const profiles = await visibleProfiles();
+    const scope = scopeFor(connection, profiles);
+    if (sessionId.length === 0 || !context.ledger.mayAccess(scope, sessionId)) {
+      return unknownSession();
+    }
+    const entry = context.ledger.get(sessionId);
+    if (entry === undefined) return unknownSession();
+    const replay = await context.sessions.messages({
+      profileId: entry.profileId,
+      sessionId,
+      // A stable synthetic id: these events are read, not fed to a live pane,
+      // and the consumer re-stamps them into its own transcript anyway.
+      runId: `server-replay:${sessionId}`,
+      cwd: entry.cwd,
+    });
+    const body: ServerSessionMessagesBody = {
+      object: 'artemis.session.messages',
+      events: replay.events,
+      hasMore: replay.hasMore,
+    };
+    return answer(body);
+  }
+
   if (path.startsWith(`${apiPrefix}/models/`)) {
     const profiles = await visibleProfiles();
     const route = path.slice(`${apiPrefix}/models/`.length);
@@ -567,14 +679,20 @@ function normalizePath(pathname: string): string {
   return pathname;
 }
 
-function hostIsLocal(host: string | undefined): boolean {
+function hostAllowed(
+  host: string | undefined,
+  allowed: readonly string[] | 'any' | undefined,
+): boolean {
+  if (allowed === 'any') return true;
   if (host === undefined) return false;
   // Strip the port. An IPv6 literal keeps its brackets, which is why they are
   // in `ALLOWED_HOSTS` — `[::1]:6472` splits to `[::1]`.
   const withoutPort = host.startsWith('[')
     ? host.slice(0, host.indexOf(']') + 1)
     : (host.split(':')[0] ?? '');
-  return ALLOWED_HOSTS.has(withoutPort.toLowerCase());
+  const name = withoutPort.toLowerCase();
+  if (ALLOWED_HOSTS.has(name)) return true;
+  return allowed !== undefined && allowed.some((entry) => entry.toLowerCase() === name);
 }
 
 /**
@@ -667,6 +785,12 @@ export interface ArtemisServerOptions {
   readonly catalogue: Catalogue;
   /** Defaults to {@link SERVER_HOST}. Injected only so a test can be explicit. */
   readonly host?: string;
+  /** Session ownership, for the session surface and the resume gate. */
+  readonly ledger?: SessionLedger;
+  /** How to read stored sessions. Required alongside {@link ledger}. */
+  readonly sessions?: SessionSource;
+  /** See {@link ServerContext.allowedHosts}. */
+  readonly allowedHosts?: readonly string[] | 'any';
   /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
@@ -737,6 +861,9 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           startedAt,
           ...(options.runs === undefined ? {} : { runs: options.runs }),
           ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
+          ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
+          ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
+          ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
         },
       );
     } catch (error) {
@@ -876,6 +1003,97 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
  * that has gone away. Once a run begins the user's plan is being spent, so
  * nothing that could have been caught first is allowed to be caught after.
  */
+/** A connection's scope: its workspace identity, and the profiles it may see. */
+function scopeFor(
+  connection: ServerConnection,
+  profiles: readonly ServerProfile[],
+): LedgerScope {
+  return {
+    workspaceKey: workspaceKeyFor(connection),
+    profileIds: profiles.map((profile) => String(profile.id)),
+  };
+}
+
+/** One refusal for "absent" and "not yours" alike. See the routes' comment. */
+function unknownSession(): ServerReply {
+  return fail(
+    404,
+    'invalid_request_error',
+    'unknown_session',
+    'No such conversation for this connection.',
+  );
+}
+
+/**
+ * The scoped ledger entries, enriched from the provider's own store.
+ *
+ * The ledger authorises; the store describes. An entry whose transcript the
+ * store no longer has — deleted on the serving machine — is dropped rather
+ * than listed as a row that cannot be opened. Reads are grouped by the
+ * (profile × directory) partition the stores are organised in, so a
+ * directory-pinned connection costs one read per visible profile rather than
+ * one per conversation.
+ */
+async function describeScopedSessions(
+  sessions: SessionSource,
+  ledger: SessionLedger,
+  scope: LedgerScope,
+  profiles: readonly ServerProfile[],
+): Promise<readonly ServerSessionSummary[]> {
+  const entries = ledger.listFor(scope);
+  if (entries.length === 0) return [];
+
+  const bySlug = new Map(profiles.map((profile) => [String(profile.id), profile]));
+
+  const groups = new Map<string, { profileId: string; cwd: string; ids: Set<string> }>();
+  for (const entry of entries) {
+    const key = `${entry.profileId}\u0000${entry.cwd}`;
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = { profileId: entry.profileId, cwd: entry.cwd, ids: new Set() };
+      groups.set(key, group);
+    }
+    group.ids.add(entry.sessionId);
+  }
+
+  const described = new Map<string, SessionSummary>();
+  for (const group of groups.values()) {
+    const profile = bySlug.get(group.profileId);
+    if (profile === undefined) continue;
+    try {
+      const page = await sessions.list({
+        providerId: String(profile.provider.id),
+        profileId: group.profileId,
+        cwd: group.cwd,
+        limit: 200,
+      });
+      for (const summary of page.sessions) {
+        if (group.ids.has(String(summary.id))) described.set(String(summary.id), summary);
+      }
+    } catch {
+      // One unreadable store must not fail the listing — the other groups'
+      // conversations are still real. The missing ones simply do not appear,
+      // which is also what a store mid-rotation looks like.
+    }
+  }
+
+  const rows: ServerSessionSummary[] = [];
+  for (const entry of entries) {
+    const summary = described.get(entry.sessionId);
+    if (summary === undefined) continue;
+    const profile = bySlug.get(entry.profileId);
+    rows.push({
+      id: entry.sessionId,
+      title: summary.title,
+      ...(summary.firstPrompt === undefined ? {} : { firstPrompt: summary.firstPrompt }),
+      updatedAt: summary.updatedAt,
+      profileSlug: profile?.slug ?? entry.profileId,
+      cwd: entry.cwd,
+    });
+  }
+  return rows;
+}
+
 async function handleChatCompletions(
   request: ServerRequestInfo,
   context: ServerContext,
@@ -938,9 +1156,26 @@ async function handleChatCompletions(
 
   // The route is resolved against what *this connection* may see, so a model
   // outside its allowance is indistinguishable from one that does not exist.
-  const model = findModel(await visibleToConnection(connection, await context.catalogue.read({})), chat.model);
+  const profiles = visibleToConnection(connection, await context.catalogue.read({}));
+  const model = findModel(profiles, chat.model);
   if (model === undefined) {
     return attribute(modelNotFound(chat.model));
+  }
+
+  /*
+   * The resume gate. A `sessionId` names a stored conversation, and the only
+   * conversations a token may re-enter are the ones its own scope created —
+   * the serving user's desktop history lives in the same store and must be
+   * unreachable, and another connection's conversations are another
+   * principal's. Same 404 as the session routes, for the same reason: a
+   * refusal that distinguished "not there" from "not yours" would let a
+   * caller enumerate which ids exist.
+   */
+  if (extensions.sessionId !== undefined && context.ledger !== undefined) {
+    const scope = scopeFor(connection, profiles);
+    if (!context.ledger.mayAccess(scope, extensions.sessionId)) {
+      return attribute(unknownSession());
+    }
   }
 
   let workspace;
@@ -977,6 +1212,25 @@ async function handleChatCompletions(
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   };
 
+  /*
+   * Ownership is written the moment a session id is knowable: at resume time
+   * (the gate above has already proven the claim), and again whenever the run
+   * announces one — re-recording refreshes recency and costs nothing. This is
+   * the record the session routes and the resume gate read, so it lives here,
+   * where the connection is, rather than in the host's RunSource where it
+   * would have to be threaded per call.
+   */
+  const record = (sessionId: string): void => {
+    context.ledger?.record({
+      sessionId,
+      connectionId: connection.id,
+      profileId: String(model.profileId),
+      workspaceKey: workspaceKeyFor(connection),
+      cwd: workspace.path,
+    });
+  };
+  if (extensions.sessionId !== undefined) record(extensions.sessionId);
+
   if (chat.stream === true) {
     return {
       status: 200,
@@ -990,13 +1244,17 @@ async function handleChatCompletions(
         connection: 'keep-alive',
       },
       connectionId: connection.id,
-      stream: streamTurn({ id, created, turn, runs: context.runs, model }),
+      stream: streamTurn({ id, created, turn, runs: context.runs, model, record }),
     };
   }
 
   let result: TurnResult | undefined;
   for await (const event of runTurn(context.runs, turn)) {
-    if (event.kind === 'done') result = event.result;
+    if (event.kind === 'session') record(event.sessionId);
+    if (event.kind === 'done') {
+      result = event.result;
+      if (result.sessionId !== undefined) record(result.sessionId);
+    }
   }
 
   if (result === undefined) {
@@ -1039,6 +1297,8 @@ async function* streamTurn(input: {
   readonly turn: Parameters<typeof runTurn>[1];
   readonly runs: RunSource;
   readonly model: ServerModel;
+  /** Called with every session id the run announces. See the ledger. */
+  readonly record?: (sessionId: string) => void;
 }): AsyncIterable<string> {
   const { id, created, model } = input;
 
@@ -1059,6 +1319,7 @@ async function* streamTurn(input: {
       // mid-turn has still told its caller where the conversation lives. The
       // final chunk repeats it, which is what pre-existing clients read.
       if (event.kind === 'session') {
+        input.record?.(event.sessionId);
         yield sseEvent(
           chatChunk({
             id,
@@ -1073,6 +1334,7 @@ async function* streamTurn(input: {
 
       if (event.kind === 'done') {
         const { result } = event;
+        if (result.sessionId !== undefined) input.record?.(result.sessionId);
         yield sseEvent(
           chatChunk({
             id,

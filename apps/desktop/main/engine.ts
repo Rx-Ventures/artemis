@@ -694,6 +694,20 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     });
 
   /**
+   * The environment a *history read* gets, chosen by where the history lives.
+   *
+   * Local stores read with `storeEnvFor` — the config directory and no
+   * credential, because opening files must not decrypt a key. A provider that
+   * declares `sessionStore: 'remote'` has no files: its history is on the
+   * other end of an authenticated request, so the read carries the same
+   * credential a run would. See `ProviderCredentialSpec.sessionStore`.
+   */
+  const historyEnvFor = async (profileId: ProfileId, providerId: ProviderId): Promise<EnvBundle> =>
+    credentialsFor(providerId).sessionStore === 'remote'
+      ? envFor(profileId, providerId)
+      : storeEnvFor(profileId, providerId);
+
+  /**
    * Everything the sign-in helpers need about one profile.
    *
    * Both the status probe and the generated command are built from the same
@@ -1224,13 +1238,14 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       if (adapter.getSessionMessages === undefined) {
         throw new EngineUnavailableError(`${adapter.label} cannot open a stored session.`);
       }
-      // Read-only, like listing: `resolveStoreEnv` yields the config directory
-      // and no credential, so opening history never decrypts a key.
+      // Read-only, like listing: a local store's environment is the config
+      // directory and no credential. A remote store's read is an authenticated
+      // request and carries the credential — see `historyEnvFor`.
       return adapter.getSessionMessages({
         profileId: query.profileId,
         sessionId: query.sessionId,
         runId: query.runId,
-        env: await storeEnvFor(query.profileId, profile.providerId),
+        env: await historyEnvFor(query.profileId, profile.providerId),
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
         ...(query.limit === undefined ? {} : { limit: query.limit }),
         ...(query.offset === undefined ? {} : { offset: query.offset }),
@@ -1360,7 +1375,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       return adapter.listSessions({
         profileId: query.profileId,
         cwd: query.cwd,
-        env: await storeEnvFor(query.profileId, query.providerId),
+        env: await historyEnvFor(query.profileId, query.providerId),
         limit: query.limit,
         offset: query.offset,
       });
@@ -1415,7 +1430,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
           try {
             scopes.push({
               profileId: profile.id,
-              env: await resolveStoreEnv(profile, { credentials: adapter.credentials }),
+              env: await historyEnvFor(profile.id, providerId),
             });
           } catch (error) {
             log.warn(`Skipping profile ${profile.id} while listing all sessions`, error);
