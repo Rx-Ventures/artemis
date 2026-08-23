@@ -1,6 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.12.0
+
+A connection token can no longer reach conversations that are not its own,
+and a server profile shows you its history.
+
+- **Sessions on the server are scoped to the token that made them.** If you
+  run Artemis's server, a program holding one of its connection tokens could
+  previously continue *any* conversation stored in the directory that token
+  was pinned to — including conversations you had yourself, in the app, in
+  that folder. It only had to name one. That is closed: Artemis now records
+  which connection created each server conversation, and listing, reopening
+  and continuing all check it. Your own conversations were never recorded
+  there, so they are not merely refused — they are unreachable. Two tokens
+  pinned to the same folder still share their history with each other, which
+  is what makes one person's several machines one workspace.
+
+- **A server profile lists its conversations.** Point a profile at another
+  Artemis and its sidebar fills in: the conversations that connection has
+  had, openable and continuable from here. Before this, a server profile
+  could carry on the conversation in front of you and nothing else — close
+  the app and the thread was gone. Now every machine holding the token sees
+  the same history, which is the point of pointing two laptops at one
+  server.
+
+- **Artemis can run without a window.** New in the repository rather than in
+  this download: a headless build that serves the same HTTP surface from a
+  plain Node process, and a container to put it in. Sign an account in
+  inside the container, mint a token per machine, and the conversations
+  follow you between them. `docker/docker-compose.yml` holds the whole
+  procedure in its comments.
+
 ## What's new in 1.11.0
 
 The update you are offered is the one that exists now, rather than the one
