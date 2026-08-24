@@ -8335,7 +8335,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     );
   }
 
-  void resumeIntoConversation(session, target);
+  void openSessionContents(session, target);
   invalidateSessions();
   void refreshSessions();
   void refreshModels(target);
@@ -8399,40 +8399,6 @@ export function openSessionBeside(
 }
 
 /**
- * Fill a just-resumed column with the conversation — live if it is live.
- *
- * The sidebar row does not say whether the conversation is running *right
- * now*: a turn started by a scheduled wakeup, a run another column backgrounded
- * and `pruneBackground` evicted, a continuation whose claim was declined — all
- * live in the registry with no pane holding them. Loading the stored file for
- * one of those painted a snapshot that nothing could ever update: the run's
- * events found no pane (`applyAgentEvent` routes on run id), the pane had
- * `run: null` so the stall sweep skipped it, and `claimContinuation` only
- * fires on a `session.started` that had already gone by. The one recovery was
- * ⌘R, because only `adoptLiveRuns` asked the registry — so this asks the same
- * question at the same seam, per click instead of per boot.
- *
- * The registry miss (or an errored list — one read must not block a resume)
- * falls through to the stored file, which is the common case and the old path
- * unchanged. The staleness rule is `loadSessionHistory`'s own: the column must
- * still be resuming this session by the time the answer lands.
- */
-async function resumeIntoConversation(session: SessionSummary, target: Pane): Promise<void> {
-  const { bridge } = resolveBridge();
-  if (bridge) {
-    const listed = await call(() => bridge.runs.list({}));
-    const handle = listed.ok
-      ? listed.value.runs.find((h) => h.sessionId === session.id && h.status !== 'ended')
-      : undefined;
-    if (handle !== undefined && paneState(target).resumeSessionId === session.id) {
-      await attachRun(target, handle);
-      return;
-    }
-  }
-  await loadSessionHistory(session, target);
-}
-
-/**
  * Replay a stored session into the transcript.
  *
  * History goes through `transcript.apply` — the *same* entry point the live
@@ -8446,6 +8412,65 @@ async function resumeIntoConversation(session: SessionSummary, target: Pane): Pr
  * make history indistinguishable from that run's own output. Deriving it from
  * the session id keeps the block stable across re-selection.
  */
+/**
+ * Show a conversation the user just opened — live if it is live.
+ *
+ * The correction this exists for: opening a session from the sidebar always
+ * read a **static snapshot** off disk, whatever the conversation was doing at
+ * the time. A run this window does not hold a pane for is unreachable by
+ * events — `applyAgentEvent` drops anything `paneForRun` cannot place, and
+ * only `session.started` can re-claim a pane — so a conversation that was
+ * mid-turn opened frozen, and *stayed* frozen however long the agent went on
+ * working. The single thing that recovered it was a full reload, because
+ * `adoptLiveRuns` runs at boot and attaches every live run the registry has.
+ *
+ * That is not a rare corner. A window holds no pane for a conversation
+ * whenever the turn was started somewhere else: a scheduled wakeup firing, a
+ * routine, another window, the HTTP server, or a pane this window evicted.
+ * Every one of those ends with a row the sidebar marks as working and a
+ * transcript that will not move until ⌘R — and nothing heals it, because the
+ * snapshot leaves the pane with `run: null`, which the stall sweep skips.
+ *
+ * So the registry is asked first, and a live run is *attached* rather than
+ * summarised. {@link attachRun} is the whole recovery: it replays the turns
+ * that came before, then the run's own retained events, then releases
+ * everything that arrived while it was reading. Falling back to the snapshot
+ * covers every other case — no live run, a registry that cannot answer, a run
+ * some other pane already holds — which is exactly the behaviour this
+ * replaces, so nothing that worked before depends on the new path succeeding.
+ */
+async function openSessionContents(session: SessionSummary, pane: Pane): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const listed = await call(() => bridge.runs.list({}));
+  // Selection can move while the registry is being asked — the same race
+  // `loadSessionHistory` guards, checked here too because the attach below
+  // rewrites the pane's provider, profile and directory from the handle.
+  if (paneState(pane).resumeSessionId !== session.id) return;
+
+  if (listed.ok) {
+    const live = listed.value.runs.find(
+      (handle) => handle.status !== 'ended' && handle.sessionId === session.id,
+    );
+    /*
+     * No second ownership check here, deliberately. `resumeSession` has
+     * already asked `paneForSession` and returned early if any pane held this
+     * conversation — and it writes `resumeSessionId` onto the target
+     * *synchronously*, before this runs, so a second column opening the same
+     * row while this is in flight takes that early return rather than racing
+     * to the registry. A `paneForRun` guard here was written for that race and
+     * could never fire; it went rather than sit untested.
+     */
+    if (live !== undefined) {
+      await attachRun(pane, live);
+      return;
+    }
+  }
+
+  await loadSessionHistory(session, pane);
+}
+
 async function loadSessionHistory(session: SessionSummary, pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;

@@ -3,8 +3,9 @@ machine it targets, and boots before it ships.
 
 ## What's new in 1.13.1
 
-Three fixes to conversations you come back to: when they happened, whether
-they are still working, and where they open.
+Three fixes to conversations you come back to — when they happened, whether
+they are still working, and where they open — and local models finally
+remember what you said to them.
 
 - **A reopened conversation shows when it happened.** Every line of a
   replayed transcript carried the moment you reloaded it rather than the
@@ -31,6 +32,14 @@ they are still working, and where they open.
   scrolled away, mid-load. Opening a conversation now starts at its end,
   and following stops only when you actually scroll up — with the tail
   picked up again the moment you return to the bottom.
+
+- **Local models keep their conversations.** A local provider was sent only
+  your latest message, so every turn began a fresh conversation with a model
+  you believed was following one — and local sessions could not be listed or
+  resumed at all, because none of it was ever written down. Each conversation
+  now keeps a transcript on disk, is seeded with it on every turn, and shows
+  up in the sidebar to reopen like any other. Rewinding and forking a local
+  conversation stay unavailable.
 
 ## What's new in 1.13.0
 
