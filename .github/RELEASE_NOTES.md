@@ -1,6 +1,36 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.13.0
+
+Cerebro grows into memory banks: any git repository can be one, and a
+machine can carry several.
+
+- **Bring your own memory bank.** The team-memory feature no longer assumes
+  the one team repository. Settings → Memory banks joins a shared bank from
+  any git remote, creates a fresh local-only one (no remote, no account —
+  memories land as plain commits), or adopts a folder that already is one.
+  Artemis ships the bank CLI for the machine that has none yet; a bank
+  created here embeds its own copy, so the repo stays shareable with people
+  who do not run Artemis.
+
+- **Several banks at once, each in its own lane.** Every bank is registered
+  under a short name and installs into project memory in its own directory
+  behind its own markers, so a team bank, a personal bank, and a client's
+  bank coexist without treading on each other. Agents are briefed per
+  machine: the prompt names your actual banks, which one takes new facts,
+  and how to route a fact to a different one.
+
+- **Banks you read but never write.** A bank can be registered read-only —
+  its memories inform every session, and drafting, promoting, and retiring
+  into it are refused everywhere: the CLI, the sync cycle, and the pane.
+  That is the shape for subscribing to a bank someone else owns.
+
+- **Nothing moves for existing setups.** A machine already running Cerebro
+  is registered automatically under its old name, keeps its exact install
+  layout, and keeps its yes: if the bank was on, it stays on. The one
+  visible change is the pane's name.
+
 ## What's new in 1.12.0
 
 A connection token can no longer reach conversations that are not its own,
