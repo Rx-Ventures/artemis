@@ -1,6 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.13.1
+
+Three fixes to conversations you come back to: when they happened, whether
+they are still working, and where they open.
+
+- **A reopened conversation shows when it happened.** Every line of a
+  replayed transcript carried the moment you reloaded it rather than the
+  moment it was written, so a session from last week read as having
+  happened entirely just now. The times were on disk the whole time —
+  Artemis was stamping its own read time over them.
+
+- **The sidebar stops calling finished conversations "working".** A
+  conversation that had ever set up a schedule — a `/loop`, a routine, any
+  wakeup — was marked as working from then on, however long it had been
+  idle, so the list filled with spinners for sessions that opened plainly
+  done. Artemis keeps such a conversation's process alive on purpose
+  (nothing says when the next wakeup lands), and that was being shown as
+  activity. Now the marker means what it says: a turn in progress, work in
+  the background, or a task settling. A turn started by a schedule while no
+  window was watching now marks its session too, which the old reading
+  could not see at all.
+
+- **A conversation opens at its end.** Reopening a session dropped you
+  partway up it, with a scroll to the bottom to do by hand. Two habits made
+  it worse: scrolling up to read something stopped the transcript following
+  its tail, and that carried into the *next* session you opened; and a
+  session's history arriving in bulk made the follower conclude you had
+  scrolled away, mid-load. Opening a conversation now starts at its end,
+  and following stops only when you actually scroll up — with the tail
+  picked up again the moment you return to the bottom.
+
 ## What's new in 1.13.0
 
 Cerebro grows into memory banks: any git repository can be one, and a
