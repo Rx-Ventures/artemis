@@ -2271,6 +2271,21 @@ const SETTLE_GRACE_MS = 2_000;
 const SUGGESTION_GRACE_MS = 10_000;
 
 /**
+ * How long an ended turn's process waits for the queued turn a mid-turn steer
+ * became, before concluding the steer was folded into the turn that just
+ * finished.
+ *
+ * The CLI folds a steer in only at a tool-batch boundary; one that misses every
+ * boundary sits in the CLI's queue and runs as the *next* turn — whose `init`
+ * the drain loop emits within milliseconds of the previous `result`. So the
+ * wait this bounds is drain-loop latency, not a network round-trip, and five
+ * seconds is orders of magnitude of headroom. Expiry means the message was
+ * consumed mid-turn (the fold, which is invisible from here) and the process
+ * is released exactly as if nothing had been pending.
+ */
+const QUEUED_TURN_GRACE_MS = 5_000;
+
+/**
  * Does this message open a turn?
  *
  * `init` does, once per turn — the CLI emits one at the head of every turn in
@@ -2447,6 +2462,11 @@ class ClaudeProcess {
   /** The turn ended and its predicted next prompt has not arrived yet. See `#awaitSuggestion`. */
   #awaitingSuggestion = false;
   #suggestionTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Steers pushed at a turn that no later turn has yet consumed. See `#awaitQueuedTurn`. */
+  #pendingSteers = 0;
+  /** The turn ended with steers pending and their queued turn has not opened yet. */
+  #awaitingQueuedTurn = false;
+  #queuedTurnTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -2548,6 +2568,12 @@ class ClaudeProcess {
     // is delivered and the renderer decides whether it is stale.
     this.#awaitingSuggestion = false;
     clearTimeout(this.#suggestionTimer);
+    // A turn opening consumes the CLI's whole queued batch — every pending
+    // steer is coalesced into it. This is the arrival `#awaitQueuedTurn` was
+    // holding the process for.
+    this.#pendingSteers = 0;
+    this.#awaitingQueuedTurn = false;
+    clearTimeout(this.#queuedTurnTimer);
 
     if (!this.#state.ended) return true;
     if (this.#deps.onContinuation === undefined) return false;
@@ -2951,8 +2977,9 @@ class ClaudeProcess {
     clearTimeout(this.#suggestionTimer);
     this.#suggestionTimer = setTimeout(() => {
       this.#awaitingSuggestion = false;
-      // Nothing came. Release the way the settle grace does.
-      if (this.#state.ended && !this.#holdsWork()) {
+      // Nothing came. Release the way the settle grace does — unless a queued
+      // turn is still owed, whose own timer will do this.
+      if (this.#state.ended && !this.#holdsWork() && !this.#awaitingQueuedTurn) {
         this.#deps.diagnostic?.(
           `Run ${this.runId}: no predicted prompt arrived; releasing the process.`,
         );
@@ -2997,6 +3024,46 @@ class ClaudeProcess {
     }
   }
 
+  /**
+   * Hold the process for the queued turn a mid-turn steer became.
+   *
+   * The one delivery mechanism a steer that misses every tool boundary has:
+   * the CLI parks it as the next turn, and the drain loop opens that turn the
+   * moment the current `result` lands. A pump that left at the turn boundary
+   * closed the transport over the parked message — the user's words, rendered
+   * as sent, destroyed on the way out ("my message vanished", 2026-08-24).
+   * Same shape as {@link #awaitSuggestion}: a flag the pump's exit condition
+   * respects, and a timer that releases the process when nothing comes —
+   * which here means the steer was folded into the turn that just ended and
+   * there is nothing left to wait for.
+   *
+   * Armed for *every* ending with steers pending, not just successful ones:
+   * an interrupted turn is precisely how "stop what you're doing and read my
+   * message" is expressed, and the CLI keeps the queue across an interrupt.
+   */
+  #awaitQueuedTurn(): void {
+    this.#awaitingQueuedTurn = true;
+    clearTimeout(this.#queuedTurnTimer);
+    this.#queuedTurnTimer = setTimeout(() => {
+      this.#awaitingQueuedTurn = false;
+      this.#pendingSteers = 0;
+      // Nothing came — the steer was consumed by the fold. Release the way the
+      // settle grace does, unless another hold is still on.
+      if (this.#state.ended && !this.#holdsWork() && !this.#awaitingSuggestion) {
+        this.#deps.diagnostic?.(
+          `Run ${this.runId}: no queued turn arrived; the steer folded in. Releasing the process.`,
+        );
+        try {
+          this.#query?.close();
+        } catch {
+          // Already gone.
+        }
+      }
+    }, QUEUED_TURN_GRACE_MS);
+    // Never a reason to keep a Node process alive on its own.
+    this.#queuedTurnTimer.unref?.();
+  }
+
   /** Hold the process briefly for a turn about work that just finished. */
   #awaitSettleTurn(): void {
     this.#settling = true;
@@ -3005,8 +3072,14 @@ class ClaudeProcess {
       this.#settling = false;
       // Nothing came. Release the way a turn boundary would have, by taking the
       // transport down — the pump's own `finally` does the rest. Unless the
-      // suggestion grace is still holding: its own timer will do this.
-      if (this.#state.ended && !this.#holdsWork() && !this.#awaitingSuggestion) {
+      // suggestion grace or a pending queued turn is still holding: their own
+      // timers will do this.
+      if (
+        this.#state.ended &&
+        !this.#holdsWork() &&
+        !this.#awaitingSuggestion &&
+        !this.#awaitingQueuedTurn
+      ) {
         this.#deps.diagnostic?.(
           `Run ${this.runId}: background work settled with no turn about it; releasing the process.`,
         );
@@ -3134,25 +3207,29 @@ class ClaudeProcess {
    * effect* in the turn that is running. The CLI only folds a mid-turn message
    * in at a tool-batch boundary; a turn that is composing its final, tool-free
    * response has no boundary left, so the message instead becomes a separate
-   * queued turn. A run here is one turn cycle, so that queued turn is never
-   * executed: the first `result` ends the run and `close()` takes the transport
-   * down with it.
+   * queued turn — which the pump now stays alive to serve (see
+   * {@link #awaitQueuedTurn}): the queued turn opens as a continuation of this
+   * conversation instead of dying with the transport, which is what used to
+   * happen and read as "my message vanished".
    *
    * Of the three honest answers the seam allows — steer, queue and report
    * `false`, or reject — only "queue and report `false`" is true in both cases.
-   * Returning `true` would be a guarantee this layer has no way to make, and
-   * the failure it hides is the silent one the seam's contract exists to
-   * prevent: a steering message the UI renders as sent that the provider never
-   * acted on.
-   *
+   * Returning `true` would be a guarantee this layer has no way to make.
    * `midRunSteering` stays `true` because the fold genuinely works and is the
    * common case; this is about not overstating it.
+   *
+   * The refusals carry `details.reason: 'run_ended'` because the renderer's
+   * steer path branches on exactly that — `isEndedRunError` — to carry the
+   * user's words into a fresh run instead of stranding them under a red
+   * banner. Both windows here *are* that race: the run ended (or began
+   * shutting down) between the keystroke and the call landing.
    */
   async send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
     if (this.#state.ended) {
       throw adapterError(
         'invalid_request',
         `Run ${this.runId} has already ended; start a new run with resumeSessionId to continue.`,
+        { details: { reason: 'run_ended', runId: this.runId } },
       );
     }
 
@@ -3164,6 +3241,7 @@ class ClaudeProcess {
       throw adapterError(
         'invalid_request',
         `Run ${this.runId} is shutting down and cannot accept more input.`,
+        { details: { reason: 'run_ended', runId: this.runId } },
       );
     }
 
@@ -3172,6 +3250,9 @@ class ClaudeProcess {
     const staged = await this.#stage(attachments);
 
     this.#promptQueue.push(this.#userMessage(text, attachments, staged));
+    // Counted *after* the push it describes: this is what keeps the pump alive
+    // past the next `result` if no tool boundary folds the message in first.
+    this.#pendingSteers += 1;
     return { deliveredImmediately: false };
   }
 
@@ -3339,7 +3420,7 @@ class ClaudeProcess {
          */
         if (message.type === 'prompt_suggestion') {
           this.#deliverSuggestion(message.suggestion);
-          if (this.#state.ended && !this.#holdsWork()) break;
+          if (this.#state.ended && !this.#holdsWork() && !this.#awaitingQueuedTurn) break;
           continue;
         }
 
@@ -3421,7 +3502,18 @@ class ClaudeProcess {
           if (message.type === 'result' && message.subtype === 'success' && !message.is_error) {
             this.#awaitSuggestion();
           }
-          if (!this.#holdsWork() && !this.#awaitingSuggestion) break;
+          /*
+           * Steers the turn never folded in are parked in the CLI's queue as
+           * the next turn, and this boundary is the moment that used to
+           * destroy them: leaving the loop closes the transport in the
+           * `finally`, queue and all. Held for every ending kind — an
+           * interrupt is exactly how "stop and read my message" is said, and
+           * the queue survives it by design.
+           */
+          if (this.#pendingSteers > 0) this.#awaitQueuedTurn();
+          if (!this.#holdsWork() && !this.#awaitingSuggestion && !this.#awaitingQueuedTurn) {
+            break;
+          }
           if (this.#holdsWork()) {
             this.#deps.diagnostic?.(
               `Run ${this.runId}: turn ended with ${this.#describeHeld()} still live; keeping the process.`,
@@ -3453,6 +3545,8 @@ class ClaudeProcess {
       clearTimeout(this.#settleTimer);
       this.#awaitingSuggestion = false;
       clearTimeout(this.#suggestionTimer);
+      this.#awaitingQueuedTurn = false;
+      clearTimeout(this.#queuedTurnTimer);
       this.#deps.onClosed?.(this);
 
       try {
@@ -3901,12 +3995,20 @@ class ClaudeTurn implements Run {
     return Promise.resolve();
   }
 
-  /** Refuse a control call aimed at a turn the process has moved on from. */
+  /**
+   * Refuse a control call aimed at a turn the process has moved on from.
+   *
+   * With `details.reason: 'run_ended'`, because the caller most likely to land
+   * here is a steer racing the turn's own end — the renderer branches on
+   * `isEndedRunError` to carry the message into a fresh run rather than
+   * stranding it, and a detail-less refusal used to read as a real failure.
+   */
   #requireActive(): void {
     if (this.#state.ended || !this.#process.isActive(this.#state)) {
       throw adapterError(
         'invalid_request',
         `Run ${this.runId} has already ended; start a new run with resumeSessionId to continue.`,
+        { details: { reason: 'run_ended', runId: this.runId } },
       );
     }
   }

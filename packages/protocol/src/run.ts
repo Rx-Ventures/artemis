@@ -320,6 +320,20 @@ export interface RunHandle {
    * to collect.
    */
   readonly lastSeq?: number;
+  /**
+   * How many prompts the registry has recorded into this run — the opening
+   * one plus every mid-run steer that was accepted.
+   *
+   * This is the numbering behind the retained-prompt identities
+   * (`${runId}:prompt:${n}`), and a window that *adopts* a run needs it for
+   * the same reason the window that started the run keeps its own count: a
+   * steer's optimistic row claims `:prompt:${n + 1}` so the registry's
+   * retained copy merges onto it in a heal instead of drawing a second row.
+   * Before this travelled on the handle, every steer into an adopted run went
+   * unclaimed — safe, but it forfeited the merge and a healed pane showed the
+   * message twice. Absent when no prompt has been recorded.
+   */
+  readonly promptCount?: number;
   /** Start time, ms since epoch. */
   readonly startedAt: number;
   /** Echoed from {@link RunInput.metadata}. */

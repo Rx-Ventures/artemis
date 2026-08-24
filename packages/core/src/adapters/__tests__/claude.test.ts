@@ -2673,3 +2673,160 @@ describe('rewind', () => {
     expect(fake.closed).toBe(false);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Steers the turn never folded in                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The CLI folds a mid-turn message in only at a tool-batch boundary; one that
+ * misses every boundary is parked in the CLI's queue as the *next* turn. A run
+ * here is one turn cycle, and the pump used to leave at the first `result` —
+ * closing the transport over the parked message, which destroyed it. From the
+ * user's side: a steer rendered as sent that the model never read, more often
+ * than not (2026-08-24).
+ *
+ * What these pin is the repair's whole shape: the process is held past the
+ * boundary for exactly as long as a steer is pending, the queued turn opens as
+ * a continuation of the same conversation, an interrupt keeps the queue (that
+ * is what makes "read it now" a lever rather than a destructor), and a steer
+ * that *was* folded releases the process on a short grace instead of holding
+ * it forever.
+ */
+describe('a steer the turn never folded in', () => {
+  const CONTINUATION_TEXT = {
+    type: 'assistant',
+    message: {
+      id: 'msg-q',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'right — doing that instead' }],
+    },
+    session_id: 'sess-abc',
+    uuid: 'u-q',
+  } as unknown as SDKMessage;
+
+  function adapterWithSink() {
+    const adopted: { run: Run; context: unknown }[] = [];
+    let n = 0;
+    const adapter = createClaudeAdapter({
+      onContinuation: (run, context) => adopted.push({ run, context }),
+      newRunId: () => `run-q${String(++n)}` as RunId,
+    });
+    return { adapter, adopted };
+  }
+
+  it('keeps the process past the turn boundary and serves the queued turn', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('also check the tests');
+    // The turn ends tool-free — nothing folded the steer in.
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // The old exit: transport closed here, queue and all.
+    expect(fake.closed).toBe(false);
+
+    // The CLI's drain loop opens the queued turn; it lands as a continuation
+    // of the same conversation.
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(CONTINUATION_TEXT);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+
+    const continuation = adopted[0]?.run as Run;
+    const events = await drain(continuation.events);
+    expect(events[0]).toMatchObject({ type: 'session.started', seq: 0 });
+    expect(events.map((e) => e.type)).toContain('text.complete');
+    expect(events.at(-1)).toMatchObject({ type: 'run.end' });
+
+    // The queued turn consumed the steer — nothing holds the process now.
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+  });
+
+  it('releases the process on the grace when the steer was folded in after all', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const { fake } = harness();
+
+      fake.messages.push(INIT_MESSAGE);
+      await run.send('fold me in');
+      fake.messages.push(RESULT_MESSAGE);
+      await drain(run.events);
+
+      // Held: from here the adapter cannot tell a fold from a queued turn.
+      expect(fake.closed).toBe(false);
+
+      // No turn arrives — the fold consumed it. The grace lets go.
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(fake.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an interrupt keeps the queue: the steer runs as the next turn', async () => {
+    const { adapter, adopted } = adapterWithSink();
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('stop that and do this instead');
+    await run.interrupt();
+    // The interrupted turn's ending — the kind the provider never predicts
+    // after, which used to mean an immediate exit.
+    fake.messages.push({
+      ...(RESULT_MESSAGE as unknown as Record<string, unknown>),
+      subtype: 'error_during_execution',
+    } as unknown as SDKMessage);
+    await drain(run.events);
+
+    expect(fake.closed).toBe(false);
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(CONTINUATION_TEXT);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+    const events = await drain(adopted[0]?.run.events as AsyncIterable<AgentEvent>);
+    expect(events.map((e) => e.type)).toContain('text.complete');
+  });
+
+  it('refuses a late steer with the reason the renderer recovers on', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    harness().fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // `details.reason` is what `isEndedRunError` branches on — without it the
+    // renderer strands the message under a red banner instead of carrying it
+    // into a fresh run.
+    await expect(run.send('too late')).rejects.toMatchObject({
+      agentError: {
+        code: 'invalid_request',
+        details: { reason: 'run_ended', runId: 'run-1' },
+      },
+    });
+  });
+
+  it('refuses a steer during teardown with the same recoverable reason', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const iterator = harness().prompt[Symbol.asyncIterator]();
+    await iterator.next();
+
+    const disposing = run.dispose();
+    await expect(run.send('one more thing')).rejects.toMatchObject({
+      agentError: {
+        code: 'invalid_request',
+        details: { reason: 'run_ended', runId: 'run-1' },
+      },
+    });
+    await disposing;
+  });
+});

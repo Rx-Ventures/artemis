@@ -265,3 +265,19 @@ describe('when the boot-time registry read fails', () => {
     expect(banners.some((b) => b.message.includes('conversations still running'))).toBe(true);
   });
 });
+
+describe('what the adopted run knows', () => {
+  it('carries the registry’s prompt numbering, so a steer into it can claim its identity', async () => {
+    setPaneState(focusedPane(), { run: null });
+    mainProcessRuns = [{ ...liveRun('r1', 's1'), promptCount: 3 }];
+
+    await bootstrap();
+
+    const holder = paneFor('r1');
+    expect(holder).toBeDefined();
+    if (holder === undefined) throw new Error('nothing adopted r1');
+    // The next steer claims `r1:prompt:4` — the id the registry will retain
+    // it under — instead of going unclaimed and drawing twice on a heal.
+    expect(paneState(holder).run?.promptsSent).toBe(3);
+  });
+});

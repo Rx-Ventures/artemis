@@ -146,7 +146,11 @@ export type WorkingDirectoryChecker = (
  * a quiet stream from a lost one without fetching the stream.
  */
 function snapshot(entry: RunEntry): RunHandle {
-  return entry.maxSeq < 0 ? entry.handle : { ...entry.handle, lastSeq: entry.maxSeq };
+  const stamped = entry.maxSeq < 0 ? entry.handle : { ...entry.handle, lastSeq: entry.maxSeq };
+  // Same read-time stamping as `lastSeq`, for the same reason: the count moves
+  // per send while the stored handle is replaced only on transitions. See
+  // `RunHandle.promptCount` on what an adopting window does with it.
+  return entry.prompts > 0 ? { ...stamped, promptCount: entry.prompts } : stamped;
 }
 
 /** Receives every event of the runs it is subscribed to. */
