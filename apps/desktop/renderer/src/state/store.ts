@@ -6041,6 +6041,10 @@ function fromHandle(handle: RunHandle): RunState {
     capabilities: handle.capabilities,
     startedAt: handle.startedAt,
     ...(handle.sessionId === undefined ? {} : { sessionId: handle.sessionId }),
+    // The registry's own prompt numbering, so a steer into an adopted run
+    // claims the identity its retained copy will carry — without this every
+    // post-reload steer forfeited the merge and a heal drew the row twice.
+    ...(handle.promptCount === undefined ? {} : { promptsSent: handle.promptCount }),
   };
 }
 
@@ -8584,11 +8588,14 @@ export async function submitPrompt(
     if (result.ok) {
       pane.transcript.confirmUserMessage(steerId);
       if (!result.value.deliveredImmediately) {
-        pane.transcript.note(
-          'info',
-          'Queued — the provider decides when this takes effect.',
-          'It steers the current turn if the provider can fold it in, and otherwise waits for the next one.',
-        );
+        // What the composer's queued strip renders, and what its "read it
+        // now" interrupt clears the way for. On the run so it dies with it.
+        setPaneState(pane, (s) => ({
+          run:
+            s.run && s.run.runId === live.runId
+              ? { ...s.run, steersQueued: (s.run.steersQueued ?? 0) + 1 }
+              : s.run,
+        }));
       }
       return true;
     }
@@ -9672,6 +9679,15 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
       // having finished before its first event was applied.
       endReason: undefined,
       error: undefined,
+      /*
+       * The registry starts this run's own prompt numbering at zero — a
+       * continuation opens with no prompt, and `#recordPrompt` skips empty
+       * text — so the old run's counts must not ride the spread into it: a
+       * steer here claims `:prompt:1`, and the queued steers that *became*
+       * this turn were consumed by it.
+       */
+      promptsSent: 0,
+      steersQueued: 0,
     },
   });
   return pane;

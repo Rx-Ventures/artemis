@@ -928,6 +928,20 @@ describe('RunRegistry — steering', () => {
     expect((await registry.send(handle.runId, 'later')).deliveredImmediately).toBe(false);
   });
 
+  it('stamps the prompt count onto the handle, so an adopting window can claim steers', async () => {
+    const { registry } = harness();
+    const handle = await registry.start(input());
+
+    // The opening prompt is recorded; each steer adds one. A window that
+    // adopts this run reads the count off the handle and numbers its next
+    // steer `:prompt:count+1` — the identity the retained copy will carry.
+    await registry.send(handle.runId, 'first steer');
+    await registry.send(handle.runId, 'second steer');
+
+    const listed = registry.list();
+    expect(listed.find((h) => h.runId === handle.runId)?.promptCount).toBe(3);
+  });
+
   it('forwards interrupt and passes through still-queued ids', async () => {
     const { registry, runs } = harness();
     const handle = await registry.start(input());

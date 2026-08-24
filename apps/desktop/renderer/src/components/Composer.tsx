@@ -172,6 +172,14 @@ export function Composer(): ReactElement {
    * so nothing here needs to watch for that.
    */
   const suggestion = usePane(offeredSuggestion);
+  /*
+   * Steers accepted into the live run that no turn has consumed yet — what the
+   * queued strip below the field renders. Gated on `live` at the selector so
+   * the strip cannot outlive the run it describes: the count is zeroed when a
+   * continuation turn opens, but between `run.end` and that claim the run is
+   * simply not live and there is nothing to interrupt.
+   */
+  const queuedSteers = usePane((s) => (isLive(s) ? (s.run?.steersQueued ?? 0) : 0));
 
   const locked = live && !steering.supported;
 
@@ -502,6 +510,37 @@ export function Composer(): ReactElement {
             className="size-5 shrink-0 p-0 text-ink-faint hover:text-ink"
           >
             <XIcon className="size-3" aria-hidden="true" />
+          </Button>
+        </div>
+      )}
+
+      {/*
+        A message sent into a running turn, still waiting to be read.
+
+        The provider folds a mid-turn message in at its next tool break;
+        one that misses every break runs as the next turn instead. Until one
+        of those happens the message is queued, and this row says so — with
+        the lever Claude Code offers in the same spot: interrupt the current
+        step, and the provider takes the queued message immediately. The
+        interrupt is safe for exactly that reason — queued messages survive
+        it by design.
+      */}
+      {queuedSteers > 0 && (
+        <div className="mx-auto flex w-full max-w-4xl items-center gap-1.5 px-3 pt-1">
+          <span className="min-w-0 truncate text-2xs text-ink-faint">
+            {queuedSteers === 1
+              ? '1 message queued — read at the next pause, or after this turn'
+              : `${queuedSteers} messages queued — read at the next pause, or after this turn`}
+          </span>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => void interruptRun(pane)}
+            title="Interrupt the current step — queued messages survive and are read immediately"
+            className="h-5 shrink-0 gap-1 px-1.5 text-2xs font-normal text-ink-muted hover:text-ink"
+          >
+            <CircleStopIcon className="size-3 shrink-0" aria-hidden="true" />
+            Read it now
           </Button>
         </div>
       )}

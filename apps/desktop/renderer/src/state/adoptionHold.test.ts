@@ -25,8 +25,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bootstrap, handleAgentEvent, useApp, allPanes } from './store';
-import { paneState } from './pane';
+import { bootstrap, focusedPane, handleAgentEvent, useApp, allPanes } from './store';
+import { paneState, setPaneState } from './pane';
 import { seedApp } from './testkit';
 
 /* -------------------------------------------------------------------------- */
@@ -195,5 +195,21 @@ describe('adopting live runs after a reload', () => {
     // Past the hold, the run is released rather than left buffering forever.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(transcriptText('r1')).toContain('work carried on');
+  });
+});
+
+describe('what the adopted run knows', () => {
+  it('carries the registry’s prompt numbering, so a steer into it can claim its identity', async () => {
+    setPaneState(focusedPane(), { run: null });
+    mainProcessRuns = [{ ...liveRun('r1', 's1'), promptCount: 3 }];
+
+    await bootstrap();
+
+    const holder = paneFor('r1');
+    expect(holder).toBeDefined();
+    if (holder === undefined) throw new Error('nothing adopted r1');
+    // The next steer claims `r1:prompt:4` — the id the registry will retain
+    // it under — instead of going unclaimed and drawing twice on a heal.
+    expect(paneState(holder).run?.promptsSent).toBe(3);
   });
 });

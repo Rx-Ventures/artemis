@@ -94,15 +94,27 @@ export interface RunState {
   readonly endReason?: RunEndReason;
   readonly error?: AgentError;
   /**
-   * How many prompts this window has pushed into the run — the opening
-   * message plus every steer. Mirrors the registry's own count, which is what
-   * lets an optimistic steer row claim the `${runId}:prompt:${n}` identity the
+   * How many prompts have been pushed into the run — the opening message plus
+   * every steer. Mirrors the registry's own count, which is what lets an
+   * optimistic steer row claim the `${runId}:prompt:${n}` identity the
    * registry will retain it under (see `TranscriptModel.pushUserMessage`).
-   * Only on runs this window started: a run adopted after a reload does not
-   * know how many prompts it missed, and a steer into one goes unclaimed
-   * rather than claiming a number that may be wrong.
+   * On runs this window started it is counted locally; on an adopted run it
+   * comes from `RunHandle.promptCount`. Absent only when neither is known —
+   * a steer then goes unclaimed rather than claiming a number that may be
+   * wrong, which forfeits the merge but never mislabels a row.
    */
   readonly promptsSent?: number;
+  /**
+   * Steers accepted into this run that no later turn has consumed yet.
+   *
+   * What the composer's queued-message strip renders, and the reason it can
+   * offer "read it now": the CLI folds a mid-turn message in only at a tool
+   * boundary, so until one arrives — or the turn ends and the queued turn
+   * opens — the message is waiting, and an interrupt is the lever that makes
+   * the provider take it immediately. Zeroed when a continuation turn opens
+   * (the queue was consumed into it) and absent on runs nothing has steered.
+   */
+  readonly steersQueued?: number;
 }
 
 /**
