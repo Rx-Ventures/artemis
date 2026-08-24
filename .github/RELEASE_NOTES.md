@@ -1,6 +1,38 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.14.0
+
+Messages sent while the model is working now reach it, conversations keep
+moving without a refresh, and the suggested reply is something you can edit.
+
+- **A message sent mid-turn is no longer lost.** Typing while the model was
+  working showed the message as sent, and more often than not nothing ever
+  came of it. The provider folds a mid-turn message into the running turn
+  only at a pause between tool calls; a message that missed every pause was
+  queued as the *next* turn — and Artemis shut the conversation down at the
+  end of the current one, taking that queue with it. The queued turn is now
+  served, and it continues the same conversation.
+
+- **"Read it now."** While messages are waiting, the composer says how many
+  and offers to interrupt so the model reads them at once rather than at the
+  next pause. Interrupting keeps the queue rather than discarding it, which
+  is what the notice after a stop always claimed and did not do.
+
+- **Conversations keep updating without ⌘R.** A conversation that was
+  working could open frozen and stay frozen — a whole class of causes, all
+  ending the same way: a turn started somewhere the window could not see (a
+  schedule firing, another window, the server), events arriving for a
+  conversation no column held, and the machinery meant to notice being
+  disarmed by those same events. Opening a working conversation now attaches
+  to it, a stalled column is spotted wherever it is, and a window that
+  cannot reach the run registry at startup says so instead of quietly
+  stranding every conversation until the next restart.
+
+- **The suggested reply is a draft, not a button.** It appears as grey text
+  inside the composer — Tab to accept, then edit it like anything else you
+  typed, or keep typing to dismiss it.
+
 ## What's new in 1.13.1
 
 Three fixes to conversations you come back to — when they happened, whether
