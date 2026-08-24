@@ -244,16 +244,35 @@ describe('status line / model and effort', () => {
     expect(screen.getByLabelText('Model').textContent).toContain('Opus');
   });
 
-  it('falls back to the provider default when the stored model is not offered', () => {
+  it('keeps a stored model this catalogue does not offer, rather than renaming it', () => {
     useProvider(ALL, { models: [{ id: 'sonnet', label: 'Sonnet', note: 'Balanced.' }] });
     seedApp({ model: 'gpt-9' });
     mount(<StatusLine />);
-    // A stored preference survives a provider switch, so naming something this
-    // catalogue does not have is routine. It resolves to the catalogue's first
-    // entry — the adapter contract's own default — rather than to an
-    // "(unavailable)" placeholder naming a model that will not run. There is no
-    // "provider default" row any more for the absent case to point at.
-    expect(screen.getByLabelText('Model').textContent).toContain('Sonnet');
+    /*
+     * This assertion is the reverse of what it was, and the reversal is the
+     * point. It used to expect the first catalogue row ("Sonnet"), on the
+     * reasoning that a preference surviving a provider switch names something
+     * meaningless and the default is the safe landing.
+     *
+     * The same fall-through fired in a second, far more common case that
+     * reasoning did not consider: the built-in catalogue and the live one the
+     * CLI publishes use different vocabularies for the *same* provider —
+     * `opus` versus `opus[1m]` — and the live one only exists once
+     * `refreshModels` lands. A conversation pinned to `opus[1m]` therefore
+     * matched nothing on every boot, and resolved to the first built-in row,
+     * which is Fable. The bar read "Fable 5" over a conversation the run
+     * reported as Opus — and since this value is what `startRun` sends, the
+     * next prompt *ran on Fable*. Silently, on a model nobody chose.
+     *
+     * The two cases are indistinguishable from state alone, so this is a
+     * choice between failure modes: an id meaningless to the provider fails
+     * loudly and immediately, naming itself, and the picker repairs itself the
+     * moment the catalogue lands (a window of milliseconds — `setProvider`
+     * refreshes at once). A silent switch to a model the user never chose
+     * succeeds, bills, and answers differently, with nothing on screen to say
+     * so. Loud and rare beats silent and common.
+     */
+    expect(screen.getByLabelText('Model').textContent).toContain('gpt-9');
   });
 
   it('disables the model segment with a reason when the provider offers none', async () => {

@@ -4512,20 +4512,71 @@ export function activeEffortLevels(state: SessionState): readonly ProviderEffort
 /**
  * The model the next run will actually use.
  *
- * **Always a real model when the provider offers any.** A stored preference the
- * current catalogue does not contain — routine, since the preference survives a
- * provider switch — falls through to the catalogue's first entry, which the
- * adapter contract defines as the provider's own default.
+ * **Always a real model when the provider offers any.** With no stored
+ * preference at all, the catalogue's first entry — which the adapter contract
+ * defines as the provider's own default.
  *
  * There used to be a "Provider default" row in the picker representing the
  * absent case, and this returned `undefined` for it. It is gone: it named no
  * model, so it told the user nothing about what would run, and it sat at the
  * top of the list where it collected mis-clicks. Resolving to a concrete model
  * means every surface can name what the next run will use.
+ *
+ * ## A choice the catalogue does not list is kept, not replaced
+ *
+ * This used to fall through to the first entry for *any* unmatched id, and
+ * that was a silent lie with teeth. The built-in catalogue and the live one the
+ * CLI publishes use different vocabularies — `opus` versus `opus[1m]`,
+ * `fable` versus `claude-fable-5[1m]` — and the live one is only present after
+ * `refreshModels` lands. Before that, and forever if the fetch fails, a
+ * conversation pinned to `opus[1m]` matched nothing and resolved to the first
+ * built-in row: the status bar read "Fable 5" while the run itself reported
+ * Opus, and — because this is the value {@link startRun} sends — the next
+ * prompt *actually switched the conversation to Fable*. Silently, on a model
+ * the user never chose.
+ *
+ * `refreshModels` reconciles the two vocabularies when both exist (see
+ * `models.test.ts`); this is the other half, for every moment one of them does
+ * not. An id we cannot place is carried through as itself, which is exactly
+ * what `RunInput.model` is documented to accept — the catalogue is what the UI
+ * *offers*, never an allow-list.
  */
 export function activeModel(state: SessionState): ProviderModelOption | undefined {
   const models = activeModels(state);
-  return models.find((m) => m.id === state.model) ?? models[0];
+  const chosen = models.find((m) => m.id === state.model);
+  if (chosen !== undefined) return chosen;
+  if (state.model === null) return models[0];
+  return unlistedModel(state.model);
+}
+
+/** Cached per id — see the memoisation note above: selectors compare by identity. */
+const unlistedModels = new Map<string, ProviderModelOption>();
+
+/**
+ * Stand for a chosen model this catalogue does not list.
+ *
+ * The id is its own label, deliberately. Prettifying it would mean guessing at
+ * a naming scheme that belongs to the provider — the adapter has
+ * `shortModelName` for exactly that and it is provider-specific, which this
+ * layer is not allowed to be. An id shown verbatim is unambiguous, and it is
+ * the string that will be sent.
+ *
+ * Every capability field is left absent rather than assumed: fast mode,
+ * ultracode and the effort ladder are facts about a model the catalogue would
+ * have told us, and claiming them for a row we could not find would put
+ * toggles on screen that the run may reject. Absent reads as "not offered",
+ * which is the conservative direction.
+ */
+function unlistedModel(id: string): ProviderModelOption {
+  const cached = unlistedModels.get(id);
+  if (cached !== undefined) return cached;
+  const option: ProviderModelOption = {
+    id,
+    label: id,
+    note: 'Chosen earlier; this account’s current model list does not include it.',
+  };
+  unlistedModels.set(id, option);
+  return option;
 }
 
 /**
