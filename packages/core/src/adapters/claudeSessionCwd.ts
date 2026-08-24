@@ -144,13 +144,18 @@ export async function recoverSessionCwds(
  * answers `null`, which is the same answer as a file that holds no directory, so
  * the caller needs no separate `stat`.
  *
+ * Exported because it is not specific to Claude's store: any JSONL transcript
+ * that puts a `cwd` on its records answers to it, which is why the local
+ * adapter's own store — whose layout deliberately mirrors this one — reads its
+ * files back through here rather than growing a second copy of the same loop.
+ *
  * Line-by-line rather than `readFile`: the first conversational record is near
  * the top and these files reach megabytes, so this returns after reading a few
  * kilobytes of a file it never has to hold in memory. A line that does not parse
  * is skipped rather than fatal — one truncated record at the end of a transcript
  * a process was killed mid-write is not a reason to lose the conversation.
  */
-async function readFirstCwd(file: string): Promise<string | null> {
+export async function readFirstCwd(file: string): Promise<string | null> {
   const stream = createReadStream(file, { encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
 

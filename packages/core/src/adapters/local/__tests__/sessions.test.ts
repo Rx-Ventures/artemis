@@ -18,7 +18,7 @@
 
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AgentEvent, ProfileId, RunId, SessionId } from '@rx-artemis/protocol';
 
+import { encodeProjectDir } from '../../claudeSessionSpawn.js';
 import { createLocalAdapter, LLAMA_CPP, BASE_URL_ENV } from '../adapter.js';
 import { LOCAL_PROFILE_DIR_ENV } from '../sessionStore.js';
 import type { ResolvedRunInput, Run } from '../../types.js';
@@ -75,6 +76,40 @@ async function serveCompletions(
   await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
   const { port } = server.address() as AddressInfo;
   return { origin: `http://127.0.0.1:${String(port)}`, bodies };
+}
+
+/**
+ * A server whose first answer asks for a shell command, and whose later ones
+ * are plain text.
+ *
+ * The id is omitted deliberately: llama.cpp and Ollama both do, which is what
+ * makes `call_0` the id of every turn's first tool call.
+ */
+async function serveToolCall(calls = 1): Promise<{ origin: string }> {
+  let answered = 0;
+  const server = createServer((request: IncomingMessage, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const delta =
+        answered++ === 0
+          ? {
+              tool_calls: Array.from({ length: calls }, (_unused, index) => ({
+                index,
+                function: { name: 'shell', arguments: '{"command":"ls"}' },
+              })),
+            }
+          : { content: 'all done' };
+      response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+      response.write('data: [DONE]\n\n');
+      response.end();
+    });
+  });
+
+  servers.push(server);
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  const { port } = server.address() as AddressInfo;
+  return { origin: `http://127.0.0.1:${String(port)}` };
 }
 
 function input(origin: string, overrides: Partial<ResolvedRunInput> = {}): ResolvedRunInput {
@@ -285,6 +320,45 @@ describe('history, end to end', () => {
     expect(before?.hasMore).toBe(true);
   });
 
+  it('stays one conversation when the resume names the directory differently', async () => {
+    /*
+     * An API caller passes the client's `cwd` straight through, and a resume
+     * routinely arrives with a trailing slash or a differently-resolved path.
+     * Reads walked the whole store and found the original file; writes trusted
+     * the spelling and started a second one under a second encoded name. The
+     * turn after that direct-hit the new file, so the history stopped at the
+     * split — silently, with the sidebar showing the id twice.
+     */
+    const { origin, bodies } = await serveCompletions('first answer', 'second answer');
+    const adapter = createLocalAdapter(LLAMA_CPP);
+    const env = { [LOCAL_PROFILE_DIR_ENV]: profileDir };
+
+    const first = await adapter.createRun(input(origin, { prompt: 'one' }));
+    await drain(first);
+    const sessionId = first.sessionId as SessionId;
+
+    await drain(
+      await adapter.createRun(
+        input(origin, { prompt: 'two', cwd: `${cwd}/`, resumeSessionId: sessionId }),
+      ),
+    );
+
+    // The second turn carried the first, and both counters agree about where
+    // the conversation is — the registry asks with the run's cwd, the renderer
+    // with the summary's.
+    expect(bodies[1]?.messages.map((message) => message.content)).toEqual([
+      'one',
+      'first answer',
+      'two',
+    ]);
+    expect(await adapter.countSessionMessages?.({ sessionId, cwd, env })).toBe(4);
+    expect(await adapter.countSessionMessages?.({ sessionId, cwd: `${cwd}/`, env })).toBe(4);
+
+    const listed = await adapter.listSessions?.({ profileId: PROFILE, cwd, env });
+    expect(listed?.sessions).toHaveLength(1);
+    expect(listed?.sessions[0]?.messageCount).toBe(4);
+  });
+
   it('answers zero for a conversation it has never seen', async () => {
     // Honest here rather than a guess: this adapter owns the store, so no file
     // means nothing was ever written.
@@ -297,6 +371,116 @@ describe('history, end to end', () => {
         env: { [LOCAL_PROFILE_DIR_ENV]: profileDir },
       }),
     ).resolves.toBe(0);
+  });
+});
+
+describe('a transcript that cannot be written', () => {
+  it('says so once, and stores no half of a turn', async () => {
+    /*
+     * A write that fails partway through a turn is the one failure that must
+     * not be shrugged off: an assistant message holding tool calls whose
+     * results never landed is rejected outright by every one of these servers,
+     * so half a turn on disk is a conversation that can never be resumed. The
+     * rest of the turn is abandoned instead — and the user is told now, rather
+     * than next turn when the model has forgotten everything since.
+     */
+    const { origin } = await serveCompletions('first answer', 'second answer');
+    const adapter = createLocalAdapter(LLAMA_CPP);
+
+    const first = await adapter.createRun(input(origin));
+    await drain(first);
+    const sessionId = first.sessionId as SessionId;
+
+    // Readable, so the conversation still replays — and unwritable, so the
+    // turn about to be added cannot land.
+    const stored = path.join(
+      profileDir,
+      'sessions',
+      encodeProjectDir(cwd),
+      `${String(sessionId)}.jsonl`,
+    );
+    await chmod(stored, 0o444);
+
+    const events = await drain(
+      await adapter.createRun(input(origin, { prompt: 'again', resumeSessionId: sessionId })),
+    );
+
+    const notices = events.filter(
+      (event) => event.type === 'text.complete' && (event as { synthetic?: boolean }).synthetic,
+    );
+    // One notice, not one per message: the first failure abandons the rest of
+    // the turn rather than retrying it message by message.
+    expect(notices).toHaveLength(1);
+    expect((notices[0] as { text: string }).text).toContain('could not be saved');
+    expect(events.at(-1)?.type).toBe('run.end');
+
+    // The turn that did land is intact and untouched.
+    await chmod(stored, 0o644);
+    expect((await readFile(stored, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+});
+
+describe('stopping a turn', () => {
+  it('ends a run interrupted while a permission prompt is open', async () => {
+    /*
+     * The deadlock this pins: the loop parks inside `#approve` on a promise
+     * that only an answer settles, and the only thing that used to release it
+     * was the run's own `finally` — which is downstream of the loop. So
+     * stopping during a prompt cancelled a request nobody was making and left
+     * the turn in `awaiting_permission` for good: no `run.end`, no flushed
+     * transcript, and a row the user could not clear. Before the fix this test
+     * does not fail, it hangs.
+     */
+    const { origin } = await serveToolCall();
+    const adapter = createLocalAdapter(LLAMA_CPP);
+
+    const run = await adapter.createRun(
+      input(origin, { prompt: 'run the tests', permissionMode: 'default' }),
+    );
+
+    const events: AgentEvent[] = [];
+    for await (const event of run.events) {
+      events.push(event);
+      if (event.type === 'permission.request') void run.interrupt();
+    }
+
+    const last = events.at(-1) as { type: string; reason?: string };
+    expect(last.type).toBe('run.end');
+    expect(last.reason).toBe('interrupted');
+    expect(run.status).toBe('ended');
+
+    // And the part of the turn that happened is on disk, which is what makes
+    // "stop" different from "undo".
+    expect(
+      await adapter.countSessionMessages?.({
+        sessionId: run.sessionId as SessionId,
+        cwd,
+        env: { [LOCAL_PROFILE_DIR_ENV]: profileDir },
+      }),
+    ).toBeGreaterThan(0);
+  });
+
+  it('asks nothing more once the turn has been stopped', async () => {
+    // Releasing the *parked* prompt is only half of it. A turn that asked for
+    // several tools in one message still has the rest of them to get through,
+    // and each one reaches the approval path after the abort has already been
+    // and gone — so a prompt raised then would park on a deferred nobody is
+    // left to release, and the run would hang one call further along.
+    const { origin } = await serveToolCall(3);
+    const adapter = createLocalAdapter(LLAMA_CPP);
+
+    const run = await adapter.createRun(input(origin, { permissionMode: 'default' }));
+
+    const events: AgentEvent[] = [];
+    for await (const event of run.events) {
+      events.push(event);
+      if (event.type === 'permission.request') void run.interrupt();
+    }
+
+    // One prompt, three refused calls, and an ending.
+    expect(events.filter((event) => event.type === 'permission.request')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'tool.end')).toHaveLength(3);
+    expect(events.at(-1)?.type).toBe('run.end');
   });
 });
 

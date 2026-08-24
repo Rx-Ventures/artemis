@@ -328,6 +328,18 @@ class LocalRun implements Run {
    * and the next request would carry a message array the server rejects.
    */
   #writes: Promise<void> = Promise.resolve();
+  /**
+   * Set the first time a write fails, and never cleared.
+   *
+   * What it stops is a *half* turn reaching the file. The rest of this turn is
+   * abandoned rather than attempted, because an assistant message holding tool
+   * calls whose results never landed is not merely incomplete — every one of
+   * these servers rejects that array, so a single failed append in the middle
+   * of a turn would leave the conversation permanently unresumable. The reader
+   * repairs what is already on disk (see `answeredCallsOnly`); this keeps the
+   * damage from being written in the first place.
+   */
+  #writesFailed = false;
   /** What each tool call looked like live, keyed by the id its result carries. */
   readonly #toolEvents = new Map<string, StoredEvent[]>();
   #usage: UsageSnapshot | undefined;
@@ -348,7 +360,24 @@ class LocalRun implements Run {
     this.#input = input;
     this.#flavour = flavour;
     this.#sessionId = input.resumeSessionId ?? (randomUUID() as SessionId);
+    /*
+     * Stopping a run must not be able to leave it stopped *and* waiting.
+     *
+     * The loop parks inside `#approve` on a promise only an answer settles, so
+     * aborting while a permission prompt was open cancelled the fetch nobody
+     * was making and left the turn in `awaiting_permission` for good: no
+     * `run.end`, no flushed transcript, a row the user could not clear. The
+     * abort is the answer — every parked call is refused, the loop unwinds, and
+     * the ordinary interrupted ending happens.
+     */
+    this.#abort.signal.addEventListener('abort', () => this.#refuseAllPending(), { once: true });
     void this.#drive();
+  }
+
+  /** Refuse every approval the loop is parked on. Safe to call twice. */
+  #refuseAllPending(): void {
+    for (const pending of this.#pending.values()) pending.resolve('deny');
+    this.#pending.clear();
   }
 
   get status(): RunStatus {
@@ -405,6 +434,11 @@ class LocalRun implements Run {
    * quietly did both would make "stop asking me" mean "and also let it out".
    */
   async #approve(call: ToolCall, tool: ToolSpec): Promise<'allow' | 'deny'> {
+    // Nothing more is run once the user has stopped the turn, and nothing more
+    // is asked either: a prompt raised after the abort would park the loop on a
+    // deferred that the abort listener has already been and gone past.
+    if (this.#abort.signal.aborted) return 'deny';
+
     const mode = this.#input.permissionMode ?? 'default';
     if (mode === 'bypassPermissions') return 'allow';
     if (mode === 'acceptEdits' && tool.risk !== 'execute') return 'allow';
@@ -557,17 +591,40 @@ class LocalRun implements Run {
    */
   #persist(messages: readonly StoredTurnMessage[]): void {
     this.#writes = this.#writes
-      .then(() =>
-        sessionStore.appendTurn({
+      .then(() => {
+        if (this.#writesFailed) return undefined;
+        return sessionStore.appendTurn({
           env: this.#input.env,
           sessionId: this.#sessionId,
           cwd: this.#input.cwd,
           providerId: this.#flavour.id,
           ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
           messages,
-        }),
-      )
-      .catch(() => undefined);
+        });
+      })
+      .catch((error: unknown) => {
+        this.#writesFailed = true;
+        /*
+         * Said out loud, once.
+         *
+         * The run itself is fine and finishes normally — but the user is about
+         * to keep talking to a conversation that has stopped recording, and
+         * finding that out on the next turn, when the model has forgotten
+         * everything since, is far worse than being told now. There is no
+         * notice event in the protocol, so it goes where an adapter's own
+         * words go: a synthetic assistant block, which the transcript renders
+         * and nothing mistakes for the model's.
+         */
+        this.#emit({
+          type: 'text.complete',
+          messageId: `${this.runId}-store-error` as MessageId,
+          role: 'assistant',
+          text: `This turn could not be saved to the conversation history: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          synthetic: true,
+        } as never);
+      });
   }
 
   /**
@@ -580,9 +637,13 @@ class LocalRun implements Run {
    */
   #storedEvents(message: ChatMessage): readonly StoredEvent[] {
     if (message.role === 'tool') {
-      return message.tool_call_id === undefined
-        ? []
-        : (this.#toolEvents.get(message.tool_call_id) ?? []);
+      if (message.tool_call_id === undefined) return [];
+      const captured = this.#toolEvents.get(message.tool_call_id) ?? [];
+      // Consumed, not kept: a long agentic turn makes hundreds of calls, and
+      // holding every one of their events for the life of the run is a leak
+      // that grows with exactly the runs that can least afford it.
+      this.#toolEvents.delete(message.tool_call_id);
+      return captured;
     }
     if (message.content === '') return [];
     return [
@@ -707,9 +768,10 @@ class LocalRun implements Run {
       } as never);
     } finally {
       // Every parked approval is released, or a disposed run leaves the loop
-      // waiting on a promise nobody will ever settle.
-      for (const pending of this.#pending.values()) pending.resolve('deny');
-      this.#pending.clear();
+      // waiting on a promise nobody will ever settle. Ordinarily the abort
+      // listener has already done this; a run that ended some other way with a
+      // prompt still open has not.
+      this.#refuseAllPending();
       if (this.#scratch !== undefined) void rm(this.#scratch, { recursive: true, force: true });
       this.#queue.close();
     }

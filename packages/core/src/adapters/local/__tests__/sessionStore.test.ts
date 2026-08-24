@@ -10,16 +10,26 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { ProfileId, ProviderId, RunId, SessionId } from '@rx-artemis/protocol';
 
+import { encodeProjectDir } from '../../claudeSessionSpawn.js';
 import {
   appendTurn,
   count,
-  encodeCwd,
   list,
   listAll,
   LOCAL_PROFILE_DIR_ENV,
@@ -50,7 +60,7 @@ function said(role: 'user' | 'assistant', text: string): StoredTurnMessage {
 
 /** The file one session's transcript is expected to be at. */
 function transcript(sessionId = SESSION, at = cwd): string {
-  return path.join(profileDir, 'sessions', encodeCwd(at), `${String(sessionId)}.jsonl`);
+  return path.join(profileDir, 'sessions', encodeProjectDir(at), `${String(sessionId)}.jsonl`);
 }
 
 beforeEach(async () => {
@@ -112,6 +122,208 @@ describe('where a transcript goes', () => {
       }),
     ).resolves.toBeUndefined();
     await expect(readMessages({ env: {}, sessionId: SESSION })).resolves.toEqual([]);
+  });
+});
+
+describe('one conversation, one file', () => {
+  /**
+   * The split this guards against is silent and total: the reader finds the
+   * first file and the writer creates a second, so the conversation stops
+   * growing without anything failing.
+   */
+  async function say(at: string, text: string): Promise<void> {
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd: at,
+      providerId: LLAMACPP,
+      messages: [said('user', text)],
+    });
+  }
+
+  it('appends to the existing transcript when the directory is spelled differently', async () => {
+    await say(cwd, 'first');
+    // The spellings a resume actually arrives with: a trailing slash from a
+    // client, and a path that resolved differently on the way in.
+    await say(`${cwd}/`, 'second');
+    await say(path.join(cwd, 'sub', '..'), 'third');
+
+    expect(await readMessages({ env, sessionId: SESSION, cwd })).toEqual([
+      { role: 'user', content: 'first' },
+      { role: 'user', content: 'second' },
+      { role: 'user', content: 'third' },
+    ]);
+  });
+
+  it('leaves one row and one count, not two of each', async () => {
+    await say(cwd, 'first');
+    await say(`${cwd}/`, 'second');
+
+    // A second file under a second encoded name would show the same id twice
+    // in the sidebar and answer two different counts to the two callers that
+    // ask — the registry with the run's cwd, the renderer with the summary's.
+    const everywhere = await listAll({ profiles: [{ profileId: PROFILE, env }] }, LLAMACPP);
+    expect(everywhere.sessions.filter((session) => session.id === SESSION)).toHaveLength(1);
+    expect(everywhere.sessions[0]?.messageCount).toBe(2);
+
+    expect(await count({ env, sessionId: SESSION, cwd })).toBe(2);
+    expect(await count({ env, sessionId: SESSION, cwd: `${cwd}/` })).toBe(2);
+  });
+
+  it('destroys the whole conversation rather than half of it', async () => {
+    await say(cwd, 'first');
+    await say(`${cwd}/`, 'second');
+
+    expect(await remove({ env, sessionId: SESSION, cwd: `${cwd}/` })).toBe(true);
+    expect(await readMessages({ env, sessionId: SESSION })).toEqual([]);
+  });
+
+  it('refuses to store a conversation with no directory at all', async () => {
+    // It would land loose in `sessions/`, where no listing walks and nothing
+    // can be resumed from.
+    await expect(
+      appendTurn({
+        env,
+        sessionId: SESSION,
+        cwd: '   ',
+        providerId: LLAMACPP,
+        messages: [said('user', 'nowhere')],
+      }),
+    ).rejects.toThrow(/directory it ran in/);
+  });
+
+  it('finds a project directory that is a symlink', async () => {
+    // `readdir` reports a linked directory as a link, not a directory, so a
+    // store assembled with `ln -s` enumerated as empty.
+    const real = path.join(profileDir, 'real-project');
+    await mkdir(real, { recursive: true });
+    await say(real, 'in the real one');
+    await rename(
+      path.join(profileDir, 'sessions', encodeProjectDir(real)),
+      path.join(profileDir, 'moved'),
+    );
+    await symlink(
+      path.join(profileDir, 'moved'),
+      path.join(profileDir, 'sessions', encodeProjectDir(real)),
+    );
+
+    // Found by a walk that has to follow the link to see anything at all.
+    expect(await readMessages({ env, sessionId: SESSION })).toHaveLength(1);
+    const everywhere = await listAll({ profiles: [{ profileId: PROFILE, env }] }, LLAMACPP);
+    expect(everywhere.sessions.map((session) => session.id)).toEqual([SESSION]);
+  });
+});
+
+describe('a conversation the model can be sent', () => {
+  /** A file written by a turn whose tool results never landed. */
+  async function withDanglingCall(): Promise<void> {
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [
+        said('user', 'run the tests'),
+        {
+          message: {
+            role: 'assistant',
+            content: 'on it',
+            tool_calls: [
+              { id: 'call_0', type: 'function', function: { name: 'shell', arguments: '{}' } },
+            ],
+          },
+          events: [],
+        },
+      ],
+    });
+  }
+
+  it('drops a tool call nothing ever answered', async () => {
+    // Every one of these servers answers 400 to an unanswered `tool_calls`,
+    // which this adapter reports as `provider_unavailable` — so one failed
+    // append would tell the user their running server is down, for good.
+    await withDanglingCall();
+
+    const messages = await readMessages({ env, sessionId: SESSION, cwd });
+
+    expect(messages.some((message) => message.tool_calls !== undefined)).toBe(false);
+    // The text the model produced is still what it said.
+    expect(messages).toEqual([
+      { role: 'user', content: 'run the tests' },
+      { role: 'assistant', content: 'on it' },
+    ]);
+  });
+
+  it('drops the assistant turn entirely when the calls were all it was', async () => {
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [
+        said('user', 'run the tests'),
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'call_0', type: 'function', function: { name: 'shell', arguments: '{}' } },
+            ],
+          },
+          events: [],
+        },
+      ],
+    });
+
+    expect(await readMessages({ env, sessionId: SESSION, cwd })).toEqual([
+      { role: 'user', content: 'run the tests' },
+    ]);
+  });
+
+  it('keeps a call that was answered', async () => {
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [
+        {
+          message: {
+            role: 'assistant',
+            content: 'on it',
+            tool_calls: [
+              { id: 'call_0', type: 'function', function: { name: 'shell', arguments: '{}' } },
+              { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+            ],
+          },
+          events: [],
+        },
+        { message: { role: 'tool', tool_call_id: 'call_0', content: 'passed' }, events: [] },
+      ],
+    });
+
+    const messages = await readMessages({ env, sessionId: SESSION, cwd });
+
+    // The answered half survives with its result; the unanswered half does not.
+    expect(messages[0]?.tool_calls?.map((call) => call.id)).toEqual(['call_0']);
+    expect(messages[1]).toEqual({ role: 'tool', tool_call_id: 'call_0', content: 'passed' });
+  });
+
+  it('drops a result for a call the array never made', async () => {
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [
+        said('user', 'hello'),
+        { message: { role: 'tool', tool_call_id: 'call_9', content: 'orphan' }, events: [] },
+      ],
+    });
+
+    expect(await readMessages({ env, sessionId: SESSION, cwd })).toEqual([
+      { role: 'user', content: 'hello' },
+    ]);
   });
 });
 
@@ -224,6 +436,69 @@ describe('reading a conversation back', () => {
     expect(events.map((event) => event.type)).toEqual(['tool.start', 'tool.end']);
     expect((events[1] as { status: string }).status).toBe('error');
   });
+
+  it('gives every replayed tool call an id of its own', async () => {
+    // These servers omit the call id, so the accumulator stands its index in —
+    // making every turn's first call `call_0`. The renderer keys tool rows on
+    // that id and replaces the row when it repeats, so a reopened four-turn
+    // session showed one tool card holding the last turn's output.
+    const turn = (output: string): StoredTurnMessage => ({
+      message: { role: 'tool', tool_call_id: 'call_0', content: output },
+      events: [
+        { type: 'tool.start', toolCallId: 'call_0', name: 'shell', input: {} } as never,
+        { type: 'tool.end', toolCallId: 'call_0', name: 'shell', status: 'ok' } as never,
+      ],
+    });
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [turn('first output'), turn('second output')],
+    });
+
+    const { events } = await readEvents({ env, sessionId: SESSION, cwd, runId: RUN });
+    const ids = events.map((event) => (event as { toolCallId: string }).toolCallId);
+
+    // Two rows, each with its start and end still paired to each other.
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+
+    // And stable when the same records are read a page at a time, or the
+    // second page would rename the rows the first one drew.
+    const second = await readEvents({ env, sessionId: SESSION, cwd, runId: RUN, offset: 1 });
+    expect((second.events[0] as { toolCallId: string }).toolCallId).toBe(ids[2]);
+  });
+
+  it('leaves the ids in the replayed message array exactly as the server issued them', async () => {
+    // The uniquifying is for display only: in the message array the id has a
+    // job — pairing a result to the call — and rewriting it would change what
+    // the model is told it said.
+    await appendTurn({
+      env,
+      sessionId: SESSION,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'call_0', type: 'function', function: { name: 'shell', arguments: '{}' } },
+            ],
+          },
+          events: [],
+        },
+        { message: { role: 'tool', tool_call_id: 'call_0', content: 'done' }, events: [] },
+      ],
+    });
+
+    const messages = await readMessages({ env, sessionId: SESSION, cwd });
+    expect(messages[0]?.tool_calls?.[0]?.id).toBe('call_0');
+    expect(messages[1]?.tool_call_id).toBe('call_0');
+  });
 });
 
 describe('a transcript that was damaged', () => {
@@ -313,6 +588,24 @@ describe('listing', () => {
     expect(row?.sizeBytes).toBeGreaterThan(0);
   });
 
+  it('cuts a long opening message without splitting a character in half', async () => {
+    // Slicing by code unit lands mid-surrogate and renders as a replacement
+    // glyph, and an opening message is exactly where an emoji turns up.
+    await appendTurn({
+      env,
+      sessionId: 'session-emoji' as SessionId,
+      cwd,
+      providerId: LLAMACPP,
+      messages: [said('user', '🙂'.repeat(200))],
+    });
+
+    const { sessions } = await list({ profileId: PROFILE, cwd, env }, LLAMACPP);
+    const title = sessions.find((session) => session.id === 'session-emoji')?.title ?? '';
+
+    expect(title).not.toMatch(/[\uD800-\uDFFF]/u);
+    expect(title).toBe(`${'🙂'.repeat(80)}…`);
+  });
+
   it('pages a project’s conversations', async () => {
     const page = await list({ profileId: PROFILE, cwd, env, limit: 1 }, LLAMACPP);
 
@@ -356,7 +649,7 @@ describe('listing', () => {
 
   it('skips a file holding no messages at all', async () => {
     // A row for it could be neither opened nor resumed.
-    await writeFile(path.join(profileDir, 'sessions', encodeCwd(cwd), 'empty.jsonl'), '');
+    await writeFile(path.join(profileDir, 'sessions', encodeProjectDir(cwd), 'empty.jsonl'), '');
 
     const { sessions } = await list({ profileId: PROFILE, cwd, env }, LLAMACPP);
     expect(sessions.map((session) => session.id)).not.toContain('empty');
