@@ -35,6 +35,7 @@ import {
   closePane,
   deleteSession,
   focusedPane,
+  handleAgentEvent,
   newSession,
   openSessionBeside,
   resumeSession,
@@ -680,5 +681,88 @@ describe('after ⌘R reloads the window', () => {
     // answerable, or the reload strands an agent that is waiting on a person.
     expect(state().permissionQueue.map((r) => r.id)).toEqual(['perm-1']);
     expect(state().run?.status).toBe('awaiting_permission');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Coming back to a conversation only the registry is holding                 */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * A turn started by a scheduled wakeup between reloads, a pane evicted by
+ * `pruneBackground`, another window's conversation: the run is live in main and
+ * no pane in this window holds it. Clicking its sidebar row used to paint the
+ * stored file — a snapshot nothing could ever update, because events route by
+ * run id to a pane that does not exist, the stall sweep skips a pane with
+ * `run: null`, and `claimContinuation` only fires on a `session.started` that
+ * has already gone by. The one recovery was ⌘R, whose `adoptLiveRuns` is the
+ * only other reader of the registry — so the resume path now asks the same
+ * question at the same seam, per click instead of per boot.
+ */
+describe('resuming a session whose live run no pane holds', () => {
+  const startedEvent = (runId: string, sessionId: string, seq: number) =>
+    ({
+      type: 'session.started',
+      runId,
+      seq,
+      ts: 1,
+      sessionId,
+    }) as never;
+
+  const sayLive = (runId: string, seq: number, text: string) =>
+    ({
+      type: 'text.complete',
+      runId,
+      seq,
+      ts: 1,
+      messageId: `live-${runId}-${String(seq)}`,
+      role: 'assistant',
+      text,
+    }) as never;
+
+  /** Everything the pane's transcript says, as text — row keys tell no story. */
+  const textOf = (target: ReturnType<typeof focusedPane>): string => {
+    target.transcript.flush();
+    return target.transcript
+      .getListSnapshot()
+      .map((id) => (target.transcript.getItem(id) as { text?: string } | undefined)?.text ?? '')
+      .join('\n');
+  };
+
+  it('attaches the live run instead of painting a snapshot nothing can update', async () => {
+    mainProcessRuns = [liveRun('run-live', 'sess-live')];
+    retainedEvents = {
+      'run-live': [
+        startedEvent('run-live', 'sess-live', 0),
+        sayLive('run-live', 1, 'already midway through'),
+      ],
+    };
+
+    resumeSession(summary('sess-live'));
+    await settled();
+
+    // The pane holds the *run*, not a static copy of the session.
+    expect(state().run?.runId).toBe('run-live');
+    expect(state().run?.status).toBe('running');
+    expect(textOf(pane())).toContain('already midway through');
+
+    // And the stream lands from here on — the whole point of holding it.
+    handleAgentEvent(sayLive('run-live', 2, 'and still talking'));
+    expect(textOf(pane())).toContain('and still talking');
+
+    // The stored file was never painted over the live conversation.
+    expect(readHistoryFor('sess-live')).toBe(false);
+  });
+
+  it('still reads the stored file when nothing is live', async () => {
+    storedMessageCount = 2;
+    mainProcessRuns = [];
+
+    resumeSession(summary('sess-cold'));
+    await settled();
+
+    expect(state().run).toBeNull();
+    expect(readHistoryFor('sess-cold')).toBe(true);
+    expect(textOf(pane())).toContain('turn 1');
   });
 });
