@@ -38,7 +38,6 @@ import {
   GitForkIcon,
   PaperclipIcon,
   SendHorizontalIcon,
-  SparklesIcon,
   XIcon,
 } from 'lucide-react';
 import {
@@ -471,50 +470,6 @@ export function Composer(): ReactElement {
       </div>
 
       {/*
-        The provider's predicted next prompt, offered above the field.
-
-        A chip and not a ghost inside the textarea, because the field already
-        has a resident ghost — the placeholder — and a prediction painted as
-        pre-typed text reads as something the app decided rather than offered.
-        Clicking it (or Tab from an empty field) puts the text *into the draft*
-        to be edited or sent; it is never sent on the user's behalf. The row
-        occupies no space when there is nothing to offer, and it retires itself
-        the moment the next run starts — see `offeredSuggestion`.
-      */}
-      {suggestion !== null && (
-        <div className="mx-auto flex w-full max-w-4xl items-center px-3 pt-1">
-          {/*
-            The same ghost language as the directory chip above — this row is
-            chrome making an offer, not content. The text is faint until the
-            pointer says it is being considered.
-          */}
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => {
-              acceptSuggestion(pane);
-              textareaRef.current?.focus();
-            }}
-            title={`Use this suggestion (${keyLabel('tab')} from an empty field)`}
-            className="h-5 min-w-0 gap-1.5 px-1.5 text-2xs font-normal text-ink-faint hover:text-ink"
-          >
-            <SparklesIcon className="size-3 shrink-0" aria-hidden="true" />
-            <span className="truncate text-ink-muted">{suggestion}</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => dismissSuggestion(pane)}
-            aria-label="Dismiss the suggestion"
-            title="Dismiss the suggestion"
-            className="size-5 shrink-0 p-0 text-ink-faint hover:text-ink"
-          >
-            <XIcon className="size-3" aria-hidden="true" />
-          </Button>
-        </div>
-      )}
-
-      {/*
         A message sent into a running turn, still waiting to be read.
 
         The provider folds a mid-turn message in at its next tool break;
@@ -642,6 +597,17 @@ export function Composer(): ReactElement {
               {...(menu === null
                 ? {}
                 : { 'aria-activedescendant': slashOptionId(selected) })}
+              /*
+                The provider's predicted next prompt rides the placeholder slot
+                as ghost text inside the field — the Claude Code idiom — rather
+                than a chip above it. The placeholder is already the field's
+                resident ghost, so the prediction shows exactly where the eye
+                already reads hints, disappears the moment the user types, and
+                occupies no chrome. Tab materialises it into the draft to be
+                edited or sent — it is never sent on the user's behalf — and
+                Escape declines it. Lock and permission messages outrank it:
+                a prediction must not paper over "why can't I type".
+              */
               placeholder={
                 locked
                   ? `Waiting for the run to finish — ${steering.reason}`
@@ -649,11 +615,18 @@ export function Composer(): ReactElement {
                     ? asking
                       ? 'The agent is waiting on an answer above…'
                       : 'A tool call is waiting for your approval above…'
-                    : live
-                      ? 'Steer the run…'
-                      : resuming
-                        ? 'Continue the selected session…'
-                        : 'Ask Artemis to do something…'
+                    : suggestion !== null
+                      ? suggestion
+                      : live
+                        ? 'Steer the run…'
+                        : resuming
+                          ? 'Continue the selected session…'
+                          : 'Ask Artemis to do something…'
+              }
+              title={
+                suggestion !== null && text.length === 0
+                  ? `Suggested reply — ${keyLabel('tab')} to accept, ${keyLabel('escape')} to dismiss`
+                  : undefined
               }
               onChange={(event) => {
                 setText(event.target.value);
@@ -744,13 +717,40 @@ export function Composer(): ReactElement {
                   !event.nativeEvent.isComposing
                 ) {
                   event.preventDefault();
+                  // Capture before accepting: the accept nulls the offer, and
+                  // the caret belongs after the text that just became real so
+                  // typing continues the sentence instead of prepending to it.
+                  const accepted = suggestion;
                   acceptSuggestion(pane);
+                  requestAnimationFrame(() => {
+                    textareaRef.current?.setSelectionRange(accepted.length, accepted.length);
+                  });
                   return;
                 }
 
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   send();
+                  return;
+                }
+
+                /*
+                 * Escape declines a showing ghost suggestion before it means
+                 * anything else — but only when it cannot also mean "stop" or
+                 * "deny": a live run or a parked permission outranks tidying a
+                 * hint, and the gates below make sure this branch never
+                 * swallows those. With the field non-empty the ghost is not
+                 * showing, so Escape falls through untouched.
+                 */
+                if (
+                  event.key === 'Escape' &&
+                  suggestion !== null &&
+                  text.length === 0 &&
+                  !live &&
+                  pending === 0
+                ) {
+                  event.preventDefault();
+                  dismissSuggestion(pane);
                   return;
                 }
 

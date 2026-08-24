@@ -61,6 +61,10 @@ let mainProcessRuns: readonly unknown[] = [];
 let historyGates = new Map<string, Promise<void>>();
 /** Which runs have had their retained events asked for. */
 const eventsAsked: string[] = [];
+/** How many upcoming `runs.list` calls fail before the stub answers again. */
+let listFailures = 0;
+/** Every `runs.list` call, counted to pin the retry. */
+let listCalls = 0;
 
 function liveRun(runId: string, sessionId: string) {
   return {
@@ -79,7 +83,17 @@ function liveRun(runId: string, sessionId: string) {
 
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   runs: {
-    list: async () => ({ ok: true, value: { runs: mainProcessRuns } }),
+    list: async () => {
+      listCalls += 1;
+      if (listFailures > 0) {
+        listFailures -= 1;
+        return {
+          ok: false,
+          error: { code: 'transport', message: 'the main process did not answer', retryable: true },
+        };
+      }
+      return { ok: true, value: { runs: mainProcessRuns } };
+    },
     events: async ({ runId }: { runId: string }) => {
       eventsAsked.push(runId);
       return { ok: true, value: { runId, events: [], truncated: false } };
@@ -146,6 +160,9 @@ beforeEach(() => {
   mainProcessRuns = [];
   historyGates = new Map();
   eventsAsked.length = 0;
+  listFailures = 0;
+  listCalls = 0;
+  useApp.setState({ banners: [] });
 });
 
 afterEach(() => {
@@ -195,6 +212,57 @@ describe('adopting live runs after a reload', () => {
     // Past the hold, the run is released rather than left buffering forever.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(transcriptText('r1')).toContain('work carried on');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The one registry read at boot                                              */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * `adoptLiveRuns` is the only reader of the registry at boot. One failed IPC
+ * round-trip used to orphan every live run for the whole window session — and
+ * silently, which gave "reload to fix one stall" the power to strand the rest.
+ * The repair is proportionate: try once more, and if that also fails, say so,
+ * because a user told the truth reloads again and a user told nothing watches
+ * a working agent paint no pixels.
+ */
+describe('when the boot-time registry read fails', () => {
+  /*
+   * The suite shares one focused pane across tests, and a run adopted by an
+   * earlier case would satisfy `paneFor` here for the wrong reason. Each case
+   * starts from a pane that holds nothing.
+   */
+  beforeEach(() => {
+    setPaneState(focusedPane(), { run: null });
+  });
+
+  it('retries once and still adopts everything', async () => {
+    vi.useFakeTimers();
+    listFailures = 1;
+    mainProcessRuns = [liveRun('r1', 's1')];
+
+    const booted = bootstrap();
+    await vi.advanceTimersByTimeAsync(1_100);
+    await booted;
+
+    expect(listCalls).toBeGreaterThanOrEqual(2);
+    expect(paneFor('r1')).toBeDefined();
+    expect(useApp.getState().banners).toHaveLength(0);
+  });
+
+  it('says so when the retry fails too, instead of orphaning silently', async () => {
+    vi.useFakeTimers();
+    listFailures = 2;
+    mainProcessRuns = [liveRun('r1', 's1')];
+
+    const booted = bootstrap();
+    await vi.advanceTimersByTimeAsync(1_100);
+    await booted;
+
+    expect(paneFor('r1')).toBeUndefined();
+    const banners = useApp.getState().banners;
+    expect(banners.some((b) => b.message.includes('conversations still running'))).toBe(true);
   });
 });
 

@@ -1066,3 +1066,58 @@ describe('user-row identity', () => {
     expect(userRows(model)).toEqual([{ text: 'before the reset', pending: false }]);
   });
 });
+
+/*
+ * The gap check counts per run, not per pane.
+ *
+ * `seq` is dense per run, and the check exists to notice a transport that
+ * dropped something. But a run whose `run.end` itself was dropped — the exact
+ * loss being watched for — used to leave `lastSeq` holding the old run's
+ * position, and the next run's dense-from-zero numbering read as "already
+ * seen" until it climbed past it: every real gap in the newcomer's opening
+ * events passed unremarked, in the one conversation that had already
+ * demonstrated it drops things.
+ */
+describe('sequence gaps across runs', () => {
+  const say = (runId: string, seq: number, text: string): AgentEvent =>
+    ({
+      type: 'text.complete',
+      messageId: `${runId}-m${String(seq)}`,
+      role: 'assistant',
+      text,
+      runId,
+      seq,
+      ts: 1,
+    }) as AgentEvent;
+
+  const noteRows = (model: TranscriptModel): readonly string[] =>
+    model
+      .getListSnapshot()
+      .map((id) => model.getItem(id))
+      .filter((item): item is NonNullable<typeof item> => item?.kind === 'notice')
+      .map((item) => (item as { text?: string }).text ?? '');
+
+  it('catches a gap in a new run even when the old run never delivered its end', () => {
+    const model = build();
+    model.apply(say('run_1', 0, 'one'));
+    model.apply(say('run_1', 5, 'six'));
+    expect(noteRows(model).filter((t) => t.includes('dropped in transit'))).toHaveLength(1);
+
+    // run_1's end is never applied — the counter must not bleed into run_2.
+    model.apply(say('run_2', 0, 'fresh start'));
+    model.apply(say('run_2', 3, 'a real gap'));
+
+    expect(noteRows(model).filter((t) => t.includes('dropped in transit'))).toHaveLength(2);
+  });
+
+  it('does not read a new run starting from zero as a gap or as the past', () => {
+    const model = build();
+    model.apply(say('run_1', 0, 'one'));
+    model.apply(say('run_1', 1, 'two'));
+
+    model.apply(say('run_2', 0, 'fresh start'));
+    model.apply(say('run_2', 1, 'no gap here'));
+
+    expect(noteRows(model)).toEqual([]);
+  });
+});

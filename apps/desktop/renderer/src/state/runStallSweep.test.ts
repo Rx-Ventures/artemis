@@ -33,12 +33,13 @@ import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import {
   focusedPane,
   handleAgentEvent,
+  newSession,
   resetRunStreamState,
   submitPrompt,
   sweepStalledRuns,
   useApp,
 } from './store';
-import { paneState, setPaneState } from './pane';
+import { paneState, setPaneState, type Pane } from './pane';
 
 /* -------------------------------------------------------------------------- */
 /* A bridge whose main process has perfect information                        */
@@ -498,5 +499,97 @@ describe('the retained prompt in the heal', () => {
       { text: 'also check the tests', pending: false },
     ]);
     expect(assistantTexts()).toEqual(['first half', 'second half']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The gate must not remember what was never drawn                            */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The gate used to record an event as applied *before* looking for a pane to
+ * draw it in. Every event for an unheld run was therefore remembered as seen on
+ * its way to the floor — and since redelivery is the one recovery every healing
+ * door relies on (the sweep's replay, a continuation's second `session.started`),
+ * remembering the drop as a draw disarmed all of them at once. The visible shape
+ * was a conversation frozen until ⌘R, because `attachRun` clearing the gate at
+ * boot was the only path left.
+ */
+describe('events that found no pane', () => {
+  it('are not remembered as drawn: the turn can still be claimed when redelivered', async () => {
+    const runId = await startSilently();
+    handleAgentEvent(started(runId, 0) as never);
+
+    /*
+     * A continuation turn starts on this conversation — a scheduled wakeup,
+     * another window's prompt — while this pane is still live on its own run,
+     * so the claim declines and both events are dropped.
+     */
+    const continuation = {
+      type: 'session.started',
+      runId: 'cont',
+      seq: 0,
+      ts: 1,
+      sessionId: `sess-${runId}`,
+    };
+    handleAgentEvent(continuation as never);
+    handleAgentEvent(text('cont', 1, 'the words the window missed') as never);
+
+    // The pane's own run ends; the conversation is free to be continued.
+    handleAgentEvent(ended(runId, 5) as never);
+
+    // Redelivery — the sweep's replay and the registry's retained stream both
+    // come through this same door.
+    handleAgentEvent(continuation as never);
+    handleAgentEvent(text('cont', 1, 'the words the window missed') as never);
+
+    expect(run()?.runId).toBe('cont');
+    expect(run()?.status).toBe('running');
+    expect(assistantTexts()).toContain('the words the window missed');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The sweep watches conversations, not columns                               */
+/* -------------------------------------------------------------------------- */
+
+describe('a conversation the user navigated away from', () => {
+  /** The transcript of a specific pane, reduced to its assistant text. */
+  function assistantTextsOf(target: Pane): string[] {
+    target.transcript.flush();
+    return target.transcript
+      .getListSnapshot()
+      .map((id) => target.transcript.getItem(id))
+      .filter((item): item is NonNullable<typeof item> => item?.kind === 'assistant')
+      .map((item) => (item as { text?: string }).text ?? '');
+  }
+
+  it('heals in the background, where nobody is watching', async () => {
+    /*
+     * The one place a stall is guaranteed to go unnoticed by a person is a
+     * backgrounded conversation — there is no column, so there is nothing to
+     * look frozen. Swept from `allPanes` (columns only) it could never heal
+     * until ⌘R; the sweep is about conversations and must read `allLivePanes`.
+     */
+    const runId = await startSilently();
+    handleAgentEvent(started(runId, 1) as never);
+
+    newSession();
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    const parked = useApp.getState().background[0];
+    expect(parked).toBeDefined();
+    if (parked === undefined) throw new Error('nothing was backgrounded');
+    expect(paneState(parked).run?.runId).toBe(runId);
+
+    mainProcessRuns = [];
+    retainedEvents = {
+      [runId]: [started(runId, 1), text(runId, 2, 'kept working unseen'), ended(runId, 3)],
+    };
+    vi.setSystemTime(LATER);
+    await sweepStalledRuns(LATER);
+
+    expect(paneState(parked).run?.status).toBe('ended');
+    expect(paneState(parked).run?.endReason).toBe('completed');
+    expect(assistantTextsOf(parked)).toContain('kept working unseen');
   });
 });

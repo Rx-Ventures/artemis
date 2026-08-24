@@ -5736,8 +5736,24 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   // No `cwd` filter: a conversation the user backgrounded may well have been
   // working in another project, and dropping it because this column happens to
   // point somewhere else is the bug this function exists to fix.
-  const result = await call(() => bridge.runs.list({}));
-  if (!result.ok) return;
+  let result = await call(() => bridge.runs.list({}));
+  if (!result.ok) {
+    // One more try, then say so. This is the only registry read at boot, so a
+    // single failed IPC round-trip used to orphan every live run for the whole
+    // window session — silently, which made "reload to fix one stall" capable
+    // of stranding the rest. The banner is the difference between a user who
+    // reloads again and one who watches nothing happen.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    result = await call(() => bridge.runs.list({}));
+    if (!result.ok) {
+      pushBanner(
+        'warn',
+        'Could not check for conversations still running',
+        'The engine did not answer. Anything live is still running — reload the window to pick it back up.',
+      );
+      return;
+    }
+  }
 
   const live = result.value.runs.filter((handle) => handle.status !== 'ended');
   const [first, ...rest] = live;
@@ -8323,7 +8339,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     );
   }
 
-  void loadSessionHistory(session, target);
+  void openSessionContents(session, target);
   invalidateSessions();
   void refreshSessions();
   void refreshModels(target);
@@ -8400,6 +8416,65 @@ export function openSessionBeside(
  * make history indistinguishable from that run's own output. Deriving it from
  * the session id keeps the block stable across re-selection.
  */
+/**
+ * Show a conversation the user just opened — live if it is live.
+ *
+ * The correction this exists for: opening a session from the sidebar always
+ * read a **static snapshot** off disk, whatever the conversation was doing at
+ * the time. A run this window does not hold a pane for is unreachable by
+ * events — `applyAgentEvent` drops anything `paneForRun` cannot place, and
+ * only `session.started` can re-claim a pane — so a conversation that was
+ * mid-turn opened frozen, and *stayed* frozen however long the agent went on
+ * working. The single thing that recovered it was a full reload, because
+ * `adoptLiveRuns` runs at boot and attaches every live run the registry has.
+ *
+ * That is not a rare corner. A window holds no pane for a conversation
+ * whenever the turn was started somewhere else: a scheduled wakeup firing, a
+ * routine, another window, the HTTP server, or a pane this window evicted.
+ * Every one of those ends with a row the sidebar marks as working and a
+ * transcript that will not move until ⌘R — and nothing heals it, because the
+ * snapshot leaves the pane with `run: null`, which the stall sweep skips.
+ *
+ * So the registry is asked first, and a live run is *attached* rather than
+ * summarised. {@link attachRun} is the whole recovery: it replays the turns
+ * that came before, then the run's own retained events, then releases
+ * everything that arrived while it was reading. Falling back to the snapshot
+ * covers every other case — no live run, a registry that cannot answer, a run
+ * some other pane already holds — which is exactly the behaviour this
+ * replaces, so nothing that worked before depends on the new path succeeding.
+ */
+async function openSessionContents(session: SessionSummary, pane: Pane): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+
+  const listed = await call(() => bridge.runs.list({}));
+  // Selection can move while the registry is being asked — the same race
+  // `loadSessionHistory` guards, checked here too because the attach below
+  // rewrites the pane's provider, profile and directory from the handle.
+  if (paneState(pane).resumeSessionId !== session.id) return;
+
+  if (listed.ok) {
+    const live = listed.value.runs.find(
+      (handle) => handle.status !== 'ended' && handle.sessionId === session.id,
+    );
+    /*
+     * No second ownership check here, deliberately. `resumeSession` has
+     * already asked `paneForSession` and returned early if any pane held this
+     * conversation — and it writes `resumeSessionId` onto the target
+     * *synchronously*, before this runs, so a second column opening the same
+     * row while this is in flight takes that early return rather than racing
+     * to the registry. A `paneForRun` guard here was written for that race and
+     * could never fire; it went rather than sit untested.
+     */
+    if (live !== undefined) {
+      await attachRun(pane, live);
+      return;
+    }
+  }
+
+  await loadSessionHistory(session, pane);
+}
+
 async function loadSessionHistory(session: SessionSummary, pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
@@ -8934,7 +9009,11 @@ export function installRunWatchdog(): () => void {
 /** One pass: find the quiet-but-live panes and reconcile each against main. */
 export async function sweepStalledRuns(now: number = Date.now()): Promise<void> {
   const stalled: { pane: Pane; runId: RunId }[] = [];
-  for (const pane of allPanes()) {
+  // `allLivePanes`, not `allPanes`: the sweep is about conversations, not
+  // columns. A backgrounded run that loses its stream has no column, and it is
+  // exactly the one nobody is watching — swept from `allPanes` it could never
+  // heal until ⌘R, which is the symptom this watchdog exists to end.
+  for (const pane of allLivePanes()) {
     const run = paneState(pane).run;
     if (!run || run.status === 'ended') continue;
     // A run being adopted or already being reconciled is mid-surgery; its
@@ -9711,7 +9790,6 @@ function applyAgentEvent(event: AgentEvent): void {
    */
   const borrowedSeq =
     event.type === 'text.complete' && event.role === 'user' && event.replay === true;
-  if (!borrowedSeq) recordApplied(event.runId, event.seq);
 
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;
@@ -9719,6 +9797,22 @@ function applyAgentEvent(event: AgentEvent): void {
   if (!run) return;
 
   pane.transcript.apply(event);
+  /*
+   * Recorded only now — after the event found a pane and was actually drawn.
+   *
+   * Recording before routing meant every event for a run no pane held was
+   * marked applied on its way to being dropped: the stall sweep then compared
+   * the registry's `lastSeq` against a gate that had "heard" everything and
+   * concluded quiet-but-healthy, so the one mechanism built to heal a silent
+   * pane was disarmed by the very events it needed to notice ("frozen until
+   * ⌘R", 2026-08-24). The same lie covered a throw inside `apply` — swallowed
+   * by the preload's catch, remembered here as drawn.
+   *
+   * The trade: an exception *after* a partial apply can now re-apply on the
+   * next replay rather than silently losing the event. Duplication is visible
+   * and diagnosable; a gate that lies is neither.
+   */
+  if (!borrowedSeq) recordApplied(event.runId, event.seq);
 
   switch (event.type) {
     /*
