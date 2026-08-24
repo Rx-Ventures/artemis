@@ -111,6 +111,62 @@ beforeEach(() => {
   globalThis.localStorage?.clear();
 });
 
+/**
+ * The other half of the same vocabulary problem.
+ *
+ * `refreshModels` reconciles the two catalogues when both exist. These cover
+ * every moment one of them does not — before the live fetch lands, and forever
+ * if it fails — where a pin like `opus[1m]` matches nothing in the built-in
+ * list. Resolving that to the first row was a silent lie with teeth: the bar
+ * read "Fable 5" over a conversation the run reported as Opus, and because
+ * this is the value `startRun` sends, the next prompt actually switched the
+ * conversation to Fable.
+ */
+describe('a chosen model the catalogue does not list', () => {
+  it('keeps the choice rather than resolving to the first row', () => {
+    // The state on boot: built-in list in force, live ids stored from a
+    // previous session that did have the live catalogue.
+    booted([], 'opus[1m]');
+
+    expect(activeModel(session())?.id).toBe('opus[1m]');
+    // The failure this replaces — `fable` is BUILT_IN[0].
+    expect(activeModel(session())?.id).not.toBe('fable');
+  });
+
+  it('claims no capability it could not look up', () => {
+    // Fast mode and ultracode are facts a catalogue would have told us. A row
+    // we could not find must not put toggles on screen the run may reject.
+    booted([], 'opus[1m]');
+    const model = activeModel(session());
+
+    expect(model?.supportsFastMode).toBeUndefined();
+    expect(model?.supportsUltracode).toBeUndefined();
+    expect(model?.effortLevels).toBeUndefined();
+  });
+
+  it('is stable between reads, so selectors do not loop', () => {
+    // Read through zustand hooks, which re-render on identity — see the
+    // memoisation note in the store.
+    booted([], 'opus[1m]');
+
+    expect(activeModel(session())).toBe(activeModel(session()));
+  });
+
+  it('still takes the first row when nothing was ever chosen', () => {
+    // `null` is the genuinely absent case, and the contract for it is
+    // unchanged: the catalogue's first entry is the provider's own default.
+    booted([], null);
+
+    expect(activeModel(session())?.id).toBe('fable');
+  });
+
+  it('prefers the catalogue whenever it does have the id', () => {
+    booted([], 'sonnet');
+
+    expect(activeModel(session())?.label).toBe('Sonnet 5');
+  });
+});
+
 describe('refreshModels', () => {
   it('carries pinned ids onto the live catalogue that renamed them', async () => {
     bridgeReturning(LIVE);
