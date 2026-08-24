@@ -1060,6 +1060,25 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     },
 
     /**
+     * The narrower set: conversations with something running *now*.
+     *
+     * `holdsWork` includes the registered-schedule bit, which is set forever —
+     * the adapter cannot know when a wakeup fires, so retention keeps the
+     * process on the honest reading of "we do not know". Reporting that same
+     * bit as *working* put a permanent spinner on every conversation that ever
+     * ran a `/loop`, however idle it sat between wakeups. This reads the
+     * process's actual activity instead: an open turn, live tasks, or the
+     * settle beat.
+     */
+    sessionsWorking(): readonly SessionId[] {
+      const working: SessionId[] = [];
+      for (const [sessionId, process] of live) {
+        if (!process.closed && process.working) working.push(sessionId);
+      }
+      return working;
+    },
+
+    /**
      * The same pool, read for its rows rather than its verdict.
      *
      * Conversations with no rows are left out entirely rather than reported
@@ -2582,6 +2601,26 @@ class ClaudeProcess {
    */
   get holdsWork(): boolean {
     return this.#holdsWork();
+  }
+
+  /**
+   * Is something actually happening on this conversation right now?
+   *
+   * An open turn, a live background task, or a settled task's grace beat —
+   * and deliberately **not** the registered-schedule bit, which is the one
+   * component of {@link holdsWork} that never clears. The split mirrors
+   * {@link busyWithWork}'s reason for existing: retention and rewind each
+   * needed their own reading of the same state, and so does the working
+   * marker. A conversation waiting on a schedule is retained and rewindable
+   * questions aside, *idle* — and must read as idle.
+   *
+   * The open-turn check (`!#state.ended`) is what lets a window mark a
+   * conversation whose turn was started by something other than that window —
+   * a scheduled wakeup firing between reloads — which its own pane state
+   * cannot know about.
+   */
+  get working(): boolean {
+    return !this.#state.ended || this.#liveTasks.length > 0 || this.#settling;
   }
 
   /**

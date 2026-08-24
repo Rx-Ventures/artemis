@@ -1752,6 +1752,61 @@ describe('a turn that ends while work is still running', () => {
     expect(adapter.sessionsHoldingWork?.()).toEqual([]);
   });
 
+  /*
+   * The retention set and the working set part ways on exactly one thing: a
+   * registered schedule. Retention keeps that process forever — nothing tells
+   * the adapter when a wakeup fires — but between wakeups the conversation is
+   * idle, and the sidebar drew its working marker from the retention set. The
+   * result was a permanent spinner on every conversation that had ever run a
+   * `/loop`, which read as "working" for sessions that were plainly done.
+   */
+  it('holds a scheduled conversation without calling it working', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(toolStart('ScheduleWakeup'));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // Retained — a wakeup may fire at any time and needs this process…
+    expect(adapter.sessionsHoldingWork?.()).toEqual(['sess-abc']);
+    // …and idle, because nothing is running until one does.
+    expect(adapter.sessionsWorking?.()).toEqual([]);
+  });
+
+  it('calls a conversation with a live background task working', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(tasksChanged(busyTask));
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    expect(adapter.sessionsWorking?.()).toEqual(['sess-abc']);
+  });
+
+  it('calls an open turn working, even one no window started', async () => {
+    // A scheduled wakeup fires between reloads: the turn is real, and no
+    // pane's own state can know about it. Main's working set is the one place
+    // it is visible from.
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(adapter.sessionsWorking?.()).toEqual(['sess-abc']);
+    await run.dispose();
+  });
+
   it('keeps it open while a background task is live', async () => {
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);

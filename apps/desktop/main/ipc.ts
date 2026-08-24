@@ -445,6 +445,7 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
         const host = engine.require();
         return Promise.resolve({
           sessionIds: host.liveWorkSessions(),
+          working: host.workingSessions(),
           delegated: host.delegatedWork(),
         });
       },

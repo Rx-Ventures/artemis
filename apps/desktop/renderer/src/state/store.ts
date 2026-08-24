@@ -381,6 +381,14 @@ export interface AppState {
    */
   readonly sessionsHoldingWork: readonly SessionId[];
   /**
+   * The narrower main-process set: sessions with something running *now* — an
+   * open turn, a live background task, a settling beat. The working marker is
+   * computed from this one; {@link sessionsHoldingWork} additionally contains
+   * conversations retained for a registered schedule, which sit idle for hours
+   * between wakeups and must not spin. Same array-not-Set shape, same poll.
+   */
+  readonly sessionsWorking: readonly SessionId[];
+  /**
    * Sessions a column is showing right now — what the sidebar marks as open.
    *
    * The same projection {@link runningSessions} is, maintained by the same
@@ -1929,6 +1937,7 @@ export const useApp = create<AppState>(() => ({
   runningSessions: [],
   waitingSessions: [],
   sessionsHoldingWork: [],
+  sessionsWorking: [],
   openSessions: [],
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
@@ -2227,7 +2236,10 @@ function syncRunningSessions(): void {
    */
   const waiting: SessionId[] = [];
   // The window value, read once for the whole walk — see `pruneBackground`.
-  const holding = useApp.getState().sessionsHoldingWork;
+  // The *working* set, not the retention set: a conversation kept alive for a
+  // registered schedule is idle between wakeups, and marking it spinning for
+  // as long as the schedule exists is the defect this line used to have.
+  const holding = useApp.getState().sessionsWorking;
   for (const pane of allLivePanes()) {
     const state = paneState(pane);
     /*
@@ -7979,9 +7991,21 @@ async function refreshLiveWork(): Promise<void> {
   restoreDelegatedRows(result.value.delegated);
 
   const next = result.value.sessionIds;
-  const current = useApp.getState().sessionsHoldingWork;
-  if (current.length === next.length && current.every((id, at) => id === next[at])) return;
-  useApp.setState({ sessionsHoldingWork: next });
+  // `?? []` for a main that predates the split — one poll against an old
+  // process during an update must degrade to "nothing working", not throw.
+  const nextWorking = result.value.working ?? [];
+  const state = useApp.getState();
+  const sameHolding =
+    state.sessionsHoldingWork.length === next.length &&
+    state.sessionsHoldingWork.every((id, at) => id === next[at]);
+  const sameWorking =
+    state.sessionsWorking.length === nextWorking.length &&
+    state.sessionsWorking.every((id, at) => id === nextWorking[at]);
+  if (sameHolding && sameWorking) return;
+  useApp.setState({
+    ...(sameHolding ? {} : { sessionsHoldingWork: next }),
+    ...(sameWorking ? {} : { sessionsWorking: nextWorking }),
+  });
   // The marker is computed from this set as well as from the panes, and nothing
   // else will recompute it: the pane subscription that normally drives it fires
   // on pane writes, and this is a window write.

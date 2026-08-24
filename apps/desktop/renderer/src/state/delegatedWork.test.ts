@@ -38,7 +38,11 @@ import {
 import { paneState, setPaneState } from './pane';
 
 /** What the main process is currently reporting, rewritten per test. */
-let liveWorkReply: { sessionIds: readonly string[]; delegated: readonly unknown[] } = {
+let liveWorkReply: {
+  sessionIds: readonly string[];
+  working?: readonly string[];
+  delegated: readonly unknown[];
+} = {
   sessionIds: [],
   delegated: [],
 };
@@ -98,7 +102,7 @@ beforeEach(() => {
     const last = allPanes()[paneCount() - 1];
     if (last) closePane(last.id);
   }
-  useApp.setState({ background: [], runningSessions: [], banners: [], sessionsHoldingWork: [] });
+  useApp.setState({ background: [], runningSessions: [], banners: [], sessionsHoldingWork: [], sessionsWorking: [] });
   const pane = focusedPane();
   pane.transcript.reset();
   setPaneState(pane, {
@@ -120,6 +124,20 @@ describe('the working marker while work is delegated', () => {
     // composer is free — and the session still reads as working.
     expect(paneState(focusedPane()).run?.status).toBe('ended');
     expect(useApp.getState().runningSessions).toContain('sess-1');
+  });
+
+  it('does not mark a session main merely retains — a schedule between wakeups', () => {
+    // The retention set includes conversations kept alive for a registered
+    // schedule, which never clears. Drawing the marker from it put a permanent
+    // spinner on every conversation that had ever run a /loop.
+    const pane = focusedPane();
+    handleAgentEvent(tasksEvent(0, ['completed']));
+    handleAgentEvent(ended(1));
+
+    useApp.setState({ sessionsHoldingWork: ['sess-1'] as never });
+    setPaneState(pane, { draft: 'x' } as never);
+
+    expect(useApp.getState().runningSessions).not.toContain('sess-1');
   });
 
   it('turns off when the provider reports the work settled', () => {
@@ -192,13 +210,13 @@ describe('leaving a column whose work this window cannot see', () => {
     expect(paneState(pane).tasks).toHaveLength(1);
   });
 
-  it('marks a session the main process reports, with no live rows to show for it', () => {
+  it('marks a session the main process reports working, with no live rows to show for it', () => {
     const pane = focusedPane();
     handleAgentEvent(tasksEvent(0, ['completed']));
     handleAgentEvent(ended(1));
     expect(useApp.getState().runningSessions).not.toContain('sess-1');
 
-    useApp.setState({ sessionsHoldingWork: ['sess-1'] as never });
+    useApp.setState({ sessionsWorking: ['sess-1'] as never });
     // A pane write is what drives the marker; the poll calls the same sync
     // directly, which is why it does not have to wait for one.
     setPaneState(pane, { draft: 'x' } as never);

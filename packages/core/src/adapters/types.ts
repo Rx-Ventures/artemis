@@ -1163,6 +1163,23 @@ export interface ProviderAdapter {
   sessionsHoldingWork?(): readonly SessionId[];
 
   /**
+   * The conversations with something *actually running* right now — an open
+   * turn, a live background task, or a task settling into its follow-up turn.
+   *
+   * Deliberately narrower than {@link sessionsHoldingWork}, and the difference
+   * is a registered schedule. Retention has to keep a scheduled conversation's
+   * process alive indefinitely — nothing tells the adapter when a wakeup will
+   * fire — but "kept alive for a timer" is not "working", and a sidebar that
+   * drew the working marker from the retention set showed a spinner forever on
+   * every conversation that had ever registered one. Retention answers "may
+   * this be thrown away"; this answers "is it doing something right now".
+   *
+   * Same contract otherwise: synchronous, in-memory, poll-friendly, and a set
+   * of conversations *known* to be working rather than a complement.
+   */
+  sessionsWorking?(): readonly SessionId[];
+
+  /**
    * The delegated rows this adapter holds, per conversation.
    *
    * {@link sessionsHoldingWork} answers "keep this conversation alive"; this
