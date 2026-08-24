@@ -5736,8 +5736,24 @@ async function adoptLiveRuns(pane: Pane): Promise<void> {
   // No `cwd` filter: a conversation the user backgrounded may well have been
   // working in another project, and dropping it because this column happens to
   // point somewhere else is the bug this function exists to fix.
-  const result = await call(() => bridge.runs.list({}));
-  if (!result.ok) return;
+  let result = await call(() => bridge.runs.list({}));
+  if (!result.ok) {
+    // One more try, then say so. This is the only registry read at boot, so a
+    // single failed IPC round-trip used to orphan every live run for the whole
+    // window session — silently, which made "reload to fix one stall" capable
+    // of stranding the rest. The banner is the difference between a user who
+    // reloads again and one who watches nothing happen.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    result = await call(() => bridge.runs.list({}));
+    if (!result.ok) {
+      pushBanner(
+        'warn',
+        'Could not check for conversations still running',
+        'The engine did not answer. Anything live is still running — reload the window to pick it back up.',
+      );
+      return;
+    }
+  }
 
   const live = result.value.runs.filter((handle) => handle.status !== 'ended');
   const [first, ...rest] = live;
@@ -8319,7 +8335,7 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     );
   }
 
-  void loadSessionHistory(session, target);
+  void resumeIntoConversation(session, target);
   invalidateSessions();
   void refreshSessions();
   void refreshModels(target);
@@ -8380,6 +8396,40 @@ export function openSessionBeside(
   // was already holding the run. `resumeSession` focuses whichever it landed in,
   // so this is the column the caller was asking for either way.
   return focusedPane();
+}
+
+/**
+ * Fill a just-resumed column with the conversation — live if it is live.
+ *
+ * The sidebar row does not say whether the conversation is running *right
+ * now*: a turn started by a scheduled wakeup, a run another column backgrounded
+ * and `pruneBackground` evicted, a continuation whose claim was declined — all
+ * live in the registry with no pane holding them. Loading the stored file for
+ * one of those painted a snapshot that nothing could ever update: the run's
+ * events found no pane (`applyAgentEvent` routes on run id), the pane had
+ * `run: null` so the stall sweep skipped it, and `claimContinuation` only
+ * fires on a `session.started` that had already gone by. The one recovery was
+ * ⌘R, because only `adoptLiveRuns` asked the registry — so this asks the same
+ * question at the same seam, per click instead of per boot.
+ *
+ * The registry miss (or an errored list — one read must not block a resume)
+ * falls through to the stored file, which is the common case and the old path
+ * unchanged. The staleness rule is `loadSessionHistory`'s own: the column must
+ * still be resuming this session by the time the answer lands.
+ */
+async function resumeIntoConversation(session: SessionSummary, target: Pane): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (bridge) {
+    const listed = await call(() => bridge.runs.list({}));
+    const handle = listed.ok
+      ? listed.value.runs.find((h) => h.sessionId === session.id && h.status !== 'ended')
+      : undefined;
+    if (handle !== undefined && paneState(target).resumeSessionId === session.id) {
+      await attachRun(target, handle);
+      return;
+    }
+  }
+  await loadSessionHistory(session, target);
 }
 
 /**
@@ -8927,7 +8977,11 @@ export function installRunWatchdog(): () => void {
 /** One pass: find the quiet-but-live panes and reconcile each against main. */
 export async function sweepStalledRuns(now: number = Date.now()): Promise<void> {
   const stalled: { pane: Pane; runId: RunId }[] = [];
-  for (const pane of allPanes()) {
+  // `allLivePanes`, not `allPanes`: the sweep is about conversations, not
+  // columns. A backgrounded run that loses its stream has no column, and it is
+  // exactly the one nobody is watching — swept from `allPanes` it could never
+  // heal until ⌘R, which is the symptom this watchdog exists to end.
+  for (const pane of allLivePanes()) {
     const run = paneState(pane).run;
     if (!run || run.status === 'ended') continue;
     // A run being adopted or already being reconciled is mid-surgery; its
@@ -9695,7 +9749,6 @@ function applyAgentEvent(event: AgentEvent): void {
    */
   const borrowedSeq =
     event.type === 'text.complete' && event.role === 'user' && event.replay === true;
-  if (!borrowedSeq) recordApplied(event.runId, event.seq);
 
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;
@@ -9703,6 +9756,22 @@ function applyAgentEvent(event: AgentEvent): void {
   if (!run) return;
 
   pane.transcript.apply(event);
+  /*
+   * Recorded only now — after the event found a pane and was actually drawn.
+   *
+   * Recording before routing meant every event for a run no pane held was
+   * marked applied on its way to being dropped: the stall sweep then compared
+   * the registry's `lastSeq` against a gate that had "heard" everything and
+   * concluded quiet-but-healthy, so the one mechanism built to heal a silent
+   * pane was disarmed by the very events it needed to notice ("frozen until
+   * ⌘R", 2026-08-24). The same lie covered a throw inside `apply` — swallowed
+   * by the preload's catch, remembered here as drawn.
+   *
+   * The trade: an exception *after* a partial apply can now re-apply on the
+   * next replay rather than silently losing the event. Duplication is visible
+   * and diagnosable; a gate that lies is neither.
+   */
+  if (!borrowedSeq) recordApplied(event.runId, event.seq);
 
   switch (event.type) {
     /*

@@ -489,6 +489,8 @@ export class TranscriptModel {
 
   private counter = 0;
   private lastSeq: number | null = null;
+  /** Which run `lastSeq` is counting — see {@link checkSequence}. */
+  private lastSeqRun: RunId | null = null;
 
   constructor(schedule: Scheduler = frameScheduler) {
     this.schedule = schedule;
@@ -1503,8 +1505,22 @@ export class TranscriptModel {
     this.openTools.clear();
   }
 
-  /** `seq` is dense per run; a gap means the transport dropped something. */
+  /**
+   * `seq` is dense per run; a gap means the transport dropped something.
+   *
+   * Per run is the load-bearing part. The counter resets when the run it was
+   * counting changes, because a run that never delivered its `run.end` — the
+   * exact loss this check exists to notice — leaves `lastSeq` holding the old
+   * run's position. Compared against the next run's dense-from-zero numbering
+   * that is a counter ~N events ahead: every real gap in the newcomer's first
+   * N events reads as "already seen" and the drop passes unremarked, in the
+   * one conversation that has already demonstrated it drops things.
+   */
   private checkSequence(runId: RunId, seq: number): void {
+    if (runId !== this.lastSeqRun) {
+      this.lastSeqRun = runId;
+      this.lastSeq = null;
+    }
     if (this.lastSeq !== null && seq > this.lastSeq + 1) {
       const missing = seq - this.lastSeq - 1;
       this.note('warn', `${missing} event${missing === 1 ? '' : 's'} were dropped in transit`);
