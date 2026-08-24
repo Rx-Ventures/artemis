@@ -26,6 +26,100 @@ function assistant(content: unknown, uuid = 'msg_1'): StoredMessage {
   return { type: 'assistant', uuid, message: { role: 'assistant', content } };
 }
 
+/**
+ * Timestamps.
+ *
+ * The bug: every replayed event was stamped with the read time, on the belief
+ * that stored records carried no wall-clock time. They do — the SDK returns
+ * `timestamp` on every user and assistant record — so a reopened conversation
+ * showed the moment of the reload on every single line.
+ */
+describe('replayed timestamps', () => {
+  const RECORDED = Date.parse('2026-08-20T09:15:00.000Z');
+
+  it('carries the message`s own recorded time, not the read time', () => {
+    const [event] = replayStoredMessage(
+      {
+        type: 'assistant',
+        uuid: 'msg_1',
+        timestamp: '2026-08-20T09:15:00.000Z',
+        message: { id: 'msg_01', content: [{ type: 'text', text: 'hi' }] },
+      },
+      ctx(),
+    );
+
+    expect(event?.ts).toBe(RECORDED);
+    expect(event?.ts).not.toBe(TS);
+  });
+
+  it('gives every block of one message the same time', () => {
+    // One record, one recorded moment: the live stream's block-by-block
+    // arrival is not in the transcript and must not be invented.
+    const events = replayStoredMessage(
+      {
+        type: 'assistant',
+        uuid: 'msg_1',
+        timestamp: '2026-08-20T09:15:00.000Z',
+        message: {
+          id: 'msg_01',
+          content: [
+            { type: 'text', text: 'first' },
+            { type: 'text', text: 'second' },
+          ],
+        },
+      },
+      ctx(),
+    );
+
+    expect(events.length).toBeGreaterThan(1);
+    expect(new Set(events.map((event) => event.ts))).toEqual(new Set([RECORDED]));
+  });
+
+  it('keeps distinct messages at their distinct times', () => {
+    const events = replayStoredSession(
+      [
+        { type: 'user', uuid: 'u1', timestamp: '2026-08-20T09:15:00.000Z', message: { role: 'user', content: 'hi' } },
+        {
+          type: 'assistant',
+          uuid: 'a1',
+          timestamp: '2026-08-20T09:16:30.000Z',
+          message: { id: 'msg_01', content: [{ type: 'text', text: 'hello' }] },
+        },
+      ],
+      ctx(),
+    );
+
+    const stamps = [...new Set(events.map((event) => event.ts))];
+    expect(stamps).toEqual([RECORDED, Date.parse('2026-08-20T09:16:30.000Z')]);
+  });
+
+  it('accepts epoch milliseconds as well as an ISO string', () => {
+    const [event] = replayStoredMessage(
+      { type: 'assistant', uuid: 'm', timestamp: RECORDED, message: { id: 'm1', content: [{ type: 'text', text: 'x' }] } },
+      ctx(),
+    );
+    expect(event?.ts).toBe(RECORDED);
+  });
+
+  it('falls back to the read time for a record with no usable timestamp', () => {
+    // Absent, unparseable, and NaN-producing all take the fallback: a `NaN`
+    // reaching the envelope renders as "Invalid Date", which is worse than the
+    // read time it replaced.
+    for (const timestamp of [undefined, '', 'last Tuesday', Number.NaN, {}]) {
+      const [event] = replayStoredMessage(
+        {
+          type: 'assistant',
+          uuid: 'm',
+          ...(timestamp === undefined ? {} : { timestamp }),
+          message: { id: 'm1', content: [{ type: 'text', text: 'x' }] },
+        },
+        ctx(),
+      );
+      expect(event?.ts).toBe(TS);
+    }
+  });
+});
+
 describe('replayStoredMessage', () => {
   it('keys replayed blocks on the provider message id, not the envelope uuid', () => {
     // The live mapper keys blocks on `message.id`. If replay keyed on the

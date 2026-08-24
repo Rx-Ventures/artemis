@@ -17,10 +17,18 @@
  * A transcript is a lossy record of a run, and pretending otherwise would be
  * worse than admitting it:
  *
- *  - **Timestamps are the read time, not the original.** Stored messages carry
- *    no wall-clock time, so every replayed event is stamped with when it was
- *    read. Ordering is preserved, which is what the transcript actually uses;
- *    a fabricated original time would be a lie the UI would happily print.
+ *  - **Sub-message timing is gone.** A stored record carries one timestamp for
+ *    the whole message, so every block replayed out of it shares that time —
+ *    the live stream's block-by-block arrival is not recoverable. The message
+ *    time itself is real: it is read from the record (see
+ *    {@link storedTimestamp}), and only a record that carries none falls back
+ *    to the read time.
+ *
+ *    This used to say stored messages had no wall-clock time at all, and every
+ *    replayed event was stamped with `now()` on that basis. They do carry one
+ *    — the SDK returns `timestamp` on every user and assistant record — so the
+ *    whole of a reopened conversation showed the moment it was reloaded,
+ *    identically, on every line.
  *  - **Streaming is gone.** Text arrives as one `text.complete` per block, not
  *    as deltas. There is nothing to stream — it finished.
  *  - **Permission prompts are gone.** They were answered long ago, and
@@ -36,13 +44,24 @@ export interface StoredMessage {
   readonly type: 'user' | 'assistant' | 'system';
   readonly uuid: string;
   readonly message: unknown;
+  /**
+   * When the provider recorded it — an ISO 8601 string in every transcript
+   * seen so far, tolerated as epoch milliseconds too.
+   *
+   * Optional because a record without one has to replay anyway: the fallback
+   * is the read time, which is what every replayed event used to carry.
+   */
+  readonly timestamp?: unknown;
 }
 
 /** Envelope fields every replayed event needs. */
 export interface ReplayContext {
   readonly runId: RunId;
   readonly sessionId: SessionId;
-  /** Read time. Every replayed event carries it — see the note above. */
+  /**
+   * Read time — the fallback for a record that carries no timestamp of its
+   * own. See {@link storedTimestamp}.
+   */
   readonly ts: number;
   /** Sequence counter, continuing from wherever the caller is. */
   next(): number;
@@ -112,6 +131,23 @@ function storedMessageId(stored: StoredMessage): string | undefined {
 }
 
 /**
+ * When the provider says this message happened, in epoch milliseconds.
+ *
+ * `undefined` for a record that carries nothing usable, which is what makes
+ * the read-time fallback the *exception* rather than the rule. Accepts the ISO
+ * string the transcripts actually contain and a bare epoch number, and refuses
+ * anything else — a `NaN` reaching the envelope would render as "Invalid
+ * Date", which is a worse lie than the read time it replaced.
+ */
+export function storedTimestamp(stored: StoredMessage): number | undefined {
+  const raw = stored.timestamp;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : undefined;
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/**
  * Turn one stored message into the events it would have emitted live.
  *
  * Returns an empty array for anything unrecognised rather than throwing: a
@@ -123,10 +159,14 @@ export function replayStoredMessage(
   context: ReplayContext,
 ): readonly AgentEvent[] {
   const events: AgentEvent[] = [];
+  // The message's own recorded time, so a reopened conversation reads as the
+  // afternoon it happened rather than the moment it was reloaded. Every block
+  // of one message shares it, which is what the live mapper does too.
+  const ts = storedTimestamp(stored) ?? context.ts;
   const envelope = (): { runId: RunId; seq: number; ts: number } => ({
     runId: context.runId,
     seq: context.next(),
-    ts: context.ts,
+    ts,
   });
 
   // System messages are provider bookkeeping — compact boundaries, notices.
