@@ -51,6 +51,7 @@ import {
 } from '@rx-artemis/protocol';
 
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -63,13 +64,26 @@ import type { Deferred } from '../stream.js';
 const execFileAsync = promisify(execFile);
 import { AdapterError, adapterError } from '../types.js';
 import type {
+  AggregatedSessionList,
+  AllSessionsQuery,
   InterruptResult,
   ProviderAdapter,
   ProviderCredentialSpec,
   ResolvedRunInput,
   Run,
   SendResult,
+  SessionDeleteQuery,
+  SessionListPage,
+  SessionListQuery,
+  SessionMessageCountQuery,
+  SessionMessagesQuery,
+  SessionTagQuery,
+  SessionTitleUpdate,
+  SessionTranscript,
 } from '../types.js';
+import * as sessionStore from './sessionStore.js';
+import { LOCAL_PROFILE_DIR_ENV } from './sessionStore.js';
+import type { StoredEvent, StoredTurnMessage } from './sessionStore.js';
 import { parseLlamaServerModels, parseOllamaTags } from './catalogues.js';
 import { parseNativeCatalogue, parseOpenAiCatalogue } from '../lmstudio/catalogue.js';
 import { readEventLine, splitEvents, ToolCallAccumulator } from './stream.js';
@@ -171,10 +185,24 @@ export const LOCAL_CAPABILITIES: Capabilities = {
   // We own the loop, so we can park it — and must. Every tool call is offered
   // to the user before it runs, under the modes below.
   interactivePermissions: true,
-  // Phase 3. The server stores no conversation, so sessions would mean Artemis
-  // persisting transcripts itself.
-  listSessions: false,
-  resumeSession: false,
+  /*
+   * The server stores no conversation, so Artemis stores it — see
+   * `sessionStore.ts`. Everything below follows from owning the file rather
+   * than asking a provider for it: history can be listed, reopened, renamed,
+   * tagged and destroyed because those are all operations on a file this
+   * adapter wrote.
+   *
+   * `rewind` and `forkSession` stay false, and that is a "not yet" of a
+   * different kind from the others: both are within reach of an append-only
+   * transcript — a fork is a copy up to a line, a rewind is a truncation — but
+   * neither has a message identity to point at yet. `rewindToMessageId` names
+   * a provider-assigned id, and nothing here assigns one.
+   */
+  listSessions: true,
+  resumeSession: true,
+  renameSession: true,
+  deleteSession: true,
+  tagSession: true,
   rewind: false,
   forkSession: false,
   /**
@@ -193,9 +221,15 @@ export const LOCAL_CAPABILITIES: Capabilities = {
 /** No account to sign in to. See the module header. */
 function localCredentials(): ProviderCredentialSpec {
   return {
-    // Nothing is spawned, so nothing reads this — but the field is required and
-    // an inert, clearly-named variable is more honest than borrowing a vendor's.
-    configDirVar: 'ARTEMIS_LOCAL_PROFILE_DIR',
+    // Nothing is spawned, so nothing reads this from an environment — but the
+    // field is required, an inert clearly-named variable is more honest than
+    // borrowing a vendor's, and it is no longer unused: it is where this
+    // profile's transcripts are kept. See `sessionStore.ts`.
+    configDirVar: LOCAL_PROFILE_DIR_ENV,
+    // Transcripts are files on this machine, so a history read gets the store
+    // environment — the directory and nothing else. Nothing is decrypted to
+    // read a conversation back.
+    sessionStore: 'local',
     /*
      * Not a credential in the sense the other providers mean — nothing here
      * signs in to an account — but exactly a credential in the sense this list
@@ -262,16 +296,40 @@ function toUsage(usage: StreamUsage): UsageSnapshot {
  * Streams until the server says it is done, then ends. `send` is refused rather
  * than queued: without `midRunSteering` the composer is already disabled, and a
  * silently queued message that arrives a turn later is worse than a refusal.
+ *
+ * The turn is one turn *of a conversation*, which is a claim this class has to
+ * make good on by itself: the server it talks to is stateless, so continuity is
+ * whatever `sessionStore.ts` holds and this run replays into the request.
  */
 class LocalRun implements Run {
   readonly runId: RunId;
   readonly providerId: ProviderId;
   readonly capabilities = LOCAL_CAPABILITIES;
 
+  /**
+   * The conversation this turn is written into.
+   *
+   * Minted here rather than reported by the provider, because there is no
+   * provider to report one — a session id is a filename this adapter chose, and
+   * a resumed run keeps the one it was given so its turns land in the same file.
+   */
+  readonly #sessionId: SessionId;
+
   #status: RunStatus = 'running';
   #seq = 0;
   #messageSeq = 0;
+  #storedSeq = 0;
   #permissionSeq = 0;
+  /**
+   * Writes to the transcript, chained.
+   *
+   * Serialised rather than fired off in parallel: two `appendFile` calls racing
+   * would interleave a tool result before the assistant turn that asked for it,
+   * and the next request would carry a message array the server rejects.
+   */
+  #writes: Promise<void> = Promise.resolve();
+  /** What each tool call looked like live, keyed by the id its result carries. */
+  readonly #toolEvents = new Map<string, StoredEvent[]>();
   #usage: UsageSnapshot | undefined;
   /** Approvals the loop is parked on, keyed by the id the renderer answers. */
   readonly #pending = new Map<PermissionRequestId, Deferred<'allow' | 'deny'>>();
@@ -289,6 +347,7 @@ class LocalRun implements Run {
     this.providerId = flavour.id;
     this.#input = input;
     this.#flavour = flavour;
+    this.#sessionId = input.resumeSessionId ?? (randomUUID() as SessionId);
     void this.#drive();
   }
 
@@ -296,9 +355,16 @@ class LocalRun implements Run {
     return this.#status;
   }
 
-  /** No session concept: the server stores nothing. See `LOCAL_CAPABILITIES`. */
+  /**
+   * The conversation, which is known before the first byte arrives.
+   *
+   * Every other adapter waits for the provider to name a session. Here the id
+   * is Artemis's own from the start — which is why it is safe to return it
+   * immediately, and why it used to be `undefined`: there was nothing to name
+   * until there was somewhere to keep it.
+   */
   get sessionId(): SessionId | undefined {
-    return undefined;
+    return this.#sessionId;
   }
 
   get events(): AsyncIterable<AgentEvent> {
@@ -481,16 +547,67 @@ class LocalRun implements Run {
     return { text, toolCalls: calls.take(), ...(finishReason === undefined ? {} : { finishReason }) };
   }
 
+  /**
+   * Add messages to this session's transcript.
+   *
+   * Queued rather than awaited: the loop is synchronous about appending and a
+   * turn must not wait on a disk write between tool calls. A failed write is
+   * swallowed — losing the transcript is bad, and failing a run the user is
+   * watching because its history could not be saved is worse.
+   */
+  #persist(messages: readonly StoredTurnMessage[]): void {
+    this.#writes = this.#writes
+      .then(() =>
+        sessionStore.appendTurn({
+          env: this.#input.env,
+          sessionId: this.#sessionId,
+          cwd: this.#input.cwd,
+          providerId: this.#flavour.id,
+          ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
+          messages,
+        }),
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * How one message looked while it was happening.
+   *
+   * The transcript cannot be rebuilt from the messages alone: a tool result
+   * reads the same whether the command succeeded or failed, and the assistant
+   * turn that asked for it carries no rendering of its own. So the events are
+   * captured as they are emitted and stored beside the message they belong to.
+   */
+  #storedEvents(message: ChatMessage): readonly StoredEvent[] {
+    if (message.role === 'tool') {
+      return message.tool_call_id === undefined
+        ? []
+        : (this.#toolEvents.get(message.tool_call_id) ?? []);
+    }
+    if (message.content === '') return [];
+    return [
+      {
+        type: 'text.complete',
+        messageId: `${this.runId}-stored-${this.#storedSeq++}` as MessageId,
+        role: message.role === 'user' ? 'user' : 'assistant',
+        text: message.content,
+      } as StoredEvent,
+    ];
+  }
+
   async #drive(): Promise<void> {
     try {
       this.#emit({
         type: 'session.started',
-        sessionId: this.runId as unknown as SessionId,
+        sessionId: this.#sessionId,
         providerId: this.#flavour.id,
         cwd: this.#input.cwd,
         ...(this.#input.model === undefined ? {} : { model: this.#input.model }),
         tools: this.#toolsForMode().map((tool) => tool.name),
         ...(this.#input.permissionMode === undefined ? {} : { permissionMode: this.#input.permissionMode }),
+        ...(this.#input.resumeSessionId === undefined
+          ? {}
+          : { resumedFrom: this.#input.resumeSessionId }),
       } as never);
 
       const initial: ChatMessage[] = [];
@@ -498,7 +615,29 @@ class LocalRun implements Run {
       if (system !== undefined && system.kind !== 'default' && system.text !== '') {
         initial.push({ role: 'system', content: system.text });
       }
-      initial.push({ role: 'user', content: this.#input.prompt });
+      /*
+       * What the model already said, read back from disk.
+       *
+       * This is the difference between a conversation and a series of
+       * unrelated questions. The server holds nothing between requests, so a
+       * resumed turn that sent only the new message produced a model with no
+       * memory of the last one — asked "what did I just ask you?", it guessed.
+       * The system prompt stays first, and the new message stays last.
+       */
+      if (this.#input.resumeSessionId !== undefined) {
+        initial.push(
+          ...(await sessionStore.readMessages({
+            env: this.#input.env,
+            sessionId: this.#input.resumeSessionId,
+            cwd: this.#input.cwd,
+          })),
+        );
+      }
+      const user: ChatMessage = { role: 'user', content: this.#input.prompt };
+      initial.push(user);
+      // Stored before the first completion, so an unanswered question is still
+      // part of the conversation when the user comes back to it.
+      this.#persist([{ message: user, events: this.#storedEvents(user) }]);
 
       await runAgentLoop({
         initialMessages: initial,
@@ -519,31 +658,51 @@ class LocalRun implements Run {
           } catch {
             /* reported to the model by executeTool; the row shows the raw text */
           }
-          this.#emit({ type: 'tool.start', toolCallId: call.id, name: call.name, input } as never);
+          const started = { type: 'tool.start', toolCallId: call.id, name: call.name, input };
+          this.#emit(started as never);
+          this.#toolEvents.set(call.id, [started as StoredEvent]);
         },
         onToolEnd: (call, output, failed) => {
-          this.#emit({
+          const ended = {
             type: 'tool.end',
             toolCallId: call.id,
             name: call.name,
             status: failed ? 'error' : 'ok',
             resultText: output,
-          } as never);
+          };
+          this.#emit(ended as never);
+          // Beside its `tool.start`, so the pair replays as one collapsed row
+          // rather than as a call with no outcome.
+          this.#toolEvents.get(call.id)?.push(ended as StoredEvent);
+        },
+        onAppend: (message) => {
+          this.#persist([{ message, events: this.#storedEvents(message) }]);
         },
       });
+
+      // The transcript is on disk before the turn is declared over, so a
+      // caller that resumes the moment it sees `run.end` reads a complete
+      // conversation rather than one still being written.
+      await this.#writes;
 
       this.#status = 'ended';
       this.#emit({
         type: 'run.end',
         reason: 'completed',
+        sessionId: this.#sessionId,
         ...(this.#usage === undefined ? {} : { usage: this.#usage }),
       } as never);
     } catch (error) {
       const aborted = this.#abort.signal.aborted;
+      // An interrupted turn keeps the part of itself that happened — the
+      // queued writes are already what the model was told, so flushing them is
+      // what makes "stop" different from "undo".
+      await this.#writes;
       this.#status = 'ended';
       this.#emit({
         type: 'run.end',
         reason: aborted ? 'interrupted' : 'error',
+        sessionId: this.#sessionId,
         ...(aborted ? {} : { error: toError(error, this.#flavour) }),
       } as never);
     } finally {
@@ -730,7 +889,98 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
       return { models: [], live: false };
     },
 
+    /**
+     * This project's conversations, from the profile's own store.
+     *
+     * Every one of these is a file operation rather than a request: the server
+     * has no history to ask for, so what is listed is what Artemis wrote. That
+     * also means an empty answer is a real answer — a store with nothing in it
+     * is a profile that has not run yet, not a provider that could not be
+     * reached — which is why none of these reject on a missing directory.
+     */
+    listSessions(query: SessionListQuery): Promise<SessionListPage> {
+      return sessionStore.list(query, flavour.id);
+    },
+
+    listAllSessions(query: AllSessionsQuery): Promise<AggregatedSessionList> {
+      return sessionStore.listAll(query, flavour.id);
+    },
+
+    getSessionMessages(query: SessionMessagesQuery): Promise<SessionTranscript> {
+      return sessionStore.readEvents({
+        env: query.env,
+        sessionId: query.sessionId,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+        runId: query.runId,
+        ...(query.limit === undefined ? {} : { limit: query.limit }),
+        ...(query.offset === undefined ? {} : { offset: query.offset }),
+      });
+    },
+
+    /**
+     * The seam between this conversation and the run about to join it.
+     *
+     * Counted in stored messages, which is the unit `getSessionMessages` pages
+     * in — the whole value of the number is that `limit: historyOffset` stops
+     * exactly where the live replay begins. Answers `0` for a session with no
+     * file, which here is the truth rather than a guess: this adapter owns the
+     * store, so "no file" means "nothing was ever written".
+     */
+    countSessionMessages(query: SessionMessageCountQuery): Promise<number> {
+      return sessionStore.count({
+        env: query.env,
+        sessionId: query.sessionId,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+    },
+
+    async setSessionTitle(update: SessionTitleUpdate): Promise<void> {
+      const named = await sessionStore.setTitle(
+        {
+          env: update.env,
+          sessionId: update.sessionId,
+          ...(update.cwd === undefined ? {} : { cwd: update.cwd }),
+        },
+        update.title,
+      );
+      // Rejecting rather than answering quietly: a rename that found nothing to
+      // rename has failed, and the caller is a menu item the user just clicked.
+      if (!named) {
+        throw adapterError('invalid_request', 'There is no such conversation in this profile.');
+      }
+    },
+
+    deleteSession(query: SessionDeleteQuery): Promise<boolean> {
+      return sessionStore.remove({
+        env: query.env,
+        sessionId: query.sessionId,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+    },
+
+    tagSession(query: SessionTagQuery): Promise<boolean> {
+      return sessionStore.tag(
+        {
+          env: query.env,
+          sessionId: query.sessionId,
+          ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+        },
+        query.tag,
+      );
+    },
+
     createRun(input: ResolvedRunInput): Promise<Run> {
+      // Refused rather than approximated, the same rule the other adapters
+      // follow: the store is append-only and has no message identity to point
+      // at, so neither control can be honoured. See `LOCAL_CAPABILITIES`.
+      if (input.forkSession === true || input.rewindToMessageId !== undefined) {
+        return Promise.reject(
+          adapterError(
+            'invalid_request',
+            `${flavour.label} conversations cannot be forked or rewound yet.`,
+          ),
+        );
+      }
       return Promise.resolve(new LocalRun(input, flavour));
     },
   } as ProviderAdapter;
