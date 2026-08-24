@@ -66,6 +66,20 @@ export interface LoopOptions {
   readonly onToolStart?: (call: ToolCall) => void;
   readonly onToolEnd?: (call: ToolCall, output: string, failed: boolean) => void;
   /**
+   * Told about each message this turn adds to the conversation, as it is added.
+   *
+   * Deliberately the exact array a later turn has to replay — the assistant's
+   * turn *with* its tool calls, then one result per call, then the final answer
+   * — rather than a summary of what happened. The server has no memory of any
+   * of it (see `sessionStore.ts`), so whatever this reports is what the model
+   * will be told it said, and a message shaped for display rather than for the
+   * wire would come back as a request the server rejects.
+   *
+   * Not given {@link initialMessages}: the caller already holds those, and the
+   * history among them has been replayed rather than newly said.
+   */
+  readonly onAppend?: (message: ChatMessage) => void;
+  /**
    * How many completions one turn may take.
    *
    * A ceiling rather than a target. Small models loop — calling the same tool
@@ -90,16 +104,36 @@ export async function runAgentLoop(options: LoopOptions): Promise<string> {
   const messages: ChatMessage[] = [...options.initialMessages];
   let last = '';
 
+  /**
+   * Add to the conversation, and tell whoever is storing it.
+   *
+   * One place rather than four, so the array the loop sends and the array a
+   * later turn replays cannot drift apart.
+   */
+  const append = (message: ChatMessage): void => {
+    messages.push(message);
+    options.onAppend?.(message);
+  };
+
   for (let iteration = 0; iteration < max; iteration += 1) {
     const result = await options.complete({ messages, tools: options.tools });
     last = result.text;
 
-    if (result.toolCalls.length === 0) return last;
+    if (result.toolCalls.length === 0) {
+      // The final answer is appended like any other message rather than merely
+      // returned. Nothing downstream reads `messages` after this, so it is
+      // recorded for the store alone — a transcript that stopped before the
+      // reply would be a conversation the model is never reminded of giving.
+      // An empty one is not recorded: some servers reject a contentless
+      // assistant turn, and it would replay as a blank row.
+      if (last !== '') append({ role: 'assistant', content: last });
+      return last;
+    }
 
     // The assistant's turn is recorded *with* its tool calls before any result
     // is appended. A server given results for calls it has no record of asking
     // for will reject the request.
-    messages.push({
+    append({
       role: 'assistant',
       content: result.text,
       tool_calls: result.toolCalls.map((call) => ({
@@ -118,7 +152,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<string> {
       if (tool === undefined) {
         const output = `No tool called "${call.name}" exists.`;
         options.onToolEnd?.(call, output, true);
-        messages.push({ role: 'tool', tool_call_id: call.id, content: output });
+        append({ role: 'tool', tool_call_id: call.id, content: output });
         continue;
       }
 
@@ -128,13 +162,13 @@ export async function runAgentLoop(options: LoopOptions): Promise<string> {
         // else; ending the run would make every "no" a dead end.
         const output = 'The user declined to run this tool.';
         options.onToolEnd?.(call, output, true);
-        messages.push({ role: 'tool', tool_call_id: call.id, content: output });
+        append({ role: 'tool', tool_call_id: call.id, content: output });
         continue;
       }
 
       const executed = await executeTool(call.name, call.argumentsJson, options.context);
       options.onToolEnd?.(call, executed.output, executed.failed === true);
-      messages.push({ role: 'tool', tool_call_id: call.id, content: executed.output });
+      append({ role: 'tool', tool_call_id: call.id, content: executed.output });
     }
   }
 
