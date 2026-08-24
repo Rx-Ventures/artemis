@@ -20,6 +20,7 @@ import {
   isBuiltInPromptId,
   parseAgentPromptsDocument,
   promptText,
+  renderMemoryBanksPrompt,
   scopeCovers,
   type AgentPrompt,
   type BuiltInPromptId,
@@ -100,6 +101,24 @@ describe('composeAgentPrompts', () => {
     expect(composeAgentPrompts(prompts, { profileId: 'a' })).toBeUndefined();
   });
 
+  it('renders the memory-banks built-in against the machine`s real banks when given them', () => {
+    const prompts = [prompt({ id: CEREBRO, builtIn: CEREBRO, markdown: '' })];
+    const text = composeAgentPrompts(prompts, {
+      profileId: 'a',
+      availableBuiltIns: EVERY_BUILT_IN,
+      memoryBanks: [{ slug: 'client-docs', isDefault: true, readonly: true, cli: '/d/bin/cerebro' }],
+    });
+    expect(text).toContain('client-docs');
+    // The bank facts refine the text; an empty list must not blank the prompt.
+    expect(
+      composeAgentPrompts(prompts, {
+        profileId: 'a',
+        availableBuiltIns: EVERY_BUILT_IN,
+        memoryBanks: [],
+      }),
+    ).toBe(BUILT_IN_AGENT_PROMPTS[CEREBRO].markdown);
+  });
+
   it('takes a built-in’s text from code, not from the stored record', () => {
     // The stored `markdown` is deliberately ignored for a built-in. If it were
     // not, a hand-edited JSON file could put words into a prompt the pane
@@ -136,10 +155,10 @@ describe('composeAgentPrompts', () => {
  * loosely — the wording is free to change — but their absence should fail a
  * build rather than be discovered a week later in an empty bank.
  */
-describe('the Cerebro built-in', () => {
+describe('the memory-banks built-in', () => {
   const markdown = BUILT_IN_AGENT_PROMPTS[CEREBRO].markdown;
 
-  it('names the verbs an agent has to run to write to the bank', () => {
+  it('names the verbs an agent has to run to write to a bank', () => {
     expect(markdown).toContain('cerebro draft');
     expect(markdown).toContain('cerebro promote');
     expect(markdown).toContain('cerebro retire');
@@ -154,11 +173,11 @@ describe('the Cerebro built-in', () => {
   });
 
   it('says which memory system a fact belongs in', () => {
-    // The routing rule. Cerebro and the per-project memory compete for exactly
-    // the same writes, and an agent given both and told nothing picks the one
-    // that explained itself — which is how four team facts ended up filed as
-    // personal ones.
-    expect(markdown).toMatch(/\bCerebro\b[^.]*\bteammate\b|\bteammate\b[^.]*\bCerebro\b/i);
+    // The routing rule. The banks and the per-project memory compete for
+    // exactly the same writes, and an agent given both and told nothing picks
+    // the one that explained itself — which is how four team facts ended up
+    // filed as personal ones.
+    expect(markdown).toMatch(/\bbank\b[^.]*\bteammate\b|\bteammate\b[^.]*\bbank\b/i);
   });
 
   it('teaches scoping, so repo facts do not spread to every index', () => {
@@ -166,6 +185,51 @@ describe('the Cerebro built-in', () => {
     // context — the "out of control" direction. The flag is the mechanism;
     // naming it is what makes an agent reach for it.
     expect(markdown).toContain('--applies-to');
+  });
+});
+
+/**
+ * The rendered (per-machine) prompt. The single-bank rendering is pinned to
+ * the same load-bearing sentences as the static preview above; these cover
+ * what only rendering can get wrong — routing between several banks, the
+ * read-only rule, and the `--bank` flag when the writable bank is not the
+ * default.
+ */
+describe('renderMemoryBanksPrompt', () => {
+  const team = { slug: 'cerebro', isDefault: true, readonly: false, cli: '/b/bin/cerebro' };
+  const docs = { slug: 'client-docs', isDefault: false, readonly: true, cli: '/d/bin/cerebro' };
+
+  it('renders every bank by slug, with its install namespace', () => {
+    const text = renderMemoryBanksPrompt([team, docs]);
+    expect(text).toContain('`cerebro`');
+    expect(text).toContain('`client-docs`');
+    expect(text).toContain('cerebro/');
+    expect(text).toContain('banks/client-docs/');
+  });
+
+  it('marks a read-only bank consult-only and never teaches writing to it', () => {
+    const text = renderMemoryBanksPrompt([team, docs]);
+    expect(text).toMatch(/client-docs.*read-only/);
+    // The draft command routes to the writable default, bare.
+    expect(text).toContain('cerebro draft');
+    expect(text).not.toContain('--bank client-docs draft');
+  });
+
+  it('teaches --bank when the writable bank is not the default', () => {
+    const readonlyDefault = { slug: 'upstream', isDefault: true, readonly: true, cli: '/u/bin/cerebro' };
+    const personal = { slug: 'notes', isDefault: false, readonly: false, cli: '/n/bin/cerebro' };
+    const text = renderMemoryBanksPrompt([readonlyDefault, personal]);
+    expect(text).toContain('--bank notes draft');
+  });
+
+  it('drops the write instructions entirely when every bank is read-only', () => {
+    const text = renderMemoryBanksPrompt([docs]);
+    expect(text).not.toContain('draft');
+    expect(text).toContain('background reference');
+  });
+
+  it('names the fallback CLI path of the default bank', () => {
+    expect(renderMemoryBanksPrompt([team, docs])).toContain('/b/bin/cerebro');
   });
 });
 

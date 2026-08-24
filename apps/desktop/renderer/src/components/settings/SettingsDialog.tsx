@@ -64,7 +64,7 @@ import { AdvancedSection } from './AdvancedSection';
 import { AgentsSection } from './AgentsSection';
 import { AppearanceSection } from './AppearanceSection';
 import { BrowserSection } from './BrowserSection';
-import { CerebroSection } from './CerebroSection';
+import { MemoryBanksSection } from './MemoryBanksSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
 import { ServerSection } from './ServerSection';
@@ -131,19 +131,21 @@ const SECTIONS: readonly SectionEntry[] = [
     hint: 'What runs without asking',
     icon: <ShieldIcon aria-hidden="true" />,
   },
-  // Above Cerebro because it is the general case of what Cerebro's pane is one
-  // instance of: what the agent is told before the conversation starts. A user
-  // who meets the bank first has met an example without the rule.
+  // Above the memory banks because it is the general case of what their pane is
+  // one instance of: what the agent is told before the conversation starts. A
+  // user who meets a bank first has met an example without the rule.
   {
     id: 'agents',
     label: 'Agents',
     hint: 'Standing instructions',
     icon: <BotIcon aria-hidden="true" />,
   },
+  // The id keeps its historical name: deep links (`openSettings('cerebro')`)
+  // and muscle memory predate the rename, and an id is an address, not a label.
   {
     id: 'cerebro',
-    label: 'Cerebro',
-    hint: 'Team memory bank',
+    label: 'Memory banks',
+    hint: 'Shared agent memory',
     icon: <BrainIcon aria-hidden="true" />,
   },
   // Below everything that describes what Artemis does for its own user, because
@@ -291,7 +293,7 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
     case 'agents':
       return <AgentsSection />;
     case 'cerebro':
-      return <CerebroSection />;
+      return <MemoryBanksSection />;
     case 'server':
       return <ServerSection />;
     case 'routines':

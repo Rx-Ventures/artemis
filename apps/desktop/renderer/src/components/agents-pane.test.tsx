@@ -247,7 +247,7 @@ describe('who a prompt reaches', () => {
 describe("Artemis's own prompts", () => {
   it('shows the text it will actually send, and does not let it be edited', async () => {
     await renderLoaded();
-    open('Use Cerebro');
+    open('Use memory banks');
 
     const surface = document.querySelector('.ProseMirror');
     expect(surface).toBeTruthy();
@@ -255,12 +255,12 @@ describe("Artemis's own prompts", () => {
     // someone opens a built-in, and paraphrasing it would be Artemis describing
     // its own prompt instead of showing it.
     expect(surface!.getAttribute('contenteditable')).toBe('false');
-    expect(surface!.textContent).toContain('Cerebro');
+    expect(surface!.textContent).toContain('memory bank');
   });
 
   it('offers no delete, because a deleted built-in comes straight back', async () => {
     await renderLoaded();
-    open('Use Cerebro');
+    open('Use memory banks');
     expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
 
     // A user prompt does offer one.
@@ -270,7 +270,7 @@ describe("Artemis's own prompts", () => {
 
   it('can still be turned off, which is the durable way to refuse it', async () => {
     await renderLoaded();
-    fireEvent.click(screen.getByRole('switch', { name: /Use Cerebro/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /Use memory banks/ }));
 
     await flushSave();
     expect(lastSave()).not.toBeNull();

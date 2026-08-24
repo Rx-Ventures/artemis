@@ -1,0 +1,267 @@
+/**
+ * The memory banks, read on demand and acted on one click at a time.
+ *
+ * A hook for the same reason `useSharedConfigStatus` is one: the reading has a
+ * lifecycle (in flight, landed, failed) plus a re-read, and the pane also has
+ * *actions* whose in-flight state has to dim the right button. Threading
+ * that through a component body is how a pane ends up showing a stale bank
+ * next to a fresh receipt.
+ *
+ * **Not in the app store, deliberately** — the same argument as the shared
+ * config reading, stronger here: this is a photograph of git clones that
+ * agents, hooks, and *other machines'* pull requests change underneath us.
+ * Nothing in the app should ever treat it as settled fact; the pane re-reads
+ * after every action, and that is the only freshness promised.
+ *
+ * Memories are fetched per bank, on request, and cached per slug for the
+ * pane's lifetime: a machine with three banks should not pay three `list`
+ * spawns to render three collapsed cards.
+ *
+ * Actions run one at a time (`busy` is a single slot, and every button
+ * disables while any action runs). Not a technical limit — the CLI serialises
+ * itself with locks — but an honest UI one: two in-flight receipts would
+ * race for the one `lastAction` line, and the loser's outcome would vanish.
+ */
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import type {
+  ArtemisBridge,
+  IpcResult,
+  MemoryBankActionResponse,
+  MemoryBankAddRequest,
+  MemoryBankMemory,
+  MemoryBankPreflight,
+  MemoryBankRetireRequest,
+  MemoryBanksStatus,
+} from '@rx-artemis/protocol';
+
+import { call, resolveBridge } from '../lib/bridge';
+
+export type MemoryBankAction =
+  | 'add'
+  | 'sync'
+  | 'retire'
+  | 'switch'
+  | 'master'
+  | 'forget';
+
+/** What the last click came to — the CLI's own words, kept until the next click. */
+export interface MemoryBankReceipt {
+  readonly ok: boolean;
+  readonly message: string;
+}
+
+export interface MemoryBanksPane {
+  /** A read is in flight. True on first render, before anything is known. */
+  readonly reading: boolean;
+  /** The last successful status reading, or `null` if there has not been one. */
+  readonly status: MemoryBanksStatus | null;
+  /**
+   * What this machine is missing, with the fix for each.
+   *
+   * Read alongside status rather than on demand: the pane's primary action is
+   * "add a bank", and an enabled button that fails on click because `git` is
+   * not installed is the exact experience the check exists to prevent.
+   */
+  readonly preflight: MemoryBankPreflight | null;
+  /** Per-bank memories, filled by {@link MemoryBanksPane.loadMemories}. */
+  readonly memories: Readonly<Record<string, readonly MemoryBankMemory[]>>;
+  /** Why the read failed, already safe to show. Mutually exclusive with {@link status}. */
+  readonly error: string | null;
+  readonly refresh: () => void;
+  /** The action currently running, or `null`. Every button disables while one runs. */
+  readonly busy: MemoryBankAction | null;
+  readonly lastAction: MemoryBankReceipt | null;
+  /** Fetch one bank's memories (cached until the next refresh). */
+  readonly loadMemories: (slug: string) => void;
+  readonly add: (request: MemoryBankAddRequest) => Promise<boolean>;
+  readonly sync: (slug?: string) => void;
+  readonly retire: (request: MemoryBankRetireRequest) => void;
+  /** Wire one bank on or off — the CLI's per-bank switch, honoured by hooks too. */
+  readonly setEnabled: (slug: string, enabled: boolean) => void;
+  /** Artemis's master gate: prompt injection + run-start syncs. */
+  readonly setMasterEnabled: (enabled: boolean) => void;
+  /** Unwire, uninstall, and forget one bank. The repo stays on disk. */
+  readonly forget: (slug: string) => void;
+}
+
+function banksChannel(): ArtemisBridge['memoryBanks'] | null {
+  return resolveBridge().bridge?.memoryBanks ?? null;
+}
+
+export function useMemoryBanks(): MemoryBanksPane {
+  const [attempt, setAttempt] = useState(0);
+  const [reading, setReading] = useState(true);
+  const [status, setStatus] = useState<MemoryBanksStatus | null>(null);
+  const [preflight, setPreflight] = useState<MemoryBankPreflight | null>(null);
+  const [memories, setMemories] = useState<Record<string, readonly MemoryBankMemory[]>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<MemoryBankAction | null>(null);
+  const [lastAction, setLastAction] = useState<MemoryBankReceipt | null>(null);
+  /** Slugs with a `list` in flight, so an expand-collapse-expand does not double-spawn. */
+  const loading = useRef(new Set<string>());
+
+  useEffect(() => {
+    const channel = banksChannel();
+    if (channel === null) {
+      setReading(false);
+      setError('This window cannot reach the main process.');
+      return undefined;
+    }
+
+    let cancelled = false;
+    setReading(true);
+    loading.current.clear();
+
+    void (async () => {
+      const statusResult = await call(() => channel.status({}));
+      if (cancelled) return;
+      if (!statusResult.ok) {
+        setReading(false);
+        setStatus(null);
+        setMemories({});
+        setError(statusResult.error.message);
+        return;
+      }
+      // The preflight matters most when nothing is set up yet — it is what
+      // gates the add-a-bank flow — but a machine with banks still shows it
+      // when something is broken, so it is read either way.
+      const preflightResult = await call(() => channel.preflight({}));
+      if (cancelled) return;
+      setReading(false);
+      setStatus(statusResult.value);
+      setPreflight(preflightResult.ok ? preflightResult.value : null);
+      setMemories({});
+      setError(null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  const refresh = useCallback(() => setAttempt((n) => n + 1), []);
+
+  const loadMemories = useCallback((slug: string) => {
+    const channel = banksChannel();
+    if (channel === null) return;
+    if (loading.current.has(slug)) return;
+    loading.current.add(slug);
+    void (async () => {
+      const result = await call(() => channel.memories({ slug }));
+      loading.current.delete(slug);
+      if (result.ok) {
+        setMemories((current) => ({ ...current, [slug]: result.value.memories }));
+      }
+    })();
+  }, []);
+
+  const act = useCallback(
+    async (
+      kind: MemoryBankAction,
+      operation: (channel: ArtemisBridge['memoryBanks']) => Promise<IpcResult<MemoryBankActionResponse>>,
+    ): Promise<boolean> => {
+      const channel = banksChannel();
+      if (channel === null) return false;
+      setBusy(kind);
+      const result = await call(() => operation(channel));
+      setBusy(null);
+      setLastAction(
+        result.ok ? { ok: true, message: result.value.message } : { ok: false, message: result.error.message },
+      );
+      if (result.ok) refresh();
+      return result.ok;
+    },
+    [refresh],
+  );
+
+  const add = useCallback(
+    (request: MemoryBankAddRequest) => act('add', (c) => c.add(request)),
+    [act],
+  );
+  const sync = useCallback(
+    (slug?: string) => void act('sync', (c) => c.sync(slug === undefined ? {} : { slug })),
+    [act],
+  );
+  const retire = useCallback(
+    (request: MemoryBankRetireRequest) => void act('retire', (c) => c.retire(request)),
+    [act],
+  );
+  const setEnabled = useCallback(
+    (slug: string, enabled: boolean) => void act('switch', (c) => c.setEnabled({ slug, enabled })),
+    [act],
+  );
+  const setMasterEnabled = useCallback(
+    (enabled: boolean) => void act('master', (c) => c.setMasterEnabled({ enabled })),
+    [act],
+  );
+  const forget = useCallback(
+    (slug: string) => void act('forget', (c) => c.forget({ slug })),
+    [act],
+  );
+
+  return {
+    reading,
+    status,
+    preflight,
+    memories,
+    error,
+    refresh,
+    busy,
+    lastAction,
+    loadMemories,
+    add,
+    sync,
+    retire,
+    setEnabled,
+    setMasterEnabled,
+    forget,
+  };
+}
+
+/**
+ * Just "is the memory-banks prompt actually being sent?".
+ *
+ * The Agents pane needs this one boolean, to decide whether its built-in
+ * prompt row is currently reaching the model. Reaching for
+ * {@link useMemoryBanks} there would work and would also pull a preflight
+ * that shells out to `cerebro doctor`, all to answer a yes/no question on a
+ * pane that shows neither.
+ *
+ * Master on **and** at least one enabled bank present, which is the same
+ * conjunction `engine.ts` composes runs with. Two sources of truth for "is
+ * this prompt live" is the one failure this pane must not have: it would tell
+ * the user a prompt is being sent that main is quietly withholding, or the
+ * reverse.
+ *
+ * `null` while the read is in flight, and *stays* `null` if it fails. Not
+ * `false`: "not available" is a claim the pane puts on screen next to a prompt
+ * it says is not being sent, and a failed read is not evidence for it.
+ */
+export function useMemoryBanksAvailable(): boolean | null {
+  const [available, setAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const channel = banksChannel();
+    if (channel === null) return undefined;
+
+    let cancelled = false;
+    void (async () => {
+      const result = await call(() => channel.status({}));
+      if (cancelled) return;
+      if (result.ok) {
+        setAvailable(
+          result.value.masterEnabled &&
+            result.value.banks.some((bank) => bank.enabled && bank.exists),
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return available;
+}

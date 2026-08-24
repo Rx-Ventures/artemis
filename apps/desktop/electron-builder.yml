@@ -24,6 +24,14 @@ asarUnpack:
   - '**/node_modules/@anthropic-ai/claude-agent-sdk/**'
   - '**/node_modules/node-pty/**'
 
+# The cerebro CLI Artemis ships for bootstrap: creating or joining a memory
+# bank on a machine that has none yet (a bank's own embedded copy wins once one
+# exists — see main/memoryBanks.ts). Outside the asar because it is spawned.
+# Refresh from the cerebro repo's bin/cerebro when the contract changes.
+extraResources:
+  - from: resources/cerebro
+    to: cerebro
+
 # Unpacking preserves the mode the file had in the archive, and node-pty
 # publishes `spawn-helper` as 0644 — so without this every install arrives
 # unable to exec the helper, and every terminal fails with `posix_spawnp

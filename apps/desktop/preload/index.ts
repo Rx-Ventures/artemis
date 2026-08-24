@@ -84,13 +84,15 @@ import {
   type SessionsListRequest,
   type AgentPromptsListRequest,
   type AgentPromptsSaveRequest,
-  type CerebroListRequest,
-  type CerebroPreflightRequest,
-  type CerebroRetireRequest,
-  type CerebroSetEnabledRequest,
-  type CerebroSetupRequest,
-  type CerebroStatusRequest,
-  type CerebroSyncRequest,
+  type MemoryBankAddRequest,
+  type MemoryBankForgetRequest,
+  type MemoryBankMemoriesRequest,
+  type MemoryBankRetireRequest,
+  type MemoryBankSetEnabledRequest,
+  type MemoryBankSyncRequest,
+  type MemoryBanksPreflightRequest,
+  type MemoryBanksSetMasterEnabledRequest,
+  type MemoryBanksStatusRequest,
   type SharedConfigStatusRequest,
   type Unsubscribe,
   type SessionsDeleteRequest,
@@ -667,14 +669,16 @@ const bridge: ArtemisBridge = Object.freeze({
    * here names a path, a binary or a remote — main resolves the bank's repo
    * and its CLI, so the renderer can ask for the bank and only the bank.
    */
-  cerebro: Object.freeze({
-    status: (request: CerebroStatusRequest) => invoke(IPC.cerebroStatus, request),
-    list: (request: CerebroListRequest) => invoke(IPC.cerebroList, request),
-    preflight: (request: CerebroPreflightRequest) => invoke(IPC.cerebroPreflight, request),
-    setup: (request: CerebroSetupRequest) => invoke(IPC.cerebroSetup, request),
-    sync: (request: CerebroSyncRequest) => invoke(IPC.cerebroSync, request),
-    retire: (request: CerebroRetireRequest) => invoke(IPC.cerebroRetire, request),
-    setEnabled: (request: CerebroSetEnabledRequest) => invoke(IPC.cerebroSetEnabled, request),
+  memoryBanks: Object.freeze({
+    status: (request: MemoryBanksStatusRequest) => invoke(IPC.memoryBanksStatus, request),
+    memories: (request: MemoryBankMemoriesRequest) => invoke(IPC.memoryBankMemories, request),
+    preflight: (request: MemoryBanksPreflightRequest) => invoke(IPC.memoryBanksPreflight, request),
+    add: (request: MemoryBankAddRequest) => invoke(IPC.memoryBankAdd, request),
+    sync: (request: MemoryBankSyncRequest) => invoke(IPC.memoryBankSync, request),
+    retire: (request: MemoryBankRetireRequest) => invoke(IPC.memoryBankRetire, request),
+    setEnabled: (request: MemoryBankSetEnabledRequest) => invoke(IPC.memoryBankSetEnabled, request),
+    forget: (request: MemoryBankForgetRequest) => invoke(IPC.memoryBankForget, request),
+    setMasterEnabled: (request: MemoryBanksSetMasterEnabledRequest) => invoke(IPC.memoryBanksSetMasterEnabled, request),
   }),
 
   /** The standing-instruction library. Read and replaced whole; see {@link IPC}. */

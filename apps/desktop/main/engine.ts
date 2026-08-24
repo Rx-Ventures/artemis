@@ -95,7 +95,7 @@ import {
 import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
-import { configureCerebro, isCerebroEnabled, isCerebroInstalled, syncCerebroInBackground } from './cerebro.js';
+import { anyBankAvailable, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 import { createProfileSecrets } from './profileSecrets.js';
@@ -265,8 +265,8 @@ export interface ArtemisEngine {
   /**
    * The standing-instruction library, as stored.
    *
-   * On the host rather than instantiated in `ipc.ts` — which is where Cerebro
-   * and the shared-config probe live — because this is the one settings surface
+   * On the host rather than instantiated in `ipc.ts` — which is where the
+   * memory banks and the shared-config probe live — because this is the one settings surface
    * whose data is also read on the path of a run. Two owners would mean two
    * caches, and the pane's save would land in the copy `startRun` is not
    * reading.
@@ -588,28 +588,29 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
-  // Where Cerebro's master switch is kept. Told once, here, because this is the
-  // only place that knows `userData`; until it is told, the switch reads as off.
-  configureCerebro(userDataDir);
+  // Where the memory banks' master switch is kept. Told once, here, because this
+  // is the only place that knows `userData`; until it is told, the switch reads
+  // as off.
+  configureMemoryBanks(userDataDir);
 
   /**
    * Which built-in prompts have the thing they talk about.
    *
    * Read per run rather than cached at startup, because the precondition can
-   * change while the app is open — setting Cerebro up is a button in the
-   * settings dialog, and a user who clicks it should not have to restart before
-   * the prompt that describes it starts arriving. Both halves are cheap at that
-   * rate: one `existsSync` and one cached file read. The full status probe,
-   * which spawns the CLI, is not.
+   * change while the app is open — adding a bank is a button in the settings
+   * dialog, and a user who clicks it should not have to restart before the
+   * prompt that describes it starts arriving. Both halves are cheap at that
+   * rate: a cached file read and a registry read with a few `existsSync`s. The
+   * full status probe, which spawns the CLI, is not.
    *
-   * Installed **and** switched on. The bank being cloned is not consent to
-   * spending every run's context describing it, so a machine that has it but
-   * has not said yes gets the prompt withheld however enabled its row is —
+   * Configured **and** switched on. Banks being registered is not consent to
+   * spending every run's context describing them, so a machine that has them
+   * but has not said yes gets the prompt withheld however enabled its row is —
    * which is exactly what `BuiltInAgentPrompt.requires` exists to explain.
    */
   const availableBuiltIns = (): ReadonlySet<BuiltInPromptId> => {
     const available = new Set<BuiltInPromptId>();
-    if (isCerebroEnabled() && isCerebroInstalled()) available.add('builtin:cerebro');
+    if (isMasterEnabled() && anyBankAvailable()) available.add('builtin:cerebro');
     return available;
   };
 
@@ -643,9 +644,13 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
     try {
       const { prompts } = await agentPrompts.read();
+      const available = availableBuiltIns();
       const text = composeAgentPrompts(prompts, {
         profileId: input.profileId,
-        availableBuiltIns: availableBuiltIns(),
+        availableBuiltIns: available,
+        // The banks by name, so the composed prompt teaches this machine's
+        // slugs and read-only rules instead of the generic preview.
+        ...(available.has('builtin:cerebro') ? { memoryBanks: promptBanks() } : {}),
       });
       return withSystemPromptAppended(input, text);
     } catch (error) {
@@ -1085,11 +1090,12 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     writeAgentPrompts: (document) => agentPrompts.write(document),
 
     startRun: async (input) => {
-      // Cerebro's own `SessionStart` hook cannot run under `settingSources: []`,
-      // so Artemis runs the bank's sync cycle itself. Started before the run and
-      // never awaited: it promotes what the last session drafted and pulls what
-      // teammates landed, neither of which this run may wait on.
-      syncCerebroInBackground();
+      // The banks' own `SessionStart` hook cannot run under `settingSources:
+      // []`, so Artemis runs the sync cycle itself — one spawn, every enabled
+      // bank. Started before the run and never awaited: it promotes what the
+      // last session drafted and pulls what teammates landed, neither of which
+      // this run may wait on.
+      syncMemoryBanksInBackground();
 
       // The library is attached here and not in the renderer, so that every
       // path that will ever start a run gets it without having to remember to.

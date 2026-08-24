@@ -12,7 +12,9 @@ import {
   validateRunsStart,
   validateSessionsList,
   validateSessionsListAll,
-  validateCerebroSetEnabled,
+  validateMemoryBankAdd,
+  validateMemoryBankSetEnabled,
+  validateMemoryBanksSetMasterEnabled,
   validateSessionsSubagentMessages,
   validateTerminalClose,
   validateTerminalList,
@@ -977,31 +979,93 @@ describe('validateSessionsSubagentMessages', () => {
 });
 
 /**
- * The Cerebro master switch.
+ * The memory-bank switches.
  *
  * The invariant worth a test is that neither direction has a default: a call
  * that omits the field must be refused rather than resolved, because guessing
  * `true` would opt a machine into writing to a repository the team shares, and
  * guessing `false` would silently undo an opt-in the user made.
  */
-describe('validateCerebroSetEnabled', () => {
+describe('validateMemoryBankSetEnabled', () => {
   it('takes the state it is given, both ways', () => {
-    expect(validateCerebroSetEnabled({ enabled: true })).toEqual({ enabled: true });
-    expect(validateCerebroSetEnabled({ enabled: false })).toEqual({ enabled: false });
+    expect(validateMemoryBankSetEnabled({ slug: 'cerebro', enabled: true })).toEqual({
+      slug: 'cerebro',
+      enabled: true,
+    });
+    expect(validateMemoryBankSetEnabled({ slug: 'cerebro', enabled: false })).toEqual({
+      slug: 'cerebro',
+      enabled: false,
+    });
   });
 
   it('refuses a call that does not say which', () => {
-    expect(() => validateCerebroSetEnabled({})).toThrow(ValidationError);
+    expect(() => validateMemoryBankSetEnabled({ slug: 'cerebro' })).toThrow(ValidationError);
   });
 
   it('refuses a truthy stand-in for the boolean', () => {
     // `'true'`, `1` and `'on'` all read as yes to a looser check, and the one
     // that gets through is an opt-in nobody made.
-    expect(() => validateCerebroSetEnabled({ enabled: 'true' })).toThrow(ValidationError);
-    expect(() => validateCerebroSetEnabled({ enabled: 1 })).toThrow(ValidationError);
+    expect(() => validateMemoryBankSetEnabled({ slug: 'cerebro', enabled: 'true' })).toThrow(ValidationError);
+    expect(() => validateMemoryBankSetEnabled({ slug: 'cerebro', enabled: 1 })).toThrow(ValidationError);
+  });
+
+  it('refuses a slug outside the banks` own grammar', () => {
+    expect(() => validateMemoryBankSetEnabled({ slug: '../etc', enabled: true })).toThrow(ValidationError);
+    expect(() => validateMemoryBankSetEnabled({ slug: 'No Caps', enabled: true })).toThrow(ValidationError);
   });
 
   it('rebuilds the request, so nothing extra reaches main', () => {
-    expect(validateCerebroSetEnabled({ enabled: true, root: '/etc' })).toEqual({ enabled: true });
+    expect(validateMemoryBankSetEnabled({ slug: 'cerebro', enabled: true, root: '/etc' })).toEqual({
+      slug: 'cerebro',
+      enabled: true,
+    });
+  });
+});
+
+describe('validateMemoryBanksSetMasterEnabled', () => {
+  it('takes the state it is given, and refuses silence and stand-ins', () => {
+    expect(validateMemoryBanksSetMasterEnabled({ enabled: false })).toEqual({ enabled: false });
+    expect(() => validateMemoryBanksSetMasterEnabled({})).toThrow(ValidationError);
+    expect(() => validateMemoryBanksSetMasterEnabled({ enabled: 'on' })).toThrow(ValidationError);
+  });
+});
+
+/**
+ * Registration is the one channel that names locations, so its validator is
+ * the one worth pinning hardest: modes and roles are closed sets, and the
+ * requirements differ per mode — a join without a remote (or an adopt without
+ * a path) would otherwise fail deep in the CLI with a worse sentence.
+ */
+describe('validateMemoryBankAdd', () => {
+  it('accepts each mode with its requirements met', () => {
+    expect(
+      validateMemoryBankAdd({ mode: 'join', slug: 'team', role: 'readwrite', remote: 'https://x/y.git' }),
+    ).toEqual({ mode: 'join', slug: 'team', role: 'readwrite', remote: 'https://x/y.git' });
+    expect(validateMemoryBankAdd({ mode: 'create', slug: 'notes', role: 'readwrite' })).toEqual({
+      mode: 'create',
+      slug: 'notes',
+      role: 'readwrite',
+    });
+    expect(
+      validateMemoryBankAdd({ mode: 'adopt', slug: 'docs', role: 'readonly', path: '/Users/d/bank' }),
+    ).toEqual({ mode: 'adopt', slug: 'docs', role: 'readonly', path: '/Users/d/bank' });
+  });
+
+  it('refuses a join without a remote and an adopt without a path', () => {
+    expect(() => validateMemoryBankAdd({ mode: 'join', slug: 'team', role: 'readwrite' })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateMemoryBankAdd({ mode: 'adopt', slug: 'docs', role: 'readwrite' })).toThrow(
+      ValidationError,
+    );
+  });
+
+  it('refuses modes and roles outside the closed sets', () => {
+    expect(() =>
+      validateMemoryBankAdd({ mode: 'clone', slug: 'team', role: 'readwrite', remote: 'x' }),
+    ).toThrow(ValidationError);
+    expect(() => validateMemoryBankAdd({ mode: 'create', slug: 'team', role: 'admin' })).toThrow(
+      ValidationError,
+    );
   });
 });

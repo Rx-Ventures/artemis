@@ -350,56 +350,68 @@ export const IPC = {
   updatesSetChannel: 'artemis:updates:setChannel',
 
   /**
-   * Cerebro — the team's shared, agent-maintained memory bank.
+   * Memory banks — shared, agent-maintained git repositories of team facts.
    *
-   * Seven channels and not one of them names a path or a binary: main owns the
-   * repo location and the CLI inside it, so the renderer can no more aim these
-   * at the filesystem than it can pick the program a terminal runs. Everything
-   * here is a thin seam over `bin/cerebro`, the single-file CLI that lives *in*
-   * the bank's own repository — reimplementing its logic in Artemis would mean
-   * two implementations of one contract drifting apart, and the CLI updates
-   * itself with the bank (`sync` fast-forwards the clone the CLI ships in).
+   * Cerebro generalized: a machine can carry several banks (the team's, a
+   * personal local-only one, a client's, one it only reads), each registered
+   * under a slug in the CLI's own config and synced into project memory under
+   * its own namespace. Not one of these channels names a path or a binary:
+   * main owns bank locations and the CLI, so the renderer can no more aim
+   * these at the filesystem than it can pick the program a terminal runs.
+   * Everything is a thin seam over the `cerebro` CLI — the bank-embedded copy
+   * when a bank carries one (self-updating with the bank), else the copy
+   * Artemis ships for bootstrap — because reimplementing bank logic in
+   * Artemis would mean two implementations of one contract drifting apart.
    *
-   * `setup` is the whole onboarding story: clone if missing, `enable` the
-   * profiles, `sync` once. Idempotent, so the pane can offer it without
-   * tracking state of its own. The write channels (`retire`, `setEnabled`) do
-   * not write to the bank directly — they queue and land changes through the
-   * same validated, PR-gated path the agents use, which is why their response
-   * is a message rather than data: the outcome is a commit or a pull request,
-   * not a mutation the renderer should pretend it can see.
+   * `add` is onboarding, one bank at a time: join a shared bank by remote,
+   * create a fresh local one, or adopt a directory that already is one.
+   * Idempotent, so the pane can offer it without tracking state of its own.
+   * The write channels (`retire`, `setEnabled`) do not write to a bank
+   * directly — they queue and land changes through the same validated,
+   * PR-gated path the agents use, which is why their response is a message
+   * rather than data: the outcome is a commit or a pull request, not a
+   * mutation the renderer should pretend it can see.
    */
-  cerebroStatus: 'artemis:cerebro:status',
-  cerebroList: 'artemis:cerebro:list',
+  memoryBanksStatus: 'artemis:memory-banks:status',
+  memoryBankMemories: 'artemis:memory-banks:memories',
   /**
-   * Can this machine run the bank at all?
+   * Can this machine run a bank at all?
    *
-   * Separate from {@link cerebroStatus} because it has to answer *before*
-   * there is a bank: status shells out to a CLI that only exists once the
-   * repo is cloned, and the interesting failures — no git, no git identity,
-   * no access to a private repository — all happen before that. Setup used
-   * to discover them by failing halfway through a clone.
+   * Separate from {@link memoryBanksStatus} because it has to answer *before*
+   * there is a bank: the interesting failures — no git, no git identity, no
+   * access to a private remote — all happen before one exists. Onboarding
+   * used to discover them by failing halfway through a clone.
    */
-  cerebroPreflight: 'artemis:cerebro:preflight',
-  cerebroSetup: 'artemis:cerebro:setup',
-  cerebroSync: 'artemis:cerebro:sync',
-  cerebroRetire: 'artemis:cerebro:retire',
+  memoryBanksPreflight: 'artemis:memory-banks:preflight',
+  memoryBankAdd: 'artemis:memory-banks:add',
+  memoryBankSync: 'artemis:memory-banks:sync',
+  memoryBankRetire: 'artemis:memory-banks:retire',
   /**
-   * The master switch: does this machine use the bank at all?
+   * Wire one bank on or off — the machine's wiring, not Artemis's gate.
    *
-   * Artemis's own answer, not the CLI's. Cerebro being *cloned* is not consent
-   * to it — the bank writes to a shared repository and its prompt spends every
-   * run's context, so both wait on a deliberate yes. Off is the default, and
-   * off means off in both directions: no sync at run start, and
-   * `builtin:cerebro` unavailable however enabled its row is.
-   *
-   * Symmetric on purpose. Turning it on runs `cerebro enable` and a forced
-   * sync, so the machine comes back exactly as `setup` left it; turning it off
-   * runs `cerebro disable`, so the managed `CLAUDE.md` block, the `/cerebro`
-   * command and the session-start hook come out of every profile. A switch that
-   * only governed Artemis would leave a stock Claude Code on the same machine
-   * still wired to the bank — off in one window and on in the next.
+   * Runs the CLI's per-bank `enable`/`disable`: the profile block and install
+   * namespace for that bank come or go, and the CLI records the flag in its
+   * own config, where the SessionStart hook (stock Claude Code's path) reads
+   * it too. One switch per bank, honoured everywhere.
    */
-  cerebroSetEnabled: 'artemis:cerebro:set-enabled',
+  memoryBankSetEnabled: 'artemis:memory-banks:set-enabled',
+  /**
+   * Drop a bank from this machine: unwire it, remove its installed copies,
+   * forget it in the CLI config. The repository itself stays on disk — the
+   * renderer cannot delete a git repo through this channel, deliberately.
+   */
+  memoryBankForget: 'artemis:memory-banks:forget',
+  /**
+   * The master switch: does *Artemis* use the banks at all?
+   *
+   * Artemis's own answer, not the CLI's, and narrower than it used to be now
+   * that each bank carries its own wiring switch: this gates what only
+   * Artemis does — the prompt injected into every run and the sync fired at
+   * run start. Off is the default; off means no context spent and no
+   * background syncs, while the machine wiring (stock Claude Code's hook and
+   * blocks) stays exactly as the per-bank switches left it.
+   */
+  memoryBanksSetMasterEnabled: 'artemis:memory-banks:set-master-enabled',
   /**
    * The standing-instruction library.
    *
@@ -1892,11 +1904,11 @@ export interface UpdatesStateResponse {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Cerebro                                                                    */
+/* Memory banks                                                               */
 /* -------------------------------------------------------------------------- */
 
 /**
- * One memory, as the bank's CLI reports it.
+ * One memory, as a bank's CLI reports it.
  *
  * `type` is a plain string rather than a union of the bank's four kinds on
  * purpose: this is a *reading* of files the bank validates on its own side,
@@ -1905,7 +1917,7 @@ export interface UpdatesStateResponse {
  * write memories at all — agents do, through the CLI — so nothing here needs
  * the constraining form.
  */
-export interface CerebroMemory {
+export interface MemoryBankMemory {
   readonly name: string;
   readonly type: string;
   readonly description: string;
@@ -1915,64 +1927,81 @@ export interface CerebroMemory {
   readonly author: string | null;
 }
 
-/** One Artemis profile, as Cerebro sees it: wired in, or not yet. */
-export interface CerebroProfileState {
-  readonly name: string;
-  readonly label: string;
-  /** The managed block is present in the profile's CLAUDE.md. */
-  readonly enabled: boolean;
-  /** The SessionStart sync hook is installed in the profile's settings.json. */
-  readonly hook: boolean;
-}
+/** A bank's writability on this machine — the CLI refuses writes to `readonly`. */
+export type MemoryBankRole = 'readwrite' | 'readonly';
 
 /**
- * The bank's condition on this machine, in one reading.
- *
- * `installed: false` is a complete, renderable answer — the repo is not cloned
- * yet and every other field is at its zero value — because "not set up" is the
- * state the settings pane exists to fix, not an error to fail on.
+ * One configured bank, as the CLI's registry and a status probe describe it.
  */
-export interface CerebroStatus {
-  readonly installed: boolean;
+export interface MemoryBankInfo {
+  /** The per-machine name; namespaces the bank's installs and prompts. */
+  readonly slug: string;
+  readonly path: string;
+  readonly remote: string | null;
+  readonly role: MemoryBankRole;
   /**
-   * Whether the user has switched the bank on for this machine.
-   *
-   * Independent of {@link installed}, and the two are read together: a cloned
-   * bank nobody has said yes to is `installed: true, enabled: false`, which is
-   * the state a fresh upgrade lands in. Nothing syncs and no prompt is
-   * injected until this is true — see `IPC.cerebroSetEnabled`.
+   * The CLI-config wiring switch for this bank — honoured by the SessionStart
+   * hook and stock Claude Code too, not only by Artemis. Distinct from
+   * {@link MemoryBanksStatus.masterEnabled}, which is Artemis's own gate.
    */
   readonly enabled: boolean;
-  readonly repoPath: string;
-  readonly remote: string | null;
+  /** Bare CLI commands (and the shim) address this bank. */
+  readonly isDefault: boolean;
+  /** The path currently holds a bank (a `memories/` directory). */
+  readonly exists: boolean;
   /** Provenance stamp of the working tree, e.g. `cerebro@52a0a32`. */
   readonly source: string | null;
   readonly memories: number;
   readonly validationErrors: number;
-  /** Projects whose Artemis memory currently carries the bank. */
+  /** Projects whose Artemis memory currently carries this bank's install. */
   readonly projects: number;
-  readonly profiles: readonly CerebroProfileState[];
+}
+
+/** One Artemis profile, as the banks see it: which blocks it carries. */
+export interface MemoryBankProfileState {
+  readonly name: string;
+  readonly label: string;
+  /** The SessionStart sync hook is installed in the profile's settings.json. */
+  readonly hook: boolean;
+  /** Per bank slug: is that bank's managed block in the profile's CLAUDE.md? */
+  readonly banks: Readonly<Record<string, boolean>>;
+}
+
+/**
+ * Every bank on this machine, in one reading.
+ *
+ * `banks: []` is a complete, renderable answer — nothing is set up yet, which
+ * is the state the settings pane exists to fix, not an error to fail on.
+ */
+export interface MemoryBanksStatus {
+  /** A CLI exists to drive (bank-embedded or the copy Artemis ships). */
+  readonly cliAvailable: boolean;
+  /**
+   * Artemis's master gate: inject the prompt, sync at run start. Off by
+   * default — banks being configured is not consent to spending every run's
+   * context on them. See `IPC.memoryBanksSetMasterEnabled`.
+   */
+  readonly masterEnabled: boolean;
+  readonly banks: readonly MemoryBankInfo[];
+  readonly profiles: readonly MemoryBankProfileState[];
 }
 
 /**
  * Empty for the same reason {@link SharedConfigStatusRequest} is: main derives
- * the repo path and the profile list itself, so this channel cannot be used to
- * probe a location the user did not already adopt as the team bank.
+ * bank locations and the profile list itself, so this channel cannot be used
+ * to probe a location the user did not already register as a bank.
  */
-export type CerebroStatusRequest = Record<string, never>;
-export type CerebroStatusResponse = CerebroStatus;
-
-/** Empty; see {@link CerebroStatusRequest}. */
-export type CerebroListRequest = Record<string, never>;
+export type MemoryBanksStatusRequest = Record<string, never>;
+export type MemoryBanksStatusResponse = MemoryBanksStatus;
 
 /**
- * One thing the bank needs, and whether this machine has it.
+ * One thing the banks need, and whether this machine has it.
  *
  * `remedy` is the whole point: a check that says "git identity: missing" and
  * stops has moved the user's problem, not solved it. Every non-`ok` state
  * carries the command or the action that fixes it.
  */
-export interface CerebroCheck {
+export interface MemoryBankCheck {
   readonly id: string;
   readonly label: string;
   /** `warn` is "works, but worse" (no `gh` → a branch to open by hand). `fail` blocks. */
@@ -1981,61 +2010,101 @@ export interface CerebroCheck {
   readonly remedy: string | null;
 }
 
-export interface CerebroPreflight {
-  /** No check failed. Setup may proceed; warnings are informational. */
+export interface MemoryBankPreflight {
+  /** No check failed. Onboarding may proceed; warnings are informational. */
   readonly ready: boolean;
-  readonly checks: readonly CerebroCheck[];
+  readonly checks: readonly MemoryBankCheck[];
 }
 
 /** Empty; main probes the machine, the renderer does not aim it. */
-export type CerebroPreflightRequest = Record<string, never>;
-export type CerebroPreflightResponse = CerebroPreflight;
+export type MemoryBanksPreflightRequest = Record<string, never>;
+export type MemoryBanksPreflightResponse = MemoryBankPreflight;
 
-export interface CerebroListResponse {
-  readonly memories: readonly CerebroMemory[];
+/** One bank's memories. The slug must name a configured bank. */
+export interface MemoryBankMemoriesRequest {
+  readonly slug: string;
 }
 
-/** Empty; the clone URL and destination are main's alone. */
-export type CerebroSetupRequest = Record<string, never>;
+export interface MemoryBankMemoriesResponse {
+  readonly memories: readonly MemoryBankMemory[];
+}
 
 /**
- * What a Cerebro action has to say for itself — one line of CLI output.
+ * Register a bank on this machine.
+ *
+ * `join` clones a shared bank from a remote; `create` starts a fresh
+ * local-only one (the CLI embeds itself into it, so the repo can later be
+ * shared); `adopt` registers a directory that already is a bank. The path is
+ * optional — main derives `~/Documents/<slug>` — except for `adopt`, where
+ * the existing location is the whole point.
+ */
+export interface MemoryBankAddRequest {
+  readonly mode: 'join' | 'create' | 'adopt';
+  readonly slug: string;
+  readonly role: MemoryBankRole;
+  /** Required for `join`. */
+  readonly remote?: string;
+  /** Required for `adopt`; overrides the default location otherwise. */
+  readonly path?: string;
+}
+
+/**
+ * What a bank action has to say for itself — one line of CLI output.
  *
  * A message rather than structured data, because the interesting outcome
  * happens elsewhere: a commit in the bank's repo, a pull request on its
- * remote, a re-installed memory directory. The pane re-reads `status` and
- * `list` for the facts; this is the receipt.
+ * remote, a re-installed memory directory. The pane re-reads `status` for
+ * the facts; this is the receipt.
  */
-export interface CerebroActionResponse {
+export interface MemoryBankActionResponse {
   readonly message: string;
 }
 
-export type CerebroSetupResponse = CerebroActionResponse;
+export type MemoryBankAddResponse = MemoryBankActionResponse;
 
-/** Empty; syncing takes no aim. */
-export type CerebroSyncRequest = Record<string, never>;
-export type CerebroSyncResponse = CerebroActionResponse;
+/** Sync one bank, or every enabled bank when `slug` is omitted. */
+export interface MemoryBankSyncRequest {
+  readonly slug?: string;
+}
+
+export type MemoryBankSyncResponse = MemoryBankActionResponse;
 
 /** Remove a memory through the same gates a promotion goes through. */
-export interface CerebroRetireRequest {
+export interface MemoryBankRetireRequest {
+  readonly slug: string;
   readonly name: string;
   /** Short reason recorded in the commit message. */
   readonly reason?: string;
 }
 
-export type CerebroRetireResponse = CerebroActionResponse;
+export type MemoryBankRetireResponse = MemoryBankActionResponse;
 
 /**
- * Throw the master switch. See `IPC.cerebroSetEnabled`.
+ * Wire one bank on or off. See `IPC.memoryBankSetEnabled`.
  *
  * The desired state rather than a toggle, so that two windows pressing at once
  * agree about where they landed instead of cancelling each other out.
  */
-export interface CerebroSetEnabledRequest {
+export interface MemoryBankSetEnabledRequest {
+  readonly slug: string;
   readonly enabled: boolean;
 }
 
-export type CerebroSetEnabledResponse = CerebroActionResponse;
+export type MemoryBankSetEnabledResponse = MemoryBankActionResponse;
+
+/** Unwire, uninstall, and forget one bank. The repository stays on disk. */
+export interface MemoryBankForgetRequest {
+  readonly slug: string;
+}
+
+export type MemoryBankForgetResponse = MemoryBankActionResponse;
+
+/** Throw Artemis's master gate. See `IPC.memoryBanksSetMasterEnabled`. */
+export interface MemoryBanksSetMasterEnabledRequest {
+  readonly enabled: boolean;
+}
+
+export type MemoryBanksSetMasterEnabledResponse = MemoryBankActionResponse;
 
 /* -------------------------------------------------------------------------- */
 /* Agent prompts                                                              */
@@ -2270,13 +2339,15 @@ export type IpcRequestMap = {
   [IPC.updatesRestart]: UpdatesRestartRequest;
   [IPC.updatesDismiss]: UpdatesDismissRequest;
   [IPC.updatesSetChannel]: UpdatesSetChannelRequest;
-  [IPC.cerebroStatus]: CerebroStatusRequest;
-  [IPC.cerebroList]: CerebroListRequest;
-  [IPC.cerebroPreflight]: CerebroPreflightRequest;
-  [IPC.cerebroSetup]: CerebroSetupRequest;
-  [IPC.cerebroSync]: CerebroSyncRequest;
-  [IPC.cerebroRetire]: CerebroRetireRequest;
-  [IPC.cerebroSetEnabled]: CerebroSetEnabledRequest;
+  [IPC.memoryBanksStatus]: MemoryBanksStatusRequest;
+  [IPC.memoryBankMemories]: MemoryBankMemoriesRequest;
+  [IPC.memoryBanksPreflight]: MemoryBanksPreflightRequest;
+  [IPC.memoryBankAdd]: MemoryBankAddRequest;
+  [IPC.memoryBankSync]: MemoryBankSyncRequest;
+  [IPC.memoryBankRetire]: MemoryBankRetireRequest;
+  [IPC.memoryBankSetEnabled]: MemoryBankSetEnabledRequest;
+  [IPC.memoryBankForget]: MemoryBankForgetRequest;
+  [IPC.memoryBanksSetMasterEnabled]: MemoryBanksSetMasterEnabledRequest;
   [IPC.agentPromptsList]: AgentPromptsListRequest;
   [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
   [IPC.serverStatus]: ServerStatusRequest;
@@ -2353,13 +2424,15 @@ export type IpcResponseMap = {
   [IPC.updatesRestart]: UpdatesStateResponse;
   [IPC.updatesDismiss]: UpdatesStateResponse;
   [IPC.updatesSetChannel]: UpdatesStateResponse;
-  [IPC.cerebroStatus]: CerebroStatusResponse;
-  [IPC.cerebroList]: CerebroListResponse;
-  [IPC.cerebroPreflight]: CerebroPreflightResponse;
-  [IPC.cerebroSetup]: CerebroSetupResponse;
-  [IPC.cerebroSync]: CerebroSyncResponse;
-  [IPC.cerebroRetire]: CerebroRetireResponse;
-  [IPC.cerebroSetEnabled]: CerebroSetEnabledResponse;
+  [IPC.memoryBanksStatus]: MemoryBanksStatusResponse;
+  [IPC.memoryBankMemories]: MemoryBankMemoriesResponse;
+  [IPC.memoryBanksPreflight]: MemoryBanksPreflightResponse;
+  [IPC.memoryBankAdd]: MemoryBankAddResponse;
+  [IPC.memoryBankSync]: MemoryBankSyncResponse;
+  [IPC.memoryBankRetire]: MemoryBankRetireResponse;
+  [IPC.memoryBankSetEnabled]: MemoryBankSetEnabledResponse;
+  [IPC.memoryBankForget]: MemoryBankForgetResponse;
+  [IPC.memoryBanksSetMasterEnabled]: MemoryBanksSetMasterEnabledResponse;
   [IPC.agentPromptsList]: AgentPromptsListResponse;
   [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
   [IPC.serverStatus]: ServerStateResponse;
@@ -2614,30 +2687,33 @@ export interface ArtemisBridge {
   };
 
   /**
-   * The team memory bank, through the bank's own CLI.
+   * The memory banks, through the banks' own CLI.
    *
-   * Two reads, one bootstrap, three actions — and none of them lets the
-   * renderer name a path, a binary, or a git remote. Main resolves the bank's
-   * repo on this machine and invokes `bin/cerebro` inside it; the bank's own
-   * validation and PR gates decide what actually lands. See the channel
-   * comments in {@link IPC} for why the write channels answer with a message
-   * rather than data.
+   * Reads and actions — and none of them lets the renderer name a path, a
+   * binary, or an arbitrary git remote outside `add`. Main resolves each
+   * bank's repo and the CLI to drive it; the banks' own validation and PR
+   * gates decide what actually lands. See the channel comments in {@link IPC}
+   * for why the write channels answer with a message rather than data.
    */
-  readonly cerebro: {
-    /** The bank's condition on this machine. `installed: false` is an answer, not an error. */
-    status(request: CerebroStatusRequest): Promise<IpcResult<CerebroStatusResponse>>;
-    /** Every memory in the bank, bodies included. */
-    list(request: CerebroListRequest): Promise<IpcResult<CerebroListResponse>>;
-    /** What this machine is missing, with the fix for each. Answers before the bank exists. */
-    preflight(request: CerebroPreflightRequest): Promise<IpcResult<CerebroPreflightResponse>>;
-    /** Clone if missing, enable every profile, sync once. Idempotent. */
-    setup(request: CerebroSetupRequest): Promise<IpcResult<CerebroSetupResponse>>;
-    /** Promote queued drafts, fetch, re-install everywhere. Bypasses the throttle. */
-    sync(request: CerebroSyncRequest): Promise<IpcResult<CerebroSyncResponse>>;
+  readonly memoryBanks: {
+    /** Every configured bank's condition. `banks: []` is an answer, not an error. */
+    status(request: MemoryBanksStatusRequest): Promise<IpcResult<MemoryBanksStatusResponse>>;
+    /** One bank's memories, bodies included. */
+    memories(request: MemoryBankMemoriesRequest): Promise<IpcResult<MemoryBankMemoriesResponse>>;
+    /** What this machine is missing, with the fix for each. Answers before any bank exists. */
+    preflight(request: MemoryBanksPreflightRequest): Promise<IpcResult<MemoryBanksPreflightResponse>>;
+    /** Join, create, or adopt a bank; wire it; sync once. Idempotent. */
+    add(request: MemoryBankAddRequest): Promise<IpcResult<MemoryBankAddResponse>>;
+    /** Promote queued drafts, fetch, re-install. Bypasses the throttle. */
+    sync(request: MemoryBankSyncRequest): Promise<IpcResult<MemoryBankSyncResponse>>;
     /** Remove a memory through the same gates. */
-    retire(request: CerebroRetireRequest): Promise<IpcResult<CerebroRetireResponse>>;
-    /** The master switch: Artemis's gate and the machine's wiring, together. */
-    setEnabled(request: CerebroSetEnabledRequest): Promise<IpcResult<CerebroSetEnabledResponse>>;
+    retire(request: MemoryBankRetireRequest): Promise<IpcResult<MemoryBankRetireResponse>>;
+    /** Wire one bank on or off (profile blocks + CLI config flag). */
+    setEnabled(request: MemoryBankSetEnabledRequest): Promise<IpcResult<MemoryBankSetEnabledResponse>>;
+    /** Unwire, uninstall, and forget one bank. The repo stays on disk. */
+    forget(request: MemoryBankForgetRequest): Promise<IpcResult<MemoryBankForgetResponse>>;
+    /** Artemis's master gate: prompt injection + run-start syncs. */
+    setMasterEnabled(request: MemoryBanksSetMasterEnabledRequest): Promise<IpcResult<MemoryBanksSetMasterEnabledResponse>>;
   };
   /**
    * Standing instructions, attached to runs by the main process.

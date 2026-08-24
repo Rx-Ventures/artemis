@@ -18,7 +18,8 @@ import type {
   AgentPromptsDocument,
   AuthStatusInfo,
   Capabilities,
-  CerebroMemory,
+  MemoryBankInfo,
+  MemoryBankMemory,
   IpcResult,
   ArtemisBridge,
   PermissionDecision,
@@ -326,14 +327,41 @@ const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
 const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
 
-/** The Cerebro "clone": agents write to the real one; here, retire deletes. */
-let mockCerebroInstalled = true;
 /**
- * The master switch. On in the mock, so the pane's populated state is the one
- * dev meets by default — the off state is one click away and comes back.
+ * The banks "on this machine": agents write to the real ones; here, retire
+ * deletes. Two banks so the multi-bank rendering — read-only badge, default
+ * marker, per-bank switches — is the state dev meets by default.
  */
-let mockCerebroEnabled = true;
-let mockCerebroMemories: CerebroMemory[] = [
+let mockMasterEnabled = true;
+let mockBanks: MemoryBankInfo[] = [
+  {
+    slug: 'cerebro',
+    path: '/Users/demo/Documents/cerebro',
+    remote: 'https://github.com/Rx-Ventures/cerebro.git',
+    role: 'readwrite',
+    enabled: true,
+    isDefault: true,
+    exists: true,
+    source: 'cerebro@52a0a32',
+    memories: 3,
+    validationErrors: 0,
+    projects: 27,
+  },
+  {
+    slug: 'client-docs',
+    path: '/Users/demo/Documents/client-docs',
+    remote: null,
+    role: 'readonly',
+    enabled: false,
+    isDefault: false,
+    exists: true,
+    source: 'cerebro@1a2b3c4',
+    memories: 1,
+    validationErrors: 0,
+    projects: 4,
+  },
+];
+let mockBankMemories: MemoryBankMemory[] = [
   {
     name: 'cerebro-memory-bank',
     type: 'reference',
@@ -1403,27 +1431,32 @@ export function createMockBridge(): ArtemisBridge {
      * A bank with no repo behind it. The array below is the "clone": drafts
      * upsert into it, retire deletes from it, and the messages are worded the
      * way the real CLI words them so the receipt line is exercised honestly.
-     * `setup` flips nothing because the mock starts installed — the not-set-up
-     * state is reachable by editing `mockCerebroInstalled` while developing
+     * The no-banks state is reachable by emptying `mockBanks` while developing
      * that path, which beats a hidden toggle nobody will find.
      */
-    cerebro: {
+    memoryBanks: {
       status: async () =>
         ok({
-          installed: mockCerebroInstalled,
-          enabled: mockCerebroEnabled,
-          repoPath: '/Users/demo/Documents/cerebro',
-          remote: 'https://github.com/Rx-Ventures/cerebro.git',
-          source: 'cerebro@52a0a32',
-          memories: mockCerebroMemories.length,
-          validationErrors: 0,
-          projects: 27,
+          cliAvailable: true,
+          masterEnabled: mockMasterEnabled,
+          banks: [...mockBanks],
           profiles: [
-            { name: 'demo-personal', label: 'Demo — personal', enabled: true, hook: true },
-            { name: 'demo-work', label: 'Demo — work', enabled: true, hook: false },
+            {
+              name: 'demo-personal',
+              label: 'Demo — personal',
+              hook: true,
+              banks: Object.fromEntries(mockBanks.map((bank) => [bank.slug, bank.enabled])),
+            },
+            {
+              name: 'demo-work',
+              label: 'Demo — work',
+              hook: false,
+              banks: Object.fromEntries(mockBanks.map((bank) => [bank.slug, bank.enabled])),
+            },
           ],
         }),
-      list: async () => ok({ memories: [...mockCerebroMemories] }),
+      memories: async (request) =>
+        ok({ memories: request.slug === 'cerebro' ? [...mockBankMemories] : [] }),
       preflight: async () =>
         ok({
           // One of each state, so the requirement list's three rows are all
@@ -1445,32 +1478,55 @@ export function createMockBridge(): ArtemisBridge {
               detail: 'not found — memory changes push a branch for you to open a PR from',
               remedy: 'brew install gh',
             },
-            {
-              id: 'remote',
-              label: 'Bank access',
-              state: 'ok' as const,
-              detail: 'https://github.com/Rx-Ventures/cerebro.git reachable',
-              remedy: null,
-            },
           ],
         }),
-      setup: async () => {
-        mockCerebroInstalled = true;
-        // Setting it up is the yes — the same thing `setupCerebro` records.
-        mockCerebroEnabled = true;
-        return ok({ message: 'Cloned the bank. Enabled every profile. cerebro@52a0a32: 3 memories -> 27 project(s).' });
+      add: async (request) => {
+        mockBanks = [
+          ...mockBanks,
+          {
+            slug: request.slug,
+            path: request.path ?? `/Users/demo/Documents/${request.slug}`,
+            remote: request.remote ?? null,
+            role: request.role,
+            enabled: true,
+            isDefault: mockBanks.length === 0,
+            exists: true,
+            source: 'cerebro@0000000',
+            memories: 0,
+            validationErrors: 0,
+            projects: 0,
+          },
+        ];
+        mockMasterEnabled = true;
+        return ok({
+          message: `${request.mode === 'join' ? 'Joined' : request.mode === 'create' ? 'Created a bank' : 'Adopted the bank'} as '${request.slug}'. Wired every profile. Installed into project memory.`,
+        });
       },
       sync: async () => ok({ message: 'cerebro@52a0a32: 3 memories -> 27 project(s) across 3 profile(s)' }),
       retire: async (request) => {
-        mockCerebroMemories = mockCerebroMemories.filter((m) => m.name !== request.name);
+        mockBankMemories = mockBankMemories.filter((m) => m.name !== request.name);
         return ok({ message: `cerebro: opened PR for memory-20260814-retire-${request.name}` });
       },
       setEnabled: async (request) => {
-        mockCerebroEnabled = request.enabled;
+        mockBanks = mockBanks.map((bank) =>
+          bank.slug === request.slug ? { ...bank, enabled: request.enabled } : bank,
+        );
         return ok({
           message: request.enabled
-            ? 'Cerebro is on. Every profile is wired up again. cerebro@52a0a32: 3 memories -> 27 project(s).'
-            : 'Cerebro is off. The instruction block, /cerebro command and sync hook are out of every profile.',
+            ? `'${request.slug}' is on. Installed into project memory.`
+            : `'${request.slug}' is off — its profile block is out, and syncs skip it.`,
+        });
+      },
+      forget: async (request) => {
+        mockBanks = mockBanks.filter((bank) => bank.slug !== request.slug);
+        return ok({ message: `Unwired '${request.slug}' from every profile. Forgot '${request.slug}'.` });
+      },
+      setMasterEnabled: async (request) => {
+        mockMasterEnabled = request.enabled;
+        return ok({
+          message: request.enabled
+            ? 'Memory banks are on for Artemis: runs sync them at start and agents are briefed about them.'
+            : 'Memory banks are off for Artemis: no run-start syncs, no prompt.',
         });
       },
     },
