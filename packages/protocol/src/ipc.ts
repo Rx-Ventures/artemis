@@ -1030,8 +1030,22 @@ export interface SessionDelegatedWork {
 }
 
 export interface RunsLiveWorkResponse {
-  /** Sessions known to still be working. Never a complete idle-set complement. */
+  /**
+   * Sessions the adapters retain work for. Never a complete idle-set
+   * complement — and **not** the working marker's set: this includes
+   * conversations kept alive by a registered schedule, which sit idle for
+   * hours between wakeups. It answers "may this conversation be thrown
+   * away" (no), and {@link working} answers "is it doing something now".
+   */
   readonly sessionIds: readonly SessionId[];
+  /**
+   * Sessions with something actually running right now — an open turn, a
+   * live background task, or a task settling into its follow-up turn. The
+   * sidebar's working marker reads this one; drawing it from
+   * {@link sessionIds} put a permanent spinner on every conversation that
+   * had ever registered a schedule.
+   */
+  readonly working: readonly SessionId[];
   /**
    * The rows themselves, for every conversation whose adapter still holds any.
    *

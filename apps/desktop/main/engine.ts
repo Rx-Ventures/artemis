@@ -305,6 +305,8 @@ export interface ArtemisEngine {
    * in-memory pools and sits on a poll.
    */
   liveWorkSessions(): readonly SessionId[];
+  /** The narrower set: sessions with an open turn, live tasks, or a settling beat. */
+  workingSessions(): readonly SessionId[];
 
   /**
    * What those conversations have delegated, for a window rebuilding its rows.
@@ -1127,6 +1129,21 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         for (const sessionId of adapter.sessionsHoldingWork?.() ?? []) holding.add(sessionId);
       }
       return [...holding];
+    },
+
+    workingSessions: () => {
+      const working = new Set<SessionId>();
+      for (const adapter of providers.list()) {
+        // An adapter without the split falls back to its retention set — for
+        // one that cannot distinguish, "retained" is the conservative reading
+        // of "working", which errs the way the old single set did.
+        for (const sessionId of adapter.sessionsWorking?.() ??
+          adapter.sessionsHoldingWork?.() ??
+          []) {
+          working.add(sessionId);
+        }
+      }
+      return [...working];
     },
 
     delegatedWork: () => {

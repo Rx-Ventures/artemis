@@ -40,6 +40,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 
 import { cn } from '../lib/utils';
 import { usePane } from '../state/paneContext';
+import { useApp } from '../state/store';
 
 /**
  * The five conditions, resolved from run status and the permission queue.
@@ -121,7 +122,24 @@ function useElapsed(since: number | null): string | null {
 export function ActivityIndicator(): ReactElement | null {
   const run = usePane((s) => s.run);
   const queued = usePane((s) => s.permissionQueue.length);
-  const state = activityOf(run, queued);
+  /*
+   * Is a turn already running on this conversation, somewhere this pane cannot
+   * see? A new run against a conversation whose retained process is mid-turn —
+   * a scheduled wakeup that fired, a workflow's settle turn — is spawned fresh
+   * and waits its turn on the provider's own transcript. That wait used to
+   * read "starting the provider" for however long the other turn ran, which
+   * is a sentence about a spawn that finished long ago. Main's working set is
+   * the one place the other turn is visible from.
+   */
+  const sessionId = usePane((s) => s.run?.sessionId ?? s.resumeSessionId);
+  const busyElsewhere = useApp(
+    (s) => sessionId !== null && sessionId !== undefined && s.sessionsWorking.includes(sessionId),
+  );
+  const raw = activityOf(run, queued);
+  const state =
+    raw.kind === 'starting' && busyElsewhere
+      ? { ...raw, because: "finishing this conversation's current turn first" }
+      : raw;
   const elapsed = useElapsed(state.since);
 
   if (state.kind === 'settled') return null;
