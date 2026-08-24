@@ -254,19 +254,75 @@ export function Transcript(): ReactElement {
   // it here costs one subscription that fires roughly never, and does not go
   // near rule 4 (which is about streaming text, not preferences).
   const width = useApp((s) => s.conversationWidth);
+  /**
+   * Which conversation this column is showing.
+   *
+   * Read for one purpose: {@link pinned} lives in a ref, and this component is
+   * mounted once per column and never keyed on the conversation — so opening a
+   * different session used to inherit the *previous* one's scroll state. Having
+   * scrolled up to read something (which unpins) meant the next session you
+   * opened did not follow its tail either, and the browser kept the old
+   * `scrollTop`, landing you partway up a conversation you had just opened.
+   */
+  const conversationId = usePane((s) => s.run?.sessionId ?? s.resumeSessionId ?? null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  /** Last observed offset, to tell a user scrolling up from the box growing. */
+  const lastTop = useRef(0);
   const [showJump, setShowJump] = useState(false);
 
+  /**
+   * Re-read the pin from a scroll event.
+   *
+   * Unpinning asks for **evidence the user moved up**, not merely for the
+   * viewport to be short of the bottom, and that is the whole correction here.
+   * The follower assigns `scrollTop` as content lands; each assignment queues a
+   * scroll event that is handled after further rows may have grown the box, so
+   * a handler that unpinned on "not at the bottom right now" unpinned itself
+   * mid-load — precisely when a session's history arrives in bulk — and nothing
+   * ever pinned it again. Growth alone never moves `scrollTop` down; a person
+   * does.
+   *
+   * Re-pinning stays unconditional at the bottom, which is what makes this
+   * self-healing: scroll back down and the tail is followed again, and a
+   * transcript that is cleared (the box collapses to the viewport) reads as
+   * "at the bottom" and re-pins on its own.
+   */
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distance < 48;
-    pinned.current = atBottom;
-    setShowJump((current) => (current === !atBottom ? current : !atBottom));
+    const movedUp = el.scrollTop < lastTop.current;
+    lastTop.current = el.scrollTop;
+
+    if (atBottom) pinned.current = true;
+    else if (movedUp) pinned.current = false;
+
+    // Tied to the pin rather than to the distance: while the follower is still
+    // catching up with a burst of rows, offering to jump to an end it is
+    // already on its way to is noise.
+    const wanted = !pinned.current;
+    setShowJump((current) => (current === wanted ? current : wanted));
   }, []);
+
+  /**
+   * A conversation change starts at its end, always.
+   *
+   * The counterpart to the ref's persistence: whatever the last conversation
+   * left behind, opening one is a request to see where it got to. The follower
+   * below does the rest as history lands, because this leaves it pinned.
+   */
+  useEffect(() => {
+    pinned.current = true;
+    lastTop.current = 0;
+    setShowJump(false);
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
+  }, [conversationId]);
 
   /**
    * Follow the tail while the user is at the bottom, and stop the moment they
@@ -284,7 +340,15 @@ export function Transcript(): ReactElement {
     const content = contentRef.current;
     if (!viewport || !content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (pinned.current) viewport.scrollTop = viewport.scrollHeight;
+      if (!pinned.current) return;
+      viewport.scrollTop = viewport.scrollHeight;
+      // Recorded here rather than left to the scroll event this assignment
+      // queues: `lastTop` is "the offset we last knew about", and it has to
+      // include the ones we caused. Waiting for the event would leave a stale
+      // value in the window before it arrives, and a user scroll landing in
+      // that window would compare against an offset from before the follower
+      // moved — reading as *downward* and failing to unpin.
+      lastTop.current = viewport.scrollTop;
     });
     observer.observe(content);
     return () => observer.disconnect();
@@ -296,6 +360,7 @@ export function Transcript(): ReactElement {
     pinned.current = true;
     setShowJump(false);
     el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
   }, []);
 
   return (
