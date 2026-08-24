@@ -71,13 +71,15 @@ import {
   type AgentPromptsSaveRequest,
   type Attachment,
   type BuiltInPromptId,
-  type CerebroListRequest,
-  type CerebroPreflightRequest,
-  type CerebroRetireRequest,
-  type CerebroSetEnabledRequest,
-  type CerebroSetupRequest,
-  type CerebroStatusRequest,
-  type CerebroSyncRequest,
+  type MemoryBankAddRequest,
+  type MemoryBankForgetRequest,
+  type MemoryBankMemoriesRequest,
+  type MemoryBankRetireRequest,
+  type MemoryBankSetEnabledRequest,
+  type MemoryBankSyncRequest,
+  type MemoryBanksPreflightRequest,
+  type MemoryBanksSetMasterEnabledRequest,
+  type MemoryBanksStatusRequest,
   type FileAttachment,
   type ImageAttachment,
   type JsonObject,
@@ -1909,67 +1911,120 @@ export function validateUpdatesSetChannel(raw: unknown): UpdatesSetChannelReques
 }
 
 /* -------------------------------------------------------------------------- */
-/* Cerebro                                                                    */
+/* Memory banks                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** The bank's own slug rule, mirrored so a bad name fails here with a field error rather than as CLI stderr. */
-const CEREBRO_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** The banks' own slug rule, mirrored so a bad name fails here with a field error rather than as CLI stderr. */
+const MEMORY_BANK_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function requireBankSlug(value: unknown, field: string): string {
+  const slug = requireString(value, field, 60);
+  if (!MEMORY_BANK_SLUG_PATTERN.test(slug)) {
+    throw new ValidationError(field, 'is not a valid bank slug');
+  }
+  return slug;
+}
 
 /**
- * The four empty requests. Empty for the reason `SharedConfigStatusRequest`
- * is: main owns the bank's location, so there is nothing safe for a renderer
- * to say here — see the Cerebro block in `protocol/src/ipc.ts`.
+ * The empty requests. Empty for the reason `SharedConfigStatusRequest` is:
+ * main owns bank locations, so there is nothing safe for a renderer to say
+ * here — see the memory-banks block in `protocol/src/ipc.ts`.
  */
-export function validateCerebroStatus(raw: unknown): CerebroStatusRequest {
+export function validateMemoryBanksStatus(raw: unknown): MemoryBanksStatusRequest {
   requireRequest(raw);
   return {};
 }
 
-/** @see validateCerebroStatus */
-export function validateCerebroList(raw: unknown): CerebroListRequest {
+/** @see validateMemoryBanksStatus */
+export function validateMemoryBanksPreflight(raw: unknown): MemoryBanksPreflightRequest {
   requireRequest(raw);
   return {};
 }
 
-/** @see validateCerebroStatus */
-export function validateCerebroPreflight(raw: unknown): CerebroPreflightRequest {
-  requireRequest(raw);
-  return {};
+/** One bank's memories; the slug must name a configured bank (the CLI checks). */
+export function validateMemoryBankMemories(raw: unknown): MemoryBankMemoriesRequest {
+  const request = requireRequest(raw);
+  return { slug: requireBankSlug(request['slug'], 'slug') };
 }
 
-/** @see validateCerebroStatus */
-export function validateCerebroSetup(raw: unknown): CerebroSetupRequest {
-  requireRequest(raw);
-  return {};
+/**
+ * Registration is the one channel that names locations, so it is the one
+ * validated hardest: a mode from the closed set, a slug in the banks' own
+ * grammar, a role from the closed set — and the remote/path length-capped.
+ * What the strings *mean* is the CLI's to judge (it refuses non-banks,
+ * unreadable remotes, and slug collisions in its own words).
+ */
+export function validateMemoryBankAdd(raw: unknown): MemoryBankAddRequest {
+  const request = requireRequest(raw);
+  const mode = requireString(request['mode'], 'mode', 10);
+  if (mode !== 'join' && mode !== 'create' && mode !== 'adopt') {
+    throw new ValidationError('mode', 'must be "join", "create" or "adopt"');
+  }
+  const slug = requireBankSlug(request['slug'], 'slug');
+  const role = requireString(request['role'], 'role', 10);
+  if (role !== 'readwrite' && role !== 'readonly') {
+    throw new ValidationError('role', 'must be "readwrite" or "readonly"');
+  }
+  const remote = optionalString(request['remote'], 'remote', 500);
+  if (mode === 'join' && (remote === undefined || remote.length === 0)) {
+    throw new ValidationError('remote', 'is required to join a bank');
+  }
+  const path = optionalString(request['path'], 'path', 1000);
+  if (mode === 'adopt' && (path === undefined || path.length === 0)) {
+    throw new ValidationError('path', 'is required to adopt a bank');
+  }
+  return {
+    mode,
+    slug,
+    role,
+    ...(remote === undefined ? {} : { remote }),
+    ...(path === undefined ? {} : { path }),
+  };
 }
 
-/** @see validateCerebroStatus */
-export function validateCerebroSync(raw: unknown): CerebroSyncRequest {
-  requireRequest(raw);
-  return {};
+/** Sync one bank, or all when the slug is omitted. */
+export function validateMemoryBankSync(raw: unknown): MemoryBankSyncRequest {
+  const request = requireRequest(raw);
+  const slug = request['slug'] === undefined ? undefined : requireBankSlug(request['slug'], 'slug');
+  return slug === undefined ? {} : { slug };
 }
 
 /** Retirement names a slug; the CLI answers "no memory named …" for one that does not exist. */
-export function validateCerebroRetire(raw: unknown): CerebroRetireRequest {
+export function validateMemoryBankRetire(raw: unknown): MemoryBankRetireRequest {
   const request = requireRequest(raw);
+  const slug = requireBankSlug(request['slug'], 'slug');
   const name = requireString(request['name'], 'name', 60);
-  if (!CEREBRO_SLUG_PATTERN.test(name)) {
+  if (!MEMORY_BANK_SLUG_PATTERN.test(name)) {
     throw new ValidationError('name', 'is not a valid memory slug');
   }
   const reason = optionalString(request['reason'], 'reason', 200);
-  return { name, ...(reason === undefined ? {} : { reason }) };
+  return { slug, name, ...(reason === undefined ? {} : { reason }) };
 }
 
 /**
- * The master switch, as a state rather than a toggle.
+ * Per-bank wiring, as a state rather than a toggle.
  *
- * Required rather than defaulted, and that is the one thing worth being strict
- * about here: a missing field defaulting to `true` would let a malformed call
- * opt the machine into writing to a shared repository, and defaulting to
- * `false` would silently undo an opt-in. Neither is a decision this layer gets
- * to make on the user's behalf.
+ * Required rather than defaulted: a missing field defaulting to `true` would
+ * let a malformed call opt the machine into writing to a shared repository,
+ * and defaulting to `false` would silently undo an opt-in. Neither is a
+ * decision this layer gets to make on the user's behalf.
  */
-export function validateCerebroSetEnabled(raw: unknown): CerebroSetEnabledRequest {
+export function validateMemoryBankSetEnabled(raw: unknown): MemoryBankSetEnabledRequest {
+  const request = requireRequest(raw);
+  const slug = requireBankSlug(request['slug'], 'slug');
+  const enabled = optionalBoolean(request['enabled'], 'enabled');
+  if (enabled === undefined) throw new ValidationError('enabled', 'is required');
+  return { slug, enabled };
+}
+
+/** Forgetting names a bank; everything else is main's. */
+export function validateMemoryBankForget(raw: unknown): MemoryBankForgetRequest {
+  const request = requireRequest(raw);
+  return { slug: requireBankSlug(request['slug'], 'slug') };
+}
+
+/** The master gate, strict for `validateMemoryBankSetEnabled`'s reason. */
+export function validateMemoryBanksSetMasterEnabled(raw: unknown): MemoryBanksSetMasterEnabledRequest {
   const request = requireRequest(raw);
   const enabled = optionalBoolean(request['enabled'], 'enabled');
   if (enabled === undefined) throw new ValidationError('enabled', 'is required');
@@ -1980,7 +2035,7 @@ export function validateCerebroSetEnabled(raw: unknown): CerebroSetEnabledReques
 /* Agent prompts                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** Empty; main owns the library's location. @see validateCerebroStatus */
+/** Empty; main owns the library's location. @see validateMemoryBanksStatus */
 export function validateAgentPromptsList(raw: unknown): AgentPromptsListRequest {
   requireRequest(raw);
   return {};
@@ -2069,7 +2124,7 @@ export function validateAgentPromptsSave(raw: unknown): AgentPromptsSaveRequest 
 /**
  * The four empty server requests.
  *
- * Empty for `validateCerebroStatus`'s reason, and with one addition of its own:
+ * Empty for `validateMemoryBanksStatus`'s reason, and with one addition of its own:
  * there is exactly one server, main owns its address, and the renderer decides
  * only whether it runs. Nothing here could name a profile, a model or a host
  * without handing the renderer a say in what gets published.

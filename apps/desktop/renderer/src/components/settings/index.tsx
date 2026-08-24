@@ -19,7 +19,7 @@ export { AppearanceSection } from './AppearanceSection';
 export { BrowserSection } from './BrowserSection';
 export { PermissionsSection } from './PermissionsSection';
 export { AgentsSection } from './AgentsSection';
-export { CerebroSection } from './CerebroSection';
+export { MemoryBanksSection } from './MemoryBanksSection';
 export { ServerSection } from './ServerSection';
 export { RoutinesSection } from './RoutinesSection';
 export { AdvancedSection } from './AdvancedSection';

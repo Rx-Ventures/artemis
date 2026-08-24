@@ -62,14 +62,16 @@ import {
 import { checkWorkingDirectory, describeWorkspace } from '@rx-artemis/core';
 
 import {
-  readCerebroList,
-  readCerebroPreflight,
-  readCerebroStatus,
-  retireCerebroMemory,
-  setCerebroEnabled,
-  setupCerebro,
-  syncCerebro,
-} from './cerebro.js';
+  addMemoryBank,
+  forgetMemoryBank,
+  readMemoryBankMemories,
+  readMemoryBanksPreflight,
+  readMemoryBanksStatus,
+  retireMemoryBankMemory,
+  setMasterEnabled,
+  setMemoryBankEnabled,
+  syncMemoryBank,
+} from './memoryBanks.js';
 import type { EngineHost } from './engine.js';
 import {
   toIpcError,
@@ -154,13 +156,15 @@ import {
   validateAuthStatus,
   validateAgentPromptsList,
   validateAgentPromptsSave,
-  validateCerebroList,
-  validateCerebroPreflight,
-  validateCerebroRetire,
-  validateCerebroSetup,
-  validateCerebroStatus,
-  validateCerebroSetEnabled,
-  validateCerebroSync,
+  validateMemoryBankAdd,
+  validateMemoryBankForget,
+  validateMemoryBankMemories,
+  validateMemoryBankRetire,
+  validateMemoryBankSetEnabled,
+  validateMemoryBankSync,
+  validateMemoryBanksPreflight,
+  validateMemoryBanksSetMasterEnabled,
+  validateMemoryBanksStatus,
   validateUsagePlan,
   validateUpdatesDismiss,
   validateUpdatesSetChannel,
@@ -553,43 +557,52 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     },
 
     /* ---------------------------------------------------------------- */
-    /* Cerebro                                                          */
+    /* Memory banks                                                     */
     /* ---------------------------------------------------------------- */
 
-    [IPC.cerebroStatus]: {
-      validate: validateCerebroStatus,
-      handle: async () => readCerebroStatus(),
+    [IPC.memoryBanksStatus]: {
+      validate: validateMemoryBanksStatus,
+      handle: async () => readMemoryBanksStatus(),
     },
 
-    [IPC.cerebroList]: {
-      validate: validateCerebroList,
-      handle: async () => ({ memories: await readCerebroList() }),
+    [IPC.memoryBankMemories]: {
+      validate: validateMemoryBankMemories,
+      handle: async (request) => ({ memories: await readMemoryBankMemories(request.slug) }),
     },
 
-    [IPC.cerebroPreflight]: {
-      validate: validateCerebroPreflight,
-      handle: async () => readCerebroPreflight(),
+    [IPC.memoryBanksPreflight]: {
+      validate: validateMemoryBanksPreflight,
+      handle: async () => readMemoryBanksPreflight(),
     },
 
-    [IPC.cerebroSetup]: {
-      validate: validateCerebroSetup,
-      handle: async () => setupCerebro(),
+    [IPC.memoryBankAdd]: {
+      validate: validateMemoryBankAdd,
+      handle: async (request) => addMemoryBank(request),
     },
 
-    [IPC.cerebroSync]: {
-      validate: validateCerebroSync,
-      handle: async () => syncCerebro(),
+    [IPC.memoryBankSync]: {
+      validate: validateMemoryBankSync,
+      handle: async (request) => syncMemoryBank(request),
     },
 
-
-    [IPC.cerebroRetire]: {
-      validate: validateCerebroRetire,
-      handle: async (request) => retireCerebroMemory(request),
+    [IPC.memoryBankRetire]: {
+      validate: validateMemoryBankRetire,
+      handle: async (request) => retireMemoryBankMemory(request),
     },
 
-    [IPC.cerebroSetEnabled]: {
-      validate: validateCerebroSetEnabled,
-      handle: async (request) => setCerebroEnabled(request),
+    [IPC.memoryBankSetEnabled]: {
+      validate: validateMemoryBankSetEnabled,
+      handle: async (request) => setMemoryBankEnabled(request),
+    },
+
+    [IPC.memoryBankForget]: {
+      validate: validateMemoryBankForget,
+      handle: async (request) => forgetMemoryBank(request),
+    },
+
+    [IPC.memoryBanksSetMasterEnabled]: {
+      validate: validateMemoryBanksSetMasterEnabled,
+      handle: async (request) => setMasterEnabled(request),
     },
 
     /* ---------------------------------------------------------------- */

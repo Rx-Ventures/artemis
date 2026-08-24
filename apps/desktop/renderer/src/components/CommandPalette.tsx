@@ -525,11 +525,11 @@ function RootPage({
           Agents and standing prompts…
         </CommandItem>
         <CommandItem
-          value="settings cerebro team memory bank memories shared knowledge"
+          value="settings memory banks cerebro team memories shared knowledge"
           onSelect={() => openSettings('cerebro')}
         >
           <BrainIcon />
-          Cerebro memory bank…
+          Memory banks…
         </CommandItem>
       </CommandGroup>
 

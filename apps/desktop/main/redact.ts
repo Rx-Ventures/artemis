@@ -295,7 +295,7 @@ const FILE_TEXT_SCAN_POLICY: ScanPolicy = {
 };
 
 /**
- * Scan policy for the Cerebro bank's memory listing.
+ * Scan policy for a memory bank's listing.
  *
  * `body` is a teammate's prose off the bank's reviewed main branch, not
  * Artemis's data — the same argument as {@link PREVIEW_SCAN_POLICY}'s `text`.
@@ -303,7 +303,7 @@ const FILE_TEXT_SCAN_POLICY: ScanPolicy = {
  * can land, and a memory that merely *documents* a key format must still be
  * listable. Structure stays strict: no profile field at any depth.
  */
-const CEREBRO_SCAN_POLICY: ScanPolicy = {
+const MEMORY_BANK_SCAN_POLICY: ScanPolicy = {
   ...RESPONSE_SCAN_POLICY,
   contentKeys: new Set([...RESPONSE_SCAN_POLICY.contentKeys, 'body']),
 };
@@ -378,8 +378,8 @@ export function assertResponseSafe(value: unknown, channel: IpcChannel): void {
       return assertNoSecrets(value, channel, FILE_TEXT_SCAN_POLICY);
 
     // Team-authored memory bodies, already gated by the bank's own validator.
-    case IPC.cerebroList:
-      return assertNoSecrets(value, channel, CEREBRO_SCAN_POLICY);
+    case IPC.memoryBankMemories:
+      return assertNoSecrets(value, channel, MEMORY_BANK_SCAN_POLICY);
 
     default:
       return assertNoSecrets(value, channel, RESPONSE_SCAN_POLICY);

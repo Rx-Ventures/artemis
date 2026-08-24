@@ -57,7 +57,7 @@ import type {
 import { BUILT_IN_AGENT_PROMPTS, promptText, scopeCovers } from '@rx-artemis/protocol';
 
 import { useAgentPrompts, type AgentPromptsPane } from '../../hooks/useAgentPrompts';
-import { useCerebroAvailable } from '../../hooks/useCerebro';
+import { useMemoryBanksAvailable } from '../../hooks/useMemoryBanks';
 import { newId } from '../../lib/id';
 import { useApp } from '../../state/store';
 import { WithReason } from '../disabled-reason';
@@ -94,17 +94,17 @@ export function AgentsSection(): ReactElement {
   const profiles = useApp((s) => s.profiles);
   const providers = useApp((s) => s.providers);
 
-  // The bank's condition, for the one built-in that depends on it. Read from
-  // the same module the Cerebro pane reads, so the two panes cannot disagree
-  // about whether it is installed *and* switched on — which is the conjunction
-  // `engine.ts` composes runs with, and the only thing that makes this row's
-  // "not being sent" line true.
-  const cerebroAvailable = useCerebroAvailable();
+  // The banks' condition, for the one built-in that depends on them. Read from
+  // the same module the memory-banks pane reads, so the two panes cannot
+  // disagree about whether they are configured *and* switched on — which is
+  // the conjunction `engine.ts` composes runs with, and the only thing that
+  // makes this row's "not being sent" line true.
+  const banksAvailable = useMemoryBanksAvailable();
   const availableBuiltIns = useMemo((): ReadonlySet<BuiltInPromptId> => {
     const available = new Set<BuiltInPromptId>();
-    if (cerebroAvailable === true) available.add('builtin:cerebro');
+    if (banksAvailable === true) available.add('builtin:cerebro');
     return available;
-  }, [cerebroAvailable]);
+  }, [banksAvailable]);
 
   const targets = useMemo((): readonly ScopeTarget[] => {
     return profiles.map((profile) => {
