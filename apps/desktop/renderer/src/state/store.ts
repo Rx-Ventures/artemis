@@ -2180,10 +2180,23 @@ function paneForSession(
   sessionId: SessionId,
   state: AppState = useApp.getState(),
 ): Pane | undefined {
-  return allLivePanes(state).find((pane) => {
+  let stale: Pane | undefined;
+  for (const pane of allLivePanes(state)) {
     const s = paneState(pane);
-    return s.run?.sessionId === sessionId || s.resumeSessionId === sessionId;
-  });
+    if (s.run?.sessionId !== sessionId && s.resumeSessionId !== sessionId) continue;
+    /*
+     * Prefer the copy that can still receive the conversation's events.
+     *
+     * A past routing bug could leave a static copy visible and the real live
+     * pane in the background, both naming one session. Visible-first ordering
+     * then made every click reveal the dead copy and every prompt start a
+     * competing provider turn. A live binding is the unique ownership fact;
+     * visibility is only layout, so it wins whenever the two disagree.
+     */
+    if (isLive(s)) return pane;
+    stale ??= pane;
+  }
+  return stale;
 }
 
 /**
@@ -8048,7 +8061,7 @@ function restoreDelegatedRows(delegated: readonly SessionDelegatedWork[]): void 
  * gives: this lands every few seconds and an unconditional write would re-render
  * every consumer of the store on each one.
  */
-async function refreshLiveWork(): Promise<void> {
+export async function refreshLiveWork(): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
 
@@ -8072,15 +8085,68 @@ async function refreshLiveWork(): Promise<void> {
   const sameWorking =
     state.sessionsWorking.length === nextWorking.length &&
     state.sessionsWorking.every((id, at) => id === nextWorking[at]);
-  if (sameHolding && sameWorking) return;
-  useApp.setState({
-    ...(sameHolding ? {} : { sessionsHoldingWork: next }),
-    ...(sameWorking ? {} : { sessionsWorking: nextWorking }),
+  if (!sameHolding || !sameWorking) {
+    useApp.setState({
+      ...(sameHolding ? {} : { sessionsHoldingWork: next }),
+      ...(sameWorking ? {} : { sessionsWorking: nextWorking }),
+    });
+    // The marker is computed from this set as well as from the panes, and nothing
+    // else will recompute it: the pane subscription that normally drives it fires
+    // on pane writes, and this is a window write.
+    syncRunningSessions();
+  }
+
+  /*
+   * Repair the stronger disagreement after painting its marker.
+   *
+   * `working` is main's statement that a provider is actively advancing this
+   * session. If this window already shows that session but its pane says idle,
+   * the pane has lost its run binding. Leaving it that way produces the exact
+   * split-brain Codex reports as "already has a runner": the old turn keeps
+   * working, the composer starts a rival one, and neither output nor steering
+   * has a live route into the window. One registry read recovers every such
+   * pane from the retained stream; healthy panes make this cost nothing.
+   */
+  await restoreLiveRunBindings(nextWorking);
+}
+
+/** Re-attach panes that main says are working but this window calls idle. */
+async function restoreLiveRunBindings(working: readonly SessionId[]): Promise<void> {
+  if (working.length === 0) return;
+
+  const candidates = working.flatMap((sessionId) => {
+    const pane = paneForSession(sessionId);
+    return pane !== undefined && !isLive(paneState(pane)) ? [{ pane, sessionId }] : [];
   });
-  // The marker is computed from this set as well as from the panes, and nothing
-  // else will recompute it: the pane subscription that normally drives it fires
-  // on pane writes, and this is a window write.
-  syncRunningSessions();
+  if (candidates.length === 0) return;
+
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+  const listed = await call(() => bridge.runs.list({}));
+  if (!listed.ok) return;
+
+  await Promise.all(
+    candidates.map(async ({ pane, sessionId }) => {
+      const handle = listed.value.runs.find(
+        (run) => run.status !== 'ended' && run.sessionId === sessionId,
+      );
+      if (handle === undefined) return;
+
+      // The selection or state may have moved while the registry answered.
+      // Never overwrite a new live run or a different conversation with an old
+      // poll's result.
+      const current = paneState(pane);
+      if (isLive(current) || !sessionIdsOf(current).includes(sessionId)) return;
+
+      // Another pane already holds the stream. `paneForSession` prefers that
+      // live owner, so the next row click reveals it; attaching a second copy
+      // would create two consumers that both appear entitled to steer.
+      const owner = paneForRun(handle.runId);
+      if (owner !== undefined && owner.id !== pane.id) return;
+
+      await attachRun(pane, handle);
+    }),
+  );
 }
 
 /** Re-read history once the provider has had a moment to flush its own writes. */
@@ -8298,6 +8364,18 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     if (useApp.getState().background.some((p) => p.id === open.id)) handOver(pane, open);
     useApp.setState({ paletteOpen: false, focusedPaneId: open.id });
     savePrefs();
+    /*
+     * "Already open" is only a layout answer, not a liveness answer.
+     *
+     * A pane can still name this session after losing the run that is actively
+     * writing it. Returning here without consulting main is what made clicking
+     * the working row a no-op: the static transcript stayed in front, output
+     * remained visible only on well-timed reloads, and the next prompt tried to
+     * start a second Codex runner instead of steering the first. Reconcile the
+     * stale copy in place. A genuinely idle open pane does one cheap registry
+     * read and remains untouched.
+     */
+    if (!isLive(paneState(open))) void restoreLiveRunBindings([session.id]);
     return;
   }
 
@@ -8622,11 +8700,24 @@ export async function submitPrompt(
   rememberPrompt(prompt, pane);
 
   const { bridge } = resolveBridge();
-  const state = paneState(pane);
+  let state = paneState(pane);
   if (!bridge) {
     pushBanner('error', 'No bridge to the main process', 'The preload script did not load.');
     return false;
   }
+
+  /*
+   * A session can still have a live runner after this renderer loses its local
+   * binding (a dropped stream or reload race). Do not trust an idle-looking pane
+   * enough to start a competing continuation: ask the main registry once and
+   * adopt its retained stream first. This also makes steering recover
+   * immediately, without requiring the user to wait for or time a refresh.
+   */
+  if (!isLive(state) && state.resumeSessionId !== null) {
+    await restoreLiveRunBindings([state.resumeSessionId]);
+    state = paneState(pane);
+  }
+
   if (!state.activeProfileId) {
     pushBanner('error', 'Pick a profile first', 'A run needs credentials, which come from a profile.');
     setScreen('profiles');

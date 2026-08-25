@@ -295,17 +295,16 @@ export interface ArtemisEngine {
   /**
    * Conversations still holding background work, across every provider.
    *
-   * Separate from {@link listRuns} because it answers about work that outlives
-   * the run that started it — a workflow, a backgrounded subagent, a registered
-   * schedule — which by definition appears in no live run. Adapters that have no
-   * such notion contribute nothing, so this is "known to be working" and never
-   * the complement of an idle set.
+   * The union of live registry runs and work that outlives the run that started
+   * it — a workflow, a backgrounded subagent, a registered schedule. Keeping
+   * both here gives a reloaded renderer one recovery source even when an adapter
+   * has no background-work ledger of its own.
    *
    * Synchronous, like {@link runEvents} and for the same reason: it reads
    * in-memory pools and sits on a poll.
    */
   liveWorkSessions(): readonly SessionId[];
-  /** The narrower set: sessions with an open turn, live tasks, or a settling beat. */
+  /** Sessions with an open registry turn, live tasks, or a settling beat. */
   workingSessions(): readonly SessionId[];
 
   /**
@@ -1125,6 +1124,17 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       // adapter, but nothing in the registry enforces that, and a session named
       // twice would make a window's "keep this" set quietly depend on ordering.
       const holding = new Set<SessionId>();
+      // A live run is work too, including for adapters such as Codex whose
+      // process has no longer-lived background-work ledger of its own. Usually
+      // the renderer already knows about these through its pane. This copy is
+      // the recovery truth for the case where that pane lost its run binding:
+      // without it the sidebar says idle while the registry and provider are
+      // still advancing the conversation.
+      for (const handle of runs.list()) {
+        if (handle.status !== 'ended' && handle.sessionId !== undefined) {
+          holding.add(handle.sessionId);
+        }
+      }
       for (const adapter of providers.list()) {
         for (const sessionId of adapter.sessionsHoldingWork?.() ?? []) holding.add(sessionId);
       }
@@ -1133,6 +1143,16 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
     workingSessions: () => {
       const working = new Set<SessionId>();
+      // The registry is authoritative for open turns. Adapters contribute the
+      // work that can outlive one below; neither source subsumes the other.
+      // Including registry runs is especially important for Codex, which has
+      // no sessionsWorking hook: a stale renderer must still be told that its
+      // session is active so it can recover instead of starting a rival turn.
+      for (const handle of runs.list()) {
+        if (handle.status !== 'ended' && handle.sessionId !== undefined) {
+          working.add(handle.sessionId);
+        }
+      }
       for (const adapter of providers.list()) {
         // An adapter without the split falls back to its retention set — for
         // one that cannot distinguish, "retained" is the conservative reading

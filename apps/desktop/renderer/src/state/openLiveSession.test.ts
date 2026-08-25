@@ -22,8 +22,19 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { allPanes, handleAgentEvent, resumeSession, splitPane, useApp } from './store';
-import { paneState } from './pane';
+import {
+  allPanes,
+  closePane,
+  focusPane,
+  focusedPane,
+  handleAgentEvent,
+  refreshLiveWork,
+  resumeSession,
+  splitPane,
+  submitPrompt,
+  useApp,
+} from './store';
+import { paneState, setPaneState } from './pane';
 import { seedApp } from './testkit';
 
 const CAPS = {
@@ -61,6 +72,12 @@ let registryGate: Promise<void> | null = null;
 let eventsAsked: string[] = [];
 /** Sessions whose stored transcript was read — evidence of a snapshot. */
 let historyRead: string[] = [];
+/** Run ids that received a mid-turn message. */
+let steeredRuns: string[] = [];
+/** New runs attempted by the composer. */
+let startedRuns: string[] = [];
+/** What the live-work poll says is actively running. */
+let workingSessions: string[] = [];
 
 function liveRun(runId: string, sessionId: string, status = 'running') {
   return {
@@ -101,7 +118,18 @@ function session(id: string) {
       eventsAsked.push(runId);
       return { ok: true, value: { runId, events: [], truncated: false } };
     },
-    liveWork: async () => ({ ok: true, value: { sessionIds: [], working: [], delegated: [] } }),
+    send: async ({ runId }: { runId: string }) => {
+      steeredRuns.push(runId);
+      return { ok: true, value: { runId, deliveredImmediately: true } };
+    },
+    start: async ({ runId }: { runId: string }) => {
+      startedRuns.push(runId);
+      return { ok: false, error: { code: 'unknown', message: 'unexpected rival run' } };
+    },
+    liveWork: async () => ({
+      ok: true,
+      value: { sessionIds: workingSessions, working: workingSessions, delegated: [] },
+    }),
     onEvent: () => () => undefined,
   },
   sessions: {
@@ -166,6 +194,9 @@ beforeEach(() => {
   registryGate = null;
   eventsAsked = [];
   historyRead = [];
+  steeredRuns = [];
+  startedRuns = [];
+  workingSessions = [];
 });
 
 afterEach(() => {
@@ -263,5 +294,83 @@ describe('opening a conversation from the sidebar', () => {
     expect(eventsAsked).toHaveLength(0);
     expect(historyRead).toHaveLength(0);
     expect(useApp.getState().focusedPaneId).toBe(holder?.id);
+  });
+
+  it('repairs an already-visible stale pane, then steers the real run', async () => {
+    /*
+     * The Codex split-brain reported on 2026-08-25: the pane retained the
+     * session id but lost its live run binding. Clicking its row returned early
+     * as "already open", so the composer started a rival turn and Codex refused
+     * it because the original runner was still handling the session.
+     */
+    setPaneState(focusedPane(), {
+      resumeSessionId: 's1',
+      run: { ...liveRun('old-ended', 's1', 'ended'), endReason: 'error' },
+    } as never);
+    mainProcessRuns = [liveRun('r-live', 's1')];
+
+    resumeSession(session('s1'));
+    await vi.waitFor(() => expect(eventsAsked).toContain('r-live'));
+
+    expect(paneState(focusedPane()).run).toMatchObject({
+      runId: 'r-live',
+      sessionId: 's1',
+      status: 'running',
+    });
+
+    await submitPrompt('read this while you work');
+    expect(steeredRuns).toEqual(['r-live']);
+  });
+
+  it('automatically repairs a stale visible pane when the live-work poll finds it', async () => {
+    setPaneState(focusedPane(), {
+      resumeSessionId: 's1',
+      run: { ...liveRun('old-ended', 's1', 'ended'), endReason: 'error' },
+    } as never);
+    mainProcessRuns = [liveRun('r-live', 's1')];
+    workingSessions = ['s1'];
+
+    await refreshLiveWork();
+
+    expect(eventsAsked).toEqual(['r-live']);
+    expect(paneState(focusedPane()).run).toMatchObject({ runId: 'r-live', status: 'running' });
+    expect(useApp.getState().runningSessions).toContain('s1');
+  });
+
+  it('reveals the live owner when a stale duplicate names the same session', () => {
+    const stale = focusedPane();
+    setPaneState(stale, {
+      resumeSessionId: 's1',
+      run: { ...liveRun('old-ended', 's1', 'ended'), endReason: 'error' },
+    } as never);
+    const live = splitPane('right');
+    expect(live).not.toBeNull();
+    setPaneState(live as never, { resumeSessionId: 's1', run: liveRun('r-live', 's1') } as never);
+    focusPane(stale.id);
+
+    resumeSession(session('s1'), stale);
+
+    expect(useApp.getState().focusedPaneId).toBe(live?.id);
+    // This suite seeds the focused pane between tests but deliberately keeps
+    // the grid, so remove the extra column this assertion introduced.
+    setPaneState(live as never, { resumeSessionId: null, run: null } as never);
+    closePane((live as NonNullable<typeof live>).id);
+    setPaneState(stale, { resumeSessionId: null, run: null } as never);
+  });
+
+  it('checks the registry before a stale pane can start a rival run', async () => {
+    setPaneState(focusedPane(), {
+      resumeSessionId: 's1',
+      run: { ...liveRun('old-ended', 's1', 'ended'), endReason: 'error' },
+    } as never);
+    mainProcessRuns = [liveRun('r-live', 's1')];
+
+    const sent = await submitPrompt('steer without waiting for the poll');
+
+    expect(eventsAsked).toEqual(['r-live']);
+    expect(paneState(focusedPane()).run).toMatchObject({ runId: 'r-live', status: 'running' });
+    expect(sent).toBe(true);
+    expect(steeredRuns).toEqual(['r-live']);
+    expect(startedRuns).toHaveLength(0);
   });
 });
