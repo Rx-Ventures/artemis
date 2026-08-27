@@ -39,6 +39,22 @@ afterAll(async () => {
 
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
+/**
+ * Whether removing a bit from a directory actually stops this process reading
+ * it. Root ignores the bits; Windows has none to remove — `chmod` there sets
+ * the read-only attribute, which says nothing about listing or entering — so a
+ * directory locked down below is still opened and the check is right to say so.
+ */
+const permissionsBite = !isRoot && process.platform !== 'win32';
+
+/**
+ * The link type a directory link needs. A plain symlink to a directory wants a
+ * privilege an ordinary Windows user does not have; a junction is the same
+ * reparse point, is followed by everything that follows a symlink, and needs
+ * none. What is under test either way is that `stat` resolves through the link.
+ */
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+
 describe('checkWorkingDirectory', () => {
   it('accepts a directory that exists and can be read', async () => {
     const check = await checkWorkingDirectory(good);
@@ -102,7 +118,7 @@ describe('checkWorkingDirectory', () => {
     expect(check.errno).toBe('ENOTDIR');
   });
 
-  it.skipIf(isRoot)('reports a directory it is not allowed to enter', async () => {
+  it.skipIf(!permissionsBite)('reports a directory it is not allowed to enter', async () => {
     const locked = join(root, 'locked');
     await mkdir(locked);
     await chmod(locked, 0o000);
@@ -119,7 +135,7 @@ describe('checkWorkingDirectory', () => {
     }
   });
 
-  it.skipIf(isRoot)('rejects a directory that can be read but not entered', async () => {
+  it.skipIf(!permissionsBite)('rejects a directory that can be read but not entered', async () => {
     // Read without execute: `readdir` works, `chdir` does not — so `spawn`
     // fails even though a check of R_OK alone would have passed it.
     const noSearch = join(root, 'no-search');
@@ -138,14 +154,14 @@ describe('checkWorkingDirectory', () => {
   it('follows a symlink to the directory the child process would actually get', async () => {
     const { symlink } = await import('node:fs/promises');
     const link = join(root, 'link-to-project');
-    await symlink(good, link, 'dir');
+    await symlink(good, link, DIRECTORY_LINK);
     await expect(checkWorkingDirectory(link)).resolves.toEqual({ ok: true, path: link });
   });
 
   it('reports a dangling symlink as a missing directory', async () => {
     const { symlink } = await import('node:fs/promises');
     const dangling = join(root, 'dangling');
-    await symlink(join(root, 'gone'), dangling, 'dir');
+    await symlink(join(root, 'gone'), dangling, DIRECTORY_LINK);
 
     const check = await checkWorkingDirectory(dangling);
     expect(check.ok).toBe(false);

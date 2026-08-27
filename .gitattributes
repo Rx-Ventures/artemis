@@ -1,0 +1,13 @@
+# Line endings are part of the source here, not a local preference.
+#
+# `renderer/index.html` carries an inline boot script, and its exact bytes are
+# what the Content-Security-Policy hash in `main/security.ts` is computed over.
+# A checkout that swapped LF for CRLF — which is what Git for Windows does out
+# of the installer, `core.autocrlf=true` — moves that hash, and the policy then
+# blocks the app's own script. Nothing says so until a packaged build flashes
+# the wrong palette on launch, which is the failure `renderer-csp.test.ts`
+# exists to catch and the reason this file is not merely tidiness.
+#
+# Normalising everything is simpler than remembering which files are
+# load-bearing. `text=auto` still leaves anything Git detects as binary alone.
+* text=auto eol=lf

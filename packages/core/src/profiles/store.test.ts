@@ -89,12 +89,18 @@ describe('ProfileStore — create', () => {
     expect(raw).not.toContain('sk-ant-');
   });
 
-  it('writes the document with owner-only permissions', async () => {
-    await store.create(draft());
-    const stats = await stat(path.join(userDataDir, PROFILE_STORE_FILE));
+  // Not on Windows, where a file has no mode to narrow: `stat` reports 0o666
+  // for anything writable however it was created, and who may read it is an ACL
+  // question this store does not answer.
+  it.skipIf(process.platform === 'win32')(
+    'writes the document with owner-only permissions',
+    async () => {
+      await store.create(draft());
+      const stats = await stat(path.join(userDataDir, PROFILE_STORE_FILE));
 
-    expect(stats.mode & 0o777).toBe(0o600);
-  });
+      expect(stats.mode & 0o777).toBe(0o600);
+    },
+  );
 
   it('creates the profile signed out, which is the ordinary first state', async () => {
     // Signing in happens afterwards, in the user's own terminal. The store has

@@ -395,8 +395,13 @@ describe('the terminal host', () => {
  *
  * That is the gap these fill. They are string assertions about a path, which is
  * all the bug ever was.
+ *
+ * Skipped on Windows, where node-pty runs no helper at all and
+ * `ensureHelperExecutable` returns before reaching this: the bundle layouts
+ * below are macOS and Linux paths, and `join` respells them with backslashes on
+ * whichever host it runs on.
  */
-describe('spawnHelperCandidates', () => {
+describe.skipIf(process.platform === 'win32')('spawnHelperCandidates', () => {
   const bundle = '/Applications/Artemis.app/Contents/Resources/app.asar/node_modules/node-pty';
 
   it('points outside the archive for a packaged app', () => {

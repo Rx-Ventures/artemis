@@ -14,6 +14,13 @@ import path from 'node:path';
 
 import { confine, sandboxEnv, SandboxViolation } from '../sandbox.js';
 
+/**
+ * The link type a directory link needs here. Windows refuses an unprivileged
+ * symlink to a directory; a junction is the same reparse point and `realpath`
+ * resolves through it identically, so the escape below is the same escape.
+ */
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : undefined;
+
 let base: string;
 let root: string;
 let outside: string;
@@ -81,13 +88,13 @@ describe('confine — escapes that must be refused', () => {
   it('ESCAPE: refuses a symlink that points out — the one string checks miss', async () => {
     // Textually `<root>/escape` is inside the root. It is not, and this is the
     // reason containment is decided on the real path.
-    await symlink(outside, path.join(root, 'escape'));
+    await symlink(outside, path.join(root, 'escape'), DIRECTORY_LINK);
 
     await expect(confine('escape/id_rsa', root)).rejects.toThrow(SandboxViolation);
   });
 
   it('ESCAPE: refuses a symlinked directory even when only the directory is named', async () => {
-    await symlink(outside, path.join(root, 'escape'));
+    await symlink(outside, path.join(root, 'escape'), DIRECTORY_LINK);
 
     await expect(confine('escape', root)).rejects.toThrow(SandboxViolation);
   });
@@ -116,7 +123,7 @@ describe('confine — escapes that must be refused', () => {
 describe('confine — what callers must use', () => {
   it('returns the resolved path, which is what closes the check/use race', async () => {
     await mkdir(path.join(root, 'real'), { recursive: true });
-    await symlink(path.join(root, 'real'), path.join(root, 'link'));
+    await symlink(path.join(root, 'real'), path.join(root, 'link'), DIRECTORY_LINK);
 
     const at = await confine('link', root);
 

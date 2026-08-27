@@ -113,11 +113,23 @@ describe('read_file', () => {
   });
 
   it('SANDBOX: refuses a symlink pointing out', async () => {
-    await symlink('/etc', path.join(root, 'escape'));
+    // Aimed at a directory that exists and holds the file being asked for, so
+    // the refusal is the sandbox's and not a missing target's — and made with a
+    // junction on Windows, where a directory symlink needs a privilege an
+    // ordinary user does not have.
+    const secrets = path.join(base, 'secrets');
+    await mkdir(secrets, { recursive: true });
+    await writeFile(path.join(secrets, 'passwd'), 'root:x:0:0');
+    await symlink(
+      secrets,
+      path.join(root, 'escape'),
+      process.platform === 'win32' ? 'junction' : undefined,
+    );
 
     const result = await executeTool('read_file', '{"path":"escape/passwd"}', ctx);
 
     expect(result.failed).toBe(true);
+    expect(result.output).toMatch(/outside this run's directory/);
   });
 
   it('reports a missing file to the model rather than ending the run', async () => {
