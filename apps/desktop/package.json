@@ -3,7 +3,11 @@
   "version": "1.14.0",
   "private": true,
   "description": "Artemis desktop application \u2014 Electron main, preload bridge and React renderer.",
-  "author": "Seth Torrence",
+  "author": {
+    "name": "Seth Torrence",
+    "email": "seth@storrence.dev"
+  },
+  "homepage": "https://github.com/Rx-Ventures/artemis",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",

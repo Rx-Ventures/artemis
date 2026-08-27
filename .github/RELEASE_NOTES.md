@@ -1050,6 +1050,13 @@ xattr -dr com.apple.quarantine /Applications/Artemis.app
 **Windows** — download and run `Artemis-<version>-x64-setup.exe`. SmartScreen
 will warn about an unrecognized publisher; "More info" → "Run anyway".
 
+**Arch Linux (x86_64)** — download `Artemis-<version>-x64.pacman`, then install
+it from the directory where you saved it:
+
+```bash
+sudo pacman -U ./Artemis-<version>-x64.pacman
+```
+
 ## First run
 
 1. You need Anthropic's `claude` CLI installed, and a Claude subscription.

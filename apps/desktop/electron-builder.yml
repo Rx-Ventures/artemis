@@ -59,9 +59,11 @@ nsis:
 
 linux:
   category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - AppImage
     - deb
+    - pacman
 
 # Declaring the provider makes electron-builder emit latest-mac.yml (the
 # update feed) beside the artifacts. Actual publishing is done by
