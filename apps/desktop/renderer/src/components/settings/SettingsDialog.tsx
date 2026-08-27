@@ -62,6 +62,7 @@ import {
   PaletteIcon,
   ServerIcon,
   ShieldIcon,
+  VaultIcon,
 } from 'lucide-react';
 
 import { ProfilesSection } from '../ProfilesScreen';
@@ -69,6 +70,7 @@ import { AboutSection } from './AboutSection';
 import { AdvancedSection } from './AdvancedSection';
 import { AppearanceSection } from './AppearanceSection';
 import { InstructionsSection } from './InstructionsSection';
+import { KeyManagersSection } from './KeyManagersSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
 import { RemoteSection } from './RemoteSection';
@@ -192,11 +194,23 @@ export const SETTINGS_NAV: readonly NavBand[] = [
   {
     label: 'This machine',
     sections: [
-      // First in its band but below everything that describes what Artemis
-      // does for its own user, because this is the one pane that is not about
-      // that: it decides whether *other programs* may use the accounts the
-      // band above configures. Meeting it before Profiles would be being
-      // offered the door before the room.
+      // First in its band because it is what the band above reaches for: the
+      // Instructions pane offers a memory bank "from a key manager", and this
+      // is the pane that makes that offer real. A connection is also the
+      // plainest thing this band holds — an address, a trusted CA and a token,
+      // all of them facts about this computer rather than about a profile —
+      // so crossing the seam lands on the least surprising pane behind it.
+      {
+        id: 'secrets',
+        label: 'Key managers',
+        hint: 'Secrets fetched, not stored',
+        icon: <VaultIcon aria-hidden="true" />,
+      },
+      // Below everything that describes what Artemis does for its own user,
+      // because this is the one pane that is not about that: it decides
+      // whether *other programs* may use the accounts the band above
+      // configures. Meeting it before Profiles would be being offered the
+      // door before the room.
       {
         id: 'server',
         label: 'Server',
@@ -416,6 +430,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
     case 'agents':
     case 'cerebro':
       return <InstructionsSection />;
+    case 'secrets':
+      return <KeyManagersSection />;
     case 'server':
       return <ServerSection />;
     case 'remote':

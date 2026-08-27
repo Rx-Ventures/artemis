@@ -117,6 +117,8 @@ import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 import { createMemoryBankSecrets } from './memoryBankSecrets.js';
 import { createProfileSecrets } from './profileSecrets.js';
+import { configureSecretManagers, resolveSecretRef } from './secretManagers.js';
+import { createSecretManagerCredentials } from './secretManagerSecrets.js';
 import {
   buildContentBridge,
   discoverMarketplacePlugins,
@@ -728,11 +730,21 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
+  /*
+   * The key managers, before the memory banks — because a bank may hold a
+   * *reference* into one rather than a token of its own, and the resolver
+   * below is how it cashes that reference in. See
+   * `core/secrets/credentials.ts`: the manager's own credential is the one
+   * Artemis stores so that per-bank git tokens do not have to be.
+   */
+  configureSecretManagers(userDataDir, createSecretManagerCredentials(userDataDir));
+
   // Where the memory banks' master switch is kept, what the banks' CLI should
-  // be told `ARTEMIS_ROOT` is, and where a private bank's git token lives. Told
-  // once, here, because this is the only place that knows `userData`; until it
-  // is told, the switch reads as off and no bank has a credential.
-  configureMemoryBanks(userDataDir, createMemoryBankSecrets(userDataDir));
+  // be told `ARTEMIS_ROOT` is, where a private bank's git token lives, and how
+  // to resolve one that lives in a key manager instead. Told once, here,
+  // because this is the only place that knows `userData`; until it is told,
+  // the switch reads as off and no bank has a credential.
+  configureMemoryBanks(userDataDir, createMemoryBankSecrets(userDataDir), resolveSecretRef);
 
   /**
    * Which built-in prompts have the thing they talk about.

@@ -66,6 +66,7 @@ import {
   normalizeProfilePlanId,
   profileColorProblem,
   profilePlanIdProblem,
+  secretRefProblem,
   type AgentPrompt,
   type AgentPromptScope,
   type AgentPromptsListRequest,
@@ -83,6 +84,14 @@ import {
   type MemoryBanksPreflightRequest,
   type MemoryBanksSetMasterEnabledRequest,
   type MemoryBanksStatusRequest,
+  type SecretCredentialInput,
+  type SecretRef,
+  type SecretsConnectionDeleteRequest,
+  type SecretsConnectionSaveRequest,
+  type SecretsConnectionVerifyRequest,
+  type SecretsConnectionsListRequest,
+  type SecretsFetchServerCertRequest,
+  type SecretsRefTestRequest,
   type FileAttachment,
   type ImageAttachment,
   type JsonObject,
@@ -2060,17 +2069,39 @@ function requireBankRemote(value: unknown, field: string): string {
  * the host issued, and quietly removing whitespace from a secret is how a
  * value that looks right fails to authenticate. The username is, because it is
  * a name a person typed and a trailing space in it is never meant.
+ *
+ * **Exactly one of `token` and `ref`.** Both is two answers to one question,
+ * and whichever this function happened to prefer would be a silent decision
+ * about where the user's secret lives. Neither is an `auth` that authenticates
+ * as nobody, which the pane already avoids by omitting the field entirely.
  */
 function optionalBankAuth(value: unknown, field: string): MemoryBankAuthInput | undefined {
   if (value === undefined || value === null) return undefined;
   const auth = requireObject(value, field);
-  const token = requireString(auth['token'], `${field}.token`, MEMORY_BANK_TOKEN_MAX);
+
+  const hasToken = auth['token'] !== undefined && auth['token'] !== null;
+  const hasRef = auth['ref'] !== undefined && auth['ref'] !== null;
+  if (hasToken && hasRef) {
+    throw new ValidationError(field, 'must carry a token or a secret reference, not both');
+  }
+  if (!hasToken && !hasRef) {
+    throw new ValidationError(field, 'must carry either a token or a secret reference');
+  }
+
   const rawUsername = optionalString(auth['username'], `${field}.username`, 64);
-  if (rawUsername === undefined) return { token };
-  const username = rawUsername.trim();
-  const problem = gitCredentialUsernameProblem(username);
-  if (problem !== null) throw new ValidationError(`${field}.username`, problem);
-  return { token, username };
+  let username: string | undefined;
+  if (rawUsername !== undefined) {
+    username = rawUsername.trim();
+    const problem = gitCredentialUsernameProblem(username);
+    if (problem !== null) throw new ValidationError(`${field}.username`, problem);
+  }
+
+  if (hasRef) {
+    const ref = requireSecretRef(auth['ref'], `${field}.ref`);
+    return username === undefined ? { ref } : { ref, username };
+  }
+  const token = requireString(auth['token'], `${field}.token`, MEMORY_BANK_TOKEN_MAX);
+  return username === undefined ? { token } : { token, username };
 }
 
 /**
@@ -2177,6 +2208,204 @@ export function validateMemoryBanksSetMasterEnabled(raw: unknown): MemoryBanksSe
   const enabled = optionalBoolean(request['enabled'], 'enabled');
   if (enabled === undefined) throw new ValidationError('enabled', 'is required');
   return { enabled };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Key managers                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The longest a manager credential may be.
+ *
+ * The same argument as `MEMORY_BANK_TOKEN_MAX`, and a different number because
+ * the values differ: an OpenBao service token is ~95 characters, a Doppler one
+ * ~44, and a JWT-shaped one from a future auth method can run long. Anything
+ * kilobyte-sized is a paste accident or a probe.
+ */
+const SECRET_CREDENTIAL_MAX = 8192;
+
+/** A PEM chain is a few kilobytes; a megabyte of one is not a certificate. */
+const SECRET_CA_PEM_MAX = 64 * 1024;
+
+/**
+ * A reference, rebuilt field by field against the protocol's own grammar.
+ *
+ * Two checks and both are load-bearing. The rebuild is the house rule, sharper
+ * than usual here because every string below is interpolated into a URL path
+ * or query on its way to a key manager — a smuggled extra key would be a
+ * smuggled request parameter. And `secretRefProblem` is the *shared* grammar:
+ * the renderer disables its Test button with the same function, so a reference
+ * the pane thinks is fine cannot be one main refuses, and a `..` segment is
+ * refused in exactly one place rather than in two that drift.
+ */
+function requireSecretRef(value: unknown, field: string): SecretRef {
+  const raw = requireObject(value, field);
+  const connectionId = requireString(raw['connectionId'], `${field}.connectionId`, 100);
+  const provider = raw['provider'];
+
+  let ref: SecretRef;
+  if (provider === 'openbao') {
+    const kvVersion = raw['kvVersion'];
+    if (
+      kvVersion !== undefined &&
+      kvVersion !== null &&
+      kvVersion !== 1 &&
+      kvVersion !== 2 &&
+      kvVersion !== 'auto'
+    ) {
+      throw new ValidationError(`${field}.kvVersion`, 'must be 1, 2 or "auto"');
+    }
+    ref = {
+      provider: 'openbao',
+      connectionId,
+      mount: requireString(raw['mount'], `${field}.mount`, 500),
+      path: requireString(raw['path'], `${field}.path`, 500),
+      key: requireString(raw['key'], `${field}.key`, 300),
+      ...(kvVersion === undefined || kvVersion === null ? {} : { kvVersion }),
+    };
+  } else if (provider === 'doppler') {
+    const project = optionalString(raw['project'], `${field}.project`, 300);
+    const config = optionalString(raw['config'], `${field}.config`, 300);
+    ref = {
+      provider: 'doppler',
+      connectionId,
+      name: requireString(raw['name'], `${field}.name`, 300),
+      ...(project === undefined ? {} : { project }),
+      ...(config === undefined ? {} : { config }),
+    };
+  } else {
+    throw new ValidationError(`${field}.provider`, 'must be "openbao" or "doppler"');
+  }
+
+  const problem = secretRefProblem(ref);
+  if (problem !== null) throw new ValidationError(field, problem);
+  return ref;
+}
+
+/** Empty; main owns the registry's location. @see validateMemoryBanksStatus */
+export function validateSecretsConnectionsList(raw: unknown): SecretsConnectionsListRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * The one channel on this surface that carries a credential.
+ *
+ * Validated hardest for that reason, and rebuilt for the usual one — the
+ * result becomes a record on disk and, for `userpass`, the body of a login
+ * request. The credential itself is length-capped and otherwise untouched:
+ * trimming a secret is how a value that looks right fails to authenticate.
+ */
+export function validateSecretsConnectionSave(raw: unknown): SecretsConnectionSaveRequest {
+  const request = requireRequest(raw);
+  const id = optionalString(request['id'], 'id', 100);
+  const label = requireString(request['label'], 'label', 100).trim();
+  if (label.length === 0) throw new ValidationError('label', 'must not be empty');
+
+  const provider = request['provider'];
+  if (provider !== 'openbao' && provider !== 'doppler') {
+    throw new ValidationError('provider', 'must be "openbao" or "doppler"');
+  }
+  const authMethod = request['authMethod'];
+  if (authMethod !== 'userpass' && authMethod !== 'token') {
+    throw new ValidationError('authMethod', 'must be "userpass" or "token"');
+  }
+
+  // The address goes through the same check a local server's does, which
+  // refuses a credential embedded in the URL — a manager address carrying
+  // `user:pass@` would put a secret in a plain JSON file this feature exists
+  // to keep secrets out of. An empty address is allowed here and defaulted in
+  // main, because Doppler's is fixed and the form does not ask for it.
+  //
+  // Read with `typeof` rather than through `optionalString`, which refuses an
+  // empty string outright — and an empty string is precisely what the pane
+  // sends for a provider whose address field it does not render. Treating
+  // "" and absent alike is what makes "leave it blank" mean what it says.
+  const rawAddress = request['address'];
+  if (rawAddress !== undefined && rawAddress !== null && typeof rawAddress !== 'string') {
+    throw new ValidationError('address', 'must be a string');
+  }
+  if (typeof rawAddress === 'string' && rawAddress.length > 500) {
+    throw new ValidationError('address', 'must be at most 500 characters');
+  }
+  const address = typeof rawAddress === 'string' ? rawAddress.trim() : '';
+  if (address.length > 0) {
+    const problem = baseUrlProblem(address);
+    if (problem !== null) throw new ValidationError('address', problem);
+  } else if (provider !== 'doppler') {
+    throw new ValidationError('address', 'is required');
+  }
+
+  const caPem = optionalString(request['caPem'], 'caPem', SECRET_CA_PEM_MAX);
+  if (caPem !== undefined && !caPem.includes('-----BEGIN CERTIFICATE-----')) {
+    throw new ValidationError('caPem', 'is not a PEM certificate');
+  }
+  const rawUsername = optionalString(request['username'], 'username', 200);
+  const username = rawUsername === undefined ? undefined : rawUsername.trim();
+  if (authMethod === 'userpass' && (username === undefined || username.length === 0)) {
+    throw new ValidationError('username', 'is required for a username and password login');
+  }
+
+  let credential: SecretCredentialInput | undefined;
+  if (request['credential'] !== undefined && request['credential'] !== null) {
+    const rawCredential = requireObject(request['credential'], 'credential');
+    const password = optionalString(rawCredential['password'], 'credential.password', SECRET_CREDENTIAL_MAX);
+    const token = optionalString(rawCredential['token'], 'credential.token', SECRET_CREDENTIAL_MAX);
+    if (password !== undefined && token !== undefined) {
+      throw new ValidationError('credential', 'must carry a password or a token, not both');
+    }
+    if (password !== undefined || token !== undefined) {
+      credential = {
+        ...(password === undefined ? {} : { password }),
+        ...(token === undefined ? {} : { token }),
+      };
+    }
+  }
+
+  return {
+    ...(id === undefined ? {} : { id }),
+    label,
+    provider,
+    address,
+    ...(caPem === undefined ? {} : { caPem }),
+    authMethod,
+    ...(username === undefined || username.length === 0 ? {} : { username }),
+    ...(credential === undefined ? {} : { credential }),
+  };
+}
+
+/** Names a connection; main answers "there is no connection with that id". */
+export function validateSecretsConnectionDelete(raw: unknown): SecretsConnectionDeleteRequest {
+  const request = requireRequest(raw);
+  return { id: requireString(request['id'], 'id', 100) };
+}
+
+/** @see validateSecretsConnectionDelete */
+export function validateSecretsConnectionVerify(raw: unknown): SecretsConnectionVerifyRequest {
+  const request = requireRequest(raw);
+  return { id: requireString(request['id'], 'id', 100) };
+}
+
+/**
+ * An address to shake hands with.
+ *
+ * The one channel here that names a host without a connection existing — the
+ * moment it is needed is the moment the connection does not verify yet. Same
+ * URL rules all the same: a renderer cannot use this to open a socket to an
+ * address the address validator would refuse.
+ */
+export function validateSecretsFetchServerCert(raw: unknown): SecretsFetchServerCertRequest {
+  const request = requireRequest(raw);
+  const address = requireString(request['address'], 'address', 500).trim();
+  const problem = baseUrlProblem(address);
+  if (problem !== null) throw new ValidationError('address', problem);
+  return { address };
+}
+
+/** A reference to resolve and throw away. @see requireSecretRef */
+export function validateSecretsRefTest(raw: unknown): SecretsRefTestRequest {
+  const request = requireRequest(raw);
+  return { ref: requireSecretRef(request['ref'], 'ref') };
 }
 
 /* -------------------------------------------------------------------------- */

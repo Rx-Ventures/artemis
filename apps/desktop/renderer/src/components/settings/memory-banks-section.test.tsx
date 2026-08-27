@@ -36,6 +36,10 @@ import type {
   MemoryBankVerifyRemoteRequest,
   MemoryBankVerifyRemoteResponse,
   MemoryBanksStatus,
+  SecretConnectionState,
+  SecretProviderDescriptor,
+  SecretRefTestResult,
+  SecretsRefTestRequest,
 } from '@rx-artemis/protocol';
 
 import { MemoryBankGroups, slugFromRemote } from '@/components/settings/MemoryBanksSection';
@@ -76,6 +80,7 @@ const HEALTHY: MemoryBankPreflight = {
 };
 
 let preflight: IpcResult<MemoryBankPreflight> = ok(HEALTHY);
+let status: MemoryBanksStatus = NO_BANKS;
 let verifyAnswer: MemoryBankVerifyRemoteResponse = {
   outcome: 'ok',
   headPresent: true,
@@ -84,10 +89,83 @@ let verifyAnswer: MemoryBankVerifyRemoteResponse = {
 const verifyCalls: MemoryBankVerifyRemoteRequest[] = [];
 const addCalls: unknown[] = [];
 
+/* -------------------------------------------------------------------------- */
+/* The key managers this machine has                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Two connections, one of each provider, because the reference form is built
+ * from the provider's declared fields — and a fixture with one provider would
+ * let that stop being true without any test noticing.
+ */
+const CONNECTIONS: readonly SecretConnectionState[] = [
+  {
+    connection: {
+      id: 'sec-1',
+      label: 'Work vault',
+      provider: 'openbao',
+      address: 'https://vault.example.com:8200',
+      authMethod: 'userpass',
+      username: 'demo',
+    },
+    hasCredential: true,
+    lastVerify: null,
+  },
+  {
+    connection: {
+      id: 'sec-2',
+      label: 'Team Doppler',
+      provider: 'doppler',
+      address: 'https://api.doppler.com',
+      authMethod: 'token',
+    },
+    hasCredential: true,
+    lastVerify: null,
+  },
+];
+
+const SECRET_PROVIDERS: readonly SecretProviderDescriptor[] = [
+  {
+    id: 'openbao',
+    label: 'OpenBao',
+    note: 'Self-hosted.',
+    authMethods: ['userpass', 'token'],
+    configFields: [],
+    refFields: [
+      { id: 'mount', label: 'Mount', required: true, kind: 'text' },
+      { id: 'path', label: 'Path', required: true, kind: 'text' },
+      { id: 'key', label: 'Key', required: true, kind: 'text' },
+    ],
+  },
+  {
+    id: 'doppler',
+    label: 'Doppler',
+    note: 'Hosted.',
+    authMethods: ['token'],
+    configFields: [],
+    refFields: [{ id: 'name', label: 'Secret', required: true, kind: 'text' }],
+  },
+];
+
+let connections: readonly SecretConnectionState[] = CONNECTIONS;
+let refTestAnswer: SecretRefTestResult = { found: true, keysAtPath: ['git_token', 'username'] };
+const testRefCalls: SecretsRefTestRequest[] = [];
+
 /** Installed before the first render: `resolveBridge` memoises on first use. */
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
+  secrets: {
+    listConnections: async () => ok({ connections, providers: SECRET_PROVIDERS }),
+    saveConnection: async () => ok({ connections, providers: SECRET_PROVIDERS, id: 'sec-1', verify: { ok: true, detail: '' } }),
+    deleteConnection: async () => ok({ connections, providers: SECRET_PROVIDERS }),
+    verifyConnection: async () => ok({ connections, providers: SECRET_PROVIDERS, verify: { ok: true, detail: '' } }),
+    fetchServerCert: async () => ({ ok: false, error: { code: 'internal', message: 'not in this test', retryable: false } }),
+    testRef: async (request: SecretsRefTestRequest) => {
+      testRefCalls.push(request);
+      return ok(refTestAnswer);
+    },
+  },
   memoryBanks: {
-    status: async () => ok(NO_BANKS),
+    status: async () => ok(status),
     preflight: async () => preflight,
     memories: async () => ok({ memories: [] }),
     verifyRemote: async (request: MemoryBankVerifyRemoteRequest) => {
@@ -135,13 +213,17 @@ const joinButton = (): HTMLElement => screen.getByRole('button', { name: 'Join b
 
 beforeEach(() => {
   preflight = ok(HEALTHY);
+  status = NO_BANKS;
   verifyAnswer = { outcome: 'ok', headPresent: true, detail: 'HEAD is 52a0a327' };
+  connections = CONNECTIONS;
+  refTestAnswer = { found: true, keysAtPath: ['git_token', 'username'] };
 });
 
 afterEach(() => {
   cleanup();
   verifyCalls.length = 0;
   addCalls.length = 0;
+  testRefCalls.length = 0;
 });
 
 describe('joining a private bank', () => {
@@ -397,5 +479,254 @@ describe('slugFromRemote', () => {
     expect(slugFromRemote('')).toBe('');
     expect(slugFromRemote('   ')).toBe('');
     expect(slugFromRemote('https://host/x/___')).toBe('');
+  });
+});
+
+/**
+ * The alternative this phase added: point the bank at a secret's *address*
+ * instead of pasting the secret.
+ *
+ * What is pinned here is the shape of the offer rather than its styling.
+ * Pasting a token stays exactly as it was — a machine with no key manager
+ * meets the form it always met — and the second source, when chosen, produces
+ * a request carrying a `ref` and no `token`, which is the whole difference
+ * between a bank that holds a credential and one that does not.
+ *
+ * The Test button gets its own tests because it is the difference between
+ * finding a mistyped key here and finding it days later in a background sync
+ * that quietly stopped.
+ */
+describe('joining a bank with a key-manager reference', () => {
+  const chooseKeyManager = async (): Promise<void> => {
+    await act(async () => {
+      screen.getByRole('button', { name: 'From a key manager' }).click();
+    });
+  };
+
+  it('leaves "paste a token" as the default, so nothing changes for a machine without one', async () => {
+    await renderPane();
+    expect(screen.getByLabelText(/Access token/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'From a key manager' })).toBeTruthy();
+  });
+
+  it('points at the Key managers pane when there is no manager to choose', async () => {
+    connections = [];
+    await renderPane();
+    await chooseKeyManager();
+    // A dead end with no instruction is how a user concludes the feature is
+    // broken rather than unconfigured.
+    expect(screen.getByText(/No key manager is connected/)).toBeTruthy();
+  });
+
+  it('replaces the token field with the provider’s own reference fields', async () => {
+    await renderPane();
+    await chooseKeyManager();
+    // The token field is gone — the point of choosing this source is that
+    // there is no token to type.
+    expect(screen.queryByLabelText(/Access token/)).toBeNull();
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    expect(screen.getByLabelText('Mount')).toBeTruthy();
+    expect(screen.getByLabelText('Path')).toBeTruthy();
+    expect(screen.getByLabelText('Key')).toBeTruthy();
+    // Doppler's fields, not OpenBao's, when a Doppler connection is chosen.
+    await act(async () => {
+      screen.getByRole('button', { name: 'Team Doppler' }).click();
+    });
+    expect(screen.getByLabelText('Secret')).toBeTruthy();
+    expect(screen.queryByLabelText('Mount')).toBeNull();
+  });
+
+  const fillOpenBaoRef = (over: { key?: string } = {}): void => {
+    fireEvent.change(screen.getByLabelText('Mount'), { target: { value: 'secret' } });
+    fireEvent.change(screen.getByLabelText('Path'), { target: { value: 'claude/artemis' } });
+    fireEvent.change(screen.getByLabelText('Key'), { target: { value: over.key ?? 'git_token' } });
+  };
+
+  it('will not test an incomplete reference', async () => {
+    await renderPane();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+
+    expect(screen.getByRole('button', { name: 'Test' }).hasAttribute('disabled')).toBe(true);
+    await act(async () => {
+      fillOpenBaoRef();
+    });
+    expect(screen.getByRole('button', { name: 'Test' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('will not test a reference the shared grammar refuses', async () => {
+    // The same function main validates with. A pane that let a `..` through
+    // and waited for the rejection would be teaching the rule twice.
+    await renderPane();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    await act(async () => {
+      fillOpenBaoRef();
+      fireEvent.change(screen.getByLabelText('Path'), { target: { value: '../sys/seal' } });
+    });
+    expect(screen.getByRole('button', { name: 'Test' }).hasAttribute('disabled')).toBe(true);
+    expect(testRefCalls).toEqual([]);
+  });
+
+  it('resolves the reference for real and says so without showing a value', async () => {
+    await renderPane();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    await act(async () => {
+      fillOpenBaoRef();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Test' }).click();
+    });
+
+    expect(testRefCalls).toEqual([
+      {
+        ref: {
+          provider: 'openbao',
+          connectionId: 'sec-1',
+          mount: 'secret',
+          path: 'claude/artemis',
+          key: 'git_token',
+        },
+      },
+    ]);
+    expect(screen.getByText(/Resolved\./)).toBeTruthy();
+    expect(screen.getByText(/discarded/)).toBeTruthy();
+  });
+
+  it('renders the key names on a miss, because that is the sentence that fixes it', async () => {
+    refTestAnswer = {
+      found: false,
+      problem: 'secret/claude/artemis has no key named “git-token”.',
+      keysAtPath: ['git_token', 'username'],
+    };
+    await renderPane();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    await act(async () => {
+      fillOpenBaoRef({ key: 'git-token' });
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Test' }).click();
+    });
+
+    expect(screen.getByText(/no key named/)).toBeTruthy();
+    expect(screen.getByText(/git_token, username/)).toBeTruthy();
+  });
+
+  it('renders a denial as a denial, never as "not found"', async () => {
+    refTestAnswer = {
+      found: false,
+      problem:
+        'OpenBao refused kv/team (403). It answers identically for a path this token’s policy does not allow, for a path that does not exist, and for a mount that does not exist, so this is “denied, or absent” and it will not say which.',
+    };
+    await renderPane();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    await act(async () => {
+      fillOpenBaoRef();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Test' }).click();
+    });
+
+    expect(screen.getByText(/denied, or absent/)).toBeTruthy();
+  });
+
+  it('sends a ref and no token with the join', async () => {
+    await renderPane();
+    fillJoin();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Work vault' }).click();
+    });
+    await act(async () => {
+      fillOpenBaoRef();
+    });
+    await act(async () => {
+      joinButton().click();
+    });
+
+    expect(addCalls).toHaveLength(1);
+    const request = addCalls[0] as { auth?: Record<string, unknown> };
+    expect(request.auth).toEqual({
+      ref: {
+        provider: 'openbao',
+        connectionId: 'sec-1',
+        mount: 'secret',
+        path: 'claude/artemis',
+        key: 'git_token',
+      },
+    });
+    // Exactly one of the two: a request carrying both would be two answers to
+    // one question, and main refuses it.
+    expect(request.auth).not.toHaveProperty('token');
+  });
+
+  it('still offers the username, because git echoes it either way', async () => {
+    await renderPane();
+    await chooseKeyManager();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+    await act(async () => {
+      screen.getByRole('button', { name: /Username/ }).click();
+    });
+    expect(screen.getByLabelText('Username')).toBeTruthy();
+  });
+});
+
+describe('a bank whose credential lives in a key manager', () => {
+  it('says so on the row, and says when it has stopped resolving', async () => {
+    status = {
+      ...NO_BANKS,
+      masterEnabled: true,
+      banks: [
+        {
+          slug: 'team',
+          path: '/Users/demo/Documents/team',
+          remote: 'https://git.example.com/team/bank.git',
+          role: 'readwrite',
+          enabled: true,
+          isDefault: true,
+          exists: true,
+          source: 'cerebro@52a0a32',
+          memories: 3,
+          mirrored: 0,
+          validationErrors: 0,
+          projects: 2,
+          credential: { kind: 'ref' },
+        },
+      ],
+    };
+    await renderPane();
+    expect(screen.getByText('key manager')).toBeTruthy();
+
+    cleanup();
+    // The degraded case: the sync did not happen, nothing blocked, and the
+    // pane is where a person finds out why.
+    status = {
+      ...status,
+      banks: [
+        {
+          ...status.banks[0]!,
+          credential: { kind: 'ref', problem: 'OpenBao is sealed, so it cannot be read.' },
+        },
+      ],
+    };
+    await renderPane();
+    expect(screen.getByText('key manager unreachable')).toBeTruthy();
+    expect(screen.getByText(/OpenBao is sealed/)).toBeTruthy();
   });
 });

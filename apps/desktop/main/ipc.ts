@@ -93,6 +93,14 @@ import {
   RESPONSE_SCAN_POLICY,
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
+import {
+  deleteSecretConnection,
+  fetchServerCertificate,
+  listSecretConnections,
+  saveSecretConnection,
+  testSecretRef,
+  verifySecretConnection,
+} from './secretManagers.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
 import { normalizeRemoteOrigin, type RemoteAccess } from './remoteAccess.js';
 import type { ServerHost } from './server.js';
@@ -174,6 +182,12 @@ import {
   validateMemoryBankSync,
   validateMemoryBanksPreflight,
   validateMemoryBanksSetMasterEnabled,
+  validateSecretsConnectionDelete,
+  validateSecretsConnectionSave,
+  validateSecretsConnectionVerify,
+  validateSecretsConnectionsList,
+  validateSecretsFetchServerCert,
+  validateSecretsRefTest,
   validateMemoryBanksStatus,
   validateMemoryBanksVerifyRemote,
   validateUsagePlan,
@@ -628,6 +642,52 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.memoryBanksSetMasterEnabled]: {
       validate: validateMemoryBanksSetMasterEnabled,
       handle: async (request) => setMasterEnabled(request),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Key managers                                                     */
+    /* ---------------------------------------------------------------- */
+
+    /*
+     * Six channels and one credential between them. `saveConnection` is the
+     * only one carrying a secret and it carries it inbound; the five others
+     * move configuration, and the strongest thing any of them returns is the
+     * list of key *names* at a path. The leak tripwire below this table sees
+     * every one of these responses like any other.
+     */
+    [IPC.secretsConnectionsList]: {
+      validate: validateSecretsConnectionsList,
+      handle: async () => listSecretConnections(),
+    },
+
+    [IPC.secretsConnectionSave]: {
+      validate: validateSecretsConnectionSave,
+      handle: async (request) => saveSecretConnection(request),
+    },
+
+    [IPC.secretsConnectionDelete]: {
+      validate: validateSecretsConnectionDelete,
+      handle: async (request) => deleteSecretConnection(request),
+    },
+
+    [IPC.secretsConnectionVerify]: {
+      validate: validateSecretsConnectionVerify,
+      handle: async (request) => verifySecretConnection(request),
+    },
+
+    /*
+     * A TLS handshake and nothing else — see `fetchServerCertificate`. It is
+     * the one place in the app that opens an unverified socket, and it is
+     * acceptable there precisely because it sends nothing.
+     */
+    [IPC.secretsFetchServerCert]: {
+      validate: validateSecretsFetchServerCert,
+      handle: async (request) => ({ certificate: await fetchServerCertificate(request) }),
+    },
+
+    [IPC.secretsRefTest]: {
+      validate: validateSecretsRefTest,
+      handle: async (request) => testSecretRef(request),
     },
 
     /* ---------------------------------------------------------------- */

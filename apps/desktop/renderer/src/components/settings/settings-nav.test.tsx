@@ -40,6 +40,7 @@ const ALL_SECTIONS: readonly SettingsSection[] = [
   'permissions',
   'agents',
   'cerebro',
+  'secrets',
   'server',
   'remote',
   'routines',
@@ -58,11 +59,14 @@ describe('the two-band nav', () => {
   it('holds the sections in their argued order', () => {
     expect(SETTINGS_NAV.map((band) => band.sections.map((s) => s.id))).toEqual([
       ['profiles', 'models', 'runs', 'agents', 'permissions', 'appearance'],
-      // Remote directly under Server: the same grant model, mirrored — one
-      // pane lends this machine out, the next borrows another one. About is
-      // last of everything: it is the only pane that decides nothing, and the
-      // bottom of the list is where people look for it unprompted.
-      ['server', 'remote', 'routines', 'advanced', 'about'],
+      // Key managers opens the second band because it is what the first one
+      // reaches for: Instructions offers a bank "from a key manager", and this
+      // is the pane behind that offer. Remote directly under Server: the same
+      // grant model, mirrored — one pane lends this machine out, the next
+      // borrows another one. About is last of everything: it is the only pane
+      // that decides nothing, and the bottom of the list is where people look
+      // for it unprompted.
+      ['secrets', 'server', 'remote', 'routines', 'advanced', 'about'],
     ]);
   });
 

@@ -34,6 +34,10 @@ import type {
   RunSuggestion,
   Routine,
   RoutinesState,
+  SecretConnection,
+  SecretConnectionState,
+  SecretProviderDescriptor,
+  SecretVerifyResult,
   ServerProfile,
   ServerSignInStatus,
   ServerState,
@@ -416,6 +420,11 @@ let mockBanks: MemoryBankInfo[] = [
     mirrored: 0,
     validationErrors: 0,
     projects: 27,
+    // Held as a reference rather than as a token, so the pane's "from a key
+    // manager" rendering is what dev meets by default — including the degraded
+    // sentence, which is the state a real machine reaches only when its vault
+    // is actually down.
+    credential: { kind: 'ref' },
   },
   {
     slug: 'client-docs',
@@ -430,8 +439,190 @@ let mockBanks: MemoryBankInfo[] = [
     mirrored: 0,
     validationErrors: 0,
     projects: 4,
+    credential: { kind: 'none' },
   },
 ];
+
+/* -------------------------------------------------------------------------- */
+/* Key managers                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The configured managers "on this machine".
+ *
+ * Two, and deliberately one of each provider: the pane's whole reason for
+ * building its forms from provider descriptors is that the two look different,
+ * and a dev fixture with one of them would let that difference rot.
+ */
+let mockSecretConnections: SecretConnectionState[] = [
+  {
+    connection: {
+      id: 'sec-openbao',
+      label: 'Work vault',
+      provider: 'openbao',
+      address: 'https://vault.example.com:8200',
+      authMethod: 'userpass',
+      username: 'demo',
+    },
+    hasCredential: true,
+    lastVerify: {
+      at: Date.now() - 3 * 3_600_000,
+      result: {
+        ok: true,
+        detail: 'OpenBao 2.6.2 is active. It expires 2026-09-28T09:14:03Z.',
+        identity: 'userpass-demo',
+        policies: ['bao-admin', 'default'],
+        expiresAt: '2026-09-28T09:14:03Z',
+      },
+    },
+  },
+  {
+    connection: {
+      id: 'sec-doppler',
+      label: 'Team Doppler',
+      provider: 'doppler',
+      address: 'https://api.doppler.com',
+      authMethod: 'token',
+    },
+    hasCredential: true,
+    lastVerify: {
+      at: Date.now() - 26 * 3_600_000,
+      result: {
+        ok: true,
+        detail: 'Doppler accepted this token for the Example Co workplace.',
+        identity: 'artemis-desktop (Example Co)',
+        policies: ['service_token'],
+      },
+    },
+  },
+];
+
+/** The dev descriptors, which mirror what the real providers declare. */
+const MOCK_SECRET_PROVIDERS: readonly SecretProviderDescriptor[] = [
+  {
+    id: 'openbao',
+    label: 'OpenBao',
+    note: 'Self-hosted secrets with policies and short-lived tokens. Also speaks to HashiCorp Vault.',
+    authMethods: ['userpass', 'token'],
+    configFields: [
+      {
+        id: 'address',
+        label: 'Address',
+        placeholder: 'https://vault.example.com:8200',
+        required: true,
+        kind: 'text',
+        note: 'The API address, including the port.',
+      },
+      {
+        id: 'username',
+        label: 'Username',
+        placeholder: 'your-openbao-user',
+        required: true,
+        kind: 'text',
+        onlyForAuthMethod: 'userpass',
+        note: 'Its password is spent once on minting a token — Artemis stores the token, never the password.',
+      },
+    ],
+    refFields: [
+      { id: 'mount', label: 'Mount', placeholder: 'secret', required: true, kind: 'text' },
+      { id: 'path', label: 'Path', placeholder: 'team/git', required: true, kind: 'text' },
+      { id: 'key', label: 'Key', placeholder: 'git_token', required: true, kind: 'text' },
+    ],
+  },
+  {
+    id: 'doppler',
+    label: 'Doppler',
+    note: 'Hosted secrets, organised by project and config. Authenticates with a token you mint in Doppler.',
+    authMethods: ['token'],
+    configFields: [
+      {
+        id: 'address',
+        label: 'API address',
+        placeholder: 'https://api.doppler.com',
+        required: false,
+        kind: 'text',
+        note: 'Leave empty for https://api.doppler.com.',
+      },
+    ],
+    refFields: [
+      { id: 'name', label: 'Secret', placeholder: 'GIT_TOKEN', required: true, kind: 'text' },
+      { id: 'project', label: 'Project', placeholder: '(from the token)', required: false, kind: 'text' },
+      { id: 'config', label: 'Config', placeholder: '(from the token)', required: false, kind: 'text' },
+    ],
+  },
+];
+
+function mockSecretsResponse(): {
+  connections: readonly SecretConnectionState[];
+  providers: readonly SecretProviderDescriptor[];
+} {
+  return { connections: [...mockSecretConnections], providers: MOCK_SECRET_PROVIDERS };
+}
+
+/**
+ * The verify outcome for a connection, chosen from its label.
+ *
+ * The bank mock picks its outcome out of the remote's spelling for the same
+ * reason: these are states a real manager produces rarely and at bad moments,
+ * and the only way to develop against all of them is to be able to ask for one
+ * by name.
+ */
+function mockVerifyFor(connection: SecretConnection): SecretVerifyResult {
+  const label = connection.label.toLowerCase();
+  if (label.includes('untrusted')) {
+    return {
+      ok: false,
+      detail:
+        `The certificate at ${connection.address} was not accepted: self signed certificate in certificate chain. ` +
+        'If this manager uses a private certificate authority, fetch its certificate and confirm it before trusting it.',
+      problem: 'tls',
+    };
+  }
+  if (label.includes('sealed')) {
+    return {
+      ok: false,
+      detail: 'OpenBao is sealed. It is running, and holds nothing usable until someone unseals it.',
+      problem: 'sealed',
+      degraded: 'sealed',
+    };
+  }
+  if (label.includes('expired')) {
+    return {
+      ok: false,
+      detail: 'The stored token expired on 2026-08-01T00:00:00Z. Enter the password again to mint a new one.',
+      problem: 'expired',
+    };
+  }
+  if (label.includes('standby')) {
+    return {
+      ok: true,
+      detail: 'This is a standby node, which OpenBao reports with 429 — that is not rate limiting, and reads work.',
+      identity: 'userpass-demo',
+      policies: ['bao-admin', 'default'],
+      degraded: 'standby',
+    };
+  }
+  return connection.provider === 'openbao'
+    ? {
+        ok: true,
+        detail: 'OpenBao 2.6.2 is active. It expires 2026-09-28T09:14:03Z.',
+        identity: `userpass-${connection.username ?? 'demo'}`,
+        policies: ['bao-admin', 'default'],
+        expiresAt: '2026-09-28T09:14:03Z',
+      }
+    : {
+        ok: true,
+        detail: 'Doppler accepted this token for the Example Co workplace.',
+        identity: 'artemis-desktop (Example Co)',
+        policies: ['service_token'],
+      };
+}
+
+function rememberMockVerify(id: string, result: SecretVerifyResult): void {
+  mockSecretConnections = mockSecretConnections.map((entry) =>
+    entry.connection.id === id ? { ...entry, lastVerify: { at: Date.now(), result } } : entry,
+  );
+}
 let mockBankMemories: MemoryBankMemory[] = [
   {
     name: 'team-memory-bank',
@@ -1647,6 +1838,108 @@ export function createMockBridge(): ArtemisBridge {
             ? 'Memory banks are on for Artemis: runs sync them at start and agents are briefed about them.'
             : 'Memory banks are off for Artemis: no run-start syncs, no prompt.',
         });
+      },
+    },
+
+    /*
+     * The key managers, faked so the pane's *outcomes* are reachable in dev.
+     *
+     * The interesting thing about this pane is not its layout — it is that
+     * every row can be in one of several states a real vault produces rarely
+     * and inconveniently: standby, sealed, an expired token, a certificate the
+     * machine does not trust. A mock that always answered "fine" would leave
+     * every one of those renderings untested until a user met it.
+     *
+     * So the outcome is chosen from the connection's own label, the way the
+     * bank mock chooses from a remote's spelling: call it "sealed" and it is
+     * sealed, "standby" and it is a standby node, "untrusted" and it fails on
+     * TLS so the certificate flow opens. Anything else verifies.
+     */
+    secrets: {
+      listConnections: async () => ok(mockSecretsResponse()),
+      saveConnection: async (request) => {
+        const id = request.id ?? newId('sec');
+        const connection: SecretConnection = {
+          id,
+          label: request.label,
+          provider: request.provider,
+          address: request.address.length > 0 ? request.address : 'https://api.doppler.com',
+          ...(request.caPem === undefined ? {} : { caPem: request.caPem }),
+          authMethod: request.authMethod,
+          ...(request.username === undefined ? {} : { username: request.username }),
+        };
+        mockSecretConnections = mockSecretConnections.some((entry) => entry.connection.id === id)
+          ? mockSecretConnections.map((entry) =>
+              entry.connection.id === id
+                ? {
+                    connection,
+                    hasCredential: entry.hasCredential || request.credential !== undefined,
+                    lastVerify: entry.lastVerify,
+                  }
+                : entry,
+            )
+          : [
+              ...mockSecretConnections,
+              { connection, hasCredential: request.credential !== undefined, lastVerify: null },
+            ];
+        const verify = mockVerifyFor(connection);
+        rememberMockVerify(id, verify);
+        return ok({ ...mockSecretsResponse(), id, verify });
+      },
+      deleteConnection: async (request) => {
+        mockSecretConnections = mockSecretConnections.filter(
+          (entry) => entry.connection.id !== request.id,
+        );
+        return ok(mockSecretsResponse());
+      },
+      verifyConnection: async (request) => {
+        const found = mockSecretConnections.find((entry) => entry.connection.id === request.id);
+        const verify: SecretVerifyResult =
+          found === undefined
+            ? { ok: false, detail: 'There is no connection with that id.', problem: 'protocol' }
+            : mockVerifyFor(found.connection);
+        rememberMockVerify(request.id, verify);
+        return ok({ ...mockSecretsResponse(), verify });
+      },
+      fetchServerCert: async (request) => {
+        const host = request.address.replace(/^https?:\/\//, '').split('/')[0] ?? 'vault.example.com';
+        return ok({
+          certificate: {
+            fingerprintSha256:
+              '9F:3C:1A:77:B2:E0:4D:6A:8C:5F:0E:1B:7D:4A:92:68:31:C5:AE:00:BB:12:74:D9:63:8E:2F:41:0A:5D:C7:16',
+            subject: `CN=${host.split(':')[0] ?? host}`,
+            issuer: 'CN=Example Internal CA, O=Example',
+            san: [`DNS:${host.split(':')[0] ?? host}`, 'IP Address:100.75.234.21'],
+            notAfter: new Date(Date.now() + 300 * 86_400_000).toISOString(),
+            pem: '-----BEGIN CERTIFICATE-----\nMIIB…mock…\n-----END CERTIFICATE-----\n',
+            selfSigned: false,
+          },
+        });
+      },
+      testRef: async (request) => {
+        // The three answers the Test button has to render, chosen from the
+        // reference itself: a key named `missing` lists its neighbours, a
+        // mount named `kv` is denied, everything else is found.
+        if (request.ref.provider === 'openbao') {
+          if (request.ref.mount === 'kv') {
+            return ok({
+              found: false,
+              problem:
+                'OpenBao refused kv/… (403). It answers identically for a path this token’s policy does not allow and for one that does not exist, so this is “denied, or absent” and it will not say which.',
+            });
+          }
+          if (request.ref.key === 'missing') {
+            return ok({
+              found: false,
+              problem: `${request.ref.mount}/${request.ref.path} has no key named “missing”.`,
+              keysAtPath: ['git_token', 'username'],
+            });
+          }
+          return ok({ found: true, keysAtPath: ['git_token', 'username'] });
+        }
+        return request.ref.name === 'MISSING'
+          ? ok({ found: false, problem: 'Doppler has nothing at that name. Doppler said: Could not find requested secret.' })
+          : ok({ found: true });
       },
     },
 
