@@ -40,8 +40,8 @@
  *
  * The script is not rendered until the user has been through the dialog and
  * accepted it. Not because reading a script is dangerous, but because this one
- * is easy to skim as boilerplate and act on: it is mostly `ln -s`, and the
- * consequence that actually surprises people — every profile shares one
+ * is easy to skim as boilerplate and act on: it is one link command repeated,
+ * and the consequence that actually surprises people — every profile shares one
  * `projects/`, so a session started on one account is listed and resumable
  * under all of them — is not visible in the diff of a symlink. The dialog says
  * that in words first, and the switch only moves if the user answers it.
@@ -105,7 +105,13 @@ import {
   setUpdateChannel,
   useApp,
 } from '../../state/store';
-import { inferHomeDirectory, lastSegment, shortenPath, sortFoldersByName } from '../../lib/paths';
+import {
+  inferHomeDirectory,
+  lastSegment,
+  shortenPath,
+  sortFoldersByName,
+  type Platform,
+} from '../../lib/paths';
 import {
   useSharedConfigStatus,
   type SharedConfigReading,
@@ -117,6 +123,7 @@ import {
   buildSharedConfigScript,
   dirsNeedingWork,
   entryGap,
+  scriptShell,
   sharedConfigDirs,
   statusDisagrees,
   statusHasLinks,
@@ -158,6 +165,14 @@ export function AdvancedSection(): ReactElement {
   const acknowledged = useApp((s) => s.sharedClaudeConfigAcknowledged);
   const [warning, setWarning] = useState(false);
   const reading = useSharedConfigStatus();
+  /*
+   * Which script the generator writes, and what the blurb calls the thing to
+   * paste it into. Read from the store rather than sniffed, because there is
+   * nothing in a renderer to sniff — the bridge reports the host at boot, and
+   * this is the same value `shortenPath` uses two rows down to decide which way
+   * the separators lean.
+   */
+  const platform = useApp((s) => s.platform);
 
   const dirs = useMemo(() => sharedConfigDirs(profiles), [profiles]);
 
@@ -254,7 +269,7 @@ export function AdvancedSection(): ReactElement {
             </Empty>
           </div>
         ) : (
-          <ScriptBlock dirs={dirs} mode={mode} status={reading.status} />
+          <ScriptBlock dirs={dirs} mode={mode} status={reading.status} platform={platform} />
         )}
       </SettingsGroup>
 
@@ -725,11 +740,14 @@ function ScriptBlock({
   dirs,
   mode,
   status,
+  platform,
 }: {
   readonly dirs: readonly string[];
   readonly mode: SharedConfigMode;
   /** The reading, or `null` while it is in flight or after it failed. */
   readonly status: SharedConfigStatus | null;
+  /** Decides `/bin/sh` or PowerShell, and what the blurb calls it. */
+  readonly platform: Platform;
 }): ReactElement {
   /*
    * Defaults to the narrow script, and falls back to all of them whenever there
@@ -748,7 +766,10 @@ function ScriptBlock({
   const canNarrow = narrow.length > 0 && narrow.length < dirs.length;
   const covered = canNarrow && scope === 'narrow' ? narrow : dirs;
 
-  const script = useMemo(() => buildSharedConfigScript(covered, mode), [covered, mode]);
+  const script = useMemo(
+    () => buildSharedConfigScript(covered, mode, platform),
+    [covered, mode, platform],
+  );
 
   // The tick waits for the write to resolve, and a refusal says so rather than
   // ticking anyway — see `useCopy`, which is where that rule now lives.
@@ -765,7 +786,7 @@ function ScriptBlock({
         <p className="min-w-0 text-2xs leading-relaxed text-ink-muted">
           {sharing ? (
             <>
-              Quit Artemis, run this in a terminal, then start it again. It covers{' '}
+              Quit Artemis, run this in {scriptShell(platform)}, then start it again. It covers{' '}
               {countProfiles(covered.length)} and nothing else on your machine.
             </>
           ) : (
