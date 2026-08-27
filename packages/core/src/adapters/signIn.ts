@@ -51,6 +51,16 @@ export interface SignInOptions {
 }
 
 /**
+ * Which shell the generated line has to satisfy.
+ *
+ * Not a user preference — a fact about the host, chosen by whoever renders the
+ * line. `cmd` is deliberately absent: Windows 11 defaults to PowerShell in both
+ * Terminal and the Start menu, and cmd's quoting rules are different enough
+ * that supporting it means a third escaper rather than a third branch.
+ */
+export type SignInShell = 'posix' | 'powershell';
+
+/**
  * Quote one argument for a POSIX shell, if it needs it.
  *
  * The config directory is the reason this exists: it is a path the *user*
@@ -65,6 +75,71 @@ function shellQuote(value: string): string {
 }
 
 /**
+ * Render a value as a PowerShell string literal. Always quoted.
+ *
+ * Single quotes, because a PowerShell single-quoted string is literal: a
+ * Windows path's backslashes are not escapes and a `$` in a directory name is
+ * not an expansion. The escape for an embedded single quote is doubling it,
+ * not a backslash.
+ *
+ * *Always* quoted, because the two places this is used — the right-hand side
+ * of `$env:… =` and the target of `&` — are expression positions, and a bare
+ * word in an expression position is not a string. PowerShell reads it as a
+ * command to run, which fails with the same "is not recognized" error as the
+ * POSIX line this function exists to replace. Quoting only "when it looks
+ * necessary" reintroduces that bug for any path made entirely of characters
+ * that looked safe, so the option is not offered.
+ */
+function powershellString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * Quote one *argument* for PowerShell, if it needs it.
+ *
+ * Arguments to a native command are the one position where a bare word is
+ * already a literal string, so `auth login` needs no quotes and reads better
+ * without them. Anything outside the safe set falls back to a real string —
+ * including `@`, which PowerShell reads as starting an array or a splat.
+ */
+function powershellArg(value: string): string {
+  return /^[A-Za-z0-9_.:/=-]+$/.test(value) ? value : powershellString(value);
+}
+
+/**
+ * The PowerShell spelling of "set this one variable, for this one command".
+ *
+ * PowerShell has no inline-assignment form — `VAR=x command` is not a command
+ * with an environment, it is a command *named* `VAR=x`, which is the error
+ * users actually hit. Nor does it scope `$env:` to a block: assigning inside
+ * `& { … }` mutates the process for the rest of the session.
+ *
+ * So the scoping the POSIX line gets from the shell has to be written out. The
+ * prior value is saved and restored rather than deleted, because a user who
+ * already had `CLAUDE_CONFIG_DIR` set would otherwise have it silently removed
+ * by a command they ran to sign in. `$env:VAR = $null` removes the variable, so
+ * the round trip is also correct when there was nothing there to begin with —
+ * and `finally` runs even when the login is abandoned with Ctrl-C.
+ */
+function powershellCommand(
+  variable: string,
+  configDir: string,
+  argv: readonly string[],
+): string {
+  // The executable is always a string literal, so `&` is always the correct
+  // way to reach it. Bare-word invocation would work for `claude` and break
+  // for the packaged binary's full path.
+  const [executable, ...args] = argv;
+  const call = [powershellString(executable ?? ''), ...args.map(powershellArg)].join(' ');
+
+  return (
+    `$ArtemisPrior = $env:${variable}; ` +
+    `$env:${variable} = ${powershellString(configDir)}; ` +
+    `try { & ${call} } finally { $env:${variable} = $ArtemisPrior }`
+  );
+}
+
+/**
  * The command a user runs to sign this profile in.
  *
  * A single line, safe to paste into a POSIX shell, that sets the config
@@ -76,18 +151,26 @@ function shellQuote(value: string): string {
  * CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/Artemis/profiles/work' claude auth login
  * ```
  *
- * Windows shells need a different spelling (`$env:` in PowerShell, `set` in
- * cmd). That is a rendering concern for whoever displays this, not a reason to
- * emit something no shell accepts.
+ * Windows needs a different spelling entirely, so `shell` selects it. It
+ * defaults to `posix` because that is what every non-Windows host wants and
+ * what every existing caller already assumed; a host that knows better says so.
+ * Emitting the POSIX line on Windows is not a cosmetic wart — PowerShell reads
+ * `VAR=x claude auth login` as a command *named* `VAR=x` and fails outright.
  */
 export function signInCommand(options: {
   readonly credentials: ProviderCredentialSpec;
   readonly configDir: string;
+  readonly shell?: SignInShell;
 }): string {
   const { credentials, configDir } = options;
+  const argv = [credentials.signIn.executable, ...credentials.signIn.loginArgs];
+
+  if ((options.shell ?? 'posix') === 'powershell') {
+    return powershellCommand(credentials.configDirVar, configDir, argv);
+  }
+
   const assignment = `${credentials.configDirVar}=${shellQuote(configDir)}`;
-  const argv = [credentials.signIn.executable, ...credentials.signIn.loginArgs].map(shellQuote);
-  return `${assignment} ${argv.join(' ')}`;
+  return `${assignment} ${argv.map(shellQuote).join(' ')}`;
 }
 
 /**
@@ -117,12 +200,32 @@ function run(
   timeoutMs: number,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(options.executable ?? options.credentials.signIn.executable, [...args], {
+    const executable = options.executable ?? options.credentials.signIn.executable;
+
+    /*
+     * Windows resolves `foo.cmd` through the shell, not through `CreateProcess`.
+     * Node's `spawn` does not consult `PATHEXT`, so a bare `claude` that is an
+     * npm-installed `claude.cmd` raises `ENOENT` — and this module reports that
+     * as "check that it is installed and on your PATH" to a user whose install
+     * is fine. A packaged Artemis hands us its bundled `.exe` and never takes
+     * this branch; a developer running from source against an npm install does.
+     *
+     * `shell: true` is confined to that case because it re-introduces shell
+     * parsing. It is safe here and nowhere near a general escape hatch: `args`
+     * are the adapter's own literals (`auth`, `status`, `--json`) and the one
+     * user-chosen string in play — the config directory — travels in the
+     * environment, which the shell does not re-parse.
+     */
+    const viaShell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable);
+    const file = viaShell && /[\s&()[\]{}^=;!'+,`~]/.test(executable) ? `"${executable}"` : executable;
+
+    const child = spawn(file, [...args], {
       env: childEnv(options),
       // Nothing here is interactive — the interactive command is the one the
       // *user* runs. Stdin is closed so a probe that unexpectedly prompts fails
       // fast instead of hanging until the timeout.
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(viaShell ? { shell: true } : {}),
     });
 
     let stdout = '';
