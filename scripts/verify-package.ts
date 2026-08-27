@@ -35,6 +35,7 @@ import { basename, dirname, join } from 'node:path';
 
 const APP_BINARY =
   process.argv[2] ?? 'apps/desktop/release/mac-arm64/Artemis.app/Contents/MacOS/Artemis';
+const APP_ARGS = process.argv.slice(3);
 const READY_MARKER = 'Engine started';
 const TIMEOUT_MS = 30_000;
 
@@ -267,7 +268,7 @@ verifySdkBinary();
 
 const userDataDir = mkdtempSync(join(tmpdir(), 'artemis-verify-'));
 
-const child = spawn(APP_BINARY, [`--user-data-dir=${userDataDir}`], {
+const child = spawn(APP_BINARY, [`--user-data-dir=${userDataDir}`, ...APP_ARGS], {
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
