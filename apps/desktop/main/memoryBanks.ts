@@ -660,6 +660,7 @@ export function parseBanksStatus(
       exists: bank['exists'] === true,
       source: stringOrNull(bank['source']),
       memories: numberOr(health['memories'], 0),
+      mirrored: numberOr(health['mirrored'], 0),
       validationErrors: numberOr(health['errors'], 0),
       projects: projectCounts.get(slug) ?? 0,
     });
@@ -689,6 +690,10 @@ export function parseMemories(text: string): MemoryBankMemory[] {
       body: stringOr(item['body'], ''),
       added: stringOrNull(metadata['added']),
       author: stringOrNull(metadata['author']),
+      org: stringOrNull(item['org']),
+      project: stringOrNull(item['project']),
+      readonly: item['readonly'] === true,
+      file: stringOrNull(item['file']),
     });
   }
   return memories;

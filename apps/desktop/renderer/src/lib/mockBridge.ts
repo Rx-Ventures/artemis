@@ -413,6 +413,7 @@ let mockBanks: MemoryBankInfo[] = [
     exists: true,
     source: 'cerebro@52a0a32',
     memories: 3,
+    mirrored: 0,
     validationErrors: 0,
     projects: 27,
   },
@@ -426,6 +427,7 @@ let mockBanks: MemoryBankInfo[] = [
     exists: true,
     source: 'cerebro@1a2b3c4',
     memories: 1,
+    mirrored: 0,
     validationErrors: 0,
     projects: 4,
   },
@@ -438,6 +440,10 @@ let mockBankMemories: MemoryBankMemory[] = [
     body: "The team memory bank is shared by every developer on the Artemis harness — and agents, not developers, maintain it.",
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: null,
+    project: null,
+    readonly: false,
+    file: 'memories/team-memory-bank.md',
   },
   {
     name: 'writing-team-memories',
@@ -446,7 +452,13 @@ let mockBankMemories: MemoryBankMemory[] = [
     body: 'A team memory is one fact per file, written so a teammate (or their agent) who lacks your context can act on it.',
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: 'demo-org',
+    project: 'harness',
+    readonly: false,
+    file: 'memories/demo-org/harness/writing-team-memories.md',
   },
+  // A mirror-tree memory, so dev meets the grouped, read-only rendering —
+  // badge on, retire hidden — without arranging a real mirror.
   {
     name: 'artemis-agent-harness',
     type: 'reference',
@@ -454,6 +466,10 @@ let mockBankMemories: MemoryBankMemory[] = [
     body: 'Artemis is the team’s in-house agent harness, an Electron app wrapping the Claude Agent SDK.',
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: 'demo-org',
+    project: 'sessions',
+    readonly: true,
+    file: 'memory/sessions/artemis-agent-harness.md',
   },
 ];
 
@@ -1595,6 +1611,7 @@ export function createMockBridge(): ArtemisBridge {
             exists: true,
             source: 'cerebro@0000000',
             memories: 0,
+            mirrored: 0,
             validationErrors: 0,
             projects: 0,
           },

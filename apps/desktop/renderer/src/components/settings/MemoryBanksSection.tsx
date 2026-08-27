@@ -184,6 +184,8 @@ function BankCard({
   // Controlled, because `Fold` routes `onOpenChange` only in controlled mode —
   // and opening is when the bank's memories are actually worth a CLI spawn.
   const [memoriesOpen, setMemoriesOpen] = useState(false);
+  const profiles = pane.status?.profiles ?? [];
+  const wired = profiles.filter((profile) => profile.banks[bank.slug] === true).length;
 
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2.5">
@@ -220,8 +222,32 @@ function BankCard({
       <Row label="Repo">{bank.path}</Row>
       <Row label="Remote">{bank.remote ?? 'none — changes commit locally'}</Row>
       <Row label="Bank">
-        {`${bank.memories} memories · ${bank.validationErrors} validation errors · installed in ${bank.projects} projects`}
+        {`${bank.memories} memories${bank.mirrored > 0 ? ` (${bank.mirrored} mirrored, read-only)` : ''} · ${bank.validationErrors} validation errors · installed in ${bank.projects} projects`}
       </Row>
+      {/*
+        The registry flag and the on-disk wiring are two different facts, and
+        they have disagreed in the wild: a bank can be "on" while no profile
+        carries its block (the setup flow records the flag; `enable` does the
+        wiring, and an enable that failed leaves exactly this state). Saying so
+        — with the repair right there — is what turns a silent nothing into a
+        one-click fix.
+      */}
+      {bank.enabled && bank.exists && profiles.length > 0 && wired === 0 ? (
+        <div className="flex items-center gap-2">
+          <p className="text-2xs leading-relaxed text-amber">
+            On, but no profile carries its block — the wiring step never completed on this machine.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-2xs"
+            disabled={pane.busy !== null}
+            onClick={() => pane.setEnabled(bank.slug, true)}
+          >
+            {working ? 'Wiring…' : 'Wire profiles'}
+          </Button>
+        </div>
+      ) : null}
       <Fold
         summary={<span className="text-2xs">memories</span>}
         open={memoriesOpen}
@@ -254,9 +280,38 @@ function BankMemories({
       (memory) =>
         memory.name.toLowerCase().includes(needle) ||
         memory.description.toLowerCase().includes(needle) ||
+        (memory.org ?? '').toLowerCase().includes(needle) ||
+        (memory.project ?? '').toLowerCase().includes(needle) ||
         memory.body.toLowerCase().includes(needle),
     );
   }, [loaded, query]);
+
+  /**
+   * Org → project buckets, in the CLI's own order (it sorts by org, project,
+   * name, so insertion order is already the display order). A flat classic
+   * bank renders without headers at all — one bucket named nothing would be a
+   * header saying nothing.
+   */
+  const groups = useMemo(() => {
+    const buckets = new Map<
+      string,
+      { readonly org: string | null; readonly project: string | null; readonly items: MemoryBankMemory[] }
+    >();
+    for (const memory of visible) {
+      // A separator no path segment can contain, written as an escape rather
+      // than as the byte itself so this file stays text to grep and to diff.
+      const key = `${memory.org ?? ''}\x00${memory.project ?? ''}`;
+      const bucket = buckets.get(key);
+      if (bucket === undefined) {
+        buckets.set(key, { org: memory.org, project: memory.project, items: [memory] });
+      } else {
+        bucket.items.push(memory);
+      }
+    }
+    return [...buckets.values()];
+  }, [visible]);
+  const flat =
+    groups.length <= 1 && (groups[0]?.org ?? null) === null && (groups[0]?.project ?? null) === null;
 
   if (loaded === undefined) {
     return <p className="text-2xs leading-relaxed text-ink-faint">Reading the bank…</p>;
@@ -267,7 +322,7 @@ function BankMemories({
       <Input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Filter by name, description, or body…"
+        placeholder="Filter by name, org, project, description, or body…"
         spellCheck={false}
         className="max-w-sm text-xs md:text-xs"
         aria-label={`Filter ${bank.slug} memories`}
@@ -276,9 +331,21 @@ function BankMemories({
         <p className="text-2xs leading-relaxed text-ink-faint">
           {loaded.length === 0 ? 'The bank is empty.' : 'No memory matches the filter.'}
         </p>
-      ) : (
+      ) : flat ? (
         visible.map((memory) => (
-          <MemoryCard key={memory.name} bank={bank} memory={memory} pane={pane} />
+          <MemoryCard key={memory.file ?? memory.name} bank={bank} memory={memory} pane={pane} />
+        ))
+      ) : (
+        groups.map((group) => (
+          <div key={`${group.org ?? '·'}/${group.project ?? '·'}`} className="flex flex-col gap-1.5">
+            <p className="pt-1 font-mono text-2xs font-medium text-ink-muted">
+              {[group.org, group.project].filter((part) => part !== null).join(' / ') || 'unfiled'}
+              {` · ${group.items.length}`}
+            </p>
+            {group.items.map((memory) => (
+              <MemoryCard key={memory.file ?? memory.name} bank={bank} memory={memory} pane={pane} />
+            ))}
+          </div>
         ))
       )}
     </div>
@@ -301,9 +368,13 @@ function MemoryCard({
       <div className="flex items-center gap-2">
         <span className="font-mono text-xs font-medium text-ink">{memory.name}</span>
         <ToneBadge tone="neutral">{memory.type}</ToneBadge>
+        {memory.readonly ? <ToneBadge tone="neutral">mirror · read-only</ToneBadge> : null}
         <span className="ml-auto">
-          {/* Retirement is a write, and a read-only bank takes none. */}
-          {bank.role === 'readwrite' ? <RetireButton bank={bank} memory={memory} pane={pane} /> : null}
+          {/* Retirement is a write; a read-only bank takes none, and a mirror
+              memory is not the bank's to retire on any machine. */}
+          {bank.role === 'readwrite' && !memory.readonly ? (
+            <RetireButton bank={bank} memory={memory} pane={pane} />
+          ) : null}
         </span>
       </div>
       <p className="text-2xs leading-relaxed text-ink-muted">{memory.description}</p>

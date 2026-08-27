@@ -2135,6 +2135,21 @@ export interface MemoryBankMemory {
   /** ISO date the memory was added, when the frontmatter recorded one. */
   readonly added: string | null;
   readonly author: string | null;
+  /** Organization the memory files under, when its bank groups by org. */
+  readonly org: string | null;
+  /** Project or topic within the org. */
+  readonly project: string | null;
+  /**
+   * From a read-only mirror tree the bank carries but does not own (cortex's
+   * session-memory mirrors, for instance): browsable and searchable here,
+   * never retirable, never installed into project memory.
+   */
+  readonly readonly: boolean;
+  /**
+   * Bank-relative file path — the stable identity in a list where mirror
+   * trees may legitimately repeat a name across projects.
+   */
+  readonly file: string | null;
 }
 
 /** A bank's writability on this machine — the CLI refuses writes to `readonly`. */
@@ -2162,6 +2177,8 @@ export interface MemoryBankInfo {
   /** Provenance stamp of the working tree, e.g. `cerebro@52a0a32`. */
   readonly source: string | null;
   readonly memories: number;
+  /** Of `memories`, how many come from read-only mirror trees. */
+  readonly mirrored: number;
   readonly validationErrors: number;
   /** Projects whose Artemis memory currently carries this bank's install. */
   readonly projects: number;

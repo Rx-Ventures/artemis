@@ -67,7 +67,7 @@ const STATUS_FIXTURE = JSON.stringify({
       exists: true,
       source: 'cerebro@1a2b3c4',
       remote: null,
-      bank: { memories: 5, errors: 1, warnings: 0 },
+      bank: { memories: 5, own: 2, mirrored: 3, errors: 1, warnings: 0 },
     },
   ],
   profiles: [
@@ -116,6 +116,9 @@ describe('parseBanksStatus', () => {
       exists: true,
       source: 'cerebro@52a0a32',
       memories: 3,
+      // A health block that predates mirror trees reads as zero mirrored —
+      // the classic bank's truthful answer, not a parse failure.
+      mirrored: 0,
       validationErrors: 0,
       projects: 2,
     });
@@ -126,6 +129,7 @@ describe('parseBanksStatus', () => {
       isDefault: false,
       remote: null,
       memories: 5,
+      mirrored: 3,
       validationErrors: 1,
       projects: 1,
     });
@@ -209,6 +213,24 @@ const LIST_FIXTURE = JSON.stringify([
     metadata: { type: 'project', added: '2026-08-14', author: 'demo@example.com' },
     body: 'Deploys need approval in #deploys first.',
     file: 'memories/deploy-approval-flow.md',
+    org: null,
+    project: null,
+    tree: 'memories',
+    readonly: false,
+    errors: [],
+    warnings: [],
+  },
+  // A mirror-tree memory: grouped under org/project and read-only.
+  {
+    name: 'unraid-server',
+    description: 'The Unraid box and how to reach it',
+    metadata: { type: 'reference' },
+    body: 'Tailscale IP, GraphQL API, key in the vault.',
+    file: 'memory/claude/unraid-server.md',
+    org: 'personal',
+    project: 'claude',
+    tree: 'memory',
+    readonly: true,
     errors: [],
     warnings: [],
   },
@@ -219,7 +241,7 @@ const LIST_FIXTURE = JSON.stringify([
 describe('parseMemories', () => {
   it('maps parseable entries and drops the name-less', () => {
     const memories = parseMemories(LIST_FIXTURE);
-    expect(memories).toHaveLength(1);
+    expect(memories).toHaveLength(2);
     expect(memories[0]).toEqual({
       name: 'deploy-approval-flow',
       type: 'project',
@@ -227,6 +249,19 @@ describe('parseMemories', () => {
       body: 'Deploys need approval in #deploys first.',
       added: '2026-08-14',
       author: 'demo@example.com',
+      org: null,
+      project: null,
+      readonly: false,
+      file: 'memories/deploy-approval-flow.md',
+    });
+    expect(memories[1]).toMatchObject({
+      name: 'unraid-server',
+      org: 'personal',
+      project: 'claude',
+      readonly: true,
+      file: 'memory/claude/unraid-server.md',
+      added: null,
+      author: null,
     });
   });
 
