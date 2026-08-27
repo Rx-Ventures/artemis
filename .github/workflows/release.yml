@@ -114,6 +114,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # electron-builder's pacman target asks bsdtar to generate .MTREE.
+      # ubuntu-latest does not ship it; libarchive-tools is the Ubuntu package
+      # that provides it. Install it only for the Linux matrix entry, before
+      # packaging has spent time assembling an artifact it cannot finish.
+      - if: runner.os == 'Linux'
+        name: Install Arch package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libarchive-tools
       - run: pnpm run build
       - run: pnpm --filter @rx-artemis/desktop exec electron-builder ${{ matrix.build-args }} --publish never
       # One feed per mac architecture. electron-builder always writes
