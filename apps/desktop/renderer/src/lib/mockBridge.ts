@@ -404,9 +404,9 @@ function advanceMockSignIn(current: ServerSignInStatus | null): ServerSignInStat
 let mockMasterEnabled = true;
 let mockBanks: MemoryBankInfo[] = [
   {
-    slug: 'cerebro',
-    path: '/Users/demo/Documents/cerebro',
-    remote: 'https://github.com/Rx-Ventures/cerebro.git',
+    slug: 'team-memory',
+    path: '/Users/demo/Documents/team-memory',
+    remote: 'https://github.com/demo-team/team-memory.git',
     role: 'readwrite',
     enabled: true,
     isDefault: true,
@@ -432,7 +432,7 @@ let mockBanks: MemoryBankInfo[] = [
 ];
 let mockBankMemories: MemoryBankMemory[] = [
   {
-    name: 'cerebro-memory-bank',
+    name: 'team-memory-bank',
     type: 'reference',
     description: "What the team memory bank is, and how agents keep it current",
     body: "The team memory bank is shared by every developer on the Artemis harness — and agents, not developers, maintain it.",
@@ -1526,7 +1526,7 @@ export function createMockBridge(): ArtemisBridge {
           ],
         }),
       memories: async (request) =>
-        ok({ memories: request.slug === 'cerebro' ? [...mockBankMemories] : [] }),
+        ok({ memories: request.slug === mockBanks[0]?.slug ? [...mockBankMemories] : [] }),
       preflight: async () =>
         ok({
           // One of each state, so the requirement list's three rows are all

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cerebro — team memory bank CLI for the Artemis agent harness.
+"""Team memory bank CLI for the Artemis agent harness.
 
 The repo is the source of truth: one memory per markdown file under memories/,
 reviewed via git. This CLI validates memories and syncs them one-way into
@@ -647,6 +647,11 @@ def profile_block(repo, stamp, entry):
     flag = "" if slug == LEGACY_SLUG else f" --bank {slug}"
     title = ("Team memory bank (agent-maintained)" if slug == LEGACY_SLUG
              else f"Memory bank `{slug}` (agent-maintained)")
+    # The bank the user set up has a name; the CLI that installs it is not it.
+    # Bare verbs below stay literal, but every sentence about the system says
+    # what the user called it.
+    subject = ("the shared team memory bank" if slug == LEGACY_SLUG
+               else f"the `{slug}` memory bank")
     if entry["role"] == "readonly":
         return f"""{begin_marker(slug)}
 ## {title} — read-only
@@ -662,9 +667,10 @@ Managed block (`cerebro enable`, source {stamp}); edit via the repo, not here.
     return f"""{begin_marker(slug)}
 ## {title}
 Managed block (`cerebro enable`, source {stamp}); edit via the repo, not here.
-Maintaining the shared team memory bank is YOUR responsibility, not the user's.
-Never ask them to run cerebro commands or to decide whether something is worth
-remembering — you decide, you act, you mention it in one line afterwards.
+Maintaining {subject} is YOUR responsibility, not the user's.
+Never ask them to run a memory-bank command themselves, or to decide whether
+something is worth remembering — you decide, you act, you mention it in one
+line afterwards.
 - The bank ({repo}) syncs itself into each project's Artemis memory at session
   start via a SessionStart hook. Consult the `{sub}/` entries in this
   project's MEMORY.md index before guessing about team conventions,
@@ -2009,7 +2015,7 @@ def main():
                    help="ignore the fetch throttle and re-install even if unchanged")
     p.set_defaults(fn=cmd_sync)
 
-    p = sub.add_parser("doctor", help="check this machine can run cerebro (tools, identity, access)")
+    p = sub.add_parser("doctor", help="check this machine can run the memory-bank CLI (tools, identity, access)")
     p.add_argument("--root")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--offline", action="store_true", help="skip the remote-access probe")
@@ -2017,7 +2023,7 @@ def main():
                                   "(for asking about a folder before cloning into it)")
     p.set_defaults(fn=cmd_doctor)
 
-    p = sub.add_parser("status", help="show bank health and where cerebro is installed")
+    p = sub.add_parser("status", help="show bank health and where the CLI is installed")
     p.add_argument("--root")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(fn=cmd_status)

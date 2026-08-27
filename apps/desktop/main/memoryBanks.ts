@@ -247,7 +247,7 @@ function resolveCli(bankPath?: string): string {
   const vendored = vendoredCliPath();
   if (vendored !== null) return vendored;
   throw new WorkspaceError(
-    'No cerebro CLI is available on this machine — reinstall Artemis, or clone a bank that embeds one.',
+    'No memory-bank CLI is available on this machine — reinstall Artemis, or clone a bank that embeds one.',
   );
 }
 
@@ -506,7 +506,7 @@ function tokensIn(env: Readonly<Record<string, string>>): readonly string[] {
  * A non-zero exit does not always mean nothing useful was said. `doctor` exits
  * 1 whenever it finds a problem — that is its whole job — and prints its report
  * on stdout on the way out. Without this the report is discarded on exactly the
- * runs it exists to explain, and the pane shows "cerebro doctor failed" over a
+ * runs it exists to explain, and the pane shows "Memory bank doctor failed" over a
  * perfectly good list of what is wrong.
  */
 export const CLI_STDOUT = Symbol('cerebro.stdout');
@@ -526,14 +526,14 @@ function toCliError(error: unknown, verb: string, secrets: readonly string[] = [
     said.length > 0
       ? // The tail, not the head: the CLI states its conclusion last.
         new WorkspaceError(
-          `cerebro ${verb} failed: ${said
+          `Memory bank ${verb} failed: ${said
             .split('\n')
             .filter((line) => line.trim().length > 0)
             .slice(-3)
             .join(' · ')}`,
         )
       : new WorkspaceError(
-          `cerebro ${verb} failed: ${
+          `Memory bank ${verb} failed: ${
             typeof raw.message === 'string'
               ? withoutSecrets(raw.message, secrets)
               : 'the CLI did not respond'
@@ -573,7 +573,7 @@ export function withoutSecrets(text: string, secrets: readonly string[]): string
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new WorkspaceError(`cerebro returned unexpected JSON: ${context} is not an object`);
+    throw new WorkspaceError(`The memory-bank CLI returned unexpected JSON: ${context} is not an object`);
   }
   return value as Record<string, unknown>;
 }
@@ -594,7 +594,7 @@ function parseJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new WorkspaceError('cerebro returned output that is not JSON');
+    throw new WorkspaceError('The memory-bank CLI returned output that is not JSON');
   }
 }
 
@@ -672,7 +672,7 @@ export function parseBanksStatus(
 export function parseMemories(text: string): MemoryBankMemory[] {
   const data = parseJson(text);
   if (!Array.isArray(data)) {
-    throw new WorkspaceError('cerebro returned unexpected JSON: list is not an array');
+    throw new WorkspaceError('The memory-bank CLI returned unexpected JSON: list is not an array');
   }
   const memories: MemoryBankMemory[] = [];
   for (const entry of data) {
@@ -952,7 +952,7 @@ export async function readMemoryBanksPreflight(): Promise<MemoryBankPreflight> {
       checks: [
         {
           id: 'cli',
-          label: 'cerebro CLI',
+          label: 'Bank CLI',
           state: 'fail',
           detail: 'no CLI is available on this machine',
           remedy: 'Reinstall Artemis — the CLI ships with it',

@@ -291,6 +291,15 @@ export interface MemoryBankPromptInfo {
  */
 export const TEAM_BANK_NAME_PLACEHOLDER = '<team memory bank name>';
 
+/**
+ * The slug the CLI gave the one bank it could manage before it could manage
+ * several. Its entries install to a bare directory rather than under `banks/`,
+ * so the install path a legacy bank is told about has to be spelled that way or
+ * the agent looks in a directory that does not exist. An address, not a name:
+ * every sentence around it still speaks {@link MemoryBankPromptInfo.slug}.
+ */
+const LEGACY_BANK_HOME = 'cerebro';
+
 export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]): string {
   /*
    * With no bank set up yet the prompt still has to read as itself: this is the
@@ -318,7 +327,7 @@ export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]):
       bank.readonly ? 'read-only: consult it, never write to it' : 'read-write',
       ...(bank.isDefault && plural ? ['the default — bare `cerebro` commands address it'] : []),
     ];
-    const home = bank.slug === 'cerebro' ? 'cerebro/' : `banks/${bank.slug}/`;
+    const home = bank.slug === LEGACY_BANK_HOME ? `${LEGACY_BANK_HOME}/` : `banks/${bank.slug}/`;
     return `- \`${bank.slug}\` (${marks.join('; ')}) — its entries live under \`${home}\` in each project's memory and MEMORY.md index.`;
   });
 
@@ -334,7 +343,10 @@ export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]):
       ? `This machine carries ${described.length} of your team's shared memory banks: git-backed, agent-maintained collections of durable facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`
       : `This machine carries your team's shared memory bank (\`${fallback?.slug ?? TEAM_BANK_NAME_PLACEHOLDER}\`): a git-backed, agent-maintained collection of durable team facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`,
     lines.join('\n'),
-    'Keeping the team\'s memory current is your job, not the user\'s. Never ask them whether something is worth remembering, and never ask them to run a cerebro command. You decide, you act, and you mention it in one line afterwards.',
+    // The command stays literal in the fenced block below; this sentence names
+    // the system rather than the binary, so the user meets the thing they set up
+    // instead of a program they will never type.
+    'Keeping the team\'s memory current is your job, not the user\'s. Never ask them whether something is worth remembering, and never ask them to run a memory-bank command themselves. You decide, you act, and you mention it in one line afterwards.',
     `**Consult before guessing** about team conventions, ownership, or past decisions — read the team's entries in this project's MEMORY.md index. A fact the team has recorded is authoritative; your prior is not.`,
   );
 

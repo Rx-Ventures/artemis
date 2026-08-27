@@ -292,6 +292,34 @@ describe('the bank the prompt names', () => {
     expect(after).not.toContain('cortex');
   });
 
+  /*
+   * The CLI's name is not the product's name, and the prompt is the one place
+   * the two used to be confused: an agent reading "a cerebro command" learns a
+   * brand, where an agent reading the bank's own name learns the thing the user
+   * set up. The verbs still have to say `cerebro`, because that is what gets
+   * typed — so the rule is positional rather than lexical: the word may appear
+   * in a fenced block or a code span (a command, a flag, a path), and nowhere
+   * else.
+   *
+   * Stripping is ordered: fences first, since their delimiters are backticks
+   * and an inline-span pass run first would eat into them.
+   */
+  const prose = (text: string) =>
+    text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+
+  it('leaves the CLI\'s name only where a command is being quoted', () => {
+    for (const banks of [[bank('cortex', true)], [bank('cortex', true), bank('atlas')]]) {
+      const text = renderMemoryBanksPrompt(banks);
+      // The guard guards nothing if the stripping is what removed every match.
+      expect(text).toMatch(/cerebro/i);
+      expect(prose(text)).not.toMatch(/cerebro/i);
+    }
+  });
+
+  it('says nothing about the CLI in prose before any bank exists either', () => {
+    expect(prose(renderMemoryBanksPrompt([]))).not.toMatch(/cerebro/i);
+  });
+
   it('falls through to the first survivor when no bank claims the default', () => {
     // What a stale registry default looks like by the time it reaches here:
     // the bank it named is gone, so nothing is marked default.
