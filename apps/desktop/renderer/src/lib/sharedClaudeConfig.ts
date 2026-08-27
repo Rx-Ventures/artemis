@@ -9,8 +9,8 @@
  * user asked for.
  *
  * This module writes the shell that undoes the second half without touching the
- * first — symlinks from each profile's directory to the matching entry under
- * the user's own `~/.claude` — and reads the main process's report of what that
+ * first — links from each profile's directory to the matching entry under the
+ * user's own `~/.claude` — and reads the main process's report of what that
  * shell actually did.
  *
  * ---------------------------------------------------------------------------
@@ -45,7 +45,39 @@
  * import for anything to do with the arrangement. They had to move: the main
  * process `lstat`s exactly these names, and a second copy of the list is a
  * script that links a directory the pane will never mention.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO SCRIPTS, BECAUSE THERE ARE TWO KINDS OF LINK
+ * ---------------------------------------------------------------------------
+ *
+ * {@link buildSharedConfigScript} takes the host platform and writes `/bin/sh`
+ * for macOS and Linux and PowerShell for Windows. Not a formatting difference:
+ * `ln -s` has no unprivileged equivalent on Windows.
+ *
+ * A Windows symbolic link — of either kind — needs `SeCreateSymbolicLinkPrivilege`,
+ * which means an elevated shell or Developer Mode. Neither is a thing to ask for
+ * in a settings pane, and a script that only works for administrators is a script
+ * that fails silently for everyone else halfway through, after it has already
+ * renamed their `projects/` out of the way. So the Windows script uses the two
+ * link kinds that need no privilege at all:
+ *
+ *  - **Junctions** for the directories. A directory-only reparse point,
+ *    creatable by any user, and — the part that matters here — one that Node's
+ *    `lstat` reports as a symbolic link and `readlink` resolves, so the status
+ *    reader in `main/sharedConfig.ts` recognises it with the same two calls it
+ *    already makes on macOS.
+ *  - **Hard links** for `CLAUDE.md`. A second name for one file rather than a
+ *    pointer to it, so `lstat` cannot see it at all — which is why the reader
+ *    grew an identity comparison for exactly this one name.
+ *
+ * The Windows script is ASCII throughout, comments included. It reaches the user
+ * through a Copy button and gets pasted into a console whose code page is
+ * whatever it is, or saved as a `.ps1` that Windows PowerShell reads as ANSI
+ * unless something put a BOM on it. An em dash in a comment is not worth finding
+ * out which.
  */
+
+import type { Platform } from './paths';
 
 import {
   BACKUP_SUFFIX,
@@ -81,22 +113,63 @@ export function shellQuote(value: string): string {
 }
 
 /**
+ * Quote one value for PowerShell.
+ *
+ * Single quotes, where the escape for a single quote is a second single quote.
+ * PowerShell does no expansion at all inside them, which is the property being
+ * bought: the Windows profile default sits under `%APPDATA%`, and a path is
+ * otherwise free to contain `$`, a backtick, or a `[` — every one of which means
+ * something inside a double-quoted PowerShell string and none of which means
+ * anything inside a single-quoted one.
+ */
+export function powerShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * What to tell the user to paste the script into.
+ *
+ * Lives here rather than in the pane so that the sentence and the script it
+ * describes are decided by the same value. A pane that says "run this in a
+ * terminal" over a `#!/bin/sh` on a Windows machine is not wrong by much, but it
+ * is wrong in the one direction that wastes somebody's afternoon.
+ */
+export function scriptShell(platform: Platform): string {
+  return platform === 'win32' ? 'PowerShell' : 'a terminal';
+}
+
+/**
  * Build the script.
  *
- * `/bin/sh`, not bash: the only bash-isms this needs are conveniences, and a
- * script the user is about to paste into whatever shell they happen to run
- * should not fail on the shebang. `set -eu` rather than `pipefail` for the same
- * reason — there are no pipes here, and `pipefail` is not POSIX.
+ * The platform is passed in rather than sniffed, because there is nothing in the
+ * renderer to sniff — it learns the host from the bridge at boot, the same way
+ * `shortenPath` and `isAbsolutePath` learn it. Required rather than defaulted:
+ * the failure mode of a wrong default is handing somebody a script for the
+ * operating system they are not using, which they find out by running it.
  *
- * The root is written as `$HOME/.claude` and left for the shell to expand. The
- * renderer does not know the home directory, and asking the main process for it
- * would add an IPC channel to interpolate a string the shell already has.
+ * On macOS and Linux this is `/bin/sh`, not bash: the only bash-isms it needs
+ * are conveniences, and a script the user is about to paste into whatever shell
+ * they happen to run should not fail on the shebang. `set -eu` rather than
+ * `pipefail` for the same reason — there are no pipes here, and `pipefail` is
+ * not POSIX.
  *
- * The shared names are written into the `for` lists as literal words rather than
+ * The root is written as `$HOME/.claude` — `$env:USERPROFILE\.claude` on Windows
+ * — and left for the shell to expand. The renderer does not know the home
+ * directory, and asking the main process for it would add an IPC channel to
+ * interpolate a string the shell already has.
+ *
+ * The shared names are written into the loop lists as literal words rather than
  * expanded out of a variable — see {@link wordList}, which is not a style
  * preference.
  */
-export function buildSharedConfigScript(dirs: readonly string[], mode: SharedConfigMode): string {
+export function buildSharedConfigScript(
+  dirs: readonly string[],
+  mode: SharedConfigMode,
+  platform: Platform,
+): string {
+  if (platform === 'win32') {
+    return mode === 'share' ? windowsShareScript(dirs) : windowsRestoreScript(dirs);
+  }
   return mode === 'share' ? shareScript(dirs) : restoreScript(dirs);
 }
 
@@ -297,6 +370,298 @@ profile() {
 ${calls(dirs, 'profile')}
 
 printf '\\nDone. Start Artemis again to pick up the new layout.\\n'
+`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The Windows scripts                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** `Update-Profile 'C:\\a'` lines, or a comment where the list is empty. */
+function psCalls(dirs: readonly string[]): string {
+  if (dirs.length === 0) return '# No Claude profiles to cover.';
+  return dirs.map((dir) => `Update-Profile ${powerShellQuote(dir)}`).join('\n');
+}
+
+/**
+ * The names of a `foreach` list, as a literal array.
+ *
+ * PowerShell has no word splitting, so this is not the bug it is in the POSIX
+ * generator — `foreach ($n in $Names)` iterates an array correctly whatever the
+ * shell. Written as literal words anyway, for the second reason the sh version
+ * gives: a script the user reads should name what it is about to link, and a
+ * `$SharedDirectories` two screens up is a name they have to go and look up.
+ */
+function psWordList(names: readonly string[]): string {
+  return `@(${names.map(powerShellQuote).join(', ')})`;
+}
+
+/**
+ * The parts both Windows scripts open with.
+ *
+ * `$ErrorActionPreference = 'Stop'` is `set -e`: PowerShell's default is to
+ * print a failure and carry on to the next statement, which in a script that
+ * renames a directory and then links over the name is how half an arrangement
+ * gets made. `Set-StrictMode` is `set -u`.
+ */
+const PS_PRELUDE = `Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$Root = Join-Path $env:USERPROFILE '.claude'
+$Suffix = '${BACKUP_SUFFIX}'
+
+# New-Item's -Target is one of the last parameters in PowerShell still read as
+# a wildcard pattern rather than as a path, so a profile under
+# "C:\\Users\\you\\OneDrive\\[work]" sends it looking for a folder called
+# "C:\\Users\\you\\OneDrive\\w" and it fails. A Windows path cannot hold "*" or
+# "?", which leaves the brackets and the backtick PowerShell escapes them with.
+# -Path is *not* resolved that way and has to be passed through untouched, or
+# the junction gets created at a name with literal backticks in it.
+function ConvertTo-Pattern {
+  param([Parameter(Mandatory = $true)] [AllowEmptyString()] [string] $Path)
+  $Path.Replace('\`', '\`\`').Replace('[', '\`[').Replace(']', '\`]')
+}
+
+# What is at $Path, following nothing, or $null when there is nothing there.
+# -Force so that hidden and system entries answer too, and -LiteralPath for the
+# same wildcard reason in the other direction.
+function Get-Entry {
+  param([Parameter(Mandatory = $true)] [string] $Path)
+  Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+}
+
+# Is this entry one of this arrangement's links to $Target?
+#
+# One test for both kinds of link. PowerShell reports .Target on a junction as
+# the folder it points at, and on a hard link as the file's other names, so
+# "the root is among them" is the same question either way.
+function Test-SharedLink {
+  param($Entry, [Parameter(Mandatory = $true)] [string] $Target)
+  if ($null -eq $Entry) { return $false }
+  return ($Entry.Target -contains $Target)
+}`;
+
+function windowsShareScript(dirs: readonly string[]): string {
+  return `# Shared Claude config - generated by Artemis.
+# ==========================================================================
+#
+# Points the shareable parts of each Artemis Claude profile at your own
+# .claude folder, so commands, skills, plugins, plans and history are the
+# same whichever account a run uses.
+#
+# NOT touched: .claude.json, settings.json, sessions\\ and the stored
+# credential. Those stay per profile - they are what make the accounts
+# separate accounts, and linking them signs every profile into whichever one
+# logged in last.
+#
+# Folders are joined with junctions and CLAUDE.md with a hard link. Neither
+# needs an administrator. A Windows symbolic link does, unless Developer Mode
+# happens to be on, and a script that half-works for most people is worse
+# than one that asks for nothing.
+#
+# Nothing is deleted. Anything already in a profile is renamed to
+# <name>${BACKUP_SUFFIX} first, and the "stop sharing" script puts it back.
+#
+# Re-running this is safe: a link that already points at the root is left as
+# it is, and no second backup is made.
+#
+# Quit Artemis before running it, so nothing is writing to these paths.
+
+${PS_PRELUDE}
+
+# Move whatever is at $Path to the first free backup name.
+#
+# Never onto an existing backup. The un-numbered one is the original, and a
+# numbered one exists only because the name filled up again after sharing was
+# already on - so the numbers count forward and nothing is ever written over.
+function Move-Aside {
+  param([Parameter(Mandatory = $true)] [string] $Path)
+
+  $backup = $Path + $Suffix
+  $n = 2
+  while ($null -ne (Get-Entry $backup)) {
+    $backup = $Path + $Suffix + '.' + $n
+    $n = $n + 1
+  }
+  Move-Item -LiteralPath $Path -Destination $backup
+  Write-Host "  move  $Path -> $backup"
+}
+
+function Set-SharedDirectory {
+  param([Parameter(Mandatory = $true)] [string] $Path, [Parameter(Mandatory = $true)] [string] $Target)
+
+  $entry = Get-Entry $Path
+  if (Test-SharedLink $entry $Target) {
+    Write-Host "  keep  $Path"
+    return
+  }
+  if ($null -ne $entry) { Move-Aside $Path }
+
+  New-Item -ItemType Junction -Path $Path -Target (ConvertTo-Pattern $Target) | Out-Null
+  Write-Host "  link  $Path"
+}
+
+function Set-SharedFile {
+  param([Parameter(Mandatory = $true)] [string] $Path, [Parameter(Mandatory = $true)] [string] $Target)
+
+  $entry = Get-Entry $Path
+  if (Test-SharedLink $entry $Target) {
+    Write-Host "  keep  $Path"
+    return
+  }
+
+  # Asked before anything moves, not after. A hard link cannot cross volumes,
+  # and finding that out afterwards would leave the profile's own CLAUDE.md in
+  # a backup with nothing at all at the name it came from.
+  if ([System.IO.Path]::GetPathRoot($Path) -ne [System.IO.Path]::GetPathRoot($Target)) {
+    Write-Host "  skip  $Path (a hard link cannot cross drives)"
+    return
+  }
+
+  if ($null -ne $entry) { Move-Aside $Path }
+
+  New-Item -ItemType HardLink -Path $Path -Target (ConvertTo-Pattern $Target) | Out-Null
+  Write-Host "  link  $Path"
+}
+
+function Update-Profile {
+  param([Parameter(Mandatory = $true)] [string] $Dir)
+
+  # Junctioning the root into itself would replace every shared folder with a
+  # link to the backup it was just renamed into. A profile is allowed to name
+  # your own .claude directly, so this is a real case and not a defensive
+  # check. Trailing separators are trimmed off both sides because Windows
+  # paths get typed with one, and a comparison that missed it here would not
+  # fail safely.
+  if ($Dir.TrimEnd('\\', '/') -eq $Root.TrimEnd('\\', '/')) {
+    Write-Host $Dir
+    Write-Host '  skip  this is your own .claude'
+    return
+  }
+  if (-not (Test-Path -LiteralPath $Dir -PathType Container)) {
+    Write-Host $Dir
+    Write-Host '  skip  no such directory'
+    return
+  }
+
+  Write-Host $Dir
+
+  foreach ($name in ${psWordList(SHARED_DIRECTORIES)}) {
+    $target = Join-Path $Root $name
+    New-Item -ItemType Directory -Path $target -Force | Out-Null
+    Set-SharedDirectory (Join-Path $Dir $name) $target
+  }
+
+  foreach ($name in ${psWordList(SHARED_FILES)}) {
+    $target = Join-Path $Root $name
+    if (-not (Test-Path -LiteralPath $target)) {
+      Write-Host "  skip  $name (no $target to share)"
+      continue
+    }
+    Set-SharedFile (Join-Path $Dir $name) $target
+  }
+}
+
+New-Item -ItemType Directory -Path $Root -Force | Out-Null
+
+${psCalls(dirs)}
+
+Write-Host ''
+Write-Host 'Done. Start Artemis again to pick up the new layout.'
+`;
+}
+
+function windowsRestoreScript(dirs: readonly string[]): string {
+  return `# Stop sharing the Claude config - generated by Artemis.
+# ==========================================================================
+#
+# Undoes the sharing script: removes the links it made and moves each
+# <name>${BACKUP_SUFFIX} back to where it came from.
+#
+# Conservative in both directions. A link is removed only when it still
+# reaches the matching path under your .claude - anything else at that name
+# is something you put there since, and is left alone with a note. A backup
+# is restored only onto a name that is now free, so nothing overwrites
+# anything.
+#
+# Files created inside a shared folder while sharing was on stay in your
+# .claude. They were written to the root, and this script does not try to
+# guess which profile they belonged to.
+#
+# Quit Artemis before running it.
+
+${PS_PRELUDE}
+
+# Take away one of this arrangement's links, and nothing else.
+#
+# [System.IO.Directory]::Delete with recursive:$false, not Remove-Item, and
+# that is the most careful line in this script. Remove-Item -Recurse has a
+# long history of walking *through* a junction and deleting the folder on the
+# far side of it, which here is your own .claude. Delete($Path, $false) takes
+# away the reparse point and cannot recurse into anything - and if it were
+# ever handed a real folder by mistake it would refuse rather than empty it.
+#
+# For the file, Remove-Item takes away one of the two names the data has and
+# the one under the root keeps it. That is also this script's blind spot,
+# stated plainly: Windows records no direction on a hard link, so once the
+# root's CLAUDE.md is gone the profile's name is simply the last name the
+# data has, Test-SharedLink stops recognising it, and it is left alone with a
+# note. The alternative is deleting a file nothing else points at.
+function Remove-SharedLink {
+  param([Parameter(Mandatory = $true)] [string] $Path, $Entry)
+
+  if ($Entry.PSIsContainer) { [System.IO.Directory]::Delete($Path, $false) }
+  else { Remove-Item -LiteralPath $Path -Force }
+}
+
+function Restore-One {
+  param([Parameter(Mandatory = $true)] [string] $Path, [Parameter(Mandatory = $true)] [string] $Target)
+
+  $entry = Get-Entry $Path
+  if ($null -ne $entry) {
+    if (-not (Test-SharedLink $entry $Target)) {
+      Write-Host "  leave    $Path (not the link this script made)"
+      return
+    }
+    Remove-SharedLink $Path $entry
+    Write-Host "  unlink   $Path"
+  }
+
+  # Only the un-numbered backup: it is the original. A numbered one exists
+  # only because the name was occupied again after sharing was already on, and
+  # guessing which of the two the user wants back is not this script's call.
+  $backup = $Path + $Suffix
+  if ($null -eq (Get-Entry $backup)) { return }
+
+  Move-Item -LiteralPath $backup -Destination $Path
+  Write-Host "  restore  $Path"
+}
+
+function Update-Profile {
+  param([Parameter(Mandatory = $true)] [string] $Dir)
+
+  if ($Dir.TrimEnd('\\', '/') -eq $Root.TrimEnd('\\', '/')) {
+    Write-Host $Dir
+    Write-Host '  skip     this is your own .claude'
+    return
+  }
+  if (-not (Test-Path -LiteralPath $Dir -PathType Container)) {
+    Write-Host $Dir
+    Write-Host '  skip     no such directory'
+    return
+  }
+
+  Write-Host $Dir
+
+  foreach ($name in ${psWordList(SHARED_ENTRIES)}) {
+    Restore-One (Join-Path $Dir $name) (Join-Path $Root $name)
+  }
+}
+
+${psCalls(dirs)}
+
+Write-Host ''
+Write-Host 'Done. Start Artemis again to pick up the new layout.'
 `;
 }
 

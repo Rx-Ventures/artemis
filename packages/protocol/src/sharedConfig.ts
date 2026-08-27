@@ -185,6 +185,16 @@ export function sharedConfigDirs(profiles: readonly ProfileMetadata[]): readonly
  * `$HOME` — reads as `foreign` here because that is what the script will treat
  * it as, and being cleverer than the script would mean describing an outcome
  * the user is not going to get.
+ *
+ * On Windows the same four words describe two other kinds of link, because
+ * `ln -s` has no unprivileged equivalent there. A shared *directory* is a
+ * junction, which `lstat` and `readlink` answer for exactly as they do a symlink
+ * — so `linked` and `foreign` are decided the same way, allowing for case and
+ * for the `\\?\` prefix a target can be spelled with. A shared `CLAUDE.md` is a
+ * hard link, which is not a link to anything but a second name for one file, so
+ * `linked` there means the two names have the same `dev` and `ino`. The one
+ * thing that cannot be told apart is which of the two names came first, which is
+ * why the undo script leaves a `CLAUDE.md` alone once the root's copy is gone.
  */
 export type SharedConfigEntryState = 'linked' | 'own' | 'missing' | 'foreign';
 

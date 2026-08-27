@@ -28,11 +28,16 @@
  * so the shell that runs it is whichever one they had open, and it has already
  * behaved differently in one of them.
  *
- * Skipped on Windows, where there is no `/bin/sh` and the feature is not offered.
+ * On Windows the round trip runs against the PowerShell script instead, and it
+ * is worth more there than anywhere else. The arrangement is made out of
+ * junctions and a hard link, the prober answers for them with two different
+ * questions — `readlink`, and a `dev`/`ino` comparison — and neither question is
+ * asked at all on the other platforms. A drift between the script and the reader
+ * would be invisible in every other suite in the repository.
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -40,7 +45,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SHARED_ENTRIES, type SharedConfigDirStatus } from '@rx-artemis/protocol';
 import { buildSharedConfigScript } from '@/lib/sharedClaudeConfig';
 
-import { readSharedConfigStatus } from './sharedConfig.js';
+import {
+  normalizeLinkTarget,
+  readSharedConfigStatus,
+  sameFileIdentity,
+  sameLinkPath,
+} from './sharedConfig.js';
 
 const canRunShell = process.platform !== 'win32';
 
@@ -109,7 +119,7 @@ function runScriptIn(
   mode: 'share' | 'restore',
 ): string {
   const script = path.join(box.home, `${mode}.sh`);
-  writeFileSync(script, buildSharedConfigScript(dirs, mode));
+  writeFileSync(script, buildSharedConfigScript(dirs, mode, 'darwin'));
   // Named explicitly rather than left to the shebang, which is what a pasted
   // script does not get.
   return execFileSync(shell, [script], {
@@ -213,6 +223,85 @@ describe.each(SHELLS)('after the real share script runs (%s)', (shell) => {
     // read as broken for as long as the user has no root CLAUDE.md.
     expect(stateOf(work, 'CLAUDE.md')).toBe('missing');
     expect(status.rootMissing).toEqual(['CLAUDE.md']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The same round trip, in PowerShell                                         */
+/* -------------------------------------------------------------------------- */
+
+/** PowerShell, if this is Windows and it will start. Detected, not assumed. */
+const POWERSHELL = ((): string | null => {
+  if (process.platform !== 'win32') return null;
+  try {
+    execFileSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], { stdio: 'ignore' });
+    return 'powershell.exe';
+  } catch {
+    return null;
+  }
+})();
+
+/** `$env:USERPROFILE` is what the Windows script expands, so that is what moves. */
+function runPowerShellIn(box: Sandbox, dirs: readonly string[], mode: 'share' | 'restore'): string {
+  const script = path.join(box.home, `${mode}.ps1`);
+  writeFileSync(script, buildSharedConfigScript(dirs, mode, 'win32'));
+  return execFileSync(
+    POWERSHELL as string,
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    { encoding: 'utf8', env: { ...process.env, USERPROFILE: box.home } },
+  );
+}
+
+describe.skipIf(POWERSHELL === null)('after the real Windows share script runs', () => {
+  it('reads every entry as linked', async () => {
+    const box = sandbox();
+    runPowerShellIn(box, [box.work, box.max], 'share');
+
+    const [work, max] = await probe(box, [box.work, box.max]);
+
+    for (const status of [work, max]) {
+      expect(status?.state).toBe('checked');
+      /*
+       * The assertion this file exists for, and on Windows it is checking two
+       * separate mechanisms at once: eight junctions the prober recognises
+       * through `readlink`, and one hard link it can only recognise by asking
+       * whether the two names are the same file. One name it cannot classify is
+       * a row the pane would report as a gap forever, and neither mechanism is
+       * exercised anywhere else in the repository.
+       */
+      expect(status?.entries.map((entry) => entry.state)).toEqual(
+        SHARED_ENTRIES.map(() => 'linked'),
+      );
+    }
+  });
+
+  it('reads the hard-linked CLAUDE.md as linked, which no lstat can see', async () => {
+    const box = sandbox();
+    runPowerShellIn(box, [box.max], 'share');
+
+    const at = path.join(box.max, 'CLAUDE.md');
+    // Not a symlink and not a copy. Without the identity comparison this entry
+    // reads as `own` — a file of the profile's own that the share script would
+    // move aside — which is a perfectly-run share reporting as a gap forever.
+    expect(lstatSync(at).isSymbolicLink()).toBe(false);
+    expect(stateOf((await probe(box, [box.max]))[0] as SharedConfigDirStatus, 'CLAUDE.md')).toBe(
+      'linked',
+    );
+  });
+
+  it('reads nothing as linked again after the undo script', async () => {
+    const box = sandbox();
+    runPowerShellIn(box, [box.work], 'share');
+    runPowerShellIn(box, [box.work], 'restore');
+
+    const [work] = await probe(box, [box.work]);
+
+    expect(work?.entries.some((entry) => entry.state === 'linked')).toBe(false);
+    // The two the profile owned came back as its own, and the backups are gone.
+    expect(stateOf(work as SharedConfigDirStatus, 'session-env')).toBe('own');
+    expect(stateOf(work as SharedConfigDirStatus, 'projects')).toBe('own');
+    expect(work?.entries.every((entry) => entry.backup === undefined)).toBe(true);
+    expect(stateOf(work as SharedConfigDirStatus, 'commands')).toBe('missing');
   });
 });
 
@@ -352,5 +441,95 @@ describe('the two directories that are not read', () => {
     // The root is still reported: it is what the pane names as the thing
     // everything would be compared against.
     expect(status.root).toBe(box.root);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The two comparisons Windows needs                                          */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Pure, and tested as such. Both are one-line judgements sitting under a pile of
+ * `fs` calls, and both are the kind of thing that reads as obviously right and
+ * is obviously right in one direction only — a prefix stripped from the wrong
+ * side, an `ino` of zero taken at face value. Asserting them through a sandbox
+ * would mean owning a filesystem that produces each case, and a `\\?\` target is
+ * not something a test can reliably make one produce.
+ */
+
+describe('normalizeLinkTarget', () => {
+  it('takes the extended-length prefix off a drive path', () => {
+    // What a junction's substitute name is actually stored as, and what some
+    // versions of Node hand back verbatim. The same directory, spelled for the
+    // filesystem instead of for the Win32 path parser.
+    expect(normalizeLinkTarget('\\\\?\\C:\\Users\\you\\.claude\\skills')).toBe(
+      'C:\\Users\\you\\.claude\\skills',
+    );
+    expect(normalizeLinkTarget('\\??\\C:\\Users\\you\\.claude\\skills')).toBe(
+      'C:\\Users\\you\\.claude\\skills',
+    );
+  });
+
+  it('unwinds the UNC form to the share path a caller would have written', () => {
+    expect(normalizeLinkTarget('\\\\?\\UNC\\server\\share\\profiles')).toBe(
+      '\\\\server\\share\\profiles',
+    );
+  });
+
+  it('leaves everything else exactly as it found it', () => {
+    // Including POSIX paths: this runs on every platform, and a normalizer that
+    // trimmed four characters off `/Users/…` would be a silent disaster.
+    expect(normalizeLinkTarget('/Users/ada/.claude/skills')).toBe('/Users/ada/.claude/skills');
+    expect(normalizeLinkTarget('C:\\Users\\you\\.claude')).toBe('C:\\Users\\you\\.claude');
+    expect(normalizeLinkTarget('\\\\server\\share')).toBe('\\\\server\\share');
+    expect(normalizeLinkTarget('')).toBe('');
+  });
+});
+
+describe('sameLinkPath', () => {
+  it('is byte equality off Windows, exactly as the shell compares it', () => {
+    // The rule this module's header commits to: a link that reaches the right
+    // directory by another spelling reads as `foreign`, because that is what the
+    // sh script will treat it as.
+    expect(sameLinkPath('/home/u/.claude/skills', '/home/u/.claude/skills', false)).toBe(true);
+    expect(sameLinkPath('/home/u/.claude/skills', '/home/u/.claude/Skills', false)).toBe(false);
+    expect(sameLinkPath('\\\\?\\C:\\a', 'C:\\a', false)).toBe(false);
+  });
+
+  it('ignores case and the prefix on Windows, as PowerShell does', () => {
+    // The script's own test is `-eq` against `.Target`, which is
+    // case-insensitive; a profile registered as `c:\users\…` would otherwise
+    // read as unlinked beside a junction the script had just made.
+    expect(sameLinkPath('\\\\?\\C:\\Users\\You\\.claude\\skills', 'C:\\users\\you\\.claude\\skills', true)).toBe(
+      true,
+    );
+    expect(sameLinkPath('C:\\Users\\you\\.claude\\skills', 'C:\\Users\\you\\.claude\\plans', true)).toBe(
+      false,
+    );
+  });
+});
+
+describe('sameFileIdentity', () => {
+  it('is true only for one file under two names', () => {
+    expect(sameFileIdentity({ dev: 7n, ino: 42n }, { dev: 7n, ino: 42n })).toBe(true);
+    // A copy with the same contents, which is what the script would move aside
+    // and link over.
+    expect(sameFileIdentity({ dev: 7n, ino: 42n }, { dev: 7n, ino: 43n })).toBe(false);
+    // The same index on another volume, which is a coincidence and not a link.
+    expect(sameFileIdentity({ dev: 8n, ino: 42n }, { dev: 7n, ino: 42n })).toBe(false);
+  });
+
+  it('refuses to guess when the filesystem gave no index', () => {
+    // Node reports zero where there is no file index to report — some network
+    // redirectors, and FAT. Two unrelated files would both be zero, and calling
+    // them shared is precisely the false "everything is fine" this display
+    // exists to end.
+    expect(sameFileIdentity({ dev: 7n, ino: 0n }, { dev: 7n, ino: 0n })).toBe(false);
+  });
+
+  it('reads a stat that failed as no link rather than as an error', () => {
+    expect(sameFileIdentity(null, { dev: 7n, ino: 42n })).toBe(false);
+    expect(sameFileIdentity({ dev: 7n, ino: 42n }, null)).toBe(false);
+    expect(sameFileIdentity(null, null)).toBe(false);
   });
 });
