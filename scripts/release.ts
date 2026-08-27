@@ -158,8 +158,8 @@ run('git', ['push', 'origin', 'main']);
 run('git', ['push', 'origin', tag]);
 
 console.log(`
-release: ${tag} is tagged. GitHub Actions is building macOS (arm64 + x64) and
-Windows natively, boot-verifying each, and publishing the release:
+release: ${tag} is tagged. GitHub Actions is building macOS arm64, Windows x64,
+and Arch Linux x64 natively, boot-verifying each, and publishing the release:
 
   watch:   gh run watch
   result:  gh release view ${tag}

@@ -1,6 +1,29 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.14.1
+
+Artemis now ships for Arch Linux, keeps live Codex conversations attached, and
+never silently substitutes a different model for the one you chose.
+
+- **Arch Linux gets a native package.** Releases now include an x86_64 pacman
+  package alongside the Apple Silicon macOS and Windows x64 installers. The
+  Linux build runs and boots on a Linux x64 runner before it is published, just
+  like every other platform artifact.
+
+- **A live Codex conversation stays live in its pane.** A window could lose its
+  binding to a Codex run that was still advancing, show the conversation as
+  idle, and try to start a rival runner on the next prompt. Artemis now recovers
+  that binding from the engine's live registry, restores the event stream, and
+  routes prompts and steering back to the run that already owns the session.
+
+- **Your pinned model remains the model on the wire.** The built-in and live
+  Claude catalogues use different ids for the same models. Before the live list
+  arrived, a saved id such as `opus[1m]` matched nothing and silently fell back
+  to the first built-in model, so the next prompt could run on a model nobody
+  chose. An unmatched saved id now passes through unchanged until the live
+  catalogue reconciles it.
+
 ## What's new in 1.14.0
 
 Messages sent while the model is working now reach it, conversations keep
