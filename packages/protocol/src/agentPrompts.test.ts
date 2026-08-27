@@ -21,6 +21,7 @@ import {
   parseAgentPromptsDocument,
   promptText,
   renderMemoryBanksPrompt,
+  TEAM_BANK_NAME_PLACEHOLDER,
   scopeCovers,
   type AgentPrompt,
   type BuiltInPromptId,
@@ -249,6 +250,57 @@ describe('the memory-banks built-in', () => {
  * read-only rule, and the `--bank` flag when the writable bank is not the
  * default.
  */
+describe('the bank the prompt names', () => {
+  const bank = (slug: string, isDefault = false) => ({
+    slug,
+    isDefault,
+    readonly: false,
+    cli: `/banks/${slug}/bin/cerebro`,
+  });
+
+  it('stands a placeholder in its place before any bank exists', () => {
+    // The Agents pane shows this text, and an override starts from it, so the
+    // no-bank rendering has to be the whole prompt rather than a stub — with
+    // the one thing it cannot know marked as the thing to be filled in.
+    const text = renderMemoryBanksPrompt([]);
+    expect(text).toContain(TEAM_BANK_NAME_PLACEHOLDER);
+    expect(text).toContain('**Record what you learn, unprompted.**');
+    expect(text).toContain('cerebro draft');
+  });
+
+  it('is the built-in prompt users are shown before they add one', () => {
+    expect(BUILT_IN_AGENT_PROMPTS['builtin:cerebro'].markdown).toContain(
+      TEAM_BANK_NAME_PLACEHOLDER,
+    );
+  });
+
+  it('speaks the first bank name once there is one, not the placeholder', () => {
+    const text = renderMemoryBanksPrompt([bank('cortex', true)]);
+    expect(text).toContain('`cortex`');
+    expect(text).not.toContain(TEAM_BANK_NAME_PLACEHOLDER);
+  });
+
+  it('moves to the next bank when the one it named is removed', () => {
+    // The name is read off the list on every render rather than stored, so a
+    // removal is just a shorter list. Nothing migrates, and the prompt the
+    // model gets on the next run already says the surviving bank's name.
+    const before = renderMemoryBanksPrompt([bank('cortex', true), bank('atlas')]);
+    expect(before).toContain('`cortex`');
+
+    const after = renderMemoryBanksPrompt([bank('atlas')]);
+    expect(after).toContain('`atlas`');
+    expect(after).not.toContain('cortex');
+  });
+
+  it('falls through to the first survivor when no bank claims the default', () => {
+    // What a stale registry default looks like by the time it reaches here:
+    // the bank it named is gone, so nothing is marked default.
+    const text = renderMemoryBanksPrompt([bank('atlas'), bank('docs')]);
+    expect(text).toContain('`atlas`');
+    expect(text).not.toContain(TEAM_BANK_NAME_PLACEHOLDER);
+  });
+});
+
 describe('renderMemoryBanksPrompt', () => {
   const team = { slug: 'cerebro', isDefault: true, readonly: false, cli: '/b/bin/cerebro' };
   const docs = { slug: 'client-docs', isDefault: false, readonly: true, cli: '/d/bin/cerebro' };

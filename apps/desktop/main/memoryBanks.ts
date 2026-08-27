@@ -828,10 +828,22 @@ export function anyBankAvailable(): boolean {
 export function promptBanks(): MemoryBankPromptInfo[] {
   const { defaultSlug } = readRegistry();
   const banks = banksForRun();
-  const fallbackDefault = banks[0]?.slug ?? null;
+  /*
+   * A configured default only counts while the bank it names is still here.
+   * Forgetting a bank does not necessarily rewrite the registry's `default`,
+   * and a default naming a bank that is gone would leave every bank
+   * un-defaulted — which the prompt renderer reads as "no primary", so the
+   * name it speaks and the bank it drafts into would both change shape for a
+   * reason the user never chose. Falling through to the first surviving bank
+   * is what makes removal a promotion rather than a hole.
+   */
+  const resolvedDefault =
+    defaultSlug !== null && banks.some((bank) => bank.slug === defaultSlug)
+      ? defaultSlug
+      : (banks[0]?.slug ?? null);
   return banks.map((bank) => ({
     slug: bank.slug,
-    isDefault: bank.slug === (defaultSlug ?? fallbackDefault),
+    isDefault: bank.slug === resolvedDefault,
     readonly: bank.role === 'readonly',
     cli: embeddedCli(bank.path) ?? safeResolveCli() ?? 'bin/cerebro',
   }));

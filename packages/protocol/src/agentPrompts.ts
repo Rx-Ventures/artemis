@@ -289,12 +289,31 @@ export interface MemoryBankPromptInfo {
  * almost exactly as the original Cerebro prompt did: that text was tuned
  * against real routing failures, and generalizing must not regress it.
  */
-export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]): string {
-  const plural = banks.length > 1;
-  const writable = banks.filter((bank) => !bank.readonly);
-  const fallback = banks.find((bank) => bank.isDefault) ?? banks[0];
+export const TEAM_BANK_NAME_PLACEHOLDER = '<team memory bank name>';
 
-  const lines = banks.map((bank) => {
+export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]): string {
+  /*
+   * With no bank set up yet the prompt still has to read as itself: this is the
+   * text the Agents pane shows, and the text an override starts from, so a
+   * stripped-down version would hand the user something they then had to
+   * reconstruct. One placeholder bank stands in instead, and every sentence
+   * that would speak a name speaks {@link TEAM_BANK_NAME_PLACEHOLDER}.
+   *
+   * The name is read from the list on every render rather than remembered
+   * anywhere, which is what makes it follow reality: the first bank added
+   * supplies it, and if that bank is later removed the next one supplies it on
+   * the very next run, with nothing to migrate.
+   */
+  const described: readonly MemoryBankPromptInfo[] =
+    banks.length > 0
+      ? banks
+      : [{ slug: TEAM_BANK_NAME_PLACEHOLDER, isDefault: true, readonly: false, cli: 'bin/cerebro' }];
+
+  const plural = described.length > 1;
+  const writable = described.filter((bank) => !bank.readonly);
+  const fallback = described.find((bank) => bank.isDefault) ?? described[0];
+
+  const lines = described.map((bank) => {
     const marks = [
       bank.readonly ? 'read-only: consult it, never write to it' : 'read-write',
       ...(bank.isDefault && plural ? ['the default — bare `cerebro` commands address it'] : []),
@@ -312,8 +331,8 @@ export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]):
       ? '## Team memory banks — shared, agent-maintained'
       : '## Team memory bank — shared, agent-maintained',
     plural
-      ? `This machine carries ${banks.length} of your team's shared memory banks: git-backed, agent-maintained collections of durable facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`
-      : `This machine carries your team's shared memory bank (\`${banks[0]?.slug ?? 'cerebro'}\`): a git-backed, agent-maintained collection of durable team facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`,
+      ? `This machine carries ${described.length} of your team's shared memory banks: git-backed, agent-maintained collections of durable facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`
+      : `This machine carries your team's shared memory bank (\`${fallback?.slug ?? TEAM_BANK_NAME_PLACEHOLDER}\`): a git-backed, agent-maintained collection of durable team facts — conventions, decisions, who owns what, where things live — one fact per file, installed into each project's agent memory.`,
     lines.join('\n'),
     'Keeping the team\'s memory current is your job, not the user\'s. Never ask them whether something is worth remembering, and never ask them to run a cerebro command. You decide, you act, and you mention it in one line afterwards.',
     `**Consult before guessing** about team conventions, ownership, or past decisions — read the team's entries in this project's MEMORY.md index. A fact the team has recorded is authoritative; your prior is not.`,
@@ -349,9 +368,7 @@ export function renderMemoryBanksPrompt(banks: readonly MemoryBankPromptInfo[]):
  * so taking the prompt over means editing Artemis's words rather than facing an
  * empty box and reconstructing them.
  */
-const MEMORY_BANKS_PROMPT = renderMemoryBanksPrompt([
-  { slug: 'cerebro', isDefault: true, readonly: false, cli: '~/Documents/cerebro/bin/cerebro' },
-]);
+const MEMORY_BANKS_PROMPT = renderMemoryBanksPrompt([]);
 
 /**
  * Every prompt Artemis ships, by id.
