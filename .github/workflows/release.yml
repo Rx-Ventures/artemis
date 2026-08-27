@@ -95,6 +95,15 @@ jobs:
             build-args: --win --x64
             feed-rename: ''
             app-binary: apps/desktop/release/win-unpacked/Artemis.exe
+          - name: arch-linux-x64
+            # The package format is Arch-specific, while the bundled native
+            # dependencies are Linux x64 binaries. Building on a Linux x64
+            # runner therefore gives both the pacman package and the native
+            # Agent SDK binary the architecture they will run on.
+            runs-on: ubuntu-latest
+            build-args: --linux pacman --x64
+            feed-rename: ''
+            app-binary: apps/desktop/release/linux-unpacked/artemis
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.runs-on }}
     steps:
@@ -115,21 +124,27 @@ jobs:
         run: mv apps/desktop/release/latest-mac.yml apps/desktop/release/${{ matrix.feed-rename }}
       # The packaged app must actually boot before anything is published.
       - shell: bash
-        run: pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
+        run: |
+          if [ "${{ runner.os }}" = Linux ]; then
+            xvfb-run -a pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
+          else
+            pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           if-no-files-found: error
-          # Only what someone or something consumes: dmg and setup.exe for
-          # people, zip for the mac updater's swap, latest-mac-*.yml as its
-          # feed. Blockmaps are electron-updater's differential-download index
-          # — our updater downloads whole archives and never reads them — and
-          # latest.yml is the Windows feed, which nothing consumes until a
-          # Windows updater exists.
+          # Only what someone or something consumes: dmg, setup.exe and the
+          # Arch pacman package for people, zip for the mac updater's swap,
+          # latest-mac-*.yml as its feed. Blockmaps are electron-updater's
+          # differential-download index — our updater downloads whole archives
+          # and never reads them — and the Windows/Linux feeds have no updater
+          # consuming them yet.
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
+            apps/desktop/release/*.pacman
             apps/desktop/release/latest-mac-*.yml
 
   publish:
