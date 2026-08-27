@@ -400,6 +400,33 @@ function ForgetButton({
 
 type AddMode = 'join' | 'create' | 'adopt';
 
+/** The bank slug grammar, shared by the field, its message and the CLI. */
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The slug a remote URL suggests: its repository name, lowercased.
+ *
+ * Deliberately forgiving about the URL — this runs on every keystroke of a
+ * half-typed address, and a suggestion that appears only once the URL is
+ * perfect is a suggestion that appears too late to help. Anything that does
+ * not reduce to a legal slug yields nothing rather than something wrong.
+ */
+export function slugFromRemote(remote: string): string {
+  const tail = remote
+    .trim()
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\:]/)
+    .filter((part) => part.length > 0)
+    .at(-1);
+  if (tail === undefined) return '';
+  const slug = tail
+    .replace(/\.git$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return SLUG_PATTERN.test(slug) ? slug : '';
+}
+
 /**
  * Which failed checks actually stop each mode.
  *
@@ -444,7 +471,16 @@ function AddGroup({
   readonly first: boolean;
 }): ReactElement {
   const [mode, setMode] = useState<AddMode>('join');
-  const [slug, setSlug] = useState('');
+  /**
+   * Empty means "whatever the remote suggests"; a value means the user typed
+   * one and owns it from then on.
+   *
+   * Kept as an override rather than as the field's only source because the
+   * alternative — filling the box on every keystroke of the URL — fights
+   * anyone who names their bank something other than the repository, and
+   * silently reverts an edit made before the URL was finished.
+   */
+  const [slugOverride, setSlugOverride] = useState('');
   const [remote, setRemote] = useState('');
   const [path, setPath] = useState('');
   const [readonly, setReadonly] = useState(false);
@@ -467,10 +503,43 @@ function AddGroup({
   );
   const blocked = BLOCKING_CHECKS[mode].some((id) => failed.has(id));
 
-  const slugOk = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
   const trimmedRemote = remote.trim();
+  /*
+   * A bank joined from `…/Cortex.git` is called `cortex` unless the user says
+   * otherwise. Deriving it is not a convenience: the slug grammar is
+   * lowercase-and-hyphens, so the name staring at the user from their own URL
+   * is one the field rejects, and the only feedback was a button that would
+   * not press.
+   */
+  const suggestedSlug = mode === 'join' ? slugFromRemote(trimmedRemote) : '';
+  const slug = slugOverride.length > 0 ? slugOverride : suggestedSlug;
+  const slugOk = SLUG_PATTERN.test(slug);
+  const slugProblem =
+    slug.length === 0
+      ? mode === 'join'
+        ? 'Give the bank a short name — or paste the remote URL and one will be suggested.'
+        : 'Give the bank a short name.'
+      : slugOk
+        ? null
+        : 'Lowercase letters, digits and hyphens only — no capitals, spaces or dots.';
+
   const ready =
     slugOk && (mode !== 'join' || trimmedRemote.length > 0) && (mode !== 'adopt' || path.trim().length > 0);
+  /**
+   * Why the button will not press, or `null` when it will.
+   *
+   * The button was disabled by three separate conditions and explained by
+   * none of them unless a requirement had failed, so the commonest case — a
+   * name the grammar refuses — looked like the pane was broken.
+   */
+  const submitProblem = blocked
+    ? 'Fix the requirements marked required above — it would fail partway through.'
+    : (slugProblem ??
+      (mode === 'join' && trimmedRemote.length === 0
+        ? 'Paste the bank’s git remote URL.'
+        : mode === 'adopt' && path.trim().length === 0
+          ? 'Choose the directory that already holds the bank.'
+          : null));
 
   /**
    * Enabled on a URL that parses, and on nothing else.
@@ -517,7 +586,7 @@ function AddGroup({
       ...(mode === 'join' && credential !== undefined ? { auth: credential } : {}),
     });
     if (ok) {
-      setSlug('');
+      setSlugOverride('');
       setRemote('');
       setPath('');
       setReadonly(false);
@@ -574,7 +643,7 @@ function AddGroup({
         <div className="flex flex-wrap items-center gap-2">
           <Input
             value={slug}
-            onChange={(event) => setSlug(event.target.value)}
+            onChange={(event) => setSlugOverride(event.target.value)}
             placeholder="short-name (e.g. team, client-docs)"
             spellCheck={false}
             className="w-56 text-xs md:text-xs"
@@ -700,10 +769,8 @@ function AddGroup({
           <Button size="sm" variant="ghost" disabled={pane.busy !== null} onClick={pane.refresh}>
             Re-check
           </Button>
-          {blocked ? (
-            <span className="text-2xs text-amber">
-              Fix the requirements marked <em>required</em> above — it would fail partway through.
-            </span>
+          {submitProblem !== null ? (
+            <span className="text-2xs text-amber">{submitProblem}</span>
           ) : null}
         </div>
       </div>

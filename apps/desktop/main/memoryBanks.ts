@@ -499,8 +499,21 @@ function tokensIn(env: Readonly<Record<string, string>>): readonly string[] {
  * child's environment, and "git is careful" is a property of git rather than
  * of this boundary. The scrub is the boundary's own.
  */
+/**
+ * What the CLI printed to stdout before it exited non-zero, carried on the
+ * error so a caller can still read it.
+ *
+ * A non-zero exit does not always mean nothing useful was said. `doctor` exits
+ * 1 whenever it finds a problem — that is its whole job — and prints its report
+ * on stdout on the way out. Without this the report is discarded on exactly the
+ * runs it exists to explain, and the pane shows "cerebro doctor failed" over a
+ * perfectly good list of what is wrong.
+ */
+export const CLI_STDOUT = Symbol('cerebro.stdout');
+
 function toCliError(error: unknown, verb: string, secrets: readonly string[] = []): WorkspaceError {
   const raw = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
+  const stdout = typeof raw.stdout === 'string' ? withoutSecrets(raw.stdout, secrets) : null;
   const said = withoutSecrets(
     [raw.stderr, raw.stdout]
       .filter((chunk): chunk is string => typeof chunk === 'string')
@@ -508,13 +521,33 @@ function toCliError(error: unknown, verb: string, secrets: readonly string[] = [
       .trim(),
     secrets,
   );
-  if (said.length > 0) {
-    // The tail, not the head: the CLI states its conclusion last.
-    const lines = said.split('\n').filter((line) => line.trim().length > 0);
-    return new WorkspaceError(`cerebro ${verb} failed: ${lines.slice(-3).join(' · ')}`);
-  }
-  const message = typeof raw.message === 'string' ? withoutSecrets(raw.message, secrets) : 'the CLI did not respond';
-  return new WorkspaceError(`cerebro ${verb} failed: ${message}`);
+
+  const failure =
+    said.length > 0
+      ? // The tail, not the head: the CLI states its conclusion last.
+        new WorkspaceError(
+          `cerebro ${verb} failed: ${said
+            .split('\n')
+            .filter((line) => line.trim().length > 0)
+            .slice(-3)
+            .join(' · ')}`,
+        )
+      : new WorkspaceError(
+          `cerebro ${verb} failed: ${
+            typeof raw.message === 'string'
+              ? withoutSecrets(raw.message, secrets)
+              : 'the CLI did not respond'
+          }`,
+        );
+
+  if (stdout !== null) Object.defineProperty(failure, CLI_STDOUT, { value: stdout, enumerable: false });
+  return failure;
+}
+
+/** The CLI's stdout from a failed run, when it said anything. @see CLI_STDOUT */
+export function cliStdoutOf(error: unknown): string | null {
+  const carried = (error as Record<symbol, unknown>)?.[CLI_STDOUT];
+  return typeof carried === 'string' ? carried : null;
 }
 
 /**
@@ -932,10 +965,16 @@ export async function readMemoryBanksPreflight(): Promise<MemoryBankPreflight> {
   try {
     return parseDoctor(await runCli(cli, args, 60_000));
   } catch (error) {
-    // `doctor` exits non-zero precisely when something failed, and execFile
-    // turns that into a throw with the JSON still on stdout.
-    const stdout = (error as { stdout?: unknown }).stdout;
-    if (typeof stdout === 'string' && stdout.trim().startsWith('{')) {
+    /*
+     * `doctor` exits 1 whenever it finds a problem, which is the ordinary case
+     * on a machine that has not set a bank up yet — so this path is the norm
+     * rather than the exception, and the report it carries is exactly what the
+     * pane needs to render. It is read off the error rather than the raw
+     * execFile rejection because `runCli` has already turned that into a
+     * `WorkspaceError`; `CLI_STDOUT` is what survives the wrapping.
+     */
+    const stdout = cliStdoutOf(error);
+    if (stdout !== null && stdout.trim().startsWith('{')) {
       try {
         return parseDoctor(stdout);
       } catch {

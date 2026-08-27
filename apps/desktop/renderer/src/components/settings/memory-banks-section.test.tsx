@@ -38,7 +38,7 @@ import type {
   MemoryBanksStatus,
 } from '@rx-artemis/protocol';
 
-import { MemoryBankGroups } from '@/components/settings/MemoryBanksSection';
+import { MemoryBankGroups, slugFromRemote } from '@/components/settings/MemoryBanksSection';
 import { useMemoryBanks } from '@/hooks/useMemoryBanks';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -373,5 +373,29 @@ describe('a preflight that could not be read', () => {
     await renderPane();
     fillJoin();
     expect(joinButton().hasAttribute('disabled')).toBe(false);
+  });
+});
+
+describe('slugFromRemote', () => {
+  it('names the bank after the repository, lowercased', () => {
+    // The reported case. `Cortex` is what the URL shows the user, and it is
+    // exactly what the slug grammar refuses — so the suggestion has to do the
+    // lowercasing rather than leave them guessing at a dead button.
+    expect(slugFromRemote('http://system-dokploy:8300/david/Cortex.git')).toBe('cortex');
+  });
+
+  it('handles the shapes a remote actually arrives in', () => {
+    expect(slugFromRemote('https://forgejo.example.com/team/Team_Docs.git')).toBe('team-docs');
+    expect(slugFromRemote('git@github.com:org/my-bank.git')).toBe('my-bank');
+    expect(slugFromRemote('https://host/x/Cortex')).toBe('cortex');
+    expect(slugFromRemote('http://host:8300/david/bank/')).toBe('bank');
+  });
+
+  it('suggests nothing rather than something wrong', () => {
+    // It runs on every keystroke of a half-typed URL, so silence is the only
+    // safe answer for input that does not reduce to a legal slug.
+    expect(slugFromRemote('')).toBe('');
+    expect(slugFromRemote('   ')).toBe('');
+    expect(slugFromRemote('https://host/x/___')).toBe('');
   });
 });
