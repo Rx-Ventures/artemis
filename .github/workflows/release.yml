@@ -182,6 +182,17 @@ jobs:
       # exactly what the updater asks for on the stable channel, so the flag is
       # the only thing standing between a beta build and every installed copy
       # of the app offering it. Without it a beta tag ships to everyone.
+      # The release is assembled as a draft and published only once every
+      # artifact is up. `gh release create <tag> dist/*` did both at once, and
+      # that is two problems. Uploads to uploads.github.com fail — a 400 on a
+      # 200MB asset with nothing wrong with the file, which is what sank
+      # v1.14.1 — and gh does not retry them, so one flake costs a whole
+      # release. Worse, the release is live from the moment it is created: had
+      # the upload died after `latest-mac-arm64.yml` landed but before the zip
+      # it names, every installed copy of the app would have been offered an
+      # update it could not download. A draft is invisible to users and to the
+      # `/releases/latest` endpoint the updater reads, so neither half can be
+      # observed until all of it is there.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -191,8 +202,41 @@ jobs:
             *-*) prerelease="--prerelease" ;;
             *)   prerelease="" ;;
           esac
-          # shellcheck disable=SC2086
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "Artemis $version" \
-            --notes-file .github/RELEASE_NOTES.md \
-            $prerelease
+
+          # Publishing a release with no artifacts is worse than failing: it
+          # looks shipped and offers nothing.
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error::dist/ is empty — the build artifacts never arrived."
+            exit 1
+          fi
+
+          # A re-run of this job finds the draft its failed attempt left
+          # behind. Reuse it — the uploads below clobber, so a re-run finishes
+          # a partial draft instead of starting the whole upload again.
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "Artemis $version" \
+              --notes-file .github/RELEASE_NOTES.md \
+              $prerelease
+          fi
+
+          # One asset at a time: a retry then costs the file that failed
+          # rather than all 700MB of them.
+          for asset in dist/*; do
+            for attempt in 1 2 3; do
+              if gh release upload "$GITHUB_REF_NAME" "$asset" --clobber; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::$(basename "$asset") failed to upload after 3 attempts."
+                exit 1
+              fi
+              echo "$(basename "$asset") failed to upload; retrying in $((attempt * 20))s"
+              sleep $((attempt * 20))
+            done
+          done
+
+          # Everything is up: the release becomes visible, atomically.
+          gh release edit "$GITHUB_REF_NAME" --draft=false
