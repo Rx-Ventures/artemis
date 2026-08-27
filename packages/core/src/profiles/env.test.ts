@@ -180,7 +180,12 @@ describe('resolveEnv — config directory isolation', () => {
   });
 
   it('accepts and normalizes an ordinary absolute path', () => {
-    expect(assertConfigDir('  /Users/me/.claude/  ')).toBe('/Users/me/.claude');
+    // Spelled for the platform. `/Users/me/.claude` is absolute on Windows too,
+    // but `resolve` gives it the current drive, so the normalisation under test
+    // — trimmed, trailing separator gone — would be read as a failure.
+    const ordinary =
+      process.platform === 'win32' ? String.raw`C:\Users\me\.claude` : '/Users/me/.claude';
+    expect(assertConfigDir(`  ${ordinary}${path.sep}  `)).toBe(ordinary);
   });
 
   it('builds the config path without touching the filesystem', () => {

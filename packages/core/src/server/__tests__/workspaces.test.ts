@@ -92,8 +92,9 @@ describe('an ephemeral workspace', () => {
     expect(resolved.ephemeral).toBe(true);
     const entry = await stat(resolved.path);
     expect(entry.isDirectory()).toBe(true);
-    // Owner-only: what an agent writes here is the user's work.
-    expect(entry.mode & 0o777).toBe(0o700);
+    // Owner-only: what an agent writes here is the user's work. Not asserted on
+    // Windows, which has no mode bits to set and reports 0o666 for everything.
+    if (process.platform !== 'win32') expect(entry.mode & 0o777).toBe(0o700);
   });
 
   it('keeps one directory per conversation, so a follow-up turn sees its own files', async () => {

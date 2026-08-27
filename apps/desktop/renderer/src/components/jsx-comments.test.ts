@@ -15,10 +15,14 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-const ROOT = new URL('../..', import.meta.url).pathname;
+// `fileURLToPath` rather than `.pathname`: the latter keeps the URL's leading
+// slash, so a Windows path comes back as `/C:/…` and every `readdirSync` below
+// looks for it on whichever drive the process happens to be on.
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 function tsxFiles(dir: string): string[] {
   const out: string[] = [];

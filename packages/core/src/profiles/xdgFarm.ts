@@ -61,7 +61,7 @@
  * calls, on a path that already spawns a process.
  */
 
-import { lstat, mkdir, readdir, readlink, rm, symlink } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readlink, rm, stat, symlink } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -141,14 +141,33 @@ async function buildRoot(
 
   for (const name of entries) {
     if (name === spec.ownedEntry) continue;
+    const from = path.join(source, name);
     try {
-      await symlink(path.join(source, name), path.join(farm, name));
+      await symlink(from, path.join(farm, name), await linkType(from));
     } catch {
       /* already there, or unreadable — see the tolerance note above */
     }
   }
 
   return farm;
+}
+
+/**
+ * The kind of link this platform can actually create for `target`.
+ *
+ * `undefined` everywhere but Windows, where a directory symlink needs a
+ * privilege an ordinary user does not have: `symlink` raises `EPERM`, the
+ * tolerant `catch` above swallows it, and the farm ends up holding nothing but
+ * the owned entry — every tool run under the profile behaving as freshly
+ * installed, which is the exact failure this module exists to prevent. A
+ * junction needs no privilege, and `lstat` and `readlink` report it as the
+ * symlink it stands in for. It can only point at a directory, which is why the
+ * kind is decided per entry rather than once.
+ */
+async function linkType(target: string): Promise<'junction' | undefined> {
+  if (process.platform !== 'win32') return undefined;
+  const stats = await stat(target).catch(() => undefined);
+  return stats?.isDirectory() === true ? 'junction' : undefined;
 }
 
 /**

@@ -83,22 +83,28 @@ describe('wrapCommand', () => {
     }
   });
 
-  it('SYMLINK: resolves the workspace, which is what makes writes work at all', async () => {
-    const given = await mkdtemp(path.join(tmpdir(), 'artemis-cs-'));
-    const real = await realpath(given);
+  // Not on Windows: `mkdtemp` there hands back a path `realpath` already agrees
+  // with, so nothing would be resolved, and the profile escapes the separators
+  // of the one it names — neither half of the claim can be seen from there.
+  it.skipIf(process.platform === 'win32')(
+    'SYMLINK: resolves the workspace, which is what makes writes work at all',
+    async () => {
+      const given = await mkdtemp(path.join(tmpdir(), 'artemis-cs-'));
+      const real = await realpath(given);
 
-    try {
-      const argv = await wrapCommand(await resolveSandbox('darwin', yes), 'echo hi', given);
+      try {
+        const argv = await wrapCommand(await resolveSandbox('darwin', yes), 'echo hi', given);
 
-      // Seatbelt matches the real path; naming the unresolved one denies every
-      // write and looks like nothing is wrong.
-      expect(argv?.join(' ')).toContain(real);
-      expect(argv?.[0]).toBe('/usr/bin/sandbox-exec');
-      expect(argv?.at(-1)).toBe('echo hi');
-    } finally {
-      await rm(given, { recursive: true, force: true });
-    }
-  });
+        // Seatbelt matches the real path; naming the unresolved one denies every
+        // write and looks like nothing is wrong.
+        expect(argv?.join(' ')).toContain(real);
+        expect(argv?.[0]).toBe('/usr/bin/sandbox-exec');
+        expect(argv?.at(-1)).toBe('echo hi');
+      } finally {
+        await rm(given, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('passes the command through unaltered, rather than quoting it into a new one', async () => {
     const argv = await wrapCommand(await resolveSandbox('darwin', yes), 'ls "a b" | wc -l', process.cwd());

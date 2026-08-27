@@ -141,7 +141,14 @@ describe('buildXdgFarm', () => {
 
   it('leaves an existing link alone rather than failing the run', async () => {
     await mkdir(profile, { recursive: true });
-    await symlink(path.join(realShare, 'claude'), path.join(profile, 'claude'));
+    // A junction on Windows, which is what the farm itself lays down there: an
+    // unprivileged directory symlink is refused, and the link a previous run
+    // left behind is the thing this test is about finding.
+    await symlink(
+      path.join(realShare, 'claude'),
+      path.join(profile, 'claude'),
+      process.platform === 'win32' ? 'junction' : undefined,
+    );
 
     await expect(buildXdgFarm([SPEC], profile, hostEnv)).resolves.toBeDefined();
     expect((await describeFarm(profile))['claude']).toBe(path.join(realShare, 'claude'));

@@ -205,6 +205,9 @@ describe('one conversation, one file', () => {
     await symlink(
       path.join(profileDir, 'moved'),
       path.join(profileDir, 'sessions', encodeProjectDir(real)),
+      // A junction on Windows: `ln -s` is what a user assembles this with on
+      // POSIX, and neither is a directory to `readdir`, which is the whole point.
+      process.platform === 'win32' ? 'junction' : undefined,
     );
 
     // Found by a walk that has to follow the link to see anything at all.

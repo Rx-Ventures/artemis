@@ -127,16 +127,24 @@ describe('checkFiles', () => {
     await expect(checkFiles([inner])).resolves.toEqual({ reachable: [] });
   });
 
-  it('follows a symlink to a real file, the way the read will', async () => {
-    const real = await fileWith('store.ts', 'export const answer = 42;\n');
-    const link = join(tmpdir(), `artemis-test-link-${String(process.pid)}.ts`);
-    await symlink(real, link);
+  // Not on Windows, where a symlink to a *file* needs a privilege an ordinary
+  // user does not have. A junction cannot point at one and a hard link is not a
+  // link to follow — it is the file — so there is nothing to resolve through.
+  it.skipIf(process.platform === 'win32')(
+    'follows a symlink to a real file, the way the read will',
+    async () => {
+      const real = await fileWith('store.ts', 'export const answer = 42;\n');
+      const link = join(tmpdir(), `artemis-test-link-${String(process.pid)}.ts`);
+      await symlink(real, link);
 
-    // The two have to agree: a link that resolves is a file the read opens, so
-    // refusing it here would leave a readable file as plain text.
-    await expect(checkFiles([link])).resolves.toEqual({ reachable: [link] });
-    await expect(readTextFile(link)).resolves.toMatchObject({ text: 'export const answer = 42;\n' });
-  });
+      // The two have to agree: a link that resolves is a file the read opens, so
+      // refusing it here would leave a readable file as plain text.
+      await expect(checkFiles([link])).resolves.toEqual({ reachable: [link] });
+      await expect(readTextFile(link)).resolves.toMatchObject({
+        text: 'export const answer = 42;\n',
+      });
+    },
+  );
 
   it('says no to a binary file’s absence and yes to its presence', async () => {
     // Deliberately *not* the read's rule. `logo.png` is there, so it is a link,
