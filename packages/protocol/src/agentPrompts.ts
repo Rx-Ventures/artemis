@@ -576,8 +576,21 @@ export function parseAgentPromptsDocument(value: unknown): AgentPromptsDocument 
 /* -------------------------------------------------------------------------- */
 
 /** What a prompt's text is, accounting for built-ins carrying theirs in code. */
-export function promptText(prompt: AgentPrompt): string {
+export function promptText(
+  prompt: AgentPrompt,
+  memoryBanks?: readonly MemoryBankPromptInfo[],
+): string {
   if (prompt.builtIn !== undefined && prompt.overridden !== true) {
+    /*
+     * Rendered against this machine's banks when the caller knows them, so the
+     * pane previews the words the run will actually carry. Without them the
+     * bank-agnostic text is the honest answer — it says
+     * `<team memory bank name>` — but it is the wrong one to show someone who
+     * has a bank, and it is the text their override would start from.
+     */
+    if (prompt.builtIn === 'builtin:cerebro' && memoryBanks !== undefined) {
+      return renderMemoryBanksPrompt(memoryBanks);
+    }
     return BUILT_IN_AGENT_PROMPTS[prompt.builtIn]?.markdown ?? '';
   }
   return prompt.markdown;

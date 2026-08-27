@@ -1643,7 +1643,18 @@ export function createMockBridge(): ArtemisBridge {
      * echoed the request would let a bug in that handling reach a real build.
      */
     agentPrompts: {
-      list: async () => ok({ document: mockAgentPrompts }),
+      // The dev mock's own bank, so the built-in previews under a real name
+      // here too rather than showing the placeholder the empty case renders.
+      list: async () =>
+        ok({
+          document: mockAgentPrompts,
+          memoryBanks: mockBanks.map((bank) => ({
+            slug: bank.slug,
+            isDefault: bank.isDefault,
+            readonly: bank.role === 'readonly',
+            cli: `${bank.path}/bin/cerebro`,
+          })),
+        }),
       save: async (request) => {
         mockAgentPrompts = parseAgentPromptsDocument(request.document);
         return ok({ document: mockAgentPrompts });

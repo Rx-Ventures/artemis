@@ -72,6 +72,7 @@ import {
   setMemoryBankEnabled,
   syncMemoryBank,
   verifyMemoryBankRemote,
+  promptBanks,
 } from './memoryBanks.js';
 import type { EngineHost } from './engine.js';
 import {
@@ -642,7 +643,12 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      */
     [IPC.agentPromptsList]: {
       validate: validateAgentPromptsList,
-      handle: async () => ({ document: await engine.require().readAgentPrompts() }),
+      // The banks ride along because only main can see them, and the pane's
+      // preview of a built-in is wrong without them — see the response type.
+      handle: async () => ({
+        document: await engine.require().readAgentPrompts(),
+        memoryBanks: promptBanks(),
+      }),
     },
 
     [IPC.agentPromptsSave]: {

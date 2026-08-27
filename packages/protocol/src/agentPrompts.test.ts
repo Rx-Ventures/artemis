@@ -250,6 +250,47 @@ describe('the memory-banks built-in', () => {
  * read-only rule, and the `--bank` flag when the writable bank is not the
  * default.
  */
+describe('promptText for a built-in', () => {
+  const row = {
+    id: 'builtin:cerebro' as const,
+    name: 'Use the team memory bank',
+    markdown: '',
+    enabled: true,
+    scope: { kind: 'all' } as const,
+    builtIn: 'builtin:cerebro' as const,
+  };
+
+  it('previews the placeholder when the caller knows of no banks', () => {
+    expect(promptText(row)).toContain(TEAM_BANK_NAME_PLACEHOLDER);
+  });
+
+  it('previews the real name when the caller knows the banks', () => {
+    // The pane and the run must agree: showing the placeholder to someone who
+    // has a bank means the text they are invited to take over is not the text
+    // their runs are being sent.
+    const text = promptText(row, [
+      { slug: 'cortex', isDefault: true, readonly: false, cli: '/b/bin/cerebro' },
+    ]);
+    expect(text).toContain('`cortex`');
+    expect(text).not.toContain(TEAM_BANK_NAME_PLACEHOLDER);
+  });
+
+  it('matches exactly what a run would carry', () => {
+    const banks = [
+      { slug: 'cortex', isDefault: true, readonly: false, cli: '/b/bin/cerebro' },
+      { slug: 'atlas', isDefault: false, readonly: true, cli: '/b/bin/cerebro' },
+    ];
+    expect(promptText(row, banks)).toBe(renderMemoryBanksPrompt(banks));
+  });
+
+  it('leaves an overridden built-in alone, banks or no banks', () => {
+    const taken = { ...row, markdown: 'my own words', overridden: true };
+    expect(promptText(taken, [
+      { slug: 'cortex', isDefault: true, readonly: false, cli: '/b/bin/cerebro' },
+    ])).toBe('my own words');
+  });
+});
+
 describe('the bank the prompt names', () => {
   const bank = (slug: string, isDefault = false) => ({
     slug,

@@ -25,7 +25,9 @@
  * encrypted storage.
  */
 
-import type { AgentPromptsDocument } from './agentPrompts.js';
+import type { AgentPromptsDocument,
+  MemoryBankPromptInfo,
+} from './agentPrompts.js';
 import type { PullRequestRef, PullRequestResult } from './github.js';
 import type { AgentEvent, BackgroundTask } from './events.js';
 import type { AgentError } from './errors.js';
@@ -2402,6 +2404,18 @@ export type AgentPromptsListRequest = Record<string, never>;
  */
 export interface AgentPromptsListResponse {
   readonly document: AgentPromptsDocument;
+  /**
+   * The banks a built-in's text is rendered against, so the pane previews the
+   * words the model will actually be sent.
+   *
+   * Without this the renderer can only render the bank-agnostic text, which
+   * says `<team memory bank name>` where a real render says the bank's name —
+   * so a user with a bank set up reads a placeholder in the pane while their
+   * runs get the name, and a prompt they are invited to take over is not the
+   * one they were shown. Facts rather than prose: the rendering stays in one
+   * function, and the wire carries no second copy of the words.
+   */
+  readonly memoryBanks: readonly MemoryBankPromptInfo[];
 }
 
 /** Replace the library. */
@@ -2414,8 +2428,14 @@ export interface AgentPromptsSaveRequest {
  * the library's invariants on the way in, so a save can legitimately answer
  * with a document that differs from the request, and a pane that assumed
  * otherwise would show state the disk does not have.
+ *
+ * The document alone, unlike the list: a save cannot change which banks this
+ * machine carries, and answering with them would invite a pane to refresh its
+ * preview from a reply that never had news about them.
  */
-export type AgentPromptsSaveResponse = AgentPromptsListResponse;
+export interface AgentPromptsSaveResponse {
+  readonly document: AgentPromptsDocument;
+}
 
 /* -------------------------------------------------------------------------- */
 /* Server                                                                     */

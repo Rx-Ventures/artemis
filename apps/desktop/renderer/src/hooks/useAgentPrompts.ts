@@ -39,7 +39,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { AgentPrompt, AgentPromptsDocument, ArtemisBridge } from '@rx-artemis/protocol';
+import type {
+  AgentPrompt,
+  AgentPromptsDocument,
+  ArtemisBridge,
+  MemoryBankPromptInfo,
+} from '@rx-artemis/protocol';
 import { AGENT_PROMPTS_VERSION } from '@rx-artemis/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
@@ -69,6 +74,8 @@ export interface AgentPromptsPane {
   /** Why the *read* failed. A failed read is fatal to the pane; a failed write is not. */
   readonly error: string | null;
   readonly prompts: readonly AgentPrompt[];
+  /** This machine's banks, for previewing a built-in as it will be sent. */
+  readonly memoryBanks: readonly MemoryBankPromptInfo[];
   readonly saveState: SaveState;
   /**
    * Replace the list.
@@ -88,6 +95,12 @@ export function useAgentPrompts(): AgentPromptsPane {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [prompts, setLocalPrompts] = useState<readonly AgentPrompt[]>([]);
+  /*
+   * The banks main saw at read time, kept only so a built-in previews as the
+   * text a run would carry. Never written back and never part of a save: these
+   * are facts about the machine, not part of the library.
+   */
+  const [memoryBanks, setMemoryBanks] = useState<readonly MemoryBankPromptInfo[]>([]);
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
 
   /**
@@ -152,6 +165,7 @@ export function useAgentPrompts(): AgentPromptsPane {
       }
       setError(null);
       setLocalPrompts(result.value.document.prompts);
+      setMemoryBanks(result.value.memoryBanks);
     })();
 
     return () => {
@@ -187,5 +201,5 @@ export function useAgentPrompts(): AgentPromptsPane {
     };
   }, [flush]);
 
-  return { loading, error, prompts, saveState, setPrompts };
+  return { loading, error, prompts, memoryBanks, saveState, setPrompts };
 }
