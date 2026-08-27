@@ -112,7 +112,7 @@ import {
 import { applyPlanLimit, composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
-import { anyBankAvailable, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
+import { anyBankAvailable, banksForRun, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
 import { createProfileSecrets } from './profileSecrets.js';
@@ -172,6 +172,49 @@ export function withSystemPromptAppended(input: RunInput, text: string | undefin
     return { ...input, systemPrompt: { kind: 'append', text: `${existing.text}\n\n${text}` } };
   }
   return input;
+}
+
+/**
+ * Fold the enabled memory banks into a run's `additionalDirectories`.
+ *
+ * A bank lives *outside* the working directory — the common case is a clone in
+ * `~/Documents/cortex`, which is exactly the folder a local model cannot reach
+ * because the tool sandbox is rooted at cwd. A session that cannot read the
+ * bank cannot use the standing knowledge the bank exists to hold, so every run
+ * on a machine with banks switched on is handed those directories to read.
+ *
+ * Exported and pure so the merge can be tested without an engine. Three rules,
+ * each a decision rather than a fallthrough:
+ *
+ *  - **Off, or nothing configured.** `masterEnabled` false, or no bank paths —
+ *    which is every machine that has not opted in. The input's own directories
+ *    are returned *by reference*, `undefined` included, so a run that carried
+ *    none still carries none and the caller can detect a no-op by identity.
+ *  - **The user's own directories are never dropped**, and they come first: a
+ *    folder the user attached to this run is the more deliberate request.
+ *  - **Order-stable and idempotent.** Bank paths follow in registry order, a
+ *    path already present on either side appears once, so re-running an input
+ *    that already carries its banks — a resume — does not double them.
+ */
+export function mergeAdditionalDirectories(
+  userDirs: readonly string[] | undefined,
+  bankPaths: readonly string[],
+  masterEnabled: boolean,
+): readonly string[] | undefined {
+  if (!masterEnabled || bankPaths.length === 0) return userDirs;
+
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const dir of [...(userDirs ?? []), ...bankPaths]) {
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    merged.push(dir);
+  }
+  // Every bank path was already present (a resumed run carrying them): hand the
+  // original reference back so the caller sees an untouched input, matching how
+  // the prompt merge above leaves a no-op run identical.
+  if (userDirs !== undefined && merged.length === userDirs.length) return userDirs;
+  return merged;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1271,13 +1314,27 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       // this run may wait on.
       syncMemoryBanksInBackground();
 
+      // Every enabled bank is attached to the run as a directory it may read.
+      // A bank lives outside cwd — a clone in `~/Documents`, typically — so a
+      // local model, whose tool sandbox is rooted at cwd, otherwise cannot open
+      // the very knowledge base the bank exists to hold. Gated on the master
+      // switch, and a no-op merge returns the input by reference, so a machine
+      // with banks off or none configured starts exactly the run it would have.
+      const bankDirs = mergeAdditionalDirectories(
+        input.additionalDirectories,
+        isMasterEnabled() ? banksForRun().map((bank) => bank.path) : [],
+        isMasterEnabled(),
+      );
+      const withBanks =
+        bankDirs === input.additionalDirectories ? input : { ...input, additionalDirectories: bankDirs };
+
       // The library is attached here and not in the renderer, so that every
       // path that will ever start a run gets it without having to remember to.
       // `namer` and `owners` are told about the *original* input on purpose:
       // they record what the user asked for — the prompt to name the session
       // by, the account to attribute it to — and neither is a fact about the
-      // system prompt the run happened to carry.
-      const handle = await runs.start(await withAgentPrompts(input));
+      // system prompt or the bank directories the run happened to carry.
+      const handle = await runs.start(await withAgentPrompts(withBanks));
       namer.noteRun(input, handle.runId);
       owners.noteRun(input, handle.runId);
       return handle;

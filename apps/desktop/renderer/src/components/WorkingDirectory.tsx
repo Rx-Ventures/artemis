@@ -36,7 +36,14 @@
  */
 
 import { useMemo, useRef, useState, type ReactElement } from 'react';
-import { FolderIcon, FolderSearchIcon, GitBranchIcon, TriangleAlertIcon } from 'lucide-react';
+import {
+  FolderIcon,
+  FolderPlusIcon,
+  FolderSearchIcon,
+  GitBranchIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON } from '../lib/extensions';
 import {
@@ -48,8 +55,16 @@ import {
   sortFoldersByName,
   type Platform,
 } from '../lib/paths';
-import { chooseWorkingDirectory, lastKnownBranch, setCwd, useApp } from '../state/store';
+import {
+  addSessionDirectory,
+  chooseWorkingDirectory,
+  lastKnownBranch,
+  removeSessionDirectory,
+  setCwd,
+  useApp,
+} from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
+import { useAutoIncludedBankDirectories } from '../hooks/useMemoryBanks';
 import { ReasonButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
 import {
@@ -197,6 +212,116 @@ export function DirectoryChooser({
           </Button>
         ) : null}
       </div>
+
+      <AdditionalFolders />
+    </div>
+  );
+}
+
+/**
+ * Folders the next run may read, beyond the working directory.
+ *
+ * Separate from the commit above, and deliberately so: adding or removing one
+ * takes effect at once and does *not* move the session, because these widen
+ * where the next run looks rather than where this conversation lives. The
+ * protocol has carried {@link RunInput.additionalDirectories} all along; this is
+ * the first surface that fills it in, so a folder outside the project — a bank,
+ * a sibling checkout — can be reached without repointing the whole session at it.
+ *
+ * The team memory banks arrive by the same field but are merged in the main
+ * process (see `main/engine.ts`), so they are shown here read-only: the point is
+ * to make visible that a bank kept outside the project is already attached, not
+ * to offer to detach it from a single run.
+ */
+function AdditionalFolders(): ReactElement {
+  const pane = usePaneRef();
+  const platform = useApp((s) => s.platform);
+  const folders = usePane((s) => s.additionalDirectories);
+  const bankFolders = useAutoIncludedBankDirectories();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const native = hasNativeDirectoryPicker();
+
+  const add = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    const choice = await addSessionDirectory(pane);
+    setBusy(false);
+    // Cancelling is a decision, not a failure. Only the picker's own refusals
+    // surface, in its own words — the same rule the working-directory field uses.
+    if (choice.status === 'failed' || choice.status === 'unavailable') setError(choice.message);
+  };
+
+  const empty = folders.length === 0 && bankFolders.length === 0;
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="chrome-label text-ink-faint">Additional folders</Label>
+        <ReasonButton
+          size="xs"
+          variant="ghost"
+          onClick={() => void add()}
+          disabled={!native || busy}
+          disabledReason={native ? undefined : NO_PICKER_REASON}
+          tooltip="Add a folder the agent may read, beyond the working directory."
+        >
+          <FolderPlusIcon />
+          {busy ? 'Choosing…' : 'Add folder…'}
+        </ReasonButton>
+      </div>
+
+      <p className="text-2xs leading-snug text-ink-faint">
+        Read-only folders the next run may open in addition to the working directory. Adding one does
+        not start a new session.
+      </p>
+
+      {empty ? (
+        <p className="text-2xs text-ink-faint">
+          None. A run reaches only the working directory.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {folders.map((folder) => (
+            <li key={folder} className="flex items-center gap-2" title={folder}>
+              <FolderIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-muted">
+                {shortenPath(folder, { platform, max: 40 })}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeSessionDirectory(folder, pane)}
+                aria-label={`Remove ${folder}`}
+                className="shrink-0 rounded-sm p-0.5 text-ink-faint transition-colors hover:text-signal"
+              >
+                <XIcon className="size-3" aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+          {/*
+            The banks, read-only. They are attached by the engine whenever the
+            master switch is on, so a remove button here would promise something
+            this surface cannot deliver — the folder would be back on the next
+            run. The caption is what makes "already attached" legible.
+          */}
+          {bankFolders.map((folder) => (
+            <li key={folder} className="flex items-center gap-2" title={folder}>
+              <FolderIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-muted">
+                {shortenPath(folder, { platform, max: 40 })}
+              </span>
+              <span className="shrink-0 text-2xs text-ink-faint">memory bank</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error ? (
+        <p className="flex items-start gap-1.5 text-2xs leading-snug text-signal">
+          <TriangleAlertIcon className="mt-px size-3 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
+        </p>
+      ) : null}
     </div>
   );
 }

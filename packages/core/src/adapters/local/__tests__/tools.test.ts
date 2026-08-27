@@ -231,6 +231,73 @@ describe('shell', () => {
   });
 });
 
+describe('additional directories — reading beyond the working directory', () => {
+  // The shape of the bug this fixes: a team memory bank kept outside cwd that a
+  // local model must be able to read. Granted read-only, so a read lands and a
+  // write does not.
+  let bank: string;
+  let bankCtx: ToolContext;
+
+  beforeEach(async () => {
+    bank = path.join(base, 'cortex');
+    await mkdir(path.join(bank, 'notes'), { recursive: true });
+    await writeFile(path.join(bank, 'notes', 'memory.md'), 'needle in the bank\n');
+    bankCtx = { ...ctx, additionalRoots: [{ path: bank, writable: false }] };
+  });
+
+  it('reads a file inside the additional directory by absolute path', async () => {
+    const result = await executeTool(
+      'read_file',
+      JSON.stringify({ path: path.join(bank, 'notes', 'memory.md') }),
+      bankCtx,
+    );
+
+    expect(result.failed).toBeUndefined();
+    expect(result.output).toContain('needle in the bank');
+  });
+
+  it('lists the additional directory', async () => {
+    const result = await executeTool('list_files', JSON.stringify({ path: bank }), bankCtx);
+
+    expect(result.output).toContain('notes/');
+  });
+
+  it('READ-ONLY: refuses to write into the additional directory, as a result not a throw', async () => {
+    const target = path.join(bank, 'notes', 'memory.md');
+    const result = await executeTool(
+      'write_file',
+      JSON.stringify({ path: target, content: 'tampered' }),
+      bankCtx,
+    );
+
+    expect(result.failed).toBe(true);
+    expect(result.output).toMatch(/read-only additional directory/);
+    // The refusal is real: the file the model tried to overwrite is untouched.
+    expect(await readFile(target, 'utf8')).toBe('needle in the bank\n');
+  });
+
+  it('still writes inside the working directory when extra roots are present', async () => {
+    const result = await executeTool(
+      'write_file',
+      '{"path":"src/b.ts","content":"export {}"}',
+      bankCtx,
+    );
+
+    expect(result.failed).toBeUndefined();
+    expect(await readFile(path.join(root, 'src', 'b.ts'), 'utf8')).toBe('export {}');
+  });
+
+  it('SANDBOX: a path outside both the working directory and the bank is still refused', async () => {
+    const result = await executeTool(
+      'read_file',
+      JSON.stringify({ path: path.join(base, 'nope', 'secret.txt') }),
+      bankCtx,
+    );
+
+    expect(result.failed).toBe(true);
+  });
+});
+
 describe('executeTool — the rule that keeps an agent working', () => {
   it('MALFORMED: tells the model its JSON was broken instead of throwing', async () => {
     // Small models emit malformed arguments often enough that this is a normal

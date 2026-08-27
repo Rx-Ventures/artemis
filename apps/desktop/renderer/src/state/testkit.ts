@@ -44,6 +44,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   activeProfileId: true,
   cwd: true,
   workspace: true,
+  additionalDirectories: true,
   permissionMode: true,
   model: true,
   effort: true,

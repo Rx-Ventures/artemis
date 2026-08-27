@@ -217,6 +217,23 @@ export interface SessionState extends MirroredState {
   /** What {@link cwd} is called — repository name where there is one. */
   readonly workspace: WorkspaceNames | null;
 
+  /**
+   * Extra directories, beyond {@link cwd}, the next run may read.
+   *
+   * Absolute paths the user attached to this column — a checkout elsewhere, a
+   * shared notes folder — that ride the run as
+   * {@link RunInput.additionalDirectories}. Unlike {@link cwd}, changing this
+   * does not end the session: it widens where the *next* run may look, not where
+   * this conversation lives, so it is a plain `setPaneState` rather than a
+   * `setCwd`. The team memory banks are attached the same way but by the engine
+   * (see `main/engine.ts`), so a folder control shows them read-only rather than
+   * listing them here.
+   *
+   * Renderer-local; a column starts with none each launch — the same minimal
+   * scope the control that fills them ships with.
+   */
+  readonly additionalDirectories: readonly string[];
+
   readonly permissionMode: PermissionMode;
   /** Model id for the next run, or `null` for the provider's default. */
   readonly model: string | null;

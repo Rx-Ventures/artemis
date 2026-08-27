@@ -245,3 +245,45 @@ export function banksAvailability(status: MemoryBanksStatus | null): boolean | n
   if (status === null) return null;
   return status.masterEnabled && status.banks.some((bank) => bank.enabled && bank.exists);
 }
+
+/**
+ * The bank directories a run is handed for free, or `[]`.
+ *
+ * The engine attaches every enabled, present bank to a run as a readable
+ * additional directory (see `main/engine.ts` and `banksForRun`), so a
+ * folder-picking control can show the user that a bank kept outside the project
+ * — Cortex in `~/Documents`, say — is already along for the ride, without their
+ * having to add it. The same conjunction the engine and
+ * {@link useMemoryBanksAvailable} use: master on, bank enabled, bank present.
+ *
+ * Status only — no preflight spawn — because this answers a display question,
+ * not the add-a-bank flow's readiness one. Empty while the read is in flight and
+ * if it fails: a list captioned "already attached" must not claim a folder that
+ * is not.
+ */
+export function useAutoIncludedBankDirectories(): readonly string[] {
+  const [dirs, setDirs] = useState<readonly string[]>([]);
+
+  useEffect(() => {
+    const channel = banksChannel();
+    if (channel === null) return undefined;
+
+    let cancelled = false;
+    void (async () => {
+      const result = await call(() => channel.status({}));
+      if (cancelled || !result.ok) return;
+      const { masterEnabled, banks } = result.value;
+      setDirs(
+        masterEnabled
+          ? banks.filter((bank) => bank.enabled && bank.exists).map((bank) => bank.path)
+          : [],
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return dirs;
+}

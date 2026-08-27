@@ -627,6 +627,20 @@ export function createOpencodeAdapter(options?: OpencodeAdapterOptions): Provide
       if (!input.cwd.startsWith('/')) {
         throw adapterError('invalid_request', 'The working directory must be an absolute path.');
       }
+
+      // OpenCode is reached over ACP, whose `session/new` carries a cwd and a
+      // set of MCP servers and nothing else — there is no field for directories
+      // beyond the working one. So a run's `additionalDirectories`, including
+      // any team memory bank the engine merged in, cannot be granted here the
+      // way Claude, Codex and the local sandbox grant them. Rather than drop
+      // that on the floor in silence — which would leave a model unable to read
+      // a folder the user was told every session gets — it is said out loud
+      // once. Supporting it means an ACP extension upstream, not a change here.
+      if (input.additionalDirectories !== undefined && input.additionalDirectories.length > 0) {
+        console.warn(
+          `OpenCode run ${input.runId}: ACP has no seam for additional directories, so these were not attached: ${input.additionalDirectories.join(', ')}`,
+        );
+      }
       const modeId =
         input.permissionMode === undefined ? undefined : OPENCODE_MODE_IDS[input.permissionMode];
       if (input.permissionMode !== undefined && modeId === undefined) {
