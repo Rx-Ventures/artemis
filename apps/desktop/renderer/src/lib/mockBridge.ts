@@ -1550,6 +1550,38 @@ export function createMockBridge(): ArtemisBridge {
             },
           ],
         }),
+      /*
+       * Every outcome the pane draws differently is reachable from the URL
+       * itself, so the four inline results can be seen without a network: a
+       * remote whose path says `private` asks for a token (and accepts any),
+       * one that says `missing` is not found, one that says `down` is
+       * unreachable, and anything else is fine.
+       */
+      verifyRemote: async (request) => {
+        const said = request.remote.toLowerCase();
+        if (said.includes('private') && request.auth === undefined) {
+          return ok({
+            outcome: 'auth-required' as const,
+            headPresent: false,
+            detail: "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled",
+          });
+        }
+        if (said.includes('missing')) {
+          return ok({
+            outcome: 'not-found' as const,
+            headPresent: false,
+            detail: 'remote: Repository not found.',
+          });
+        }
+        if (said.includes('down')) {
+          return ok({
+            outcome: 'unreachable' as const,
+            headPresent: false,
+            detail: "fatal: unable to access 'https://git.example.com/': Could not resolve host",
+          });
+        }
+        return ok({ outcome: 'ok' as const, headPresent: true, detail: 'HEAD is 52a0a327' });
+      },
       add: async (request) => {
         mockBanks = [
           ...mockBanks,

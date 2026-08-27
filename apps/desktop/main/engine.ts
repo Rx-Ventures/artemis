@@ -115,6 +115,7 @@ import { AgentPromptStore } from './agentPrompts.js';
 import { anyBankAvailable, banksForRun, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
+import { createMemoryBankSecrets } from './memoryBankSecrets.js';
 import { createProfileSecrets } from './profileSecrets.js';
 import {
   buildContentBridge,
@@ -727,10 +728,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
   const agentPrompts = new AgentPromptStore({ userDataDir });
 
-  // Where the memory banks' master switch is kept. Told once, here, because this
-  // is the only place that knows `userData`; until it is told, the switch reads
-  // as off.
-  configureMemoryBanks(userDataDir);
+  // Where the memory banks' master switch is kept, what the banks' CLI should
+  // be told `ARTEMIS_ROOT` is, and where a private bank's git token lives. Told
+  // once, here, because this is the only place that knows `userData`; until it
+  // is told, the switch reads as off and no bank has a credential.
+  configureMemoryBanks(userDataDir, createMemoryBankSecrets(userDataDir));
 
   /**
    * Which built-in prompts have the thing they talk about.

@@ -297,12 +297,42 @@ def repo_root():
     return here
 
 
+# The stderr of the most recent run_git call.
+#
+# run_git's contract is "the output, or None" — which throws away the only part
+# of a git failure anybody can act on. A clone that dies of a 403, of a name
+# that will not resolve, or of a branch that is not there reaches the caller as
+# the same None, and every one of them used to reach the user as the same four
+# words. Kept here so the two callers that have something to say can say it.
+#
+# A module global rather than a second return value: run_git is called from a
+# couple of dozen places that want the string, and widening all of them to
+# carry an error they ignore is a worse trade than one variable read
+# immediately after the call that set it.
+_LAST_GIT_STDERR = ""
+
+
+def last_git_error(lines=2):
+    """The tail of the last git failure's stderr, or "" if it said nothing."""
+    said = [line.strip() for line in _LAST_GIT_STDERR.splitlines() if line.strip()]
+    return " · ".join(said[-lines:])
+
+
 def run_git(repo, *argv, timeout=10):
+    global _LAST_GIT_STDERR
+    _LAST_GIT_STDERR = ""
     try:
         out = subprocess.run(["git", "-C", str(repo), *argv],
                              capture_output=True, text=True, timeout=timeout)
-        return out.stdout.strip() if out.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
+        if out.returncode == 0:
+            return out.stdout.strip()
+        _LAST_GIT_STDERR = out.stderr or ""
+        return None
+    except subprocess.TimeoutExpired:
+        _LAST_GIT_STDERR = "git did not answer within %ss" % timeout
+        return None
+    except OSError as exc:
+        _LAST_GIT_STDERR = str(exc)
         return None
 
 
@@ -1319,7 +1349,12 @@ def cmd_setup(args):
         print(f"cerebro: cloning {remote} into {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
         if run_git(path.parent, "clone", "--quiet", remote, str(path), timeout=300) is None:
-            fail(f"could not clone {remote}")
+            # git's own last words, not just ours: "could not clone <url>" is
+            # true of a private repo, a typo, an offline laptop and a wrong
+            # branch alike, and the difference is the whole of what the reader
+            # needs.
+            said = last_git_error()
+            fail(f"could not clone {remote}: {said}" if said else f"could not clone {remote}")
 
     path, existed = init_bank(path, remote if mode == "remote" else None)
 
@@ -1514,6 +1549,24 @@ def check_path_shim(repo):
     return _check("shim", "cerebro on PATH", "ok", found)
 
 
+def remote_label(url):
+    """`org/repo` as a person would name it, out of any remote URL form.
+
+    Named rather than quoted whole because the remedy that uses it is a
+    sentence, and a URL in the middle of one is unreadable. Any userinfo is
+    dropped on the way out: a remote somebody pasted a token into must not have
+    it echoed back by a message this CLI prints.
+    """
+    text = re.sub(r"\.git$", "", (url or "").strip().rstrip("/"))
+    if "://" in text:
+        text = text.split("://", 1)[1].split("@")[-1]
+        parts = text.split("/", 1)
+        return parts[1] if len(parts) > 1 and parts[1] else text
+    if ":" in text:
+        return text.split(":", 1)[1] or text
+    return text
+
+
 def check_remote_access(url):
     """Can this machine actually reach the private bank? The real auth gate."""
     if shutil.which("git") is None:
@@ -1530,10 +1583,14 @@ def check_remote_access(url):
     if out.returncode == 0:
         return _check("remote", "Bank access", "ok", f"{url} reachable")
     said = (out.stderr or "").strip().splitlines()
+    # The remedy names the remote that was actually probed. It used to name
+    # this project's own upstream whatever it had just checked, which for
+    # anyone running their own bank was advice about a repository they have
+    # never heard of and cannot be given access to.
     return _check("remote", "Bank access", "fail",
                   said[-1] if said else f"cannot read {url}",
-                  "Sign in to GitHub (gh auth login, or add an SSH key) and ask for access "
-                  "to Rx-Ventures/cerebro — it is a private repository")
+                  f"Sign in to that host (gh auth login, an SSH key, or an access token) and "
+                  f"ask for access to {remote_label(url)} — it may be a private repository")
 
 
 def check_artemis(root):
@@ -1571,11 +1628,20 @@ def check_destination(path):
                   "cerebro setup")
 
 
-def gather_checks(repo, root, network=True):
+def gather_checks(repo, root, network=True, destination=None):
+    """Every check, for one machine.
+
+    `destination` is where a bank is *going*, which is only the same place as
+    `repo` once it exists. Threading it through is what lets `doctor --path
+    <dir>` answer for the folder somebody is about to clone into: the check
+    used to inspect ~/Documents/cerebro no matter what the caller had chosen,
+    and report a stranger's directory as their problem.
+    """
     remote = (run_git(repo, "remote", "get-url", "origin") if repo else None) or CEREBRO_REPO_URL
+    where = destination or repo or (Path.home() / "Documents" / "cerebro")
     checks = [check_python(), check_git(), check_git_identity(repo), check_gh(),
               check_path_shim(repo),
-              check_destination(repo if repo else Path.home() / "Documents" / "cerebro"),
+              check_destination(where),
               check_artemis(root)]
     if network:
         checks.append(check_remote_access(remote))
@@ -1588,7 +1654,9 @@ def cmd_doctor(args):
         repo = repo_root()
     except SystemExit:
         pass
-    checks = gather_checks(repo, artemis_root(args), network=not args.offline)
+    destination = Path(args.path).expanduser() if getattr(args, "path", None) else None
+    checks = gather_checks(repo, artemis_root(args), network=not args.offline,
+                           destination=destination)
     ready = not any(c["state"] == "fail" for c in checks)
     if args.json:
         print(json.dumps({"ready": ready, "checks": checks}, indent=2))
@@ -1945,6 +2013,8 @@ def main():
     p.add_argument("--root")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--offline", action="store_true", help="skip the remote-access probe")
+    p.add_argument("--path", help="check this destination rather than the registered bank's "
+                                  "(for asking about a folder before cloning into it)")
     p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("status", help="show bank health and where cerebro is installed")

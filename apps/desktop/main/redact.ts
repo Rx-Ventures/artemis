@@ -174,6 +174,15 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
     'refreshtoken',
     'authtoken',
     'credentials',
+    // Added with the team memory banks' git token. Artemis holds one again —
+    // encrypted, per bank, resolved in main and injected into a subprocess
+    // environment — and no response shape has a field it could ride out on.
+    // These names are the tripwire for one appearing.
+    'authorization',
+    'gittoken',
+    'apitoken',
+    'secret',
+    'privatekey',
   ]),
   // Session titles and first prompts are user text; a user may have pasted a
   // key into a prompt and we still have to list their history. `name` and

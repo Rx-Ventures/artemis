@@ -33,6 +33,8 @@ import type {
   MemoryBankMemory,
   MemoryBankPreflight,
   MemoryBankRetireRequest,
+  MemoryBankVerifyRemoteRequest,
+  MemoryBankVerifyRemoteResponse,
   MemoryBanksStatus,
 } from '@rx-artemis/protocol';
 
@@ -65,6 +67,19 @@ export interface MemoryBanksPane {
    * not installed is the exact experience the check exists to prevent.
    */
   readonly preflight: MemoryBankPreflight | null;
+  /**
+   * Why the preflight could not be read, already safe to show.
+   *
+   * Kept rather than folded into `preflight: null`, which is what this used to
+   * do. The two states are not the same and the pane renders them
+   * differently: `null` with no error means "still asking" and shows a spinner
+   * line, while an error means "asked, and here is what went wrong" — most
+   * often, on Windows, that the machine has no Python 3 to run the banks' CLI
+   * with. Collapsing them left that machine reading "Checking what this
+   * machine needs…" forever, which is the one sentence that is never true
+   * after the read has finished.
+   */
+  readonly preflightError: string | null;
   /** Per-bank memories, filled by {@link MemoryBanksPane.loadMemories}. */
   readonly memories: Readonly<Record<string, readonly MemoryBankMemory[]>>;
   /** Why the read failed, already safe to show. Mutually exclusive with {@link status}. */
@@ -76,6 +91,17 @@ export interface MemoryBanksPane {
   /** Fetch one bank's memories (cached until the next refresh). */
   readonly loadMemories: (slug: string) => void;
   readonly add: (request: MemoryBankAddRequest) => Promise<boolean>;
+  /**
+   * Ask whether a remote is readable, without joining it.
+   *
+   * Deliberately outside the `busy` slot and outside `lastAction`: it changes
+   * nothing, its answer belongs beside the URL field that produced it rather
+   * than in the pane's one receipt line, and a user who is trying URLs should
+   * not have every other button in the pane dim for fifteen seconds each time.
+   */
+  readonly verifyRemote: (
+    request: MemoryBankVerifyRemoteRequest,
+  ) => Promise<IpcResult<MemoryBankVerifyRemoteResponse>>;
   readonly sync: (slug?: string) => void;
   readonly retire: (request: MemoryBankRetireRequest) => void;
   /** Wire one bank on or off — the CLI's per-bank switch, honoured by hooks too. */
@@ -95,6 +121,7 @@ export function useMemoryBanks(): MemoryBanksPane {
   const [reading, setReading] = useState(true);
   const [status, setStatus] = useState<MemoryBanksStatus | null>(null);
   const [preflight, setPreflight] = useState<MemoryBankPreflight | null>(null);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
   const [memories, setMemories] = useState<Record<string, readonly MemoryBankMemory[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<MemoryBankAction | null>(null);
@@ -131,7 +158,11 @@ export function useMemoryBanks(): MemoryBanksPane {
       if (cancelled) return;
       setReading(false);
       setStatus(statusResult.value);
+      // Both halves are set on every read, and only one of them is ever
+      // non-null: a failed preflight must not leave the last successful one on
+      // screen next to its error, and a recovered one must clear the error.
       setPreflight(preflightResult.ok ? preflightResult.value : null);
+      setPreflightError(preflightResult.ok ? null : preflightResult.error.message);
       setMemories({});
       setError(null);
     })();
@@ -180,6 +211,19 @@ export function useMemoryBanks(): MemoryBanksPane {
     (request: MemoryBankAddRequest) => act('add', (c) => c.add(request)),
     [act],
   );
+  const verifyRemote = useCallback(
+    async (request: MemoryBankVerifyRemoteRequest): Promise<IpcResult<MemoryBankVerifyRemoteResponse>> => {
+      const channel = banksChannel();
+      if (channel === null) {
+        return {
+          ok: false,
+          error: { code: 'transport', message: 'This window cannot reach the main process.', retryable: true },
+        };
+      }
+      return call(() => channel.verifyRemote(request));
+    },
+    [],
+  );
   const sync = useCallback(
     (slug?: string) => void act('sync', (c) => c.sync(slug === undefined ? {} : { slug })),
     [act],
@@ -205,6 +249,7 @@ export function useMemoryBanks(): MemoryBanksPane {
     reading,
     status,
     preflight,
+    preflightError,
     memories,
     error,
     refresh,
@@ -212,6 +257,7 @@ export function useMemoryBanks(): MemoryBanksPane {
     lastAction,
     loadMemories,
     add,
+    verifyRemote,
     sync,
     retire,
     setEnabled,

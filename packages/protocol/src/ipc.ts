@@ -428,6 +428,25 @@ export const IPC = {
    * used to discover them by failing halfway through a clone.
    */
   memoryBanksPreflight: 'artemis:memory-banks:preflight',
+  /**
+   * Can this machine read *that* remote, with *these* credentials?
+   *
+   * The one question onboarding could not answer before committing to it. A
+   * join is a clone, a wiring pass and a sync — minutes of work whose first
+   * step is the only one that can fail for a reason the user can act on
+   * ("that repository is private and your token cannot read it"), and which
+   * used to surface as a clone that died with git's stderr folded into a
+   * receipt. This runs `git ls-remote` and nothing else: no clone, no
+   * registry write, no bank. Its answer is a category the pane can render
+   * differently — a missing token is not a missing repository.
+   *
+   * Deliberately *not* routed through the banks' CLI. The CLI's job starts
+   * once a bank exists; this has to answer for a URL the machine has never
+   * seen, and going through a Python process to run one git command would
+   * add a failure mode (no interpreter) to a question that has nothing to do
+   * with it.
+   */
+  memoryBanksVerifyRemote: 'artemis:memory-banks:verify-remote',
   memoryBankAdd: 'artemis:memory-banks:add',
   memoryBankSync: 'artemis:memory-banks:sync',
   memoryBankRetire: 'artemis:memory-banks:retire',
@@ -2235,6 +2254,77 @@ export interface MemoryBankAddRequest {
   readonly remote?: string;
   /** Required for `adopt`; overrides the default location otherwise. */
   readonly path?: string;
+  /**
+   * How to authenticate to a private remote, when the user supplied a token.
+   *
+   * The one credential this surface carries, and it travels in one direction
+   * only: renderer → main, once, when the user types it. Main encrypts it
+   * against the bank's slug and every later sync resolves it from there — the
+   * renderer never stores it, never receives it back, and no response shape
+   * has a field it could return in.
+   */
+  readonly auth?: MemoryBankAuthInput;
+}
+
+/**
+ * A git credential as the renderer supplies it.
+ *
+ * The username is separate from the token and is **never** a secret: git
+ * echoes it into its own prompts and error strings, which is exactly the text
+ * a failed clone folds into a receipt. Hosts differ on what it must be —
+ * GitHub and Forgejo ignore it for token auth (hence the `x-access-token`
+ * default main applies), GitLab deploy tokens and Bitbucket app passwords
+ * require the account's own — so it is offered rather than assumed.
+ */
+export interface MemoryBankAuthInput {
+  readonly token: string;
+  /** Defaults to `x-access-token` when omitted. Never a place to put a token. */
+  readonly username?: string;
+}
+
+/**
+ * Ask whether a remote is readable, before committing to a clone.
+ *
+ * `auth` is optional on purpose: the interesting first answer is often "this
+ * repository needs a token", and the pane can only say that by having tried
+ * without one.
+ */
+export interface MemoryBankVerifyRemoteRequest {
+  readonly remote: string;
+  readonly auth?: MemoryBankAuthInput;
+}
+
+/**
+ * What `git ls-remote` came to, as a category rather than as stderr.
+ *
+ * A category because the remedies are different and only one of them is the
+ * user's to apply: `auth-required` means "supply a token", `not-found` means
+ * "check the URL or ask for access", `unreachable` means "this is the network,
+ * try again". Rendering all three as red text with git's own wording is how a
+ * user with a typo spends an afternoon generating access tokens.
+ */
+export type MemoryBankVerifyOutcome =
+  | 'ok'
+  | 'auth-required'
+  | 'not-found'
+  | 'unreachable'
+  | 'invalid-url';
+
+export interface MemoryBankVerifyRemoteResponse {
+  readonly outcome: MemoryBankVerifyOutcome;
+  /**
+   * Whether the remote advertises a `HEAD` — true only when `outcome` is
+   * `ok`. A readable repository with no `HEAD` is an empty one, which is a
+   * perfectly good bank to join and a surprising thing to discover after the
+   * clone rather than before it.
+   */
+  readonly headPresent: boolean;
+  /**
+   * One line the pane can show verbatim: the remote's own words on failure,
+   * a short receipt on success. Already scrubbed — the token the caller sent
+   * is removed from it in main before it is ever a response.
+   */
+  readonly detail: string;
 }
 
 /**
@@ -2573,6 +2663,7 @@ export type IpcRequestMap = {
   [IPC.memoryBanksStatus]: MemoryBanksStatusRequest;
   [IPC.memoryBankMemories]: MemoryBankMemoriesRequest;
   [IPC.memoryBanksPreflight]: MemoryBanksPreflightRequest;
+  [IPC.memoryBanksVerifyRemote]: MemoryBankVerifyRemoteRequest;
   [IPC.memoryBankAdd]: MemoryBankAddRequest;
   [IPC.memoryBankSync]: MemoryBankSyncRequest;
   [IPC.memoryBankRetire]: MemoryBankRetireRequest;
@@ -2667,6 +2758,7 @@ export type IpcResponseMap = {
   [IPC.memoryBanksStatus]: MemoryBanksStatusResponse;
   [IPC.memoryBankMemories]: MemoryBankMemoriesResponse;
   [IPC.memoryBanksPreflight]: MemoryBanksPreflightResponse;
+  [IPC.memoryBanksVerifyRemote]: MemoryBankVerifyRemoteResponse;
   [IPC.memoryBankAdd]: MemoryBankAddResponse;
   [IPC.memoryBankSync]: MemoryBankSyncResponse;
   [IPC.memoryBankRetire]: MemoryBankRetireResponse;
@@ -2955,6 +3047,14 @@ export interface ArtemisBridge {
     memories(request: MemoryBankMemoriesRequest): Promise<IpcResult<MemoryBankMemoriesResponse>>;
     /** What this machine is missing, with the fix for each. Answers before any bank exists. */
     preflight(request: MemoryBanksPreflightRequest): Promise<IpcResult<MemoryBanksPreflightResponse>>;
+    /**
+     * Is that remote readable with those credentials? One `git ls-remote`,
+     * nothing cloned, nothing registered — the only channel here that names
+     * a remote without also joining it.
+     */
+    verifyRemote(
+      request: MemoryBankVerifyRemoteRequest,
+    ): Promise<IpcResult<MemoryBankVerifyRemoteResponse>>;
     /** Join, create, or adopt a bank; wire it; sync once. Idempotent. */
     add(request: MemoryBankAddRequest): Promise<IpcResult<MemoryBankAddResponse>>;
     /** Promote queued drafts, fetch, re-install. Bypasses the throttle. */

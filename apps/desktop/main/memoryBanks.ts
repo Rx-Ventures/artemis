@@ -28,15 +28,28 @@
  * test in `memoryBanks.test.ts`. They rebuild rather than pass through — only
  * the fields the protocol names cross into a response, so a future CLI field
  * can never leak into the renderer unreviewed.
+ *
+ * The third decision is that **the environment is composed here, once**. The
+ * CLI is a Python script, and on Windows a Python script is not something a
+ * process can execute — so this module resolves an interpreter and spawns
+ * `[python, cli, …args]` while other platforms keep the direct exec. It also
+ * tells every spawn where Artemis keeps its own state (`ARTEMIS_ROOT`,
+ * without which the CLI looks in a macOS-only location and reports every
+ * machine as unready), forbids git from opening a terminal prompt behind a
+ * window nobody is watching, and — for a private bank — supplies the git
+ * credential through `gitCredentialEnv.ts`. All of it goes through the one
+ * `runCli` choke point, because "every call except that one" is how an
+ * environment invariant stops being one.
  */
 
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import type { MemoryBankCredential, MemoryBankSecrets } from '@rx-artemis/core';
 import type {
   MemoryBankActionResponse,
   MemoryBankAddRequest,
@@ -50,12 +63,25 @@ import type {
   MemoryBankRetireRequest,
   MemoryBankSetEnabledRequest,
   MemoryBankSyncRequest,
+  MemoryBankVerifyOutcome,
+  MemoryBankVerifyRemoteRequest,
+  MemoryBankVerifyRemoteResponse,
   MemoryBanksSetMasterEnabledRequest,
   MemoryBanksStatus,
 } from '@rx-artemis/protocol';
 
 import { WorkspaceError } from './errors.js';
+import {
+  credentialOrigin,
+  DEFAULT_GIT_USERNAME,
+  GIT_TOKEN_ENV,
+  gitCredentialEnv,
+  gitCredentialsEnv,
+  type GitCredential,
+  type GitCredentialEnv,
+} from './gitCredentialEnv.js';
 import { createLogger } from './log.js';
+import { scrubSecrets } from './redact.js';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('memory-banks');
@@ -225,6 +251,193 @@ function resolveCli(bankPath?: string): string {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Spawning a Python script on a platform that cannot execute one             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An interpreter, as a command plus the arguments that select a version.
+ *
+ * `py -3` is two words rather than one command because the Windows launcher is
+ * a *dispatcher*: bare `py` runs whatever version the machine considers
+ * default, which on a machine with Python 2 still installed is the one that
+ * cannot run the CLI.
+ */
+export interface PythonCandidate {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+/**
+ * What to try, in order.
+ *
+ * The launcher first, because it is the one entry that is *installed with*
+ * Python on Windows rather than being whatever a PATH mutation left behind,
+ * and it resolves a real interpreter even when the app-execution aliases are
+ * in the way. Then the version-qualified name, then the bare one — the order a
+ * person would try them in, for the same reasons.
+ */
+export const PYTHON_CANDIDATES: readonly PythonCandidate[] = [
+  { command: 'py', args: ['-3'] },
+  { command: 'python3', args: [] },
+  { command: 'python', args: [] },
+];
+
+/** What running `<candidate> --version` came to. */
+export interface PythonProbe {
+  /** Did it exit zero? */
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Is this probe a real Python 3?
+ *
+ * Two rejections matter and one of them is not obvious. The obvious one is a
+ * non-zero exit, or an answer that is not a Python 3 version.
+ *
+ * The other is **the Windows Store stub**. Windows ships `python.exe` and
+ * `python3.exe` under `WindowsApps` as app-execution aliases that exist purely
+ * to open the Store. Run with `--version` they print nothing at all and exit —
+ * so a probe that only checked the exit code would accept the stub, and every
+ * later spawn would either open the Store or fail with an error that says
+ * nothing about Python. Empty output is therefore a rejection in its own
+ * right: a real interpreter always says which one it is.
+ */
+export function acceptsAsPython3(probe: PythonProbe): boolean {
+  if (!probe.ok) return false;
+  // `--version` went to stderr on Python 3.3 and earlier and to stdout since;
+  // both are read so the check does not depend on which.
+  const said = `${probe.stdout} ${probe.stderr}`.trim();
+  if (said.length === 0) return false;
+  const version = /Python (\d+)\.(\d+)/.exec(said);
+  if (version === null) return false;
+  return Number(version[1]) >= 3;
+}
+
+/** The first candidate whose probe passed, or `null`. Pure; the unit under test. */
+export function selectPython(
+  probes: readonly { readonly candidate: PythonCandidate; readonly probe: PythonProbe }[],
+): PythonCandidate | null {
+  return probes.find(({ probe }) => acceptsAsPython3(probe))?.candidate ?? null;
+}
+
+/**
+ * Does this CLI need an interpreter in front of it on this platform?
+ *
+ * The bundled CLI is an extension-less file whose first line is a shebang.
+ * That is executable on macOS and Linux and is *nothing* on Windows, which
+ * has no shebang support and matches executables by `PATHEXT`: `execFile`
+ * fails before the script's first line runs, which is why every bank operation
+ * used to throw on Windows with an error about a file not being an
+ * application.
+ *
+ * Asked of the path rather than assumed, because the same resolution finds a
+ * bank's *embedded* copy — and a bank is free to ship a `.exe`.
+ */
+export function needsPythonInterpreter(cliPath: string, platform: NodeJS.Platform): boolean {
+  if (platform !== 'win32') return false;
+  const extension = extname(cliPath).toLowerCase();
+  return extension !== '.exe' && extension !== '.cmd' && extension !== '.bat' && extension !== '.com';
+}
+
+/**
+ * The resolved interpreter, or `null` when the machine has none.
+ *
+ * Cached for the process's life: this is three spawns of `--version`, and the
+ * answer does not change while the app is open. `undefined` means "not yet
+ * asked", `null` means "asked, and there is none" — the distinction is what
+ * keeps a machine without Python from re-probing on every status read.
+ */
+let cachedPython: PythonCandidate | null | undefined;
+
+async function probePython(candidate: PythonCandidate): Promise<PythonProbe> {
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      candidate.command,
+      [...candidate.args, '--version'],
+      { timeout: 10_000, encoding: 'utf8', maxBuffer: 64 * 1024 },
+    );
+    return { ok: true, stdout, stderr };
+  } catch (error) {
+    const raw = error as { stdout?: unknown; stderr?: unknown };
+    return {
+      ok: false,
+      stdout: typeof raw.stdout === 'string' ? raw.stdout : '',
+      stderr: typeof raw.stderr === 'string' ? raw.stderr : '',
+    };
+  }
+}
+
+async function resolvePython(): Promise<PythonCandidate | null> {
+  if (cachedPython !== undefined) return cachedPython;
+  const probes = [];
+  for (const candidate of PYTHON_CANDIDATES) {
+    // Sequentially, and stopping at the first that answers: the common case is
+    // that the first candidate works, and probing all three in parallel would
+    // spawn two processes nobody needs on every machine that has Python.
+    const probe = await probePython(candidate);
+    probes.push({ candidate, probe });
+    if (acceptsAsPython3(probe)) break;
+  }
+  cachedPython = selectPython(probes);
+  if (cachedPython !== null) {
+    log.info(`Driving the memory-bank CLI with ${[cachedPython.command, ...cachedPython.args].join(' ')}`);
+  }
+  return cachedPython;
+}
+
+/** The error a machine with no interpreter gets, worded so it can be acted on. */
+function noPythonError(): WorkspaceError {
+  return new WorkspaceError(
+    'Python 3 is required for the team memory bank CLI, and this machine has none that answers ' +
+      '`--version` (the Microsoft Store stub does not count). Install it from python.org/downloads ' +
+      'or with `winget install Python.Python.3.13`, then re-check.',
+  );
+}
+
+/**
+ * How to spawn this CLI: the executable, and whatever has to precede its
+ * arguments.
+ */
+async function spawnPlan(cli: string): Promise<{ command: string; prefix: readonly string[] }> {
+  if (!needsPythonInterpreter(cli, process.platform)) return { command: cli, prefix: [] };
+  const python = await resolvePython();
+  if (python === null) throw noPythonError();
+  return { command: python.command, prefix: [...python.args, cli] };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The one spawn                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What every CLI spawn is told, before anything specific to the call.
+ *
+ * `ARTEMIS_ROOT` because the CLI's own default is
+ * `~/Library/Application Support/Artemis` — the right answer on the machine it
+ * was written on and nowhere else. Without it the CLI finds no `profiles.json`
+ * off macOS, `doctor` reports "no Artemis profiles" forever, and the pane
+ * blocks onboarding on a requirement the user cannot possibly satisfy.
+ *
+ * `GIT_TERMINAL_PROMPT=0` because everything here runs unattended behind a
+ * settings pane. Git's prompt would be written to a console nobody is
+ * watching and would hang the spawn until its timeout, turning "this remote
+ * needs credentials" — a sentence the pane can act on — into "the CLI did not
+ * respond".
+ *
+ * Exported for the same reason the `parse*` functions are: it is the pure half
+ * of a spawn, and asserting that both variables are present is what stops a
+ * later edit from quietly dropping the one that un-bricks `doctor`.
+ */
+export function baseCliEnv(): Record<string, string> {
+  return {
+    ...(artemisRoot !== null ? { ARTEMIS_ROOT: artemisRoot } : {}),
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
 /**
  * Run the CLI and hand back stdout.
  *
@@ -233,33 +446,92 @@ function resolveCli(bankPath?: string): string {
  * secret (GitHub token) — memories must never contain credentials"), and a
  * pane that replaced them with "command failed" would be discarding the only
  * part the user needs.
+ *
+ * `env` is merged over {@link baseCliEnv} and over the inherited environment,
+ * and is where a private bank's git credential arrives. It is a parameter of
+ * *this* function rather than of each caller's spawn because there is only one
+ * spawn: a second one would be a second place for the credential rules to be
+ * got right.
  */
-async function runCli(cli: string, args: readonly string[], timeoutMs: number): Promise<string> {
+async function runCli(
+  cli: string,
+  args: readonly string[],
+  timeoutMs: number,
+  env: Readonly<Record<string, string>> = {},
+): Promise<string> {
+  const { command, prefix } = await spawnPlan(cli);
   try {
-    const { stdout } = await execFileAsync(cli, [...args], {
+    const { stdout } = await execFileAsync(command, [...prefix, ...args], {
       timeout: timeoutMs,
       encoding: 'utf8',
       maxBuffer: MAX_OUTPUT_BYTES,
+      env: { ...process.env, ...baseCliEnv(), ...env },
     });
     return stdout;
   } catch (error) {
-    throw toCliError(error, args.find((arg) => !arg.startsWith('-')) ?? 'cerebro');
+    throw toCliError(error, args.find((arg) => !arg.startsWith('-')) ?? 'cerebro', tokensIn(env));
   }
 }
 
-function toCliError(error: unknown, verb: string): WorkspaceError {
+/**
+ * The literal secrets an environment block carries, so they can be scrubbed
+ * back out of anything the child said.
+ *
+ * Derived from the variable *names* rather than tracked separately, which is
+ * what keeps this honest: `gitCredentialEnv` puts the token in
+ * `ARTEMIS_GIT_TOKEN[_n]` and nowhere else, so anything matching that name is
+ * exactly the set of strings that must not reach the renderer. A future
+ * variable carrying a secret has to be named to be spawned, and naming it here
+ * is one line.
+ */
+function tokensIn(env: Readonly<Record<string, string>>): readonly string[] {
+  return Object.entries(env)
+    .filter(([name, value]) => name.startsWith(GIT_TOKEN_ENV) && value.length > 0)
+    .map(([, value]) => value);
+}
+
+/**
+ * Fold a failed spawn into a message meant for a person.
+ *
+ * `secrets` are removed from that message before it exists. Git does not print
+ * a password it was handed — but this text is assembled from a child process's
+ * whole stderr, on a path where the caller has just put a token into that
+ * child's environment, and "git is careful" is a property of git rather than
+ * of this boundary. The scrub is the boundary's own.
+ */
+function toCliError(error: unknown, verb: string, secrets: readonly string[] = []): WorkspaceError {
   const raw = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
-  const said = [raw.stderr, raw.stdout]
-    .filter((chunk): chunk is string => typeof chunk === 'string')
-    .join('\n')
-    .trim();
+  const said = withoutSecrets(
+    [raw.stderr, raw.stdout]
+      .filter((chunk): chunk is string => typeof chunk === 'string')
+      .join('\n')
+      .trim(),
+    secrets,
+  );
   if (said.length > 0) {
     // The tail, not the head: the CLI states its conclusion last.
     const lines = said.split('\n').filter((line) => line.trim().length > 0);
     return new WorkspaceError(`cerebro ${verb} failed: ${lines.slice(-3).join(' · ')}`);
   }
-  const message = typeof raw.message === 'string' ? raw.message : 'the CLI did not respond';
+  const message = typeof raw.message === 'string' ? withoutSecrets(raw.message, secrets) : 'the CLI did not respond';
   return new WorkspaceError(`cerebro ${verb} failed: ${message}`);
+}
+
+/**
+ * Replace each known secret with a placeholder, then run the shape-based
+ * scrub over what is left.
+ *
+ * Both halves, because they catch different things: the exact-value pass knows
+ * this run's token and nothing else, and `scrubSecrets` knows the shapes of
+ * credentials Artemis never held but a git host might have quoted back.
+ */
+export function withoutSecrets(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length === 0) continue;
+    out = out.split(secret).join('[redacted]');
+  }
+  return scrubSecrets(out);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -431,9 +703,38 @@ const SWITCH_FILE = 'cerebro.json';
 let switchFile: string | null = null;
 let cachedEnabled: boolean | null = null;
 
-/** Tell this module where Artemis keeps its own state. Called once, at startup. */
-export function configureMemoryBanks(userDataDir: string): void {
+/**
+ * What every spawn is told `ARTEMIS_ROOT` is — Electron's `userData`, which is
+ * where `profiles.json` actually lives on this platform. `null` until
+ * configured, in which case the variable is simply not set and the CLI falls
+ * back to its own default.
+ */
+let artemisRoot: string | null = null;
+
+/**
+ * Where a private bank's git credential is kept.
+ *
+ * Injected rather than constructed here, for the reason every Electron-shaped
+ * thing in Artemis is: `memoryBankSecrets.ts` imports `safeStorage`, and this
+ * module is unit-tested in a plain Node process. `null` is a complete state,
+ * not a degraded one — a machine whose banks are public or reached over ssh
+ * never needs one, and every path below treats an absent store exactly as it
+ * treats a bank with no stored token.
+ */
+let bankSecrets: MemoryBankSecrets | null = null;
+
+/**
+ * Tell this module where Artemis keeps its own state. Called once, at startup.
+ *
+ * Three facts, one call, because they all come from the same place and are all
+ * unknowable to a module that may not import `electron`: where the master
+ * switch is written, what the CLI should be told `ARTEMIS_ROOT` is, and where
+ * to find a bank's stored git credential.
+ */
+export function configureMemoryBanks(userDataDir: string, secrets?: MemoryBankSecrets): void {
   switchFile = join(userDataDir, SWITCH_FILE);
+  artemisRoot = userDataDir;
+  bankSecrets = secrets ?? null;
   cachedEnabled = null;
 }
 
@@ -634,6 +935,317 @@ export async function readMemoryBanksPreflight(): Promise<MemoryBankPreflight> {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Credentials for a private bank                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A clone's `origin` URL, out of its own `.git/config`.
+ *
+ * Read rather than asked for, because `git remote get-url` would be a spawn on
+ * a path that must not have one — this is called from the background sync,
+ * which fires at every run start. Parsed as its own function so the awkward
+ * half (git's config grammar) is testable without a repository.
+ *
+ * A hand-rolled parse of a format git owns, so it is deliberately narrow: the
+ * first `url` under `[remote "origin"]`, and nothing else. Anything it fails
+ * to understand reads as "no origin", and a bank with no origin is one that
+ * syncs without a credential — the same as today.
+ */
+export function parseGitOrigin(configText: string): string | null {
+  let inOrigin = false;
+  for (const raw of configText.split('\n')) {
+    const line = raw.trim();
+    const section = /^\[(.+)\]$/.exec(line);
+    if (section !== null) {
+      inOrigin = /^remote\s+"origin"$/.test((section[1] ?? '').trim());
+      continue;
+    }
+    if (!inOrigin) continue;
+    const url = /^url\s*=\s*(.+)$/.exec(line);
+    if (url !== null) return url[1]?.trim() ?? null;
+  }
+  return null;
+}
+
+function bankRemote(bankPath: string): string | null {
+  try {
+    return parseGitOrigin(readFileSync(join(bankPath, '.git', 'config'), 'utf8'));
+  } catch {
+    // Not a clone, or not readable. Either way there is no remote to scope a
+    // credential to.
+    return null;
+  }
+}
+
+/**
+ * The git credential for one registered bank, or `null`.
+ *
+ * The registry and the remote are consulted *before* the store, so a bank
+ * whose credential could not be used anyway — unregistered, no origin, an ssh
+ * origin — is never decrypted. Cheap questions first is the ordinary way to
+ * write this; here it is also the rule that keeps a secret out of memory when
+ * nothing was going to use it.
+ */
+async function credentialFor(slug: string): Promise<GitCredential | null> {
+  if (bankSecrets === null) return null;
+  const bank = readRegistry().banks.find((entry) => entry.slug === slug);
+  if (bank === undefined) return null;
+  const remote = bankRemote(bank.path);
+  if (remote === null) return null;
+  const origin = credentialOrigin(remote);
+  if (origin === null) return null;
+  const stored = await bankSecrets.read(slug);
+  if (stored === null) return null;
+  return { origin, token: stored.token, username: stored.username };
+}
+
+/**
+ * The environment for a spawn that addresses one bank, or every bank.
+ *
+ * The every-bank case is the background sync's: one CLI pass covers all of
+ * them, so all of their origins have to be configured up front. `list()` is
+ * asked first and never decrypts, so a machine whose banks are all public
+ * pays one file read and no decryption at all.
+ */
+async function bankCredentialEnv(slug?: string): Promise<GitCredentialEnv> {
+  if (bankSecrets === null) return {};
+  if (slug !== undefined) {
+    const credential = await credentialFor(slug);
+    return credential === null ? {} : gitCredentialEnv(credential);
+  }
+  const credentials: GitCredential[] = [];
+  for (const stored of await bankSecrets.list()) {
+    const credential = await credentialFor(stored);
+    if (credential !== null) credentials.push(credential);
+  }
+  return gitCredentialsEnv(credentials);
+}
+
+/**
+ * The credential a join was asked to use, before the bank it belongs to exists.
+ *
+ * The one place the origin cannot come from a clone's config, because there is
+ * no clone yet — it comes from the URL the user typed, which is also the URL
+ * about to be cloned.
+ *
+ * A token offered for a remote that cannot carry one is refused rather than
+ * dropped. Silently ignoring it would produce the worst version of this
+ * failure: a clone that prompts for an ssh key it does not have, while the
+ * pane shows a token the user is sure they supplied.
+ */
+function requestedCredential(request: MemoryBankAddRequest): GitCredential | null {
+  const auth = request.auth;
+  if (auth === undefined || auth.token.length === 0) return null;
+  const remote = request.remote ?? '';
+  const origin = credentialOrigin(remote);
+  if (origin === null) {
+    throw new WorkspaceError(
+      'An access token can only be used with an https:// remote. This remote is reached another ' +
+        'way (ssh, for instance), which authenticates with a key rather than a token — join it ' +
+        'without a token, or use the repository’s https:// URL.',
+    );
+  }
+  return { origin, token: auth.token, username: auth.username ?? DEFAULT_GIT_USERNAME };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Verifying a remote, before anything is cloned                              */
+/* -------------------------------------------------------------------------- */
+
+/** How long a reachability probe is worth waiting for, with a person watching. */
+const VERIFY_TIMEOUT_MS = 15_000;
+
+/** What running `git ls-remote` came to, before it is interpreted. */
+export interface LsRemoteResult {
+  /** `null` when the process was killed rather than exiting on its own. */
+  readonly code: number | null;
+  readonly timedOut: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Patterns, in the order they are asked.
+ *
+ * Order is the whole design here. GitHub answers an unreadable private
+ * repository with `The requested URL returned error: 403`, which matches both
+ * "unable to access" and an authentication shape; Forgejo answers a wrong
+ * token with `unable to access … Authentication failed`. Asking "is this
+ * about credentials?" before "is this about the network?" is what keeps a
+ * missing token from being reported as an outage — the failure that sends a
+ * user to check their wifi while the pane holds the remedy.
+ */
+const VERIFY_PATTERNS: readonly { readonly outcome: MemoryBankVerifyOutcome; readonly pattern: RegExp }[] = [
+  { outcome: 'auth-required', pattern: /authentication failed/i },
+  { outcome: 'auth-required', pattern: /could not read (username|password)/i },
+  { outcome: 'auth-required', pattern: /terminal prompts disabled/i },
+  { outcome: 'auth-required', pattern: /\b(401|403)\b/ },
+  { outcome: 'auth-required', pattern: /unauthorized|access denied|permission denied/i },
+  { outcome: 'auth-required', pattern: /invalid (username or )?(password|token|credentials)/i },
+  { outcome: 'not-found', pattern: /repository not found/i },
+  { outcome: 'not-found', pattern: /\b404\b/ },
+  { outcome: 'not-found', pattern: /not found|does not exist/i },
+  { outcome: 'not-found', pattern: /does not appear to be a git repository/i },
+  { outcome: 'unreachable', pattern: /could not resolve (host|proxy)/i },
+  { outcome: 'unreachable', pattern: /couldn'?t connect|failed to connect|connection (refused|timed out|reset)/i },
+  { outcome: 'unreachable', pattern: /network is unreachable|operation timed out|no route to host/i },
+  { outcome: 'unreachable', pattern: /ssl|certificate/i },
+];
+
+/**
+ * Turn one `git ls-remote` into an answer the pane can render.
+ *
+ * Pure, and the unit under test against canned stderr from the hosts this
+ * actually meets. The interesting case is the one that looks like a failure
+ * and is not: `--exit-code` makes git exit 2 when no ref matched, which for
+ * `HEAD` means **the repository is readable and empty**. That is a perfectly
+ * good bank to join — it is what a team's second machine sees on the day the
+ * bank is created — and reporting it as an error would block the join with an
+ * accurate-sounding sentence about a repository that is fine.
+ */
+export function categorizeLsRemote(result: LsRemoteResult): MemoryBankVerifyRemoteResponse {
+  if (result.timedOut) {
+    return {
+      outcome: 'unreachable',
+      headPresent: false,
+      detail: `the remote did not answer within ${VERIFY_TIMEOUT_MS / 1000} seconds`,
+    };
+  }
+
+  const said = `${result.stderr}\n${result.stdout}`;
+  const fatal = /^fatal:|^error:/im.test(result.stderr);
+
+  if (result.code === 0) {
+    const head = /^([0-9a-f]{7,40})\s+HEAD/im.exec(result.stdout);
+    return {
+      outcome: 'ok',
+      headPresent: head !== null,
+      detail: head === null ? 'the remote answered' : `HEAD is ${(head[1] ?? '').slice(0, 8)}`,
+    };
+  }
+
+  // Exit 2 with nothing fatal on stderr: git read the remote and found no
+  // matching ref. See the doc comment — an empty repository, not a failure.
+  if (result.code === 2 && !fatal) {
+    return {
+      outcome: 'ok',
+      headPresent: false,
+      detail: 'readable, and empty — joining it starts the bank',
+    };
+  }
+
+  const detail = lastLine(result.stderr) || lastLine(result.stdout) || 'git gave no reason';
+  for (const { outcome, pattern } of VERIFY_PATTERNS) {
+    if (pattern.test(said)) return { outcome, headPresent: false, detail };
+  }
+  // Anything git failed at that names none of the shapes above. `unreachable`
+  // rather than a sixth category, because the remedy the pane offers for it —
+  // read what git said, and try again — is the right one for an unknown
+  // failure too.
+  return { outcome: 'unreachable', headPresent: false, detail };
+}
+
+function lastLine(text: string): string {
+  const lines = text.split('\n').filter((line) => line.trim().length > 0);
+  return (lines.at(-1) ?? '').trim().slice(0, 240);
+}
+
+/**
+ * Can this machine read that remote, with those credentials?
+ *
+ * One `git ls-remote`, spawned directly rather than through the banks' CLI:
+ * see `IPC.memoryBanksVerifyRemote` for why a question asked before any bank
+ * exists should not depend on a Python interpreter.
+ *
+ * The token supplied for the probe is not stored. Verifying is a question,
+ * and a question that quietly wrote a credential to disk would be a different
+ * feature; the token is stored when a bank is actually joined with it.
+ */
+export async function verifyMemoryBankRemote(
+  request: MemoryBankVerifyRemoteRequest,
+): Promise<MemoryBankVerifyRemoteResponse> {
+  const remote = request.remote.trim();
+  const auth = request.auth;
+  let env: GitCredentialEnv = {};
+
+  if (auth !== undefined && auth.token.length > 0) {
+    const origin = credentialOrigin(remote);
+    if (origin === null) {
+      return {
+        outcome: 'invalid-url',
+        headPresent: false,
+        detail:
+          'an access token needs an https:// URL — this one is reached another way, which ' +
+          'authenticates with a key instead',
+      };
+    }
+    env = gitCredentialEnv({ origin, token: auth.token, username: auth.username ?? DEFAULT_GIT_USERNAME });
+  }
+
+  const secrets = tokensIn(env);
+  try {
+    const { stdout, stderr } = await execFileAsync('git', ['ls-remote', '--exit-code', remote, 'HEAD'], {
+      timeout: VERIFY_TIMEOUT_MS,
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env },
+    });
+    return scrubVerify(categorizeLsRemote({ code: 0, timedOut: false, stdout, stderr }), secrets);
+  } catch (error) {
+    const raw = error as {
+      code?: unknown;
+      killed?: unknown;
+      signal?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+    // `code` is the exit status for a process that ran, and an errno string
+    // (`ENOENT`) for one that never started. The second means git is not
+    // installed, which is a machine fact rather than a fact about the remote.
+    if (typeof raw.code === 'string') {
+      return {
+        outcome: 'unreachable',
+        headPresent: false,
+        detail:
+          raw.code === 'ENOENT'
+            ? 'git is not installed on this machine, so no remote can be checked'
+            : `git could not be run: ${raw.code}`,
+      };
+    }
+    return scrubVerify(
+      categorizeLsRemote({
+        code: typeof raw.code === 'number' ? raw.code : null,
+        timedOut: raw.killed === true || typeof raw.signal === 'string',
+        stdout: typeof raw.stdout === 'string' ? raw.stdout : '',
+        stderr:
+          typeof raw.stderr === 'string' && raw.stderr.length > 0
+            ? raw.stderr
+            : typeof raw.message === 'string'
+              ? raw.message
+              : '',
+      }),
+      secrets,
+    );
+  }
+}
+
+/**
+ * The last gate before a verify result becomes a response.
+ *
+ * `detail` is assembled from a child's stderr on the one path in Artemis where
+ * a token was just put into that child's environment. Nothing observed says
+ * git echoes it — and this scrub is what makes that a claim the boundary does
+ * not have to rely on.
+ */
+function scrubVerify(
+  response: MemoryBankVerifyRemoteResponse,
+  secrets: readonly string[],
+): MemoryBankVerifyRemoteResponse {
+  return { ...response, detail: withoutSecrets(response.detail, secrets) };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Actions                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -663,9 +1275,16 @@ export async function addMemoryBank(request: MemoryBankAddRequest): Promise<Memo
       : ['setup', '--mode', 'local', '--path', path];
   setupArgs.push('--slug', request.slug, '--role', request.role);
 
+  // Composed once and used by all three spawns below. `enable` and the first
+  // `sync` reach the remote too — a bank whose credential arrived only in time
+  // for the clone would join successfully and then fail on its own first sync,
+  // which is the confusing half of a two-step failure.
+  const credential = requestedCredential(request);
+  const credentialEnv = credential === null ? {} : gitCredentialEnv(credential);
+
   // The bootstrap CLI does the registration; the bank's own copy (cloned or
   // freshly embedded) takes over from the next call on.
-  await runCli(resolveCli(), setupArgs, request.mode === 'join' ? 300_000 : 60_000);
+  await runCli(resolveCli(), setupArgs, request.mode === 'join' ? 300_000 : 60_000, credentialEnv);
   steps.push(
     request.mode === 'join'
       ? `Joined ${request.remote ?? ''} at ${path} as '${request.slug}'.`
@@ -674,10 +1293,21 @@ export async function addMemoryBank(request: MemoryBankAddRequest): Promise<Memo
         : `Adopted the bank at ${path} as '${request.slug}'.`,
   );
 
-  await runCli(resolveCli(path), ['--bank', request.slug, 'enable'], 60_000);
+  // Stored here rather than at the end, because *this* is the step that proved
+  // the token works. A wiring or sync failure after a successful clone leaves
+  // a real bank on disk that the user will retry; one that had forgotten its
+  // credential would retry into an authentication error.
+  if (credential !== null) {
+    await storeCredential(request.slug, credential);
+    steps.push('Its access token is stored encrypted, so background syncs keep working.');
+  }
+
+  await runCli(resolveCli(path), ['--bank', request.slug, 'enable'], 60_000, credentialEnv);
   steps.push('Wired every profile (managed block, /cerebro command, session-start sync hook).');
 
-  const synced = (await runCli(resolveCli(path), ['--bank', request.slug, 'sync', '--force'], 180_000)).trim();
+  const synced = (
+    await runCli(resolveCli(path), ['--bank', request.slug, 'sync', '--force'], 180_000, credentialEnv)
+  ).trim();
   steps.push(synced.length > 0 ? synced : 'Installed into project memory.');
 
   if (!hadBanks && !isMasterEnabled()) {
@@ -687,13 +1317,51 @@ export async function addMemoryBank(request: MemoryBankAddRequest): Promise<Memo
   return { message: steps.join(' ') };
 }
 
+/**
+ * Store one bank's credential, failing the whole action if it cannot be
+ * stored.
+ *
+ * Loud rather than best-effort, following `profileSecrets.ts`: a join that
+ * reported success while quietly discarding the token would leave the user
+ * with a bank that works exactly once — until the window closes and the next
+ * background sync meets a private remote with nothing to present.
+ */
+async function storeCredential(slug: string, credential: GitCredential): Promise<void> {
+  if (bankSecrets === null) {
+    throw new WorkspaceError(
+      'This process cannot store an access token, so the bank would stop syncing when Artemis ' +
+        'restarts. Join it without a token, or report this — it means memory banks were not ' +
+        'configured at startup.',
+    );
+  }
+  const record: MemoryBankCredential = {
+    token: credential.token,
+    // Resolved rather than carried through as optional: what is stored is what
+    // git will be presented with on every later sync, and "whatever the default
+    // was on the day it was joined" is not a thing to record.
+    username: credential.username ?? DEFAULT_GIT_USERNAME,
+  };
+  try {
+    await bankSecrets.write(slug, record);
+  } catch (error) {
+    throw new WorkspaceError(
+      `The bank was set up, but its access token could not be stored: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 /** Wire one bank on or off — the CLI records the flag and moves the blocks. */
 export async function setMemoryBankEnabled(
   request: MemoryBankSetEnabledRequest,
 ): Promise<MemoryBankActionResponse> {
   if (request.enabled) {
-    await runCli(resolveCli(), ['--bank', request.slug, 'enable'], 60_000);
-    const synced = (await runCli(resolveCli(), ['--bank', request.slug, 'sync', '--force'], 180_000)).trim();
+    const credentialEnv = await bankCredentialEnv(request.slug);
+    await runCli(resolveCli(), ['--bank', request.slug, 'enable'], 60_000, credentialEnv);
+    const synced = (
+      await runCli(resolveCli(), ['--bank', request.slug, 'sync', '--force'], 180_000, credentialEnv)
+    ).trim();
     return {
       message: `'${request.slug}' is on. ${synced.length > 0 ? synced : 'Installed into project memory.'}`,
     };
@@ -724,16 +1392,22 @@ export function setMasterEnabled(
 
 export async function syncMemoryBank(request: MemoryBankSyncRequest): Promise<MemoryBankActionResponse> {
   const args = request.slug !== undefined ? ['--bank', request.slug] : [];
-  const output = (await runCli(resolveCli(), [...args, 'sync', '--force'], 180_000)).trim();
+  const output = (
+    await runCli(resolveCli(), [...args, 'sync', '--force'], 180_000, await bankCredentialEnv(request.slug))
+  ).trim();
   return { message: output.length > 0 ? output : 'Already up to date.' };
 }
 
+/**
+ * Retirement reaches the remote — with a remote configured it opens a pull
+ * request — so it carries the bank's credential like any other write.
+ */
 export async function retireMemoryBankMemory(
   request: MemoryBankRetireRequest,
 ): Promise<MemoryBankActionResponse> {
   const args = ['--bank', request.slug, 'retire', request.name];
   if (request.reason !== undefined) args.push('--reason', request.reason);
-  const output = (await runCli(resolveCli(), args, 120_000)).trim();
+  const output = (await runCli(resolveCli(), args, 120_000, await bankCredentialEnv(request.slug))).trim();
   return { message: output.length > 0 ? output : `Retired ${request.name}.` };
 }
 
@@ -745,7 +1419,11 @@ export async function retireMemoryBankMemory(
 export async function forgetMemoryBank(request: MemoryBankForgetRequest): Promise<MemoryBankActionResponse> {
   const cli = resolveCli();
   const steps: string[] = [];
-  await runCli(cli, ['--bank', request.slug, 'disable'], 60_000);
+  // Resolved before the registry entry goes, because that entry is how the
+  // bank's origin is found — and after `forget` there is nothing left to scope
+  // a credential to.
+  const credentialEnv = await bankCredentialEnv(request.slug);
+  await runCli(cli, ['--bank', request.slug, 'disable'], 60_000, credentialEnv);
   steps.push(`Unwired '${request.slug}' from every profile.`);
   try {
     await runCli(cli, ['--bank', request.slug, 'uninstall', '--all-projects'], 120_000);
@@ -758,6 +1436,18 @@ export async function forgetMemoryBank(request: MemoryBankForgetRequest): Promis
   }
   const output = (await runCli(cli, ['forget', request.slug], 30_000)).trim();
   steps.push(output.length > 0 ? output.split('\n')[0]! : `Forgot '${request.slug}'.`);
+
+  // The credential last, and unconditionally: a bank Artemis no longer knows
+  // about must not leave an encrypted token behind for a slug nothing will
+  // ever resolve again. Best-effort on purpose — the bank *is* forgotten by
+  // this point, and failing the action now would report the opposite.
+  if (bankSecrets !== null) {
+    try {
+      await bankSecrets.clear(request.slug);
+    } catch (error) {
+      log.warn(`Could not delete the stored access token for '${request.slug}'`, error);
+    }
+  }
   return { message: steps.join(' ') };
 }
 
@@ -818,7 +1508,12 @@ export function syncMemoryBanksInBackground(): void {
 
   // 180s: a sync that has to fetch is bounded by the network once per bank,
   // and the CLI's own locks mean a slow one cannot overlap the next.
-  void runCli(cli, ['sync', '--quiet'], 180_000)
+  //
+  // Every private bank's credential goes in, because one spawn covers every
+  // enabled bank — see `bankCredentialEnv`. A machine with none composes an
+  // empty block and spawns exactly what it spawned before any of this existed.
+  void bankCredentialEnv()
+    .then((credentialEnv) => runCli(cli, ['sync', '--quiet'], 180_000, credentialEnv))
     .then((output) => {
       const said = output.trim();
       if (said.length > 0) log.info(`memory-banks sync: ${said}`);

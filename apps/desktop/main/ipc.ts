@@ -71,6 +71,7 @@ import {
   setMasterEnabled,
   setMemoryBankEnabled,
   syncMemoryBank,
+  verifyMemoryBankRemote,
 } from './memoryBanks.js';
 import type { EngineHost } from './engine.js';
 import {
@@ -173,6 +174,7 @@ import {
   validateMemoryBanksPreflight,
   validateMemoryBanksSetMasterEnabled,
   validateMemoryBanksStatus,
+  validateMemoryBanksVerifyRemote,
   validateUsagePlan,
   validateUpdatesCheck,
   validateUpdatesDismiss,
@@ -584,6 +586,17 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.memoryBanksPreflight]: {
       validate: validateMemoryBanksPreflight,
       handle: async () => readMemoryBanksPreflight(),
+    },
+
+    /*
+     * The only bank channel that names a remote without joining it, and the
+     * only one that may be handed a token the user has not committed to
+     * storing. Nothing here writes: no clone, no registry entry, no secret on
+     * disk — see `verifyMemoryBankRemote`.
+     */
+    [IPC.memoryBanksVerifyRemote]: {
+      validate: validateMemoryBanksVerifyRemote,
+      handle: async (request) => verifyMemoryBankRemote(request),
     },
 
     [IPC.memoryBankAdd]: {

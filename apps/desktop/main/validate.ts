@@ -36,6 +36,7 @@ import type {
   RoutinesRunNowRequest,
   RoutinesUpdateRequest,
 } from '@rx-artemis/protocol';
+import { gitCredentialUsernameProblem, gitRemoteProblem } from './gitCredentialEnv.js';
 import { readSchedule } from './routines.js';
 
 import {
@@ -72,11 +73,13 @@ import {
   type Attachment,
   type BuiltInPromptId,
   type MemoryBankAddRequest,
+  type MemoryBankAuthInput,
   type MemoryBankForgetRequest,
   type MemoryBankMemoriesRequest,
   type MemoryBankRetireRequest,
   type MemoryBankSetEnabledRequest,
   type MemoryBankSyncRequest,
+  type MemoryBankVerifyRemoteRequest,
   type MemoryBanksPreflightRequest,
   type MemoryBanksSetMasterEnabledRequest,
   type MemoryBanksStatusRequest,
@@ -2019,11 +2022,68 @@ export function validateMemoryBankMemories(raw: unknown): MemoryBankMemoriesRequ
 }
 
 /**
+ * The longest an access token may be.
+ *
+ * Generous — a GitHub fine-grained token is ~93 characters, a GitLab one 26,
+ * and a JWT-shaped forge token can run to several hundred — and a cap all the
+ * same, because this is the one field on this surface whose contents are never
+ * looked at. Something kilobytes long is a paste accident or a probe, and
+ * neither should reach a subprocess environment.
+ */
+const MEMORY_BANK_TOKEN_MAX = 4096;
+
+/**
+ * A bank's remote, refused for the two things it must never be.
+ *
+ * The shape rules live in `gitCredentialEnv.ts` next to the code that has to
+ * honour them — chiefly that a remote may not carry credentials, the same rule
+ * `optionalBaseUrl` applies to a local server's address and for the same
+ * reason: a secret in this field would be written into `.git/config` on clone
+ * and echoed by the banks' own plain-JSON registry.
+ */
+function requireBankRemote(value: unknown, field: string): string {
+  const remote = requireString(value, field, 500);
+  const problem = gitRemoteProblem(remote);
+  if (problem !== null) throw new ValidationError(field, problem);
+  return remote;
+}
+
+/**
+ * The optional git credential, rebuilt field by field.
+ *
+ * Rebuilt rather than passed through — the rule everywhere on this boundary,
+ * and the one place it matters most. This object is about to become the
+ * environment of a subprocess, and an unknown key surviving validation is an
+ * unknown key reaching a spawn.
+ *
+ * The token is not trimmed, for `optionalApiKey`'s reason: a token is whatever
+ * the host issued, and quietly removing whitespace from a secret is how a
+ * value that looks right fails to authenticate. The username is, because it is
+ * a name a person typed and a trailing space in it is never meant.
+ */
+function optionalBankAuth(value: unknown, field: string): MemoryBankAuthInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  const auth = requireObject(value, field);
+  const token = requireString(auth['token'], `${field}.token`, MEMORY_BANK_TOKEN_MAX);
+  const rawUsername = optionalString(auth['username'], `${field}.username`, 64);
+  if (rawUsername === undefined) return { token };
+  const username = rawUsername.trim();
+  const problem = gitCredentialUsernameProblem(username);
+  if (problem !== null) throw new ValidationError(`${field}.username`, problem);
+  return { token, username };
+}
+
+/**
  * Registration is the one channel that names locations, so it is the one
  * validated hardest: a mode from the closed set, a slug in the banks' own
  * grammar, a role from the closed set — and the remote/path length-capped.
  * What the strings *mean* is the CLI's to judge (it refuses non-banks,
  * unreadable remotes, and slug collisions in its own words).
+ *
+ * It is now also the one channel that carries a secret, which is why the
+ * remote gained a shape check: `auth.token` and a credential-bearing URL are
+ * two ways to say the same thing, and only one of them keeps the secret out of
+ * the clone's config file.
  */
 export function validateMemoryBankAdd(raw: unknown): MemoryBankAddRequest {
   const request = requireRequest(raw);
@@ -2036,7 +2096,10 @@ export function validateMemoryBankAdd(raw: unknown): MemoryBankAddRequest {
   if (role !== 'readwrite' && role !== 'readonly') {
     throw new ValidationError('role', 'must be "readwrite" or "readonly"');
   }
-  const remote = optionalString(request['remote'], 'remote', 500);
+  const remote =
+    request['remote'] === undefined || request['remote'] === null
+      ? undefined
+      : requireBankRemote(request['remote'], 'remote');
   if (mode === 'join' && (remote === undefined || remote.length === 0)) {
     throw new ValidationError('remote', 'is required to join a bank');
   }
@@ -2044,13 +2107,27 @@ export function validateMemoryBankAdd(raw: unknown): MemoryBankAddRequest {
   if (mode === 'adopt' && (path === undefined || path.length === 0)) {
     throw new ValidationError('path', 'is required to adopt a bank');
   }
+  const auth = optionalBankAuth(request['auth'], 'auth');
   return {
     mode,
     slug,
     role,
     ...(remote === undefined ? {} : { remote }),
     ...(path === undefined ? {} : { path }),
+    ...(auth === undefined ? {} : { auth }),
   };
+}
+
+/**
+ * Ask whether a remote is readable. The only channel here that names a remote
+ * without joining it, and the only one that may be called with a token the
+ * user has not committed to storing.
+ */
+export function validateMemoryBanksVerifyRemote(raw: unknown): MemoryBankVerifyRemoteRequest {
+  const request = requireRequest(raw);
+  const remote = requireBankRemote(request['remote'], 'remote');
+  const auth = optionalBankAuth(request['auth'], 'auth');
+  return { remote, ...(auth === undefined ? {} : { auth }) };
 }
 
 /** Sync one bank, or all when the slug is omitted. */

@@ -1,6 +1,18 @@
 /**
- * Give node-pty's `spawn-helper` its executable bit, in the bundle.
+ * Give the bundle's two shipped executables their executable bit.
  * ============================================================================
+ *
+ * Two files, one problem, one moment to fix it. node-pty's `spawn-helper` is
+ * the original case and the long explanation below is about it; the banks' CLI
+ * (`resources/cerebro`) is the same story in fewer words. It is an
+ * extension-less Python script whose first line is a shebang, which is how it
+ * is run everywhere except Windows — and a shebang without an execute bit is
+ * decoration. It reaches the packager as whatever mode the checkout gave it,
+ * which on a Windows build host is `0644`, and a macOS or Linux user then
+ * installs a memory-bank CLI they cannot run.
+ *
+ * Only the helper is required to exist: a build with no `cerebro` resource is
+ * a build without the banks, which is a configuration rather than a fault.
  *
  * On macOS and Linux node-pty spawns a shell by exec'ing a small helper binary
  * that sets up the controlling terminal first. The published node-pty tarball
@@ -44,6 +56,13 @@ const path = require('node:path');
 
 /** node-pty's helper, by the only name it has ever had. */
 const HELPER = 'spawn-helper';
+
+/**
+ * The banks' CLI, as `extraResources` places it — beside `app.asar` rather
+ * than inside it, because a file that has to be *spawned* cannot live in an
+ * archive. `main/memoryBanks.ts` looks for it at exactly this path.
+ */
+const CEREBRO = 'cerebro';
 
 /**
  * Every plausible home for the helper inside the unpacked node-pty.
@@ -105,5 +124,18 @@ module.exports = async function afterPack(context) {
   for (const helper of helpers) {
     await chmod(helper, 0o755);
     console.log(`  • after-pack: chmod 0755 ${path.relative(context.appOutDir, helper)}`);
+  }
+
+  // The banks' CLI. Not fatal when absent — see the header — but noted either
+  // way, so a build that quietly stopped shipping it says so in its log.
+  const cli = path.join(resources, CEREBRO);
+  try {
+    const info = await stat(cli);
+    if (info.isFile()) {
+      await chmod(cli, 0o755);
+      console.log(`  • after-pack: chmod 0755 ${path.relative(context.appOutDir, cli)}`);
+    }
+  } catch {
+    console.log(`  • after-pack: no ${CEREBRO} resource in this build; nothing to chmod`);
   }
 };

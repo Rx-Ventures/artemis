@@ -16,6 +16,7 @@ import {
   validateMemoryBankAdd,
   validateMemoryBankSetEnabled,
   validateMemoryBanksSetMasterEnabled,
+  validateMemoryBanksVerifyRemote,
   validateSessionsSubagentMessages,
   validateTerminalClose,
   validateTerminalList,
@@ -1102,6 +1103,167 @@ describe('validateMemoryBankAdd', () => {
     expect(() => validateMemoryBankAdd({ mode: 'create', slug: 'team', role: 'admin' })).toThrow(
       ValidationError,
     );
+  });
+});
+
+/**
+ * The add channel now carries a secret, which changes what its validator is
+ * for. Two things matter and they pull in opposite directions: the token has
+ * to survive intact (trimming a credential is how a value that looks right
+ * fails to authenticate), and nothing *around* it may survive at all — this
+ * object becomes the environment of a subprocess.
+ */
+describe('validateMemoryBankAdd with a token', () => {
+  it('keeps the token exactly, and defaults the username by omitting it', () => {
+    const token = '  forgejo-9f3c1a77b2e04d6a8c5f0e1b7d4a9268  ';
+    expect(
+      validateMemoryBankAdd({
+        mode: 'join',
+        slug: 'team',
+        role: 'readwrite',
+        remote: 'https://git.example.com/team/bank.git',
+        auth: { token },
+      }),
+    ).toEqual({
+      mode: 'join',
+      slug: 'team',
+      role: 'readwrite',
+      remote: 'https://git.example.com/team/bank.git',
+      // Untrimmed on purpose: whitespace can be part of what the host issued.
+      auth: { token },
+    });
+  });
+
+  it('keeps a username the host requires, trimmed', () => {
+    const request = validateMemoryBankAdd({
+      mode: 'join',
+      slug: 'team',
+      role: 'readwrite',
+      remote: 'https://gitlab.com/team/bank.git',
+      auth: { token: 'glpat-abc', username: '  bank-deploy ' },
+    });
+    expect(request.auth).toEqual({ token: 'glpat-abc', username: 'bank-deploy' });
+  });
+
+  it('drops unknown keys from the credential', () => {
+    // This object is about to be turned into a subprocess environment. An
+    // unknown key surviving validation is an unknown key reaching a spawn.
+    const request = validateMemoryBankAdd({
+      mode: 'join',
+      slug: 'team',
+      role: 'readwrite',
+      remote: 'https://git.example.com/team/bank.git',
+      auth: { token: 'abc', helper: 'rm -rf /', GIT_CONFIG_COUNT: '9' },
+    });
+    expect(request.auth).toEqual({ token: 'abc' });
+  });
+
+  it('refuses a credential-bearing remote, whether or not a token came with it', () => {
+    // The one shape that would write a secret into .git/config on clone.
+    expect(() =>
+      validateMemoryBankAdd({
+        mode: 'join',
+        slug: 'team',
+        role: 'readwrite',
+        remote: 'https://user:glpat-abc@git.example.com/team/bank.git',
+      }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateMemoryBankAdd({
+        mode: 'join',
+        slug: 'team',
+        role: 'readwrite',
+        remote: 'https://glpat-abc@git.example.com/team/bank.git',
+        auth: { token: 'abc' },
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('refuses a username that could be a token, or that could rewrite a shell body', () => {
+    for (const username of ['tok en', 'a;b', '$(id)']) {
+      expect(() =>
+        validateMemoryBankAdd({
+          mode: 'join',
+          slug: 'team',
+          role: 'readwrite',
+          remote: 'https://git.example.com/team/bank.git',
+          auth: { token: 'abc', username },
+        }),
+      ).toThrow(ValidationError);
+    }
+  });
+
+  it('refuses a token that is missing, empty or absurd', () => {
+    const join = (auth: unknown) => ({
+      mode: 'join',
+      slug: 'team',
+      role: 'readwrite',
+      remote: 'https://git.example.com/team/bank.git',
+      auth,
+    });
+    expect(() => validateMemoryBankAdd(join({}))).toThrow(ValidationError);
+    expect(() => validateMemoryBankAdd(join({ token: '' }))).toThrow(ValidationError);
+    expect(() => validateMemoryBankAdd(join({ token: 42 }))).toThrow(ValidationError);
+    expect(() => validateMemoryBankAdd(join({ token: 'x'.repeat(4097) }))).toThrow(ValidationError);
+    // 4096 is the ceiling, not the wall a normal token hits.
+    expect(validateMemoryBankAdd(join({ token: 'x'.repeat(4096) })).auth?.token).toHaveLength(4096);
+  });
+
+  it('leaves a join with no token exactly as it was', () => {
+    // The path most banks take. No `auth` key at all, rather than an empty one.
+    expect(
+      validateMemoryBankAdd({
+        mode: 'join',
+        slug: 'team',
+        role: 'readwrite',
+        remote: 'git@github.com:Rx-Ventures/cerebro.git',
+      }),
+    ).toEqual({
+      mode: 'join',
+      slug: 'team',
+      role: 'readwrite',
+      remote: 'git@github.com:Rx-Ventures/cerebro.git',
+    });
+  });
+});
+
+/**
+ * The verify channel: one remote, one optional credential, and nothing else —
+ * it is the only channel that names a remote without joining it, so what it
+ * accepts is exactly what `git ls-remote` will be pointed at.
+ */
+describe('validateMemoryBanksVerifyRemote', () => {
+  it('accepts a remote alone, and a remote with a credential', () => {
+    expect(validateMemoryBanksVerifyRemote({ remote: 'https://git.example.com/team/bank.git' })).toEqual({
+      remote: 'https://git.example.com/team/bank.git',
+    });
+    expect(
+      validateMemoryBanksVerifyRemote({
+        remote: 'https://git.example.com/team/bank.git',
+        auth: { token: 'abc', username: 'x-access-token' },
+      }),
+    ).toEqual({
+      remote: 'https://git.example.com/team/bank.git',
+      auth: { token: 'abc', username: 'x-access-token' },
+    });
+  });
+
+  it('requires a remote, and refuses one carrying credentials', () => {
+    expect(() => validateMemoryBanksVerifyRemote({})).toThrow(ValidationError);
+    expect(() => validateMemoryBanksVerifyRemote({ remote: '' })).toThrow(ValidationError);
+    expect(() =>
+      validateMemoryBanksVerifyRemote({ remote: 'https://u:p@git.example.com/team/bank.git' }),
+    ).toThrow(ValidationError);
+  });
+
+  it('drops anything else the renderer sent', () => {
+    expect(
+      validateMemoryBanksVerifyRemote({
+        remote: 'https://git.example.com/team/bank.git',
+        path: '/etc',
+        slug: 'team',
+      }),
+    ).toEqual({ remote: 'https://git.example.com/team/bank.git' });
   });
 });
 
