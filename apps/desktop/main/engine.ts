@@ -97,6 +97,7 @@ import {
   type ProviderRegistry,
   type SessionListScope,
   type SessionNamingPlan,
+  type SignInShell,
 } from '@rx-artemis/core';
 import { applyPlanLimit, composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
@@ -775,6 +776,16 @@ function createEngine(options: EngineOptions): ArtemisEngine {
    * resolved once. Reading the status against one directory while telling the
    * user to sign a different one in is the failure this shape rules out.
    */
+  /*
+   * Which shell the copyable sign-in line has to satisfy.
+   *
+   * The host's call, not the core's: `signIn.ts` can compose either spelling
+   * but has no business deciding which terminal the user is about to paste
+   * into. Picked once, from the platform, because that is the whole of what
+   * the decision depends on.
+   */
+  const signInShell: SignInShell = process.platform === 'win32' ? 'powershell' : 'posix';
+
   const authOptionsFor = async (
     profileId: ProfileId,
   ): Promise<{ readonly credentials: ProviderCredentialSpec; readonly configDir: string; readonly hostEnv: NodeJS.ProcessEnv }> => {
@@ -1354,7 +1365,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       const options = await authOptionsFor(profileId);
       return {
         status: await checkAuthStatus(options),
-        signInCommand: signInCommand(options),
+        signInCommand: signInCommand({ ...options, shell: signInShell }),
       };
     },
 
@@ -1365,7 +1376,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       // real credential in place while the UI claimed otherwise.
       return {
         status: await cliSignOut(options),
-        signInCommand: signInCommand(options),
+        signInCommand: signInCommand({ ...options, shell: signInShell }),
       };
     },
 
