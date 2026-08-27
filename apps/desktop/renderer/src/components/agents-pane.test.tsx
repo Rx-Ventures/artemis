@@ -14,10 +14,13 @@
  *     quiet one — a Codex profile ticked in a settings pane while the model is
  *     never told a word of it. Hiding the row would be the same lie with better
  *     manners.
- *  2. **A built-in cannot be edited or deleted.** Its text ships with Artemis;
- *     an editable copy would drift from the one actually sent, and a deleted
- *     one would come back on the next read and read as the app overruling the
- *     user.
+ *  2. **A built-in cannot be deleted, and only the one about the user's team
+ *     can be edited.** A deleted built-in would come back on the next read and
+ *     read as the app overruling the user. Editing is narrower: the memory-bank
+ *     prompt is mostly claims about a team Artemis cannot know, so that one is
+ *     the user's to take over — and taking it over has to be recorded, and
+ *     reversible, or Artemis silently stops updating a prompt nobody decided to
+ *     freeze.
  *  3. **"Every profile" is not the same as ticking every box.** Unticking it
  *     has to produce a concrete list, and that list has to exclude the profiles
  *     that could not have received it anyway.
@@ -32,7 +35,7 @@
  * behavioural.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { BUILT_IN_AGENT_PROMPTS, NO_CAPABILITIES } from '@rx-artemis/protocol';
@@ -72,19 +75,52 @@ const HOUSE_STYLE = {
   scope: { kind: 'all' as const },
 };
 
+const MEMORY_BANKS_PROMPT_NAME = BUILT_IN_AGENT_PROMPTS['builtin:cerebro'].name;
+
 const CEREBRO_ROW = {
   id: 'builtin:cerebro',
-  name: BUILT_IN_AGENT_PROMPTS['builtin:cerebro'].name,
+  name: MEMORY_BANKS_PROMPT_NAME,
   markdown: '',
   enabled: true,
   scope: { kind: 'all' as const },
   builtIn: 'builtin:cerebro' as const,
 };
 
+/**
+ * A second built-in, invented here and registered in the map the pane reads.
+ *
+ * The rule under test is that editing was granted to one prompt rather than to
+ * built-ins as a class, and Artemis ships exactly one built-in today — so
+ * without a second one the test would be pinning a coincidence. Removed again
+ * after this file's tests, since the map is a module-level export.
+ */
+const OTHER_BUILT_IN = 'builtin:test-only';
+(BUILT_IN_AGENT_PROMPTS as unknown as Record<string, unknown>)[OTHER_BUILT_IN] = {
+  id: OTHER_BUILT_IN,
+  name: 'Something else Artemis ships',
+  summary: 'A built-in about Artemis, not about the team.',
+  requires: 'nothing this machine is missing',
+  markdown: 'Artemis wrote this one and keeps it.',
+};
+
+const OTHER_BUILT_IN_ROW = {
+  id: OTHER_BUILT_IN,
+  name: 'Something else Artemis ships',
+  markdown: '',
+  enabled: true,
+  scope: { kind: 'all' as const },
+  builtIn: OTHER_BUILT_IN,
+};
+
 /** The library the next `list` answers with. Reassigned per test before rendering. */
 let library: unknown[] = [];
-/** Whether the stubbed banks report an enabled bank behind an open master gate. */
-let cerebroInstalled = true;
+/**
+ * Whether the stubbed banks report themselves usable — master gate on, and a
+ * bank that exists and is wired. The same conjunction `banksAvailability`
+ * reads, because it is the one that decides whether the built-in row claims to
+ * be reaching the model.
+ */
+let banksAvailable = true;
 /** Every document the pane has saved, oldest first. */
 let saved: { prompts: unknown[] }[] = [];
 
@@ -111,28 +147,33 @@ let saved: { prompts: unknown[] }[] = [];
     status: async () => ({
       ok: true as const,
       value: {
-        masterEnabled: cerebroInstalled,
-        banks: cerebroInstalled
-          ? [
-              {
-                slug: 'team',
-                path: '/x/team',
-                remote: null,
-                role: 'readwrite',
-                enabled: true,
-                exists: true,
-                isDefault: true,
-                memories: 0,
-                validationErrors: 0,
-                projects: 0,
-              },
-            ]
-          : [],
+        cliAvailable: true,
+        masterEnabled: banksAvailable,
+        banks: [
+          {
+            slug: 'team',
+            path: '/x/team',
+            remote: null,
+            role: 'readwrite',
+            enabled: banksAvailable,
+            isDefault: true,
+            exists: banksAvailable,
+            source: null,
+            memories: 0,
+            validationErrors: 0,
+            projects: 0,
+          },
+        ],
+        profiles: [],
       },
     }),
     preflight: async () => ({ ok: true as const, value: { ready: true, checks: [] } }),
   },
 };
+
+afterAll(() => {
+  delete (BUILT_IN_AGENT_PROMPTS as unknown as Record<string, unknown>)[OTHER_BUILT_IN];
+});
 
 function renderPane(): void {
   render(
@@ -200,7 +241,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   seedApp({ providers: PROVIDERS as never, profiles: PROFILES as never });
   library = [HOUSE_STYLE, CEREBRO_ROW];
-  cerebroInstalled = true;
+  banksAvailable = true;
   saved = [];
   // TipTap drives a contenteditable through ProseMirror, which reaches for
   // layout APIs jsdom does not implement. Stubbed rather than skipped: the
@@ -270,22 +311,84 @@ describe('who a prompt reaches', () => {
 /* -------------------------------------------------------------------------- */
 
 describe("Artemis's own prompts", () => {
-  it('shows the text it will actually send, and does not let it be edited', async () => {
+  it('shows the text it will actually send', async () => {
     await renderLoaded();
-    open('Use memory banks');
+    open(MEMORY_BANKS_PROMPT_NAME);
 
     const surface = document.querySelector('.ProseMirror');
     expect(surface).toBeTruthy();
-    // Read-only rather than absent: "what exactly will be sent" is the reason
-    // someone opens a built-in, and paraphrasing it would be Artemis describing
-    // its own prompt instead of showing it.
+    // Shown rather than paraphrased: "what exactly will be sent" is the reason
+    // someone opens a built-in, and a description of it would be Artemis
+    // talking about its own prompt instead of handing it over.
+    expect(surface!.textContent).toContain('Team memory bank');
+  });
+
+  it('keeps a built-in that is not about the team read-only', async () => {
+    library = [HOUSE_STYLE, OTHER_BUILT_IN_ROW];
+    await renderLoaded();
+    open('Something else Artemis ships');
+
+    // The general rule, still in force: Artemis wrote it, Artemis keeps it
+    // current, and an editable copy would drift from the one actually sent.
+    const surface = document.querySelector('.ProseMirror');
     expect(surface!.getAttribute('contenteditable')).toBe('false');
-    expect(surface!.textContent).toContain('memory bank');
+    expect(screen.queryByRole('button', { name: /^Reset/ })).toBeNull();
+  });
+
+  it('lets the team memory-bank prompt be edited, starting from Artemis’s words', async () => {
+    await renderLoaded();
+    open(MEMORY_BANKS_PROMPT_NAME);
+
+    const surface = document.querySelector('.ProseMirror');
+    // Editable *and* seeded, which is the pair that matters: an empty box
+    // would make taking the prompt over mean rewriting it from memory.
+    expect(surface!.getAttribute('contenteditable')).toBe('true');
+    expect(surface!.textContent).toContain('Team memory bank');
+    // Nothing to reset yet — Artemis's text is still Artemis's.
+    expect(screen.queryByRole('button', { name: /^Reset/ })).toBeNull();
+  });
+
+  it('records the takeover on the first edit, so Artemis stops overwriting it', async () => {
+    await renderLoaded();
+    open(MEMORY_BANKS_PROMPT_NAME);
+
+    // A real gesture through the real editor. The flag has to be set by the
+    // *edit*, not by a separate "take this over" control the user would have
+    // to find first.
+    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
+
+    await flushSave();
+    expect(lastSave()).not.toBeNull();
+    const row = lastSave()!.prompts.find((p: any) => p.builtIn === 'builtin:cerebro');
+    expect(row.overridden).toBe(true);
+    expect(row.markdown.length).toBeGreaterThan(0);
+  });
+
+  it('offers reset once the prompt is the user’s, and hands Artemis’s back', async () => {
+    library = [HOUSE_STYLE, { ...CEREBRO_ROW, overridden: true, markdown: 'Our bank, our rules.' }];
+    await renderLoaded();
+    open(MEMORY_BANKS_PROMPT_NAME);
+
+    expect(document.querySelector('.ProseMirror')!.textContent).toContain('Our bank, our rules.');
+    fireEvent.click(screen.getByRole('button', { name: /^Reset/ }));
+
+    // On screen as well as in the record: the editor reads its value once, so
+    // clearing the row without remounting would leave the user's text sitting
+    // in a prompt that no longer contains it.
+    await waitFor(() =>
+      expect(document.querySelector('.ProseMirror')!.textContent).toContain('Team memory bank'),
+    );
+    expect(screen.queryByRole('button', { name: /^Reset/ })).toBeNull();
+
+    await flushSave();
+    const row = lastSave()!.prompts.find((p: any) => p.builtIn === 'builtin:cerebro');
+    expect(row.overridden).toBe(false);
+    expect(row.markdown).toBe('');
   });
 
   it('offers no delete, because a deleted built-in comes straight back', async () => {
     await renderLoaded();
-    open('Use memory banks');
+    open(MEMORY_BANKS_PROMPT_NAME);
     expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
 
     // A user prompt does offer one.
@@ -295,7 +398,7 @@ describe("Artemis's own prompts", () => {
 
   it('can still be turned off, which is the durable way to refuse it', async () => {
     await renderLoaded();
-    fireEvent.click(screen.getByRole('switch', { name: /Use memory banks/ }));
+    fireEvent.click(screen.getByRole('switch', { name: new RegExp(MEMORY_BANKS_PROMPT_NAME) }));
 
     await flushSave();
     expect(lastSave()).not.toBeNull();
@@ -305,12 +408,22 @@ describe("Artemis's own prompts", () => {
 
   it('reports an enabled built-in that its precondition has switched off', async () => {
     // The state a plain on/off flag cannot express: the switch says yes, the
-    // machine says the tool is not there, and nothing is being sent.
-    cerebroInstalled = false;
+    // machine says no bank is wired, and nothing is being sent. The stub has to
+    // actually answer "unavailable" for this to test anything — it once
+    // answered on a bridge namespace that no longer exists, which made every
+    // built-in unavailable and this assertion true for the wrong reason.
+    banksAvailable = false;
     await renderLoaded();
     await waitFor(() =>
       expect(screen.getByText(/On, but not sent/)).toBeTruthy(),
     );
+  });
+
+  it('says a built-in is being sent when its precondition holds', async () => {
+    // The other half, and the one that fails if the availability stub is wired
+    // to nothing: both rows have to reach the "sent" line, not just the user's.
+    await renderLoaded();
+    await waitFor(() => expect(screen.getAllByText(/Sent to every profile/)).toHaveLength(2));
   });
 });
 

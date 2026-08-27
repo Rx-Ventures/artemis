@@ -158,8 +158,8 @@ export class AgentPromptStore {
    * The payload is re-parsed rather than trusted even though it arrived through
    * the IPC validator. The validator proves the *shape*; this restores the
    * invariants the library has to keep whatever the shape (built-ins present,
-   * built-in text unstored, ids unique), so what lands on disk is what a read
-   * would have produced.
+   * a built-in's text unstored unless its row says the user took it over, ids
+   * unique), so what lands on disk is what a read would have produced.
    */
   async write(document: AgentPromptsDocument): Promise<AgentPromptsDocument> {
     const next = parseAgentPromptsDocument(document);

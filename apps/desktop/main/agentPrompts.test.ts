@@ -74,6 +74,31 @@ describe('AgentPromptStore', () => {
     expect(read.prompts[0]).toEqual(userPrompt());
   });
 
+  it('keeps a built-in the user took over across a save and a fresh read', async () => {
+    // The one claim the override feature makes about disk. The repairs run on
+    // both paths, so a flag that did not survive `JSON.stringify` would revert
+    // the user's text on the very next save — silently, since the pane does not
+    // apply what a save answers with.
+    const dir = sandbox();
+    await new AgentPromptStore({ userDataDir: dir }).write({
+      version: 1,
+      prompts: [
+        {
+          id: 'builtin:cerebro',
+          name: 'Use the team memory bank',
+          markdown: 'Our bank, our rules.',
+          enabled: true,
+          scope: { kind: 'all' },
+          builtIn: 'builtin:cerebro',
+          overridden: true,
+        },
+      ],
+    });
+    const read = await new AgentPromptStore({ userDataDir: dir }).read();
+    expect(read.prompts[0]?.overridden).toBe(true);
+    expect(read.prompts[0]?.markdown).toBe('Our bank, our rules.');
+  });
+
   it('answers a save with what landed, not with what was asked for', async () => {
     // Main restores the library's invariants on write, so the response can
     // differ from the request — the built-in the request omitted is back.

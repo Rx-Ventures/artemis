@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ValidationError } from './errors.js';
 import {
+  validateAgentPromptsSave,
   validatePreviewOpen,
   validateProfilesCreate,
   validateProfilesSuggestDir,
@@ -1099,6 +1100,47 @@ describe('validateMemoryBankAdd', () => {
       validateMemoryBankAdd({ mode: 'clone', slug: 'team', role: 'readwrite', remote: 'x' }),
     ).toThrow(ValidationError);
     expect(() => validateMemoryBankAdd({ mode: 'create', slug: 'team', role: 'admin' })).toThrow(
+      ValidationError,
+    );
+  });
+});
+
+describe('validateAgentPromptsSave', () => {
+  const row = (over: Record<string, unknown>) => ({
+    document: {
+      prompts: [
+        { id: 'builtin:cerebro', name: 'x', builtIn: 'builtin:cerebro', scope: { kind: 'all' }, ...over },
+      ],
+    },
+  });
+
+  it('strips a body sent for a built-in the renderer does not claim was taken over', () => {
+    // The edge's half of the rule the protocol's parser also keeps. A body
+    // without the flag is text nobody chose, and this channel is the one place
+    // a compromised renderer could introduce it.
+    const saved = validateAgentPromptsSave(row({ markdown: 'forged' }));
+    expect(saved.document.prompts[0]?.markdown).toBe('');
+    expect(saved.document.prompts[0]?.overridden).toBeUndefined();
+  });
+
+  it('carries a built-in’s body through when the row says the user took it over', () => {
+    const saved = validateAgentPromptsSave(row({ overridden: true, markdown: 'Ours.' }));
+    expect(saved.document.prompts[0]?.overridden).toBe(true);
+    expect(saved.document.prompts[0]?.markdown).toBe('Ours.');
+  });
+
+  it('drops the flag from a prompt the user wrote, where it means nothing', () => {
+    const saved = validateAgentPromptsSave({
+      document: {
+        prompts: [{ id: 'p1', name: 'Mine', markdown: 'x', overridden: true, scope: { kind: 'all' } }],
+      },
+    });
+    expect(saved.document.prompts[0]?.overridden).toBeUndefined();
+    expect(saved.document.prompts[0]?.markdown).toBe('x');
+  });
+
+  it('refuses a flag that is not a boolean rather than coercing it', () => {
+    expect(() => validateAgentPromptsSave(row({ overridden: 'true', markdown: 'forged' }))).toThrow(
       ValidationError,
     );
   });

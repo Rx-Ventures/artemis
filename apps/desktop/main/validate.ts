@@ -2140,19 +2140,26 @@ function validateAgentPrompt(value: unknown, field: string): AgentPrompt {
     throw new ValidationError(`${field}.builtIn`, `names no prompt this build ships`);
   }
   const builtIn = rawBuiltIn as BuiltInPromptId | undefined;
+  // The flag the renderer sets when the user edits a built-in's text, and the
+  // one thing that makes a body for one legitimate. Only meaningful on a
+  // built-in: on a prompt the user wrote there is nothing to override.
+  const overridden =
+    builtIn !== undefined && (optionalBoolean(prompt['overridden'], `${field}.overridden`) ?? false);
 
   return {
     id,
     name: requireString(prompt['name'], `${field}.name`, AGENT_PROMPT_LIMITS.name),
-    // Not merely allowed to be empty for a built-in — required to be. Their
-    // text ships with Artemis, and accepting a body here would let the renderer
-    // put words into a prompt the pane presents as Artemis's own.
-    markdown: builtIn === undefined
+    // Not merely allowed to be empty for a built-in the user has left alone —
+    // required to be. Its text ships with Artemis, and accepting a body without
+    // the override flag would let a renderer put words into a prompt the pane
+    // presents as Artemis's own.
+    markdown: builtIn === undefined || overridden
       ? optionalString(prompt['markdown'], `${field}.markdown`, AGENT_PROMPT_LIMITS.markdown) ?? ''
       : '',
     enabled: optionalBoolean(prompt['enabled'], `${field}.enabled`) ?? true,
     scope: validateAgentPromptScope(prompt['scope'], `${field}.scope`),
     ...(builtIn === undefined ? {} : { builtIn }),
+    ...(overridden ? { overridden: true } : {}),
   };
 }
 

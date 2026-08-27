@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cerebro — shared team memory bank for the Artemis agent harness.
+"""Cerebro — team memory bank CLI for the Artemis agent harness.
 
 The repo is the source of truth: one memory per markdown file under memories/,
 reviewed via git. This CLI validates memories and syncs them one-way into
@@ -615,7 +615,7 @@ def profile_block(repo, stamp, entry):
     sub = bank_subdir(slug)
     cli = bank_cli(repo)
     flag = "" if slug == LEGACY_SLUG else f" --bank {slug}"
-    title = ("Cerebro — team memory bank (agent-maintained)" if slug == LEGACY_SLUG
+    title = ("Team memory bank (agent-maintained)" if slug == LEGACY_SLUG
              else f"Memory bank `{slug}` (agent-maintained)")
     if entry["role"] == "readonly":
         return f"""{begin_marker(slug)}
@@ -670,7 +670,7 @@ def command_file(banks):
     cli = bank_cli(Path(single["path"]).expanduser()) if single else Path(__file__).resolve()
     flag = "" if single is not None and single["slug"] == LEGACY_SLUG else " --bank <slug>"
     return f"""---
-description: Consult or contribute to the shared memory bank(s)
+description: Consult or contribute to the team memory bank(s)
 ---
 {CMD_MARKER}
 Memory banks on this machine (agent-maintained, synced into project memory):

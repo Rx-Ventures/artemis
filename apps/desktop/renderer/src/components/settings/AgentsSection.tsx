@@ -49,11 +49,27 @@
  * so a deleted one would reappear on the next open and read as the app
  * overruling the user. Turning it off is durable, does the same thing, and is
  * the only one of the two this app can honour.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE BUILT-IN IS EDITABLE, AND IT IS THE ONE ABOUT THE USER'S TEAM
+ * ---------------------------------------------------------------------------
+ *
+ * A built-in is read-only because its text is a thing Artemis knows and keeps
+ * current. The memory-bank prompt is the exception, because most of what it
+ * says is not about Artemis at all: which facts belong in the bank, how this
+ * team words a memory, what never goes in one. Artemis cannot know those, and
+ * a team that disagrees with the shipped wording had, before this, no move
+ * except turning the prompt off entirely and rewriting it from nothing.
+ *
+ * So editing it is allowed, and taking it over is recorded (`overridden`)
+ * rather than inferred from the text having changed. The consequence the user
+ * has to be told about is that Artemis stops updating it — which is what the
+ * banner says, and what the reset button undoes.
  */
 
 import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-import { LockIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import { LockIcon, PlusIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 
 import type {
   AgentPrompt,
@@ -86,6 +102,18 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+
+/**
+ * The one built-in whose text is the user's to take over.
+ *
+ * A function rather than the id spelled out at each site, because the list and
+ * the editor have to agree about it: the list stops claiming a row is locked at
+ * exactly the moment the editor stops locking it. See the note on this module
+ * for why it is this prompt and not built-ins in general.
+ */
+function isEditableBuiltIn(prompt: AgentPrompt): boolean {
+  return prompt.builtIn === 'builtin:cerebro';
+}
 
 /** What a profile can be told, and why not when it cannot. */
 interface ScopeTarget {
@@ -304,8 +332,13 @@ function PromptRow({
           </span>
           {builtIn ? (
             <ToneBadge tone="neutral" className="gap-1">
-              <LockIcon aria-hidden="true" className="size-2.5" />
-              built-in
+              {/* The padlock is a claim about this row, not decoration: it says
+                  the text below is Artemis's and cannot be changed. It belongs
+                  only on the rows where that is still true. */}
+              {isEditableBuiltIn(prompt) ? null : (
+                <LockIcon aria-hidden="true" className="size-2.5" />
+              )}
+              {prompt.overridden === true ? 'built-in, edited' : 'built-in'}
             </ToneBadge>
           ) : null}
         </span>
@@ -344,6 +377,18 @@ function PromptEditor({
 }): ReactElement {
   const builtIn = prompt.builtIn === undefined ? undefined : BUILT_IN_AGENT_PROMPTS[prompt.builtIn];
   const unavailable = prompt.builtIn !== undefined && !available.has(prompt.builtIn);
+  const editableBuiltIn = isEditableBuiltIn(prompt);
+  const overridden = prompt.overridden === true;
+
+  /**
+   * Bumped when the user resets, and part of the editor's key.
+   *
+   * `MarkdownEditor` reads `value` once, so putting Artemis's text back in the
+   * record does not put it back on screen — the live ProseMirror instance is
+   * still holding what the user typed. Remounting is what actually restores it,
+   * and it discards an undo history that no longer describes the document.
+   */
+  const [restored, setRestored] = useState(0);
 
   const patch = (change: Partial<AgentPrompt>): void => {
     pane.setPrompts(pane.prompts.map((p) => (p.id === prompt.id ? { ...p, ...change } : p)));
@@ -353,13 +398,41 @@ function PromptEditor({
     pane.setPrompts(pane.prompts.filter((p) => p.id !== prompt.id));
   };
 
+  const reset = (): void => {
+    patch({ overridden: false, markdown: '' });
+    setRestored((n) => n + 1);
+  };
+
   return (
     <SettingsGroup label={builtIn ? `${prompt.name} — Artemis's own` : 'Prompt'}>
       {builtIn ? (
-        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-muted">
-          {builtIn.summary} Artemis wrote this one and keeps it current, so it is shown rather than
-          edited. It is only sent when {builtIn.requires}.
-        </p>
+        <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+          <p className="text-2xs leading-relaxed text-ink-muted">
+            {builtIn.summary}{' '}
+            {editableBuiltIn ? (
+              overridden ? (
+                <>
+                  You have rewritten it, so what is below is what gets sent and Artemis no longer
+                  updates it. Reset to go back to Artemis's live version.
+                </>
+              ) : (
+                <>
+                  Artemis wrote this one and keeps it current until you edit it — after that the
+                  text is yours, and reset brings Artemis's version back.
+                </>
+              )
+            ) : (
+              <>Artemis wrote this one and keeps it current, so it is shown rather than edited.</>
+            )}{' '}
+            It is only sent when {builtIn.requires}.
+          </p>
+          {editableBuiltIn && overridden ? (
+            <Button size="sm" variant="outline" onClick={reset} className="shrink-0">
+              <RotateCcwIcon aria-hidden="true" />
+              Reset to Artemis's default
+            </Button>
+          ) : null}
+        </div>
       ) : (
         <div className="flex items-end gap-2 px-3 py-2.5">
           <label className="flex min-w-0 flex-1 flex-col gap-1">
@@ -393,10 +466,23 @@ function PromptEditor({
         <MarkdownEditor
           // Keyed by the caller, so this component never has to reconcile a
           // document change against a live ProseMirror instance. See
-          // `MarkdownEditor` — `value` is read exactly once.
+          // `MarkdownEditor` — `value` is read exactly once. The reset counter
+          // joins the key because a reset is the one change of document that
+          // happens without the selection changing.
+          key={restored}
+          // For a built-in still on Artemis's text this is Artemis's text, which
+          // is what makes the first edit an edit *of* it rather than a blank page
+          // the user has to fill from memory.
           value={builtIn ? promptText(prompt) : prompt.markdown}
-          onChange={(markdown) => patch({ markdown })}
-          readOnly={builtIn !== undefined}
+          // The first keystroke on a pristine built-in is the act of taking it
+          // over, so it carries the flag. Recording it here rather than inferring
+          // it from the text differing keeps a round-trip through the serialiser
+          // — which can renormalise whitespace on its own — from reading as a
+          // decision the user never made.
+          onChange={(markdown) =>
+            patch(editableBuiltIn && !overridden ? { markdown, overridden: true } : { markdown })
+          }
+          readOnly={builtIn !== undefined && !editableBuiltIn}
           // Deliberately not the prompt's name. `MarkdownEditor` hands its
           // attributes to ProseMirror once, at construction, so a label built
           // from a field the user can rename would keep announcing the old name

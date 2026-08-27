@@ -254,7 +254,7 @@ export function banksAvailability(status: MemoryBanksStatus | null): boolean | n
  * folder-picking control can show the user that a bank kept outside the project
  * — Cortex in `~/Documents`, say — is already along for the ride, without their
  * having to add it. The same conjunction the engine and
- * {@link useMemoryBanksAvailable} use: master on, bank enabled, bank present.
+ * {@link banksAvailability} use: master on, bank enabled, bank present.
  *
  * Status only — no preflight spawn — because this answers a display question,
  * not the add-a-bank flow's readiness one. Empty while the read is in flight and
