@@ -135,7 +135,10 @@ jobs:
       - shell: bash
         run: |
           if [ "${{ runner.os }}" = Linux ]; then
-            xvfb-run -a pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
+            # linux-unpacked is not installed, so chrome-sandbox cannot yet be
+            # root-owned with mode 4755 as it is after package installation.
+            # Disable only that Chromium layer for this ephemeral boot check.
+            xvfb-run -a pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}" --no-sandbox
           else
             pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
           fi
