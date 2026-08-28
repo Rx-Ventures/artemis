@@ -40,11 +40,31 @@ RUN apt-get update \
 COPY --from=build /out /app
 
 # The Agent SDK's platform package ships the real `claude` binary; put it on
-# PATH so signing an account in is `docker exec -it <name> claude login`
+# PATH so signing an account in is `docker exec -it <name> claude auth login`
 # with CLAUDE_CONFIG_DIR pointing at the profile's directory under /data.
-RUN set -e; \
-  bin="$(ls /app/node_modules/@anthropic-ai/claude-agent-sdk-*/claude 2>/dev/null | head -1)"; \
-  if [ -n "$bin" ]; then ln -s "$bin" /usr/local/bin/claude; fi
+#
+# The binary is not a direct dependency of anything the server declares — it is
+# an *optional* dependency of the SDK, selected by platform — so pnpm keeps it
+# where every transitive dependency lives, nested under the SDK's own
+# `node_modules` (and, in the store layout, under `.pnpm/`), not flattened to
+# the top of `@anthropic-ai/`. A glob rooted one level deep misses it entirely,
+# which is how an image shipped for a long time with no `claude` on PATH and a
+# green build: the miss was guarded with `if [ -n "$bin" ]`, so the one defect
+# — that no account could ever be signed in — surfaced only to whoever first
+# tried, at the one moment they could not fix it. So: search the whole tree,
+# prefer the glibc build this Debian image needs over any musl sibling pnpm may
+# also have unpacked, and make a genuine miss a build failure, not a shrug.
+RUN set -eu; \
+  bin="$(find /app/node_modules -type f -path '*claude-agent-sdk-linux-x64/claude' 2>/dev/null | head -1)"; \
+  if [ -z "$bin" ]; then \
+    bin="$(find /app/node_modules -type f -path '*claude-agent-sdk-linux-*/claude' ! -path '*-musl/*' 2>/dev/null | head -1)"; \
+  fi; \
+  if [ -z "$bin" ]; then \
+    echo "No claude binary under /app/node_modules/**/claude-agent-sdk-linux-*/." >&2; \
+    echo "The Agent SDK's platform package has moved or was not installed for linux; fix the find above." >&2; \
+    exit 1; \
+  fi; \
+  ln -s "$bin" /usr/local/bin/claude
 
 ENV ARTEMIS_DATA_DIR=/data \
     ARTEMIS_BIND_HOST=0.0.0.0 \
