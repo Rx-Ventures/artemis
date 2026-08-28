@@ -2553,6 +2553,26 @@ class ClaudeProcess {
   #suggestionTimer: ReturnType<typeof setTimeout> | undefined;
   /** Steers pushed at a turn that no later turn has yet consumed. See `#awaitQueuedTurn`. */
   #pendingSteers = 0;
+  /**
+   * Sends that have been accepted but have not reached the queue yet.
+   *
+   * Counted from the first line of {@link send}, before it stages the message's
+   * files, because the pump's decision to keep or drop the process is taken on
+   * whatever these counters say at the instant a turn ends — and a message the
+   * user has already been told was sent must weigh on that decision from the
+   * moment it was accepted, not from the moment its last file finished copying.
+   */
+  #sendsInFlight = 0;
+  /**
+   * The provider's own word that a message survives the interrupt.
+   *
+   * `still_queued` on the interrupt receipt names messages the CLI will run
+   * regardless, and it is authoritative where {@link #pendingSteers} is only a
+   * local guess: the count is zeroed whenever a turn opens, it cannot see a
+   * message the CLI enqueued for itself, and a fold leaves it counting a steer
+   * that has already been read. When the two disagree, this one is the fact.
+   */
+  #providerQueued = false;
   /** The turn ended with steers pending and their queued turn has not opened yet. */
   #awaitingQueuedTurn = false;
   #queuedTurnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2658,9 +2678,11 @@ class ClaudeProcess {
     this.#awaitingSuggestion = false;
     clearTimeout(this.#suggestionTimer);
     // A turn opening consumes the CLI's whole queued batch — every pending
-    // steer is coalesced into it. This is the arrival `#awaitQueuedTurn` was
-    // holding the process for.
+    // steer is coalesced into it, and whatever the interrupt receipt promised
+    // is what this turn is. This is the arrival `#awaitQueuedTurn` was holding
+    // the process for.
     this.#pendingSteers = 0;
+    this.#providerQueued = false;
     this.#awaitingQueuedTurn = false;
     clearTimeout(this.#queuedTurnTimer);
 
@@ -3159,8 +3181,20 @@ class ClaudeProcess {
     this.#awaitingQueuedTurn = true;
     clearTimeout(this.#queuedTurnTimer);
     this.#queuedTurnTimer = setTimeout(() => {
+      /*
+       * A message accepted but still being staged has nowhere to go if this
+       * releases now, so the grace is re-armed instead of expiring. Bounded
+       * rather than open-ended: staging always settles, and the `finally` in
+       * `send` decrements even when it throws, so at worst this waits one more
+       * grace than it needed to.
+       */
+      if (this.#sendsInFlight > 0) {
+        this.#awaitQueuedTurn();
+        return;
+      }
       this.#awaitingQueuedTurn = false;
       this.#pendingSteers = 0;
+      this.#providerQueued = false;
       // Nothing came — the steer was consumed by the fold. Release the way the
       // settle grace does, unless another hold is still on.
       if (this.#state.ended && !this.#holdsWork() && !this.#awaitingSuggestion) {
@@ -3359,9 +3393,50 @@ class ClaudeProcess {
       );
     }
 
-    // Staged before the push and outside any queue guard, so a staging failure
-    // surfaces as itself rather than as a message that silently lost its files.
-    const staged = await this.#stage(attachments);
+    /*
+     * Counted before the staging below, and this is the whole of the fix for
+     * "the interrupt stops the session instead of reading my message"
+     * (2026-08-27).
+     *
+     * Staging is real filesystem work, and the turn is free to end during it —
+     * an interrupt is *when* a user types the correction, so it is the ending
+     * most likely to land here. Every fact the pump reads to decide whether to
+     * keep the process used to be written on the far side of that await, so it
+     * found nothing holding, left the loop, and its `finally` closed the prompt
+     * queue. The push that landed a moment later was a documented no-op on a
+     * closed queue: a message reported as sent, rendered as sent, delivered to
+     * nobody, and the transport it was addressed to gone with it.
+     *
+     * Held in a `finally` rather than cleared on the happy path, because a
+     * staging failure must not pin the process open for the rest of the
+     * conversation.
+     */
+    this.#sendsInFlight += 1;
+    let staged: readonly StagedAttachment[];
+    try {
+      // Staged outside any queue guard, so a staging failure surfaces as itself
+      // rather than as a message that silently lost its files.
+      staged = await this.#stage(attachments);
+    } finally {
+      this.#sendsInFlight -= 1;
+    }
+
+    /*
+     * Re-checked after the await, the way `continueWith` already does for the
+     * same window. The hold above keeps the process across an ordinary send,
+     * but it is bounded by `QUEUED_TURN_GRACE_MS` — staging that outlasts the
+     * grace arrives at a queue that is genuinely closed, and the honest answer
+     * then is a refusal the renderer can act on. `run_ended` is what
+     * `isEndedRunError` branches on to carry the user's words into a fresh run
+     * instead of stranding them under a red banner.
+     */
+    if (this.#disposing !== undefined || this.#promptQueue.closed) {
+      throw adapterError(
+        'invalid_request',
+        `Run ${this.runId} ended while this message was being prepared; it was not delivered.`,
+        { details: { reason: 'run_ended', runId: this.runId } },
+      );
+    }
 
     this.#promptQueue.push(this.#userMessage(text, attachments, staged));
     // Counted *after* the push it describes: this is what keeps the pump alive
@@ -3408,7 +3483,22 @@ class ClaudeProcess {
 
     try {
       const response = await withTimeout(sdkQuery.interrupt(), INTERRUPT_TIMEOUT_MS);
-      return { stillQueued: response?.still_queued ?? [] };
+      const stillQueued = response?.still_queued ?? [];
+      /*
+       * Recorded rather than acted on here, because the turn has not ended yet
+       * — the receipt is written *before* the interrupted turn's result, which
+       * is the whole reason it can be trusted at this point. Arming the grace
+       * from here would start a timer against a turn that is still running and
+       * zero the steer count underneath it; the pump reads this at the
+       * boundary instead, where the decision actually belongs.
+       *
+       * One-way for the life of the process, cleared only by the turn that
+       * consumes the queue (`#ensureTurn`) or by the grace expiring. A stale
+       * `true` costs a five-second hold on a process that was going to be
+       * released; a missed `true` costs the user's message.
+       */
+      if (stillQueued.length > 0) this.#providerQueued = true;
+      return { stillQueued };
     } catch (error) {
       // The control channel did not answer. Do not leave the user holding a
       // Stop button that did nothing: force the transport down and let the pump
@@ -3623,8 +3713,17 @@ class ClaudeProcess {
            * `finally`, queue and all. Held for every ending kind — an
            * interrupt is exactly how "stop and read my message" is said, and
            * the queue survives it by design.
+           *
+           * Three sources, because no one of them sees the whole picture. The
+           * count is what this adapter pushed. A send in flight is a message
+           * the user has already been told was accepted but that is still
+           * being staged — see {@link send}. And the interrupt receipt is the
+           * provider's own promise to run something, which is the only
+           * evidence there is for a message the CLI queued for itself.
            */
-          if (this.#pendingSteers > 0) this.#awaitQueuedTurn();
+          if (this.#pendingSteers > 0 || this.#sendsInFlight > 0 || this.#providerQueued) {
+            this.#awaitQueuedTurn();
+          }
           if (!this.#holdsWork() && !this.#awaitingSuggestion && !this.#awaitingQueuedTurn) {
             break;
           }

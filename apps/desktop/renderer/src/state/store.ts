@@ -11472,23 +11472,36 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
 }
 
 function applyAgentEvent(event: AgentEvent): void {
-  // The gate. See `appliedSeqs`: at or below the recorded seq means this event
-  // has already been drawn, whichever door it came through this time.
-  const tracked = appliedSeqs.get(event.runId);
-  if (tracked !== undefined && event.seq <= tracked.seq) return;
   /*
    * The registry's retained prompt is the one event whose `seq` is borrowed,
    * not owned: `#recordPrompt` deliberately reuses the run's current position
-   * rather than consuming a slot from the adapter's dense numbering. Recording
-   * that borrowed value here would spend the slot on the prompt's behalf — on
-   * a fresh replay the prompt sits at seq 0 *ahead of* `session.started` at
-   * seq 0, and a gate that remembered the prompt swallowed the run's own
-   * opening: the healed pane lost its sessionId, model, and tool list.
-   * The prompt itself needs no gate entry; its idempotence is identity-based —
-   * see `TranscriptModel.completeUserText`.
+   * rather than consuming a slot from the adapter's dense numbering. That makes
+   * it the one event the gate below cannot reason about, in *both* directions.
+   *
+   * It must not *spend* a slot: on a fresh replay the opening prompt sits at
+   * seq 0 ahead of `session.started` at seq 0, and a gate that remembered the
+   * prompt swallowed the run's own opening — the healed pane lost its
+   * sessionId, model, and tool list.
+   *
+   * And it must not be *stopped* by one, which is the half that was missing.
+   * A steer borrows the position the run had already reached, so its seq is by
+   * construction one the window has drawn: `40 <= 40` read as "already seen"
+   * and every mid-run message the user typed vanished on ⌘R, while the opening
+   * prompt survived only because it borrows 0 against a gate `attachRun` has
+   * just cleared ("messages sent during runs keep disappearing on refresh",
+   * 2026-08-27).
+   *
+   * Exempting it is safe because the prompt never needed the gate: its
+   * idempotence is identity-based, on the `messageId` the renderer claimed
+   * when it drew the row optimistically — see `TranscriptModel.completeUserText`.
    */
   const borrowedSeq =
     event.type === 'text.complete' && event.role === 'user' && event.replay === true;
+
+  // The gate. See `appliedSeqs`: at or below the recorded seq means this event
+  // has already been drawn, whichever door it came through this time.
+  const tracked = appliedSeqs.get(event.runId);
+  if (!borrowedSeq && tracked !== undefined && event.seq <= tracked.seq) return;
 
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;
