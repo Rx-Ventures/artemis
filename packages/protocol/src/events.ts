@@ -53,6 +53,7 @@ export type AgentEventType =
   | 'permission.resolved'
   | 'usage'
   | 'plan.limit'
+  | 'command.run'
   | 'background.tasks'
   | 'run.end';
 
@@ -69,6 +70,7 @@ export const AGENT_EVENT_TYPES = [
   'permission.resolved',
   'usage',
   'plan.limit',
+  'command.run',
   'background.tasks',
   'run.end',
 ] as const satisfies readonly AgentEventType[];
@@ -400,6 +402,59 @@ export interface UsageEvent extends AgentEventBase {
 }
 
 /* -------------------------------------------------------------------------- */
+/* command.run                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A slash command the user ran, and what the host said back.
+ *
+ * "Local" in the sense that matters here: the *host* executed it, not the
+ * model. `/model` and `/effort` change the session and print a line; nothing
+ * was sampled and no turn took place. That is why this is its own event rather
+ * than user text — it is a thing that happened *to* the conversation, and
+ * drawing it as something the user said puts words in their mouth.
+ */
+export interface LocalCommand {
+  /**
+   * The command as typed, without its leading slash.
+   *
+   * Plugin commands keep their namespace — `mattpocock-skills:implement` —
+   * because that is what the user typed and what identifies it.
+   */
+  readonly name: string;
+  /** Arguments as typed. Absent when the command took none. */
+  readonly args?: string;
+  /**
+   * What the host printed, with terminal control codes removed.
+   *
+   * Absent for a command that printed nothing, which is the ordinary case for
+   * the ones that expand into a prompt rather than doing something locally.
+   */
+  readonly output?: string;
+  /** True when the output came from the host's error stream. */
+  readonly failed?: boolean;
+}
+
+/**
+ * The user ran a slash command.
+ *
+ * Providers announce these in their own presentation vocabulary — Claude wraps
+ * them in `<command-name>` / `<local-command-stdout>` envelopes and sends them
+ * down the message stream as if the user had typed them, which is how the raw
+ * XML used to end up rendered as a chat bubble. The adapter recognises the
+ * envelope and emits this instead, so consumers get the command rather than
+ * the provider's markup.
+ *
+ * One event per command: an invocation and the output it produced are two
+ * messages on the wire and one thing that happened, so the adapter pairs them
+ * before emitting. A command that prints nothing still gets an event.
+ */
+export interface CommandRunEvent extends AgentEventBase {
+  readonly type: 'command.run';
+  readonly command: LocalCommand;
+}
+
+/* -------------------------------------------------------------------------- */
 /* plan.limit                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -710,6 +765,7 @@ export type AgentEvent =
   | PermissionResolvedEvent
   | UsageEvent
   | PlanLimitEvent
+  | CommandRunEvent
   | BackgroundTasksEvent
   | RunEndEvent;
 

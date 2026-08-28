@@ -114,6 +114,10 @@ function describeEvent(event: AgentEvent): string {
       return `${event.limit.status} on ${event.limit.windowId ?? 'an unnamed window'}${
         event.limit.utilization === undefined ? '' : ` at ${String(event.limit.utilization)}%`
       }`;
+    case 'command.run':
+      return `/${event.command.name}${
+        event.command.args === undefined ? '' : ` ${event.command.args}`
+      }${event.command.output === undefined ? '' : ` → ${event.command.output}`}`;
     case 'run.end':
       return `${event.reason}${event.error ? ` — ${event.error.code}: ${event.error.message}` : ''}${
         event.sessionId ? ` (resume with ${event.sessionId})` : ''

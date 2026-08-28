@@ -194,6 +194,7 @@ import {
   isGroupId,
   type ActivityGroup,
   type AssistantItem,
+  type CommandItem,
   type NoticeItem,
   type PermissionItem,
   type RunEndItem,
@@ -439,6 +440,8 @@ const ItemRow = memo(function ItemRow({ id }: { readonly id: string }): ReactEle
       return <PermissionRow item={item} />;
     case 'notice':
       return <NoticeRow item={item} />;
+    case 'command':
+      return <CommandRow item={item} />;
     case 'run-end':
       return <RunEndRow item={item} />;
     default:
@@ -1366,6 +1369,62 @@ function NoticeRow({ item }: { readonly item: NoticeItem }): ReactElement {
           {item.detail ? (
             <span className="ml-1.5 font-mono text-2xs text-ink-faint">{item.detail}</span>
           ) : null}
+        </div>
+      </div>
+    </Line>
+  );
+}
+
+/**
+ * A slash command, as one line rather than two bubbles of markup.
+ *
+ *     ⌘ /model  opus[1m]
+ *       Set model to Fable 5 and saved as your default
+ *
+ * Sized like a notice, not like a turn. This is the register the row belongs
+ * in: something happened to the session, it is worth a line of the record, and
+ * it is not what anybody opened the transcript to read. The old rendering —
+ * two full-width chat bubbles of raw XML per `/effort` — was loud in exactly
+ * the proportion it was uninformative.
+ *
+ * The name keeps its slash, because that is how it was typed and how it is
+ * searched for. The output is the host's own words and is shown verbatim,
+ * wrapped rather than truncated: these lines are one sentence in practice, and
+ * a "Set model to …" the user has to expand to read is not worth the row.
+ */
+function CommandRow({ item }: { readonly item: CommandItem }): ReactElement {
+  return (
+    <Line label="" ts={item.ts}>
+      <div className="flex items-start gap-1.5 py-0.5">
+        {/* The failure tone lives on the icon rather than the whole row: the
+            command still ran, and colouring its name red would read as the
+            command itself being wrong rather than its result. */}
+        {item.failed === true ? (
+          <TriangleAlertIcon
+            className={cn('mt-[2px] size-3 shrink-0', toneClasses.text.signal)}
+            aria-hidden="true"
+          />
+        ) : (
+          <TerminalIcon className="mt-[2px] size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+        )}
+        <div className="min-w-0">
+          <span className="font-mono text-2xs text-ink">/{item.name}</span>
+          {/* Arguments in the muted weight, because the command is what the
+              row is *about* and the argument qualifies it — the same
+              relationship the notice row draws between text and detail. */}
+          {item.args === undefined ? null : (
+            <span className="ml-1.5 font-mono text-2xs text-ink-muted">{item.args}</span>
+          )}
+          {item.output === undefined ? null : (
+            <div
+              className={cn(
+                'font-mono text-2xs whitespace-pre-wrap',
+                item.failed === true ? toneClasses.text.signal : 'text-ink-faint',
+              )}
+            >
+              {item.output}
+            </div>
+          )}
         </div>
       </div>
     </Line>
