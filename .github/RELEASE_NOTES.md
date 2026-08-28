@@ -1,6 +1,27 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.16.0
+
+Slash commands read as commands instead of as markup.
+
+- **A slash command is one line, not two bubbles of XML.** Running `/model` or
+  `/effort` used to put the CLI's own markup straight into the transcript —
+  `<command-name>`, `<command-args>`, `<local-command-stdout>` — as two
+  full-width chat bubbles, plus a third message of boilerplate addressed to the
+  model. Artemis now recognises all of it and draws one compact row: the
+  command, its arguments, and what it printed. The boilerplate is dropped, and
+  terminal colour codes no longer show up as escape sequences on screen.
+
+- **It is no longer filed as something you said.** `/model` never reaches the
+  model — it changes the session and prints a line. Drawing it in your own
+  message bubble made a settings change look like a turn in the conversation,
+  so it now sits in the same quiet register as the rest of the session record.
+
+- **Commands that print nothing still appear.** A plugin command that expands
+  into a prompt rather than doing something locally leaves no output, and used
+  to leave no trace either — so the turn that followed had no visible reason.
+
 ## What's new in 1.15.0
 
 The usage meter now hears the provider's own verdict, so an account that is
