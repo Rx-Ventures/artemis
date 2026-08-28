@@ -38,7 +38,7 @@ import type { AgentError } from './errors.js';
 import type { JsonObject, JsonValue } from './json.js';
 import type { PermissionMode, PermissionRequest, QuestionAnswer } from './permissions.js';
 import type { ProviderId } from './provider.js';
-import type { UsageSnapshot } from './usage.js';
+import type { PlanLimitReading, UsageSnapshot } from './usage.js';
 
 /** Discriminator values of {@link AgentEvent}. */
 export type AgentEventType =
@@ -52,6 +52,7 @@ export type AgentEventType =
   | 'permission.request'
   | 'permission.resolved'
   | 'usage'
+  | 'plan.limit'
   | 'background.tasks'
   | 'run.end';
 
@@ -67,6 +68,7 @@ export const AGENT_EVENT_TYPES = [
   'permission.request',
   'permission.resolved',
   'usage',
+  'plan.limit',
   'background.tasks',
   'run.end',
 ] as const satisfies readonly AgentEventType[];
@@ -398,6 +400,31 @@ export interface UsageEvent extends AgentEventBase {
 }
 
 /* -------------------------------------------------------------------------- */
+/* plan.limit                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The provider's live word on a plan limit.
+ *
+ * Distinct from {@link UsageEvent} the way an account is distinct from a run:
+ * `usage` reports what this run has spent, this reports what the *account* is
+ * allowed to do next. It exists because the alternative reading of that fact —
+ * a polled percentage — lags by minutes and rounds away the endgame, which is
+ * how a meter reads 97% on an account whose requests are already being
+ * refused. The provider states its verdict on every response; this is that
+ * verdict, passed through instead of dropped.
+ *
+ * Consumers other than the plan-usage cache should ignore it. It is not
+ * transcript content, and it is not an error — a `rejected` here does not mean
+ * the run has failed, only that the account it is spending is out of room. A
+ * run that *dies* of a limit still says so on `run.end`.
+ */
+export interface PlanLimitEvent extends AgentEventBase {
+  readonly type: 'plan.limit';
+  readonly limit: PlanLimitReading;
+}
+
+/* -------------------------------------------------------------------------- */
 /* run.end                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -682,6 +709,7 @@ export type AgentEvent =
   | PermissionRequestEvent
   | PermissionResolvedEvent
   | UsageEvent
+  | PlanLimitEvent
   | BackgroundTasksEvent
   | RunEndEvent;
 

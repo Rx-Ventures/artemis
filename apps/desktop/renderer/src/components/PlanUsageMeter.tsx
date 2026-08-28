@@ -41,6 +41,7 @@ import {
   bindingWindow,
   focusedWindow,
   isModelScoped,
+  type PlanLimitStatus,
   type PlanUsage,
   type PlanUsageWindow,
 } from '@rx-artemis/protocol';
@@ -68,14 +69,18 @@ import { cn } from '../lib/utils';
  * account described two ways on one bar, which is precisely the disagreement
  * this status line exists to avoid.
  */
-export function toneFor(utilization: number | null): string {
+export function toneFor(utilization: number | null, status?: PlanLimitStatus): string {
+  // The provider's verdict outranks the thresholds: a window it is rejecting
+  // on is at the far end of the scale whatever its stale percentage reads.
+  if (status === 'rejected') return 'text-signal';
   if (utilization === null) return 'text-ink-faint';
   if (utilization >= 90) return 'text-signal';
   if (utilization >= 75) return 'text-amber';
   return 'text-ink-muted';
 }
 
-function barToneFor(utilization: number | null): string {
+function barToneFor(utilization: number | null, status?: PlanLimitStatus): string {
+  if (status === 'rejected') return 'bg-signal';
   if (utilization === null) return 'bg-line';
   if (utilization >= 90) return 'bg-signal';
   if (utilization >= 75) return 'bg-amber';
@@ -104,7 +109,10 @@ interface RingTone {
 }
 
 /** Same thresholds as {@link toneFor}, and deliberately so — see its header. */
-function ringToneFor(utilization: number | null): RingTone {
+function ringToneFor(utilization: number | null, status?: PlanLimitStatus): RingTone {
+  if (status === 'rejected') {
+    return { arc: 'stroke-signal', disc: 'fill-signal/15', text: 'text-signal' };
+  }
   if (utilization === null) {
     return { arc: 'stroke-line', disc: 'fill-line/25', text: 'text-ink-faint' };
   }
@@ -146,10 +154,25 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
  * dash paints a dot, and a dot at the twelve o'clock position reads as a sliver
  * of usage on a window that has none.
  */
-function UsageRing({ utilization }: { readonly utilization: number | null }): ReactElement {
-  const tone = ringToneFor(utilization);
-  const filled = utilization === null ? 0 : Math.max(0, Math.min(100, utilization));
-  const text = utilization === null ? '—' : String(Math.round(utilization));
+function UsageRing({
+  utilization,
+  status,
+}: {
+  readonly utilization: number | null;
+  readonly status?: PlanLimitStatus;
+}): ReactElement {
+  const tone = ringToneFor(utilization, status);
+  /*
+    A rejected window draws full whatever its number reads. The ring is the
+    glanceable surface, and "97" with a sliver of arc missing reads as "still
+    going" — which is the exact misreading the verdict exists to correct. The
+    number keeps saying what the provider last reported; the geometry says
+    what the provider is doing.
+  */
+  const filled =
+    status === 'rejected' ? 100 : utilization === null ? 0 : Math.max(0, Math.min(100, utilization));
+  const text =
+    utilization === null ? (status === 'rejected' ? '!' : '—') : String(Math.round(utilization));
 
   return (
     <span className="relative inline-flex size-6 shrink-0 items-center justify-center">
@@ -296,7 +319,8 @@ function meterSlots(usage: PlanUsage | null): readonly MeterSlot[] {
 /** One ring's contribution to the trigger's label: "5hr 61%". */
 function describeSlot(slot: MeterSlot): string {
   const pct = slot.window?.utilization ?? null;
-  return `${slot.label} ${pct === null ? 'unknown' : `${String(Math.round(pct))}%`}`;
+  const reading = `${slot.label} ${pct === null ? 'unknown' : `${String(Math.round(pct))}%`}`;
+  return slot.window?.status === 'rejected' ? `${reading} — limit reached` : reading;
 }
 
 /**
@@ -573,7 +597,10 @@ export function PlanUsageMeter(): ReactElement | null {
         {slots.map((slot) => (
           <span key={slot.key} className="flex shrink-0 items-center gap-1">
             <span className="font-mono text-2xs text-ink-faint">{slot.label}</span>
-            <UsageRing utilization={slot.window?.utilization ?? null} />
+            <UsageRing
+              utilization={slot.window?.utilization ?? null}
+              status={slot.window?.status}
+            />
           </span>
         ))}
       </PopoverTrigger>
@@ -841,25 +868,39 @@ function WindowRow({
   readonly now: number;
 }): ReactElement {
   const pct = window.utilization;
-  const hint = resetLabel(window.resetsAt, now);
+  const rejected = window.status === 'rejected';
+  const reset = resetLabel(window.resetsAt, now);
+  /*
+    The verdict gets the hint line, and the reset time rides behind it: on a
+    rejected window "when does it come back" is the whole question, so the two
+    belong in one sentence rather than the verdict displacing the answer.
+  */
+  const hint = rejected
+    ? `limit reached — requests are being refused${reset === '' ? '' : ` · ${reset}`}`
+    : reset;
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2 text-2xs">
         <span className="truncate text-ink-muted">{window.label}</span>
-        <span className={cn('shrink-0 font-mono tabular-nums', toneFor(pct))}>
-          {pct === null ? '—' : `${Math.round(pct)}%`}
+        <span className={cn('shrink-0 font-mono tabular-nums', toneFor(pct, window.status))}>
+          {pct === null ? (rejected ? '100%' : '—') : `${Math.round(pct)}%`}
         </span>
       </div>
 
       <div className="h-1 overflow-hidden rounded-full bg-line/60">
         <div
-          className={cn('h-full rounded-full transition-[width]', barToneFor(pct))}
-          style={{ width: `${pct ?? 0}%` }}
+          className={cn('h-full rounded-full transition-[width]', barToneFor(pct, window.status))}
+          // Full on a rejected window whatever the number reads — the bar is
+          // the glance, and a sliver of green headroom on a window the
+          // provider is refusing on is the misreading this feature removes.
+          style={{ width: `${rejected ? 100 : (pct ?? 0)}%` }}
         />
       </div>
 
-      {hint === '' ? null : <span className="text-2xs text-ink-faint">{hint}</span>}
+      {hint === '' ? null : (
+        <span className={cn('text-2xs', rejected ? 'text-signal' : 'text-ink-faint')}>{hint}</span>
+      )}
     </div>
   );
 }

@@ -64,6 +64,7 @@ import type {
   SessionSummary,
   Unsubscribe,
   PlanUsage,
+  PlanUsagePush,
   AuthStatusResponse,
   AgentPromptsDocument,
   BuiltInPromptId,
@@ -92,7 +93,7 @@ import {
   type SessionListScope,
   type SessionNamingPlan,
 } from '@rx-artemis/core';
-import { composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
+import { applyPlanLimit, composeAgentPrompts, lowestTierModel } from '@rx-artemis/protocol';
 
 import { AgentPromptStore } from './agentPrompts.js';
 import { anyBankAvailable, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
@@ -481,6 +482,19 @@ export interface ArtemisEngine {
    * {@link IPC_PUSH.runSuggestion} for the renderer's half.
    */
   subscribeSuggestions(listener: (suggestion: RunSuggestion) => void): Unsubscribe;
+
+  /**
+   * Subscribe to plan-usage readings the engine learns *between* polls.
+   *
+   * A third stream for the same reason suggestions are one: these are not run
+   * events. A live run's `plan.limit` events are folded into the engine's
+   * plan-usage cache as they arrive — see the fold beside the namer's
+   * subscription — and each merge that changes anything comes out here, keyed
+   * by the profile it describes. `planUsagePoll.ts` forwards them onto the
+   * same scanned push channel as the poll's own readings, which is what makes
+   * the meter live during a run instead of thirty seconds behind it.
+   */
+  subscribePlanUsage(listener: (push: PlanUsagePush) => void): Unsubscribe;
 
   /** Tear down every live run. Called on quit. */
   dispose(): Promise<void>;
@@ -902,9 +916,52 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     },
   });
 
+  /**
+   * Who hears about a live plan-usage merge. Fed by the fold below, drained by
+   * `planUsagePoll.ts`, which owns the broadcast (and its credential scan).
+   */
+  const planUsageListeners = new Set<(push: PlanUsagePush) => void>();
+
+  /**
+   * Fold a run's `plan.limit` events into the plan-usage cache.
+   *
+   * The third subscriber, held to the same rule as the namer and the owners
+   * ledger: it must never delay, fail or touch the run it learns from.
+   *
+   * This is the live half of the cache. The poll reads an account every two
+   * minutes (thirty seconds with a run on it), which is how a meter reads 97%
+   * on an account already refusing requests — the refusal is in this event,
+   * on this machine, seconds after the server decided it, and used to be
+   * dropped. `applyPlanLimit` decides what counts as news; anything that is
+   * none returns `null` and nothing is pushed, which is what keeps a chatty
+   * event stream from becoming a chatty push channel.
+   */
+  const foldPlanLimit = (event: AgentEvent): void => {
+    if (event.type !== 'plan.limit') return;
+    // Live or recently finished — either way the handle knows the profile the
+    // run was spending, which the event alone does not carry.
+    const run = runs.get(event.runId);
+    if (run === undefined) return;
+
+    const merged = applyPlanLimit(planUsageCache.get(run.profileId) ?? null, event.limit, Date.now());
+    if (merged === null) return;
+
+    planUsageCache.set(run.profileId, merged);
+    const push: PlanUsagePush = { profileId: run.profileId, usage: merged };
+    // Copied before iterating: a listener may unsubscribe itself mid-call.
+    for (const listener of [...planUsageListeners]) {
+      try {
+        listener(push);
+      } catch (error) {
+        log.error(`A plan-usage listener failed on profile ${run.profileId}`, error);
+      }
+    }
+  };
+
   runs.subscribe((event) => {
     namer.handleEvent(event);
     owners.handleEvent(event);
+    foldPlanLimit(event);
   });
 
   return {
@@ -1547,6 +1604,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     subscribeSuggestions: (listener) => {
       suggestionListeners.add(listener);
       return () => suggestionListeners.delete(listener);
+    },
+
+    subscribePlanUsage: (listener) => {
+      planUsageListeners.add(listener);
+      return () => planUsageListeners.delete(listener);
     },
 
     // All three, and in parallel: a half-written title is not worth delaying

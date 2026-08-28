@@ -57,6 +57,8 @@ import type {
   QuestionAnswer,
   QuestionOption,
   QuestionPrompt,
+  PlanLimitReading,
+  PlanLimitStatus,
   RunEndReason,
   RunId,
   SessionId,
@@ -78,12 +80,15 @@ import type {
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKPermissionDeniedMessage,
+  SDKRateLimitEvent,
   SDKResultMessage,
   SDKSessionInfo,
   SDKSystemMessage,
   SDKUserMessage,
   SDKUserMessageReplay,
 } from '@anthropic-ai/claude-agent-sdk';
+
+import { clampUtilization, planWindowLabel } from './planUsage.js';
 
 /** The provider id every event from this adapter carries. */
 export const CLAUDE_PROVIDER_ID = 'claude' as const;
@@ -371,11 +376,7 @@ export function mapSdkMessage(
       return [];
 
     case 'rate_limit_event':
-      // A standing rate-limit *status* (window, resets-at), not a failure. There
-      // is no protocol event for provider health, and turning it into an
-      // `AgentError` would falsely imply the run had failed. Rate-limit
-      // *errors* still arrive as `run.end` with `code: 'rate_limit'`.
-      return [];
+      return mapRateLimitEvent(message, state);
 
     case 'conversation_reset':
       // The provider started a fresh conversation id underneath us. Nothing in
@@ -1300,6 +1301,79 @@ export function mapStopReason(stopReason: string | null | undefined): StopReason
     default:
       return 'other';
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* rate_limit_event → plan.limit                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The SDK's wording for a verdict, onto the protocol's.
+ *
+ * Anything else — a future status this table has not heard of — drops the
+ * message rather than guessing. A verdict is the one field the event is
+ * worthless without, and an invented one would be worse than none.
+ */
+const RATE_LIMIT_STATUS: Readonly<Record<string, PlanLimitStatus>> = {
+  allowed: 'ok',
+  allowed_warning: 'warning',
+  rejected: 'rejected',
+};
+
+/**
+ * `resetsAt` off the wire, in ms.
+ *
+ * The event carries epoch *seconds* — verified against a live capture, where
+ * the same instant arrived as `1787900400` here and as an ISO timestamp on the
+ * usage endpoint — but the API is explicitly unstable, so a value that is
+ * already in milliseconds (thirteen digits against ten) is passed through
+ * rather than multiplied into the year 58000.
+ */
+function rateLimitResetsAtMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  return value > 1e12 ? value : value * 1000;
+}
+
+/**
+ * A standing rate-limit status, passed through as a `plan.limit` event.
+ *
+ * This used to be dropped, which is how the meter could read 97% on an account
+ * whose requests were already being refused: the poll's percentage was the
+ * only input, and the provider's own live verdict — sent on every response —
+ * went nowhere. It is still not an error (`run.end` with `code: 'rate_limit'`
+ * remains the failure path); it is the account's health, and the plan-usage
+ * cache is the consumer.
+ *
+ * Defensive against its own types on every field: the SDK marks this API
+ * experimental, so a missing or reshaped field degrades to an absent one
+ * rather than an exception mid-stream.
+ */
+function mapRateLimitEvent(
+  message: SDKRateLimitEvent,
+  state: ClaudeMapperState,
+): readonly AgentEvent[] {
+  const info: Partial<SDKRateLimitEvent['rate_limit_info']> | null | undefined =
+    message.rate_limit_info;
+  const status = typeof info?.status === 'string' ? RATE_LIMIT_STATUS[info.status] : undefined;
+  if (status === undefined) return [];
+
+  // Widened before the emptiness check: the declared union has no '' member,
+  // but the API is experimental and the wire is not the type.
+  const rawWindow: string | undefined = info.rateLimitType;
+  const windowId = typeof rawWindow === 'string' && rawWindow !== '' ? rawWindow : undefined;
+  const utilization = clampUtilization(info.utilization) ?? undefined;
+  const resetsAt = rateLimitResetsAtMs(info.resetsAt);
+  const label = windowId === undefined ? undefined : planWindowLabel(windowId);
+
+  const limit: PlanLimitReading = {
+    status,
+    ...(windowId === undefined ? {} : { windowId }),
+    ...(label === undefined ? {} : { label }),
+    ...(utilization === undefined ? {} : { utilization }),
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+  };
+
+  return [{ type: 'plan.limit', ...stamp(state), limit }];
 }
 
 /** Map the SDK's assistant-error enum onto protocol's error taxonomy. */

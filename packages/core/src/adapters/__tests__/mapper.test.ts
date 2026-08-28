@@ -1151,7 +1151,9 @@ describe('deliberately dropped messages', () => {
   const dropped: readonly [string, unknown][] = [
     ['tool_progress', { type: 'tool_progress', tool_use_id: 't', tool_name: 'Bash', parent_tool_use_id: null, elapsed_time_seconds: 3, uuid: 'u', session_id: 's' }],
     ['tool_use_summary', { type: 'tool_use_summary', summary: 'read some files', preceding_tool_use_ids: [], uuid: 'u', session_id: 's' }],
-    ['rate_limit_event', { type: 'rate_limit_event', rate_limit_info: {}, uuid: 'u', session_id: 's' }],
+    // Only the verdict-less shape is dropped — see the plan.limit suite for
+    // the ones that map. A report with no status has nothing to say.
+    ['rate_limit_event (no verdict)', { type: 'rate_limit_event', rate_limit_info: {}, uuid: 'u', session_id: 's' }],
     ['conversation_reset', { type: 'conversation_reset', new_conversation_id: 'c', uuid: 'u', session_id: 's' }],
     ['prompt_suggestion', { type: 'prompt_suggestion', suggestion: 'try this', uuid: 'u', session_id: 's' }],
     ['auth_status', { type: 'auth_status', isAuthenticating: false, output: [], uuid: 'u', session_id: 's' }],
@@ -1174,6 +1176,92 @@ describe('deliberately dropped messages', () => {
   it('drops an unknown future message type instead of throwing', () => {
     expect(mapSdkMessage(sdk({ type: 'something_new_in_2027', uuid: 'u' }), makeState())).toEqual([]);
     expect(mapSdkMessage(sdk({ type: 'system', subtype: 'brand_new', uuid: 'u' }), makeState())).toEqual([]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* rate_limit_event → plan.limit                                              */
+/* -------------------------------------------------------------------------- */
+
+describe('rate limit events', () => {
+  /** The event as a live capture showed it: a verdict, a window, epoch seconds. */
+  const rateLimit = (info: unknown) => ({
+    type: 'rate_limit_event',
+    rate_limit_info: info,
+    uuid: 'u',
+    session_id: 's',
+  });
+
+  it('passes the verdict through as a plan.limit event', () => {
+    const events = mapSdkMessage(
+      sdk(rateLimit({ status: 'rejected', rateLimitType: 'seven_day', utilization: 97 })),
+      makeState(),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'plan.limit',
+      limit: { status: 'rejected', windowId: 'seven_day', utilization: 97, label: '7 days' },
+    });
+  });
+
+  it('maps the three SDK statuses onto the protocol vocabulary', () => {
+    const statusOf = (status: string) => {
+      const [event] = mapSdkMessage(sdk(rateLimit({ status })), makeState());
+      return event?.type === 'plan.limit' ? event.limit.status : undefined;
+    };
+    expect(statusOf('allowed')).toBe('ok');
+    expect(statusOf('allowed_warning')).toBe('warning');
+    expect(statusOf('rejected')).toBe('rejected');
+    // A status this table has never heard of drops the message rather than
+    // inventing a verdict.
+    expect(mapSdkMessage(sdk(rateLimit({ status: 'shiny_new' })), makeState())).toEqual([]);
+  });
+
+  it('converts resetsAt from epoch seconds, tolerating milliseconds', () => {
+    // The wire carries seconds (verified live); the API is marked unstable, so
+    // a value already in ms must not be multiplied into the far future.
+    const at = (resetsAt: unknown) => {
+      const [event] = mapSdkMessage(
+        sdk(rateLimit({ status: 'allowed', resetsAt })),
+        makeState(),
+      );
+      return event?.type === 'plan.limit' ? event.limit.resetsAt : undefined;
+    };
+    expect(at(1_787_900_400)).toBe(1_787_900_400_000);
+    expect(at(1_787_900_400_000)).toBe(1_787_900_400_000);
+    expect(at('soon')).toBeUndefined();
+    expect(at(-5)).toBeUndefined();
+  });
+
+  it('omits what the report does not carry, rather than inventing it', () => {
+    // The common live shape: a verdict and a reset, no percentage.
+    const [event] = mapSdkMessage(
+      sdk(rateLimit({ status: 'allowed', rateLimitType: 'five_hour', resetsAt: 1_787_900_400 })),
+      makeState(),
+    );
+    expect(event?.type).toBe('plan.limit');
+    if (event?.type !== 'plan.limit') return;
+    expect(event.limit.utilization).toBeUndefined();
+    expect(event.limit.label).toBe('5 hours');
+  });
+
+  it('passes an unfamiliar window id through unlabelled', () => {
+    const [event] = mapSdkMessage(
+      sdk(rateLimit({ status: 'rejected', rateLimitType: 'overage' })),
+      makeState(),
+    );
+    if (event?.type !== 'plan.limit') throw new Error('expected a plan.limit event');
+    expect(event.limit.windowId).toBe('overage');
+    expect(event.limit.label).toBeUndefined();
+  });
+
+  it('takes its turn in the dense sequence', () => {
+    const state = makeState();
+    const events = run(state, [
+      rateLimit({ status: 'allowed', rateLimitType: 'five_hour' }),
+      rateLimit({ status: 'rejected', rateLimitType: 'five_hour' }),
+    ]);
+    expect(events.map((e) => e.seq)).toEqual([0, 1]);
   });
 });
 
