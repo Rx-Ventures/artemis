@@ -1026,6 +1026,13 @@ export class TranscriptModel {
         break;
       }
 
+      case 'plan.limit':
+        // The account's health, not something that was said. It is folded into
+        // the plan-usage cache in the main process, and the meter and the
+        // profile menu are its surfaces — a thread entry per verdict would be
+        // a log of a gauge.
+        break;
+
       case 'background.tasks':
         /*
          * Not a transcript entry, and not for the usual reason.

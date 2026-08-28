@@ -732,6 +732,11 @@ function ProfileItem({
    */
   const binding = bindingWindow(usage);
   const capacity = binding?.utilization ?? null;
+  // The provider's live verdict, when one has been heard. A rejected account
+  // showing its last polled percentage is the menu repeating the exact
+  // misreading the verdict corrects — this row is where "which of these has
+  // room" is decided, and an account with none must say so.
+  const rejected = binding?.status === 'rejected';
 
   return (
     <DropdownMenuRadioItem
@@ -741,9 +746,11 @@ function ProfileItem({
       title={
         [
           status?.email,
-          capacity === null
-            ? undefined
-            : `${String(Math.round(capacity))}% of its ${binding?.label ?? ''} limit used`,
+          rejected
+            ? `its ${binding?.label ?? ''} limit is reached — requests are being refused`
+            : capacity === null
+              ? undefined
+              : `${String(Math.round(capacity))}% of its ${binding?.label ?? ''} limit used`,
           path,
         ]
           .filter(Boolean)
@@ -786,7 +793,9 @@ function ProfileItem({
        * so the selected row's tick sits outside the column rather than shoving
        * one number out of alignment with the rest.
        */}
-      {capacity === null ? null : (
+      {rejected ? (
+        <span className="shrink-0 tabular-nums text-signal">out</span>
+      ) : capacity === null ? null : (
         <span className={cn('shrink-0 tabular-nums', toneFor(capacity))}>
           {Math.round(capacity)}%
         </span>

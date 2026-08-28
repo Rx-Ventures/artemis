@@ -24,7 +24,11 @@ let openWindows = 1;
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => Array.from({ length: openWindows }, () => ({})) },
 }));
-vi.mock('./ipc.js', () => ({ broadcast: () => undefined }));
+vi.mock('./ipc.js', () => ({
+  broadcast: (channel: string, payload: unknown) => {
+    broadcasts.push({ channel, payload });
+  },
+}));
 vi.mock('./redact.js', () => ({
   assertNoSecrets: () => undefined,
   RESPONSE_SCAN_POLICY: {},
@@ -36,10 +40,17 @@ const { startPlanUsagePolling } = await import('./planUsagePoll');
 /* A stand-in engine that records what was asked of it                        */
 /* -------------------------------------------------------------------------- */
 
+/** Every push that went out, across the poll and the live stream. */
+const broadcasts: { channel: string; payload: unknown }[] = [];
+
 /** Every profile whose usage was read, in order, across all cycles. */
 let reads: string[] = [];
 /** What `listRuns` answers with — the profiles currently doing work. */
 let liveProfiles: string[] = [];
+/** The live-merge listener the poller registered, so a test can feed it. */
+let liveListener: ((push: { profileId: string; usage: unknown }) => void) | null = null;
+/** Whether the poller unsubscribed from the live stream on stop. */
+let liveUnsubscribed = false;
 
 function engineHost(profiles: string[]): never {
   const engine = {
@@ -48,6 +59,12 @@ function engineHost(profiles: string[]): never {
     refreshPlanUsage: ({ profileId }: { profileId: string }) => {
       reads.push(profileId);
       return Promise.resolve({ available: true, windows: [], fetchedAt: 0 });
+    },
+    subscribePlanUsage: (listener: (push: { profileId: string; usage: unknown }) => void) => {
+      liveListener = listener;
+      return () => {
+        liveUnsubscribed = true;
+      };
     },
   };
   return { ready: true, require: () => engine } as never;
@@ -64,7 +81,10 @@ const FAST = 30_000;
 beforeEach(() => {
   vi.useFakeTimers();
   reads = [];
+  broadcasts.length = 0;
   liveProfiles = [];
+  liveListener = null;
+  liveUnsubscribed = false;
   openWindows = 1;
 });
 
@@ -181,5 +201,40 @@ describe('the plan usage poll', () => {
     await tick(SWEEP * 2);
 
     expect(reads).toEqual([]);
+  });
+
+  it('forwards a live merge onto the push channel without a poll', async () => {
+    const stop = startPlanUsagePolling(engineHost(['a', 'b']), {
+      intervalMs: SWEEP,
+      activeIntervalMs: FAST,
+      firstDelayMs: 1_000,
+    });
+    broadcasts.length = 0;
+
+    const usage = { available: true, windows: [], fetchedAt: 5 };
+    liveListener?.({ profileId: 'b', usage });
+
+    // No timer advanced, no CLI read: the reading already existed in the
+    // engine's cache, and forwarding it is the whole cost.
+    expect(reads).toEqual([]);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]?.payload).toEqual({ profileId: 'b', usage });
+    stop();
+  });
+
+  it('drops live merges after stop, and lets the engine subscription go', async () => {
+    const stop = startPlanUsagePolling(engineHost(['a']), {
+      intervalMs: SWEEP,
+      activeIntervalMs: FAST,
+      firstDelayMs: 1_000,
+    });
+    stop();
+    expect(liveUnsubscribed).toBe(true);
+
+    broadcasts.length = 0;
+    // A merge that races the shutdown — the engine-side unsubscribe has
+    // happened, but a listener already mid-call must still land nowhere.
+    liveListener?.({ profileId: 'a', usage: { available: true, windows: [], fetchedAt: 1 } });
+    expect(broadcasts).toEqual([]);
   });
 });

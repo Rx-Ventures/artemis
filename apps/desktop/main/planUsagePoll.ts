@@ -207,8 +207,30 @@ export function startPlanUsagePolling(
 
   schedule(firstDelayMs);
 
+  /*
+    The live half. A run's `plan.limit` events are folded into the engine's
+    cache as they arrive — see the fold in `engine.ts` — and each merge that
+    changed anything comes out here. Forwarded through the same `push` as the
+    poll's readings so the two sources share one credential scan and one
+    channel: the renderer cannot tell a live correction from a polled one, and
+    should not be able to.
+
+    This is what closes the poll's blind window. The poll reads the busy
+    account every thirty seconds; the provider states its verdict on every
+    response. Between the two, "the meter says 97% but I am out" was a reading
+    that had nowhere to land.
+  */
+  const unsubscribeLive = engine.require().subscribePlanUsage((payload) => {
+    if (stopped) return;
+    // Not gated on a window being open, unlike the poll: this costs no
+    // subprocess — the reading already exists — and the engine's cache is
+    // updated either way, so a window opening later starts from the truth.
+    push(payload.profileId, payload);
+  });
+
   return () => {
     stopped = true;
+    unsubscribeLive();
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
   };

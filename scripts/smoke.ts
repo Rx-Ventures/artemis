@@ -110,6 +110,10 @@ function describeEvent(event: AgentEvent): string {
         : `${String(event.tasks.length)} background task(s): ${event.tasks.map((t) => t.description).join(', ')}`;
     case 'session.commands':
       return `${String(event.slashCommands.length)} slash command(s) now on offer`;
+    case 'plan.limit':
+      return `${event.limit.status} on ${event.limit.windowId ?? 'an unnamed window'}${
+        event.limit.utilization === undefined ? '' : ` at ${String(event.limit.utilization)}%`
+      }`;
     case 'run.end':
       return `${event.reason}${event.error ? ` — ${event.error.code}: ${event.error.message}` : ''}${
         event.sessionId ? ` (resume with ${event.sessionId})` : ''

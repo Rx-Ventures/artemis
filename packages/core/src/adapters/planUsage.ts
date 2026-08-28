@@ -162,13 +162,30 @@ function parseResetsAt(value: string | null | undefined): number | null {
 }
 
 /**
+ * The display label this file gives a window id, or `undefined` for one it has
+ * never heard of.
+ *
+ * Exported for the mapper: the live `rate_limit_event` names windows in the
+ * same vocabulary this file labels (`five_hour`, `seven_day`, …), and a window
+ * first heard of *live* should read identically to one first read by the poll.
+ * Two label tables would drift, and the drift would surface as one window
+ * listed twice under two names.
+ */
+export function planWindowLabel(id: string): string | undefined {
+  return KNOWN_WINDOWS.find((w) => w.id === id)?.label;
+}
+
+/**
  * Clamp a reported percentage into 0–100.
  *
  * The provider is the source of truth, but a meter that renders past its own
  * ends is worse than one that saturates. Values outside the range are clamped
  * rather than discarded: "over limit" is meaningful, "no data" is not.
+ *
+ * Exported for the mapper, which holds a live report's percentage to the same
+ * rule as a polled one.
  */
-function clampUtilization(value: number | null | undefined): number | null {
+export function clampUtilization(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return Math.max(0, Math.min(100, value));
 }

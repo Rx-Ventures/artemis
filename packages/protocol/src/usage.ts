@@ -95,6 +95,130 @@ export interface PlanUsageWindow {
   readonly utilization: number | null;
   /** When the window rolls over, ms since epoch. `null` when not reported. */
   readonly resetsAt: number | null;
+  /**
+   * The provider's own verdict on this window, when one has been heard.
+   *
+   * This is the field that stops "97% but out". The percentage is a rounded,
+   * minutes-old reading; the verdict is the server saying what it is actually
+   * doing with requests right now, and where the two disagree the verdict is
+   * the truth. Absent when nothing live has been heard — a window from the
+   * polled snapshot alone carries only its number.
+   */
+  readonly status?: PlanLimitStatus;
+}
+
+/**
+ * What the provider is doing with requests against a limit.
+ *
+ * - `ok`       — requests are being served normally.
+ * - `warning`  — served, but the provider says the limit is close.
+ * - `rejected` — refused. The window is spent regardless of what its
+ *                percentage reads; a rejected window at 97% is *out*, not
+ *                "3% from out".
+ */
+export type PlanLimitStatus = 'ok' | 'warning' | 'rejected';
+
+/**
+ * One live report about one limit, as an event mid-run carries it.
+ *
+ * This is the payload of a `plan.limit` agent event, defined here rather than
+ * in `events.ts` because {@link applyPlanLimit} consumes it and `usage.ts`
+ * cannot import the event union without a cycle.
+ *
+ * Everything but the verdict is optional because the provider's live signal is
+ * a health report, not a gauge reading: the common case carries a status and a
+ * window name and *no percentage at all*.
+ */
+export interface PlanLimitReading {
+  /** The verdict. The one field a reading is worthless without. */
+  readonly status: PlanLimitStatus;
+  /** Which window the verdict is about. Absent when the provider names none. */
+  readonly windowId?: PlanUsageWindowId;
+  /** Display label for {@link windowId}, when the adapter knows one. */
+  readonly label?: string;
+  /** Share of the window consumed, 0–100, when the report carries it. */
+  readonly utilization?: number;
+  /** When the window rolls over, ms since epoch, when the report carries it. */
+  readonly resetsAt?: number;
+}
+
+/**
+ * Fold a live limit report into the last polled snapshot.
+ *
+ * Returns the merged snapshot, or `null` when the reading is not news — and
+ * `null` matters as much as the merge does. The provider sends a report on
+ * every API response, which during a fanned-out workflow is many per second;
+ * a caller broadcasts what this returns, so everything that would only restate
+ * the cache must come back `null` or the push channel becomes a firehose of
+ * no-ops. News is a verdict changing or a percentage moving, and nothing else:
+ *
+ *  - A reset time is deliberately *not* news by itself. Every report carries
+ *    one, at second precision, while the poll records the same instant at
+ *    sub-millisecond precision — treating the difference as change would make
+ *    every report newsworthy forever. It rides along when something else is.
+ *  - An `ok` report is news only when it *clears* a worse verdict already
+ *    held. That case is common and load-bearing: a 5-hour window rolling over
+ *    mid-session is exactly an `ok` arriving on a window marked `rejected`.
+ *  - A reading naming no window is never news. The verdict cannot be attached
+ *    to a window it might not belong to, and every observed payload names one.
+ *
+ * The merge keeps what it is not contradicted on: a report with no percentage
+ * leaves the polled percentage standing rather than blanking it.
+ *
+ * `fetchedAt` is stamped on the merged snapshot because the *verdict* is
+ * fresh, even though any untouched percentages are as old as the poll that
+ * read them. While reports are arriving the active-profile poll re-reads the
+ * numbers every thirty seconds, which bounds how far the two can drift.
+ *
+ * Note the complement: a later poll replaces the snapshot wholesale and drops
+ * any held verdict. That is self-healing, not loss — a verdict with no run
+ * feeding it fresh evidence goes stale the moment the window rolls, and the
+ * poll's numbers are the better fact within minutes either way.
+ */
+export function applyPlanLimit(
+  usage: PlanUsage | null | undefined,
+  reading: PlanLimitReading,
+  fetchedAt: number,
+): PlanUsage | null {
+  const windowId = reading.windowId;
+  if (windowId === undefined) return null;
+
+  // An unavailable snapshot ("no plan limits apply") is *not* merged into: a
+  // live verdict arriving on such a profile means the provider disagrees with
+  // it, so it is replaced by a minimal available one the same way no snapshot
+  // at all would be.
+  const existing = usage?.available === true ? usage : null;
+  const current = existing?.windows.find((w) => w.id === windowId) ?? null;
+
+  const statusChanged = reading.status !== (current?.status ?? 'ok');
+  const utilizationMoved =
+    reading.utilization !== undefined && reading.utilization !== current?.utilization;
+  if (!statusChanged && !utilizationMoved) return null;
+
+  const window: PlanUsageWindow = {
+    id: windowId,
+    // The polled label wins: it is the vocabulary the rest of the UI already
+    // shows, and a reading's label is a fallback for a window the poll has
+    // never reported.
+    label: current?.label ?? reading.label ?? windowId.replace(/_/g, ' '),
+    utilization: reading.utilization ?? current?.utilization ?? null,
+    resetsAt: reading.resetsAt ?? current?.resetsAt ?? null,
+    status: reading.status,
+  };
+
+  const windows =
+    current === null
+      ? [...(existing?.windows ?? []), window]
+      : existing?.windows.map((w) => (w.id === windowId ? window : w)) ?? [window];
+
+  return {
+    available: true,
+    windows,
+    fetchedAt,
+    ...(existing?.subscriptionType === undefined
+      ? {}
+      : { subscriptionType: existing.subscriptionType }),
+  };
 }
 
 /**
@@ -195,12 +319,23 @@ export function focusedWindow(
 
 export function bindingWindow(usage: PlanUsage | null | undefined): PlanUsageWindow | null {
   if (!usage?.available) return null;
+  // A window the provider has said it is rejecting on outranks any percentage:
+  // it is the limit that is stopping you as a fact, not a forecast. It binds
+  // even with no percentage at all — the number a rejected window lacks is not
+  // evidence that some 40% window is the tighter constraint.
+  let rejected: PlanUsageWindow | null = null;
   let worst: PlanUsageWindow | null = null;
   for (const window of usage.windows) {
+    if (window.status === 'rejected') {
+      if (rejected === null || (window.utilization ?? -1) > (rejected.utilization ?? -1)) {
+        rejected = window;
+      }
+      continue;
+    }
     if (window.utilization === null) continue;
     if (worst === null || window.utilization > (worst.utilization ?? -1)) worst = window;
   }
-  return worst;
+  return rejected ?? worst;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -273,7 +408,12 @@ export const PLAN_USAGE_MAX_AGE_MS = 3 * PLAN_USAGE_POLL_INTERVAL_MS;
  */
 export function planHeadroom(usage: PlanUsage | null | undefined): number | null {
   const binding = bindingWindow(usage);
-  if (binding === null || binding.utilization === null) return null;
+  if (binding === null) return null;
+  // A rejected window is zero headroom whatever its percentage reads — the
+  // provider is refusing requests, and "3% left" on a window that is already
+  // refusing is the lie this field exists to correct.
+  if (binding.status === 'rejected') return 0;
+  if (binding.utilization === null) return null;
   return 100 - binding.utilization;
 }
 
@@ -435,9 +575,15 @@ export function recommendProfile(
     if (Math.max(0, options.now - usage.fetchedAt) > maxAge) continue;
 
     const binding = bindingWindow(usage);
-    if (binding === null || binding.utilization === null) continue;
+    if (binding === null) continue;
+    // The same rule as {@link planHeadroom}: a rejected window is zero room
+    // whatever it reads. It stays *in* the ranking rather than being excluded —
+    // an account the provider is refusing is a fact worth counting among the
+    // candidates the winner beat, and at zero it can never be named.
+    const headroom = binding.status === 'rejected' ? 0 : 100 - (binding.utilization ?? NaN);
+    if (Number.isNaN(headroom)) continue;
 
-    ranked.push({ entry, usage, binding, headroom: 100 - binding.utilization });
+    ranked.push({ entry, usage, binding, headroom });
   }
 
   if (ranked.length < 2) return null;

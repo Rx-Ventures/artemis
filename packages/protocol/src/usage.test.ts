@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 
 import { resolvePlanWeight } from './planCapacity.js';
 import {
+  applyPlanLimit,
+  bindingWindow,
   PLAN_USAGE_MAX_AGE_MS,
   planHeadroom,
   recommendProfile,
@@ -22,7 +24,10 @@ import {
 const NOW = 1_700_000_000_000;
 
 function usage(
-  windows: readonly (Pick<PlanUsageWindow, 'id' | 'utilization'> & { label?: string })[],
+  windows: readonly (Pick<PlanUsageWindow, 'id' | 'utilization'> & {
+    label?: string;
+    status?: PlanUsageWindow['status'];
+  })[],
   overrides: Partial<PlanUsage> = {},
 ): PlanUsage {
   return {
@@ -33,6 +38,7 @@ function usage(
       label: w.label ?? w.id,
       utilization: w.utilization,
       resetsAt: null,
+      ...(w.status === undefined ? {} : { status: w.status }),
     })),
     ...overrides,
   };
@@ -620,5 +626,124 @@ describe('recommendProfile', () => {
       expect(result?.profileId).toBe('idle');
       expect(result?.headroom).toBe(75);
     });
+  });
+});
+
+describe('the live verdict', () => {
+  it('binds a rejected window over a fuller allowed one', () => {
+    // The exact shape of the bug this exists for: the weekly reads 97 and is
+    // refusing, the five-hour reads 98 and is not. The account is limited by
+    // the window that is *rejecting*, not the one with the bigger number.
+    const reading = usage([
+      { id: 'five_hour', utilization: 98 },
+      { id: 'seven_day', utilization: 97, status: 'rejected' },
+    ]);
+    expect(bindingWindow(reading)?.id).toBe('seven_day');
+    expect(planHeadroom(reading)).toBe(0);
+  });
+
+  it('binds a rejected window even when it has no number at all', () => {
+    const reading = usage([
+      { id: 'five_hour', utilization: 40 },
+      { id: 'seven_day', utilization: null, status: 'rejected' },
+    ]);
+    expect(bindingWindow(reading)?.id).toBe('seven_day');
+    expect(planHeadroom(reading)).toBe(0);
+  });
+
+  it('keeps a rejected account in the ranking, at zero, where it can never win', () => {
+    const result = recommendProfile(
+      [
+        {
+          profileId: 'spent',
+          usage: usage([{ id: 'seven_day', utilization: 60, status: 'rejected' }]),
+        },
+        { profileId: 'ok', usage: usage([{ id: 'seven_day', utilization: 90 }]) },
+      ],
+      { now: NOW },
+    );
+    // 10% of room beats "the provider is refusing", whatever the percentages
+    // say — and the refused account still counts among the candidates beaten.
+    expect(result?.profileId).toBe('ok');
+    expect(result?.candidates).toBe(2);
+  });
+});
+
+describe('applyPlanLimit', () => {
+  const polled = usage([
+    { id: 'five_hour', utilization: 33 },
+    { id: 'seven_day', utilization: 97 },
+  ]);
+
+  it('marks the named window and stamps the merge time', () => {
+    const merged = applyPlanLimit(polled, { status: 'rejected', windowId: 'seven_day' }, NOW + 5_000);
+    expect(merged).not.toBeNull();
+    const window = merged?.windows.find((w) => w.id === 'seven_day');
+    expect(window?.status).toBe('rejected');
+    // The polled number stands: the report carried a verdict, not a reading.
+    expect(window?.utilization).toBe(97);
+    expect(merged?.fetchedAt).toBe(NOW + 5_000);
+    // The other window is untouched.
+    expect(merged?.windows.find((w) => w.id === 'five_hour')?.status).toBeUndefined();
+  });
+
+  it('is not news when nothing changed', () => {
+    // The provider reports on every API response. An ordinary "allowed" on a
+    // window holding no verdict restates the cache and must not broadcast.
+    expect(applyPlanLimit(polled, { status: 'ok', windowId: 'five_hour' }, NOW + 1)).toBeNull();
+    // Same verdict twice: the second is not news either.
+    const rejected = applyPlanLimit(polled, { status: 'rejected', windowId: 'seven_day' }, NOW + 1);
+    expect(
+      applyPlanLimit(rejected, { status: 'rejected', windowId: 'seven_day' }, NOW + 2),
+    ).toBeNull();
+  });
+
+  it('clears a held verdict when the provider allows again', () => {
+    // A 5-hour window rolling over mid-session arrives as exactly this.
+    const rejected = applyPlanLimit(polled, { status: 'rejected', windowId: 'five_hour' }, NOW + 1);
+    const cleared = applyPlanLimit(rejected, { status: 'ok', windowId: 'five_hour' }, NOW + 2);
+    expect(cleared?.windows.find((w) => w.id === 'five_hour')?.status).toBe('ok');
+  });
+
+  it('carries a fresh percentage when the report has one', () => {
+    const merged = applyPlanLimit(
+      polled,
+      { status: 'warning', windowId: 'five_hour', utilization: 91, resetsAt: NOW + 60_000 },
+      NOW + 1,
+    );
+    const window = merged?.windows.find((w) => w.id === 'five_hour');
+    expect(window?.utilization).toBe(91);
+    expect(window?.resetsAt).toBe(NOW + 60_000);
+    expect(window?.status).toBe('warning');
+  });
+
+  it('creates the window when nothing has been polled yet', () => {
+    const merged = applyPlanLimit(null, { status: 'rejected', windowId: 'five_hour', label: '5 hours' }, NOW);
+    expect(merged?.available).toBe(true);
+    expect(merged?.windows).toEqual([
+      { id: 'five_hour', label: '5 hours', utilization: null, resetsAt: null, status: 'rejected' },
+    ]);
+  });
+
+  it('never attaches a verdict to a window the report did not name', () => {
+    expect(applyPlanLimit(polled, { status: 'rejected' }, NOW)).toBeNull();
+  });
+
+  it('keeps the polled label over the report\'s', () => {
+    const named = usage([{ id: 'five_hour', utilization: 10, label: '5 hours' }]);
+    const merged = applyPlanLimit(
+      named,
+      { status: 'rejected', windowId: 'five_hour', label: 'five hour' },
+      NOW,
+    );
+    expect(merged?.windows[0]?.label).toBe('5 hours');
+  });
+
+  it('replaces an unavailable snapshot rather than merging into it', () => {
+    // "No plan limits apply" contradicted by a live verdict: the verdict wins.
+    const metered: PlanUsage = { available: false, windows: [], fetchedAt: NOW };
+    const merged = applyPlanLimit(metered, { status: 'rejected', windowId: 'five_hour' }, NOW + 1);
+    expect(merged?.available).toBe(true);
+    expect(merged?.windows).toHaveLength(1);
   });
 });

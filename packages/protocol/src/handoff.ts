@@ -159,7 +159,23 @@ export function handoffTrigger(
   if (!usage?.available) return null;
   for (const threshold of thresholds) {
     const window = windowFor(usage, threshold);
-    if (window?.utilization == null) continue;
+    if (window === null) continue;
+    /*
+      The provider's own verdict outranks the threshold. A window it has said
+      it is rejecting on has been *hit*, whatever the rounded percentage reads
+      — the reported 97% against a weekly rule set at 98 is exactly the gap
+      this closes. Firing now is late by the feature's own standard, and still
+      right: the alternative is a conversation that keeps failing on a spent
+      account rather than moving to one with room.
+
+      The reported percentage is kept when there is one; a rejected window
+      with none is described as 100, which is the one number the verdict has
+      itself established.
+    */
+    if (window.status === 'rejected') {
+      return { threshold, window, utilization: Math.round(window.utilization ?? 100) };
+    }
+    if (window.utilization == null) continue;
     if (window.utilization >= threshold.at) {
       return { threshold, window, utilization: Math.round(window.utilization) };
     }

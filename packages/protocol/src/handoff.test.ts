@@ -166,3 +166,38 @@ describe('handoffThresholdsWith', () => {
     ).toBe(90);
   });
 });
+
+describe('the provider\'s live verdict', () => {
+  const rejected = (id: string, utilization: number | null): PlanUsageWindow => ({
+    id,
+    label: id,
+    utilization,
+    resetsAt: null,
+    status: 'rejected',
+  });
+
+  it('fires below the threshold when the provider is already refusing', () => {
+    // The reported 97 against a weekly rule at 98 is the exact gap this
+    // closes: the percentage is a rounded, minutes-old reading, and the
+    // verdict is what the server is doing with requests right now.
+    const trigger = handoffTrigger(usage(rejected('seven_day', 97)));
+    expect(trigger?.threshold.id).toBe('seven_day');
+    expect(trigger?.utilization).toBe(97);
+  });
+
+  it('describes a rejected window with no number as 100', () => {
+    // The one number the verdict itself has established.
+    expect(handoffTrigger(usage(rejected('five_hour', null)))?.utilization).toBe(100);
+  });
+
+  it('does not fire early on a warning — thresholds still govern below rejection', () => {
+    const warned: PlanUsageWindow = {
+      id: 'five_hour',
+      label: '5 hours',
+      utilization: 80,
+      resetsAt: null,
+      status: 'warning',
+    };
+    expect(handoffTrigger(usage(warned))).toBeNull();
+  });
+});
