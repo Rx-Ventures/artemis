@@ -87,6 +87,8 @@ function label(event: AgentEvent): string {
       return `${String(event.slashCommands.length)} slash command(s)`;
     case 'plan.limit':
       return `${event.limit.status} on ${event.limit.windowId ?? 'an unnamed window'}`;
+    case 'command.run':
+      return `/${event.command.name}`;
     case 'run.end':
       return `${event.reason}${event.error === undefined ? '' : ` — ${event.error.message}`}`;
   }

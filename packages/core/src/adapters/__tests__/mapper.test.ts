@@ -1180,6 +1180,124 @@ describe('deliberately dropped messages', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* slash commands → command.run                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('slash commands', () => {
+  /** A replayed user message, which is the shape an envelope arrives in. */
+  const userText = (text: string) => ({
+    type: 'user',
+    isReplay: true,
+    parent_tool_use_id: null,
+    uuid: 'u',
+    session_id: 's',
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  });
+
+  const INVOKE =
+    '<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus[1m]</command-args>';
+  const OUTPUT = '<local-command-stdout>Set model to opus[1m]</local-command-stdout>';
+
+  it('pairs an invocation with the output that follows it', () => {
+    const state = makeState();
+    const events = run(state, [userText(INVOKE), userText(OUTPUT)]);
+
+    // One event for one command, and no user prose at all — the XML that used
+    // to be drawn as two chat bubbles.
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'command.run',
+      command: { name: 'model', args: 'opus[1m]', output: 'Set model to opus[1m]' },
+    });
+    expect(events.some((e) => e.type === 'text.complete')).toBe(false);
+  });
+
+  it('emits a command that never printed, once the next message arrives', () => {
+    // A plugin command expands into a prompt and prints nothing. It is still
+    // the reason the next turn happened, so it must not be swallowed.
+    const state = makeState();
+    const events = run(state, [
+      userText('<command-message>x:implement</command-message>\n<command-name>/x:implement</command-name>'),
+      assistantMessage({ content: [{ type: 'text', text: 'working', citations: null }] }),
+    ]);
+
+    const command = events.find((e) => e.type === 'command.run');
+    expect(command).toMatchObject({ type: 'command.run', command: { name: 'x:implement' } });
+    expect(command && 'command' in command ? command.command.output : 'x').toBeUndefined();
+    // Released *before* the reply it preceded, so the thread reads in order.
+    expect(events.indexOf(command!)).toBeLessThan(
+      events.findIndex((e) => e.type === 'text.complete'),
+    );
+  });
+
+  it('releases a held command before the run ends', () => {
+    const state = makeState();
+    const events = run(state, [userText(INVOKE), resultMessage()]);
+    const kinds = events.map((e) => e.type);
+    expect(kinds).toContain('command.run');
+    expect(kinds.indexOf('command.run')).toBeLessThan(kinds.indexOf('run.end'));
+  });
+
+  it('releases the first of two commands in a row', () => {
+    const state = makeState();
+    const events = run(state, [
+      userText('<command-name>/effort</command-name>'),
+      userText(INVOKE),
+      userText(OUTPUT),
+    ]);
+    const commands = events.filter((e) => e.type === 'command.run');
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).toMatchObject({ command: { name: 'effort' } });
+    // The output belongs to the second, not the first.
+    expect(commands[0] && 'command' in commands[0] ? commands[0].command.output : 'x').toBeUndefined();
+    expect(commands[1]).toMatchObject({ command: { name: 'model', output: 'Set model to opus[1m]' } });
+  });
+
+  it('drops the caveat, which is addressed to the model', () => {
+    const state = makeState();
+    expect(
+      run(state, [
+        userText('<local-command-caveat>Caveat: … DO NOT respond …</local-command-caveat>'),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('marks a command whose output came from the error stream', () => {
+    const state = makeState();
+    const events = run(state, [
+      userText('<command-name>/nope</command-name>'),
+      userText('<local-command-stderr>unknown command</local-command-stderr>'),
+    ]);
+    expect(events[0]).toMatchObject({
+      type: 'command.run',
+      command: { name: 'nope', output: 'unknown command', failed: true },
+    });
+  });
+
+  it('leaves an ordinary prompt alone', () => {
+    const state = makeState();
+    const events = run(state, [userText('please ship it')]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'text.complete', role: 'user', text: 'please ship it' });
+  });
+
+  it('keeps orphan output as prose rather than losing it', () => {
+    // Never observed, but the pairing is a CLI convention rather than a
+    // promise. The envelope is stripped; the text survives.
+    const state = makeState();
+    const events = run(state, [userText(OUTPUT)]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'text.complete', text: 'Set model to opus[1m]' });
+  });
+
+  it('takes its turn in the dense sequence', () => {
+    const state = makeState();
+    const events = run(state, [userText(INVOKE), userText(OUTPUT), userText('then this')]);
+    expect(events.map((e) => e.seq)).toEqual([0, 1]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* rate_limit_event → plan.limit                                              */
 /* -------------------------------------------------------------------------- */
 

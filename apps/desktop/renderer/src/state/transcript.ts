@@ -167,6 +167,22 @@ export interface NoticeItem extends ItemBase {
   readonly detail?: string;
 }
 
+/**
+ * A slash command the user ran, and what the host printed.
+ *
+ * Its own row rather than a user bubble, because it is not something the user
+ * *said*. `/model` never reached the model; it changed the session and printed
+ * a line. Drawing it as a chat message — which is what the raw envelope did —
+ * puts words in the user's mouth and files a settings change as a turn.
+ */
+export interface CommandItem extends ItemBase {
+  readonly kind: 'command';
+  readonly name: string;
+  readonly args?: string;
+  readonly output?: string;
+  readonly failed?: boolean;
+}
+
 /** The terminal card for a run. */
 export interface RunEndItem extends ItemBase {
   readonly kind: 'run-end';
@@ -185,6 +201,7 @@ export type TranscriptItem =
   | ToolItem
   | PermissionItem
   | NoticeItem
+  | CommandItem
   | RunEndItem;
 
 /* -------------------------------------------------------------------------- */
@@ -1032,6 +1049,20 @@ export class TranscriptModel {
         // profile menu are its surfaces — a thread entry per verdict would be
         // a log of a gauge.
         break;
+
+      case 'command.run': {
+        const id = `c:${++this.counter}`;
+        this.insert({
+          id,
+          ts: event.ts,
+          kind: 'command',
+          name: event.command.name,
+          ...(event.command.args === undefined ? {} : { args: event.command.args }),
+          ...(event.command.output === undefined ? {} : { output: event.command.output }),
+          ...(event.command.failed === undefined ? {} : { failed: event.command.failed }),
+        });
+        break;
+      }
 
       case 'background.tasks':
         /*

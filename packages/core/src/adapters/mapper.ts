@@ -57,6 +57,7 @@ import type {
   QuestionAnswer,
   QuestionOption,
   QuestionPrompt,
+  LocalCommand,
   PlanLimitReading,
   PlanLimitStatus,
   RunEndReason,
@@ -89,6 +90,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { clampUtilization, planWindowLabel } from './planUsage.js';
+import { parseCommandEnvelope, type CommandEnvelope } from './localCommand.js';
 
 /** The provider id every event from this adapter carries. */
 export const CLAUDE_PROVIDER_ID = 'claude' as const;
@@ -256,6 +258,18 @@ export interface ClaudeMapperState {
   readonly streamedBlocks: Map<MessageId, Set<number>>;
   /** Message id of the assistant message currently streaming. */
   streamMessageId: MessageId | undefined;
+
+  /**
+   * A slash command seen but not yet emitted, waiting for its output.
+   *
+   * The CLI narrates one command as two user messages — the invocation, then
+   * whatever it printed — and they are one thing that happened. Holding the
+   * first until the second arrives is what lets a single `command.run` carry
+   * both; see {@link flushPendingCommand} for what happens when the second
+   * never comes, which is the ordinary case for a command that expands into a
+   * prompt instead of printing.
+   */
+  pendingCommand: LocalCommand | undefined;
 }
 
 /** Options for {@link createClaudeMapperState}. */
@@ -293,6 +307,7 @@ export function createClaudeMapperState(
     closedToolCalls: new Set(),
     streamedBlocks: new Map(),
     streamMessageId: undefined,
+    pendingCommand: undefined,
   };
 }
 
@@ -346,6 +361,57 @@ export function mapSdkMessage(
 ): readonly AgentEvent[] {
   if (state.ended) return [];
 
+  /*
+    A held command is released the moment anything that is not its own output
+    arrives, so the wait can never outlive the message after the invocation.
+
+    Prepended rather than appended: the command happened *before* whatever is
+    being mapped now, and `seq` is handed out in emission order — so flushing
+    after would file it later in the conversation than the reply it preceded.
+  */
+  const flushed = isCommandOutput(message) ? [] : flushPendingCommand(state);
+  const mapped = mapSdkMessageInner(message, state);
+  return flushed.length === 0 ? mapped : [...flushed, ...mapped];
+}
+
+/** True when this message is a command's printed output and nothing else. */
+function isCommandOutput(message: SDKMessage): boolean {
+  if (message.type !== 'user') return false;
+  return userTextBlocks(message as UserMessage).some(
+    (text) => parseCommandEnvelope(text)?.kind === 'output',
+  );
+}
+
+/**
+ * Emit a held command, with whatever it had.
+ *
+ * A command that printed nothing is still a command the user ran, so this
+ * emits rather than discarding: `/mattpocock-skills:implement` expands into a
+ * prompt and prints not one word, and a transcript that showed the resulting
+ * turn with no sign of what asked for it would be missing the reason.
+ */
+function flushPendingCommand(state: ClaudeMapperState): readonly AgentEvent[] {
+  const command = state.pendingCommand;
+  if (command === undefined) return [];
+  state.pendingCommand = undefined;
+  return [{ type: 'command.run', ...stamp(state), command }];
+}
+
+/** Every text block on a user message, whatever shape its content took. */
+function userTextBlocks(message: UserMessage): readonly string[] {
+  const content = message.message.content;
+  if (typeof content === 'string') return [content];
+  const out: string[] = [];
+  for (const block of content) {
+    if (block.type === 'text') out.push(block.text);
+  }
+  return out;
+}
+
+function mapSdkMessageInner(
+  message: SDKMessage,
+  state: ClaudeMapperState,
+): readonly AgentEvent[] {
   switch (message.type) {
     case 'assistant':
       return mapAssistantMessage(message, state);
@@ -882,6 +948,66 @@ function isHumanTurn(message: UserMessage, isReplay: boolean): boolean {
   return origin === undefined || origin.kind === 'human';
 }
 
+/**
+ * Take a command envelope out of a user text block.
+ *
+ * Returns the text that should still be emitted as user prose, or `null` when
+ * the block was a command and has been fully dealt with.
+ *
+ * Deliberately runs *before* {@link isHumanTurn}. That gate asks "did a person
+ * type this", and the answer for an envelope is no — the CLI generated it. A
+ * command still has to be recognised so it can be drawn as one and so its
+ * caveat can be dropped, and letting the gate see it first would mean an
+ * envelope arriving on a synthetic message stayed raw.
+ */
+function takeCommandEnvelope(
+  text: string,
+  state: ClaudeMapperState,
+  events: AgentEvent[],
+): string | null {
+  const envelope: CommandEnvelope | null = parseCommandEnvelope(text);
+  if (envelope === null) return text;
+
+  // Boilerplate the CLI addresses to the model, telling it to ignore what
+  // follows. It says nothing to a person and is not part of the conversation.
+  if (envelope.kind === 'caveat') return null;
+
+  if (envelope.kind === 'invocation') {
+    // Two commands in a row: the first never got output and is released now,
+    // before the second takes its place.
+    events.push(...flushPendingCommand(state));
+    state.pendingCommand = {
+      name: envelope.name,
+      ...(envelope.args === undefined ? {} : { args: envelope.args }),
+    };
+    return null;
+  }
+
+  const pending = state.pendingCommand;
+  if (pending !== undefined) {
+    state.pendingCommand = undefined;
+    events.push({
+      type: 'command.run',
+      ...stamp(state),
+      command: {
+        ...pending,
+        ...(envelope.text === '' ? {} : { output: envelope.text }),
+        ...(envelope.failed ? { failed: true } : {}),
+      },
+    });
+    return null;
+  }
+
+  /*
+   * Output with no invocation in front of it — not seen in any stored
+   * transcript, but the pairing is the CLI's convention rather than a promise.
+   * Emitted as prose *stripped of its envelope*: a command.run with no name
+   * would be a chip nobody could identify, and dropping it would lose whatever
+   * the host printed. Neither is worth it to avoid one plain line.
+   */
+  return envelope.text === '' ? null : envelope.text;
+}
+
 function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonly AgentEvent[] {
   const events: AgentEvent[] = [];
   const isReplay = 'isReplay' in message && message.isReplay === true;
@@ -893,13 +1019,14 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
     // A plain string user turn. Artemis's own prompts come back this way and
     // the renderer already drew them, so only replayed history is surfaced —
     // see {@link isHumanTurn} for why synthesised turns are not.
-    if (isHumanTurn(message, isReplay)) {
+    const prose = takeCommandEnvelope(content, state, events);
+    if (prose !== null && isHumanTurn(message, isReplay)) {
       events.push({
         type: 'text.complete',
         ...stamp(state),
         messageId,
         role: 'user',
-        text: content,
+        text: prose,
         replay: true,
         agentId,
       });
@@ -926,17 +1053,20 @@ function mapUserMessage(message: UserMessage, state: ClaudeMapperState): readonl
       continue;
     }
 
-    if (block.type === 'text' && isHumanTurn(message, isReplay)) {
-      events.push({
-        type: 'text.complete',
-        ...stamp(state),
-        messageId,
-        role: 'user',
-        text: block.text,
-        blockIndex,
-        replay: true,
-        agentId,
-      });
+    if (block.type === 'text') {
+      const prose = takeCommandEnvelope(block.text, state, events);
+      if (prose !== null && isHumanTurn(message, isReplay)) {
+        events.push({
+          type: 'text.complete',
+          ...stamp(state),
+          messageId,
+          role: 'user',
+          text: prose,
+          blockIndex,
+          replay: true,
+          agentId,
+        });
+      }
       continue;
     }
 
