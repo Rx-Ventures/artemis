@@ -1,6 +1,29 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 1.15.0
+
+The usage meter now hears the provider's own verdict, so an account that is
+out of usage says so — even while its percentage still reads 97%.
+
+- **"Says 97% but I'm out" is fixed.** Claude states on every response whether
+  the account is allowed, near its limit, or being refused. Artemis used to
+  drop that signal and show only a polled percentage, which lags by minutes
+  and rounds away the endgame. The verdict now reaches the meter live: a
+  refused window draws full and red, reads "limit reached — requests are being
+  refused", and says when it comes back. Between polls, the rings move within
+  seconds of the provider deciding, not minutes after.
+
+- **The profile menu says "out".** An account the provider is refusing shows
+  `out` where its stale percentage used to be, and the recommended-account
+  ranking scores it at zero headroom — it can never be the account Artemis
+  sends your next session to.
+
+- **Automatic handoff fires on the refusal itself.** A refused window triggers
+  the handover below its percentage threshold, so the weekly rule at 98% no
+  longer sits silent while an account reported at 97% is already turning
+  requests away.
+
 ## What's new in 1.14.1
 
 Artemis now ships for Arch Linux, keeps live Codex conversations attached, and
