@@ -30,7 +30,21 @@ COPY packages/sdk ./packages/sdk
 # the graph, so Electron is neither downloaded nor built.
 RUN pnpm install --frozen-lockfile --filter @rx-artemis/server...
 RUN pnpm --filter @rx-artemis/server build
-RUN pnpm --filter @rx-artemis/server deploy --prod --legacy /out
+# `--config.node-linker=hoisted` is load-bearing, not tidiness. This repo's
+# .npmrc pins `node-linker=isolated`, and a legacy deploy under that linker
+# writes the workspace packages (`@rx-artemis/protocol`, `core`, and the SDK)
+# into /out/node_modules as **absolute symlinks back into the build tree**
+# (/src/packages/*, /src/node_modules/.pnpm/*). Those resolve while /src still
+# exists — which is why the deploy ran in every local test — and dangle the
+# instant `COPY --from=build /out /app` lands them in a stage where /src is
+# gone: the server then dies at its first import with ERR_MODULE_NOT_FOUND for
+# `@rx-artemis/protocol`, before it prints a line. (The modern injected deploy
+# refuses to run at all under a shared lockfile.) Hoisting the deploy inlines
+# every workspace package and dependency as real files, so /out is genuinely
+# self-contained — and, as a dividend, it lands the SDK's platform binary at
+# top-level `@anthropic-ai/claude-agent-sdk-<platform>/`, which the runtime
+# symlink step below then finds without any hand-copying.
+RUN pnpm --filter @rx-artemis/server deploy --prod --legacy --config.node-linker=hoisted /out
 
 FROM node:22-bookworm-slim
 RUN apt-get update \
@@ -43,17 +57,13 @@ COPY --from=build /out /app
 # PATH so signing an account in is `docker exec -it <name> claude auth login`
 # with CLAUDE_CONFIG_DIR pointing at the profile's directory under /data.
 #
-# The binary is not a direct dependency of anything the server declares — it is
-# an *optional* dependency of the SDK, selected by platform — so pnpm keeps it
-# where every transitive dependency lives, nested under the SDK's own
-# `node_modules` (and, in the store layout, under `.pnpm/`), not flattened to
-# the top of `@anthropic-ai/`. A glob rooted one level deep misses it entirely,
-# which is how an image shipped for a long time with no `claude` on PATH and a
-# green build: the miss was guarded with `if [ -n "$bin" ]`, so the one defect
-# — that no account could ever be signed in — surfaced only to whoever first
-# tried, at the one moment they could not fix it. So: search the whole tree,
-# prefer the glibc build this Debian image needs over any musl sibling pnpm may
-# also have unpacked, and make a genuine miss a build failure, not a shrug.
+# The hoisted deploy places this binary at top-level
+# `@anthropic-ai/claude-agent-sdk-linux-x64/claude`; the search stays broad (and
+# fatal on a miss) anyway, because the exact location is the SDK's to change on
+# an upgrade, and an image that silently ships with no `claude` on PATH — the
+# way this one did while the miss was a shrug rather than a failure — is a
+# defect that only surfaces to whoever first tries to sign in. Prefer the glibc
+# build this Debian image needs over any musl sibling pnpm may also unpack.
 RUN set -eu; \
   bin="$(find /app/node_modules -type f -path '*claude-agent-sdk-linux-x64/claude' 2>/dev/null | head -1)"; \
   if [ -z "$bin" ]; then \
