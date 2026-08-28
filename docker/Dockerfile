@@ -17,6 +17,14 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/protocol ./packages/protocol
 COPY packages/core ./packages/core
 COPY apps/server ./apps/server
+# The server does not import the SDK, but the workspace *root* declares it as a
+# devDependency (`@rx-ventures/artemis-sdk`, the one package the fork never
+# renamed). `pnpm install --filter` below is happy without it — filtering walks
+# only the server's own subgraph — but `pnpm deploy` resolves the root manifest
+# in full and refuses on a `workspace:*` dependency whose package is absent from
+# the build context. Copying the manifest is enough to satisfy that resolution;
+# nothing in it is built or shipped.
+COPY packages/sdk ./packages/sdk
 
 # Filtered to the server and what it depends on: the desktop app is not in
 # the graph, so Electron is neither downloaded nor built.
