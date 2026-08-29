@@ -20,7 +20,7 @@ import type {
 } from '../adapters/types.js';
 import { RunError } from './errors.js';
 import { RunRegistry } from './registry.js';
-import type { RunRegistryOptions } from './registry.js';
+import type { RunLifecycleEvent, RunRegistryOptions } from './registry.js';
 
 /* -------------------------------------------------------------------------- */
 /* Fixtures                                                                   */
@@ -187,6 +187,7 @@ function harness(
     countSessionMessages?: (query: { sessionId: string }) => Promise<number>;
     resolveRun?: RunRegistryOptions['resolveRun'];
     checkWorkingDirectory?: RunRegistryOptions['checkWorkingDirectory'];
+    onLifecycle?: RunRegistryOptions['onLifecycle'];
   } = {},
 ): Harness {
   const runs: FakeRun[] = [];
@@ -228,6 +229,7 @@ function harness(
     historyLimit: options.historyLimit,
     endedRetention: options.endedRetention,
     onError: (error, context) => errors.push({ error, phase: context.phase }),
+    onLifecycle: options.onLifecycle,
   });
 
   return { registry, runs, errors, resolved, calls };
@@ -1553,5 +1555,186 @@ describe('history offset', () => {
     // `session.started` replaces the handle. The offset is a fact about how the
     // run began and must not be dropped on the way through.
     expect(h.registry.get(handle.runId)?.historyOffset).toBe(7);
+  });
+});
+
+/**
+ * The lifecycle seam: the run's biography as the session-lifecycle log hears
+ * it. The shapes are asserted exactly, because these objects are written to
+ * disk verbatim and the log's no-content rule starts with what the registry
+ * chooses to say — ids and event names, nothing else.
+ */
+describe('RunRegistry — lifecycle notifications', () => {
+  function collector(): {
+    events: RunLifecycleEvent[];
+    onLifecycle: (event: RunLifecycleEvent) => void;
+  } {
+    const events: RunLifecycleEvent[] = [];
+    return {
+      events,
+      onLifecycle: (event) => {
+        events.push(event);
+      },
+    };
+  }
+
+  it('notes a started run with its ids and nothing else', async () => {
+    const { events, onLifecycle } = collector();
+    const { registry } = harness({ onLifecycle });
+
+    await registry.start(input());
+
+    expect(events).toEqual([
+      {
+        kind: 'run.started',
+        runId: 'run-1',
+        profileId: 'profile-1',
+        providerId: 'claude',
+        cwd: '/repo',
+      },
+    ]);
+  });
+
+  it('carries the resume id on a continuation, so a resumed run is distinguishable at start', async () => {
+    const { events, onLifecycle } = collector();
+    const { registry } = harness({ onLifecycle });
+
+    await registry.start(input({ resumeSessionId: 'session-prior' }));
+
+    expect(events[0]).toMatchObject({ kind: 'run.started', resumeSessionId: 'session-prior' });
+  });
+
+  it('notes the session id the moment the provider announces it, exactly once', async () => {
+    const { events, onLifecycle } = collector();
+    const h = harness({ onLifecycle });
+
+    const handle = await h.registry.start(input());
+    firstRun(h.runs).emit(sessionStarted(handle.runId), sessionStarted(handle.runId, 1));
+    await flush();
+
+    const sessions = events.filter((event) => event.kind === 'run.session');
+    expect(sessions).toEqual([
+      {
+        kind: 'run.session',
+        runId: 'run-1',
+        profileId: 'profile-1',
+        providerId: 'claude',
+        cwd: '/repo',
+        sessionId: 'session-abc',
+      },
+    ]);
+  });
+
+  it("notes an adapter's own run.end as not synthesized, then the release", async () => {
+    const { events, onLifecycle } = collector();
+    const h = harness({ onLifecycle, releasable: true });
+
+    const handle = await h.registry.start(input());
+    firstRun(h.runs).emit(sessionStarted(handle.runId), runEnd(handle.runId, 1));
+    firstRun(h.runs).close();
+    await flush();
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'run.started',
+      'run.session',
+      'run.ended',
+      'run.released',
+    ]);
+    expect(events[2]).toEqual({
+      kind: 'run.ended',
+      runId: 'run-1',
+      profileId: 'profile-1',
+      providerId: 'claude',
+      cwd: '/repo',
+      sessionId: 'session-abc',
+      reason: 'completed',
+      synthesized: false,
+    });
+    // The turn was released, not torn down: the adapter kept its process.
+    expect(events[3]).toMatchObject({ kind: 'run.released', mode: 'released' });
+  });
+
+  it('marks a run.end the registry had to invent as synthesized', async () => {
+    const { events, onLifecycle } = collector();
+    const h = harness({ onLifecycle });
+
+    await h.registry.start(input());
+    // The stream just ends — the misbehaviour the phantom-done forensics
+    // could never see: nothing distinguished the adapter's end from the
+    // registry papering over its absence. Now the log says which it was.
+    firstRun(h.runs).close();
+    await flush();
+
+    expect(events.map((event) => event.kind)).toEqual(['run.started', 'run.ended', 'run.released']);
+    expect(events[1]).toMatchObject({ kind: 'run.ended', reason: 'completed', synthesized: true });
+    // No release() on a plain FakeRun: letting go and tearing down are one act.
+    expect(events[2]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
+  });
+
+  it('records a disposed run as ended by disposal and released by teardown', async () => {
+    const { events, onLifecycle } = collector();
+    const h = harness({ onLifecycle, releasable: true });
+
+    const handle = await h.registry.start(input());
+    firstRun(h.runs).emit(sessionStarted(handle.runId));
+    await flush();
+    await h.registry.dispose(handle.runId);
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'run.started',
+      'run.session',
+      'run.ended',
+      'run.released',
+    ]);
+    expect(events[2]).toMatchObject({ kind: 'run.ended', reason: 'disposed', synthesized: true });
+    // An explicit dispose overrules retention even for a releasable turn.
+    expect(events[3]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
+  });
+
+  it('notes an adopted run under the continuation context it arrived with', () => {
+    const { events, onLifecycle } = collector();
+    const { registry } = harness({ onLifecycle });
+
+    const run = Object.assign(new FakeTurn(), {
+      runId: 'run-c1',
+      providerId: 'claude',
+      capabilities: FULL_CAPABILITIES,
+    });
+    registry.adopt(run as unknown as Run, {
+      providerId: 'claude',
+      profileId: 'profile-2',
+      cwd: '/other',
+      sessionId: 'session-adopted',
+    });
+
+    expect(events).toEqual([
+      {
+        kind: 'run.adopted',
+        runId: 'run-c1',
+        profileId: 'profile-2',
+        providerId: 'claude',
+        cwd: '/other',
+        sessionId: 'session-adopted',
+      },
+    ]);
+  });
+
+  it('contains a lifecycle listener that throws, reporting it and leaving the run alone', async () => {
+    const h = harness({
+      onLifecycle: () => {
+        throw new Error('log disk full');
+      },
+    });
+
+    const handle = await h.registry.start(input());
+    firstRun(h.runs).emit(sessionStarted(handle.runId), runEnd(handle.runId, 1));
+    firstRun(h.runs).close();
+    await flush();
+
+    // Every note threw; every throw was contained and reported as a listener
+    // failure; the run itself started, ran and ended normally.
+    expect(h.errors.length).toBeGreaterThan(0);
+    expect(h.errors.every((entry) => entry.phase === 'listener')).toBe(true);
+    expect(h.registry.get(handle.runId)?.status).toBe('ended');
   });
 });
