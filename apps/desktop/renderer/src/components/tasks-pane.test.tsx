@@ -118,7 +118,7 @@ beforeEach(() => {
     closePane(extra.id);
   }
   useApp.setState({
-    preview: null,
+    previews: [],
     terminals: [],
     activeDockTab: null,
     visibleDockTabs: [],
@@ -126,6 +126,9 @@ beforeEach(() => {
     // The window store outlives each `it` too, and the block below turns this
     // off — left flipped it would hide the tab from every test after it.
     dockAutoOpen: true,
+    // Same argument for the scope: the split test widens it to reach the
+    // other column's list, and the default is the focused conversation.
+    dockScope: 'pane',
   });
   setPaneState(focusedPane(), {
     cwd: '/Users/me/project',
@@ -280,7 +283,11 @@ describe('the delegated-work pane', () => {
       dismissedTasks: [],
       run: { ...paneState(left).run, runId: 'run-2' },
     } as never);
-    useApp.setState({ focusedPaneId: left.id });
+    // Scope widened on purpose: under the `'pane'` default the strip shows
+    // only the focused conversation's tabs, and the whole premise here is
+    // reaching the *other* column's list — which is exactly what the `all`
+    // view is for. The mis-routing hazard is sharpest in this view too.
+    useApp.setState({ focusedPaneId: left.id, dockScope: 'all' });
 
     renderDock();
     fireEvent.click(screen.getByRole('tab', { name: /1 running/ }));

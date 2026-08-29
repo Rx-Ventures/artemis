@@ -53,8 +53,9 @@
  */
 
 import { useEffect, useMemo, useRef, type ReactElement } from 'react';
+import { PinIcon } from 'lucide-react';
 
-import { useApp } from '../state/store';
+import { pinFile, useApp } from '../state/store';
 import { highlightLines } from '../lib/highlight';
 import { formatBytes } from '../lib/attachments';
 import { CopyButton } from './primitives';
@@ -93,12 +94,14 @@ export function FileViewer({ id }: { readonly id: string }): ReactElement | null
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Caption
+        id={file.id}
         path={file.path}
         bytes={file.bytes}
         lines={lines.length}
         truncated={file.truncated}
         clipped={clipped}
         text={file.text}
+        pinned={file.pinned}
       />
       <Body lines={shown} line={file.line} path={file.path} />
     </div>
@@ -113,22 +116,46 @@ export function FileViewer({ id }: { readonly id: string }): ReactElement | null
  * conclusions from the end of a file that is not the end of the file.
  */
 function Caption({
+  id,
   path,
   bytes,
   lines,
   truncated,
   clipped,
   text,
+  pinned,
 }: {
+  readonly id: string;
   readonly path: string;
   readonly bytes: number;
   readonly lines: number;
   readonly truncated: boolean;
   readonly clipped: boolean;
   readonly text: string;
+  readonly pinned: boolean;
 }): ReactElement {
   return (
     <DockHeader>
+      {/*
+        The pin, while the tab is transient — the button half of the promotion
+        whose gesture half is double-clicking the tab. In the header rather
+        than on the 34px tab because the header is where the viewer explains
+        itself, and a control that decides whether the *next* file replaces
+        this one deserves a word, not a corner pixel. It disappears once
+        pinned: unpinning is not offered (see `pinFile`), so a pressed state
+        would be a control that no longer does anything.
+      */}
+      {pinned ? null : (
+        <button
+          type="button"
+          onClick={() => pinFile(id)}
+          title="Keep this tab — the next file opened will otherwise replace it"
+          className="flex shrink-0 items-center gap-1 rounded-xs px-1 font-mono text-2xs text-ink-faint hover:text-ink"
+        >
+          <PinIcon className="size-2.5" aria-hidden="true" />
+          pin
+        </button>
+      )}
       <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint" title={path}>
         {path}
       </span>

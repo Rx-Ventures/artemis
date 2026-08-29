@@ -72,6 +72,11 @@ const { closePane, focusedPane, handleAgentEvent, splitPane, useApp } = await im
 const { setPaneState } = await import('@/state/pane');
 const { seedApp } = await import('@/state/testkit');
 
+/** The open previews' paths — previews are a list now, one per conversation. */
+function previewPaths(): readonly string[] {
+  return useApp.getState().previews.map((one) => one.path);
+}
+
 const NO_CAPABILITIES = {
   interactivePermissions: false,
   partialMessages: false,
@@ -212,7 +217,7 @@ beforeEach(() => {
   forgetFolds();
   focusedPane().transcript.reset();
   focusedPane().transcript.flush();
-  useApp.setState({ preview: null });
+  useApp.setState({ previews: [] });
   seedApp({
     providers: [
       {
@@ -345,7 +350,7 @@ describe('opening by itself', () => {
     await wrote(RUN, '/tmp/report.html');
 
     expect(asked).toEqual(['/tmp/report.html']);
-    expect(useApp.getState().preview?.path).toBe('/tmp/report.html');
+    expect(previewPaths()).toContain('/tmp/report.html');
   });
 
   it('does not open a second time, and leaves the first where it is', async () => {
@@ -355,17 +360,17 @@ describe('opening by itself', () => {
     // The second one is a tile and nothing more. One uninvited pane per
     // conversation is the whole allowance.
     expect(asked).toEqual(['/tmp/one.html']);
-    expect(useApp.getState().preview?.path).toBe('/tmp/one.html');
+    expect(previewPaths()).toContain('/tmp/one.html');
   });
 
   it('stays shut once the user has closed it', async () => {
     await wrote(RUN, '/tmp/one.html');
     act(() => {
-      useApp.setState({ preview: null });
+      useApp.setState({ previews: [] });
     });
 
     await wrote(RUN, '/tmp/two.html');
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 
   it('refreshes itself when the page on screen is the one that changed', async () => {
@@ -401,7 +406,7 @@ describe('opening by itself', () => {
     await wrote(RUN, '/tmp/report.html', PAGE, 'error');
 
     expect(asked).toEqual([]);
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 
   it('does not take the window for a column that is not focused', async () => {
@@ -422,7 +427,7 @@ describe('opening by itself', () => {
     await wrote(RUN2, '/tmp/background.html');
 
     expect(asked).toEqual([]);
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 });
 
@@ -435,18 +440,18 @@ describe('an artifact belongs to its conversation', () => {
     });
 
     await wrote(RUN2, '/tmp/report.html');
-    expect(useApp.getState().preview?.path).toBe('/tmp/report.html');
+    expect(previewPaths()).toContain('/tmp/report.html');
 
     act(() => {
       closePane(right!.id);
     });
 
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 
   it('closes when the column moves to a different session', async () => {
     await wrote(RUN, '/tmp/report.html');
-    expect(useApp.getState().preview).not.toBeNull();
+    expect(useApp.getState().previews).not.toEqual([]);
 
     // Resuming something else into this column: same column, different
     // conversation, and the artifact belonged to the one that left.
@@ -454,7 +459,7 @@ describe('an artifact belongs to its conversation', () => {
       setPaneState(focusedPane(), { run: aRun(`${RUN}_other`, `${SESSION}_other`), resumeSessionId: null });
     });
 
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 
   it('survives the run that made it ending', async () => {
@@ -467,7 +472,7 @@ describe('an artifact belongs to its conversation', () => {
     });
 
     // The conversation is still in the column; only the turn is over.
-    expect(useApp.getState().preview?.path).toBe('/tmp/report.html');
+    expect(previewPaths()).toContain('/tmp/report.html');
   });
 
   it('follows the conversation when it is still there under a resume pointer', async () => {
@@ -479,6 +484,6 @@ describe('an artifact belongs to its conversation', () => {
       setPaneState(focusedPane(), { run: null, resumeSessionId: SESSION });
     });
 
-    expect(useApp.getState().preview?.path).toBe('/tmp/report.html');
+    expect(previewPaths()).toContain('/tmp/report.html');
   });
 });
