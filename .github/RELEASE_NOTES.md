@@ -1,6 +1,65 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.0.0
+
+Artemis 2.0. One overhaul, shipped whole: how the window looks, how you pick
+what runs, whose dock it is, and where a conversation can go when its account
+runs dry — or when the machine doing the work isn't the one you're sitting at.
+
+- **A new coat of paint, chosen the slow way.** The near-black canvas is now a
+  bare neutral grey, and the bright teal accent is a deep blue-violet fill you
+  sit things on rather than an ink that glares. Both were judged against
+  control renders across five mockup rounds, and the light theme was settled
+  the same way — derived from the same two seeds as the dark one, so the two
+  read as one system instead of cousins.
+
+- **The profile and model chips open one navigator.** Profile → Model → Effort
+  as columns that reveal left to right, and every row knows what it costs you:
+  live usage meters and reset times per profile, a relative burn-rate pip per
+  model (Fable draws 8× what Sonnet does against the same plan), and a model
+  whose weekly window is spent stays visible — struck through, with the reason
+  and when it comes back. A Recommended row points at the account with real
+  headroom, so the right choice is the easy one.
+
+- **The dock belongs to the conversation.** Surfaces — terminals, browsers,
+  previews, files — are owned by the conversation that opened them, shown for
+  the pane you're focused on, with an explicit toggle to see everything. Four
+  identical terminal icons from four panes are gone; tabs say whose they are.
+  Preview is no longer a window-wide singleton, file tabs distinguish the one
+  you're reading from the ones you've pinned, each session's arrangement comes
+  back when that session does, and a terminal selection can be sent straight
+  into the conversation's draft. The old rule survives everywhere: only the ✕
+  ends a shell.
+
+- **When an account runs out, the wall is a menu.** Hitting a limit used to be
+  a dead end with generic advice. Now the banner names the window that tripped
+  and when it resets, and — when another signed-in account can take the work —
+  offers to continue there. At the automatic threshold, a picker shows every
+  candidate with its live meters and you choose. Nothing ever moves without
+  you choosing it; when no account can take the work, the continuity note
+  still gets written.
+
+- **The same window reaches another machine.** Point Artemis at an Artemis on
+  another computer — over your tailnet, with a token you carry by hand and can
+  give an expiry — and the window you already know becomes the remote one:
+  watch its runs live, interrupt them, answer their permission prompts, start
+  new work, open its shells. Tokens are workspace-pinned and account-scoped,
+  revocation cuts even an open stream within seconds, and everything a remote
+  hand does is written to a log the serving machine keeps.
+
+- **Runs stopped lying about their lifecycle.** The five reported bugs are
+  fixed: sessions that silently detached after an app restart, Codex refusing
+  follow-ups on resumed conversations, the stop button not acknowledging the
+  click, a vanished transcript pretending to be a new conversation, and rival
+  runs racing one session. Underneath, Artemis now keeps a session-lifecycle
+  log — run started, ended, adopted, released, ids only — so the next incident
+  is read rather than excavated.
+
+- **Settings sorted by what things really are.** Two bands — what Artemis is
+  for you, and how it runs — with agents and memory banks merged into
+  Instructions, a new Runs section, and stable deep links throughout.
+
 ## What's new in 1.16.0
 
 Slash commands read as commands instead of as markup.
