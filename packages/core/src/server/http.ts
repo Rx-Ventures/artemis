@@ -77,6 +77,7 @@ import {
   SERVER_HEALTH_PATH,
   SERVER_HOST,
   SSE_DONE,
+  connectionHasExpired,
   describeConnection,
   parseModelRoute,
   readChatExtensions,
@@ -93,11 +94,13 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import type { RemoteAccessEvent } from '../sessions/lifecycleLog.js';
 import type { PushFeed } from './feed.js';
 import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
 import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
+import type { RemoteTerminals } from './terminals.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
@@ -211,6 +214,24 @@ export interface ServerContext {
    * policy — which a host that also provides no control verbs honestly has.
    */
   readonly guard?: RemoteRunGuard;
+  /**
+   * Shells a remote window may open on this machine. Absent means this
+   * deployment has no PTY to offer and the terminal routes answer `501` —
+   * which the headless server honestly does, and which a remote client renders
+   * as an empty dock rather than an error.
+   */
+  readonly terminals?: RemoteTerminals;
+  /**
+   * The attribution record: which token did what.
+   *
+   * Absent means nothing is written, which is what every pre-remote build did.
+   * Present, it is handed acts only — starting and steering runs, answering
+   * permission prompts, opening and closing shells, and a token presented past
+   * its expiry — never reads, and never anything carrying content. See
+   * `sessions/lifecycleLog.ts` for the record's shape and the redaction rule
+   * that is enforced rather than promised.
+   */
+  readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
 }
 
 /**
@@ -333,6 +354,35 @@ export async function handleServerRequest(
         'Send a connection token as `Authorization: Bearer <token>`. Settings → Server lists them, and each one carries its own working directory.',
       ),
       rejected: true,
+    };
+  }
+
+  /*
+   * Expiry is checked after the match and not folded into it.
+   *
+   * Folding it in would make an expired token indistinguishable from a wrong
+   * one, which sounds safer and is worse in the only case that matters: the
+   * holder of an expired token is the person who was given it, and telling
+   * them "expired" instead of "invalid" is the difference between asking for a
+   * new one and debugging a server they think is broken. It discloses nothing
+   * a wrong guess could reach — the sentence is only ever shown to someone who
+   * has already presented the real secret.
+   *
+   * It is also *checked here* rather than at connection-load time so that a
+   * long-lived server does not go on honouring a token that expired while it
+   * was running: `connections` is read fresh per request for the same reason.
+   */
+  if (connectionHasExpired(connection, Date.now())) {
+    context.onRemoteAccess?.({ kind: 'remote.token.expired', connectionId: connection.id });
+    return {
+      ...fail(
+        401,
+        'authentication_error',
+        'expired_api_key',
+        'This connection has expired. Expiry is fixed when a token is issued and cannot be extended — create a new connection and revoke this one.',
+      ),
+      rejected: true,
+      connectionId: connection.id,
     };
   }
 
@@ -820,6 +870,10 @@ export interface ArtemisServerOptions {
   readonly remoteStream?: RemoteStreamOptions;
   /** See {@link ServerContext.guard}. */
   readonly guard?: RemoteRunGuard;
+  /** See {@link ServerContext.terminals}. */
+  readonly terminals?: RemoteTerminals;
+  /** See {@link ServerContext.onRemoteAccess}. */
+  readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
   /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
@@ -896,6 +950,10 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.feed === undefined ? {} : { feed: options.feed }),
           ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),
           ...(options.guard === undefined ? {} : { guard: options.guard }),
+          ...(options.terminals === undefined ? {} : { terminals: options.terminals }),
+          ...(options.onRemoteAccess === undefined
+            ? {}
+            : { onRemoteAccess: options.onRemoteAccess }),
         },
       );
     } catch (error) {
@@ -1120,7 +1178,14 @@ async function describeScopedSessions(
       ...(summary.firstPrompt === undefined ? {} : { firstPrompt: summary.firstPrompt }),
       updatedAt: summary.updatedAt,
       profileSlug: profile?.slug ?? entry.profileId,
+      // The ledger's account, not the store's: `SessionSummary.profileId` is a
+      // pick when several profiles reach one store (see `profileIsUnknown`),
+      // and the ledger *knows* which connection ran this one. The provider is
+      // the account's own, which is the only one it could have been.
+      profileId: entry.profileId,
+      providerId: String(profile?.provider.id ?? summary.providerId),
       cwd: entry.cwd,
+      ...(entry.origin === 'bridge' ? { origin: 'bridge' as const } : {}),
     });
   }
   return rows;

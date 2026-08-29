@@ -47,6 +47,9 @@ import type {
   ServerRunsBody,
   ServerRunSendBody,
   ServerRunActionBody,
+  ServerTerminalBody,
+  ServerTerminalReplayBody,
+  ServerTerminalsBody,
 } from '@rx-artemis/protocol';
 import {
   connectionAllowsModel,
@@ -72,6 +75,7 @@ import type {
 } from './http.js';
 import { workspaceKeyFor } from './ledger.js';
 import { CORS_HEADERS, fail, ok } from './replies.js';
+import { TooManyRemoteTerminalsError, UnknownRemoteTerminalError } from './terminals.js';
 import { WorkspaceUnavailableError } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
@@ -148,14 +152,19 @@ export async function handleRemoteRequest(
     return attribute(await handleRunAction(input, runRoute.id, runRoute.action));
   }
 
-  // The terminal surface lands with the remote-terminal phase.
+  if (path === REMOTE_TERMINALS_PATH) {
+    if (method === 'GET') return attribute(handleTerminalList(input));
+    if (method === 'POST') return attribute(await handleTerminalStart(input));
+    return attribute(methodNotAllowed('The terminal list is a GET; opening a shell is a POST.'));
+  }
+
+  const terminalRoute = parseRemoteResourcePath(path, REMOTE_TERMINALS_PATH);
+  if (terminalRoute !== undefined && terminalRoute.action !== undefined) {
+    return attribute(handleTerminalAction(input, terminalRoute.id, terminalRoute.action));
+  }
+
   return attribute(
-    fail(
-      501,
-      'invalid_request_error',
-      'not_implemented',
-      'This Artemis build does not serve remote terminals.',
-    ),
+    fail(404, 'invalid_request_error', 'unknown_endpoint', 'No such remote route.'),
   );
 }
 
@@ -329,7 +338,7 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
     );
   }
 
-  const pinned = await resolvePinnedCwd(input, runInput);
+  const pinned = await resolvePinnedCwd(input, runInput.cwd, runInput.resumeSessionId);
   if (typeof pinned !== 'string') return pinned;
 
   let handle: RunHandle;
@@ -359,12 +368,28 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
     cwd: handle.cwd,
   });
 
+  /*
+   * The attribution line, written at the moment the plan starts being spent.
+   *
+   * Ids only — see `RemoteAccessEvent`. The prompt that was sent is on this
+   * stack and does not go anywhere near the log; what is recorded is that
+   * *this* token started *this* run on *this* account, in this directory,
+   * which is the question a surprising bill or an unexplained commit asks.
+   */
+  context.onRemoteAccess?.({
+    kind: 'remote.run.started',
+    connectionId: connection.id,
+    runId: String(handle.runId),
+    profileId: String(handle.profileId),
+    cwd: handle.cwd,
+  });
+
   const body: ServerRunBody = { object: 'artemis.run', run: handle };
   return ok(body);
 }
 
 /**
- * The working directory a bridge-started run actually gets.
+ * The working directory a bridge-started run — or shell — actually gets.
  *
  * The pin is the token's whole authority story — see `ServerConnection` — so
  * the caller's `cwd` is honoured only as far as it stays inside it:
@@ -376,10 +401,16 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
  *    caller's `cwd` is ignored entirely — it names a path on the wrong
  *    machine, and scratch is minted here;
  *  - `none` cannot run turns at all.
+ *
+ * `requested` is optional because the terminal route's is: a remote client
+ * opening a shell may honestly have no directory to name, and the pin is the
+ * right default. A run always names one, because a run is started from a
+ * conversation that is already somewhere.
  */
 async function resolvePinnedCwd(
   input: RemoteRequestInput,
-  runInput: RunInput,
+  requested: string | undefined,
+  sessionId?: string,
 ): Promise<string | ServerReply> {
   const { context, connection } = input;
   const workspace = connection.workspace;
@@ -395,7 +426,8 @@ async function resolvePinnedCwd(
 
   if (workspace.kind === 'directory') {
     const root = workspace.path;
-    if (runInput.cwd === root || runInput.cwd.startsWith(`${root}/`)) return runInput.cwd;
+    if (requested === undefined) return root;
+    if (requested === root || requested.startsWith(`${root}/`)) return requested;
     return fail(
       403,
       'invalid_request_error',
@@ -409,9 +441,7 @@ async function resolvePinnedCwd(
     const resolved = await context.workspaces.resolve({
       connectionId: connection.id,
       workspace,
-      ...(runInput.resumeSessionId === undefined
-        ? {}
-        : { sessionId: runInput.resumeSessionId }),
+      ...(sessionId === undefined ? {} : { sessionId }),
     });
     return resolved.path;
   } catch (error) {
@@ -465,6 +495,26 @@ async function handleRunAction(
     unknown
   >;
 
+  /*
+   * Written before the verb runs, not after.
+   *
+   * The record exists for the incident where something went wrong, and the
+   * verbs most worth attributing — an interrupt, an `allow` on a permission
+   * prompt — are exactly the ones that can be followed by a crash. A line
+   * written after a successful return is the line missing from every
+   * transcript anybody ever needs. So this says *asked*, and the run's own
+   * lifecycle lines beside it in the same file say what happened next.
+   */
+  const record = (): void => {
+    context.onRemoteAccess?.({
+      kind: action === 'respond-permission' ? 'remote.permission.answered' : 'remote.run.acted',
+      connectionId: connection.id,
+      action,
+      runId,
+      profileId: String(run.profileId),
+    });
+  };
+
   try {
     switch (action) {
       case 'send': {
@@ -475,6 +525,7 @@ async function handleRunAction(
         const attachments = Array.isArray(body['attachments'])
           ? (body['attachments'] as never)
           : undefined;
+        record();
         const outcome = await runs.send(runId, body['text'], attachments);
         const reply: ServerRunSendBody = {
           object: 'artemis.run.send',
@@ -485,6 +536,7 @@ async function handleRunAction(
       }
 
       case 'interrupt': {
+        record();
         const outcome =
           runs.interruptRun !== undefined
             ? await runs.interruptRun(runId)
@@ -513,6 +565,7 @@ async function handleRunAction(
          * ever deny. The renderer's own `permission.resolved` event follows
          * on the stream, so every attached window sees the prompt settle.
          */
+        record();
         await runs.respondToPermission(runId, body['requestId'], decision);
         const reply: ServerRunPermissionBody = {
           object: 'artemis.run.permission',
@@ -527,12 +580,14 @@ async function handleRunAction(
         if (typeof body['taskId'] !== 'string' || body['taskId'].length === 0) {
           return fail(400, 'invalid_request_error', 'invalid_body', '`taskId` must be a non-empty string.');
         }
+        record();
         await runs.stopTask(runId, body['taskId']);
         const reply: ServerRunActionBody = { object: 'artemis.run.action', runId };
         return ok(reply);
       }
 
       case 'dispose': {
+        record();
         await runs.disposeRun(runId);
         context.guard?.untrackRun(runId);
         const reply: ServerRunActionBody = { object: 'artemis.run.action', runId };
@@ -560,6 +615,181 @@ function readDecision(raw: unknown): PermissionDecision | undefined {
   const behavior = (raw as { behavior?: unknown }).behavior;
   if (behavior !== 'allow' && behavior !== 'deny') return undefined;
   return raw as PermissionDecision;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Terminal routes                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The answer when this build serves no shells.
+ *
+ * Distinct from {@link notControllable} because it is a different absence and a
+ * person reading it deserves to know which: a headless deployment has no PTY to
+ * offer at all, while a build with no control verbs is refusing something it
+ * could in principle do. The client renders either as the sentence it is.
+ */
+function noTerminals(): ServerReply {
+  return fail(
+    501,
+    'invalid_request_error',
+    'not_implemented',
+    'This Artemis does not serve shells over the wire — the machine hosting it has no terminal surface attached.',
+  );
+}
+
+/** Terminal failures, as sentences rather than stack traces. */
+function terminalFailure(error: unknown): ServerReply {
+  if (error instanceof UnknownRemoteTerminalError) {
+    return fail(404, 'invalid_request_error', 'unknown_terminal', error.message);
+  }
+  if (error instanceof TooManyRemoteTerminalsError) {
+    return fail(429, 'invalid_request_error', 'too_many_terminals', error.message);
+  }
+  return fail(
+    400,
+    'invalid_request_error',
+    'terminal_failed',
+    error instanceof Error ? error.message : 'The terminal request failed.',
+  );
+}
+
+/** `GET /api/v0/terminals`: the shells this connection's family opened. */
+function handleTerminalList(input: RemoteRequestInput): ServerReply {
+  const terminals = input.context.terminals;
+  if (terminals === undefined) return noTerminals();
+  const body: ServerTerminalsBody = {
+    object: 'artemis.terminals',
+    terminals: terminals.list(input.connection),
+  };
+  return ok(body);
+}
+
+/**
+ * `POST /api/v0/terminals`: open one.
+ *
+ * The body names a directory, a width and a height, and nothing else — see
+ * `terminals.ts` on why there is no argv and no environment on this wire. The
+ * directory is confined to the connection's pin by the same function a run's
+ * is, so a shell cannot be opened somewhere the token could not have run a
+ * turn; an absent one means the pin itself, which is the honest default for a
+ * client whose own idea of a path is a path on the wrong machine.
+ */
+async function handleTerminalStart(input: RemoteRequestInput): Promise<ServerReply> {
+  const terminals = input.context.terminals;
+  if (terminals === undefined) return noTerminals();
+
+  const body = (typeof input.request.body === 'object' && input.request.body !== null
+    ? input.request.body
+    : {}) as Record<string, unknown>;
+
+  const cols = readDimension(body['cols']);
+  const rows = readDimension(body['rows']);
+  if (cols === undefined || rows === undefined) {
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_body',
+      '`cols` and `rows` must be positive integers — a shell that starts at the wrong size draws its prompt at the wrong width, once.',
+    );
+  }
+
+  const requested = typeof body['cwd'] === 'string' && body['cwd'].length > 0
+    ? (body['cwd'] as string)
+    : undefined;
+  const cwd = await resolvePinnedCwd(input, requested);
+  if (typeof cwd !== 'string') return cwd;
+
+  try {
+    const info = await terminals.start(input.connection, { cwd, cols, rows });
+    const reply: ServerTerminalBody = { object: 'artemis.terminal', terminal: info };
+    return ok(reply);
+  } catch (error) {
+    return terminalFailure(error);
+  }
+}
+
+/** `write` / `resize` / `close` (POST) and `replay` (GET), on one shell. */
+function handleTerminalAction(
+  input: RemoteRequestInput,
+  terminalId: string,
+  action: string,
+): ServerReply {
+  const terminals = input.context.terminals;
+  if (terminals === undefined) return noTerminals();
+
+  const { method, connection } = input;
+  const body = (typeof input.request.body === 'object' && input.request.body !== null
+    ? input.request.body
+    : {}) as Record<string, unknown>;
+
+  try {
+    if (action === 'replay') {
+      if (method !== 'GET') return methodNotAllowed('A terminal replay is a GET.');
+      const tail = terminals.replay(connection, terminalId);
+      const reply: ServerTerminalReplayBody = {
+        object: 'artemis.terminal.replay',
+        id: terminalId,
+        data: tail.data,
+        truncated: tail.truncated,
+      };
+      return ok(reply);
+    }
+
+    if (method !== 'POST') return methodNotAllowed('Terminal actions are POSTs.');
+
+    switch (action) {
+      case 'write': {
+        if (typeof body['data'] !== 'string') {
+          return fail(400, 'invalid_request_error', 'invalid_body', '`data` must be a string.');
+        }
+        // Keystrokes, so no length floor: an empty write is a no-op rather than
+        // an error, which is what a paste of nothing should be.
+        const info = terminals.write(connection, terminalId, body['data']);
+        return ok({ object: 'artemis.terminal', terminal: info } satisfies ServerTerminalBody);
+      }
+
+      case 'resize': {
+        const cols = readDimension(body['cols']);
+        const rows = readDimension(body['rows']);
+        if (cols === undefined || rows === undefined) {
+          return fail(
+            400,
+            'invalid_request_error',
+            'invalid_body',
+            '`cols` and `rows` must be positive integers.',
+          );
+        }
+        const info = terminals.resize(connection, terminalId, cols, rows);
+        return ok({ object: 'artemis.terminal', terminal: info } satisfies ServerTerminalBody);
+      }
+
+      case 'close': {
+        // The one route that ends a shell, and it exists because the ✕ does.
+        // Nothing else on this surface — not a dropped stream, not a disposed
+        // run — reaches it. See `terminals.ts`.
+        const info = terminals.close(connection, terminalId);
+        return ok({ object: 'artemis.terminal', terminal: info } satisfies ServerTerminalBody);
+      }
+
+      default:
+        return fail(
+          404,
+          'invalid_request_error',
+          'unknown_endpoint',
+          `No terminal action "${action}".`,
+        );
+    }
+  } catch (error) {
+    return terminalFailure(error);
+  }
+}
+
+/** A column or row count: a positive integer, and sane for a screen. */
+function readDimension(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) return undefined;
+  if (raw < 1 || raw > 10_000) return undefined;
+  return raw;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -200,6 +200,66 @@ describe('SessionLifecycleLog', () => {
     }).not.toThrow();
     expect(errors).toHaveLength(1);
   });
+
+  /*
+   * Remote attribution (ADR 0004) rides this same file, and the reason it may
+   * is the allowlist: an event kind added for the wire cannot smuggle content
+   * onto disk any more than one added for a run could.
+   */
+  it('records which connection did what, ids only', async () => {
+    const { lifecycle, errors } = log();
+
+    lifecycle.record({
+      kind: 'remote.run.started',
+      connectionId: 'conn-7',
+      runId: 'run-1',
+      profileId: 'work-max',
+      cwd: '/w/repo',
+    });
+    lifecycle.record({
+      kind: 'remote.permission.answered',
+      connectionId: 'conn-7',
+      action: 'respond-permission',
+      runId: 'run-1',
+    });
+    lifecycle.record({
+      kind: 'remote.terminal.started',
+      connectionId: 'conn-7',
+      terminalId: 'term-3',
+      cwd: '/w/repo',
+    });
+    lifecycle.record({ kind: 'remote.token.expired', connectionId: 'conn-9' });
+
+    expect(errors).toEqual([]);
+    const written = await lines();
+    expect(written.map((line) => line['kind'])).toEqual([
+      'remote.run.started',
+      'remote.permission.answered',
+      'remote.terminal.started',
+      'remote.token.expired',
+    ]);
+    expect(written[0]).toMatchObject({ connectionId: 'conn-7', runId: 'run-1', cwd: '/w/repo' });
+    expect(written[1]).toMatchObject({ action: 'respond-permission' });
+    expect(written[2]).toMatchObject({ terminalId: 'term-3' });
+    expect(written[3]).toEqual({ ts: expect.any(String), kind: 'remote.token.expired', connectionId: 'conn-9' });
+  });
+
+  it('drops a token or a prompt smuggled onto a remote event', async () => {
+    const { lifecycle } = log();
+    lifecycle.record({
+      kind: 'remote.run.started',
+      connectionId: 'conn-7',
+      // Neither key is on the allowlist. The type would reject them too, but
+      // types erase and this is the runtime guarantee.
+      token: 'sk-live-do-not-write-this',
+      prompt: 'the secret plan',
+    } as unknown as SessionLifecycleEvent);
+
+    const line = (await lines())[0];
+    expect(raw(line)).not.toContain('sk-live');
+    expect(raw(line)).not.toContain('secret plan');
+    expect(line).toMatchObject({ kind: 'remote.run.started', connectionId: 'conn-7' });
+  });
 });
 
 function raw(line: Record<string, unknown> | undefined): string {

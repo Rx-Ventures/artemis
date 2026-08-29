@@ -674,6 +674,7 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
           label: request.label,
           workspace: request.workspace,
           ...(request.allow === undefined ? {} : { allow: request.allow }),
+          ...(request.expiresAt === undefined ? {} : { expiresAt: request.expiresAt }),
         }),
       }),
     },

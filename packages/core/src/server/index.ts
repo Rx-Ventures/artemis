@@ -82,3 +82,13 @@ export {
   type RemoteRunGuardOptions,
   type TrackedRun,
 } from './guard.js';
+
+export {
+  createRemoteTerminals,
+  MAX_REMOTE_TERMINALS_PER_FAMILY,
+  TooManyRemoteTerminalsError,
+  UnknownRemoteTerminalError,
+  type RemoteTerminals,
+  type RemoteTerminalsOptions,
+  type TerminalSource,
+} from './terminals.js';

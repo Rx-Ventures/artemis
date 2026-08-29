@@ -19,6 +19,8 @@
  *    whose settings pre-authorize what their work needs.
  */
 
+import { join } from 'node:path';
+
 import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
   createCatalogue,
@@ -31,9 +33,12 @@ import {
   ProfileStore,
   resolveEnv,
   RunRegistry,
+  SessionLifecycleLog,
+  SESSION_LIFECYCLE_LOG_FILE,
   type Catalogue,
   type ProviderRegistry,
   type PushFeed,
+  type RemoteAccessEvent,
   type RemoteRunGuard,
   type RunSource,
   type SessionLedger,
@@ -56,6 +61,17 @@ export interface HeadlessHost {
   readonly feed: PushFeed;
   /** Interrupt-on-disconnect for bridge-started runs. See `server/guard.ts`. */
   readonly guard: RemoteRunGuard;
+  /**
+   * The attribution record: which token did what.
+   *
+   * The headless deployment is the one this matters most for. A desktop server
+   * has a person in front of it who can watch a run appear; this process is
+   * reached only over the wire, by tokens, and "which of these four started
+   * that" has no other answer. Ids and event names only — see
+   * `RemoteAccessEvent` — into the same append-only JSONL file the run
+   * lifecycle goes into, beside the ledger in the data directory.
+   */
+  readonly recordAccess: (event: RemoteAccessEvent) => void;
   dispose(): Promise<void>;
 }
 
@@ -205,6 +221,25 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     },
   });
 
+  /*
+   * The attribution log, on the same file the run lifecycle writes to.
+   *
+   * One story, one file: a bridge token started a run, the registry adopted
+   * it, something ended it. Splitting the remote half into a log of its own
+   * would mean correlating two files by timestamp to answer a question that is
+   * one sentence long. Ids only — the log's `RECORDED_KEYS` allowlist is what
+   * enforces that, rather than the caller remembering to.
+   */
+  const accessLog = new SessionLifecycleLog({
+    file: join(dataDir, SESSION_LIFECYCLE_LOG_FILE),
+    onError: (error) =>
+      process.stderr.write(
+        `could not append to the session-lifecycle log: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      ),
+  });
+
   const sessionSource: SessionSource = {
     list: async (query) => {
       const adapter = providers.get(query.providerId as ProviderId);
@@ -241,6 +276,7 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     sessionSource,
     feed,
     guard,
+    recordAccess: (event) => accessLog.record(event),
     dispose: async () => {
       guard.dispose();
       await runs.disposeAll();

@@ -58,9 +58,13 @@ import type {
   ServerRunPermissionBody,
   ServerRunsBody,
   ServerRunSendBody,
+  ServerSessionMessagesBody,
+  ServerSessionsBody,
+  ServerSessionSummary,
   ServerTerminalBody,
   ServerTerminalReplayBody,
   ServerTerminalsBody,
+  SessionSummary,
   TerminalEvent,
   UpdateState,
   WindowState,
@@ -573,19 +577,112 @@ export function createRemoteBridge(
       onSuggestion: () => () => undefined,
     },
 
-    sessions: {
-      // The stored-history surface is ledger-scoped per connection and lands
-      // with the remote-session phase; empty lists are its honest cold state.
-      list: async () => ok({ sessions: [], hasMore: false }),
-      listAll: async () => ok({ sessions: [], hasMore: false }),
-      messages: async () =>
-        absent('This connection cannot read the serving machine’s stored sessions yet.'),
-      subagentMessages: async () =>
-        absent('Subagent transcripts do not cross the remote wire.'),
-      rename: async () => absent(LOCAL_SETTINGS_REASON),
-      delete: async () => absent(LOCAL_SETTINGS_REASON),
-      tag: async () => absent(LOCAL_SETTINGS_REASON),
-    },
+    /*
+     * The serving machine's conversations, in this window's own sidebar.
+     *
+     * -----------------------------------------------------------------------
+     * WHAT THIS CONNECTION IS ALLOWED TO SEE
+     * -----------------------------------------------------------------------
+     *
+     * Not "every session on that machine" — the ledger's pin decides, and the
+     * server applies it before answering. What comes back is the conversations
+     * *this connection's family* created: the token's own, and those of any
+     * other token pinned to the same directory, which is the multi-device case
+     * the pin was designed for. The serving desktop's own private history is
+     * not on this list and no parameter here can widen it.
+     *
+     * -----------------------------------------------------------------------
+     * WHY BOTH LISTS ARE ONE REQUEST
+     * -----------------------------------------------------------------------
+     *
+     * Locally, `list` reads one (profile × directory) partition off disk and
+     * `listAll` walks the whole store, so they are genuinely different costs.
+     * Here the server has already done the walking — the ledger *is* the
+     * index, and it is scoped — so the wire has exactly one answer and the two
+     * calls differ only in how it is filtered. `list` narrows to the
+     * provider/profile/directory it was asked for; `listAll` returns the lot,
+     * newest first, which is what the sidebar wants.
+     */
+    sessions: (() => {
+      const read = async (): Promise<IpcResult<readonly ServerSessionSummary[]>> => {
+        const reply = await http<ServerSessionsBody>(`/api/${SERVER_API_VERSION}/sessions`);
+        // A serving build with no session history answers 501, and an empty
+        // sidebar is the honest rendering of "this machine keeps none" — the
+        // same cold state a store with nothing in it produces.
+        return reply.ok ? ok(reply.value.sessions) : ok([]);
+      };
+
+      /*
+       * A server row, as the sidebar's own type.
+       *
+       * The fields the wire does not carry are *omitted*, never invented.
+       * `titleIsCustom` would be a claim about how the title was made,
+       * `messageCount` a number nobody counted, `gitBranch` a fact about a
+       * checkout on another machine — and a sidebar rendering an invented
+       * value is worse than one rendering none. `title` is already resolved
+       * server-side by the same preference order the local adapters use.
+       */
+      const toSummary = (row: ServerSessionSummary): SessionSummary => ({
+        id: row.id as SessionSummary['id'],
+        providerId: row.providerId as SessionSummary['providerId'],
+        profileId: row.profileId as SessionSummary['profileId'],
+        cwd: row.cwd,
+        title: row.title,
+        ...(row.firstPrompt === undefined ? {} : { firstPrompt: row.firstPrompt }),
+        updatedAt: row.updatedAt,
+      });
+
+      const sorted = (rows: readonly ServerSessionSummary[]): SessionSummary[] =>
+        [...rows].sort((a, b) => b.updatedAt - a.updatedAt).map(toSummary);
+
+      return {
+        list: async (request) => {
+          const rows = await read();
+          if (!rows.ok) return rows;
+          const matching = rows.value.filter(
+            (row) =>
+              row.providerId === String(request.providerId) &&
+              row.profileId === String(request.profileId) &&
+              row.cwd === request.cwd,
+          );
+          return ok({ sessions: sorted(matching), hasMore: false });
+        },
+        listAll: async (request) => {
+          const rows = await read();
+          if (!rows.ok) return rows;
+          const matching =
+            request.providerId === undefined
+              ? rows.value
+              : rows.value.filter((row) => row.providerId === String(request.providerId));
+          return ok({ sessions: sorted(matching), hasMore: false });
+        },
+        messages: async (request) => {
+          const reply = await http<ServerSessionMessagesBody>(
+            `/api/${SERVER_API_VERSION}/sessions/${encodeURIComponent(String(request.sessionId))}/messages`,
+          );
+          if (!reply.ok) return reply;
+          /*
+           * Re-stamped with the caller's run id.
+           *
+           * The server replays under a synthetic id of its own — it has no
+           * idea which pane is asking — and the transcript this is about to
+           * join is keyed on the run. Restamping here rather than asking the
+           * server to accept an id keeps a client from choosing what another
+           * client's events are labelled with.
+           */
+          const events = reply.value.events.map((event) => ({
+            ...event,
+            runId: request.runId,
+          })) as readonly AgentEvent[];
+          return ok({ events, hasMore: reply.value.hasMore });
+        },
+        subagentMessages: async () =>
+          absent('Subagent transcripts do not cross the remote wire.'),
+        rename: async () => absent(LOCAL_SETTINGS_REASON),
+        delete: async () => absent(LOCAL_SETTINGS_REASON),
+        tag: async () => absent(LOCAL_SETTINGS_REASON),
+      };
+    })(),
 
     workspace: {
       pickDirectory: async () => {

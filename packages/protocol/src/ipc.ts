@@ -2227,6 +2227,17 @@ export interface ServerCreateConnectionRequest {
    * issued, and there is no channel that widens it afterwards.
    */
   readonly allow?: readonly ServerAllowance[];
+  /**
+   * Epoch ms after which the token stops working. Omit for a token that never
+   * expires, which stays the default — see {@link ServerConnection.expiresAt}.
+   *
+   * An absolute instant rather than a duration, so that the moment is decided
+   * once, here, by the surface that knows what the user picked. A duration would
+   * have to be resolved against *some* clock, and the two candidates — the
+   * renderer's and the main process's — can disagree by more than the shortest
+   * expiry on offer.
+   */
+  readonly expiresAt?: number;
 }
 
 /** Rename a connection. @see ServerCreateConnectionRequest */

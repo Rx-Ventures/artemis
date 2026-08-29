@@ -93,7 +93,12 @@ let state: ServerState = STOPPED;
 const startCalls: unknown[] = [];
 const stopCalls: unknown[] = [];
 const configureCalls: { port?: number; autoStart?: boolean }[] = [];
-const createCalls: { label: string; workspace: unknown; allow?: unknown }[] = [];
+const createCalls: {
+  label: string;
+  workspace: unknown;
+  allow?: unknown;
+  expiresAt?: number;
+}[] = [];
 const deleteCalls: { id: string }[] = [];
 const renameCalls: { id: string; label: string }[] = [];
 
@@ -120,6 +125,7 @@ const renameCalls: { id: string; label: string }[] = [];
       label: string;
       workspace: unknown;
       allow?: unknown;
+      expiresAt?: number;
     }) => {
       createCalls.push(request);
       return ok({ state });
@@ -281,6 +287,46 @@ describe('ServerSection', () => {
       screen.getByRole('button', { name: 'Create connection' }).hasAttribute('disabled'),
     ).toBe(true);
     expect(createCalls).toEqual([]);
+  });
+
+  /*
+   * Expiry (ADR 0004). The default has to stay "never": a token that stops
+   * working unasked is indistinguishable, from the client's side, from a
+   * server that went down.
+   */
+  it('creates a token that never expires unless asked', async () => {
+    await renderPane();
+    await act(async () => {
+      screen.getByRole('button', { name: 'New connection' }).click();
+    });
+    expect(screen.getByRole('radio', { name: /Never expires/ }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    await act(async () => {
+      screen.getByRole('button', { name: 'Create connection' }).click();
+    });
+    expect(createCalls[0]).not.toHaveProperty('expiresAt');
+  });
+
+  it('resolves a chosen lifetime to an instant at the click', async () => {
+    await renderPane();
+    await act(async () => {
+      screen.getByRole('button', { name: 'New connection' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('radio', { name: /A week/ }).click();
+    });
+    const before = Date.now();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Create connection' }).click();
+    });
+
+    const expiresAt = createCalls[0]?.expiresAt;
+    expect(typeof expiresAt).toBe('number');
+    const week = 7 * 24 * 60 * 60 * 1000;
+    // Now plus a week, not "a week from whenever it is first used".
+    expect(expiresAt).toBeGreaterThanOrEqual(before + week);
+    expect(expiresAt).toBeLessThan(before + week + 5_000);
   });
 
   it('revokes one connection', async () => {

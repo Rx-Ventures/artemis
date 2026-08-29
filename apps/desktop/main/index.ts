@@ -480,6 +480,10 @@ async function bootstrap(): Promise<void> {
     userDataDir,
     appVersion: app.getVersion(),
     broadcast: (state) => broadcast(IPC_PUSH.serverState, state),
+    // Constructed just above, and handed over rather than re-created: a remote
+    // window's shells are this machine's shells, spawned by the one file that
+    // is allowed to spawn them. See `ServerHostOptions.terminals`.
+    terminals,
   });
 
   // Same construction order as the server host, for the same reason: the IPC

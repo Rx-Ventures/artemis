@@ -437,3 +437,148 @@ describe('what cannot cross the wire', () => {
     expect(bridge.window).toBe(localWindow);
   });
 });
+
+/*
+ * The serving machine's history, in this window's sidebar.
+ *
+ * Scoping is the server's job and is tested there; what has to hold here is
+ * the mapping — that a wire row becomes a sidebar row without gaining a field
+ * nobody measured — and that the two list calls differ only in their filter.
+ */
+describe('sessions', () => {
+  const SESSIONS = [
+    {
+      id: 'sess-1',
+      title: 'The dock rebuild',
+      firstPrompt: 'Rebuild the dock',
+      updatedAt: 3_000,
+      profileSlug: 'work-max',
+      profileId: 'prof-a',
+      providerId: 'claude',
+      cwd: '/srv/repo',
+      origin: 'bridge' as const,
+    },
+    {
+      id: 'sess-2',
+      title: 'A codex thing',
+      updatedAt: 9_000,
+      profileSlug: 'personal',
+      profileId: 'prof-b',
+      providerId: 'codex',
+      cwd: '/srv/other',
+    },
+  ];
+
+  it('lists the serving machine’s conversations, newest first', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, { object: 'artemis.sessions', sessions: SESSIONS }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.listAll({});
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sessions.map((session) => session.id)).toEqual(['sess-2', 'sess-1']);
+    expect(result.value.hasMore).toBe(false);
+  });
+
+  it('carries the ids a sidebar row is keyed and resumed on', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, { object: 'artemis.sessions', sessions: SESSIONS }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.listAll({});
+    if (!result.ok) throw new Error('expected a listing');
+    expect(result.value.sessions[1]).toEqual({
+      id: 'sess-1',
+      providerId: 'claude',
+      profileId: 'prof-a',
+      cwd: '/srv/repo',
+      title: 'The dock rebuild',
+      firstPrompt: 'Rebuild the dock',
+      updatedAt: 3_000,
+    });
+  });
+
+  it('invents nothing the wire did not carry', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, { object: 'artemis.sessions', sessions: SESSIONS }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.listAll({});
+    if (!result.ok) throw new Error('expected a listing');
+    const row = result.value.sessions[0] as Record<string, unknown>;
+    for (const invented of ['titleIsCustom', 'messageCount', 'sizeBytes', 'gitBranch', 'model']) {
+      expect(row).not.toHaveProperty(invented);
+    }
+  });
+
+  it('narrows the scoped list to one provider, profile and directory', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, { object: 'artemis.sessions', sessions: SESSIONS }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.list({
+      providerId: 'claude' as never,
+      profileId: 'prof-a' as never,
+      cwd: '/srv/repo',
+    });
+    if (!result.ok) throw new Error('expected a listing');
+    expect(result.value.sessions.map((session) => session.id)).toEqual(['sess-1']);
+  });
+
+  it('replays a transcript, restamped with the caller’s run id', async () => {
+    const stored: AgentEvent = {
+      type: 'text.delta',
+      runId: 'server-replay:sess-1',
+      seq: 1,
+      ts: 0,
+      messageId: 'm1',
+      blockIndex: 0,
+      text: 'hi',
+    };
+    replies.set('/api/v0/sessions/sess-1/messages', [
+      jsonResponse(200, {
+        object: 'artemis.session.messages',
+        events: [stored],
+        hasMore: false,
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.messages({
+      profileId: 'prof-a' as never,
+      sessionId: 'sess-1' as never,
+      runId: 'run-local' as never,
+    });
+    if (!result.ok) throw new Error('expected a replay');
+    expect(result.value.events[0]?.runId).toBe('run-local');
+    // The id travels in the path, encoded once; the token never does.
+    const call = requests.find((request) => request.url.includes('/sessions/'));
+    expect(call?.url).not.toContain(CONFIG.token);
+  });
+
+  it('shows an empty sidebar rather than an error when the server keeps no history', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(501, {
+        error: { message: 'This Artemis keeps no session history.', type: 'invalid_request_error' },
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.listAll({});
+    expect(result).toEqual({ ok: true, value: { sessions: [], hasMore: false } });
+  });
+
+  it('still refuses what stays on the serving machine', async () => {
+    const bridge = bridgeUnderTest();
+    for (const result of await Promise.all([
+      bridge.sessions.rename({ profileId: 'p' as never, sessionId: 's' as never, title: 'x' }),
+      bridge.sessions.subagentMessages({
+        profileId: 'p' as never,
+        sessionId: 's' as never,
+        agentId: 'a',
+        runId: 'r' as never,
+      }),
+    ])) {
+      expect(result.ok).toBe(false);
+    }
+  });
+});

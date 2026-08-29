@@ -74,8 +74,66 @@ export interface HistoryLockQueueEvent {
   readonly holding?: string;
 }
 
+/**
+ * A remote connection did something that spends, steers, or spawns.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY ATTRIBUTION LANDS HERE AND NOT IN A NEW FILE
+ * ---------------------------------------------------------------------------
+ *
+ * Remote control (ADR 0004) creates a question the server has never had to
+ * answer: *which token did this?* Until now the server's own traffic record was
+ * counters and one `lastUsedAt` per connection, deliberately — a request log is
+ * a transcript of what a person asked, and Artemis does not keep one. That
+ * posture is right and it is also, on its own, useless the morning after: a run
+ * that spent a plan overnight, a shell that was opened on the serving machine,
+ * and no way to say which of four tokens did either.
+ *
+ * This log is the shape that answers it without becoming the thing the posture
+ * refuses. It is *already* ids-and-event-names only, and it is already enforced
+ * as such at the door by {@link RECORDED_KEYS} rather than promised in a
+ * comment. So the record of remote acts is one more event kind on the same
+ * line-per-transition file: `connectionId` names who, `kind` names what, and the
+ * ids name which run, session or shell. There is nowhere for a prompt to go.
+ *
+ * What is deliberately *not* recorded: reads. Listing runs, replaying events,
+ * reading the catalogue and holding the event stream open are how a remote
+ * window draws a frame, and logging them would produce a line per frame and
+ * bury the four lines a year that matter. Only acts that spend money, change
+ * what a machine is doing, or start a process are named.
+ */
+export interface RemoteAccessEvent {
+  readonly kind:
+    /** A bridge token started a run — the one that spends a plan. */
+    | 'remote.run.started'
+    /** …steered a live one: send, interrupt, stop-task, dispose. */
+    | 'remote.run.acted'
+    /** …answered a permission prompt. Its own kind because it is the one
+     *  that lets an agent touch the serving machine on somebody's say-so. */
+    | 'remote.permission.answered'
+    /** …opened a shell on the serving machine. */
+    | 'remote.terminal.started'
+    /** …closed one. */
+    | 'remote.terminal.closed'
+    /** A token was presented after its expiry and refused. */
+    | 'remote.token.expired';
+  /** Which connection. The whole point of the record. */
+  readonly connectionId: string;
+  /** The verb, for `remote.run.acted` — `send`, `interrupt`, `dispose`. */
+  readonly action?: string;
+  readonly runId?: string;
+  readonly sessionId?: string;
+  readonly profileId?: string;
+  readonly terminalId?: string;
+  readonly cwd?: string;
+}
+
 /** Everything the log records. */
-export type SessionLifecycleEvent = RunLifecycleEvent | EngineLifecycleEvent | HistoryLockQueueEvent;
+export type SessionLifecycleEvent =
+  | RunLifecycleEvent
+  | EngineLifecycleEvent
+  | HistoryLockQueueEvent
+  | RemoteAccessEvent;
 
 /**
  * Every key a line may carry, `ts` aside.
@@ -99,6 +157,12 @@ const RECORDED_KEYS = [
   'depth',
   'waiting',
   'holding',
+  // Remote attribution. `connectionId` is an id Artemis minted, never a token:
+  // the token itself is a secret and could not be added here even by accident,
+  // because `ServerConnection` is not what any of these events carry.
+  'connectionId',
+  'action',
+  'terminalId',
 ] as const;
 
 /** Construction options for {@link SessionLifecycleLog}. */

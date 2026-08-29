@@ -498,6 +498,7 @@ function ConnectionRow({
         {connection.allow !== undefined && connection.allow.length > 0 ? (
           <ToneBadge tone="amber">{summariseAllowance(connection.allow)}</ToneBadge>
         ) : null}
+        <ExpiryBadge expiresAt={connection.expiresAt} />
         <span className="ml-auto text-2xs text-ink-faint">
           {connection.lastUsedAt === undefined
             ? 'never used'
@@ -669,6 +670,53 @@ function WorkspaceBadge({ workspace }: { readonly workspace: ServerWorkspace }):
 }
 
 /**
+ * How long a connection has left, when it has a limit at all.
+ *
+ * An expired token is shown *red and still listed*, not hidden and not swept
+ * away. The row is the only place a person can see that the thing they handed
+ * to another machine has stopped working, and quietly deleting it would turn
+ * "your token expired" into "your token vanished" — which is the same
+ * confusion the server's own `expired_api_key` sentence exists to prevent, seen
+ * from the other end.
+ */
+function ExpiryBadge({ expiresAt }: { readonly expiresAt?: number }): ReactElement | null {
+  if (expiresAt === undefined) return null;
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return <ToneBadge tone="signal">expired</ToneBadge>;
+
+  const days = Math.floor(remaining / (24 * 60 * 60 * 1000));
+  const hours = Math.floor(remaining / (60 * 60 * 1000));
+  // Coarse on purpose: the decision this informs is "reissue or not", and a
+  // countdown to the minute would be a clock that has to keep ticking.
+  const label = days >= 1 ? `${days}d left` : hours >= 1 ? `${hours}h left` : 'under an hour';
+  return (
+    <ToneBadge tone={days >= 1 ? 'neutral' : 'amber'}>
+      <span title={`Expires ${new Date(expiresAt).toLocaleString()}`}>{label}</span>
+    </ToneBadge>
+  );
+}
+
+/**
+ * How long a new connection lasts.
+ *
+ * Never is the default and stays it — see `ServerConnection.expiresAt` on why a
+ * token that stops working unasked is the worse failure — but the options are
+ * on screen rather than behind an "advanced" fold, because the case this was
+ * built for is a *remote bridge* token typed into a laptop at somebody else's
+ * desk, and the moment to think about how long that should last is the moment
+ * it is created. There is no renewal: the choice is fixed with the rest of the
+ * grant.
+ */
+const EXPIRY_CHOICES = [
+  { id: 'never', label: 'Never expires', days: null, note: 'The default, and right for a program that runs indefinitely on a machine you control.' },
+  { id: '1d', label: 'One day', days: 1, note: 'A token for one afternoon on a machine you will not be sitting at again.' },
+  { id: '7d', label: 'A week', days: 7, note: 'Long enough for a trip, short enough that forgetting it costs nothing.' },
+  { id: '30d', label: 'A month', days: 30, note: 'A remote window you use regularly, with a date on it anyway.' },
+] as const;
+
+type ExpiryChoice = (typeof EXPIRY_CHOICES)[number]['id'];
+
+/**
  * Creating one: a name, and the choice that cannot be changed afterwards.
  *
  * The three workspace options are offered as a `ChoiceList` rather than a
@@ -689,6 +737,7 @@ function NewConnection({ pane }: { readonly pane: ServerPane }): ReactElement {
    * everything is stopped from creating a token that can reach nothing.
    */
   const [allowed, setAllowed] = useState<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
+  const [expiry, setExpiry] = useState<ExpiryChoice>('never');
 
   const reset = (): void => {
     setOpen(false);
@@ -696,6 +745,7 @@ function NewConnection({ pane }: { readonly pane: ServerPane }): ReactElement {
     setKind('ephemeral');
     setPath(null);
     setAllowed(new Map());
+    setExpiry('never');
   };
 
   const toggleModel = (profileId: string, modelId: string): void => {
@@ -762,10 +812,24 @@ function NewConnection({ pane }: { readonly pane: ServerPane }): ReactElement {
         : { profileId: profileId as ServerAllowance['profileId'], modelIds: [...models] };
     });
 
+    /*
+     * Resolved to an instant here, at the click, rather than sent as a
+     * duration.
+     *
+     * The token's life has to start somewhere, and the only defensible answer
+     * is "when the person decided", which is now. A duration resolved later —
+     * in main, or worse on first use — would mean a token created on Friday
+     * and first used on Monday quietly lasting three days longer than the
+     * label on the button said.
+     */
+    const days = EXPIRY_CHOICES.find((choice) => choice.id === expiry)?.days ?? null;
+    const expiresAt = days === null ? undefined : Date.now() + days * 24 * 60 * 60 * 1000;
+
     pane.createConnection({
       label: label.trim() || 'Connection',
       workspace,
       ...(allow.length === 0 ? {} : { allow }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
     });
     reset();
   };
@@ -825,6 +889,17 @@ function NewConnection({ pane }: { readonly pane: ServerPane }): ReactElement {
         allowed={allowed}
         onToggleProfile={toggleProfile}
         onToggleModel={toggleModel}
+      />
+
+      <ChoiceList
+        label="How long it lasts"
+        value={expiry}
+        onChange={(next) => setExpiry(next)}
+        choices={EXPIRY_CHOICES.map((choice) => ({
+          id: choice.id,
+          label: choice.label,
+          note: choice.note,
+        }))}
       />
 
       <p className="text-2xs leading-relaxed text-ink-faint">
