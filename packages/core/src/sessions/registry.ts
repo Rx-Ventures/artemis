@@ -47,12 +47,14 @@ import type {
   Capabilities,
   PermissionDecision,
   PermissionRequestId,
+  ProfileId,
   ProviderId,
   RunEndEvent,
   RunEndReason,
   RunHandle,
   RunId,
   RunInput,
+  SessionId,
   Unsubscribe,
 } from '@rx-artemis/protocol';
 import { isFileAttachment, isImageAttachment } from '@rx-artemis/protocol';
@@ -171,6 +173,59 @@ export type RunErrorReporter = (
   context: { readonly runId: RunId; readonly phase: RunErrorPhase },
 ) => void;
 
+/**
+ * The identifiers every lifecycle notification carries.
+ *
+ * Ids and names only, by contract: these events exist to be written into the
+ * session-lifecycle log, whose whole redaction rule is that nothing
+ * content-bearing — no prompt text, no message content, no tokens — is ever on
+ * one. `cwd` is the pane's project directory, which is what locates the
+ * incident; the sessionId is present from the moment the run knows it.
+ */
+export interface RunLifecycleBase {
+  readonly runId: RunId;
+  readonly profileId: ProfileId;
+  readonly providerId: ProviderId;
+  readonly cwd: string;
+  readonly sessionId?: SessionId;
+}
+
+/**
+ * One run-lifecycle transition, as {@link RunRegistryOptions.onLifecycle}
+ * hears it.
+ *
+ * Four transitions plus one promotion, together the run's whole biography:
+ *
+ * - `run.started` — {@link RunRegistry.start} accepted it. Carries
+ *   `resumeSessionId` when the run continues a stored conversation, so a
+ *   continuation is distinguishable from a fresh session before any session id
+ *   is known.
+ * - `run.session` — the provider announced which session the run writes into.
+ *   Logged separately because a fresh run has no session id at start, and a
+ *   crash between start and end would otherwise leave no way to connect the
+ *   run to the session file it died writing.
+ * - `run.adopted` — the provider opened a turn nobody asked for and
+ *   {@link RunRegistry.adopt} took it on.
+ * - `run.ended` — the run's one `run.end` was ingested. `synthesized` says
+ *   whether the adapter produced it or the registry had to invent it, which is
+ *   precisely the distinction the phantom-done forensics lacked.
+ * - `run.released` — the registry let go of the run: `mode: 'released'` left
+ *   the adapter's process alive on purpose, `mode: 'disposed'` tore it down.
+ */
+export type RunLifecycleEvent =
+  | (RunLifecycleBase & { readonly kind: 'run.started'; readonly resumeSessionId?: SessionId })
+  | (RunLifecycleBase & { readonly kind: 'run.session'; readonly sessionId: SessionId })
+  | (RunLifecycleBase & { readonly kind: 'run.adopted' })
+  | (RunLifecycleBase & {
+      readonly kind: 'run.ended';
+      readonly reason: RunEndReason;
+      readonly synthesized: boolean;
+    })
+  | (RunLifecycleBase & { readonly kind: 'run.released'; readonly mode: 'released' | 'disposed' });
+
+/** Hears every {@link RunLifecycleEvent}. */
+export type RunLifecycleListener = (event: RunLifecycleEvent) => void;
+
 /** Construction options for {@link RunRegistry}. */
 export interface RunRegistryOptions {
   /** Provider → adapter lookup. */
@@ -220,6 +275,15 @@ export interface RunRegistryOptions {
    * without one, a throwing subscriber fails silently.
    */
   readonly onError?: RunErrorReporter;
+  /**
+   * Hears every lifecycle transition — started, session known, adopted, ended,
+   * released — carrying ids only. The host wires this to the session-lifecycle
+   * log; see {@link RunLifecycleEvent} for the exact vocabulary.
+   *
+   * Observation, not participation: a listener that throws is reported through
+   * {@link onError} and cannot affect the run.
+   */
+  readonly onLifecycle?: RunLifecycleListener;
 }
 
 /**
@@ -276,6 +340,14 @@ interface RunEntry {
   released: boolean;
   disposeRequested: boolean;
   interruptRequested: boolean;
+  /**
+   * The `run.end` being ingested was invented by {@link #synthesizeEnd} rather
+   * than produced by the adapter. Carried on the entry because by the time the
+   * event reaches {@link #ingest} the two paths are one, and the lifecycle log
+   * exists to tell them apart — a synthesized end is the registry papering over
+   * exactly the upstream loss the log is meant to catch.
+   */
+  syntheticEnd: boolean;
   pump: Promise<void>;
 }
 
@@ -308,6 +380,7 @@ export class RunRegistry {
   readonly #endedRetention: number;
   readonly #disposeTimeoutMs: number;
   readonly #onError: RunErrorReporter | undefined;
+  readonly #onLifecycle: RunLifecycleListener | undefined;
 
   /** Runs that have not emitted `run.end` yet. */
   readonly #runs = new Map<RunId, RunEntry>();
@@ -349,6 +422,7 @@ export class RunRegistry {
     this.#endedRetention = Math.max(0, options.endedRetention ?? DEFAULT_ENDED_RETENTION);
     this.#disposeTimeoutMs = Math.max(0, options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS);
     this.#onError = options.onError;
+    this.#onLifecycle = options.onLifecycle;
   }
 
   /* ---------------------------------------------------------------------- */
@@ -540,6 +614,16 @@ export class RunRegistry {
     };
 
     this.#register(handle, run, input.prompt);
+    this.#noteLifecycle({
+      kind: 'run.started',
+      runId,
+      profileId: input.profileId,
+      providerId: input.providerId,
+      cwd: input.cwd,
+      // The one content-free fact that separates a continuation from a fresh
+      // session before any session id is announced.
+      ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
+    });
     return handle;
   }
 
@@ -597,6 +681,14 @@ export class RunRegistry {
     };
 
     this.#register(handle, run);
+    this.#noteLifecycle({
+      kind: 'run.adopted',
+      runId,
+      profileId: context.profileId,
+      providerId: context.providerId,
+      cwd: context.cwd,
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+    });
     return handle;
   }
 
@@ -623,6 +715,7 @@ export class RunRegistry {
       released: false,
       disposeRequested: false,
       interruptRequested: false,
+      syntheticEnd: false,
       pump: Promise.resolve(),
     };
     this.#runs.set(handle.runId, entry);
@@ -997,9 +1090,28 @@ export class RunRegistry {
         : { ...incoming, runId: entry.handle.runId };
 
     if (event.seq > entry.maxSeq) entry.maxSeq = event.seq;
+    const priorSessionId = entry.handle.sessionId;
     this.#applyToHandle(entry, event);
     this.#retain(entry, event);
     this.#emit(entry, event);
+
+    // After the fan-out, so the log records what the app was told, in the
+    // order it was told it. Both notes read `entry.handle` post-apply: that is
+    // where the session id lands, whichever event carried it.
+    if (event.type === 'session.started' && entry.handle.sessionId !== priorSessionId) {
+      const sessionId = entry.handle.sessionId;
+      if (sessionId !== undefined) {
+        this.#noteLifecycle({ ...this.#lifecycleIdsOf(entry), kind: 'run.session', sessionId });
+      }
+    }
+    if (event.type === 'run.end') {
+      this.#noteLifecycle({
+        ...this.#lifecycleIdsOf(entry),
+        kind: 'run.ended',
+        reason: event.reason,
+        synthesized: entry.syntheticEnd,
+      });
+    }
   }
 
   #applyToHandle(entry: RunEntry, event: AgentEvent): void {
@@ -1065,6 +1177,7 @@ export class RunRegistry {
 
   /** Emit a `run.end` the adapter did not produce. */
   #synthesizeEnd(entry: RunEntry, reason: RunEndReason, error?: AgentError): void {
+    entry.syntheticEnd = true;
     const event: RunEndEvent = {
       type: 'run.end',
       runId: entry.handle.runId,
@@ -1128,6 +1241,16 @@ export class RunRegistry {
     if (entry.disposeRequested) await this.#disposeRun(entry);
     else await this.#releaseRun(entry);
 
+    // After the release/dispose settled, so `mode` reports what actually
+    // happened: `released` when the adapter kept its process on purpose,
+    // `disposed` when it was torn down — including the adapters for which the
+    // two are one act.
+    this.#noteLifecycle({
+      ...this.#lifecycleIdsOf(entry),
+      kind: 'run.released',
+      mode: entry.released ? 'released' : 'disposed',
+    });
+
     const { runId } = entry.handle;
     this.#runs.delete(runId);
     entry.listeners.clear();
@@ -1156,6 +1279,28 @@ export class RunRegistry {
       this.#onError(error, { runId, phase });
     } catch {
       // A reporter that throws is not worth a second exception.
+    }
+  }
+
+  /** The identifiers a lifecycle note carries, read off the current handle. */
+  #lifecycleIdsOf(entry: RunEntry): RunLifecycleBase {
+    const { runId, profileId, providerId, cwd, sessionId } = entry.handle;
+    return { runId, profileId, providerId, cwd, ...(sessionId === undefined ? {} : { sessionId }) };
+  }
+
+  /**
+   * Tell the lifecycle listener, without letting it participate.
+   *
+   * The same containment {@link #emit} gives event subscribers: instrumentation
+   * that throws is reported and dropped, because a log line is never worth the
+   * run it describes.
+   */
+  #noteLifecycle(event: RunLifecycleEvent): void {
+    if (!this.#onLifecycle) return;
+    try {
+      this.#onLifecycle(event);
+    } catch (error) {
+      this.#report(error, event.runId, 'listener');
     }
   }
 }

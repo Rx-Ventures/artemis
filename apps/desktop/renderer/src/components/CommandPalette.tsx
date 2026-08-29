@@ -123,6 +123,9 @@ import { usePane, usePaneRef } from '../state/paneContext';
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
+import { costPosture, modelExhaustion, modelPressure } from '../state/modelFacts';
+import { CostPips, PressureDot } from './RunNavigator';
+import { toneFor } from './PlanUsageMeter';
 import { ProfileSwatch } from './primitives';
 import { DirectoryChooser } from './WorkingDirectory';
 import {
@@ -842,6 +845,18 @@ function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElem
 function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement {
   const models = usePane(activeModels);
   const current = usePane((s) => s.model);
+  /*
+    The same three facts the navigator's rows carry — exhaustion, pressure,
+    cost posture — read off the same polled map through the same helpers
+    (`modelFacts.ts`), so the two surfaces cannot disagree about whether a
+    model has room. Read-only here, never a fetch: this is a list mounted by a
+    keystroke, and a subprocess per row would be the hazard the profile rows
+    already document.
+  */
+  const profileId = usePane((s) => s.activeProfileId);
+  const usage = useApp((s) => (profileId === null ? null : (s.planUsageByProfile[profileId] ?? null)));
+  // Captured at mount — the page opens, the facts are judged then.
+  const [now] = useState(() => Date.now());
 
   return (
     <>
@@ -854,43 +869,82 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
           you reach by typing four characters of a name you already know. A
           shortlist you have to search is not a search.
         */}
-        {models.map((model) => (
-          <CommandItem
-            key={model.id}
-            // Everything a user might type: short label, full name, alias and
-            // the wire id it resolves to. "sonnet" and "claude-sonnet-5" should
-            // both find the same row.
-            value={`${model.label} ${model.displayName ?? ''} ${model.id} ${model.resolvedModel ?? ''}`}
-            className="flex-col items-start gap-0.5"
-            onSelect={() => {
-              setModel(model.id);
-              onClose();
-            }}
-          >
-            <span className="flex w-full items-center gap-2">
-              <CpuIcon className="size-3 shrink-0" aria-hidden="true" />
-              <span className="text-xs text-ink">{model.displayName ?? model.label}</span>
-              {model.supportsFastMode === true ? (
-                <ZapIcon className="size-3 shrink-0 text-cyan" aria-label="offers fast mode" />
-              ) : null}
-              {model.supportsUltracode === true ? (
-                <SparklesIcon
-                  className="size-3 shrink-0 text-beam-text"
-                  aria-label="offers ultracode"
-                />
-              ) : null}
-              {current === model.id ? (
-                <span className="ml-auto font-mono text-2xs text-beam-text">selected</span>
-              ) : null}
-            </span>
-            <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>
-            {model.resolvedModel ? (
-              <span className="pl-5 font-mono text-2xs text-ink-faint/75">
-                {model.resolvedModel}
+        {models.map((model) => {
+          const exhausted = modelExhaustion(model, usage, now);
+          const pressure = modelPressure(model, usage);
+          return (
+            <CommandItem
+              key={model.id}
+              // Everything a user might type: short label, full name, alias and
+              // the wire id it resolves to. "sonnet" and "claude-sonnet-5" should
+              // both find the same row.
+              value={`${model.label} ${model.displayName ?? ''} ${model.id} ${model.resolvedModel ?? ''}`}
+              // Present-but-disabled with the reason inline — the GatedItem
+              // treatment, applied to a model rather than a command. A model
+              // that vanished would read as withdrawn; one that is struck
+              // through with a reset time reads as what it is: out until then.
+              disabled={exhausted !== null}
+              className={cn('flex-col items-start gap-0.5', exhausted !== null && 'opacity-100')}
+              onSelect={() => {
+                setModel(model.id);
+                onClose();
+              }}
+            >
+              <span className="flex w-full items-center gap-2">
+                <CpuIcon className="size-3 shrink-0" aria-hidden="true" />
+                <span
+                  className={cn(
+                    'text-xs',
+                    exhausted === null ? 'text-ink' : 'text-ink-faint line-through',
+                  )}
+                >
+                  {model.displayName ?? model.label}
+                </span>
+                <CostPips posture={costPosture(model)} />
+                {model.supportsFastMode === true ? (
+                  <ZapIcon className="size-3 shrink-0 text-cyan" aria-label="offers fast mode" />
+                ) : null}
+                {model.supportsUltracode === true ? (
+                  <SparklesIcon
+                    className="size-3 shrink-0 text-beam-text"
+                    aria-label="offers ultracode"
+                  />
+                ) : null}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 font-mono text-2xs">
+                  {pressure !== null ? (
+                    <span className="flex items-center gap-1">
+                      <PressureDot pressure={pressure} />
+                      {pressure.window.status === 'rejected' ? (
+                        <span className="tabular-nums text-signal">out</span>
+                      ) : pressure.utilization === null ? null : (
+                        <span
+                          className={cn(
+                            'tabular-nums',
+                            toneFor(pressure.utilization, pressure.window.status),
+                          )}
+                        >
+                          {Math.round(pressure.utilization)}%
+                        </span>
+                      )}
+                    </span>
+                  ) : null}
+                  {current === model.id ? <span className="text-beam-text">selected</span> : null}
+                </span>
               </span>
-            ) : null}
-          </CommandItem>
-        ))}
+              {exhausted !== null ? (
+                <span className="pl-5 text-2xs leading-snug text-signal no-underline">
+                  {exhausted.reason}
+                </span>
+              ) : null}
+              <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>
+              {model.resolvedModel ? (
+                <span className="pl-5 font-mono text-2xs text-ink-faint/75">
+                  {model.resolvedModel}
+                </span>
+              ) : null}
+            </CommandItem>
+          );
+        })}
       </CommandGroup>
     </>
   );

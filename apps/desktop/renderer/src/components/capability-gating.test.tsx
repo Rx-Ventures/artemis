@@ -304,18 +304,16 @@ describe('status line / model and effort', () => {
   });
 
   /*
-   * REGRESSION. The effort ladder opened leftward, off the side of the window.
-   *
-   * jsdom computes no layout, so the *position* is not assertable here — but the
-   * cause is structural and is. The submenu was rendered inside the model menu,
-   * which animates with a transform: a transformed ancestor becomes the
-   * containing block for `position: fixed`, so the submenu was both clipped by
-   * that menu's `overflow-y-auto` and measured against its box rather than the
-   * window. Radix concluded there was no room to the right and flipped it into
-   * even less. Portaling it out of that ancestor is the fix, and "is it a
-   * descendant of the parent menu" is exactly the thing that regressed.
+   * The thinking ladder used to be a *submenu* of the model popover, and two
+   * regression tests here pinned its portal-and-clamp mechanics (a transformed
+   * ancestor made `position: fixed` measure against the menu's box; an
+   * unclamped submenu took its ~570px max-content width and fell off the
+   * window). The navigator makes both impossible by construction: the ladder
+   * is a column *inside* the one surface, not a floating box positioned beside
+   * it — there is no second popover to mis-measure. What is still worth
+   * pinning is that structure.
    */
-  it('opens the thinking ladder outside the menu that owns it', async () => {
+  it('renders the thinking ladder as a column of the navigator, not a submenu', async () => {
     useProvider(ALL);
     mount(<StatusLine />);
     fireEvent.pointerDown(screen.getByLabelText('Model'), {
@@ -325,39 +323,21 @@ describe('status line / model and effort', () => {
     });
 
     const menu = await screen.findByRole('menu');
-    const submenuTrigger = screen.getByText('Thinking').closest('[data-slot="dropdown-menu-sub-trigger"]');
-    expect(submenuTrigger).toBeTruthy();
-    fireEvent.pointerMove(submenuTrigger as Element, { pointerType: 'mouse' });
-
-    const ladder = await waitFor(() => {
-      const found = document.querySelector('[data-slot="dropdown-menu-sub-content"]');
-      if (!found) throw new Error('the thinking ladder never opened');
-      return found;
-    });
-
-    // The whole fix, stated as a fact about the tree: the ladder is on the page
-    // and is *not* inside the menu it belongs to.
-    expect(menu.contains(ladder)).toBe(false);
-    expect(document.body.contains(ladder)).toBe(true);
+    // Not behind a sub-trigger: the rungs are on the surface itself…
+    expect(screen.getByText('Thinking').closest('[data-slot="dropdown-menu-sub-trigger"]')).toBeNull();
+    // …every one of them, notes and all, inside the menu that owns them.
+    expect(menu.contains(screen.getByText('Low'))).toBe(true);
+    expect(menu.contains(screen.getByText('High'))).toBe(true);
   });
 
   /*
-   * REGRESSION, the second half. The portal above shipped and the ladder went
-   * on falling off the screen, because position was never the whole problem:
-   * Radix places a submenu but does not size it, so the box takes its
-   * max-content width — and the rung notes are sentences, which took it to
-   * ~570px. A box wider than either side of its trigger cannot be placed;
-   * `avoidCollisions` flipped to whichever side had more room and the menu
-   * still hung off the window edge.
-   *
-   * jsdom computes no layout, so the width is not assertable — but the clamp
-   * is: the primitive caps the box to the space Radix measured (the
-   * `-available-width/height` variables) and scrolls past its height, and the
-   * ladder sets the fixed width its notes wrap at. These are exactly what a
-   * `shadcn add` regenerating dropdown-menu.tsx would silently remove, which
-   * is how the class of bug gets back in.
+   * The clamp half survives the rebuild: the navigator is one Radix content
+   * box, and the primitive caps it to the space Radix measured (the
+   * `-available-width/height` variables) and scrolls past its height. These
+   * classes are exactly what a `shadcn add` regenerating dropdown-menu.tsx
+   * would silently remove, which is how the class of bug gets back in.
    */
-  it('clamps the thinking ladder to the space the window actually has', async () => {
+  it('clamps the navigator to the space the window actually has', async () => {
     useProvider(ALL);
     mount(<StatusLine />);
     fireEvent.pointerDown(screen.getByLabelText('Model'), {
@@ -366,26 +346,10 @@ describe('status line / model and effort', () => {
       pointerType: 'mouse',
     });
 
-    await screen.findByRole('menu');
-    const submenuTrigger = screen
-      .getByText('Thinking')
-      .closest('[data-slot="dropdown-menu-sub-trigger"]');
-    fireEvent.pointerMove(submenuTrigger as Element, { pointerType: 'mouse' });
-
-    const ladder = await waitFor(() => {
-      const found = document.querySelector('[data-slot="dropdown-menu-sub-content"]');
-      if (!found) throw new Error('the thinking ladder never opened');
-      return found;
-    });
-
-    const classes = ladder.className;
-    expect(classes).toContain('max-w-(--radix-dropdown-menu-content-available-width)');
+    const menu = await screen.findByRole('menu');
+    const classes = menu.className;
     expect(classes).toContain('max-h-(--radix-dropdown-menu-content-available-height)');
     expect(classes).toContain('overflow-y-auto');
-    // The call site's half: a fixed width for the notes to wrap at, not a
-    // min-width for max-content to blow past.
-    expect(classes).toContain('w-64');
-    expect(classes).not.toContain('min-w-56');
   });
 });
 

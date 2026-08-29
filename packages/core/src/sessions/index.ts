@@ -24,3 +24,4 @@ export * from './errors.js';
 export * from './registry.js';
 export * from './naming.js';
 export * from './owners.js';
+export * from './lifecycleLog.js';
