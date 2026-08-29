@@ -2231,6 +2231,23 @@ export function createMockBridge(): ArtemisBridge {
     },
 
     /*
+     * The remote-origin grant, held in memory. The mock has no CSP to widen —
+     * the grant's whole effect lives in main — so this only remembers what it
+     * was told, which is exactly enough to develop the settings section
+     * against: configure, read back, withdraw.
+     */
+    remote: (() => {
+      let origin: string | null = null;
+      return {
+        status: async () => ok({ origin }),
+        configure: async ({ origin: next }: { origin: string | null }) => {
+          origin = next === null ? null : next.trim() || null;
+          return ok({ origin });
+        },
+      };
+    })(),
+
+    /*
      * Routines, held in this mock's memory: enough behaviour to develop the
      * pane against — create, edit, pause, delete, a run-now that "runs" for a
      * few seconds and settles as completed — without a scheduler behind it.

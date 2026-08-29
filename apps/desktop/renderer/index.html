@@ -41,10 +41,23 @@
       So: the scheme is spelled out below, and it must stay in step with
       `PREVIEW_SCHEME` in `main/preview.ts`. An HTML file cannot import the
       constant, which is the whole reason these two can drift.
+
+      `connect-src` carries `http: https:`, and that breadth is this layer's
+      honest limit rather than a loosened posture. Remote mode (ADR 0004)
+      fetches one user-configured origin, and a static tag cannot name a value
+      chosen at runtime — the *narrowing to exactly that origin* is done twice
+      elsewhere, by the header CSP `applySessionPolicy` computes per response
+      and by the `webRequest` lockdown, both of which read the configured
+      origin live and grant no wildcard ever. This tag already worked that
+      way: `ws://localhost:*` below has never been in the production header,
+      which narrows it away. The cost, stated plainly: if BOTH runtime layers
+      failed at once, this fallback alone would no longer stop a compromised
+      renderer's fetch — connect-src only; script, frames and everything else
+      stay as tight as ever.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-yRY6nRklLH9xjg6E1SchWH7UfjpaDTMnCFAe/HvBO/o='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*; frame-src artemis-preview:"
+      content="default-src 'self'; script-src 'self' 'sha256-yRY6nRklLH9xjg6E1SchWH7UfjpaDTMnCFAe/HvBO/o='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http: https:; frame-src artemis-preview:"
     />
     <!--
       Resolve the palette before anything paints.

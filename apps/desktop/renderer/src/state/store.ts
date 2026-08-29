@@ -210,6 +210,7 @@ export type SettingsSection =
   | 'agents'
   | 'cerebro'
   | 'server'
+  | 'remote'
   | 'routines'
   | 'advanced';
 
@@ -238,6 +239,7 @@ const SETTINGS_SECTION_HOMES: Readonly<Record<SettingsSection, SettingsSection>>
   agents: 'agents',
   cerebro: 'agents',
   server: 'server',
+  remote: 'remote',
   routines: 'routines',
   advanced: 'advanced',
 };
@@ -1425,6 +1427,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'agents',
   'cerebro',
   'server',
+  'remote',
   'routines',
   'advanced',
 ];

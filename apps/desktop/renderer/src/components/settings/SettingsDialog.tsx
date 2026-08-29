@@ -54,6 +54,7 @@ import {
   BotIcon,
   BoxesIcon,
   CalendarClockIcon,
+  CastIcon,
   GaugeIcon,
   KeyRoundIcon,
   LaptopIcon,
@@ -68,6 +69,7 @@ import { AppearanceSection } from './AppearanceSection';
 import { InstructionsSection } from './InstructionsSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
+import { RemoteSection } from './RemoteSection';
 import { RunsSection } from './RunsSection';
 import { ServerSection } from './ServerSection';
 import { RoutinesSection } from './RoutinesSection';
@@ -198,6 +200,16 @@ export const SETTINGS_NAV: readonly NavBand[] = [
         label: 'Server',
         hint: 'Lend models to other apps',
         icon: <ServerIcon aria-hidden="true" />,
+      },
+      // The server's mirror, and directly under it on purpose: Server lends
+      // this machine's accounts out, Remote borrows another machine's whole
+      // Artemis — one grant model (a token, minted over there), one mental
+      // model, two directions.
+      {
+        id: 'remote',
+        label: 'Remote',
+        hint: 'Drive another machine',
+        icon: <CastIcon aria-hidden="true" />,
       },
       // Beside the server on purpose: both panes are the app acting without a
       // person at the keyboard — one lends the accounts out, this one spends
@@ -390,6 +402,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <InstructionsSection />;
     case 'server':
       return <ServerSection />;
+    case 'remote':
+      return <RemoteSection />;
     case 'routines':
       return <RoutinesSection />;
     case 'advanced':

@@ -61,7 +61,6 @@ import type {
   AgentEvent,
   OpenAiChatRequest,
   OpenAiModelList,
-  ServerErrorBody,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
@@ -78,6 +77,7 @@ import {
   SERVER_HEALTH_PATH,
   SERVER_HOST,
   SSE_DONE,
+  connectionHasExpired,
   describeConnection,
   parseModelRoute,
   readChatExtensions,
@@ -94,7 +94,13 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import type { RemoteAccessEvent } from '../sessions/lifecycleLog.js';
+import type { PushFeed } from './feed.js';
+import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
+import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
+import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
+import type { RemoteTerminals } from './terminals.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
@@ -195,6 +201,53 @@ export interface ServerContext {
    * carries per-connection.
    */
   readonly allowedHosts?: readonly string[] | 'any';
+  /**
+   * The push feed the event stream serves. Absent means this build has no
+   * live feed to offer and `/api/v0/events` answers `501` — a catalogue-only
+   * deployment, and every test that is not about the stream.
+   */
+  readonly feed?: PushFeed;
+  /** Tuning for the event stream. Injected by tests; defaults apply live. */
+  readonly remoteStream?: RemoteStreamOptions;
+  /**
+   * Interrupt-on-disconnect for bridge-started runs. Absent means no such
+   * policy — which a host that also provides no control verbs honestly has.
+   */
+  readonly guard?: RemoteRunGuard;
+  /**
+   * The configured connections, read *live* rather than as this request's
+   * snapshot.
+   *
+   * Every route is answered from {@link connections}, which is the snapshot
+   * taken when the request arrived, and for a request that is the same thing.
+   * A *stream* is not a request: it is open for hours, and the snapshot it was
+   * born with says a token is valid long after the user revoked it or its
+   * expiry passed. `deleteConnection` promises revocation takes effect on the
+   * next request with no restart; a stream that keeps delivering transcripts
+   * and PTY bytes to a deleted token breaks that promise in the worst possible
+   * direction. This is how the stream re-asks. Absent means it cannot, and it
+   * falls back to the snapshot — which is what every test that builds a context
+   * by hand does.
+   */
+  readonly connectionsNow?: () => readonly ServerConnection[];
+  /**
+   * Shells a remote window may open on this machine. Absent means this
+   * deployment has no PTY to offer and the terminal routes answer `501` —
+   * which the headless server honestly does, and which a remote client renders
+   * as an empty dock rather than an error.
+   */
+  readonly terminals?: RemoteTerminals;
+  /**
+   * The attribution record: which token did what.
+   *
+   * Absent means nothing is written, which is what every pre-remote build did.
+   * Present, it is handed acts only — starting and steering runs, answering
+   * permission prompts, opening and closing shells, and a token presented past
+   * its expiry — never reads, and never anything carrying content. See
+   * `sessions/lifecycleLog.ts` for the record's shape and the redaction rule
+   * that is enforced rather than promised.
+   */
+  readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
 }
 
 /**
@@ -236,23 +289,6 @@ export interface ServerStreamReply {
 /* -------------------------------------------------------------------------- */
 /* Routing                                                                    */
 /* -------------------------------------------------------------------------- */
-
-const JSON_HEADERS: Readonly<Record<string, string>> = {
-  'content-type': 'application/json; charset=utf-8',
-  // The catalogue describes live accounts and can change between two polls.
-  // Nothing here should ever be served from a client's disk cache.
-  'cache-control': 'no-store',
-};
-
-const CORS_HEADERS: Readonly<Record<string, string>> = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
-  // `x-api-key` alongside the standard header because Anthropic-shaped clients
-  // send that one, and a client that has to be reconfigured to talk to a
-  // compatibility layer is a compatibility layer that did not work.
-  'access-control-allow-headers': 'authorization, content-type, x-api-key',
-  'access-control-max-age': '600',
-};
 
 /** Hosts a request may legitimately claim to have been sent to. See the file comment. */
 const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -337,6 +373,41 @@ export async function handleServerRequest(
     };
   }
 
+  /*
+   * Expiry is checked after the match and not folded into it.
+   *
+   * Folding it in would make an expired token indistinguishable from a wrong
+   * one, which sounds safer and is worse in the only case that matters: the
+   * holder of an expired token is the person who was given it, and telling
+   * them "expired" instead of "invalid" is the difference between asking for a
+   * new one and debugging a server they think is broken. It discloses nothing
+   * a wrong guess could reach — the sentence is only ever shown to someone who
+   * has already presented the real secret.
+   *
+   * It is also *checked here* rather than at connection-load time so that a
+   * long-lived server does not go on honouring a token that expired while it
+   * was running: `connections` is read fresh per request for the same reason.
+   */
+  if (connectionHasExpired(connection, Date.now())) {
+    context.onRemoteAccess?.({ kind: 'remote.token.expired', connectionId: connection.id });
+    return {
+      ...fail(
+        401,
+        'authentication_error',
+        'expired_api_key',
+        'This connection has expired. Expiry is fixed when a token is issued and cannot be extended — create a new connection and revoke this one.',
+      ),
+      rejected: true,
+      /*
+       * No `connectionId`, deliberately — that field is what stamps
+       * `lastUsedAt`. An expired token is one the user is deciding whether to
+       * delete, and a stale poller hammering it would show "used just now"
+       * forever, which is the opposite of what that column is for. The refusal
+       * is still recorded, above, where it belongs.
+       */
+    };
+  }
+
   const refresh = url.searchParams.get('refresh') === '1';
   const apiPrefix = `/api/${SERVER_API_VERSION}`;
 
@@ -390,6 +461,18 @@ export async function handleServerRequest(
       'not_implemented',
       `Artemis's server does not run turns yet — it publishes its catalogue only. ${path} is planned; list what is available at /v1/models.`,
     );
+  }
+
+  /*
+   * The remote bridge surface (ADR 0004): the run list, per-run replay and
+   * control verbs, the terminals, and the event stream. Dispatched before the
+   * read-only method gate below because several of its routes are POSTs, and
+   * routed as one block because every one of them shares the same visibility
+   * rule — what this connection's allowance can see — which lives in one
+   * module rather than being re-derived per path. See `remote.ts`.
+   */
+  if (isRemotePath(path)) {
+    return handleRemoteRequest({ request, context, connection, method, path, url });
   }
 
   if (method !== 'GET' && method !== 'HEAD') {
@@ -579,6 +662,27 @@ function indexBody(context: ServerContext): Record<string, unknown> {
         path: `${apiPrefix}/models/{profile}/{model}`,
         description: 'One route, in full.',
       },
+      // The remote bridge surface, named only when this build serves it —
+      // the index's rule is that every path on it actually answers.
+      ...(context.runs?.listRuns === undefined
+        ? []
+        : [
+            {
+              method: 'GET',
+              path: `${apiPrefix}/runs`,
+              description: 'Live runs visible to your connection.',
+            },
+          ]),
+      ...(context.feed === undefined
+        ? []
+        : [
+            {
+              method: 'GET',
+              path: `${apiPrefix}/events`,
+              description:
+                'The event stream (SSE). Resume with Last-Event-ID; gaps are reported, not hidden.',
+            },
+          ]),
     ],
     // Said out loud rather than left to a 401: a catalogue that changes when an
     // account is added is worth re-reading, and a client that does not know the
@@ -750,15 +854,6 @@ function constantTimeEquals(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-function ok(body: unknown): ServerReply {
-  return { status: 200, headers: { ...JSON_HEADERS, ...CORS_HEADERS }, body };
-}
-
-function fail(status: number, type: string, code: string, message: string): ServerReply {
-  const body: ServerErrorBody = { error: { message, type, code } };
-  return { status, headers: { ...JSON_HEADERS, ...CORS_HEADERS }, body };
-}
-
 /* -------------------------------------------------------------------------- */
 /* The socket                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -791,6 +886,16 @@ export interface ArtemisServerOptions {
   readonly sessions?: SessionSource;
   /** See {@link ServerContext.allowedHosts}. */
   readonly allowedHosts?: readonly string[] | 'any';
+  /** See {@link ServerContext.feed}. */
+  readonly feed?: PushFeed;
+  /** See {@link ServerContext.remoteStream}. */
+  readonly remoteStream?: RemoteStreamOptions;
+  /** See {@link ServerContext.guard}. */
+  readonly guard?: RemoteRunGuard;
+  /** See {@link ServerContext.terminals}. */
+  readonly terminals?: RemoteTerminals;
+  /** See {@link ServerContext.onRemoteAccess}. */
+  readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
   /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
@@ -864,6 +969,14 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
           ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
           ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+          ...(options.feed === undefined ? {} : { feed: options.feed }),
+          ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),
+          ...(options.guard === undefined ? {} : { guard: options.guard }),
+          connectionsNow: options.connections,
+          ...(options.terminals === undefined ? {} : { terminals: options.terminals }),
+          ...(options.onRemoteAccess === undefined
+            ? {}
+            : { onRemoteAccess: options.onRemoteAccess }),
         },
       );
     } catch (error) {
@@ -1088,7 +1201,14 @@ async function describeScopedSessions(
       ...(summary.firstPrompt === undefined ? {} : { firstPrompt: summary.firstPrompt }),
       updatedAt: summary.updatedAt,
       profileSlug: profile?.slug ?? entry.profileId,
+      // The ledger's account, not the store's: `SessionSummary.profileId` is a
+      // pick when several profiles reach one store (see `profileIsUnknown`),
+      // and the ledger *knows* which connection ran this one. The provider is
+      // the account's own, which is the only one it could have been.
+      profileId: entry.profileId,
+      providerId: String(profile?.provider.id ?? summary.providerId),
       cwd: entry.cwd,
+      ...(entry.origin === 'bridge' ? { origin: 'bridge' as const } : {}),
     });
   }
   return rows;

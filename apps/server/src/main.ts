@@ -102,6 +102,12 @@ async function serve(): Promise<void> {
     workspaces: host.workspaces,
     ledger: host.ledger,
     sessions: host.sessionSource,
+    feed: host.feed,
+    guard: host.guard,
+    onRemoteAccess: host.recordAccess,
+    // No `terminals`: this process has no PTY surface — see the file header on
+    // what a headless deployment gives up — so the terminal routes answer 501
+    // and a remote window's dock shows no shells rather than an error.
     ...(allowedHosts() === undefined ? {} : { allowedHosts: allowedHosts() as never }),
     onError: (error) => {
       process.stderr.write(`server error: ${error instanceof Error ? error.message : String(error)}\n`);

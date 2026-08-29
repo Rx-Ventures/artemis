@@ -64,3 +64,33 @@ export {
   type ServerStreamReply,
   type SessionSource,
 } from './http.js';
+
+export {
+  createPushFeed,
+  type FeedEvent,
+  type FeedReplay,
+  type FeedScope,
+  type PushFeed,
+  type PushFeedOptions,
+} from './feed.js';
+
+export { type RemoteStreamOptions } from './remote.js';
+
+export {
+  createRemoteRunGuard,
+  type RemoteRunGuard,
+  type RemoteRunGuardOptions,
+  type TrackedRun,
+} from './guard.js';
+
+export {
+  createRemoteTerminals,
+  MAX_REMOTE_TERMINALS_PER_FAMILY,
+  TooManyRemoteTerminalsError,
+  UnknownRemoteTerminalError,
+  type RemoteTerminals,
+  type RemoteTerminalsOptions,
+  type TerminalSource,
+} from './terminals.js';
+
+export { pathsOf, readRunInput, RunInputError } from './runInput.js';

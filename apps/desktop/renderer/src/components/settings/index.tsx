@@ -20,6 +20,7 @@ export { AppearanceSection } from './AppearanceSection';
 export { PermissionsSection } from './PermissionsSection';
 export { InstructionsSection } from './InstructionsSection';
 export { ServerSection } from './ServerSection';
+export { RemoteSection } from './RemoteSection';
 export { RoutinesSection } from './RoutinesSection';
 export { AdvancedSection } from './AdvancedSection';
 export { ProfilesSection } from '../ProfilesScreen';

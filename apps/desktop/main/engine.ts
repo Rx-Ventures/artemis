@@ -299,6 +299,16 @@ export interface ArtemisEngine {
   listRuns(options: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
 
   /**
+   * One run's handle — live or recently finished — or undefined.
+   *
+   * Synchronous, like {@link runEvents} and for the same reason: it reads the
+   * registry's in-memory index, and the server's event-feed publisher calls it
+   * per event to stamp which account a push concerns — an await there would
+   * let pushes reorder behind the lookup.
+   */
+  getRun(runId: RunId): RunHandle | undefined;
+
+  /**
    * Conversations still holding background work, across every provider.
    *
    * The union of live registry runs and work that outlives the run that started
@@ -1207,6 +1217,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await runs.dispose(runId);
     },
     listRuns: (query) => Promise.resolve(runs.list(query.cwd)),
+    getRun: (runId) => runs.get(runId),
     liveWorkSessions: () => {
       // Deduplicated across providers: one conversation belongs to exactly one
       // adapter, but nothing in the registry enforces that, and a session named

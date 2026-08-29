@@ -105,6 +105,8 @@ import {
   type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
+  type RemoteAccessConfigureRequest,
+  type RemoteAccessStatusRequest,
   type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
@@ -2181,10 +2183,27 @@ export function validateServerCreateConnection(raw: unknown): ServerCreateConnec
 
   const allow = validateAllowance(request['allow']);
 
+  /*
+   * An expiry instant, bounded above rather than merely typed.
+   *
+   * The ceiling is a century out, which no user will ever choose and which
+   * catches the mistake that actually happens: seconds sent where milliseconds
+   * were meant lands a token in 1970 and is dropped by the host as already
+   * past, while milliseconds×1000 lands it past any clock and is refused here.
+   * Neither is a token anybody meant to create.
+   */
+  const expiresAt = optionalInteger(
+    request['expiresAt'],
+    'expiresAt',
+    0,
+    Date.now() + 100 * 365 * 24 * 60 * 60 * 1000,
+  );
+
   return {
     label,
     workspace: resolved,
     ...(allow === undefined || allow.length === 0 ? {} : { allow }),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
 
@@ -2268,6 +2287,30 @@ export function validateServerCatalogue(raw: unknown): ServerCatalogueRequest {
   const request = requireRequest(raw);
   const refresh = optionalBoolean(request['refresh'], 'refresh');
   return refresh === undefined ? {} : { refresh };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Remote access                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** @see validateServerStatus */
+export function validateRemoteStatus(raw: unknown): RemoteAccessStatusRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * An origin string or an explicit null. Shape only — whether the string is an
+ * acceptable origin is `normalizeRemoteOrigin`'s question, answered in the
+ * handler so the refusal can carry a sentence rather than a validation error.
+ */
+export function validateRemoteConfigure(raw: unknown): RemoteAccessConfigureRequest {
+  const request = requireRequest(raw);
+  const origin = request['origin'];
+  if (origin !== null && typeof origin !== 'string') {
+    throw new ValidationError('origin', 'must be a string or null');
+  }
+  return { origin };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -38,16 +38,20 @@ import type {
   AgentEvent,
   ArtemisActivity,
   ArtemisChatExtensions,
+  Attachment,
   OpenAiChatChunk,
   OpenAiChatMessage,
   OpenAiChatRequest,
   OpenAiChatResponse,
   OpenAiFinishReason,
   OpenAiUsage,
+  PermissionDecision,
   RunEndReason,
   RunHandle,
   RunId,
+  RunInput,
   ServerModel,
+  SessionDelegatedWork,
 } from '@rx-artemis/protocol';
 
 /* -------------------------------------------------------------------------- */
@@ -81,15 +85,90 @@ export interface RunSource {
   /** Stop a run that is still going. Called when the client disconnects. */
   interrupt(runId: RunId): Promise<void>;
 
-  /** Answer a permission request. See the file comment on why this always denies. */
+  /**
+   * Answer a permission request.
+   *
+   * The parameter is the full {@link PermissionDecision}, and the widening is
+   * phase 2 of ADR 0004: a *person on another machine* answers prompts
+   * through the remote routes, and remote permission answering is the heart
+   * of controlling what a machine is working on. The completions surface is
+   * unchanged in behaviour — `runTurn` still sends `deny`, always, because on
+   * that surface nobody is watching (see the file comment) — the type simply
+   * stopped pretending the seam could carry nothing else.
+   */
   respondToPermission(
     runId: RunId,
     requestId: string,
-    decision: { readonly behavior: 'deny'; readonly message?: string },
+    decision: PermissionDecision,
   ): Promise<void>;
 
   /** Release the run's resources once its reply has been written. */
   disposeRun(runId: RunId): Promise<void>;
+
+  /* ------------------------------------------------------------------------
+   * The remote bridge's observation and control surface (ADR 0004).
+   *
+   * Optional as a set: a host that provides none of them serves completions
+   * exactly as before and the remote routes answer 501, which is what a
+   * catalogue-only or pre-remote build honestly is. They are on this seam
+   * rather than a second one because they are the same narrowing discipline
+   * over the same engine — the server may ask exactly these questions, and a
+   * route cannot reach anything the host did not choose to expose here.
+   * ---------------------------------------------------------------------- */
+
+  /** Live runs, as `runs:list` reports them to a window. */
+  listRuns?(query: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
+
+  /** One run's handle — live or recently finished — for the visibility gate. */
+  getRun?(runId: RunId): Promise<RunHandle | undefined>;
+
+  /**
+   * A run's retained events, exactly as `runs:events` replays them, with the
+   * same `truncated` honesty flag.
+   */
+  runEvents?(query: { readonly runId: RunId; readonly afterSeq?: number }): Promise<{
+    readonly events: readonly AgentEvent[];
+    readonly truncated: boolean;
+  }>;
+
+  /**
+   * Conversations still holding background work, as `runs:live-work` answers.
+   * Absent when the host keeps no such ledger; the route reports empty sets,
+   * which the response contract already defines as "nothing known", never
+   * "nothing running".
+   */
+  liveWork?(): Promise<{
+    readonly sessionIds: readonly string[];
+    readonly working: readonly string[];
+    readonly delegated: readonly SessionDelegatedWork[];
+  }>;
+
+  /**
+   * Start a run with the *user's own settings* — the whole {@link RunInput}.
+   *
+   * Deliberately a second entry point beside the narrow {@link startRun},
+   * because the two callers are different principals. A completions caller is
+   * a program borrowing an account and may not choose a permission mode or a
+   * tool set; the holder of a remote-bridge token is the user on another
+   * machine, and refusing them their own settings would make the remote
+   * window a lesser Artemis. The routes still enforce the token's scope —
+   * profile allowance, model allowance, the workspace pin — before this is
+   * called.
+   */
+  startUserRun?(input: RunInput): Promise<RunHandle>;
+
+  /** Send another message into a live run, as `runs:send` does. */
+  send?(
+    runId: RunId,
+    text: string,
+    attachments?: readonly Attachment[],
+  ): Promise<{ readonly deliveredImmediately: boolean }>;
+
+  /** Interrupt, with the `stillQueued` detail a window renders. */
+  interruptRun?(runId: RunId): Promise<{ readonly stillQueued?: readonly string[] }>;
+
+  /** Stop one delegated task, leaving the run alone. */
+  stopTask?(runId: RunId, taskId: string): Promise<void>;
 }
 
 /** Everything one turn needs, resolved by the caller before this is entered. */

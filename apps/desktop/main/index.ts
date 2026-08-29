@@ -33,6 +33,7 @@ import { profilesRoot } from '@rx-artemis/core';
 
 import { APP_NAME, flavouredAppName, previousUserDataDir } from './appNames.js';
 import { configurePrefs, readPrefsSync, writePrefs } from './prefs.js';
+import { createRemoteAccess } from './remoteAccess.js';
 
 /**
  * Which build this is: `''` for Artemis, `Beta` for a copy installed beside it.
@@ -218,11 +219,12 @@ const engineHost = new EngineHost();
 /* Window                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function buildSecurityPolicy(): SecurityPolicy {
+function buildSecurityPolicy(remoteOrigin?: () => string | null): SecurityPolicy {
   const rendererEntry = join(distributionDir, '..', 'renderer', 'index.html');
   return {
     devServerOrigin: devServerUrl ? new URL(devServerUrl).origin : null,
     rendererFileUrl: pathToFileURL(rendererEntry).toString(),
+    ...(remoteOrigin === undefined ? {} : { remoteOrigin }),
   };
 }
 
@@ -352,7 +354,17 @@ async function bootstrap(): Promise<void> {
   // Center cannot resolve the id to a shortcut.
   app.setAppUserModelId(APP_USER_MODEL_ID);
 
-  const policy = buildSecurityPolicy();
+  /*
+   * The remote-origin grant, loaded before the security policy is applied: an
+   * app that was left connected to another machine reloads its renderer
+   * straight into remote mode, and that renderer's first fetch must find the
+   * CSP already naming the origin. The policy holds a *getter*, so a grant
+   * configured later in this launch applies without a restart too.
+   */
+  const remoteAccess = createRemoteAccess(artemisDataDir());
+  await remoteAccess.load();
+
+  const policy = buildSecurityPolicy(() => remoteAccess.origin());
 
   // Order matters: the session policy and the `web-contents-created` hook are
   // installed before any window exists, so there is no window that was ever
@@ -468,6 +480,10 @@ async function bootstrap(): Promise<void> {
     userDataDir,
     appVersion: app.getVersion(),
     broadcast: (state) => broadcast(IPC_PUSH.serverState, state),
+    // Constructed just above, and handed over rather than re-created: a remote
+    // window's shells are this machine's shells, spawned by the one file that
+    // is allowed to spawn them. See `ServerHostOptions.terminals`.
+    terminals,
   });
 
   // Same construction order as the server host, for the same reason: the IPC
@@ -502,6 +518,7 @@ async function bootstrap(): Promise<void> {
     browsers,
     server: serverHost,
     routines: routineHost,
+    remoteAccess,
   });
   stopEventForwarding = forwardAgentEvents(engineHost);
   stopSuggestionForwarding = forwardRunSuggestions(engineHost);

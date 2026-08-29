@@ -14,23 +14,37 @@
  *    call; here a session lists under its first prompt. Cosmetic.
  *  - **No plan-usage polling, no update checks, no notifications.** All
  *    window furniture.
- *  - **Permission prompts are auto-denied**, exactly as they are for the
- *    desktop-hosted server — nobody is present to answer. Serve profiles
- *    whose settings pre-authorize what their work needs.
+ *  - **Permission prompts on the completions surface are auto-denied**, exactly
+ *    as they are for the desktop-hosted server: an HTTP chat request has nobody
+ *    behind it to ask. That is no longer the whole story. A *remote bridge*
+ *    client (ADR 0004) is a person at another machine, and this process serves
+ *    them the control routes — so a prompt raised by a bridge-started run is
+ *    answered by whoever is holding that window, over the event stream. Serve
+ *    profiles whose settings pre-authorize what their unattended work needs;
+ *    attended work no longer has to.
  */
+
+import { join } from 'node:path';
 
 import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
   createCatalogue,
   createDefaultProviderRegistry,
+  createPushFeed,
+  createRemoteRunGuard,
   createSessionLedger,
   createWorkspaceResolver,
   managedEnvKeys,
   ProfileStore,
   resolveEnv,
   RunRegistry,
+  SessionLifecycleLog,
+  SESSION_LIFECYCLE_LOG_FILE,
   type Catalogue,
   type ProviderRegistry,
+  type PushFeed,
+  type RemoteAccessEvent,
+  type RemoteRunGuard,
   type RunSource,
   type SessionLedger,
   type SessionSource,
@@ -48,6 +62,21 @@ export interface HeadlessHost {
   readonly ledger: SessionLedger;
   readonly runSource: RunSource;
   readonly sessionSource: SessionSource;
+  /** Every push the server can stream to a remote client. See `server/feed.ts`. */
+  readonly feed: PushFeed;
+  /** Interrupt-on-disconnect for bridge-started runs. See `server/guard.ts`. */
+  readonly guard: RemoteRunGuard;
+  /**
+   * The attribution record: which token did what.
+   *
+   * The headless deployment is the one this matters most for. A desktop server
+   * has a person in front of it who can watch a run appear; this process is
+   * reached only over the wire, by tokens, and "which of these four started
+   * that" has no other answer. Ids and event names only — see
+   * `RemoteAccessEvent` — into the same append-only JSONL file the run
+   * lifecycle goes into, beside the ledger in the data directory.
+   */
+  readonly recordAccess: (event: RemoteAccessEvent) => void;
   dispose(): Promise<void>;
 }
 
@@ -104,6 +133,24 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
   const workspaces = createWorkspaceResolver();
   const ledger = createSessionLedger(dataDir);
 
+  /*
+   * The push feed: every agent event, stamped with the account its run bills
+   * so the routes can filter per connection. Subscribed once, here, because
+   * the feed's sequence numbers are the remote client's replay cursor and a
+   * second subscription would number every event twice. `runs.get` covers
+   * live and recently-ended runs, so even a run's own `run.end` still finds
+   * its profile.
+   */
+  const feed = createPushFeed();
+  runs.subscribe((event) => {
+    const profileId = runs.get(event.runId)?.profileId;
+    feed.publish(
+      'artemis:push:agent-event',
+      event,
+      profileId === undefined ? {} : { profileId: String(profileId) },
+    );
+  });
+
   const runSource: RunSource = {
     startRun: (input) =>
       runs.start({
@@ -129,7 +176,74 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     disposeRun: async (runId) => {
       await runs.dispose(runId as RunId);
     },
+
+    // The observation surface (ADR 0004). No `liveWork`: the headless host
+    // keeps no background-work ledger, and the route's contract makes the
+    // empty answer it degrades to an honest one.
+    listRuns: async (query) => runs.list(query.cwd),
+    getRun: async (runId) => runs.get(runId as RunId),
+    runEvents: async (query) => {
+      const after = query.afterSeq ?? -1;
+      const events = runs.eventsSince(query.runId as RunId, after);
+      // The buffer drops from the front, so a first event that is not the one
+      // immediately after `after` is the only evidence that something was
+      // lost — the same derivation the desktop's engine makes.
+      const first = events[0];
+      return { events, truncated: first !== undefined && first.seq > after + 1 };
+    },
+
+    // The control surface. `startUserRun` takes the whole RunInput — the
+    // routes have already enforced the token's scope, and the registry
+    // enforces capabilities exactly as it does for a window.
+    startUserRun: (input) => runs.start(input),
+    send: async (runId, text, attachments) => {
+      const outcome = await runs.send(runId as RunId, text, attachments);
+      return { deliveredImmediately: outcome.deliveredImmediately };
+    },
+    interruptRun: (runId) => runs.interrupt(runId as RunId),
+    stopTask: (runId, taskId) => runs.stopTask(runId as RunId, taskId),
   };
+
+  /*
+   * Interrupt-on-disconnect, and the attribution record in one wiring: a
+   * bridge run whose client stays gone past the grace is interrupted, and the
+   * session it announced is written into the ledger against the connection
+   * that started it — `origin: 'bridge'`, so it is reachable from the whole
+   * connection family later without ever being mistaken for a program's.
+   */
+  const guard = createRemoteRunGuard({
+    interrupt: (runId) => runs.interrupt(runId as RunId),
+    feed,
+    onSession: (run, sessionId) => {
+      ledger.record({
+        sessionId,
+        connectionId: run.connectionId,
+        profileId: run.profileId,
+        workspaceKey: run.workspaceKey,
+        cwd: run.cwd,
+        origin: 'bridge',
+      });
+    },
+  });
+
+  /*
+   * The attribution log, on the same file the run lifecycle writes to.
+   *
+   * One story, one file: a bridge token started a run, the registry adopted
+   * it, something ended it. Splitting the remote half into a log of its own
+   * would mean correlating two files by timestamp to answer a question that is
+   * one sentence long. Ids only — the log's `RECORDED_KEYS` allowlist is what
+   * enforces that, rather than the caller remembering to.
+   */
+  const accessLog = new SessionLifecycleLog({
+    file: join(dataDir, SESSION_LIFECYCLE_LOG_FILE),
+    onError: (error) =>
+      process.stderr.write(
+        `could not append to the session-lifecycle log: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      ),
+  });
 
   const sessionSource: SessionSource = {
     list: async (query) => {
@@ -165,7 +279,11 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     ledger,
     runSource,
     sessionSource,
+    feed,
+    guard,
+    recordAccess: (event) => accessLog.record(event),
     dispose: async () => {
+      guard.dispose();
       await runs.disposeAll();
       await ledger.flush();
       await workspaces.disposeAll();

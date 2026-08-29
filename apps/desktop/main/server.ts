@@ -73,15 +73,22 @@ import {
 import {
   createArtemisServer,
   createCatalogue,
+  createPushFeed,
+  createRemoteRunGuard,
+  createRemoteTerminals,
   createWorkspaceResolver,
   sweepStaleWorkspaces,
+  SessionLifecycleLog,
+  SESSION_LIFECYCLE_LOG_FILE,
   type ArtemisServer,
   type Catalogue,
+  type RemoteTerminals,
   type RunSource,
   type WorkspaceResolver,
 } from '@rx-artemis/core';
 
 import type { EngineHost } from './engine.js';
+import type { TerminalHost } from './terminal.js';
 import { createLogger } from './log.js';
 import { looksLikeSecretValue } from './redact.js';
 import { createSessionLedger } from '@rx-artemis/core';
@@ -106,6 +113,21 @@ export interface ServerHostOptions {
   readonly appVersion: string;
   /** Push a new state to every window. */
   readonly broadcast: (state: ServerState) => void;
+  /**
+   * This machine's shells, so a remote window can open one (ADR 0004).
+   *
+   * The *same* host the local window uses, deliberately: the containment
+   * rules that make a terminal safe — main picks the program, main owns the
+   * ids, main owns the lifetime, and the environment is stripped of the
+   * config-directory variables — are properties of that file, and a second
+   * spawner for remote clients would be a second place to get them wrong.
+   * What the remote surface adds is visibility scoping, which lives in the
+   * core's `terminals.ts` and cannot see a shell this window opened.
+   *
+   * Omitted by tests that do not care, in which case the terminal routes
+   * answer `501` exactly as the headless server's do.
+   */
+  readonly terminals?: TerminalHost;
 }
 
 export interface ServerHost {
@@ -134,6 +156,8 @@ export interface ServerHost {
     readonly workspace: ServerWorkspace;
     /** Accounts and models this token may reach. Omit for everything. */
     readonly allow?: readonly ServerAllowance[];
+    /** Epoch ms it stops working. Omit for a token that never expires. */
+    readonly expiresAt?: number;
   }): Promise<ServerState>;
   /** Rename one. The label grants nothing, so it is the only editable field. */
   renameConnection(id: string, label: string): Promise<ServerState>;
@@ -269,7 +293,143 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     disposeRun: async (runId) => {
       await options.engine.require().disposeRun(runId);
     },
+
+    // The observation surface (ADR 0004): the same reads `runs:list` and
+    // `runs:events` answer for a window, exposed so a remote bridge can draw
+    // this machine. Thin passthroughs — visibility filtering happens in the
+    // routes, against the connection that asked.
+    listRuns: (query) => options.engine.require().listRuns(query),
+    getRun: async (runId) => options.engine.require().getRun(runId as never),
+    runEvents: async (query) =>
+      options.engine.require().runEvents({
+        runId: query.runId as never,
+        ...(query.afterSeq === undefined ? {} : { afterSeq: query.afterSeq }),
+      }),
+    liveWork: async () => {
+      const engine = options.engine.require();
+      return {
+        sessionIds: engine.liveWorkSessions(),
+        working: engine.workingSessions(),
+        delegated: engine.delegatedWork(),
+      };
+    },
+
+    // The control surface: the same engine verbs a window's IPC handlers
+    // call, which is the point — a remote answer to a permission prompt takes
+    // exactly the path a local click takes once it clears the routes' scope
+    // checks. `startUserRun` goes through `engine.startRun`, so bridge runs
+    // get the user's standing instructions and settings like any other.
+    startUserRun: (input) => options.engine.require().startRun(input),
+    send: (runId, text, attachments) =>
+      options.engine.require().sendToRun(runId as never, text, attachments),
+    interruptRun: (runId) => options.engine.require().interruptRun(runId as never),
+    stopTask: (runId, taskId) => options.engine.require().stopTask(runId as never, taskId),
   };
+
+  /**
+   * The push feed the event stream serves, wired to the engine on first bind.
+   *
+   * Lazily, because the engine does not exist yet when this host is created —
+   * and once, because the feed's sequence numbers are the stream's replay
+   * cursor and a re-subscribe per bind would double every event. Each agent
+   * event is stamped with the account its run bills, which is what lets the
+   * routes keep an allowance-restricted token from hearing other accounts'
+   * work.
+   */
+  const feed = createPushFeed({
+    onError: (error) => log.debug('A feed listener threw', error),
+  });
+  let feedWired = false;
+  const wireFeed = (): void => {
+    if (feedWired) return;
+    feedWired = true;
+    options.engine.require().subscribe((event) => {
+      const profileId = options.engine.require().getRun(event.runId)?.profileId;
+      feed.publish(
+        'artemis:push:agent-event',
+        event,
+        profileId === undefined ? {} : { profileId },
+      );
+    });
+  };
+
+  /*
+   * Interrupt-on-disconnect for bridge-started runs, plus the attribution
+   * record: a session a remote window starts is written into the ledger as
+   * `origin: 'bridge'` — reachable by its connection family, never hidden
+   * from this machine's own sidebar. See the core guard for the grace-window
+   * reasoning.
+   */
+  const guard = createRemoteRunGuard({
+    interrupt: async (runId) => {
+      await options.engine.require().interruptRun(runId as never);
+    },
+    feed,
+    onSession: (run, sessionId) => {
+      ledger.record({
+        sessionId,
+        connectionId: run.connectionId,
+        profileId: run.profileId,
+        workspaceKey: run.workspaceKey,
+        cwd: run.cwd,
+        origin: 'bridge',
+      });
+    },
+    onError: (error) => log.debug('The remote run guard reported a failure', error),
+  });
+
+  /*
+   * The attribution record: which token did what.
+   *
+   * A second writer onto the *same* file the engine's run lifecycle goes into,
+   * rather than a log of its own, and that is the point rather than a
+   * shortcut. The question this exists to answer — "what happened overnight?"
+   * — is never only about the remote half: a bridge token started a run, the
+   * registry adopted it, something ended it, and reading that story out of two
+   * files with two clocks is how a five-minute answer becomes an afternoon.
+   * The format is one flushed line per transition precisely so it can take
+   * more than one writer; `appendFileSync` opens with `O_APPEND` each time, so
+   * lines this short interleave without tearing.
+   *
+   * Ids only, enforced at the door by the log's own allowlist. See
+   * `RemoteAccessEvent` for what is recorded and, more importantly, what is
+   * deliberately not: reads. A remote window listing runs and holding the
+   * event stream open is how it draws a frame, and a line per frame would bury
+   * the four lines a year that matter.
+   */
+  const accessLog = new SessionLifecycleLog({
+    file: join(options.userDataDir, SESSION_LIFECYCLE_LOG_FILE),
+    onError: (error) => log.warn('Could not append to the session-lifecycle log', error),
+  });
+
+  /*
+   * Shells over the wire, scoped by the connection family.
+   *
+   * Wired to the window's own terminal host — see {@link ServerHostOptions} on
+   * why there is not a second spawner — and subscribed *unconditionally*, so
+   * that events for the local window's shells reach `observe` and are dropped
+   * there for want of an owner. Filtering at the subscription instead would
+   * put the "which shells cross the wire" decision in two places.
+   */
+  const remoteTerminals: RemoteTerminals | undefined =
+    options.terminals === undefined
+      ? undefined
+      : createRemoteTerminals({
+          source: {
+            start: (request) => options.terminals!.start(request),
+            write: (id, data) => options.terminals!.write(id as never, data),
+            resize: (id, cols, rows) => options.terminals!.resize(id as never, cols, rows),
+            close: (id) => options.terminals!.close(id as never),
+            replay: (id) => options.terminals!.replay(id as never),
+            has: (id) => options.terminals!.has(id as never),
+          },
+          feed,
+          onAccess: (event) => accessLog.record(event),
+        });
+  const unsubscribeTerminals =
+    options.terminals === undefined || remoteTerminals === undefined
+      ? undefined
+      : options.terminals.subscribe((event) => remoteTerminals.observe(event));
 
   const catalogue: Catalogue = createCatalogue({
     source: {
@@ -430,6 +590,13 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         ...(typeof row['lastUsedAt'] === 'number'
           ? { lastUsedAt: row['lastUsedAt'] as number }
           : {}),
+        // An unparseable expiry is dropped, which reads as "never expires".
+        // The opposite default would be worse in the same way a corrupt
+        // allowlist reading as a lockout is: a token that stopped working for
+        // a reason nobody could see in the file that describes it.
+        ...(typeof row['expiresAt'] === 'number' && Number.isFinite(row['expiresAt'])
+          ? { expiresAt: row['expiresAt'] as number }
+          : {}),
         ...(allow === undefined || allow.length === 0 ? {} : { allow }),
       });
     }
@@ -494,7 +661,12 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     lastError = null;
     options.broadcast(snapshot());
 
+    wireFeed();
     const instance = createArtemisServer({
+      feed,
+      guard,
+      ...(remoteTerminals === undefined ? {} : { terminals: remoteTerminals }),
+      onRemoteAccess: (event) => accessLog.record(event),
       port: config.port,
       // Read on every request, so a revoked token stops working immediately
       // rather than at the next restart. See `ArtemisServerOptions.connections`.
@@ -640,6 +812,15 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         ...(draft.allow === undefined || draft.allow.length === 0
           ? {}
           : { allow: draft.allow }),
+        // An expiry already in the past is dropped rather than stored: it
+        // would mint a token that has never worked, which is a bug report
+        // rather than a grant. The renderer computes the instant, and clocks
+        // that disagree should not be able to produce one.
+        ...(draft.expiresAt === undefined ||
+        !Number.isFinite(draft.expiresAt) ||
+        draft.expiresAt <= Date.now()
+          ? {}
+          : { expiresAt: draft.expiresAt }),
       };
       config = { ...config, connections: [...config.connections, connection] };
       await persist();
@@ -673,7 +854,10 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     catalogue: (readOptions) =>
       catalogue.read(readOptions?.refresh === true ? { refresh: true } : {}),
 
-    isServerSession: (sessionId) => ledger.has(sessionId),
+    // `isProgramSession`, not `has`: a bridge-started conversation is in the
+    // ledger (that is what makes it reachable from the user's other machines)
+    // and still the person's own work — the sidebar must not bury it.
+    isServerSession: (sessionId) => ledger.isProgramSession(sessionId),
 
     invalidateCatalogue() {
       catalogue.invalidate();
@@ -685,6 +869,11 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       phase = 'stopped';
       boundPort = null;
       startedAt = null;
+      guard.dispose();
+      // The subscription and the visibility map, not the shells: stopping the
+      // server must not kill a `pnpm dev` the local window is also showing.
+      unsubscribeTerminals?.();
+      remoteTerminals?.dispose();
       if (instance !== null) await instance.close().catch(() => undefined);
       // After the socket closes, so nothing is still writing into a directory
       // as it is removed.

@@ -41,6 +41,7 @@ const ALL_SECTIONS: readonly SettingsSection[] = [
   'agents',
   'cerebro',
   'server',
+  'remote',
   'routines',
   'advanced',
 ];
@@ -56,7 +57,9 @@ describe('the two-band nav', () => {
   it('holds the sections in their argued order', () => {
     expect(SETTINGS_NAV.map((band) => band.sections.map((s) => s.id))).toEqual([
       ['profiles', 'models', 'runs', 'agents', 'permissions', 'appearance'],
-      ['server', 'routines', 'advanced'],
+      // Remote directly under Server: the same grant model, mirrored — one
+      // pane lends this machine out, the next borrows another one.
+      ['server', 'remote', 'routines', 'advanced'],
     ]);
   });
 

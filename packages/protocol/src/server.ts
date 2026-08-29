@@ -373,8 +373,32 @@ export interface ServerSessionSummary {
   readonly updatedAt: number;
   /** The serving profile's slug — the same value model routes carry. */
   readonly profileSlug: string;
+  /**
+   * The account's stable id, and the provider it belongs to.
+   *
+   * Carried beside the slug rather than instead of it, because the two answer
+   * different questions: the slug is an *address* a person types, and these are
+   * what a client keys on. A remote sidebar has to group rows by account and
+   * resume them under the right one, and a slug can come to mean a different
+   * account after a rename — the same hazard {@link ServerAllowance} exists to
+   * avoid. Both are already inside this connection's own catalogue, so naming
+   * them here discloses nothing it could not already read.
+   *
+   * **Optional on the wire**, because a client may be talking to a server older
+   * than this field. A newer client against an older server must degrade to
+   * "which account this was is unknown" — which the sidebar can render — rather
+   * than either dropping every row or casting `undefined` into a branded id and
+   * carrying the lie forward. Any server that fills these fills both.
+   */
+  readonly profileId?: string;
+  readonly providerId?: string;
   /** Where the conversation ran, on the serving machine. */
   readonly cwd: string;
+  /**
+   * Who started it: a program borrowing the account, or the user's own remote
+   * bridge. Absent means `program` — see the core ledger's `origin`.
+   */
+  readonly origin?: 'program' | 'bridge';
 }
 
 /** Body of `GET /api/v0/sessions`. */
@@ -618,6 +642,40 @@ export interface ServerConnection {
    * using this? Deliberately not a request log — see {@link ServerTraffic}.
    */
   readonly lastUsedAt?: number;
+  /**
+   * Epoch ms after which this token stops working. Absent means it never does.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY EXPIRY IS A FIELD AND NOT A POLICY
+   * ---------------------------------------------------------------------------
+   *
+   * A connection's authority is otherwise fixed for its whole life — the
+   * workspace pin and the allowance cannot widen after the token is handed out,
+   * which is what makes a token something a person can reason about. Time is the
+   * one axis where the opposite is true: a token that *only* ever narrows, on a
+   * schedule chosen when it was issued, is strictly safer than one that does
+   * not, and the phase that made this worth adding is remote control. A bridge
+   * token is carried to another machine by hand — typed into a Settings field on
+   * a laptop, a borrowed desk, a machine at a client's office — and the thing
+   * most likely to happen to it is not theft but *being forgotten*.
+   *
+   * Absent is the default and stays the default, because the alternative fails
+   * in the worse direction: a token that silently stops working is
+   * indistinguishable, from the client's side, from a server that went down, and
+   * imposing that on every program-borrowing-an-account connection would be a
+   * expiry nobody asked for. So it is chosen at creation, beside the workspace
+   * and the allowance, and it is refused with a sentence that says *expired*
+   * rather than a bare 401 — see the server's `resolveConnection`.
+   *
+   * Like the rest of a grant, it cannot be extended. A connection outliving its
+   * usefulness is replaced, not renewed.
+   */
+  readonly expiresAt?: number;
+}
+
+/** Has this connection's expiry passed? Absent expiry never has. */
+export function connectionHasExpired(connection: ServerConnection, now: number): boolean {
+  return connection.expiresAt !== undefined && now >= connection.expiresAt;
 }
 
 /**
@@ -672,6 +730,16 @@ export interface ServerConnectionInfo {
   readonly allow?: readonly ServerAllowance[];
   /** False when the connection has no directory and so cannot run a turn. */
   readonly canRunTurns: boolean;
+  /**
+   * Epoch ms this token stops working, when it has one. Absent means never.
+   *
+   * Told to the client rather than merely enforced, because the difference
+   * between a remote window that says "this connection expires on Friday" and
+   * one that simply stops working on Friday is the difference between a warning
+   * and an outage. It leaks nothing: the holder of the token is the only one who
+   * ever sees it, and they are entitled to know how long they have.
+   */
+  readonly expiresAt?: number;
 }
 
 /** Strip a connection down to what its own client may see. */
@@ -684,6 +752,7 @@ export function describeConnection(connection: ServerConnection): ServerConnecti
       ? {}
       : { allow: connection.allow }),
     canRunTurns: workspaceCanRunTurns(connection.workspace),
+    ...(connection.expiresAt === undefined ? {} : { expiresAt: connection.expiresAt }),
   };
 }
 

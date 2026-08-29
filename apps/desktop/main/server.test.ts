@@ -31,6 +31,10 @@ const engine = {
     listProfiles: async () => [],
     listProviders: async () => [],
     listProviderModels: async () => ({ models: [], live: false }),
+    // The event feed subscribes on first bind; a fake with nothing to say
+    // still has to accept the listener.
+    subscribe: () => () => undefined,
+    getRun: () => undefined,
   }),
 } as unknown as EngineHost;
 

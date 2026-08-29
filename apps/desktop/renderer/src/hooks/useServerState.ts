@@ -83,6 +83,8 @@ export interface ServerPane {
     readonly label: string;
     readonly workspace: ServerWorkspace;
     readonly allow?: readonly ServerAllowance[];
+    /** Epoch ms it stops working. Omit for a token that never expires. */
+    readonly expiresAt?: number;
   }): void;
   renameConnection(id: string, label: string): void;
   deleteConnection(id: string): void;
