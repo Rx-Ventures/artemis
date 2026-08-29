@@ -80,11 +80,14 @@ const log = createLogger('terminal');
 /**
  * How many shells may run at once.
  *
- * Matches the pane ceiling, because the UI cannot show more than one dock at a
- * time per conversation and sixteen conversations is already the limit. It is
- * here as a backstop rather than as a product decision: a renderer bug that
- * called `start` in a loop should exhaust a counter, not the machine's process
- * table.
+ * Twice the renderer's pane ceiling of eight (`MAX_PANES`), and deliberately
+ * not equal to it, because shells are not one-per-pane in either direction: a
+ * pane can open several through the strip's `+`, and a shell outlives its
+ * conversation leaving the screen — a backgrounded session keeps its
+ * `pnpm dev` running, which is the dock's whole promise. Sixteen is headroom
+ * over the worst-case grid rather than a product decision: this is a backstop,
+ * so a renderer bug that called `start` in a loop should exhaust a counter,
+ * not the machine's process table.
  */
 export const MAX_TERMINALS = 16;
 

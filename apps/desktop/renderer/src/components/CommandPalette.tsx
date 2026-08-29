@@ -284,8 +284,9 @@ function RootPage({
          * Filed under Session rather than under a surface of its own, because
          * that is what it is scoped to: the shell opens on *this* conversation's
          * working directory and disappears with it. `openTerminal` rather than
-         * `toggleTerminal` — a palette entry that sometimes closed the thing its
-         * label says it opens would be a trap, and the ✕ is right there.
+         * `toggleTerminal` — the toggle is a focus bounce now, and a palette
+         * entry that sometimes only moved the caret would do less than its
+         * label promises. "Open" opens, every time.
          */}
         <CommandItem
           onSelect={() => {

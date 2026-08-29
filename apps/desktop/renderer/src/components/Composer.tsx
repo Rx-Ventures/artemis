@@ -74,6 +74,7 @@ import {
   readAttachments,
   type AttachmentRejection,
 } from '../lib/attachments';
+import { registerComposer } from '../lib/composerFocus';
 import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
 import { ActivityRule } from './Activity';
 import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
@@ -141,6 +142,18 @@ export function Composer(): ReactElement {
    * than left to default.
    */
   const pane = usePaneRef();
+
+  /*
+   * Offer this field to the store's imperative half. ⌘J bounces the caret
+   * between the shell and the composer — see `toggleTerminal` — and the second
+   * half of that bounce can only be done from out here through a seam like
+   * this one; the store has no ref to reach. Registering is not focusing:
+   * nothing moves until an action asks.
+   */
+  useEffect(
+    () => registerComposer(pane.id, () => textareaRef.current?.focus()),
+    [pane.id],
+  );
   /*
    * The draft lives in the pane, not in `useState` here.
    *

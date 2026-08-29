@@ -16,6 +16,7 @@ import {
   MAX_RESTORED_FILES,
   MAX_RESTORED_TERMINALS,
   parseDockLayout,
+  type DockTab,
 } from './dock';
 
 describe('parseDockLayout', () => {
@@ -88,8 +89,26 @@ describe('parseDockLayout', () => {
     expect(parseDockLayout({ activeKind: 7 }).activeKind).toBeNull();
   });
 
-  it.each(['preview', 'file', 'terminal', 'browser', 'tasks', 'agent'])(
-    'accepts %s as a tab kind',
+  /*
+   * A `Record` over the union rather than a list copied from `dock.ts`, so the
+   * next kind added to `DockTab` fails this file at compile time instead of
+   * failing the user at restore time. That is exactly how `'files'` slipped
+   * through: `captureDockLayout` wrote whatever kind was in front, the
+   * validator only knew the kinds it was born with, and a layout saved with
+   * the folder browser in front restored with nothing in front at all.
+   */
+  const EVERY_TAB_KIND: Record<DockTab['kind'], true> = {
+    preview: true,
+    file: true,
+    files: true,
+    terminal: true,
+    browser: true,
+    tasks: true,
+    agent: true,
+  };
+
+  it.each(Object.keys(EVERY_TAB_KIND))(
+    'round-trips %s as a stored active kind',
     (kind) => {
       expect(parseDockLayout({ activeKind: kind }).activeKind).toBe(kind);
     },

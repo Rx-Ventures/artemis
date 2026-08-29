@@ -297,9 +297,11 @@ export function AppHeader(): ReactElement {
       <SearchEntry />
 
       {/*
-        `toggleTerminal` opens the focused conversation's shell or brings it
-        forward — see the store for why repeating it does not stack up terminals
-        nobody asked for.
+        `toggleTerminal` opens the focused conversation's shell, brings it
+        forward, or bounces the caret between it and the composer — never
+        closes it; the ✕ on the tab is the only thing that ends a shell. See
+        the store for why repeating it does not stack up terminals nobody
+        asked for.
       */}
       <UpdateChip />
       <WaitingBadge />

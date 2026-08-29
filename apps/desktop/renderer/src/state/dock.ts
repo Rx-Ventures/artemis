@@ -588,5 +588,25 @@ export const MAX_RESTORED_TERMINALS = 8;
 export const MAX_RESTORED_BROWSERS = 8;
 export const MAX_RESTORED_FILES = 8;
 
-/** Every tab kind, for validating a stored one. */
-const DOCK_TAB_KINDS = ['preview', 'file', 'terminal', 'browser', 'tasks', 'agent'] as const;
+/**
+ * Every tab kind, for validating a stored one.
+ *
+ * A `Record` over the union rather than a hand-written list, because a
+ * hand-written list can silently run one short: `'files'` was missing for as
+ * long as the strip has had a folder browser, so a layout captured with that
+ * tab in front wrote an `activeKind` this parser then rejected on the next
+ * launch — restore quietly put nothing in front. Spelling it this way makes
+ * the compiler refuse the next kind added to {@link DockTab} until it is
+ * listed here too.
+ */
+const EVERY_DOCK_TAB_KIND: Record<DockTab['kind'], true> = {
+  preview: true,
+  file: true,
+  files: true,
+  terminal: true,
+  browser: true,
+  tasks: true,
+  agent: true,
+};
+
+const DOCK_TAB_KINDS = Object.keys(EVERY_DOCK_TAB_KIND) as readonly DockTab['kind'][];

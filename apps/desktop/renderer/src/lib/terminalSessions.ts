@@ -80,15 +80,24 @@ function token(name: string, fallback: string): string {
  * file that has no business setting it.
  */
 function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>['theme'] {
-  const ink = token('--ink', '#e6e4ea');
-  const abyss = token('--abyss', '#0d0b10');
-  const mint = token('--mint', '#8fd9b6');
-  const amber = token('--amber', '#e8c07d');
-  const cyan = token('--cyan', '#8fbce8');
-  const beam = token('--beam', '#b9a9f0');
-  const sage = token('--sage', '#a8c8a0');
-  const signal = token('--signal', '#e89a9a');
-  const faint = token('--ink-faint', '#8b8794');
+  /*
+   * The literals only fire where `getComputedStyle` has nothing to say — a
+   * window with no stylesheet, which in practice means a test. They are the
+   * dark palette's tokens resolved to sRGB (via `lib/oklch.ts`, the same
+   * conversion `palette.test.ts` trusts), and they have to be re-resolved
+   * when `index.css` moves: a stale fallback is the old palette frozen into
+   * this file, which is exactly what reading the stylesheet was meant to
+   * prevent.
+   */
+  const ink = token('--ink', '#f4f5f6');
+  const abyss = token('--abyss', '#020203');
+  const mint = token('--mint', '#6ce98d');
+  const amber = token('--amber', '#fcc53f');
+  const cyan = token('--cyan', '#8cc3fc');
+  const beam = token('--beam', '#31eee8');
+  const sage = token('--sage', '#93879c');
+  const signal = token('--signal', '#fa6863');
+  const faint = token('--ink-faint', '#7e8083');
 
   /*
    * ANSI 0 and 7 are the ends of the greyscale, and they do not follow the
@@ -115,7 +124,7 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     background: 'rgba(0,0,0,0)',
     foreground: ink,
     cursor: beam,
-    cursorAccent: token('--panel', '#151318'),
+    cursorAccent: token('--panel', '#070708'),
     // Mixed from the accent rather than the literal `rgba(185,169,240,0.28)`
     // this was, which is the *dark* beam frozen into a number — under the
     // light palette it stayed a pale lavender while every other selection in
@@ -364,6 +373,23 @@ export function fitTerminal(id: TerminalId): void {
 /** Put the caret in a terminal, now, if it is somewhere it can be seen. */
 export function focusTerminal(id: TerminalId): void {
   sessions.get(id)?.term.focus();
+}
+
+/**
+ * Is the caret in this terminal right now?
+ *
+ * Asked by `toggleTerminal`, whose press means two different things depending
+ * on the answer: "let me type into the shell" when the caret is elsewhere, and
+ * "let me back out" when it is already there. xterm takes keys through a
+ * hidden textarea inside the host, so containment is the whole test — and a
+ * parked host cannot contain the document's active element, which makes "not
+ * on screen" answer no without a special case.
+ */
+export function terminalHasFocus(id: TerminalId): boolean {
+  const session = sessions.get(id);
+  if (session === undefined) return false;
+  const active = document.activeElement;
+  return active !== null && session.host.contains(active);
 }
 
 /**
