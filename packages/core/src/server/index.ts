@@ -75,3 +75,10 @@ export {
 } from './feed.js';
 
 export { type RemoteStreamOptions } from './remote.js';
+
+export {
+  createRemoteRunGuard,
+  type RemoteRunGuard,
+  type RemoteRunGuardOptions,
+  type TrackedRun,
+} from './guard.js';

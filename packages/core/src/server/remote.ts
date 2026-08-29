@@ -35,12 +35,21 @@
 
 import type { FeedEvent, FeedScope, PushFeed } from './feed.js';
 import type {
+  PermissionDecision,
+  RunHandle,
+  RunInput,
   ServerConnection,
   ServerLiveWorkBody,
+  ServerRunBody,
   ServerRunEventsBody,
+  ServerRunInterruptBody,
+  ServerRunPermissionBody,
   ServerRunsBody,
+  ServerRunSendBody,
+  ServerRunActionBody,
 } from '@rx-artemis/protocol';
 import {
+  connectionAllowsModel,
   connectionAllowsProfile,
   parseRemoteResourcePath,
   REMOTE_EVENTS_PATH,
@@ -63,6 +72,7 @@ import type {
 } from './http.js';
 import { workspaceKeyFor } from './ledger.js';
 import { CORS_HEADERS, fail, ok } from './replies.js';
+import { WorkspaceUnavailableError } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
 /* Dispatch                                                                   */
@@ -119,7 +129,7 @@ export async function handleRemoteRequest(
 
   if (path === REMOTE_RUNS_PATH) {
     if (method === 'GET') return attribute(await handleRunList(context, connection));
-    if (method === 'POST') return attribute(notYetControllable());
+    if (method === 'POST') return attribute(await handleStartRun(input));
     return attribute(methodNotAllowed('The run list is a GET; starting a run is a POST.'));
   }
 
@@ -130,7 +140,12 @@ export async function handleRemoteRequest(
       return attribute(await handleRunEvents(input, runRoute.id));
     }
     if (method !== 'POST') return attribute(methodNotAllowed('Run actions are POSTs.'));
-    return attribute(notYetControllable());
+    if (runRoute.action === undefined) {
+      return attribute(
+        fail(404, 'invalid_request_error', 'unknown_endpoint', 'A run action names its verb.'),
+      );
+    }
+    return attribute(await handleRunAction(input, runRoute.id, runRoute.action));
   }
 
   // The terminal surface lands with the remote-terminal phase.
@@ -148,8 +163,8 @@ function methodNotAllowed(message: string): ServerReply {
   return fail(405, 'invalid_request_error', 'method_not_allowed', message);
 }
 
-/** The observe-only build's answer on every control verb. */
-function notYetControllable(): ServerReply {
+/** The answer on every control verb the host chose not to expose. */
+function notControllable(): ServerReply {
   return fail(
     501,
     'invalid_request_error',
@@ -271,6 +286,283 @@ async function handleRunEvents(input: RemoteRequestInput, runId: string): Promis
 }
 
 /* -------------------------------------------------------------------------- */
+/* Control routes                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `POST /api/v0/runs`: start a run with the user's own settings.
+ *
+ * The body carries a whole `RunInput` — see the protocol on why the remote
+ * principal is owed more than the completions surface offers — and the
+ * token's scope is enforced before anything is spent: the profile must be
+ * inside the allowance (with the same one-refusal-for-absent-and-invisible
+ * rule the run routes use), a named model must be allowed on it, and the
+ * working directory is the connection's pin, not the caller's choice.
+ */
+async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
+  const { request, context, connection } = input;
+  const startUserRun = context.runs?.startUserRun;
+  if (startUserRun === undefined) return notControllable();
+
+  const runInput = readRunInput(request.body);
+  if (runInput === undefined) {
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_body',
+      'The body must be `{ input }` carrying providerId, profileId, cwd and prompt.',
+    );
+  }
+
+  if (!connectionAllowsProfile(connection, runInput.profileId)) {
+    return fail(404, 'invalid_request_error', 'unknown_profile', 'No such account for this connection.');
+  }
+  if (
+    runInput.model !== undefined &&
+    !connectionAllowsModel(connection, runInput.profileId, runInput.model)
+  ) {
+    return fail(
+      404,
+      'invalid_request_error',
+      'model_not_found',
+      `No model "${runInput.model}" on that account for this connection.`,
+    );
+  }
+
+  const pinned = await resolvePinnedCwd(input, runInput);
+  if (typeof pinned !== 'string') return pinned;
+
+  let handle: RunHandle;
+  try {
+    handle = await startUserRun({ ...runInput, cwd: pinned });
+  } catch (error) {
+    return fail(
+      400,
+      'invalid_request_error',
+      'run_rejected',
+      error instanceof Error ? error.message : 'The run could not be started.',
+    );
+  }
+
+  /*
+   * Guarded from the moment it exists: a client that vanishes for good has
+   * this run interrupted rather than left burning the plan — the same
+   * deliberate policy the completions surface has structurally — and the
+   * session id it announces is recorded against this connection through the
+   * guard's feed subscription. See `guard.ts`.
+   */
+  context.guard?.trackRun({
+    runId: String(handle.runId),
+    connectionId: connection.id,
+    profileId: String(handle.profileId),
+    workspaceKey: workspaceKeyFor(connection),
+    cwd: handle.cwd,
+  });
+
+  const body: ServerRunBody = { object: 'artemis.run', run: handle };
+  return ok(body);
+}
+
+/**
+ * The working directory a bridge-started run actually gets.
+ *
+ * The pin is the token's whole authority story — see `ServerConnection` — so
+ * the caller's `cwd` is honoured only as far as it stays inside it:
+ *
+ *  - a `directory` pin admits the directory and anything beneath it, which is
+ *    what lets a remote window work in a repo's subfolder or a worktree
+ *    inside it;
+ *  - an `ephemeral` pin resolves to the connection's scratch space and the
+ *    caller's `cwd` is ignored entirely — it names a path on the wrong
+ *    machine, and scratch is minted here;
+ *  - `none` cannot run turns at all.
+ */
+async function resolvePinnedCwd(
+  input: RemoteRequestInput,
+  runInput: RunInput,
+): Promise<string | ServerReply> {
+  const { context, connection } = input;
+  const workspace = connection.workspace;
+
+  if (workspace.kind === 'none') {
+    return fail(
+      403,
+      'invalid_request_error',
+      'workspace_unavailable',
+      'This connection has nowhere to run turns — it was created catalogue-only.',
+    );
+  }
+
+  if (workspace.kind === 'directory') {
+    const root = workspace.path;
+    if (runInput.cwd === root || runInput.cwd.startsWith(`${root}/`)) return runInput.cwd;
+    return fail(
+      403,
+      'invalid_request_error',
+      'outside_workspace',
+      `This connection's turns are pinned to ${root}.`,
+    );
+  }
+
+  if (context.workspaces === undefined) return notControllable();
+  try {
+    const resolved = await context.workspaces.resolve({
+      connectionId: connection.id,
+      workspace,
+      ...(runInput.resumeSessionId === undefined
+        ? {}
+        : { sessionId: runInput.resumeSessionId }),
+    });
+    return resolved.path;
+  } catch (error) {
+    return fail(
+      403,
+      'invalid_request_error',
+      'workspace_unavailable',
+      error instanceof WorkspaceUnavailableError
+        ? error.message
+        : 'This connection has nowhere to run turns.',
+    );
+  }
+}
+
+/** Shape-check the body's `input`. Capability questions stay the engine's. */
+function readRunInput(body: unknown): RunInput | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const raw = (body as { input?: unknown }).input;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  for (const field of ['providerId', 'profileId', 'cwd', 'prompt']) {
+    if (typeof candidate[field] !== 'string' || candidate[field] === '') return undefined;
+  }
+  return raw as RunInput;
+}
+
+/**
+ * The per-run verbs: send, interrupt, respond-permission, stop-task, dispose.
+ *
+ * Every one resolves the run against the host first and refuses an id outside
+ * the connection's allowance with the same 404 an absent one gets — a token
+ * must not be able to steer, stop, or *probe for* another account's work.
+ */
+async function handleRunAction(
+  input: RemoteRequestInput,
+  runId: string,
+  action: string,
+): Promise<ServerReply> {
+  const { request, context, connection } = input;
+  const runs = context.runs;
+  const getRun = runs?.getRun;
+  if (runs === undefined || getRun === undefined) return notControllable();
+
+  const run = await getRun(runId);
+  if (run === undefined || !connectionAllowsProfile(connection, run.profileId)) {
+    return unknownRun();
+  }
+
+  const body = (typeof request.body === 'object' && request.body !== null ? request.body : {}) as Record<
+    string,
+    unknown
+  >;
+
+  try {
+    switch (action) {
+      case 'send': {
+        if (runs.send === undefined) return notControllable();
+        if (typeof body['text'] !== 'string' || body['text'].length === 0) {
+          return fail(400, 'invalid_request_error', 'invalid_body', '`text` must be a non-empty string.');
+        }
+        const attachments = Array.isArray(body['attachments'])
+          ? (body['attachments'] as never)
+          : undefined;
+        const outcome = await runs.send(runId, body['text'], attachments);
+        const reply: ServerRunSendBody = {
+          object: 'artemis.run.send',
+          runId,
+          deliveredImmediately: outcome.deliveredImmediately,
+        };
+        return ok(reply);
+      }
+
+      case 'interrupt': {
+        const outcome =
+          runs.interruptRun !== undefined
+            ? await runs.interruptRun(runId)
+            : await runs.interrupt(runId).then(() => ({ stillQueued: [] as readonly string[] }));
+        const reply: ServerRunInterruptBody = {
+          object: 'artemis.run.interrupt',
+          runId,
+          stillQueued: outcome.stillQueued ?? [],
+        };
+        return ok(reply);
+      }
+
+      case 'respond-permission': {
+        const decision = readDecision(body['decision']);
+        if (typeof body['requestId'] !== 'string' || decision === undefined) {
+          return fail(
+            400,
+            'invalid_request_error',
+            'invalid_body',
+            '`requestId` and a `decision` with behavior "allow" or "deny" are required.',
+          );
+        }
+        /*
+         * The heart of the phase: the widened seam carries a real person's
+         * answer — allow included — where the completions surface can only
+         * ever deny. The renderer's own `permission.resolved` event follows
+         * on the stream, so every attached window sees the prompt settle.
+         */
+        await runs.respondToPermission(runId, body['requestId'], decision);
+        const reply: ServerRunPermissionBody = {
+          object: 'artemis.run.permission',
+          runId,
+          requestId: body['requestId'],
+        };
+        return ok(reply);
+      }
+
+      case 'stop-task': {
+        if (runs.stopTask === undefined) return notControllable();
+        if (typeof body['taskId'] !== 'string' || body['taskId'].length === 0) {
+          return fail(400, 'invalid_request_error', 'invalid_body', '`taskId` must be a non-empty string.');
+        }
+        await runs.stopTask(runId, body['taskId']);
+        const reply: ServerRunActionBody = { object: 'artemis.run.action', runId };
+        return ok(reply);
+      }
+
+      case 'dispose': {
+        await runs.disposeRun(runId);
+        context.guard?.untrackRun(runId);
+        const reply: ServerRunActionBody = { object: 'artemis.run.action', runId };
+        return ok(reply);
+      }
+
+      default:
+        return fail(404, 'invalid_request_error', 'unknown_endpoint', `No run action "${action}".`);
+    }
+  } catch (error) {
+    // The engine's refusals are sentences written for a person — a stale
+    // permission click, a run that just ended — and they travel as such.
+    return fail(
+      400,
+      'invalid_request_error',
+      'run_action_failed',
+      error instanceof Error ? error.message : 'The action failed.',
+    );
+  }
+}
+
+/** The decision, shape-checked: exactly the two behaviours, fields passed through. */
+function readDecision(raw: unknown): PermissionDecision | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const behavior = (raw as { behavior?: unknown }).behavior;
+  if (behavior !== 'allow' && behavior !== 'deny') return undefined;
+  return raw as PermissionDecision;
+}
+
+/* -------------------------------------------------------------------------- */
 /* The event stream                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -328,6 +620,7 @@ function handleEventStream(input: RemoteRequestInput): ServerReply | ServerStrea
       heartbeatMs: context.remoteStream?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
       ...(afterSeq === undefined ? {} : { afterSeq }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
+      ...(context.guard === undefined ? {} : { guard: context.guard }),
     }),
   };
 }
@@ -339,6 +632,7 @@ async function* streamFeed(input: {
   readonly heartbeatMs: number;
   readonly afterSeq?: number;
   readonly signal?: { readonly aborted: boolean };
+  readonly guard?: import('./guard.js').RemoteRunGuard;
 }): AsyncGenerator<string> {
   const { feed, connection, signal } = input;
   // Read through a call: `aborted` flips from another task, and a bare
@@ -364,6 +658,10 @@ async function* streamFeed(input: {
       data: JSON.stringify(event.payload),
     });
 
+  // The interrupt-on-disconnect ledger: this stream is what "the client is
+  // still here" means, and its close is what starts the grace clock. See
+  // `guard.ts` for why the clock is minutes and not milliseconds.
+  input.guard?.attach(connection.id);
   try {
     const hello: RemoteHelloPayload = { seq: feed.head(), version: input.version };
     yield sseMessage({ event: REMOTE_STREAM_HELLO, data: JSON.stringify(hello) });
@@ -408,5 +706,6 @@ async function* streamFeed(input: {
     }
   } finally {
     unsubscribe();
+    input.guard?.detach(connection.id);
   }
 }

@@ -24,6 +24,7 @@ import {
   createCatalogue,
   createDefaultProviderRegistry,
   createPushFeed,
+  createRemoteRunGuard,
   createSessionLedger,
   createWorkspaceResolver,
   managedEnvKeys,
@@ -33,6 +34,7 @@ import {
   type Catalogue,
   type ProviderRegistry,
   type PushFeed,
+  type RemoteRunGuard,
   type RunSource,
   type SessionLedger,
   type SessionSource,
@@ -52,6 +54,8 @@ export interface HeadlessHost {
   readonly sessionSource: SessionSource;
   /** Every push the server can stream to a remote client. See `server/feed.ts`. */
   readonly feed: PushFeed;
+  /** Interrupt-on-disconnect for bridge-started runs. See `server/guard.ts`. */
+  readonly guard: RemoteRunGuard;
   dispose(): Promise<void>;
 }
 
@@ -166,7 +170,40 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
       const first = events[0];
       return { events, truncated: first !== undefined && first.seq > after + 1 };
     },
+
+    // The control surface. `startUserRun` takes the whole RunInput — the
+    // routes have already enforced the token's scope, and the registry
+    // enforces capabilities exactly as it does for a window.
+    startUserRun: (input) => runs.start(input),
+    send: async (runId, text, attachments) => {
+      const outcome = await runs.send(runId as RunId, text, attachments);
+      return { deliveredImmediately: outcome.deliveredImmediately };
+    },
+    interruptRun: (runId) => runs.interrupt(runId as RunId),
+    stopTask: (runId, taskId) => runs.stopTask(runId as RunId, taskId),
   };
+
+  /*
+   * Interrupt-on-disconnect, and the attribution record in one wiring: a
+   * bridge run whose client stays gone past the grace is interrupted, and the
+   * session it announced is written into the ledger against the connection
+   * that started it — `origin: 'bridge'`, so it is reachable from the whole
+   * connection family later without ever being mistaken for a program's.
+   */
+  const guard = createRemoteRunGuard({
+    interrupt: (runId) => runs.interrupt(runId as RunId),
+    feed,
+    onSession: (run, sessionId) => {
+      ledger.record({
+        sessionId,
+        connectionId: run.connectionId,
+        profileId: run.profileId,
+        workspaceKey: run.workspaceKey,
+        cwd: run.cwd,
+        origin: 'bridge',
+      });
+    },
+  });
 
   const sessionSource: SessionSource = {
     list: async (query) => {
@@ -203,7 +240,9 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     runSource,
     sessionSource,
     feed,
+    guard,
     dispose: async () => {
+      guard.dispose();
       await runs.disposeAll();
       await ledger.flush();
       await workspaces.disposeAll();

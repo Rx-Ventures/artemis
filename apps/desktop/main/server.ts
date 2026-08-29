@@ -74,6 +74,7 @@ import {
   createArtemisServer,
   createCatalogue,
   createPushFeed,
+  createRemoteRunGuard,
   createWorkspaceResolver,
   sweepStaleWorkspaces,
   type ArtemisServer,
@@ -290,6 +291,17 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         delegated: engine.delegatedWork(),
       };
     },
+
+    // The control surface: the same engine verbs a window's IPC handlers
+    // call, which is the point — a remote answer to a permission prompt takes
+    // exactly the path a local click takes once it clears the routes' scope
+    // checks. `startUserRun` goes through `engine.startRun`, so bridge runs
+    // get the user's standing instructions and settings like any other.
+    startUserRun: (input) => options.engine.require().startRun(input),
+    send: (runId, text, attachments) =>
+      options.engine.require().sendToRun(runId as never, text, attachments),
+    interruptRun: (runId) => options.engine.require().interruptRun(runId as never),
+    stopTask: (runId, taskId) => options.engine.require().stopTask(runId as never, taskId),
   };
 
   /**
@@ -318,6 +330,31 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       );
     });
   };
+
+  /*
+   * Interrupt-on-disconnect for bridge-started runs, plus the attribution
+   * record: a session a remote window starts is written into the ledger as
+   * `origin: 'bridge'` — reachable by its connection family, never hidden
+   * from this machine's own sidebar. See the core guard for the grace-window
+   * reasoning.
+   */
+  const guard = createRemoteRunGuard({
+    interrupt: async (runId) => {
+      await options.engine.require().interruptRun(runId as never);
+    },
+    feed,
+    onSession: (run, sessionId) => {
+      ledger.record({
+        sessionId,
+        connectionId: run.connectionId,
+        profileId: run.profileId,
+        workspaceKey: run.workspaceKey,
+        cwd: run.cwd,
+        origin: 'bridge',
+      });
+    },
+    onError: (error) => log.debug('The remote run guard reported a failure', error),
+  });
 
   const catalogue: Catalogue = createCatalogue({
     source: {
@@ -545,6 +582,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     wireFeed();
     const instance = createArtemisServer({
       feed,
+      guard,
       port: config.port,
       // Read on every request, so a revoked token stops working immediately
       // rather than at the next restart. See `ArtemisServerOptions.connections`.
@@ -723,7 +761,10 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     catalogue: (readOptions) =>
       catalogue.read(readOptions?.refresh === true ? { refresh: true } : {}),
 
-    isServerSession: (sessionId) => ledger.has(sessionId),
+    // `isProgramSession`, not `has`: a bridge-started conversation is in the
+    // ledger (that is what makes it reachable from the user's other machines)
+    // and still the person's own work — the sidebar must not bury it.
+    isServerSession: (sessionId) => ledger.isProgramSession(sessionId),
 
     invalidateCatalogue() {
       catalogue.invalidate();
@@ -735,6 +776,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       phase = 'stopped';
       boundPort = null;
       startedAt = null;
+      guard.dispose();
       if (instance !== null) await instance.close().catch(() => undefined);
       // After the socket closes, so nothing is still writing into a directory
       // as it is removed.

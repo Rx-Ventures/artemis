@@ -103,6 +103,7 @@ async function serve(): Promise<void> {
     ledger: host.ledger,
     sessions: host.sessionSource,
     feed: host.feed,
+    guard: host.guard,
     ...(allowedHosts() === undefined ? {} : { allowedHosts: allowedHosts() as never }),
     onError: (error) => {
       process.stderr.write(`server error: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -74,6 +74,19 @@ export interface LedgerEntry {
   readonly workspaceKey: string;
   /** The resolved directory the conversation ran in, for display. */
   readonly cwd: string;
+  /**
+   * Who the connection *was*: a program borrowing an account, or the user's
+   * own remote bridge (ADR 0004). Absent means `program` — every entry
+   * written before the distinction existed was one.
+   *
+   * The two share the ledger because they share the access rule (the pin),
+   * and differ in exactly one consumer: the serving desktop's sidebar hides
+   * `program` sessions so a polling script cannot bury the person's own
+   * history, and must *not* hide `bridge` ones — a conversation the user
+   * drove from their laptop is their own work, and "one person, several
+   * machines, one shared history" breaks the moment it vanishes at the desk.
+   */
+  readonly origin?: 'program' | 'bridge';
   /** Epoch ms when the session was last recorded. */
   readonly at: number;
 }
@@ -121,8 +134,16 @@ export interface SessionLedger {
    * conversations clear of the cap.
    */
   record(entry: Omit<LedgerEntry, 'at'>): void;
-  /** Was this session started by a program rather than by the person? */
+  /** Is this session in the ledger at all — server-created, by anything? */
   has(sessionId: string): boolean;
+  /**
+   * Was this session started by a *program* rather than by the person?
+   *
+   * The sidebar-hiding question, now that {@link LedgerEntry.origin} splits
+   * it from {@link has}: a bridge-started conversation is server-created and
+   * still the person's own.
+   */
+  isProgramSession(sessionId: string): boolean;
   /** The record itself, for a caller that has already passed {@link mayAccess}. */
   get(sessionId: string): LedgerEntry | undefined;
   /** Every session a connection with this pin may see, newest first. */
@@ -242,6 +263,9 @@ export function createSessionLedger(dataDir: string): SessionLedger {
             profileId: typeof entry.profileId === 'string' ? entry.profileId : '',
             workspaceKey: typeof entry.workspaceKey === 'string' ? entry.workspaceKey : '',
             cwd: typeof entry.cwd === 'string' ? entry.cwd : '',
+            // Absent (and anything unrecognised) means `program`, which is
+            // what every pre-existing entry was.
+            ...(entry.origin === 'bridge' ? { origin: 'bridge' as const } : {}),
             at: typeof entry.at === 'number' ? entry.at : 0,
           });
         }
@@ -263,6 +287,11 @@ export function createSessionLedger(dataDir: string): SessionLedger {
 
     has(sessionId): boolean {
       return entries.has(sessionId);
+    },
+
+    isProgramSession(sessionId): boolean {
+      const entry = entries.get(sessionId);
+      return entry !== undefined && entry.origin !== 'bridge';
     },
 
     get(sessionId): LedgerEntry | undefined {

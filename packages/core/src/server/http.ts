@@ -94,6 +94,7 @@ import {
   type TurnResult,
 } from './completions.js';
 import type { PushFeed } from './feed.js';
+import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
 import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
@@ -205,6 +206,11 @@ export interface ServerContext {
   readonly feed?: PushFeed;
   /** Tuning for the event stream. Injected by tests; defaults apply live. */
   readonly remoteStream?: RemoteStreamOptions;
+  /**
+   * Interrupt-on-disconnect for bridge-started runs. Absent means no such
+   * policy — which a host that also provides no control verbs honestly has.
+   */
+  readonly guard?: RemoteRunGuard;
 }
 
 /**
@@ -812,6 +818,8 @@ export interface ArtemisServerOptions {
   readonly feed?: PushFeed;
   /** See {@link ServerContext.remoteStream}. */
   readonly remoteStream?: RemoteStreamOptions;
+  /** See {@link ServerContext.guard}. */
+  readonly guard?: RemoteRunGuard;
   /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
@@ -887,6 +895,7 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
           ...(options.feed === undefined ? {} : { feed: options.feed }),
           ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),
+          ...(options.guard === undefined ? {} : { guard: options.guard }),
         },
       );
     } catch (error) {

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, RunHandle, ServerProfile } from '@rx-artemis/protocol';
+import type { AgentEvent, RunHandle, RunInput, ServerProfile } from '@rx-artemis/protocol';
 import {
   createSseDecoder,
   NO_CAPABILITIES,
@@ -191,6 +191,249 @@ describe('GET /api/v0/runs/live-work', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Control                                                                    */
+/* -------------------------------------------------------------------------- */
+
+describe('the control routes', () => {
+  /** A source that records every control call it receives. */
+  function controllable(): {
+    source: RunSource;
+    calls: { started: RunInput[]; decisions: unknown[]; sent: string[]; interrupted: string[] };
+  } {
+    const calls = {
+      started: [] as RunInput[],
+      decisions: [] as unknown[],
+      sent: [] as string[],
+      interrupted: [] as string[],
+    };
+    const source: RunSource = {
+      ...observableRuns,
+      startUserRun: async (input) => {
+        calls.started.push(input);
+        return runHandle('run-new', String(input.profileId));
+      },
+      send: async (_runId, text) => {
+        calls.sent.push(text);
+        return { deliveredImmediately: true };
+      },
+      interruptRun: async (runId) => {
+        calls.interrupted.push(runId);
+        return { stillQueued: ['q1'] };
+      },
+      respondToPermission: async (_runId, _requestId, decision) => {
+        calls.decisions.push(decision);
+      },
+      stopTask: async () => undefined,
+    };
+    return { source, calls };
+  }
+
+  it('starts a run with the user’s own settings, inside the pin', async () => {
+    const { source, calls } = controllable();
+    const input = {
+      providerId: 'claude',
+      profileId: 'prof-a',
+      cwd: '/w/sub',
+      prompt: 'do the thing',
+      permissionMode: 'default',
+      effort: 'high',
+    };
+    const reply = await ask(REMOTE_RUNS_PATH, { runs: source }, {}, 'POST');
+    // No body: refused before anything is spent.
+    expect(reply.status).toBe(400);
+
+    const started = await handleServerRequest(
+      {
+        method: 'POST',
+        url: REMOTE_RUNS_PATH,
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { input },
+      },
+      { connections: [CONNECTION, NARROW], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(started.status).toBe(200);
+    // The settings travelled whole — permission mode and effort included —
+    // and the cwd stayed the caller's because it sits inside the pin.
+    expect(calls.started[0]).toMatchObject({
+      prompt: 'do the thing',
+      permissionMode: 'default',
+      effort: 'high',
+      cwd: '/w/sub',
+    });
+  });
+
+  it('refuses a working directory outside the connection’s pin', async () => {
+    const { source, calls } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: REMOTE_RUNS_PATH,
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: {
+          input: { providerId: 'claude', profileId: 'prof-a', cwd: '/etc', prompt: 'x' },
+        },
+      },
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(403);
+    expect(calls.started).toHaveLength(0);
+  });
+
+  it('refuses an account outside the allowance as unknown, before spending', async () => {
+    const { source, calls } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: REMOTE_RUNS_PATH,
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${NARROW_TOKEN}` },
+        body: {
+          input: { providerId: 'claude', profileId: 'prof-b', cwd: '/w', prompt: 'x' },
+        },
+      },
+      { connections: [CONNECTION, NARROW], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(404);
+    expect(calls.started).toHaveLength(0);
+  });
+
+  it('carries a remote permission answer — allow included — to the seam', async () => {
+    const { source, calls } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/respond-permission',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { requestId: 'perm-1', decision: { behavior: 'allow' } },
+      },
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(200);
+    expect(calls.decisions).toEqual([{ behavior: 'allow' }]);
+  });
+
+  it('refuses a decision that is neither allow nor deny', async () => {
+    const { source, calls } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/respond-permission',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { requestId: 'perm-1', decision: { behavior: 'shrug' } },
+      },
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(400);
+    expect(calls.decisions).toHaveLength(0);
+  });
+
+  it('keeps another account’s runs unsteerable and unprobeable', async () => {
+    const { source, calls } = controllable();
+    // `run-b` exists and bills prof-b; the narrow token gets the same 404 an
+    // absent run would.
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-b/interrupt',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${NARROW_TOKEN}` },
+        body: {},
+      },
+      { connections: [CONNECTION, NARROW], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(404);
+    expect(calls.interrupted).toHaveLength(0);
+  });
+
+  it('interrupts with the stillQueued detail', async () => {
+    const { source } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/interrupt',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: {},
+      },
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(200);
+    if (isStreamReply(reply)) throw new Error('expected a body');
+    expect(reply.body).toMatchObject({ stillQueued: ['q1'] });
+  });
+
+  it('steers mid-run over the wire', async () => {
+    const { source, calls } = controllable();
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/send',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { text: 'also check the tests' },
+      },
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: source },
+    );
+    expect(reply.status).toBe(200);
+    if (isStreamReply(reply)) throw new Error('expected a body');
+    expect(reply.body).toMatchObject({ deliveredImmediately: true });
+    expect(calls.sent).toEqual(['also check the tests']);
+  });
+
+  it('answers 501 on control verbs the host does not expose', async () => {
+    const reply = await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/send',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { text: 'x' },
+      },
+      // `observableRuns` has the observation surface and no control verbs.
+      { connections: [CONNECTION], version: '1', catalogue, startedAt: 0, runs: observableRuns },
+    );
+    expect(reply.status).toBe(501);
+  });
+
+  it('tracks a started run in the guard, and untracks on dispose', async () => {
+    const { source } = controllable();
+    const guard = {
+      attach: vi.fn(),
+      detach: vi.fn(),
+      trackRun: vi.fn(),
+      untrackRun: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const context = {
+      connections: [CONNECTION],
+      version: '1',
+      catalogue,
+      startedAt: 0,
+      runs: source,
+      guard,
+    };
+    await handleServerRequest(
+      {
+        method: 'POST',
+        url: REMOTE_RUNS_PATH,
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: { input: { providerId: 'claude', profileId: 'prof-a', cwd: '/w', prompt: 'x' } },
+      },
+      context,
+    );
+    expect(guard.trackRun).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-new', connectionId: 'conn-1', workspaceKey: 'dir:/w' }),
+    );
+
+    await handleServerRequest(
+      {
+        method: 'POST',
+        url: '/api/v0/runs/run-a/dispose',
+        headers: { host: '127.0.0.1:6472', authorization: `Bearer ${TOKEN}` },
+        body: {},
+      },
+      context,
+    );
+    expect(guard.untrackRun).toHaveBeenCalledWith('run-a');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* The event stream                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -317,6 +560,23 @@ describe('GET /api/v0/events', () => {
     const feed = createPushFeed();
     const reply = await ask(REMOTE_EVENTS_PATH, { feed }, { 'last-event-id': 'x' });
     expect(reply.status).toBe(400);
+  });
+
+  it('is what "still here" means: attach on open, detach on close', async () => {
+    const feed = createPushFeed();
+    const guard = {
+      attach: vi.fn(),
+      detach: vi.fn(),
+      trackRun: vi.fn(),
+      untrackRun: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const stream = await openStream({ feed, guard });
+    await stream.next(); // The hello proves the generator started.
+    expect(guard.attach).toHaveBeenCalledWith('conn-1');
+    expect(guard.detach).not.toHaveBeenCalled();
+    await stream.close();
+    expect(guard.detach).toHaveBeenCalledWith('conn-1');
   });
 
   it('accepts ?after= for a client that cannot set headers', async () => {
