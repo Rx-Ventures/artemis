@@ -92,3 +92,5 @@ export {
   type RemoteTerminalsOptions,
   type TerminalSource,
 } from './terminals.js';
+
+export { pathsOf, readRunInput, RunInputError } from './runInput.js';

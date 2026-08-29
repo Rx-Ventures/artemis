@@ -215,6 +215,22 @@ export interface ServerContext {
    */
   readonly guard?: RemoteRunGuard;
   /**
+   * The configured connections, read *live* rather than as this request's
+   * snapshot.
+   *
+   * Every route is answered from {@link connections}, which is the snapshot
+   * taken when the request arrived, and for a request that is the same thing.
+   * A *stream* is not a request: it is open for hours, and the snapshot it was
+   * born with says a token is valid long after the user revoked it or its
+   * expiry passed. `deleteConnection` promises revocation takes effect on the
+   * next request with no restart; a stream that keeps delivering transcripts
+   * and PTY bytes to a deleted token breaks that promise in the worst possible
+   * direction. This is how the stream re-asks. Absent means it cannot, and it
+   * falls back to the snapshot — which is what every test that builds a context
+   * by hand does.
+   */
+  readonly connectionsNow?: () => readonly ServerConnection[];
+  /**
    * Shells a remote window may open on this machine. Absent means this
    * deployment has no PTY to offer and the terminal routes answer `501` —
    * which the headless server honestly does, and which a remote client renders
@@ -382,7 +398,13 @@ export async function handleServerRequest(
         'This connection has expired. Expiry is fixed when a token is issued and cannot be extended — create a new connection and revoke this one.',
       ),
       rejected: true,
-      connectionId: connection.id,
+      /*
+       * No `connectionId`, deliberately — that field is what stamps
+       * `lastUsedAt`. An expired token is one the user is deciding whether to
+       * delete, and a stale poller hammering it would show "used just now"
+       * forever, which is the opposite of what that column is for. The refusal
+       * is still recorded, above, where it belongs.
+       */
     };
   }
 
@@ -950,6 +972,7 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.feed === undefined ? {} : { feed: options.feed }),
           ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),
           ...(options.guard === undefined ? {} : { guard: options.guard }),
+          connectionsNow: options.connections,
           ...(options.terminals === undefined ? {} : { terminals: options.terminals }),
           ...(options.onRemoteAccess === undefined
             ? {}

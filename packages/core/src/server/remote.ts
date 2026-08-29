@@ -33,6 +33,8 @@
  * than a departure.
  */
 
+import { resolve, sep } from 'node:path';
+
 import type { FeedEvent, FeedScope, PushFeed } from './feed.js';
 import type {
   PermissionDecision,
@@ -47,6 +49,7 @@ import type {
   ServerRunsBody,
   ServerRunSendBody,
   ServerRunActionBody,
+  ServerProfile,
   ServerTerminalBody,
   ServerTerminalReplayBody,
   ServerTerminalsBody,
@@ -54,15 +57,19 @@ import type {
 import {
   connectionAllowsModel,
   connectionAllowsProfile,
+  connectionHasExpired,
+  visibleToConnection,
   parseRemoteResourcePath,
   REMOTE_EVENTS_PATH,
   REMOTE_LIVE_WORK_PATH,
   REMOTE_RUNS_PATH,
+  REMOTE_STREAM_CLOSED,
   REMOTE_STREAM_GAP,
   REMOTE_STREAM_HELLO,
   REMOTE_TERMINALS_PATH,
   SSE_HEARTBEAT,
   sseMessage,
+  type RemoteClosedPayload,
   type RemoteGapPayload,
   type RemoteHelloPayload,
 } from '@rx-artemis/protocol';
@@ -75,6 +82,7 @@ import type {
 } from './http.js';
 import { workspaceKeyFor } from './ledger.js';
 import { CORS_HEADERS, fail, ok } from './replies.js';
+import { pathsOf, readRunInput, RunInputError } from './runInput.js';
 import { TooManyRemoteTerminalsError, UnknownRemoteTerminalError } from './terminals.js';
 import { WorkspaceUnavailableError } from './workspaces.js';
 
@@ -98,6 +106,11 @@ export function isRemotePath(path: string): boolean {
 export interface RemoteStreamOptions {
   /** How often the quiet stream writes its comment. Defaults to 15 s. */
   readonly heartbeatMs?: number;
+  /**
+   * How often an open stream re-asks whether its token is still valid.
+   * Defaults to {@link AUTHORISATION_RECHECK_MS}. Injected by tests.
+   */
+  readonly recheckMs?: number;
 }
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
@@ -182,6 +195,34 @@ function notControllable(): ServerReply {
   );
 }
 
+/**
+ * Did this host wire the control surface, or only the observation one?
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS ONE QUESTION AND NOT FIVE
+ * ---------------------------------------------------------------------------
+ *
+ * Three of the five control verbs — interrupt, respond-permission, dispose —
+ * are backed by `RunSource` members that are *required*, because the
+ * completions surface has always needed them: a chat request has to be able to
+ * hang up its own run. So checking "is this member present?" per verb, which is
+ * what the first version of these routes did, made `notControllable()`
+ * unreachable for exactly those three. A host that wired only the observation
+ * surface would answer 501 to `send` and `stop-task`, in a sentence claiming to
+ * be observe-only, while cheerfully accepting a remote interrupt and a remote
+ * *permission answer* on the same runs.
+ *
+ * The distinguishing member is {@link RunSource.startUserRun}: it exists for no
+ * other caller, it is the one both hosts add when they mean "this deployment is
+ * remotely controllable", and it is the verb whose absence genuinely means the
+ * host declined the surface. So the decision is made once, here, and every verb
+ * asks the same question — which also means the 501's sentence is true whenever
+ * it is sent.
+ */
+function controlEnabled(context: ServerContext): boolean {
+  return context.runs?.startUserRun !== undefined;
+}
+
 /** One refusal for "absent" and "not yours" alike, matching the session routes. */
 function unknownRun(): ServerReply {
   return fail(404, 'invalid_request_error', 'unknown_run', 'No such run for this connection.');
@@ -234,27 +275,82 @@ async function handleRunList(
   return ok(body);
 }
 
+/**
+ * `GET /api/v0/runs/live-work`: which of *this connection's* conversations
+ * still hold background work.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS LEDGER-SCOPED AND NOT MERELY ALLOWANCE-SCOPED
+ * ---------------------------------------------------------------------------
+ *
+ * Every sibling route filters by `connectionAllowsProfile`, because it answers
+ * about *runs*, and a run names the account it bills. This one answers about
+ * *sessions*, and a session id carries no account — so the allowance is not a
+ * filter that can be applied to it at all. The first version of this route
+ * therefore filtered by nothing, and handed any token, however narrowly scoped,
+ * every live session id on the machine plus every delegated task's
+ * `description` — which is provider-authored content about work the token had
+ * no part in.
+ *
+ * The right authority is the ledger, which is the single arbiter of "may this
+ * connection touch this session" for list, replay and resume alike. Asking it
+ * here makes this route agree with `/api/v0/sessions` rather than inventing a
+ * fourth rule, and it means the serving desktop's own conversations are absent
+ * for the same reason they are absent from the session list: they were never
+ * recorded against a connection.
+ *
+ * A build with no ledger cannot answer the question, so it answers *empty*
+ * rather than everything. Empty is contractually safe here in a way it is not
+ * everywhere: `RunsLiveWorkResponse` is a set of conversations known to be
+ * working — "keep these", never "the rest are finished" — so an under-complete
+ * answer costs a client nothing it can act on, while an over-complete one is
+ * the leak.
+ */
 async function handleLiveWork(
   context: ServerContext,
   connection: ServerConnection,
 ): Promise<ServerReply> {
-  void connection;
   const liveWork = context.runs?.liveWork;
-  /*
-   * Empty rather than 501 when the host cannot answer. `RunsLiveWorkResponse`
-   * is contractually a set of conversations *known* to be working — "keep
-   * these", never "the rest are finished" — so an empty answer from a build
-   * with no background-work ledger is true, while an error would make every
-   * remote client carry a fallback for a distinction it cannot act on.
-   */
-  const work = liveWork === undefined ? undefined : await liveWork();
+  const ledger = context.ledger;
+  const empty: ServerLiveWorkBody = {
+    object: 'artemis.live-work',
+    sessionIds: [],
+    working: [],
+    delegated: [],
+  };
+  if (liveWork === undefined || ledger === undefined) return ok(empty);
+
+  const profiles = await visibleProfiles(context, connection);
+  const scope = {
+    workspaceKey: workspaceKeyFor(connection),
+    profileIds: profiles.map((profile) => String(profile.id)),
+  };
+  const mine = (sessionId: string): boolean => ledger.mayAccess(scope, sessionId);
+
+  const work = await liveWork();
   const body: ServerLiveWorkBody = {
     object: 'artemis.live-work',
-    sessionIds: work?.sessionIds ?? [],
-    working: work?.working ?? [],
-    delegated: work?.delegated ?? [],
+    sessionIds: work.sessionIds.filter((id) => mine(String(id))),
+    working: work.working.filter((id) => mine(String(id))),
+    // The rows carry provider-authored task descriptions, so they are filtered
+    // by the same gate rather than a laxer one.
+    delegated: work.delegated.filter((entry) => mine(String(entry.sessionId))),
   };
   return ok(body);
+}
+
+/**
+ * The accounts this connection can see, for scoping.
+ *
+ * Reads the same cached catalogue `/api/v0/sessions` does — the read is memoised
+ * for minutes inside {@link Catalogue}, so a client polling live work does not
+ * spawn a provider CLI per poll.
+ */
+async function visibleProfiles(
+  context: ServerContext,
+  connection: ServerConnection,
+): Promise<readonly ServerProfile[]> {
+  return visibleToConnection(connection, await context.catalogue.read({}));
 }
 
 async function handleRunEvents(input: RemoteRequestInput, runId: string): Promise<ServerReply> {
@@ -302,24 +398,38 @@ async function handleRunEvents(input: RemoteRequestInput, runId: string): Promis
  * `POST /api/v0/runs`: start a run with the user's own settings.
  *
  * The body carries a whole `RunInput` — see the protocol on why the remote
- * principal is owed more than the completions surface offers — and the
- * token's scope is enforced before anything is spent: the profile must be
- * inside the allowance (with the same one-refusal-for-absent-and-invisible
- * rule the run routes use), a named model must be allowed on it, and the
- * working directory is the connection's pin, not the caller's choice.
+ * principal is owed more than the completions surface offers — but "the user's
+ * own settings" is a statement about which knobs are offered, not about what
+ * this route will pass through. The input is rebuilt field by field from an
+ * explicit allowlist (`runInput.ts`), and then the token's scope is enforced
+ * before anything is spent: the profile must be inside the allowance (with the
+ * same one-refusal-for-absent-and-invisible rule the run routes use), a named
+ * model must be allowed on it, and **every path the input carries** is confined
+ * to the connection's pin.
+ *
+ * Every path, not just `cwd`. `additionalDirectories` reaches the Claude SDK's
+ * option of the same name and Codex's `writableRoots`, so confining `cwd` alone
+ * left the pin — the token's entire authority story — steppable in one line of
+ * JSON. They go through the same confinement, in a loop over the paths the
+ * allowlist declares, so a path-bearing field cannot be added upstream and
+ * quietly miss the check.
  */
 async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
   const { request, context, connection } = input;
   const startUserRun = context.runs?.startUserRun;
-  if (startUserRun === undefined) return notControllable();
+  if (!controlEnabled(context) || startUserRun === undefined) return notControllable();
 
-  const runInput = readRunInput(request.body);
-  if (runInput === undefined) {
+  let runInput: RunInput;
+  try {
+    runInput = readRunInput(request.body);
+  } catch (error) {
     return fail(
       400,
       'invalid_request_error',
       'invalid_body',
-      'The body must be `{ input }` carrying providerId, profileId, cwd and prompt.',
+      error instanceof RunInputError
+        ? error.message
+        : 'The body must be `{ input }` carrying providerId, profileId, cwd and prompt.',
     );
   }
 
@@ -341,9 +451,38 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
   const pinned = await resolvePinnedCwd(input, runInput.cwd, runInput.resumeSessionId);
   if (typeof pinned !== 'string') return pinned;
 
+  /*
+   * The extra roots, against the same pin.
+   *
+   * An `ephemeral` or `none` workspace has no directory a caller could name, so
+   * naming one is refused outright rather than silently rewritten to the
+   * scratch path: a run told it may write to `/srv/data` and given a temporary
+   * folder instead is a run whose grant was quietly changed under it.
+   */
+  const extraRoots: string[] = [];
+  for (const { field, path } of pathsOf(runInput).slice(1)) {
+    if (connection.workspace.kind !== 'directory') {
+      return fail(
+        403,
+        'invalid_request_error',
+        'outside_workspace',
+        `This connection has no directory to widen, so \`${field}\` cannot be honoured.`,
+      );
+    }
+    const inside = confineToRoot(resolve(connection.workspace.path), path);
+    if (inside === undefined) return outsideWorkspace(resolve(connection.workspace.path));
+    extraRoots.push(inside);
+  }
+
   let handle: RunHandle;
   try {
-    handle = await startUserRun({ ...runInput, cwd: pinned });
+    handle = await startUserRun({
+      ...runInput,
+      cwd: pinned,
+      ...(runInput.additionalDirectories === undefined
+        ? {}
+        : { additionalDirectories: extraRoots }),
+    });
   } catch (error) {
     return fail(
       400,
@@ -388,6 +527,52 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
   return ok(body);
 }
 
+/** The one refusal for a path that is not inside the pin. */
+function outsideWorkspace(root: string): ServerReply {
+  return fail(
+    403,
+    'invalid_request_error',
+    'outside_workspace',
+    `This connection is pinned to ${root}.`,
+  );
+}
+
+/**
+ * `requested`, if it is `root` or lies beneath it. `undefined` otherwise.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE PATH IS RESOLVED BEFORE IT IS COMPARED
+ * ---------------------------------------------------------------------------
+ *
+ * A prefix test on the raw string is not containment, and the counterexample is
+ * one line long: `/w/../../etc` starts with `/w/` and names `/etc`. Every
+ * dot-segment spelling has to be collapsed *before* the comparison, which is
+ * exactly what `path.resolve` does — it is the same reasoning the renderer's
+ * `file:` navigation check states, where the raw URL is discarded in favour of
+ * the parser's serialized `href` for this precise reason.
+ *
+ * The boundary test is then `===` or a prefix ending in the path separator, so
+ * that `/workspace-2` is not admitted by a `/workspace` pin. A trailing slash
+ * on the pin would produce the same result; comparing against a resolved root
+ * makes it true regardless of how the pin was typed.
+ *
+ * **What this does not do is resolve symlinks.** A symlink inside the pin that
+ * points outside it still leads outside, and `realpath` is the only thing that
+ * would catch it — at the cost of an async stat per path and a refusal for any
+ * directory that does not yet exist. Artemis's local boundary
+ * (`requireAbsolutePath`) is lexical for the same reasons, so this matches the
+ * posture rather than inventing a second one; and the pin is a *rooting* rule
+ * rather than a sandbox in any case — a shell or an agent inside it can `cd`
+ * anywhere the serving user can. What the pin governs is where work is rooted
+ * and what a token may *declare* it reaches, and that is what this enforces.
+ */
+function confineToRoot(root: string, requested: string): string | undefined {
+  if (!requested.startsWith('/')) return undefined;
+  const resolved = resolve(requested);
+  if (resolved === root) return resolved;
+  return resolved.startsWith(`${root}${sep}`) ? resolved : undefined;
+}
+
 /**
  * The working directory a bridge-started run — or shell — actually gets.
  *
@@ -425,15 +610,11 @@ async function resolvePinnedCwd(
   }
 
   if (workspace.kind === 'directory') {
-    const root = workspace.path;
+    const root = resolve(workspace.path);
     if (requested === undefined) return root;
-    if (requested === root || requested.startsWith(`${root}/`)) return requested;
-    return fail(
-      403,
-      'invalid_request_error',
-      'outside_workspace',
-      `This connection's turns are pinned to ${root}.`,
-    );
+    const inside = confineToRoot(root, requested);
+    if (inside !== undefined) return inside;
+    return outsideWorkspace(root);
   }
 
   if (context.workspaces === undefined) return notControllable();
@@ -456,18 +637,6 @@ async function resolvePinnedCwd(
   }
 }
 
-/** Shape-check the body's `input`. Capability questions stay the engine's. */
-function readRunInput(body: unknown): RunInput | undefined {
-  if (typeof body !== 'object' || body === null) return undefined;
-  const raw = (body as { input?: unknown }).input;
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const candidate = raw as Record<string, unknown>;
-  for (const field of ['providerId', 'profileId', 'cwd', 'prompt']) {
-    if (typeof candidate[field] !== 'string' || candidate[field] === '') return undefined;
-  }
-  return raw as RunInput;
-}
-
 /**
  * The per-run verbs: send, interrupt, respond-permission, stop-task, dispose.
  *
@@ -483,7 +652,11 @@ async function handleRunAction(
   const { request, context, connection } = input;
   const runs = context.runs;
   const getRun = runs?.getRun;
-  if (runs === undefined || getRun === undefined) return notControllable();
+  // One gate for all five verbs — see `controlEnabled` on why per-member checks
+  // silently let interrupt, respond-permission and dispose through.
+  if (runs === undefined || getRun === undefined || !controlEnabled(context)) {
+    return notControllable();
+  }
 
   const run = await getRun(runId);
   if (run === undefined || !connectionAllowsProfile(connection, run.profileId)) {
@@ -848,12 +1021,60 @@ function handleEventStream(input: RemoteRequestInput): ServerReply | ServerStrea
       connection,
       version: context.version,
       heartbeatMs: context.remoteStream?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+      recheckMs: context.remoteStream?.recheckMs ?? AUTHORISATION_RECHECK_MS,
+      stillAuthorised: authorisationCheck(context, connection),
       ...(afterSeq === undefined ? {} : { afterSeq }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
       ...(context.guard === undefined ? {} : { guard: context.guard }),
     }),
   };
 }
+
+/**
+ * Is this connection still one the server would let in?
+ *
+ * Built once per stream, asked repeatedly while it is open. Reads through
+ * {@link ServerContext.connectionsNow} so it sees revocations and expiries that
+ * happened *after* the stream attached — the request-time gate cannot, because
+ * it ran once, hours ago.
+ */
+function authorisationCheck(
+  context: ServerContext,
+  connection: ServerConnection,
+): () => RemoteClosedPayload | undefined {
+  const now = context.connectionsNow;
+  return () => {
+    // No live reader: fall back to the request's snapshot, which at least
+    // catches an expiry that passed while the stream was open.
+    const current = (now === undefined ? context.connections : now()).find(
+      (candidate) => candidate.id === connection.id,
+    );
+    if (current === undefined) {
+      return {
+        reason: 'revoked',
+        message: 'This connection was revoked on the serving machine.',
+      };
+    }
+    if (connectionHasExpired(current, Date.now())) {
+      return {
+        reason: 'expired',
+        message: 'This connection has expired. Expiry cannot be extended — ask for a new token.',
+      };
+    }
+    return undefined;
+  };
+}
+
+/**
+ * How long a stream may go without re-asking whether its token is still good.
+ *
+ * The bound on how long a revoked or expired credential keeps receiving data.
+ * Well under the default heartbeat, so a quiet stream is checked on its
+ * heartbeat tick and a busy one is checked on this schedule instead of once per
+ * event — the check walks the connection list, and a stream carrying PTY bytes
+ * at sixty frames a second should not walk it sixty times a second.
+ */
+const AUTHORISATION_RECHECK_MS = 5_000;
 
 async function* streamFeed(input: {
   readonly feed: PushFeed;
@@ -863,6 +1084,8 @@ async function* streamFeed(input: {
   readonly afterSeq?: number;
   readonly signal?: { readonly aborted: boolean };
   readonly guard?: import('./guard.js').RemoteRunGuard;
+  readonly recheckMs?: number;
+  readonly stillAuthorised?: () => RemoteClosedPayload | undefined;
 }): AsyncGenerator<string> {
   const { feed, connection, signal } = input;
   // Read through a call: `aborted` flips from another task, and a bare
@@ -893,6 +1116,11 @@ async function* streamFeed(input: {
   // `guard.ts` for why the clock is minutes and not milliseconds.
   input.guard?.attach(connection.id);
   try {
+    const opening = input.stillAuthorised?.();
+    if (opening !== undefined) {
+      yield sseMessage({ event: REMOTE_STREAM_CLOSED, data: JSON.stringify(opening) });
+      return;
+    }
     const hello: RemoteHelloPayload = { seq: feed.head(), version: input.version };
     yield sseMessage({ event: REMOTE_STREAM_HELLO, data: JSON.stringify(hello) });
 
@@ -913,7 +1141,23 @@ async function* streamFeed(input: {
       }
     }
 
+    let checkedAt = Date.now();
     while (!aborted()) {
+      /*
+       * Re-asked here rather than only on the heartbeat, so that a stream busy
+       * enough never to idle is still cut off. The `finally` below detaches the
+       * guard on the way out, which arms the grace timer — so a revoked token's
+       * runs are interrupted rather than left running with nobody watching.
+       */
+      if (Date.now() - checkedAt >= (input.recheckMs ?? AUTHORISATION_RECHECK_MS)) {
+        checkedAt = Date.now();
+        const closed = input.stillAuthorised?.();
+        if (closed !== undefined) {
+          yield sseMessage({ event: REMOTE_STREAM_CLOSED, data: JSON.stringify(closed) });
+          return;
+        }
+      }
+
       if (pending.length === 0) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         await new Promise<void>((resolve) => {

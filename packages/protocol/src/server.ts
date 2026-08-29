@@ -383,9 +383,15 @@ export interface ServerSessionSummary {
    * account after a rename — the same hazard {@link ServerAllowance} exists to
    * avoid. Both are already inside this connection's own catalogue, so naming
    * them here discloses nothing it could not already read.
+   *
+   * **Optional on the wire**, because a client may be talking to a server older
+   * than this field. A newer client against an older server must degrade to
+   * "which account this was is unknown" — which the sidebar can render — rather
+   * than either dropping every row or casting `undefined` into a branded id and
+   * carrying the lie forward. Any server that fills these fills both.
    */
-  readonly profileId: string;
-  readonly providerId: string;
+  readonly profileId?: string;
+  readonly providerId?: string;
   /** Where the conversation ran, on the serving machine. */
   readonly cwd: string;
   /**

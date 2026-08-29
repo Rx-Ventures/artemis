@@ -14,7 +14,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, ServerProfile } from '@rx-artemis/protocol';
-import { NO_CAPABILITIES, sseMessage, REMOTE_STREAM_HELLO } from '@rx-artemis/protocol';
+import {
+  NO_CAPABILITIES,
+  parseRemoteResourcePath,
+  REMOTE_STREAM_HELLO,
+  REMOTE_TERMINALS_PATH,
+  remoteTerminalPath,
+  sseMessage,
+} from '@rx-artemis/protocol';
 
 import { createRemoteBridge } from './remoteBridge';
 import type { RemoteBridgeConfig } from './remoteConfig';
@@ -567,6 +574,57 @@ describe('sessions', () => {
     expect(result).toEqual({ ok: true, value: { sessions: [], hasMore: false } });
   });
 
+  /*
+   * `profileId`/`providerId` arrived on the wire with remote sessions, so a
+   * newer client can meet a server that sends neither. Both obvious handlings
+   * are wrong: casting `undefined` into a branded id puts a lie in the row, and
+   * filtering rows that lack it empties the sidebar against a server that is
+   * working perfectly.
+   */
+  it('degrades honestly against a server too old to send the ids', async () => {
+    const old = [
+      {
+        id: 'sess-old',
+        title: 'Before the ids existed',
+        updatedAt: 5_000,
+        profileSlug: 'work-max',
+        cwd: '/srv/repo',
+      },
+    ];
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, { object: 'artemis.sessions', sessions: old }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.listAll({});
+    if (!result.ok) throw new Error('expected a listing');
+
+    expect(result.value.sessions).toHaveLength(1);
+    const row = result.value.sessions[0];
+    // Marked unknown rather than attributed to an account it may not belong to.
+    expect(row?.profileIsUnknown).toBe(true);
+    expect(row?.profileId).toBe('');
+    expect(row?.title).toBe('Before the ids existed');
+  });
+
+  it('still finds an unattributed row by the directory it does carry', async () => {
+    replies.set('/api/v0/sessions', [
+      jsonResponse(200, {
+        object: 'artemis.sessions',
+        sessions: [
+          { id: 'sess-old', title: 'Old', updatedAt: 1, profileSlug: 'x', cwd: '/srv/repo' },
+        ],
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.sessions.list({
+      providerId: 'claude' as never,
+      profileId: 'prof-a' as never,
+      cwd: '/srv/repo',
+    });
+    if (!result.ok) throw new Error('expected a listing');
+    expect(result.value.sessions.map((session) => session.id)).toEqual(['sess-old']);
+  });
+
   it('still refuses what stays on the serving machine', async () => {
     const bridge = bridgeUnderTest();
     for (const result of await Promise.all([
@@ -580,5 +638,149 @@ describe('sessions', () => {
     ])) {
       expect(result.ok).toBe(false);
     }
+  });
+});
+
+/*
+ * The terminal wire, from the client side.
+ *
+ * The dock's terminal surface is the one part of this bridge whose request
+ * shapes were written against routes that did not exist yet, and matched by
+ * hand afterwards. Field names are the whole contract here — `data`,
+ * `cols`/`rows`, `cwd`, and the `artemis:push:terminal-event` channel — and a
+ * rename on either side is silent: the server would answer 400 and the dock
+ * would show a shell that never echoes. These pin the vocabulary, and they
+ * build every path through the *shared* `remoteTerminalPath` helper, so a
+ * change to the route grammar has to break here rather than in production.
+ */
+describe('terminals', () => {
+  const INFO = {
+    id: 'term-1',
+    shell: '/bin/zsh',
+    cwd: '/srv/repo',
+    startedAt: 1_000,
+    exited: false,
+  };
+
+  it('opens a shell with the size the pane measured', async () => {
+    replies.set(REMOTE_TERMINALS_PATH, [
+      jsonResponse(200, { object: 'artemis.terminal', terminal: INFO }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.terminal.start({ cwd: '/srv/repo', cols: 120, rows: 40 });
+    expect(result).toEqual({ ok: true, value: { terminal: INFO } });
+
+    const call = requests.find((request) => request.url.endsWith(REMOTE_TERMINALS_PATH));
+    expect(call?.method).toBe('POST');
+    // The three fields the route reads, and no argv or environment: the serving
+    // side picks the program. See `core/server/terminals.ts`.
+    expect(call?.body).toEqual({ cwd: '/srv/repo', cols: 120, rows: 40 });
+  });
+
+  it('writes keystrokes to the path the shared helper builds', async () => {
+    replies.set(remoteTerminalPath('term-1', 'write'), [
+      jsonResponse(200, { object: 'artemis.terminal', terminal: INFO }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.terminal.write({ id: 'term-1' as never, data: 'ls -la\n' });
+    expect(result).toEqual({ ok: true, value: { id: 'term-1' } });
+
+    const call = requests.find((request) => request.url.includes('/write'));
+    expect(new URL(call?.url ?? '').pathname).toBe(remoteTerminalPath('term-1', 'write'));
+    expect(call?.body).toEqual({ data: 'ls -la\n' });
+  });
+
+  it('resizes with cols and rows, the names the route reads', async () => {
+    replies.set(remoteTerminalPath('term-1', 'resize'), [
+      jsonResponse(200, { object: 'artemis.terminal', terminal: INFO }),
+    ]);
+    const bridge = bridgeUnderTest();
+    await bridge.terminal.resize({ id: 'term-1' as never, cols: 100, rows: 30 });
+    const call = requests.find((request) => request.url.includes('/resize'));
+    expect(call?.body).toEqual({ cols: 100, rows: 30 });
+  });
+
+  it('closes through the one route that ends a shell', async () => {
+    replies.set(remoteTerminalPath('term-1', 'close'), [
+      jsonResponse(200, { object: 'artemis.terminal', terminal: { ...INFO, exited: true } }),
+    ]);
+    const bridge = bridgeUnderTest();
+    await bridge.terminal.close({ id: 'term-1' as never });
+    const call = requests.find((request) => request.url.includes('/close'));
+    expect(call?.method).toBe('POST');
+  });
+
+  it('replays the retained tail with its truncation flag', async () => {
+    replies.set(remoteTerminalPath('term-1', 'replay'), [
+      jsonResponse(200, {
+        object: 'artemis.terminal.replay',
+        id: 'term-1',
+        data: 'last screenful',
+        truncated: true,
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    const result = await bridge.terminal.replay({ id: 'term-1' as never });
+    expect(result).toEqual({
+      ok: true,
+      value: { id: 'term-1', data: 'last screenful', truncated: true },
+    });
+    const call = requests.find((request) => request.url.includes('/replay'));
+    expect(call?.method).toBe('GET');
+  });
+
+  it('percent-encodes an awkward id exactly as the server decodes it', async () => {
+    const id = 'term/one two';
+    replies.set(remoteTerminalPath(id, 'write'), [
+      jsonResponse(200, { object: 'artemis.terminal', terminal: INFO }),
+    ]);
+    const bridge = bridgeUnderTest();
+    await bridge.terminal.write({ id: id as never, data: 'x' });
+    const call = requests.find((request) => request.url.includes('/write'));
+    // The round trip the two sides have to agree on: the client's builder and
+    // the server's parser are the same module.
+    const path = new URL(call?.url ?? '').pathname;
+    expect(parseRemoteResourcePath(path, REMOTE_TERMINALS_PATH)).toEqual({
+      id,
+      action: 'write',
+    });
+  });
+
+  it('lists no shells rather than erroring when the server serves none', async () => {
+    replies.set(REMOTE_TERMINALS_PATH, [
+      jsonResponse(501, {
+        error: { message: 'This Artemis does not serve shells.', type: 'invalid_request_error' },
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    // The reload path asks for this; a 501 must not break it.
+    expect(await bridge.terminal.list({})).toEqual({ ok: true, value: { terminals: [] } });
+  });
+
+  it('delivers PTY bytes off the event stream to terminal listeners', async () => {
+    const event = { type: 'data', id: 'term-1', data: 'hello from the other machine' };
+    replies.set('/api/v0/events', [
+      {
+        ok: true,
+        status: 200,
+        body: scriptedBody(
+          [
+            sseMessage({ event: REMOTE_STREAM_HELLO, data: '{"seq":0,"version":"t"}' }),
+            sseMessage({
+              id: '1',
+              event: 'artemis:push:terminal-event',
+              data: JSON.stringify(event),
+            }),
+          ],
+          true,
+        ),
+      } as unknown as Response,
+    ]);
+
+    const seen: unknown[] = [];
+    const bridge = bridgeUnderTest();
+    bridge.terminal.onEvent((received) => seen.push(received));
+    await until(() => seen.length > 0);
+    expect(seen[0]).toEqual(event);
   });
 });

@@ -164,6 +164,43 @@ describe('the terminal routes', () => {
     expect(outside.status).toBe(403);
   });
 
+  /*
+   * The spelling a raw prefix test admits. `/w/../../etc` starts with `/w/` as
+   * a string and names `/etc`; this cwd reaches `node-pty` directly, so it is
+   * the same hazard the run route has and gets the same confinement.
+   */
+  it('refuses a cwd that climbs out of the pin with dot segments', async () => {
+    const source = fakeSource();
+    const terminals = createRemoteTerminals({ source });
+    for (const cwd of ['/w/../../etc', '/w/./../..', '/w/sub/../../../etc', '/w/..']) {
+      const reply = await ask(REMOTE_TERMINALS_PATH, { terminals }, {
+        method: 'POST',
+        body: { cwd, cols: 80, rows: 24 },
+      });
+      expect(reply.status).toBe(403);
+    }
+    // Nothing was spawned on any of them.
+    expect(source.live.size).toBe(0);
+  });
+
+  it('does not admit a sibling directory sharing the pin’s prefix', async () => {
+    const terminals = createRemoteTerminals({ source: fakeSource() });
+    const reply = await ask(REMOTE_TERMINALS_PATH, { terminals }, {
+      method: 'POST',
+      body: { cwd: '/w-other', cols: 80, rows: 24 },
+    });
+    expect(reply.status).toBe(403);
+  });
+
+  it('normalizes a path that stays inside the pin', async () => {
+    const terminals = createRemoteTerminals({ source: fakeSource() });
+    const started = await ask(REMOTE_TERMINALS_PATH, { terminals }, {
+      method: 'POST',
+      body: { cwd: '/w/packages/../packages/core', cols: 80, rows: 24 },
+    });
+    expect((await json<ServerTerminalBody>(started)).terminal.cwd).toBe('/w/packages/core');
+  });
+
   it('refuses a size that is not a positive integer', async () => {
     const terminals = createRemoteTerminals({ source: fakeSource() });
     const reply = await ask(REMOTE_TERMINALS_PATH, { terminals }, {

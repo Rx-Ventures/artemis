@@ -136,6 +136,37 @@ describe('token expiry', () => {
   });
 });
 
+/*
+ * Three of the five control verbs are backed by *required* `RunSource` members,
+ * because the completions surface has always needed them. So a per-member check
+ * made the observe-only 501 unreachable for exactly those three: a host that
+ * wired only the observation surface refused `send` in a sentence claiming to
+ * be observe-only, while accepting a remote interrupt and a remote permission
+ * answer on the same runs.
+ */
+describe('a host that wired only the observation surface', () => {
+  const { startUserRun: _omit, send: _s, interruptRun: _i, stopTask: _t, ...observeOnly } = runs;
+
+  it('refuses every control verb, not just the optional ones', async () => {
+    for (const [url, body] of [
+      [REMOTE_RUNS_PATH, { input: { providerId: 'claude', profileId: 'prof-a', cwd: '/w', prompt: 'x' } }],
+      [remoteRunPath('run-a', 'send'), { text: 'x' }],
+      [remoteRunPath('run-a', 'interrupt'), {}],
+      [remoteRunPath('run-a', 'respond-permission'), { requestId: 'r', decision: { behavior: 'allow' } }],
+      [remoteRunPath('run-a', 'stop-task'), { taskId: 't' }],
+      [remoteRunPath('run-a', 'dispose'), {}],
+    ] as const) {
+      const reply = await ask(url, { runs: observeOnly as RunSource }, { method: 'POST', body });
+      expect([url, reply.status]).toEqual([url, 501]);
+    }
+  });
+
+  it('still serves the observation surface it claims to', async () => {
+    const reply = await ask(REMOTE_RUNS_PATH, { runs: observeOnly as RunSource });
+    expect(reply.status).toBe(200);
+  });
+});
+
 describe('the attribution record', () => {
   it('names the token that started a run', async () => {
     const onRemoteAccess = vi.fn();

@@ -36,6 +36,35 @@ describe('createRemoteRunGuard', () => {
     guard.dispose();
   });
 
+  /*
+   * The race. A second run started late in the first run's grace used to
+   * inherit whatever was left of it, so a run begun at t=999 of a 1000ms window
+   * was interrupted one millisecond later, having been given no window at all.
+   */
+  it('gives a run started inside an existing grace a full window of its own', async () => {
+    const interrupted: string[] = [];
+    const guard = createRemoteRunGuard({
+      interrupt: async (runId) => {
+        interrupted.push(runId);
+      },
+      graceMs: 1_000,
+    });
+
+    guard.trackRun(RUN);
+    await vi.advanceTimersByTimeAsync(900);
+    guard.trackRun({ ...RUN, runId: 'run-2' });
+
+    // The moment the first run's original deadline would have fallen.
+    await vi.advanceTimersByTimeAsync(150);
+    expect(interrupted).toEqual([]);
+
+    // A full grace from the second run's start, and then both go — they belong
+    // to one connection that has stayed away the whole time.
+    await vi.advanceTimersByTimeAsync(900);
+    expect(interrupted.sort()).toEqual(['run-1', 'run-2']);
+    guard.dispose();
+  });
+
   it('does not fire while a stream is attached', async () => {
     const interrupted: string[] = [];
     const guard = createRemoteRunGuard({

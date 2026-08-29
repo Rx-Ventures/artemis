@@ -305,6 +305,30 @@ export const REMOTE_STREAM_HELLO = 'artemis:stream:hello';
 export const REMOTE_STREAM_GAP = 'artemis:stream:gap';
 
 /**
+ * `event:` name of the message a stream sends when it is ending on purpose.
+ *
+ * A dropped TCP connection and a *revoked credential* look identical to a
+ * client that only ever sees the socket close, and the two want opposite
+ * responses: the first should be retried on a backoff, the second should stop
+ * retrying and tell the user why. So a stream the server closes deliberately
+ * says so first. See {@link RemoteClosedPayload}.
+ */
+export const REMOTE_STREAM_CLOSED = 'artemis:stream:closed';
+
+/** Why a stream ended, when the server ended it. */
+export interface RemoteClosedPayload {
+  /**
+   * `expired` — the token's expiry passed while the stream was open.
+   * `revoked` — the connection was deleted on the serving machine.
+   *
+   * Both are permanent, and a client that reconnects will be refused at the
+   * door; the distinction is only there so the message on screen can be true.
+   */
+  readonly reason: 'expired' | 'revoked';
+  readonly message: string;
+}
+
+/**
  * The first message on every stream: where the feed's head stands right now.
  *
  * Exists so a client can tell a quiet stream from a dead one — the hello is

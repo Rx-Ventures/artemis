@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent, RunHandle, RunInput, ServerProfile } from '@rx-artemis/protocol';
+import type {
+  AgentEvent,
+  RunHandle,
+  RunInput,
+  ServerConnection,
+  ServerProfile,
+} from '@rx-artemis/protocol';
 import {
   createSseDecoder,
   NO_CAPABILITIES,
   REMOTE_EVENTS_PATH,
   REMOTE_LIVE_WORK_PATH,
   REMOTE_RUNS_PATH,
+  REMOTE_STREAM_CLOSED,
   REMOTE_STREAM_GAP,
   REMOTE_STREAM_HELLO,
   type SseMessage,
@@ -178,15 +185,81 @@ describe('GET /api/v0/runs/live-work', () => {
     });
   });
 
-  it('reports the host ledger when there is one', async () => {
+  /*
+   * A ledger that owns `s1` and nothing else, so "may this connection see this
+   * session" has a true answer and a false one.
+   */
+  function ledgerOwning(...sessionIds: readonly string[]): ServerContext['ledger'] {
+    return {
+      load: async () => undefined,
+      record: () => undefined,
+      has: (id) => sessionIds.includes(id),
+      isProgramSession: () => false,
+      get: () => undefined,
+      listFor: () => [],
+      mayAccess: (_scope, id) => sessionIds.includes(id),
+      size: () => sessionIds.length,
+      flush: async () => undefined,
+    } as ServerContext['ledger'];
+  }
+
+  const busy = {
+    ...observableRuns,
+    liveWork: async () => ({
+      sessionIds: ['s1', 's2'],
+      working: ['s1', 's2'],
+      delegated: [
+        { sessionId: 's1', tasks: [{ id: 't1', description: 'mine' }] },
+        { sessionId: 's2', tasks: [{ id: 't2', description: 'somebody else’s' }] },
+      ],
+    }),
+  } as RunSource;
+
+  it('reports the sessions this connection may see', async () => {
     const reply = await ask(REMOTE_LIVE_WORK_PATH, {
-      runs: {
-        ...observableRuns,
-        liveWork: async () => ({ sessionIds: ['s1'], working: ['s1'], delegated: [] }),
-      },
+      runs: busy,
+      ledger: ledgerOwning('s1', 's2'),
     });
     if (isStreamReply(reply)) throw new Error('expected a body');
-    expect((reply.body as { working: string[] }).working).toEqual(['s1']);
+    expect((reply.body as { working: string[] }).working).toEqual(['s1', 's2']);
+  });
+
+  /*
+   * The leak this route had. A session id carries no account, so the allowance
+   * cannot filter it and the first version of the route filtered by nothing —
+   * handing every token every live session id on the machine, plus every
+   * delegated task's provider-authored description.
+   */
+  it('hides sessions outside the connection’s ledger scope', async () => {
+    const reply = await ask(REMOTE_LIVE_WORK_PATH, {
+      runs: busy,
+      ledger: ledgerOwning('s1'),
+    });
+    if (isStreamReply(reply)) throw new Error('expected a body');
+    const body = reply.body as {
+      sessionIds: string[];
+      working: string[];
+      delegated: { sessionId: string }[];
+    };
+    expect(body.sessionIds).toEqual(['s1']);
+    expect(body.working).toEqual(['s1']);
+    expect(body.delegated.map((entry) => entry.sessionId)).toEqual(['s1']);
+    // And the task text of the conversation it may not see is nowhere in the
+    // reply — that is the part that is provider content, not just an id.
+    expect(JSON.stringify(body)).not.toContain('somebody');
+  });
+
+  it('answers empty rather than everything when it cannot scope', async () => {
+    // No ledger means no authority to filter by. Under-complete is safe here —
+    // the response is "keep these", never "the rest are finished".
+    const reply = await ask(REMOTE_LIVE_WORK_PATH, { runs: busy });
+    if (isStreamReply(reply)) throw new Error('expected a body');
+    expect(reply.body).toEqual({
+      object: 'artemis.live-work',
+      sessionIds: [],
+      working: [],
+      delegated: [],
+    });
   });
 });
 
@@ -459,6 +532,20 @@ function decode(frame: string): SseMessage[] {
   return createSseDecoder().feed(frame);
 }
 
+/** Pull frames until one carries `event`, or give up rather than hang forever. */
+async function waitForEvent(
+  stream: { next(): Promise<string> },
+  event: string,
+  attempts = 40,
+): Promise<SseMessage> {
+  for (let i = 0; i < attempts; i += 1) {
+    for (const message of decode(await stream.next())) {
+      if (message.event === event) return message;
+    }
+  }
+  throw new Error(`never saw ${event}`);
+}
+
 async function openStream(
   overrides: Partial<ServerContext> = {},
   headers: Record<string, string | undefined> = {},
@@ -474,6 +561,100 @@ async function openStream(
   expect(reply.headers['x-accel-buffering']).toBe('no');
   return reader(reply.stream);
 }
+
+/*
+ * A stream is not a request, and the auth gate is a request-time check.
+ *
+ * `deleteConnection` promises revocation takes effect on the next request with
+ * no restart, and expiry is checked per request — but a stream opened before
+ * either happens is one long-lived request that never re-asks. Left that way it
+ * keeps delivering transcripts and PTY bytes to a credential the user has
+ * already withdrawn, and holds the guard's attachment so the runs behind it are
+ * never interrupted.
+ */
+describe('a stream whose credential stops being valid', () => {
+  const live = (): ServerConnection[] => [
+    { ...CONNECTION, expiresAt: Date.now() + 60_000 },
+    NARROW as ServerConnection,
+  ];
+
+  it('ends itself when the token expires while it is open', async () => {
+    const feed = createPushFeed();
+    let connections = live();
+    const stream = await openStream({
+      feed,
+      remoteStream: { heartbeatMs: 5, recheckMs: 0 },
+      connectionsNow: () => connections,
+    });
+    expect(decode(await stream.next())[0]?.event).toBe(REMOTE_STREAM_HELLO);
+
+    // The expiry passes under the open stream.
+    connections = [{ ...CONNECTION, expiresAt: Date.now() - 1 }, NARROW as ServerConnection];
+
+    const closing = await waitForEvent(stream, REMOTE_STREAM_CLOSED);
+    expect(JSON.parse(closing.data ?? '')).toMatchObject({ reason: 'expired' });
+    await stream.close();
+  });
+
+  it('ends itself when the connection is revoked while it is open', async () => {
+    const feed = createPushFeed();
+    let connections = live();
+    const stream = await openStream({
+      feed,
+      remoteStream: { heartbeatMs: 5, recheckMs: 0 },
+      connectionsNow: () => connections,
+    });
+    expect(decode(await stream.next())[0]?.event).toBe(REMOTE_STREAM_HELLO);
+
+    connections = [NARROW as ServerConnection];
+
+    const closing = await waitForEvent(stream, REMOTE_STREAM_CLOSED);
+    expect(JSON.parse(closing.data ?? '')).toMatchObject({ reason: 'revoked' });
+    await stream.close();
+  });
+
+  it('detaches the guard on the way out, so the runs behind it are stopped', async () => {
+    const feed = createPushFeed();
+    const attached: string[] = [];
+    const detached: string[] = [];
+    let connections = live();
+    const stream = await openStream({
+      feed,
+      remoteStream: { heartbeatMs: 5, recheckMs: 0 },
+      connectionsNow: () => connections,
+      guard: {
+        attach: (id) => attached.push(id),
+        detach: (id) => detached.push(id),
+        trackRun: () => undefined,
+        untrackRun: () => undefined,
+        dispose: () => undefined,
+      },
+    });
+    expect(decode(await stream.next())[0]?.event).toBe(REMOTE_STREAM_HELLO);
+    expect(attached).toEqual(['conn-1']);
+
+    connections = [NARROW as ServerConnection];
+    await waitForEvent(stream, REMOTE_STREAM_CLOSED);
+    await stream.close();
+    expect(detached).toEqual(['conn-1']);
+  });
+
+  it('leaves a stream on a healthy connection alone', async () => {
+    const feed = createPushFeed();
+    const stream = await openStream({
+      feed,
+      remoteStream: { heartbeatMs: 5, recheckMs: 0 },
+      connectionsNow: live,
+    });
+    expect(decode(await stream.next())[0]?.event).toBe(REMOTE_STREAM_HELLO);
+    // Several ticks' worth of heartbeats, none of them a close.
+    for (let i = 0; i < 3; i += 1) {
+      const frames = decode(await stream.next());
+      for (const frame of frames) expect(frame.event).not.toBe(REMOTE_STREAM_CLOSED);
+    }
+    await stream.close();
+  });
+});
 
 describe('GET /api/v0/events', () => {
   it('answers 501 with no feed, as a build without one honestly is', async () => {

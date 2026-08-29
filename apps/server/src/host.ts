@@ -14,9 +14,14 @@
  *    call; here a session lists under its first prompt. Cosmetic.
  *  - **No plan-usage polling, no update checks, no notifications.** All
  *    window furniture.
- *  - **Permission prompts are auto-denied**, exactly as they are for the
- *    desktop-hosted server — nobody is present to answer. Serve profiles
- *    whose settings pre-authorize what their work needs.
+ *  - **Permission prompts on the completions surface are auto-denied**, exactly
+ *    as they are for the desktop-hosted server: an HTTP chat request has nobody
+ *    behind it to ask. That is no longer the whole story. A *remote bridge*
+ *    client (ADR 0004) is a person at another machine, and this process serves
+ *    them the control routes — so a prompt raised by a bridge-started run is
+ *    answered by whoever is holding that window, over the event stream. Serve
+ *    profiles whose settings pre-authorize what their unattended work needs;
+ *    attended work no longer has to.
  */
 
 import { join } from 'node:path';

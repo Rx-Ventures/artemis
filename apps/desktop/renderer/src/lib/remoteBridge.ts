@@ -622,10 +622,28 @@ export function createRemoteBridge(
        * value is worse than one rendering none. `title` is already resolved
        * server-side by the same preference order the local adapters use.
        */
+      /*
+       * A server row, as the sidebar's own type — degrading where the server is
+       * older than the fields this asks for.
+       *
+       * `profileId`/`providerId` were added to the wire with remote sessions,
+       * so a newer client can meet a server that sends neither. Two wrong
+       * answers were available and both are refused here: casting `undefined`
+       * into a branded id puts a lie in the row that everything downstream then
+       * trusts, and dropping every row without them makes the sidebar silently
+       * empty against a server that is working perfectly. Instead the ids are
+       * omitted and the row carries `profileIsUnknown` — the protocol's own
+       * word for "this account is a guess, show no account" — which the sidebar
+       * already knows how to render.
+       */
       const toSummary = (row: ServerSessionSummary): SessionSummary => ({
         id: row.id as SessionSummary['id'],
-        providerId: row.providerId as SessionSummary['providerId'],
-        profileId: row.profileId as SessionSummary['profileId'],
+        // The branded ids are empty strings rather than absent when the server
+        // did not say: `SessionSummary` requires both, and an empty id matches
+        // no account, which is exactly what `profileIsUnknown` then explains.
+        providerId: (row.providerId ?? '') as SessionSummary['providerId'],
+        profileId: (row.profileId ?? '') as SessionSummary['profileId'],
+        ...(row.profileId === undefined ? { profileIsUnknown: true as const } : {}),
         cwd: row.cwd,
         title: row.title,
         ...(row.firstPrompt === undefined ? {} : { firstPrompt: row.firstPrompt }),
@@ -639,11 +657,20 @@ export function createRemoteBridge(
         list: async (request) => {
           const rows = await read();
           if (!rows.ok) return rows;
+          /*
+           * An unattributed row matches on directory alone.
+           *
+           * Against an older server every row is unattributed, so demanding an
+           * id match would return nothing for every query — a silently empty
+           * project history against a server whose sessions are all there. The
+           * directory is the field such a server does send, and it is the one
+           * this query is really about.
+           */
           const matching = rows.value.filter(
             (row) =>
-              row.providerId === String(request.providerId) &&
-              row.profileId === String(request.profileId) &&
-              row.cwd === request.cwd,
+              row.cwd === request.cwd &&
+              (row.providerId === undefined || row.providerId === String(request.providerId)) &&
+              (row.profileId === undefined || row.profileId === String(request.profileId)),
           );
           return ok({ sessions: sorted(matching), hasMore: false });
         },
@@ -653,7 +680,11 @@ export function createRemoteBridge(
           const matching =
             request.providerId === undefined
               ? rows.value
-              : rows.value.filter((row) => row.providerId === String(request.providerId));
+              : rows.value.filter(
+                  (row) =>
+                    row.providerId === undefined ||
+                    row.providerId === String(request.providerId),
+                );
           return ok({ sessions: sorted(matching), hasMore: false });
         },
         messages: async (request) => {

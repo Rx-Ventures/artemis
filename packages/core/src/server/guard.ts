@@ -163,10 +163,24 @@ export function createRemoteRunGuard(options: RemoteRunGuardOptions): RemoteRunG
 
     trackRun(run): void {
       runs.set(run.runId, run);
-      // A caller that started a run without ever opening the stream gets the
-      // same grace to open one — otherwise a control-only client could start
-      // work no disconnect would ever stop.
-      if ((attachments.get(run.connectionId) ?? 0) === 0) arm(run.connectionId);
+      /*
+       * A caller that started a run without ever opening the stream gets the
+       * same grace to open one — otherwise a control-only client could start
+       * work no disconnect would ever stop.
+       *
+       * The timer is *re-armed*, not merely armed, and that is the fix for a
+       * real race: a second run started at t=59 of the first run's 60-second
+       * grace would otherwise inherit one second of it and be interrupted
+       * immediately, having been given no window of its own. Re-arming also
+       * extends the earlier run's clock, which is the right direction for the
+       * error to point — this policy exists to stop work nobody is watching,
+       * and being a minute late to do that costs a minute of plan, while being
+       * early kills work somebody is about to come back to.
+       */
+      if ((attachments.get(run.connectionId) ?? 0) === 0) {
+        disarm(run.connectionId);
+        arm(run.connectionId);
+      }
     },
 
     untrackRun(runId): void {
