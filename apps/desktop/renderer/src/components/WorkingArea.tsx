@@ -107,6 +107,7 @@ import {
 import { PaneProvider, usePane } from '../state/paneContext';
 import type { Pane, PaneRow } from '../state/pane';
 import { Composer } from './Composer';
+import { HandoffPicker } from './HandoffPicker';
 import { DockPane } from './DockPane';
 import { StatusLine } from './StatusLine';
 import { Transcript } from './Transcript';
@@ -557,6 +558,10 @@ function PaneColumn({
         <Transcript />
         <Composer />
         <StatusLine />
+        {/* The standing hand-off question, when this conversation has one.
+            Inside the provider because the offer — like the transcript it is
+            about — belongs to this column and no other. */}
+        <HandoffPicker />
       </section>
     </PaneProvider>
   );

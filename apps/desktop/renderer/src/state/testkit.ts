@@ -66,6 +66,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   filesRequested: true,
   promptHistory: true,
   handoff: true,
+  handoffOffer: true,
   draft: true,
   parkedDrafts: true,
 };

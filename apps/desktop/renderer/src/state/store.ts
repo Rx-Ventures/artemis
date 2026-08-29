@@ -94,7 +94,12 @@ import {
   setHandoff,
   HANDOFF_BLOCK_DETAIL,
 } from './autoHandoff';
-import { describeBindingLimit, describeBlock, handoffTargetBlock } from './handoffTargets';
+import {
+  describeBindingLimit,
+  describeBlock,
+  handoffCandidates,
+  handoffTargetBlock,
+} from './handoffTargets';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   describeWorkspace,
@@ -1956,6 +1961,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     filesRequested: false,
     promptHistory: [],
     handoff: 'none',
+    handoffOffer: null,
     draft: '',
     parkedDrafts: {},
     ...overrides,
@@ -5395,8 +5401,8 @@ function considerHandoff(): void {
     setHandoff(pane, 'stopping');
     pane.transcript.note(
       'warn',
-      `Handing this work over — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
-      'Artemis is asking for a handover document while there is still budget to write one. Turn this off in Appearance → Handing over.',
+      `Handing off — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
+      'Artemis stopped before the wall while there is still budget to move the work or write a continuity note. Turn this off in Settings → Runs.',
     );
 
     void requestHandoff(pane, trigger, now);
@@ -5404,17 +5410,24 @@ function considerHandoff(): void {
 }
 
 /**
- * Stop whatever is running, then ask for the document.
+ * Stop whatever is running, then ask the *user* — and only then the agent.
  *
  * The interrupt comes first and is awaited: a provider mid-turn will not take
- * the prompt as its own turn, and sending it anyway would either queue it
- * behind the work being abandoned or fold it into that work as a steer. Neither
- * produces a document.
+ * a prompt as its own turn, and sending one anyway would either queue it
+ * behind the work being abandoned or fold it into that work as a steer.
  *
- * `submitPrompt` is used rather than a bespoke call so the handoff request is an
- * ordinary turn in every respect — it appears in the transcript as a prompt, it
- * is subject to the same capability gating, and the run it starts ends the way
- * any other does.
+ * The wait below is also what sequences a chosen move safely (§5 obstacle 1):
+ * `settled` resolves on the interrupted run's `run.end`, and that same event —
+ * one write, earlier in the same handler — promotes `endedSessionId` into
+ * `resumeSessionId` while the pane's profile still matches the run's. So by
+ * the time the picker opens, the conversation the user might move is already
+ * the one the pane will resume; a picker opened before the settle could move
+ * the profile under the promotion's feet and silently drop it.
+ *
+ * Then the fork (ADR 0003): when another reachable account could take the
+ * work, the informed picker opens and *nothing more happens until the user
+ * chooses*. When no candidate passes — reachability, auth, freshness or plain
+ * count — it degrades to what this function always did: the continuity note.
  */
 async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
   if (isLive(paneState(pane))) {
@@ -5434,7 +5447,22 @@ async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number):
     // punishing them for a provider that ignored an interrupt.
     return abandonHandoff(pane, 'the run would not stop');
   }
-  // Promoted only now, once the interrupted run's `run.end` is behind us: from
+  if (offerHandoff(pane, trigger)) return;
+  await requestContinuityNote(pane, trigger, now);
+}
+
+/**
+ * Ask the agent for the continuity note — today's document path, verbatim.
+ *
+ * `submitPrompt` is used rather than a bespoke call so the request is an
+ * ordinary turn in every respect — it appears in the transcript as a prompt,
+ * it is subject to the same capability gating, and the run it starts ends the
+ * way any other does. Reached two ways, deliberately the same both times: the
+ * trigger found no candidate to offer, or the user looked at the candidates
+ * and declined ({@link declineHandoffOffer}).
+ */
+async function requestContinuityNote(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
+  // Promoted only once the interrupted run's `run.end` is behind us: from
   // here the next run to end is the one this prompt starts, which is exactly
   // what `asked` means.
   setHandoff(pane, 'asked');
@@ -5444,6 +5472,117 @@ async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number):
   // refusal means no document exists. `done` would block the conversation over
   // a handover that was never written.
   if (!sent) abandonHandoff(pane, 'the prompt could not be sent');
+}
+
+/**
+ * Open the picker, if there is a choice worth opening it over.
+ *
+ * The bar for opening is one candidate that could actually be chosen —
+ * reachable, not known signed out, fresh-reading, not rejected. Candidates
+ * blocked on facts still *render*, disabled with their reasons, but a picker
+ * whose every row is dead is a question with no answers, and the ADR's own
+ * fallback for that is the continuity note.
+ *
+ * `unchecked` counts as chooseable here: sign-in has simply never been asked
+ * about — the ordinary state on a fresh launch — and the probes fired below
+ * usually answer before the user has read the dialog. The *move* re-validates
+ * against the answered probe either way (`handOffToProfile`).
+ *
+ * Returns whether the picker opened, so the caller knows to stand down.
+ */
+function offerHandoff(pane: Pane, trigger: HandoffTrigger): boolean {
+  const state = paneState(pane);
+  const sessionId = state.resumeSessionId;
+  // No resumable session means no conversation a target could continue —
+  // there is nothing to move, only something to write down.
+  if (sessionId === null) return false;
+  const summary = state.sessions.find((s) => s.id === sessionId);
+  // A session the listing has not seen yet cannot prove any target reaches
+  // it. Reachability is the floor, so the honest answer is the note.
+  if (summary === undefined) return false;
+
+  const app = useApp.getState();
+  const now = Date.now();
+  const candidates = handoffCandidates(state.profiles, state.activeProfileId, (id) =>
+    canReachSession(summary, id),
+  );
+  const chooseable = candidates.some((profile) => {
+    const block = handoffTargetBlock({
+      profile,
+      reachable: true,
+      auth: app.authByProfile[profile.id],
+      usage: app.planUsageByProfile[profile.id],
+      now,
+    });
+    return block === null || block.kind === 'unchecked';
+  });
+  if (!chooseable) return false;
+
+  // The cheap gate, fired for every row at the moment the question opens (§5
+  // obstacle 6): by the time the user has read the dialog, "signed out" is a
+  // fact on the row rather than a surprise after the choice.
+  for (const profile of candidates) {
+    if (app.authByProfile[profile.id] === undefined) void readAuthStatus(profile.id);
+  }
+
+  setPaneState(pane, { handoffOffer: { trigger, at: now } });
+  setHandoff(pane, 'offered');
+  return true;
+}
+
+/**
+ * The user chose a target in the picker. The chosen act, performed.
+ *
+ * All the safety lives in {@link handOffToProfile}, which re-validates every
+ * gate at the moment of the act — the picker's rows were drawn from the same
+ * facts, but a dialog can sit open across a poll. A refusal leaves the offer
+ * open with the banner saying why: the world changed, the question has not.
+ */
+export async function chooseHandoffTarget(
+  profileId: ProfileId,
+  pane: Pane = focusedPane(),
+): Promise<boolean> {
+  const offer = paneState(pane).handoffOffer;
+  if (offer == null) return false;
+
+  const moved = await handOffToProfile(profileId, pane);
+  if (!moved) return false;
+
+  // The latch comes off entirely rather than parking on a terminal state: the
+  // conversation now bills an account with room, and if *that* account later
+  // crosses a threshold, the trigger has every right to fire again.
+  setPaneState(pane, { handoffOffer: null });
+  setHandoff(pane, 'none');
+  return true;
+}
+
+/**
+ * The user declined the move and asked for the continuity note instead —
+ * ADR 0003's degraded hand off, exactly as it ran before the picker existed.
+ */
+export function declineHandoffOffer(pane: Pane = focusedPane()): void {
+  const offer = paneState(pane).handoffOffer;
+  if (offer == null) return;
+  setPaneState(pane, { handoffOffer: null });
+  void requestContinuityNote(pane, offer.trigger, Date.now());
+}
+
+/**
+ * The user closed the picker without choosing anything: keep working here.
+ *
+ * `dismissed`, the same standing door out the feature has always had — nothing
+ * moves, nothing is written, and nothing re-asks for the rest of the
+ * conversation, however full the account gets. Escape must not be a trap.
+ */
+export function dismissHandoffOffer(pane: Pane = focusedPane()): void {
+  if (paneState(pane).handoffOffer == null) return;
+  setPaneState(pane, { handoffOffer: null });
+  setHandoff(pane, 'dismissed');
+  pane.transcript.note(
+    'info',
+    'Staying on this account',
+    'Nothing moves and nothing more will be asked in this conversation. The account is still nearly spent.',
+  );
 }
 
 /**
@@ -8667,6 +8806,8 @@ export function newSession(
       // room is a question for the next reading, not a state to inherit — and a
       // fresh session that opened already refusing prompts would be absurd.
       handoff: 'none',
+      // An open picker was a question about the conversation being erased.
+      handoffOffer: null,
     });
   }
 
@@ -8850,6 +8991,8 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     tasks: [],
     dismissedTasks: [],
     tasksRequested: false,
+    // The question belonged to the conversation this column is leaving.
+    handoffOffer: null,
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
