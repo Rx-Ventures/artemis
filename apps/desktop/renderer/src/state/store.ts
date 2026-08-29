@@ -5804,6 +5804,43 @@ async function adoptTerminals(pane: Pane): Promise<void> {
 }
 
 /**
+ * Take a reading, unless it describes an older moment than the one already held.
+ *
+ * Two writers land in this map — the poll's push, and the read taken a few
+ * seconds after a run ends — and neither can see the other's timing. Both spawn
+ * a provider CLI that takes a second or two, so their *replies* can arrive in
+ * the opposite order to the readings they describe: the settle read starts
+ * later, answers first, and then the poll's older cycle overwrites it. On screen
+ * that is a percentage that climbs and then falls back with nothing having
+ * reset — 77% to 67% on a five-hour window that is only ever filling — which
+ * reads as the gauge being wrong rather than merely late.
+ *
+ * `fetchedAt` is stamped when the provider was asked, so it orders the readings
+ * themselves rather than the order their replies happened to land in. Equal
+ * stamps take the newcomer: the two describe the same moment, so preferring
+ * either is arbitrary.
+ *
+ * This is the same rule `newerReading` applies in the meter when it weighs its
+ * own read against this map. That guard could not save the display on its own,
+ * because both racing writers are on *this* side of it: once the older reading
+ * is in the map, it is simply what the map says.
+ *
+ * Returns whether the map moved, so a caller does not act on a discarded read.
+ */
+function acceptPlanUsage(profileId: ProfileId, usage: PlanUsage): boolean {
+  let accepted = false;
+  useApp.setState((s) => {
+    const held = s.planUsageByProfile[profileId];
+    // Returning nothing leaves the map's identity alone as well as its contents,
+    // so a rejected reading costs no re-render anywhere downstream.
+    if (held !== undefined && usage.fetchedAt < held.fetchedAt) return {};
+    accepted = true;
+    return { planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage } };
+  });
+  return accepted;
+}
+
+/**
  * Subscribe to the main process's plan-usage poll. Returns an unsubscribe.
  *
  * There is no timer here, and that is the point: the poll runs once in main
@@ -5818,10 +5855,10 @@ export function installPlanUsageFeed(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
   return bridge.usagePlan.onChange(({ profileId, usage }) => {
-    useApp.setState((s) => ({
-      planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
-    }));
-    considerHandoff();
+    // Only when the reading actually landed: a cycle discarded for being older
+    // than what is already held has told the ranking nothing new, and a handoff
+    // decided on a superseded number is the thing this ordering protects.
+    if (acceptPlanUsage(profileId, usage)) considerHandoff();
   });
 }
 
@@ -5885,14 +5922,13 @@ function refreshPlanUsageSoon(profileId: ProfileId): void {
       // drop the account out of the ranking entirely. Leave what is there and
       // let the poll try again.
       if (!result.ok || result.value.usage === null) return;
-      const usage = result.value.usage;
       // Written straight in rather than waited for on the push channel: the
       // push is what the *poll* broadcasts, and this read was asked for by this
-      // window. Both land in the same map, and the later write wins — which is
-      // this one, since it is the newer reading.
-      useApp.setState((s) => ({
-        planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
-      }));
+      // window. Both land in the same map, and the newer *reading* wins — by
+      // `fetchedAt`, not by which reply arrived last, because a poll cycle that
+      // started before this read can easily answer after it. See
+      // `acceptPlanUsage`.
+      if (!acceptPlanUsage(profileId, result.value.usage)) return;
       // The moment this matters most. A run just ended, so this reading is the
       // freshest one this account will have for minutes — and an idle pane is
       // exactly where a handoff can be asked for without cutting anything off.
