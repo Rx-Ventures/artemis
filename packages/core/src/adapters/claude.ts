@@ -1149,8 +1149,10 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         }
         let stored;
         try {
-          stored = await withClaudeConfigDir(configDir, () =>
-            sdkGetSessionMessages(input.resumeSessionId as string, { dir: input.cwd }),
+          stored = await withClaudeConfigDir(
+            configDir,
+            () => sdkGetSessionMessages(input.resumeSessionId as string, { dir: input.cwd }),
+            'rewind read',
           );
         } catch (error) {
           throw adapterError('unknown', `Could not read the session to rewind it: ${describe(error)}`, {
@@ -1256,14 +1258,17 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
 
       let infos;
       try {
-        infos = await withClaudeConfigDir(configDir, () =>
-          sdkListSessions({
-            dir: request.cwd,
-            // Over-fetch by one so `hasMore` is a fact rather than a guess: the
-            // SDK returns a bare array with no total.
-            limit: limit === undefined ? undefined : limit + 1,
-            offset,
-          }),
+        infos = await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkListSessions({
+              dir: request.cwd,
+              // Over-fetch by one so `hasMore` is a fact rather than a guess: the
+              // SDK returns a bare array with no total.
+              limit: limit === undefined ? undefined : limit + 1,
+              offset,
+            }),
+          'listSessions',
         );
       } catch (error) {
         throw adapterError('unknown', `Could not read Claude session history: ${describe(error)}`, {
@@ -1347,7 +1352,11 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
           // Pagination belongs to whoever merges across profiles — slicing here
           // would drop one profile's older sessions in favour of another's
           // newer ones before they were ever compared.
-          infos = await withClaudeConfigDir(group.configDir, () => sdkListSessions({}));
+          infos = await withClaudeConfigDir(
+            group.configDir,
+            () => sdkListSessions({}),
+            'listAllSessions',
+          );
         } catch (error) {
           // Every profile in the group, not just the first: they were grouped
           // because they read one store, so one store failing fails all of
@@ -1484,10 +1493,13 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     async countSessionMessages(input: SessionMessageCountQuery): Promise<number> {
       const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
       try {
-        const stored = await withClaudeConfigDir(configDir, () =>
-          sdkGetSessionMessages(input.sessionId, {
-            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
-          }),
+        const stored = await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkGetSessionMessages(input.sessionId, {
+              ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+            }),
+          'countSessionMessages',
         );
         return stored.length;
       } catch (error) {
@@ -1516,12 +1528,15 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
 
       let stored;
       try {
-        stored = await withClaudeConfigDir(configDir, () =>
-          sdkGetSessionMessages(input.sessionId, {
-            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
-            ...(limit === undefined ? {} : { limit: limit + 1 }),
-            ...(input.offset === undefined ? {} : { offset: input.offset }),
-          }),
+        stored = await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkGetSessionMessages(input.sessionId, {
+              ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+              ...(limit === undefined ? {} : { limit: limit + 1 }),
+              ...(input.offset === undefined ? {} : { offset: input.offset }),
+            }),
+          'getSessionMessages',
         );
       } catch (error) {
         throw adapterError('unknown', `Could not read that session: ${describe(error)}`, {
@@ -1566,12 +1581,15 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
 
       let stored;
       try {
-        stored = await withClaudeConfigDir(configDir, () =>
-          sdkGetSubagentMessages(input.sessionId, input.agentId, {
-            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
-            ...(limit === undefined ? {} : { limit: limit + 1 }),
-            ...(input.offset === undefined ? {} : { offset: input.offset }),
-          }),
+        stored = await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkGetSubagentMessages(input.sessionId, input.agentId, {
+              ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+              ...(limit === undefined ? {} : { limit: limit + 1 }),
+              ...(input.offset === undefined ? {} : { offset: input.offset }),
+            }),
+          'getSubagentMessages',
         );
       } catch (error) {
         throw adapterError('unknown', `Could not read that agent: ${describe(error)}`, {
@@ -1707,12 +1725,15 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     async setSessionTitle(update: SessionTitleUpdate): Promise<void> {
       const configDir = readEnv(update.env, CLAUDE_CONFIG_DIR_ENV);
       try {
-        await withClaudeConfigDir(configDir, () =>
-          sdkRenameSession(
-            update.sessionId,
-            update.title,
-            update.cwd === undefined ? undefined : { dir: update.cwd },
-          ),
+        await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkRenameSession(
+              update.sessionId,
+              update.title,
+              update.cwd === undefined ? undefined : { dir: update.cwd },
+            ),
+          'setSessionTitle',
         );
       } catch (error) {
         throw adapterError('unknown', `Could not rename the Claude session: ${describe(error)}`, {
@@ -1741,10 +1762,13 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
 
       try {
-        await withClaudeConfigDir(configDir, () =>
-          sdkDeleteSession(input.sessionId, {
-            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
-          }),
+        await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkDeleteSession(input.sessionId, {
+              ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+            }),
+          'deleteSession',
         );
         return true;
       } catch (error) {
@@ -1769,10 +1793,13 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       const configDir = readEnv(input.env, CLAUDE_CONFIG_DIR_ENV);
 
       try {
-        await withClaudeConfigDir(configDir, () =>
-          sdkTagSession(input.sessionId, input.tag, {
-            ...(input.cwd === undefined ? {} : { dir: input.cwd }),
-          }),
+        await withClaudeConfigDir(
+          configDir,
+          () =>
+            sdkTagSession(input.sessionId, input.tag, {
+              ...(input.cwd === undefined ? {} : { dir: input.cwd }),
+            }),
+          'tagSession',
         );
         return true;
       } catch (error) {
@@ -4034,11 +4061,77 @@ class ClaudeTurn implements Run {
  */
 let configDirLock: Promise<unknown> = Promise.resolve();
 
-function withClaudeConfigDir<T>(
+/**
+ * Queue-depth instrumentation for the lock above — observation only.
+ *
+ * The lock is one process-wide chain, so reads for *different* profiles queue
+ * behind each other, and one slow read stalls every history surface at once:
+ * the sidebar's poll, a pane's subagent re-read, the message count on the path
+ * of a resumed run. When that happens today it looks like Artemis "being
+ * slow"; these few lines make it a log line instead.
+ *
+ * `configDirPending` counts calls that have entered {@link withClaudeConfigDir}
+ * and not yet finished — the holder plus everything queued. Each arrival that
+ * pushes it past {@link CLAUDE_CONFIG_DIR_QUEUE_THRESHOLD} is reported with
+ * what just joined and what was holding the lock at that moment. The threshold
+ * sits above the app's steady-state concurrency (the pollers overlapping is
+ * three-deep at most), so an ordinary tick reports nothing.
+ *
+ * A reporter must never break a read: failures are swallowed here, and the
+ * reporter is a seam so core stays free of any logging dependency — the main
+ * process points it at the session-lifecycle log.
+ */
+export const CLAUDE_CONFIG_DIR_QUEUE_THRESHOLD = 3;
+
+/** What {@link setClaudeConfigDirQueueReporter}'s reporter is told. */
+export interface ClaudeConfigDirQueueReport {
+  /** Calls pending on the lock, the new arrival included. */
+  readonly depth: number;
+  /** The operation that just joined the queue. */
+  readonly waiting: string;
+  /** The operation holding the lock, once any call has started executing. */
+  readonly holding?: string;
+}
+
+let configDirPending = 0;
+let configDirHolder: string | undefined;
+let configDirQueueReporter: ((report: ClaudeConfigDirQueueReport) => void) | undefined;
+
+/**
+ * Hear about the lock's queue getting deep. One reporter per process, matching
+ * the lock itself; pass `undefined` to unhook (tests do).
+ */
+export function setClaudeConfigDirQueueReporter(
+  reporter: ((report: ClaudeConfigDirQueueReport) => void) | undefined,
+): void {
+  configDirQueueReporter = reporter;
+}
+
+/**
+ * Exported for the queue-depth tests, which drive the lock directly rather
+ * than mocking the SDK behind ten adapter methods. `waiting` names the
+ * operation for the queue report; it appears in no other output.
+ */
+export function withClaudeConfigDir<T>(
   configDir: string | undefined,
   fn: () => Promise<T>,
+  waiting = 'unnamed',
 ): Promise<T> {
+  configDirPending += 1;
+  if (configDirPending > CLAUDE_CONFIG_DIR_QUEUE_THRESHOLD && configDirQueueReporter !== undefined) {
+    try {
+      configDirQueueReporter({
+        depth: configDirPending,
+        waiting,
+        ...(configDirHolder === undefined ? {} : { holding: configDirHolder }),
+      });
+    } catch {
+      // Instrumentation must never cost a read.
+    }
+  }
+
   const run = configDirLock.then(async () => {
+    configDirHolder = waiting;
     const previous = process.env[CLAUDE_CONFIG_DIR_ENV];
     if (configDir === undefined) {
       delete process.env[CLAUDE_CONFIG_DIR_ENV];
@@ -4053,6 +4146,7 @@ function withClaudeConfigDir<T>(
       } else {
         process.env[CLAUDE_CONFIG_DIR_ENV] = previous;
       }
+      configDirPending -= 1;
     }
   });
 
