@@ -64,7 +64,7 @@ code { font: 12px var(--mono); color: var(--accent); }
 <div class="wrap">
 
   <h1>Design</h1>
-  <p class="lede"><b>Round three.</b> The layout is settled — keep it. What restarts is the design language laid over it.</p>
+  <p class="lede"><b>Round five.</b> The layout is settled, the language axes are named. What is being decided now is where a palette <b>comes from</b>: a <code>{canvas, accent}</code> seed pair with every other token computed, or nineteen hand decisions. Newest first; the earlier rounds stand below as the record.</p>
 
   <div class="settled">
     <h3>SETTLED IN ROUND TWO</h3>
@@ -91,6 +91,54 @@ code { font: 12px var(--mono); color: var(--accent); }
     <p><b><a href="app.html" style="color:var(--accent);text-decoration:none">app.html</a></b> — the layout refreshed <i>intentionally</i> rather than additively, with <b>Sheet and Signal swappable live</b>. Six screens: the session grid, a full 2×2, the dock's tasks and terminal, the command palette, the profiles screen and first run. Every state is linkable: <code>app.html#signal/quad</code>. Press <b>L</b> to swap language, <b>1–6</b> for screens.</p>
     <p>The refresh fixes what was accretion: <b>a navigator rail that never disappears</b> — which removes the reason the window header existed, since the sidebar could not reopen itself — <b>one update surface</b> instead of a card and a banner, <b>a status line that elides</b> to the two facts that change behaviour, and <b>a dock with a vertical tab rail and a this-pane/all scope</b>. See <code>_layout.md</code>.</p>
   </div>
+
+  <div class="meta">ROUND FIVE · THE SEED PAIR</div>
+
+  <p class="lede">This round implements the overhaul's settled decisions (<code>docs/research/OVERHAUL-PREP.md</code>, ADR 0001 — <i>themes derive from seeds</i>): a theme is a <b>seed pair</b> — a bare neutral canvas at T3-boring depth, chroma zero, and one deep blue-violet fill at 264 that light text sits <b>on</b>, replacing the bright-ink teal judged hard on the eyes. Every other token is computed: surface lifts, ink floors, contrast walks, written once in <code>_seed_build.py</code> and re-verified through the app's own <code>lib/oklch.ts</code> by <code>_seedcheck.mts</code>. The layout is imported byte-identical from <code>_build.py</code>, type is held at the shipped Geist, and two files <b>bracket</b> the settled seed so judging picks a point on a line rather than rubber-stamping the only point shown. Rules and the measured table: <code>_seeds.md</code>.</p>
+
+  <a class="card" href="5a-control.html">
+    <div class="hd"><span class="n">5A</span><h2>Control</h2><span class="tag">SEED: NONE</span></div>
+    <div class="sw"><i style="background:oklch(9% 0.003 250)"></i><i style="background:oklch(13% 0.003 250)"></i><i style="background:oklch(10.5% 0.003 250)"></i><i style="background:oklch(86% 0.14 192)"></i><i style="background:oklch(80% 0.1 250)"></i><i style="background:oklch(84% 0.17 150)"></i><i style="background:oklch(85% 0.155 85)"></i><i style="background:oklch(70% 0.18 25)"></i></div>
+    <p class="bet"><b>The shipped palette, verbatim</b> — teal ink at L86, 9% ground, a 250-hue tint in every grey — rendered in this round's frame so the seed variants have something to lose to.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The incumbent: every value argued, checked and shipped; worst text contrast 5.1:1.</div>
+      <div class="cost"><span class="lab">COSTS</span>Nothing — it is the control. The claims against it live in the other five files.</div>
+    </div>
+  </a>
+
+  <a class="card" href="5b-violet.html">
+    <div class="hd"><span class="n">5B</span><h2>Beam 264</h2><span class="tag">THE SETTLED DIRECTION</span></div>
+    <div class="sw"><i style="background:oklch(15.5% 0 0)"></i><i style="background:oklch(19.5% 0 0)"></i><i style="background:oklch(17% 0 0)"></i><i style="background:oklch(52% 0.21 264)"></i><i style="background:oklch(61.5% 0.14 264)"></i><i style="background:oklch(80% 0.1 210)"></i><i style="background:oklch(84% 0.17 150)"></i><i style="background:oklch(70% 0.18 25)"></i></div>
+    <p class="bet">Canvas <code>oklch(15.5% 0 0)</code>, accent <code>oklch(52% 0.21 264)</code>. The accent becomes a <b>place</b> rather than a light source; tools-cyan moves 250 → 210 to stay clear of it.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Two numbers decide the theme, and the same construction survives light mode unchanged.</div>
+      <div class="cost"><span class="lab">COSTS</span>A deep fill cannot be text — the seed must derive <code>beam-text</code> — and 264 is 23° from the violet round three called least ownable.</div>
+    </div>
+  </a>
+
+  <a class="card" href="5c-violet-dim.html">
+    <div class="hd"><span class="n">5C</span><h2>Beam 264 · dimmer</h2><span class="tag">BRACKET: BELOW</span></div>
+    <div class="sw"><i style="background:oklch(15.5% 0 0)"></i><i style="background:oklch(19.5% 0 0)"></i><i style="background:oklch(44% 0.21 264)"></i><i style="background:oklch(61.5% 0.14 264)"></i></div>
+    <p class="bet">Same seeds, accent at 44%. The retreat position if 52% still glares after six hours — priced now: the fill measures <b>2.21:1</b> on the panel, under the 3:1 floor, which is switched off in this file so the bracket exists.</p>
+  </a>
+
+  <a class="card" href="5d-canvas-lift.html">
+    <div class="hd"><span class="n">5D</span><h2>Beam 264 · canvas 17.5</h2><span class="tag">BRACKET: ABOVE</span></div>
+    <div class="sw"><i style="background:oklch(17.5% 0 0)"></i><i style="background:oklch(21.5% 0 0)"></i><i style="background:oklch(19% 0 0)"></i><i style="background:oklch(52% 0.21 264)"></i></div>
+    <p class="bet">Same seeds, canvas one notch lighter — T3's actual depth. One number moves and twelve tokens follow; every ratio compresses toward its floor and nothing fails, which is the derivation doing its job in public.</p>
+  </a>
+
+  <a class="card" href="5e-violet-light.html">
+    <div class="hd"><span class="n">5E</span><h2>Beam 264 · light</h2><span class="tag">SAME SEEDS, LIGHT</span></div>
+    <div class="sw"><i style="background:oklch(96.5% 0 0)"></i><i style="background:oklch(100% 0 0)"></i><i style="background:oklch(94% 0 0)"></i><i style="background:oklch(48% 0.19 264)"></i><i style="background:oklch(48% 0.08 210)"></i><i style="background:oklch(52% 0.19 25)"></i></div>
+    <p class="bet">The same two seeds through the light pass: paper anchors at 100% and surfaces are computed drops. The 264 fill doubles as its own text here — the deep-fill argument collecting its win, where the teal ink needed lightness surgery to survive light at all.</p>
+  </a>
+
+  <a class="card" href="5f-violet-split.html">
+    <div class="hd"><span class="n">5F</span><h2>Beam 264 · split</h2><span class="tag">DARK RAIL, LIGHT CONTENT</span></div>
+    <div class="sw"><i style="background:oklch(19.5% 0 0)"></i><i style="background:oklch(33.5% 0 0)"></i><i style="background:oklch(100% 0 0)"></i><i style="background:oklch(96.5% 0 0)"></i><i style="background:oklch(52% 0.21 264)"></i></div>
+    <p class="bet">The ChatGPT desktop pattern, rendered for judging rather than argued about: header and sidebar take the dark pass verbatim, the panes and dock take the light pass, one CSS block scopes the seam. The rail keeps the identity; the transcript gets paper.</p>
+  </a>
 
   <div class="meta">ROUND THREE · FOUR LANGUAGES, ONE LAYOUT</div>
 
