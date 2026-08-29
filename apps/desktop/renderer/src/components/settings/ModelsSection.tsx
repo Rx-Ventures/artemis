@@ -57,7 +57,7 @@ import type { PlanUsage, ProviderModelOption } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ToneBadge } from '../primitives';
-import { CostPips, PressureDot } from '../RunNavigator';
+import { PressureDot } from '../RunNavigator';
 import { toneFor } from '../PlanUsageMeter';
 import { SettingsGroup, SettingsPane } from './pane';
 import {
@@ -71,7 +71,7 @@ import {
   toggleQuickModel,
   useApp,
 } from '../../state/store';
-import { costPosture, modelExhaustion, modelPressure } from '../../state/modelFacts';
+import { modelExhaustion, modelPressure } from '../../state/modelFacts';
 import { usePane } from '../../state/paneContext';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
@@ -414,7 +414,6 @@ function ModelRow({
       <ItemContent>
         <ItemTitle className="flex-wrap text-xs text-ink">
           <span className={cn(exhausted !== null && 'text-ink-faint line-through')}>{name}</span>
-          <CostPips posture={costPosture(model)} />
           {selected ? <ToneBadge tone="beam">in use</ToneBadge> : null}
           {model.supportsFastMode ? <ToneBadge tone="mint">fast mode</ToneBadge> : null}
           {model.supportsUltracode ? <ToneBadge tone="cyan">ultracode</ToneBadge> : null}

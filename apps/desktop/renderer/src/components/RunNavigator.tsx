@@ -35,7 +35,7 @@
  *
  * ## Row vocabulary is deliberately reusable
  *
- * `ModelFactRow`, `CostPips` and `PressureDot` are exported: the §5 hand-off
+ * `ModelFactRow` and `PressureDot` are exported: the §5 hand-off
  * picker presents the same decision — candidates with live meters and
  * disabled-with-reason exhaustion — and must speak the same language rather
  * than a dialect of it.
@@ -79,11 +79,9 @@ import {
   useApp,
 } from '../state/store';
 import {
-  costPosture,
   modelExhaustion,
   modelPressure,
   recommendModel,
-  type CostPosture,
   type ModelPressure,
 } from '../state/modelFacts';
 import { hiddenModelCount, navigatorColumns, navigatorFooter, navigatorModelRows } from '../state/runNavigator';
@@ -554,7 +552,6 @@ function ModelColumn(): ReactElement {
             title={`${String(Math.round(recommendation.headroom))}% of its ${recommendation.binding.label} window is unused, against ${String(Math.round(recommendation.selectedHeadroom))}% for ${selected?.label ?? 'the selected model'} — ranked across ${String(recommendation.candidates)} pinned models.`}
           >
             <span className="min-w-0 flex-1 truncate text-ink">{recommendation.model.label}</span>
-            <CostPips posture={costPosture(recommendation.model)} />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
         </>
@@ -648,7 +645,6 @@ export function ModelFactRow({
 }): ReactElement {
   const exhausted = modelExhaustion(model, usage, now);
   const pressure = modelPressure(model, usage);
-  const cost = costPosture(model);
 
   return (
     /*
@@ -674,7 +670,6 @@ export function ModelFactRow({
           >
             {model.label}
           </span>
-          <CostPips posture={cost} />
           {pressure !== null ? (
             <span className="ml-auto flex shrink-0 items-center gap-1">
               <PressureDot pressure={pressure} />
@@ -698,28 +693,15 @@ export function ModelFactRow({
   );
 }
 
-/**
- * Cost posture as `$` pips with the exact multiplier beside them.
- *
- * The settled decision, verbatim: the multipliers are `MODEL_LOAD`'s own —
- * haiku 0.25× · sonnet 1× · opus 4× · fable 8× — printed in the row detail so
- * the burn rate is visible at selection time. Absent for a family the table
- * has never heard of: no pips is honest, a confident `1×` is a guess.
+/*
+ * REMOVED: `CostPips` — the `$` pips and multiplier that sat beside every
+ * model name here, in the palette and in settings. Editorial where the rows
+ * needed facts: the pressure dot and the plan meters already say what is
+ * left, and pricing a model in dollar glyphs at selection time second-guessed
+ * a choice the user is equipped to make (removed 2026-08-30, by request).
+ * `costPosture` and `MODEL_LOAD` stay in `state/modelFacts.ts` — the data
+ * outlived its costume; nothing renders it today.
  */
-export function CostPips({ posture }: { readonly posture: CostPosture | null }): ReactElement | null {
-  if (posture === null) return null;
-  const multiplier =
-    posture.multiplier >= 1 ? String(posture.multiplier) : posture.multiplier.toFixed(2);
-  return (
-    <span
-      className="flex shrink-0 items-baseline gap-0.5 font-mono text-2xs text-ink-faint"
-      title={`Relative burn against your plan: ${multiplier}× a Sonnet run.`}
-    >
-      <span aria-hidden="true">{'$'.repeat(posture.pips)}</span>
-      <span>{multiplier}×</span>
-    </span>
-  );
-}
 
 /**
  * The row's meter dot: pressure at a glance, matching `PlanUsageMeter`

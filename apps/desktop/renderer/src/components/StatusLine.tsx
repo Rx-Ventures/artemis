@@ -66,9 +66,13 @@
  * ## It sits under the composer, not across the window
  *
  * These controls describe what the *prompt you are typing* will do, so they
- * line up with the input's edges (`max-w-4xl`) rather than running the full
- * width of a pane the input does not fill. The composer draws the border above
- * them; a second one here would box the input in.
+ * line up with the input's edges rather than running the full width of a pane
+ * the input does not fill. The measure is the transcript's own `COLUMN_MAX` —
+ * messages, input and these chips share one column, so the three edges cannot
+ * drift apart (they used to: this bar pinned itself to `max-w-4xl` while the
+ * transcript read `max-w-5xl`, and the chips sat visibly inside the
+ * conversation's margin). The composer draws the border above them; a second
+ * one here would box the input in.
  *
  * The sidebar toggle used to ride along at the far left. The header carries it
  * now — it is always present, so this bar no longer needs a second copy.
@@ -101,6 +105,7 @@ import {
 } from '../state/store';
 import { usePermissionModes } from '../hooks/useCapability';
 import { usePane, usePaneRef } from '../state/paneContext';
+import { COLUMN_MAX } from './Transcript';
 import { WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
 import { MODE_LABELS, MODE_NOTES, RunNavigatorContent } from './RunNavigator';
@@ -124,9 +129,9 @@ import { cn } from '@/lib/utils';
  *
  *  - **No top border.** The composer already draws one above itself; a second
  *    one here would box the input in a way nothing else in the app is.
- *  - **Same `max-w-4xl` as the composer.** These controls belong to the input,
- *    so they line up with its edges instead of running the full width of a
- *    pane the input does not fill.
+ *  - **The transcript's own measure.** These controls belong to the column,
+ *    so they take `COLUMN_MAX` at the same setting the transcript reads,
+ *    instead of a private cap that only agreed with it at one width.
  *
  * There is no sidebar toggle here, and this header used to say there was. The
  * control moved to `AppHeader` — window chrome belongs on the window's bar —
@@ -135,12 +140,18 @@ import { cn } from '@/lib/utils';
  * needed at all.
  */
 export function StatusLine(): ReactElement {
+  const width = useApp((s) => s.conversationWidth);
   // No fill. These controls belong to the input directly above them, and the
   // composer no longer sits in a bar of its own — filling this strip would
   // re-draw the same bottom panel one row lower.
   return (
     <footer className="shrink-0 pb-1">
-      <div className="mx-auto flex h-7 w-full max-w-4xl items-center gap-0.5 px-3 text-2xs">
+      <div
+        className={cn(
+          'mx-auto flex h-7 w-full items-center gap-0.5 px-3 text-2xs',
+          COLUMN_MAX[width],
+        )}
+      >
         <ProfileSegment />
         <Divider />
         {/*

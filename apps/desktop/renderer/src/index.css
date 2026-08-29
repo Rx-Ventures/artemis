@@ -304,20 +304,25 @@
   --signal-ink: oklch(16% 0.03 25); /* text on a signal fill         */
 
   /* ---- Shape ----------------------------------------------------------
-     Radius carries meaning now instead of being a global constant nobody
-     chose. 3px is the base — the milled edge of a made thing rather than a
-     card — and shadcn derives sm/md/lg/xl from it in `@theme inline` below.
+     Radius carries meaning instead of being a global constant nobody chose.
+     8px is the base — round seven's verdict (7D "Console",
+     docs/design/7d-full.html): the milled 3px edge read as the
+     terminal-emulator idiom, and the treatment that replaced it keeps the
+     app's density while letting surfaces read as made this decade. shadcn
+     derives sm/md/lg/xl from it in `@theme inline` below, so controls land
+     around 5–6px and cards at 8 from this one number.
 
-     Square is the tell that you are looking at something the app did not
-     write, and it is applied at the call site rather than through a token,
-     because no token can know which is which. `rounded-none` is what says it:
-     `DiffView`, the raw-output well in `primitives`, the quoted command in
-     `InlinePermission`, and the redacted-thinking block in `Transcript`.
+     Square is still the tell that you are looking at something the app did
+     not write, and it is applied at the call site rather than through a
+     token, because no token can know which is which. `rounded-none` is what
+     says it: `DiffView`, the raw-output well in `primitives`, the quoted
+     command in `InlinePermission`, and the redacted-thinking block in
+     `Transcript`.
 
      `--radius-machine` exists as the name for that decision so the reason is
      findable from the stylesheet, not because a class reads it. Anything a
-     person operates — buttons, inputs, the composer, cards — keeps the 3px. */
-  --radius: 0.1875rem; /* 3px — things a person operates             */
+     person operates — buttons, inputs, the composer, cards — takes the 8. */
+  --radius: 0.5rem; /* 8px — things a person operates               */
   --radius-machine: 0; /* things the machine produced                */
 
   /* ======================================================================
@@ -1089,19 +1094,23 @@
  * The chrome label.
  * ============================================================================
  *
- * Uppercase monospace at 11px with wide tracking: the app's own voice, used for
- * section headings, field labels and the small caps that name a region. It is
- * what separates what *Artemis* is saying from what the conversation is saying,
- * and mono is doing that as a texture rather than because the text is machine
- * output.
+ * The app's own voice, used for section headings, field labels and the small
+ * runs of text that name a region — what separates what *Artemis* is saying
+ * from what the conversation is saying.
+ *
+ * Round seven retired the voice's old costume. It was uppercase monospace at
+ * 11px with 0.14em tracking, and that combination is most of what made the
+ * app read as a terminal emulator: a strong voice spent on words nobody reads
+ * twice (7D "Console", docs/design/7d-full.html). The voice is now the sans
+ * at the same size, medium weight, sentence case — quiet chrome over loud
+ * chrome — and mono goes back to meaning "the machine produced this".
  *
  * It exists as one class because it was previously twelve. The same label was
  * spelled `tracking-wider`, `tracking-[0.14em]`, `tracking-[0.16em]`,
  * `tracking-wide` and nothing at all, sometimes with `font-mono` and sometimes
  * without, sometimes at `font-semibold` — every one of them a reasonable local
- * choice, and together an inconsistency you could see. Small caps need tracking
- * or the letterforms crowd; leaving that to each call site guarantees the next
- * one forgets.
+ * choice, and together an inconsistency you could see. One class is what keeps
+ * the next call site from reinventing it.
  *
  * 0.14em is the value. Uppercase Archivo at 11px needs more than `tracking-wide`
  * (0.025em) and less than `tracking-widest` (0.1em) — those are scaled for body
@@ -1114,11 +1123,11 @@
  */
 @layer components {
   .chrome-label {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: var(--text-2xs);
     line-height: var(--text-2xs--line-height);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    font-weight: 500;
+    letter-spacing: 0.01em;
   }
 }
 

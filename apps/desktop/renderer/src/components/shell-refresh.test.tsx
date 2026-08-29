@@ -98,41 +98,63 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-describe('the navigator rail', () => {
-  it('is mounted whether the list is open or shut', () => {
-    // By role, not by label: the rail carries a *button* called "Sessions" as
-    // well, and `getByLabelText` cannot tell the column from the control that
-    // selects it.
+describe('the sidebar toggle has one home at a time', () => {
+  // The navigator rail is gone (2026-08-30, the 7D pass): its icons were
+  // doubles of controls the header and the opener menu already carry. What
+  // replaced it is a stricter contract than "the rail never disappears" —
+  // the way back exists exactly when it is needed, and never twice.
+  it('collapsed renders no sidebar at all, and the header grows the way back', () => {
     const column = () => screen.queryByRole('complementary', { name: 'Sessions' });
     const rail = () => screen.queryByRole('complementary', { name: 'Navigator' });
+    const headerToggle = () => screen.queryByRole('button', { name: /Show the sidebar/ });
 
-    mount(<Sidebar />);
-    expect(rail()).toBeTruthy();
+    mount(
+      <>
+        <AppHeader />
+        <Sidebar />
+      </>,
+    );
     expect(column()).toBeTruthy();
+    expect(rail()).toBeNull();
+    // While the list is open, the header carries no toggle — the list's own
+    // caption does. One control, one home.
+    expect(headerToggle()).toBeNull();
 
     cleanup();
     useApp.setState({ sidebarCollapsed: true });
-    mount(<Sidebar />);
+    mount(
+      <>
+        <AppHeader />
+        <Sidebar />
+      </>,
+    );
 
-    // The rail survives; only the list goes.
-    expect(rail()).toBeTruthy();
+    // Collapsed is null — not a rail, not a sliver — and the way back is in
+    // the one strip that never disappears.
     expect(column()).toBeNull();
+    expect(rail()).toBeNull();
+    expect(headerToggle()).toBeTruthy();
   });
 
-  it('toggles the list in both directions from the same place', () => {
-    // The whole reason it is permanent. Collapse used to be reversible only
-    // from a control in the header, because the button that collapsed the
-    // sidebar went with it.
-    mount(<Sidebar />);
+  it('toggles the list shut from its caption and open from the header', () => {
+    mount(
+      <>
+        <AppHeader />
+        <Sidebar />
+      </>,
+    );
 
-    // The caption's chevron shuts it; the rail's view button brings it back.
-    // Two controls, two jobs — not one job twice.
     fireEvent.click(screen.getByRole('button', { name: /Hide the sidebar/ }));
     expect(useApp.getState().sidebarCollapsed).toBe(true);
 
     cleanup();
-    mount(<Sidebar />);
-    fireEvent.click(screen.getByRole('button', { name: /Show sessions/ }));
+    mount(
+      <>
+        <AppHeader />
+        <Sidebar />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Show the sidebar/ }));
     expect(useApp.getState().sidebarCollapsed).toBe(false);
   });
 });

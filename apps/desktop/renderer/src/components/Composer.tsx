@@ -76,6 +76,20 @@ import {
   type AttachmentRejection,
 } from '../lib/attachments';
 import { registerComposer } from '../lib/composerFocus';
+import { COLUMN_MAX } from './Transcript';
+
+/**
+ * The column the composer sits on — the transcript's, exactly.
+ *
+ * Every row this file lays out (the directory chip, the queued-steer strip,
+ * the field itself, the hand-off strip) takes this class instead of a private
+ * `max-w-4xl`. The private cap is how the input ended up narrower than the
+ * messages above it: three surfaces, three opinions about one column. Now the
+ * transcript's `COLUMN_MAX` is the only opinion (2026-08-30, the 7D pass).
+ */
+function useColumnMax(): string {
+  return COLUMN_MAX[useApp((s) => s.conversationWidth)];
+}
 import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
 import { ActivityRule } from './Activity';
 import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
@@ -117,6 +131,7 @@ function reportRejections(rejected: readonly AttachmentRejection[]): void {
 }
 
 export function Composer(): ReactElement {
+  const columnMax = useColumnMax();
   /**
    * How far back through `promptHistory` recall has walked. `null` is "not
    * recalling" — the distinction matters, because index 0 is a real entry.
@@ -496,7 +511,7 @@ export function Composer(): ReactElement {
         prompt do"; this answers "where am I", which is the frame the rest sits
         inside. Reading order matches: place, then prompt, then settings.
       */}
-      <div className="mx-auto flex w-full max-w-4xl items-center px-3 pt-1.5">
+      <div className={cn('mx-auto flex w-full items-center px-3 pt-1.5', columnMax)}>
         <WorkingDirectoryChip />
       </div>
 
@@ -512,7 +527,7 @@ export function Composer(): ReactElement {
         it by design.
       */}
       {queuedSteers > 0 && (
-        <div className="mx-auto flex w-full max-w-4xl items-center gap-1.5 px-3 pt-1">
+        <div className={cn('mx-auto flex w-full items-center gap-1.5 px-3 pt-1', columnMax)}>
           <span className="min-w-0 truncate text-2xs text-ink-faint">
             {queuedSteers === 1
               ? '1 message queued — read at the next pause, or after this turn'
@@ -533,7 +548,7 @@ export function Composer(): ReactElement {
 
       {/* One child now that Stop has moved inside the field; the row is what
           centres the composer and gives it its margins. */}
-      <div className="mx-auto flex w-full max-w-4xl items-end px-3 pt-1 pb-1">
+      <div className={cn('mx-auto flex w-full items-end px-3 pt-1 pb-1', columnMax)}>
         {/*
           The positioning context for Send is this element, not `WithReason`.
           `WithReason` renders its children bare — no wrapper, no `className` —
@@ -1076,10 +1091,11 @@ function AttachmentStrip({
 function HandoffStrip(): ReactElement | null {
   const pane = usePaneRef();
   const state = usePane((s) => s.handoff);
+  const columnMax = useColumnMax();
   if (state !== 'done') return null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-3 pt-1.5">
+    <div className={cn('mx-auto w-full px-3 pt-1.5', columnMax)}>
       <div className="flex items-start gap-3 border border-amber/40 bg-panel px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-2xs font-medium text-amber">This conversation has been handed over</p>

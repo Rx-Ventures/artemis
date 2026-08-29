@@ -88,11 +88,15 @@
  * See `SessionList`. Streaming text never reaches this subtree, so a persistent
  * pane costs nothing per token.
  *
- * ## Collapsed still renders nothing
+ * ## Collapsed renders nothing — again, and this time it is true
  *
- * Not a rail, not a sliver — `null`. The control that brings it back lives in
- * `AppHeader`, which is always mounted; that is the whole reason the app grew a
- * header.
+ * Not a rail, not a sliver — `null`. The navigator rail that stood here for a
+ * while is gone (2026-08-30, with the 7D pass): its icons were doubles of
+ * controls the header and the kebab menu already carry, and 46px of chrome
+ * whose best argument was "the way back" is a lot to pay for one button. The
+ * way back is the panel toggle in `AppHeader`, which renders exactly when the
+ * list is closed — one control, two homes, never both at once. The caption's
+ * chevron below is the same control's other home, on the thing it closes.
  */
 
 import {
@@ -102,15 +106,7 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react';
-import {
-  FolderIcon,
-  ListTreeIcon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  PlusIcon,
-  SearchIcon,
-  SettingsIcon,
-} from 'lucide-react';
+import { PanelLeftCloseIcon, PlusIcon } from 'lucide-react';
 
 import { keyLabel } from '../hooks/useHotkeys';
 import {
@@ -118,25 +114,18 @@ import {
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   newSession,
-  openSettings,
-  togglePalette,
-  toggleFiles,
-  toggleTasks,
   setSidebarCollapsed,
   setSidebarWidth,
   useApp,
 } from '../state/store';
-import type { Pane } from '../state/pane';
-import { usePane, usePaneRef } from '../state/paneContext';
+import { usePaneRef } from '../state/paneContext';
 import { SessionList } from './SessionList';
 import { ScheduledStrip } from './ScheduledStrip';
 import { BugReportCard } from './BugReportCard';
-import { UpdateCard } from './UpdateCard';
-import { useUpdateState } from '../hooks/useUpdateState';
 import { IconButton } from './disabled-reason';
 import { Button } from '@/components/ui/button';
 
-export function Sidebar(): ReactElement {
+export function Sidebar(): ReactElement | null {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const width = useApp((s) => s.sidebarWidth);
   // The sidebar sits outside every column, so this is the focused one — which
@@ -144,25 +133,10 @@ export function Sidebar(): ReactElement {
   const pane = usePaneRef();
   const asideRef = useRef<HTMLElement>(null);
 
-  /*
-   * The rail is always mounted; the list opens *beside* it.
-   *
-   * It used to be one or the other — `collapsed` returned the rail instead of
-   * the sidebar — which is a narrower thing than it looks. A rail that only
-   * exists while the list is shut is not a navigator, it is an undo button for
-   * having shut it. `_layout.md` asks for the first: 46px of icons that never
-   * disappear, so the window always has one fixed place to steer from and
-   * collapse stops being a state the rest of the chrome has to work around.
-   *
-   * The fragment is deliberate. Two siblings in the same flex row, so the list
-   * can be absent without the rail moving a pixel — anything else animates the
-   * rail sideways every time the sidebar is toggled.
-   */
+  if (collapsed) return null;
+
   return (
-    <>
-      <Rail pane={pane} collapsed={collapsed} />
-      {collapsed ? null : (
-        <aside
+    <aside
           ref={asideRef}
           style={{ width }}
           aria-label="Sessions"
@@ -230,145 +204,21 @@ export function Sidebar(): ReactElement {
           <BugReportCard />
 
           <ResizeHandle target={asideRef} />
-        </aside>
-      )}
-    </>
-  );
-}
-
-/**
- * What is left when the sidebar is hidden.
- *
- * This used to be `null`, and that one decision cost the app two components and
- * a bar. `App.tsx` said it plainly: the header exists so that hiding the sidebar
- * stays reversible, because "`Sidebar` renders `null` when collapsed — not a
- * rail, not a sliver — so its own close button cannot bring it back". And
- * `UpdateBanner` existed because the update card went with it, and "an update
- * nobody can see is an update nobody installs".
- *
- * A rail fixes both at the source. Collapse is reversible by the thing that
- * collapsed, and the update has somewhere to live that never disappears — so
- * the second update component is gone and the header is free to carry what is
- * actually true of the window rather than a control it was holding for someone
- * else.
- *
- * It is 46px and it holds three things: the way back, the one action worth
- * having without opening anything, and news. Everything else — the session
- * list, the bug report, the project headings — is what expanding is *for*, and
- * putting a stunted version of it here would only make the rail a worse
- * sidebar rather than a good rail.
- */
-function Rail({
-  pane,
-  collapsed,
-}: {
-  readonly pane: Pane;
-  readonly collapsed: boolean;
-}): ReactElement {
-  return (
-    <aside
-      aria-label="Navigator"
-      className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-2"
-    >
-      {/*
-        The sessions *view*, not a second hide button.
-
-        The list has its own chevron in its caption; giving the rail one too
-        would be two controls with one job and one of them always redundant.
-        This is what the mockup's highlighted `▤` is: which view the column is
-        showing, lit while it is showing it. Pressing it when the column is shut
-        is how the column comes back, which is the property that lets collapse
-        be reversible without the header holding a control for it.
-      */}
-      <IconButton
-        label={collapsed ? `Show sessions (${keyLabel('mod+b')})` : 'Sessions'}
-        onClick={() => setSidebarCollapsed(!collapsed)}
-        size="icon-sm"
-        className={collapsed ? 'text-ink-faint' : 'bg-raised text-beam-text'}
-      >
-        <PanelLeftOpenIcon />
-      </IconButton>
-
-      {/*
-        The one action worth having without opening anything. It stays on the
-        rail even while the list is open, where the list has its own filled
-        button — the same action reachable from the fixed place and from the
-        place you are already looking, which is what a navigator is for.
-      */}
-      <IconButton
-        label={`New session (${keyLabel('mod+n')})`}
-        onClick={() => newSession(pane)}
-        size="icon-sm"
-        className="text-ink-faint"
-      >
-        <PlusIcon />
-      </IconButton>
-
-      <IconButton
-        label={`Search sessions and commands (${keyLabel('mod+k')})`}
-        onClick={togglePalette}
-        size="icon-sm"
-        className="text-ink-faint"
-      >
-        <SearchIcon />
-      </IconButton>
-
-      {/*
-        Delegated work, with the badge the mockup puts here. The count is the
-        window's, not the focused pane's: the rail is the one piece of chrome
-        that is about the whole window, and a rail reporting only what is in
-        front of you would be answering a question you can already see.
-      */}
-      {/*
-        The folder the focused column is working in. On the rail rather than in
-        the header because it is a view you switch *to*, like the sessions list
-        above it — the header's controls act on the conversation in front of you.
-      */}
-      <IconButton
-        label="The working folder"
-        onClick={() => toggleFiles(pane)}
-        size="icon-sm"
-        className="text-ink-faint"
-      >
-        <FolderIcon />
-      </IconButton>
-
-      <RailTasks pane={pane} />
-
-      <div className="flex-1" />
-
-      <IconButton
-        label="Settings"
-        onClick={() => openSettings()}
-        size="icon-sm"
-        className="text-ink-faint"
-      >
-        <SettingsIcon />
-      </IconButton>
     </aside>
   );
 }
 
-/** Delegated work on the rail, with a dot when any of it is still running. */
-function RailTasks({ pane }: { readonly pane: Pane }): ReactElement | null {
-  const count = usePane((s) => s.tasks.length);
-  if (count === 0) return null;
-
-  return (
-    <IconButton
-      label={`Delegated work — ${String(count)} task${count === 1 ? '' : 's'}`}
-      onClick={() => toggleTasks(pane)}
-      size="icon-sm"
-      className="relative text-ink-faint"
-    >
-      <ListTreeIcon />
-      <span
-        aria-hidden="true"
-        className="absolute top-1 right-1 block size-1.5 rounded-full bg-beam"
-      />
-    </IconButton>
-  );
-}
+/*
+ * REMOVED: `Rail`, the 46px navigator column, and `RailTasks` with it.
+ *
+ * It held five icons: the sessions view, New session, search, the working
+ * folder, delegated work, and settings at the foot. Every one of them was a
+ * double — the header carries search and settings, the kebab menu carries the
+ * folder and delegated work, `⌘N` and the list's own button carry New session
+ * — so the rail's one non-duplicate job was reopening the list it stood
+ * beside. That job moved to `AppHeader`, which shows the panel toggle exactly
+ * while the list is closed. See the file header (2026-08-30, the 7D pass).
+ */
 
 /*
  * REMOVED: `ProjectTitle`.

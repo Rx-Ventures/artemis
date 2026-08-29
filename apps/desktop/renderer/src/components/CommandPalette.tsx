@@ -123,8 +123,8 @@ import { usePane, usePaneRef } from '../state/paneContext';
 // Only the reason strings come from the bar, so the palette's disabled
 // explanations and the bar's cannot drift. The setters are the store's own —
 // the exclusion between the two flags lives in the actions, not in a wrapper.
-import { costPosture, modelExhaustion, modelPressure } from '../state/modelFacts';
-import { CostPips, PressureDot } from './RunNavigator';
+import { modelExhaustion, modelPressure } from '../state/modelFacts';
+import { PressureDot } from './RunNavigator';
 import { toneFor } from './PlanUsageMeter';
 import { ProfileSwatch } from './primitives';
 import { DirectoryChooser } from './WorkingDirectory';
@@ -900,7 +900,6 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
                 >
                   {model.displayName ?? model.label}
                 </span>
-                <CostPips posture={costPosture(model)} />
                 {model.supportsFastMode === true ? (
                   <ZapIcon className="size-3 shrink-0 text-cyan" aria-label="offers fast mode" />
                 ) : null}

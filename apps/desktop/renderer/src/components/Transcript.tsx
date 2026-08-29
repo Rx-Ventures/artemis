@@ -243,8 +243,16 @@ const STREAMING_TEXT = 'text-sm leading-relaxed break-words whitespace-pre-wrap 
  * are for people who want more. `full` is uncapped on purpose — at that point
  * the reader has explicitly said they want the whole window, and second-guessing
  * them with a hidden prose measure would make the setting a lie.
+ *
+ * Exported, because this is the measure of the *column*, not of the transcript:
+ * the composer and the status line sit on the same one. They used to pin
+ * themselves to `max-w-4xl` while this read `max-w-5xl`, so the input and the
+ * chips under it were narrower than the messages above them — the seams never
+ * lined up, and the drift got worse the wider the pane was. One lookup, three
+ * consumers, and the edges cannot disagree again (decided 2026-08-30, with the
+ * 7D pass).
  */
-const COLUMN_MAX: Record<ConversationWidth, string> = {
+export const COLUMN_MAX: Record<ConversationWidth, string> = {
   comfortable: 'max-w-5xl',
   wide: 'max-w-7xl',
   full: 'max-w-none',
