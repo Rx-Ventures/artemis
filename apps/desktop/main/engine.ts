@@ -72,6 +72,8 @@ import type {
 
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 
+import path from 'node:path';
+
 import {
   attributeSession,
   checkAuthStatus,
@@ -82,8 +84,11 @@ import {
   resolveEnv,
   resolveStoreEnv,
   RunRegistry,
+  SESSION_LIFECYCLE_LOG_FILE,
+  SessionLifecycleLog,
   SessionNamer,
   SessionOwners,
+  setClaudeConfigDirQueueReporter,
   signInCommand,
   signOut as cliSignOut,
   type EnvBundle,
@@ -514,6 +519,31 @@ function createEngine(options: EngineOptions): ArtemisEngine {
   const { userDataDir } = options;
 
   /**
+   * The session-lifecycle log — the observability half of OVERHAUL-PREP §9.
+   *
+   * One append-only JSONL file under `userData`, beside `sessionOwners.json`:
+   * run started/session/adopted/ended/released lines from the registry,
+   * engine started/stopped brackets from here, and the config-dir lock's
+   * queue-depth reports. Ids and event names only — the redaction rule lives
+   * in {@link SessionLifecycleLog.record} — and every line is flushed as it is
+   * written, because the lines that matter are the ones a crash would eat.
+   *
+   * Failures are logged and never thrown: the log observes runs, it must not
+   * participate in them.
+   */
+  const lifecycle = new SessionLifecycleLog({
+    file: path.join(userDataDir, SESSION_LIFECYCLE_LOG_FILE),
+    onError: (error) => log.warn('Could not append to the session-lifecycle log', error),
+  });
+  lifecycle.record({ kind: 'engine.started' });
+  // The lock is process-wide, so its reporter is too. Depth reports land in
+  // the same file as the run lifecycle: a stalled history read and a lost
+  // run.end are halves of the same incident more often than not.
+  setClaudeConfigDirQueueReporter((report) =>
+    lifecycle.record({ kind: 'history.lock.queued', ...report }),
+  );
+
+  /**
    * Whoever asked to hear predictions. Declared before the registry because
    * the adapter option below closes over it; the set is what makes wiring
    * order irrelevant — the adapter can speak before anyone subscribes and it
@@ -810,6 +840,7 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     onError: (error, context) => {
       log.error(`Run ${context.runId} reported a swallowed error during ${context.phase}`, error);
     },
+    onLifecycle: (event) => lifecycle.record(event),
   });
 
   /** Last plan-usage reading per profile. In-memory by design — see below. */
@@ -1619,6 +1650,10 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     // whichever session was started last, which is exactly the session the user
     // will look for first when they reopen.
     dispose: async () => {
+      // Written before the teardown is awaited, so the line exists even if the
+      // teardown hangs past Electron's patience. Its absence is the signal: a
+      // log that ends without `engine.stopped` ends in a crash.
+      lifecycle.record({ kind: 'engine.stopped' });
       await Promise.all([runs.disposeAll(), namer.dispose(), owners.flush()]);
     },
   };
