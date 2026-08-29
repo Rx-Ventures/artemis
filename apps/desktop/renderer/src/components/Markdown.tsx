@@ -203,7 +203,7 @@ function CodeSpan({
       type="button"
       onClick={() => links.open(reference)}
       title={reference.line === undefined ? reference.path : `${reference.path}, line ${String(reference.line)}`}
-      className="cursor-pointer rounded-sm text-beam underline decoration-beam/40 underline-offset-2 outline-none hover:decoration-beam focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="cursor-pointer rounded-sm text-beam-text underline decoration-beam-text/40 underline-offset-2 outline-none hover:decoration-beam-text focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       <code {...rest}>{children}</code>
     </button>

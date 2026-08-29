@@ -2,18 +2,22 @@
  * What the pane is doing, at the foot of the transcript.
  * ============================================================================
  *
- * A run is in exactly one of five conditions, and before this they were not all
+ * A run is in exactly one of six conditions, and before this they were not all
  * distinguishable. `Working` covered one of them — a non-streaming provider
  * mid-turn — and everything else was inferred from whether text happened to be
  * arriving. A run that had failed looked like a run that had finished; a run
  * waiting on a permission looked like a run still thinking; a run that had not
  * started yet looked like nothing at all.
  *
- * So the five are named, and each says what it is *and why*:
+ * So the six are named, and each says what it is *and why*:
  *
  *   starting   the provider is being spawned. Nothing has arrived because
  *              nothing has been asked yet, which is different from silence.
  *   running    a turn is in flight. The shuttle, plus elapsed time.
+ *   stopping   the user asked it to stop and the provider has not let go yet.
+ *              The shuttle keeps moving — winding down is still work — but
+ *              the words answer the click. Without this, the seconds between
+ *              Stop and `run.end` read as the button having done nothing.
  *   waiting    it wants something from you, and says what.
  *   failed     it stopped because of an error, and says which.
  *   settled    it finished. Renders nothing — the transcript is the record,
@@ -43,7 +47,7 @@ import { usePane } from '../state/paneContext';
 import { useApp } from '../state/store';
 
 /**
- * The five conditions, resolved from run status and the permission queue.
+ * The six conditions, resolved from run status and the permission queue.
  *
  * Ordered by urgency rather than by lifecycle: a queued permission outranks a
  * `running` status, because a provider that has asked for something and is
@@ -51,8 +55,13 @@ import { useApp } from '../state/store';
  * waiting. `awaiting_permission` and a non-empty queue are two spellings of the
  * same condition — the first is what the provider reports, the second is what
  * the renderer holds — and either one is enough.
+ *
+ * A requested stop outranks even that. The interrupt withdraws whatever was
+ * asked — the adapter denies pending prompts on the way down — so "needs your
+ * answer" over a question that is being taken back would send the user to
+ * answer nothing, when what they want to know is that the stop was heard.
  */
-export type Activity = 'starting' | 'running' | 'waiting' | 'failed' | 'settled';
+export type Activity = 'starting' | 'running' | 'stopping' | 'waiting' | 'failed' | 'settled';
 
 export interface ActivityState {
   readonly kind: Activity;
@@ -76,11 +85,16 @@ export function formatElapsed(ms: number): string {
  * a pure function of two values rather than a hook.
  */
 export function activityOf(
-  run: { readonly status: string; readonly startedAt: number; readonly endReason?: string; readonly error?: { readonly message?: string } } | null,
+  run: { readonly status: string; readonly startedAt: number; readonly endReason?: string; readonly error?: { readonly message?: string }; readonly interruptRequested?: boolean } | null,
   queued: number,
 ): ActivityState {
   if (run === null) return { kind: 'settled', because: '', since: null };
 
+  // The clock keeps `since`: a counter that stalls while the provider winds
+  // down is indistinguishable from the hang the user is afraid of.
+  if (run.status !== 'ended' && run.interruptRequested === true) {
+    return { kind: 'stopping', because: 'winding down', since: run.startedAt };
+  }
   if (queued > 0 || run.status === 'awaiting_permission') {
     return {
       kind: 'waiting',
@@ -145,7 +159,7 @@ export function ActivityIndicator(): ReactElement | null {
   if (state.kind === 'settled') return null;
 
   const tone =
-    state.kind === 'waiting' ? 'text-amber' : state.kind === 'failed' ? 'text-signal' : 'text-beam';
+    state.kind === 'waiting' ? 'text-amber' : state.kind === 'failed' ? 'text-signal' : 'text-beam-text';
 
   return (
     <div
@@ -198,7 +212,10 @@ export function ActivityRule(): ReactElement {
   const queued = usePane((s) => s.permissionQueue.length);
   const state = activityOf(run, queued);
 
-  const moving = state.kind === 'running' || state.kind === 'starting';
+  // `stopping` still moves: the provider is winding down, which is work, and a
+  // bar that froze on the click would say "hung" where the words say "heard".
+  const moving =
+    state.kind === 'running' || state.kind === 'starting' || state.kind === 'stopping';
 
   return (
     <div

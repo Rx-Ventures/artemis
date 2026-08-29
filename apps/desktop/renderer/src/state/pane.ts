@@ -115,6 +115,24 @@ export interface RunState {
    * (the queue was consumed into it) and absent on runs nothing has steered.
    */
   readonly steersQueued?: number;
+  /**
+   * The user has asked this run to stop and the provider has not let go yet.
+   *
+   * Written by `interruptRun` *before* its IPC call, and that ordering is the
+   * whole point: the wait between the click and `run.end` is however long the
+   * provider takes to wind a turn down — seconds, on a busy one — and for all
+   * of it the pane used to claim the run was still happily working. This flag
+   * is what lets the stop button and the activity line answer the click in the
+   * same frame it lands.
+   *
+   * A fact about the *request*, not the outcome. Cleared when main refuses the
+   * interrupt — the flag disables the button, and a dead button on a run that
+   * was not stopped is a run nobody can end — and made irrelevant by the
+   * `run.end` that settles the pane. Never persisted, never adopted: a
+   * reloaded window that lost it merely shows "running" until the end arrives,
+   * which is where every window was before this field existed.
+   */
+  readonly interruptRequested?: boolean;
 }
 
 /**

@@ -89,15 +89,18 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
    * this file, which is exactly what reading the stylesheet was meant to
    * prevent.
    */
-  const ink = token('--ink', '#f4f5f6');
-  const abyss = token('--abyss', '#020203');
+  const ink = token('--ink', '#f2f2f2');
+  const abyss = token('--abyss', '#0c0c0c');
   const mint = token('--mint', '#6ce98d');
   const amber = token('--amber', '#fcc53f');
-  const cyan = token('--cyan', '#8cc3fc');
-  const beam = token('--beam', '#31eee8');
+  const cyan = token('--cyan', '#66cfe1');
+  const beam = token('--beam', '#265adf');
+  // The accent's text companion — see index.css: `--beam` is a deep fill and
+  // is not readable at text sizes, which an ANSI colour slot has to be.
+  const beamText = token('--beam-text', '#5981d8');
   const sage = token('--sage', '#93879c');
   const signal = token('--signal', '#fa6863');
-  const faint = token('--ink-faint', '#7e8083');
+  const faint = token('--ink-faint', '#868686');
 
   /*
    * ANSI 0 and 7 are the ends of the greyscale, and they do not follow the
@@ -123,8 +126,10 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     // sits on the app's surface rather than punching a black rectangle in it.
     background: 'rgba(0,0,0,0)',
     foreground: ink,
+    // The block cursor is a fill — the one accent duty in here that stays on
+    // `--beam` rather than moving to `--beam-text` with the magenta slots.
     cursor: beam,
-    cursorAccent: token('--panel', '#070708'),
+    cursorAccent: token('--panel', '#151515'),
     // Mixed from the accent rather than the literal `rgba(185,169,240,0.28)`
     // this was, which is the *dark* beam frozen into a number — under the
     // light palette it stayed a pale lavender while every other selection in
@@ -135,7 +140,10 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     green: mint,
     yellow: amber,
     blue: cyan,
-    magenta: beam,
+    // A program prints in ANSI magenta to be *read*, so the slot takes the
+    // accent's text companion — the deep `--beam` fill measures 3.2:1 on a
+    // dark pane, which is a fill's floor and not a glyph's.
+    magenta: beamText,
     cyan: cyan,
     white: ansiWhite,
     brightBlack: faint,
@@ -143,7 +151,7 @@ function artemisTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>[
     brightGreen: sage,
     brightYellow: amber,
     brightBlue: cyan,
-    brightMagenta: beam,
+    brightMagenta: beamText,
     brightCyan: cyan,
     brightWhite: ansiWhite,
   };

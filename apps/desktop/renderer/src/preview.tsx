@@ -102,6 +102,7 @@ const SWATCHES: readonly (readonly [string, string])[] = [
   ['inset', 'bg-inset'],
   ['line', 'bg-line'],
   ['beam', 'bg-beam'],
+  ['beam-text', 'bg-beam-text'],
   ['cyan', 'bg-cyan'],
   ['sage', 'bg-sage'],
   ['mint', 'bg-mint'],

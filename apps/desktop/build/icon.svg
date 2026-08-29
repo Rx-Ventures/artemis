@@ -4,10 +4,11 @@
   drawings of one idea drift the first time either is touched.
 
   Colours are literal because an .icns has no cascade to inherit from. They are
-  the design tokens resolved to sRGB, not chosen here. #31eee8 is the accent
-  token at oklch(86% 0.14 192); #0c0d0f is the window ground lifted a step,
-  because the ground itself resolves to #020203 and reads as a void rather than
-  a tile.
+  the design tokens resolved to sRGB (via lib/oklch.ts), not chosen here.
+  #265adf is the accent token at oklch(52% 0.21 264); #0c0c0c is the window
+  ground itself, oklch(15.5% 0 0). The old 9% ground resolved to a near-void
+  and had to be lifted a step to read as a tile; the seed canvas does not, so
+  the tile and the ground are now the same value.
 
   Note for editors: XML forbids a double hyphen inside a comment, so token names
   are written without their leading dashes above. A version of this file that
@@ -63,13 +64,13 @@
   renders every iconset size at its true size rather than upscaling one.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0c0d0f"/>
+<rect x="100" y="100" width="824" height="824" rx="185.4" fill="#0c0c0c"/>
 <g transform="translate(512 512) scale(1.652) translate(-252.5 -259.5)">
-  <g transform="translate(36 -36) rotate(-45 256 256)" stroke="#31eee8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(36 -36) rotate(-45 256 256)" stroke="#265adf" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M176 96C220 104 272 176 272 256C272 336 220 408 176 416" stroke-width="38"/>
     <path d="M176 96L72 256L176 416" stroke-width="15"/>
     <path d="M72 256H326" stroke-width="30"/>
-    <path d="M412 256L318 210L318 302Z" fill="#31eee8" stroke="none"/>
+    <path d="M412 256L318 210L318 302Z" fill="#265adf" stroke="none"/>
   </g>
 </g>
 </svg>

@@ -111,7 +111,7 @@ export function ThemeToggle(): ReactElement {
                   'flex size-6 cursor-pointer items-center justify-center rounded-[min(var(--radius-sm),9px)] border outline-none transition-colors',
                   'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
                   active
-                    ? 'border-beam/30 bg-beam/10 text-beam'
+                    ? 'border-beam/30 bg-beam/10 text-beam-text'
                     : 'border-transparent text-ink-faint hover:bg-raised hover:text-ink-muted',
                 )}
               >

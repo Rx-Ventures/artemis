@@ -22,73 +22,105 @@
  * friends, so a component copied from the registry works unmodified.
  *
  * ---------------------------------------------------------------------------
- * THE PALETTE — "one plane and a hairline"
+ * THE PALETTE — grown from a seed pair
  * ---------------------------------------------------------------------------
  *
- * A near-neutral substrate (hue 250 at chroma at or under 0.005 — cool enough
- * to belong with the accent, far too low to read as a colour) lit by one teal
- * accent: `--beam`, the only colour that means "act". Five semantic hues carry
- * meaning and nothing else: `--cyan` for machine work, `--sage` for the model's
- * private thinking, `--mint`/`--amber`/`--signal` for the three outcomes.
+ * Every colour below is computed from two numbers rather than picked: a canvas
+ * seed — the ground's lightness, 15.5%, at chroma zero — and an accent seed,
+ * `oklch(52% 0.21 264)`. The derivation rules (surface lifts, ink floors,
+ * contrast walks) live in `docs/design/_seeds.md` alongside the measured table
+ * this file transcribes; round five rendered the result as variant 5b, judged
+ * it against the shipped teal and two brackets, and 5b won. The palette this
+ * replaces was nineteen hand-picked values, each well argued — and that was
+ * the problem: every change was a full re-argument. Now the argument is the
+ * rules, made once.
  *
- * There is no gradient and no glow anywhere in this file, and that is
- * deliberate. The substrate recedes and the hairlines do the work.
+ * The greys are bare neutral — no accent tint. The old palette pulled every
+ * grey toward the accent's hue; the decision record rejects that, because it
+ * quietly lets the accent choice determine the entire substrate.
+ *
+ * There is still no gradient and no glow anywhere in this file. The substrate
+ * recedes and the hairlines do the work.
+ *
+ * ### The accent is a place, not a light source
+ *
+ * `--beam` is a deep blue-violet *fill* that light text sits on, not a bright
+ * ink. Its predecessor — teal at L86 — was judged hard on the eyes: an accent
+ * at near-white lightness is a glare on every surface it touches, and this is
+ * an app someone sits in for eight hours. A fill at L52 is a place things
+ * happen instead: buttons, rings, selections, the shuttle.
+ *
+ * What a deep fill cannot do is be read. At 13px on the panel it measures
+ * 3.16:1 where AA text wants 4.5, so the seed derives a companion,
+ * `--beam-text` — the accent's hue at C 0.14, walked down to the last
+ * half-step that holds 4.75:1 on the panel. The rule of use: **`--beam` for
+ * anything filled, ringed or bordered; `--beam-text` for anything read** —
+ * links, accent-coloured labels, syntax keywords, the caret.
+ * `palette.test.ts` holds `--beam-text` to 4.5:1 as text and `--beam` to 3:1
+ * as a component, which is what each is owed and no more.
+ *
+ * Five semantic hues carry meaning and nothing else: `--cyan` for machine
+ * work at 210 — moved from 250, because any blue accent forces it out from
+ * under the 40° separation rule — `--sage` for the model's private thinking
+ * at 310, `--mint`/`--amber`/`--signal` for the three outcomes at 150/85/25.
+ * Hues are decided; each colour's lightness walks in 0.5 steps until it
+ * clears 4.5:1 on both grounds.
  *
  * ### Depth was deleted, not reduced
  *
- * This replaces a charcoal-and-moonlight palette that had six steps of
- * elevation expressed as six fills. The problem was not the values, which were
- * carefully chosen. It was that stacked greys are *the* shadcn-era idiom, so
- * an app built on them looks like every other app built on them — and at six
- * steps two adjacent surfaces sat within 3% of each other and told the eye
- * nothing at 13px anyway.
+ * Stacked greys are *the* shadcn-era idiom, so an app built on six fills of
+ * elevation looks like every other app built on them — and at six steps two
+ * adjacent surfaces sat within 3% of each other and told the eye nothing at
+ * 13px anyway.
  *
  * So nothing here is lighter because it is *nearer*. There are four surfaces
- * and only one of them is a tier:
+ * and only one of them is a tier, each a fixed lift off the canvas seed:
  *
- *   `--abyss`    the ground, and the trough between panes
- *   `--panel`    ALL chrome — bars, rails, panes, cards, sidebars. One value.
- *   `--raised`   hover and pressed states. Not a tier.
- *   `--inset`    the well machine text sits in — code, output, terminals
+ *   `--abyss`    the ground, and the trough between panes          (L)
+ *   `--panel`    ALL chrome — bars, rails, panes, cards. One value (L + 4)
+ *   `--raised`   hover and pressed states. Not a tier.             (L + 7)
+ *   `--inset`    the well machine text sits in — code, terminals   (L + 1.5)
  *
  * What used to be carried by a fill is carried by `--line`, which is why that
- * token is now the load-bearing one in the file. A boundary that used to be
+ * token is the load-bearing one in the file. A boundary that used to be
  * "these two greys differ" is now "there is a rule here".
  *
- * `--float` is the exception, and it is deliberate rather than overlooked. A
- * popover genuinely *is* above the content, and a language with no elevation
- * has no other way to say so. Overlays get a lift and a border and a shadow;
- * nothing in the normal flow may use that combination.
+ * `--float` (L + 9.5) is the exception, and it is deliberate rather than
+ * overlooked. A popover genuinely *is* above the content, and a language with
+ * no elevation has no other way to say so. Overlays get a lift and a border
+ * and a shadow; nothing in the normal flow may use that combination.
  *
- * ### The values were checked, and the checker caught two real errors
+ * ### The derivation was checked, and the checker caught real errors
  *
- * `docs/design/_oklch.py` converts OKLCH to sRGB and computes WCAG contrast.
- * It is committed because "checked rather than eyed" has to survive the next
- * change, not just this one. Two things it caught that judgment did not:
+ * The rules are enforced by `docs/design/_seed_build.py` and re-verified
+ * through `lib/oklch.ts` — the same maths `palette.test.ts` trusts — by
+ * `docs/design/_seedcheck.mts`. Checked rather than eyed has to survive the
+ * next change, not just this one, and the record already shows why:
  *
- *   - **Teal at chroma 0.17 is outside sRGB.** The ceiling at L86 H192 is
- *     0.148, so the accent sits at 0.140 — about 5% inside, which leaves
- *     `color-mix` room to lighten it without clipping. L90 stays in gamut;
- *     L94 does not.
- *   - **`--cyan` had been left at hue 192** — the accent's own hue, zero
- *     degrees of separation. That is precisely the confusion the previous
- *     palette spent four paragraphs designing out of `--amber`, reintroduced
- *     by hand. It is at 250 now, 58° clear.
+ *   - **`--amber-ink` at chroma 0.045 clips sRGB at L18.** The derivation
+ *     shrank it to 0.035. A clipped near-black is invisible in a swatch and
+ *     wrong on a screen — the same class of bug as the near-black
+ *     `--beam-ink` the old palette shipped and the checker caught.
+ *   - **Light tools-cyan at chroma 0.10 clips at L48 H210.** The 210 hue is
+ *     narrower at mid lightness than 250 was; the gamut shrink lands it at
+ *     0.08 automatically.
  *
  * Every value in both themes falls inside sRGB with no clipping. Minimum hue
- * separation across the accent and the five semantics is 42°. Worst text
- * contrast against either ground is 5.10 in dark and 5.05 in light, where AA
- * wants 4.5. In light, `--amber` is the token that moved for that reason
- * alone: at L55 C0.13 it measured 4.48, which is the kind of miss nothing but
- * a checker finds.
+ * separation across the accent and the five semantics is 46° — the accent
+ * against `--sage`, the tightest pair on the board and the reason neither
+ * hue may drift without re-running the check. Worst text contrast against
+ * either ground is 4.84 in dark (`--beam-text` on the panel, designed to sit
+ * just over its 4.75 floor) and 4.98 in light, where AA wants 4.5.
  *
- * ### Light is not the dark values inverted
+ * ### Light is the same seeds, not the dark values inverted
  *
- * Teal is narrow in sRGB at mid lightness in a way it is not at high
- * lightness: the ceiling at L50 H192 is 0.089 against 0.148 at L86. The light
- * accent is at 0.084 for that reason and nothing else. Anything more saturated
- * needs display-p3, which is a palette-policy decision and not one to make by
- * nudging a number until it looks right.
+ * Light is a second pass of the same rules with paper as the anchor: the
+ * canvas seed contributes its chroma policy (zero), the accent seed its hue
+ * and construction, and every surface is a computed drop below 100%. The
+ * accent is where the deep-fill construction collects its win — at
+ * `oklch(48% 0.19 264)` the fill clears 4.75:1 as text on paper, so it
+ * doubles as its own `--beam-text`. The teal it replaces had to fall from
+ * L86 to L52 and give up 40% of its chroma to survive light at all.
  *
  * ---------------------------------------------------------------------------
  * TWO NAMING SYSTEMS, ON PURPOSE
@@ -185,70 +217,87 @@
   color-scheme: dark;
 
   /* ---- Substrate ------------------------------------------------------
-     Four surfaces, one of which is a tier. See the header: nothing here is
-     lighter because it is nearer, so a fill only exists where it means
-     something other than elevation.
+     The canvas seed is one number — the ground's lightness, 15.5%, at chroma
+     zero — and every other surface is a fixed lift off it: +1.5 inset,
+     +4 panel, +7 raised, +9.5 float. That schedule is the old palette's
+     geometry made a rule instead of five choices. See the header: nothing
+     here is lighter because it is nearer, so a fill only exists where it
+     means something other than elevation.
 
-     `--line` is the load-bearing token now. Every boundary that used to be
-     "these two greys differ" is a rule instead, which is why it sits at 27%
-     rather than the 28% it was — high enough to divide reliably at 1px on a
-     panel it is only 14 points away from.
-
-     Hue 250 at chroma <= 0.005, lower than the 0.008 this replaces: the accent
-     is a teal at 192 now, and a 285-hue grey under it read as a faint violet
-     cast against it. */
-  --abyss: oklch(9% 0.003 250); /* window ground, gaps between panes  */
-  --panel: oklch(13% 0.003 250); /* every chrome surface, one value   */
-  --raised: oklch(16% 0.004 250); /* hover and pressed, nothing else  */
-  --float: oklch(18.5% 0.005 250); /* overlays only — the exception   */
-  --inset: oklch(10.5% 0.003 250); /* code wells, output, troughs     */
-  --line: oklch(27% 0.004 250); /* hairlines — load-bearing           */
-  /* 50%, and the reason is the same one the light theme already recorded and
-     the dark theme never applied. `--line-strong` draws scrollbar thumbs and
-     the border of an unchecked radio, which are UI component boundaries and
-     owed 3:1 under WCAG 1.4.11 — not the nothing a decorative hairline is
-     owed. The old dark value measured 1.97 against its own ground and this one
-     measured 2.45; both fail. 50% clears it at 3.45. `palette.test.ts` is what
-     found this, after both palettes had shipped claiming to be checked. */
-  --line-strong: oklch(50% 0.006 250); /* emphasised edges, thumbs    */
+     `--line` is the load-bearing token. Every boundary that used to be
+     "these two greys differ" is a rule instead; it rides at L + 18, high
+     enough to divide reliably at 1px on a panel it is only 14 points away
+     from. Bare neutral throughout — no accent tint in the greys; that was
+     decided against, because it lets the accent choice quietly set the
+     entire substrate. */
+  --abyss: oklch(15.5% 0 0); /* window ground, gaps between panes  */
+  --panel: oklch(19.5% 0 0); /* every chrome surface, one value   */
+  --raised: oklch(22.5% 0 0); /* hover and pressed, nothing else  */
+  --float: oklch(25% 0 0); /* overlays only — the exception   */
+  --inset: oklch(17% 0 0); /* code wells, output, troughs     */
+  --line: oklch(33.5% 0 0); /* hairlines — load-bearing           */
+  /* L + 41, then walked up in 0.5 steps until it clears 3:1 on the panel.
+     `--line-strong` draws scrollbar thumbs and the border of an unchecked
+     radio, which are UI component boundaries and owed 3:1 under WCAG 1.4.11 —
+     not the nothing a decorative hairline is owed. Both shipped palettes had
+     once failed this claiming to be checked, which is why the walk is a rule
+     now: 56.5% measures 4.29 on the ground and 4.01 on the panel, and
+     `palette.test.ts` holds it there. */
+  --line-strong: oklch(56.5% 0 0); /* emphasised edges, thumbs    */
 
   /* ---- Ink ------------------------------------------------------------
-     With elevation gone, ink carries more of the hierarchy than it used to,
-     so the spread between the three steps is wider than it was. All three
-     clear AA on both `--abyss` and `--panel`; the faintest is the workhorse
-     for 11px chrome labels, which is the worst place to be a little quiet. */
-  --ink: oklch(97% 0.002 250);
-  --ink-muted: oklch(76% 0.004 250);
-  --ink-faint: oklch(60% 0.005 250);
+     Fixed rather than derived — 96/77/62 at chroma zero — and the canvas
+     seed's upper bound (L <= 18) is what guarantees all three clear AA on
+     the panel. Neutral substrate, neutral inks. With elevation gone, ink
+     carries more of the hierarchy than it used to; the faintest step is the
+     workhorse for 11px chrome labels, which is the worst place to be a
+     little quiet. */
+  --ink: oklch(96% 0 0);
+  --ink-muted: oklch(77% 0 0);
+  --ink-faint: oklch(62% 0 0);
 
   /* ---- Accents --------------------------------------------------------
-     Beam is the only colour that means "act". The rest are semantic and are
-     never used decoratively — a discipline that matters more here than it did
-     before, because with no fills carrying hierarchy colour is the loudest
-     thing on screen and a full window has only about eight coloured marks on
-     it. See the header for what the checker caught in these values. */
-  --beam: oklch(86% 0.14 192); /* primary action, focus ring         */
-  --beam-dim: oklch(74% 0.12 192);
-  /* 0.025, not the 0.04 this was drafted at. Teal is at its narrowest near
-     black — the sRGB ceiling at L16 H192 is 0.028 — so anything more saturated
-     clips, and clipping a near-black is invisible in a swatch and wrong on a
-     screen. It reads 13.3 against `--beam`. */
-  --beam-ink: oklch(16% 0.025 192); /* text on a beam fill           */
-  /* 250, not 192. Tool output sits beside accent-coloured chrome constantly,
-     so this needs real hue distance from the accent rather than being a shade
-     of it. At L80 H250 the sRGB ceiling is 0.116; 0.100 keeps a margin. */
-  --cyan: oklch(80% 0.1 250); /* tools / machine activity            */
+     Beam is the only colour that means "act", and it is a fill: a deep place
+     light text sits on, not a bright ink. The seed sits at the middle of the
+     settled 48–55 window, chroma shrunk into sRGB and lightness walked until
+     the fill clears 3:1 on the panel as a component. The rest are semantic
+     and are never used decoratively — a discipline that matters more here
+     than it used to, because with no fills carrying hierarchy colour is the
+     loudest thing on screen. */
+  --beam: oklch(52% 0.21 264); /* primary action, focus ring — a fill */
+  /* L − 8, C × 0.85: the pressed and hover depth of the fill. */
+  --beam-dim: oklch(44% 0.178 264);
+  /* Light text ON the fill — near-white with a breath of the hue. It reads
+     5.31 against `--beam`, where 4.5 is owed. */
+  --beam-ink: oklch(97% 0.014 264); /* text on a beam fill           */
+  /* The one place the derivation bends, and it is a bend of role rather than
+     of value: a deep fill cannot be read as 13px text (3.16:1 on the panel,
+     nowhere near AA), so accent-as-text is its own token — the accent's hue
+     at C 0.14, walked down to the last half-step that holds 4.75:1 on the
+     panel. Links, accent labels, syntax keywords and the caret take this;
+     fills, rings and borders take `--beam`. */
+  --beam-text: oklch(61.5% 0.14 264); /* the accent, as something read */
+  /* 210, moved from 250: any blue accent forces tools-cyan out from under
+     the 40° rule, and 264 ↔ 210 is 54° clear. Tool output sits beside
+     accent-coloured chrome constantly, so this needs real hue distance from
+     the accent rather than being a shade of it. */
+  --cyan: oklch(80% 0.1 210); /* tools / machine activity            */
   /* Deliberately the dimmest colour in the file. It is the model talking to
      itself and should be legible without competing with the answer under it.
-     310 puts it 118° off the accent. */
+     310 puts it 46° off the accent — the tightest pair on the board, six
+     degrees over the rule, and the reason neither hue may drift without
+     re-running the check. */
   --sage: oklch(64% 0.035 310); /* thinking                          */
   --mint: oklch(84% 0.17 150); /* success                            */
-  /* Amber at 85, 107° from the accent. The long history of this token — a true
-     yellow at 100, then a muted gold at 90, then an amber that sat inside the
-     old accent's own family separated only by depth — was forced entirely by
-     warm accents. A teal dissolves the constraint, so warning is just the
-     colour warning should be. */
+  /* Amber at 85. The long history of this token — a true yellow at 100, then
+     a muted gold at 90, then an amber inside an old accent's own family —
+     was forced entirely by warm accents. A blue-violet dissolves the
+     constraint, so warning is just the colour warning should be. */
   --amber: oklch(85% 0.155 85); /* warning                           */
+  /* Text on an amber fill — the waiting chip. Drafted at chroma 0.045, which
+     clips sRGB at L18; the derivation shrank it to 0.035, because a clipped
+     near-black is invisible in a swatch and wrong on a screen. */
+  --amber-ink: oklch(18% 0.035 85); /* text on an amber fill         */
   /* Rose-red rather than orange-red, so it clears `--amber` by 60° instead of
      sitting beside the meaning immediately adjacent to it. */
   --signal: oklch(70% 0.18 25); /* error / denial                    */
@@ -355,34 +404,36 @@
  * ELEVATION DOES NOT INVERT
  * ---------------------------------------------------------------------------
  *
- * The dark substrate climbs monotonically — abyss 14.5 → panel 18 → raised 22 →
- * float 25 — because there "above" and "lighter" are the same direction. Light
- * has no such luxury: `--panel` is already white and there is nothing above
- * white. So this splits the difference the way light interfaces actually work.
- * The window is a soft grey; chrome and cards are white and read as sitting on
- * top of it; floating things stay white and are separated by the shadow and
- * hairline ring the components already draw rather than by fill. The surfaces
- * that have to be *seen* against white — inputs, hover, wells — go down.
+ * The dark substrate climbs monotonically — abyss 15.5 → panel 19.5 → raised
+ * 22.5 → float 25 — because there "above" and "lighter" are the same
+ * direction. Light has no such luxury: `--panel` is already white and there is
+ * nothing above white. So this splits the difference the way light interfaces
+ * actually work. The window is a soft grey; chrome and cards are white and
+ * read as sitting on top of it; floating things stay white and are separated
+ * by the shadow and hairline ring the components already draw rather than by
+ * fill. The surfaces that have to be *seen* against white — inputs, hover,
+ * wells — go down.
  *
  * That is why `--raised` is darker than `--panel` here and lighter than it
  * above. Both satisfy the same instruction, "a fill you can see against the
  * surface it is on", and the direction that satisfies it is not the same one.
  *
  * ---------------------------------------------------------------------------
- * THE NUMBERS ARE MEASURED, NOT CHOSEN
+ * THE NUMBERS ARE THE SAME SEEDS, PASSED AGAIN
  * ---------------------------------------------------------------------------
  *
- * Every accent here is the dark palette's hue held fixed and its lightness
- * dropped until it clears 4.5:1 as text on `--panel`, then its chroma pulled
- * back to the sRGB gamut ceiling at that lightness — which is a real constraint
- * and not a rounding: cyan at hue 235 tops out at C 0.108 by L 50%, so it is
- * the one accent that ends up *less* saturated than its dark counterpart. Hues
- * never move, so a diff is the same green in both palettes and the semantic
- * separations argued for above still hold.
+ * Light is not tuned separately; it is the second pass of the rules in
+ * `docs/design/_seeds.md`, anchored to paper. The canvas seed contributes its
+ * chroma policy (zero) and every surface is a computed drop below 100%. The
+ * accent seed contributes its hue and construction: L − 4, C − 0.02, deepened
+ * until it clears 4.75:1 *as text* on paper — at which point the fill doubles
+ * as its own `--beam-text`, which is the deep-fill argument collecting its
+ * win. Hues never move, so a diff is the same green in both palettes and the
+ * semantic separations argued for above still hold.
  *
  * Ratios against `--panel`, which is the worst case for the greys and the best
- * for nothing: ink 16.5, ink-muted 7.8, ink-faint 5.5, beam 6.6, cyan 5.9,
- * sage 6.3, mint 5.4, amber 5.1, signal 6.1. `--ink-faint` is the one to watch
+ * for nothing: ink 17.3, ink-muted 8.1, ink-faint 5.5, beam 6.8, cyan 6.3,
+ * sage 6.1, mint 5.7, amber 6.1, signal 6.1. `--ink-faint` is the one to watch
  * for the same reason it is above — it is what 11px chrome labels use — and it
  * holds 4.6 even on `--raised`, the darkest surface it is ever set on.
  */
@@ -391,55 +442,63 @@
   color-scheme: light;
 
   /* ---- Substrate ------------------------------------------------------
-     The same four-surface rule, inverted. `--panel` and `--float` are both
-     pure white, which works for the reason the note at the foot of this block
-     explains; `--abyss` is the one that has to be visibly *not* white, so the
-     gaps between panes still read as gaps rather than as a seam. */
-  --abyss: oklch(97% 0.002 250); /* window ground, gaps between panes */
-  --panel: oklch(100% 0 250); /* every chrome surface, one value      */
-  --raised: oklch(94% 0.003 250); /* hover and pressed, nothing else  */
-  --float: oklch(100% 0 250); /* overlays only                        */
-  --inset: oklch(95.5% 0.003 250); /* code wells, output, troughs     */
-  --line: oklch(89% 0.004 250); /* hairlines — load-bearing           */
-  /* 64% is not a decorative value. `--line-strong` draws scrollbar thumbs and
-     the border of an unchecked radio, which are UI component boundaries and
-     owed 3:1 under WCAG 1.4.11 rather than the nothing a hairline is owed. */
-  --line-strong: oklch(64% 0.008 250); /* emphasised edges, thumbs    */
+     The same four-surface rule as computed drops below paper: −3.5 abyss,
+     −4.5 inset, −6 raised, −11 line. `--panel` and `--float` are both pure
+     white, which works for the reason the note at the foot of this block
+     explains; `--abyss` is the one that has to be visibly *not* white, so
+     the gaps between panes still read as gaps rather than as a seam. Chroma
+     zero throughout — the canvas seed's policy, both themes. */
+  --abyss: oklch(96.5% 0 0); /* window ground, gaps between panes */
+  --panel: oklch(100% 0 0); /* every chrome surface, one value      */
+  --raised: oklch(94% 0 0); /* hover and pressed, nothing else  */
+  --float: oklch(100% 0 0); /* overlays only                        */
+  --inset: oklch(95.5% 0 0); /* code wells, output, troughs     */
+  --line: oklch(89% 0 0); /* hairlines — load-bearing           */
+  /* Paper − 36, and not a decorative value. `--line-strong` draws scrollbar
+     thumbs and the border of an unchecked radio, which are UI component
+     boundaries and owed 3:1 under WCAG 1.4.11 rather than the nothing a
+     hairline is owed. 64% measures 3.04 on the ground — no margin to give. */
+  --line-strong: oklch(64% 0 0); /* emphasised edges, thumbs    */
 
   /* ---- Ink ------------------------------------------------------------
-     Chroma rises from the dark palette's 0.002–0.005 to 0.008. The same hue at
-     the same chroma reads as a flat neutral once it is dark text rather than
-     light, and the point of the hue is that the greys belong to the accent's
-     family — which needs a little more of it to survive the inversion. */
-  --ink: oklch(22% 0.008 250);
-  --ink-muted: oklch(43% 0.008 250);
-  --ink-faint: oklch(52% 0.008 250);
+     Fixed 22/43/52 at chroma zero — the same neutral-ink rule as dark,
+     anchored to paper instead of the canvas. The old palette warmed its
+     light inks toward the accent's hue; a neutral substrate wants neutral
+     inks in both directions. */
+  --ink: oklch(22% 0 0);
+  --ink-muted: oklch(43% 0 0);
+  --ink-faint: oklch(52% 0 0);
 
   /* ---- Accents --------------------------------------------------------
      Not the dark values darkened; see the header.
 
-     The light accent is as saturated as it is allowed to be, and that is not
-     very. Teal is the narrowest useful hue in sRGB at mid lightness: at L52 it
-     ceilings at 0.088, where blue reaches 0.142 and red 0.203 at L50. Push the
-     lightness up to gain chroma and the contrast on white falls through AA at
-     about L55. So it sits at L52 C0.088 — 4.83 on the window ground, 5.27 on a
-     panel — and it will read as a muted teal rather than as the vivid one dark
-     mode gets. That is structural, not a tuning error: the only ways out are
-     display-p3 or a different hue in light, and both are policy decisions
-     rather than something to fix by nudging this number.
+     The accent is the construction proving itself: seed L − 4, C − 0.02,
+     deepened until it clears 4.75:1 as text on paper. It arrives at L48
+     C0.19 — nearly the seed itself — where the teal it replaces had to fall
+     from L86 to L52 and give up 40% of its chroma to survive light at all.
+     And because the fill reads as text here, `--beam-text` *is* `--beam`:
+     one accent construction, both duties, no second colour.
 
-     `--amber` came down to L50 C0.098 because at L55 C0.13 it measured 4.48
-     against AA's 4.5 on white.
+     Cyan is the one accent whose chroma moved: 210 is narrower at L48 than
+     250 was, 0.10 clips there, and the automatic gamut shrink lands it at
+     0.08.
 
-     `--beam-ink` and `--signal-ink` swap ends: the fills they sit on are dark
-     here, so the text on them is near-white rather than near-black. */
-  --beam: oklch(52% 0.088 192);
-  --beam-dim: oklch(44% 0.073 192);
-  --beam-ink: oklch(98% 0.004 192);
-  --cyan: oklch(48% 0.1 250);
+     `--amber-ink` and `--signal-ink` swap ends: the fills they sit on are
+     mid-lightness here rather than bright, so the text on them is near-white
+     rather than near-black. `--beam-ink` does not swap — the beam fill is
+     deep in both themes, so its ink is near-white in both. */
+  --beam: oklch(48% 0.19 264);
+  /* Same rule as dark: L − 8, C × 0.85. */
+  --beam-dim: oklch(40% 0.161 264);
+  --beam-ink: oklch(98% 0.005 264);
+  /* = `--beam`, written out as a literal because `palette.test.ts` parses
+     oklch() declarations and must hold this token to 4.5:1 in both themes. */
+  --beam-text: oklch(48% 0.19 264);
+  --cyan: oklch(48% 0.08 210);
   --sage: oklch(50% 0.03 310);
   --mint: oklch(50% 0.13 150);
   --amber: oklch(50% 0.098 85);
+  --amber-ink: oklch(98% 0.005 85);
   --signal: oklch(52% 0.19 25);
   --signal-ink: oklch(98% 0.005 25);
 
@@ -517,10 +576,12 @@
   --color-beam: var(--beam);
   --color-beam-dim: var(--beam-dim);
   --color-beam-ink: var(--beam-ink);
+  --color-beam-text: var(--beam-text);
   --color-cyan: var(--cyan);
   --color-sage: var(--sage);
   --color-mint: var(--mint);
   --color-amber: var(--amber);
+  --color-amber-ink: var(--amber-ink);
   --color-signal: var(--signal);
   --color-signal-ink: var(--signal-ink);
 
@@ -775,7 +836,8 @@
     font-size: 1em;
   }
   .md a {
-    color: var(--beam);
+    /* `--beam-text`, not `--beam`: a link is read, and the fill is not. */
+    color: var(--beam-text);
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -862,8 +924,13 @@
    * are the library's DOM contract; nothing else in this app targets them.
    */
   .md.ProseMirror {
-    /* The caret is the only thing in the surface that needs the accent. */
-    caret-color: var(--beam);
+    /* The caret is the only thing in the surface that needs the accent — and
+       it takes `--beam-text`, not `--beam`. A caret is a two-pixel stroke:
+       at that width the deep fill (3.2:1 on the well) reads as a gap in the
+       line rather than a mark, and what a thing you must find between
+       letters needs is the companion tuned to reading contrast. The
+       streaming caret below makes the same choice, so the two agree. */
+    caret-color: var(--beam-text);
   }
   /*
    * The placeholder line.
@@ -908,7 +975,10 @@
     animation: artemis-word-in var(--word-ms, 150ms) ease-out both;
   }
 
-  /* The caret that trails streaming text. */
+  /* The caret that trails streaming text. `--beam-text` for the reason the
+     editor caret gives: a caret this small lives *inside* a line of text and
+     has to hold its own against the ink beside it, which is the text
+     companion's job — and the two carets should agree. */
   .caret::after {
     content: '';
     display: inline-block;
@@ -916,7 +986,7 @@
     height: 1em;
     margin-left: 1px;
     vertical-align: text-bottom;
-    background: var(--beam);
+    background: var(--beam-text);
     animation: artemis-blink 1.1s steps(1) infinite;
   }
 
@@ -1154,7 +1224,8 @@
 .hljs-literal,
 .hljs-doctag,
 .hljs-name {
-  color: var(--color-beam);
+  /* Syntax is read, so the accent's text companion — not the fill. */
+  color: var(--color-beam-text);
 }
 
 .hljs-string,

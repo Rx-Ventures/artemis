@@ -475,7 +475,7 @@ function RootPage({
             {level.id === ULTRACODE_LEVEL ? <SparklesIcon /> : <BrainIcon />}
             Thinking: {level.label}
             {level.id === thinking ? (
-              <span className="ml-auto font-mono text-2xs text-beam">current</span>
+              <span className="ml-auto font-mono text-2xs text-beam-text">current</span>
             ) : null}
           </GatedItem>
         ))}
@@ -819,7 +819,7 @@ function ProvidersPage({ onClose }: { readonly onClose: () => void }): ReactElem
                   {provider.label}
                 </span>
                 {provider.id === activeId ? (
-                  <span className="ml-auto font-mono text-2xs text-beam">active</span>
+                  <span className="ml-auto font-mono text-2xs text-beam-text">active</span>
                 ) : null}
               </span>
               {provider.available ? null : (
@@ -875,12 +875,12 @@ function ModelsPage({ onClose }: { readonly onClose: () => void }): ReactElement
               ) : null}
               {model.supportsUltracode === true ? (
                 <SparklesIcon
-                  className="size-3 shrink-0 text-beam"
+                  className="size-3 shrink-0 text-beam-text"
                   aria-label="offers ultracode"
                 />
               ) : null}
               {current === model.id ? (
-                <span className="ml-auto font-mono text-2xs text-beam">selected</span>
+                <span className="ml-auto font-mono text-2xs text-beam-text">selected</span>
               ) : null}
             </span>
             <span className="pl-5 text-2xs leading-snug text-ink-faint">{model.note}</span>

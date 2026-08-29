@@ -67,6 +67,22 @@ const RUN_TIMEOUT_MS = 120_000;
 const DEFAULT_PROMPT =
   'Reply with exactly the word: pong. Do not use any tools and do not explain yourself.';
 
+/**
+ * Interrupt mode: stop the run this long after its stream starts, and print
+ * where the milliseconds went. `SMOKE_INTERRUPT_MS=1500 pnpm smoke`.
+ *
+ * Exists to measure the one segment no renderer harness can: how long the
+ * provider takes to let go once asked. The clock starts at the first streamed
+ * text — mid-stream is the case the stop button is for — and the table at the
+ * end separates the registry's acknowledgement from the `run.end` that
+ * actually settles a pane, because those are the two waits a user can feel.
+ */
+const INTERRUPT_AFTER_MS = Number(process.env['SMOKE_INTERRUPT_MS'] ?? '0');
+
+/** A prompt that streams long enough to be interrupted mid-sentence. */
+const STREAMING_PROMPT =
+  'Count slowly from 1 to 50, one number per line, in words. Do not use any tools.';
+
 /* -------------------------------------------------------------------------- */
 /* Event printing                                                             */
 /* -------------------------------------------------------------------------- */
@@ -165,7 +181,9 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  const prompt = process.argv.slice(2).join(' ').trim() || DEFAULT_PROMPT;
+  const prompt =
+    process.argv.slice(2).join(' ').trim() ||
+    (INTERRUPT_AFTER_MS > 0 ? STREAMING_PROMPT : DEFAULT_PROMPT);
 
   // One disposable directory for everything: Artemis's "user data", and the
   // working directory the agent is pointed at.
@@ -221,11 +239,46 @@ async function main(): Promise<number> {
   let exitCode = 2;
 
   try {
+    /*
+     * Interrupt-mode bookkeeping. Offsets are taken from the moment
+     * `interrupt()` is called, because that call *is* the click: everything
+     * before it is the run streaming normally, and the two stamps after it are
+     * the whole of what a user waits on — the registry's acknowledgement
+     * (adapter → SDK control channel) and the `run.end` that settles a pane.
+     */
+    let interruptTimer: ReturnType<typeof setTimeout> | undefined;
+    let interruptDone: Promise<void> | undefined;
+    let tInterruptCall: number | undefined;
+    let tRegistryReturn: number | undefined;
+    let tRunEnd: number | undefined;
+
     // Subscribe before starting: events can arrive before `start()` resolves.
     const finished = new Promise<void>((resolve) => {
       const unsubscribe = registry.subscribe((event) => {
         printEvent(event);
+        if (
+          INTERRUPT_AFTER_MS > 0 &&
+          interruptTimer === undefined &&
+          (event.type === 'text.delta' || event.type === 'thinking.delta')
+        ) {
+          // Armed off the first streamed token rather than off `start()`:
+          // mid-stream is the case the stop button exists for, and a timer
+          // running from the spawn could fire into pre-turn silence instead.
+          interruptTimer = setTimeout(() => {
+            tInterruptCall = performance.now();
+            console.log(`\n  --- interrupting (${INTERRUPT_AFTER_MS}ms after first token) ---\n`);
+            interruptDone = registry.interrupt(event.runId).then(
+              () => {
+                tRegistryReturn = performance.now();
+              },
+              (error: unknown) => {
+                console.error('  !! interrupt failed:', error);
+              },
+            );
+          }, INTERRUPT_AFTER_MS);
+        }
         if (event.type === 'run.end') {
+          tRunEnd = performance.now();
           exitCode = event.reason === 'error' ? 1 : 0;
           unsubscribe();
           resolve();
@@ -256,6 +309,24 @@ async function main(): Promise<number> {
       console.error(`\nThe run did not finish within ${RUN_TIMEOUT_MS / 1000}s. Interrupting.`);
       await registry.interrupt(handle.runId);
       exitCode = 1;
+    }
+
+    if (INTERRUPT_AFTER_MS > 0) {
+      clearTimeout(interruptTimer);
+      // The acknowledgement can resolve after `run.end` — the two travel
+      // different channels — so give it the chance to stamp its clock.
+      if (interruptDone !== undefined) await interruptDone;
+      if (tInterruptCall === undefined) {
+        console.error('\nThe run ended before the interrupt fired; nothing was measured.');
+      } else {
+        // Captured: the narrowing above does not survive into the closure.
+        const t0 = tInterruptCall;
+        const offset = (t: number | undefined): string =>
+          t === undefined ? ' (never)' : `${(t - t0).toFixed(0).padStart(6, ' ')} ms`;
+        console.log('\ninterrupt timing (offsets from the interrupt call):');
+        console.log(`  registry.interrupt() returned  ${offset(tRegistryReturn)}`);
+        console.log(`  run.end arrived                ${offset(tRunEnd)}`);
+      }
     }
   } catch (error) {
     console.error('\nThe run could not be started:', error);

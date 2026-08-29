@@ -53,7 +53,7 @@ export function ScheduledStrip(): ReactElement | null {
               aria-hidden="true"
               className={cn(
                 'size-3 shrink-0',
-                routine.running ? 'text-beam' : routine.paused ? 'text-ink-faint' : 'text-ink-muted',
+                routine.running ? 'text-beam-text' : routine.paused ? 'text-ink-faint' : 'text-ink-muted',
               )}
             />
             <span className="min-w-0 flex-1 truncate text-2xs text-ink">{routine.name}</span>

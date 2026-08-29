@@ -474,7 +474,7 @@ function ConnectionRow({
         {draft === null ? (
           <button
             type="button"
-            className="rounded-sm text-xs font-medium text-ink hover:text-beam focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            className="rounded-sm text-xs font-medium text-ink hover:text-beam-text focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
             title="Rename"
             onClick={() => setDraft(connection.label)}
           >

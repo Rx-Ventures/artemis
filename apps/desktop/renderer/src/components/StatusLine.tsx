@@ -907,7 +907,7 @@ function ModelSegment(): ReactElement {
           */}
           {selected?.label ?? (orphaned ? `${stored} (unavailable)` : 'default')}
           {thinkingLabel !== undefined ? (
-            <span className={cn(thinking === ULTRACODE_LEVEL ? 'text-beam' : 'text-ink-muted')}>
+            <span className={cn(thinking === ULTRACODE_LEVEL ? 'text-beam-text' : 'text-ink-muted')}>
               {' · '}
               {thinkingLabel.toLowerCase()}
             </span>
@@ -1072,7 +1072,7 @@ function ThinkingRow(): ReactElement | null {
               className="items-start text-2xs"
             >
               <span className="flex min-w-0 flex-col">
-                <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-beam' : 'text-ink')}>
+                <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-beam-text' : 'text-ink')}>
                   {level.label}
                 </span>
                 <span className="text-2xs leading-snug text-ink-faint">{level.note}</span>

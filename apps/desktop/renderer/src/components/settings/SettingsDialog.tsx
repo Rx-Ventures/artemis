@@ -326,7 +326,7 @@ export function SettingsDialog(): ReactElement {
                       )}
                       onClick={() => setSettingsSection(entry.id)}
                     >
-                      <span className={cn('shrink-0', active ? 'text-beam' : 'text-ink-faint')}>
+                      <span className={cn('shrink-0', active ? 'text-beam-text' : 'text-ink-faint')}>
                         {entry.icon}
                       </span>
                       <span className="flex min-w-0 flex-col">
