@@ -167,28 +167,39 @@ function DockStrip({
   );
 
   return (
-    <div
-      ref={strip}
-      role="tablist"
-      aria-label="Dock tabs"
-      onKeyDown={onKeyDown}
-      // Same height and border as a pane's caption, so the two read as one row
-      // rather than as two applications side by side — the rule `PreviewPane`
-      // set when it was the only thing in this rail.
-      // 34px of icons down the left edge. `overflow-y-auto` rather than `-x`:
-      // a dock with nine tabs scrolls vertically, where there is room, instead
-      // of eating the width of the panel it is labelling.
-      //
-      // No vertical padding, because the active tab is a *filled* row: a gap
-      // above the first one leaves its fill floating below the top border with
-      // a sliver of panel showing through, which reads as a mistake rather than
-      // as breathing room. The tabs meet the edges; the gap between them is
-      // `gap-px`, which is the hairline the design language already uses.
-      className="flex w-[34px] shrink-0 flex-col items-stretch gap-px overflow-y-auto border-r border-line"
-    >
-      {tabs.map((tab) => (
-        <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
-      ))}
+    // The rail is two boxes now: a tab list that scrolls, and a footer that
+    // does not. The `+` used to live inside the scrolling column, which put it
+    // wherever the ninth tab pushed it — including past the fold, where the
+    // one control for "another of these" was the thing that scrolled away.
+    // A footer costs the strip nothing when it fits and keeps the button
+    // reachable when it does not.
+    <div className="flex w-[34px] shrink-0 flex-col border-r border-line">
+      <div
+        ref={strip}
+        role="tablist"
+        aria-label="Dock tabs"
+        onKeyDown={onKeyDown}
+        // Same height and border as a pane's caption, so the two read as one
+        // row rather than as two applications side by side — the rule
+        // `PreviewPane` set when it was the only thing in this rail.
+        // 34px of icons down the left edge. `overflow-y-auto` rather than
+        // `-x`: a dock with nine tabs scrolls vertically, where there is room,
+        // instead of eating the width of the panel it is labelling. `min-h-0`
+        // is what lets the list shrink under the footer instead of pushing it
+        // out of the rail.
+        //
+        // No vertical padding, because the active tab is a *filled* row: a gap
+        // above the first one leaves its fill floating below the top border
+        // with a sliver of panel showing through, which reads as a mistake
+        // rather than as breathing room. The tabs meet the edges; the gap
+        // between them is `gap-px`, which is the hairline the design language
+        // already uses.
+        className="flex min-h-0 flex-col items-stretch gap-px overflow-y-auto"
+      >
+        {tabs.map((tab) => (
+          <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
+        ))}
+      </div>
       {/*
         Still one button, and still a terminal.
 
@@ -203,7 +214,7 @@ function DockStrip({
         label="Open another terminal"
         size="icon-xs"
         onClick={() => void openTerminal()}
-        className="mx-auto mt-0.5 shrink-0 text-ink-faint"
+        className="mx-auto my-0.5 shrink-0 text-ink-faint"
       >
         <PlusIcon />
       </IconButton>

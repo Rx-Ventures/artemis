@@ -115,8 +115,10 @@ import {
   requestTerminalFocus,
   retheme,
   setTerminalSessionHooks,
+  terminalHasFocus,
   writeToTerminal,
 } from '../lib/terminalSessions';
+import { focusComposer } from '../lib/composerFocus';
 import {
   EMPTY_DOCK_LAYOUT,
   MAX_RESTORED_BROWSERS,
@@ -3434,11 +3436,20 @@ export async function openTerminal(pane: Pane = focusedPane()): Promise<void> {
 }
 
 /**
- * The focused conversation's terminal — the existing one, or a new one.
+ * The focused conversation's terminal — opened, brought forward, or left.
  *
  * What `⌘J` does. Pressing it repeatedly should not fill the strip with shells
- * nobody asked for, so it opens one the first time and brings that one forward
+ * nobody asked for, so it opens one the first time and works with that one
  * afterwards; the `+` on the strip is the deliberate way to get a second.
+ *
+ * It is a **focus** toggle, and it never kills. The second press used to call
+ * {@link closeTerminal}, on the theory that a toggle key undoes itself — which
+ * made ⌘J the one thing besides the ✕ that could end a `pnpm dev`, and made it
+ * do so from muscle memory, since the press that killed was indistinguishable
+ * from the press that opened. That broke the rule the whole feature stands on
+ * (see `state/dock.ts`: only the ✕ ends a process), so the toggle now moves
+ * the caret instead: ⌘J puts it in the shell, and ⌘J again hands it back to
+ * the composer, with the tab still in front and the process untouched.
  */
 export function toggleTerminal(pane: Pane = focusedPane()): void {
   const state = useApp.getState();
@@ -3452,11 +3463,22 @@ export function toggleTerminal(pane: Pane = focusedPane()): void {
   }
 
   const tab: DockTab = { kind: 'terminal', id: mine.info.id };
-  // Already in front: the second press closes the rail rather than doing
-  // nothing, which is what makes it a toggle and what people expect of the key
-  // that opened it.
-  if (sameTab(state.activeDockTab, tab)) closeTerminal(mine.info.id);
-  else focusDockTab(tab);
+  // Not in front yet: bring it forward, which also requests the caret — that
+  // is what `focusDockTab` does for a terminal, because it is what clicking
+  // one means.
+  if (!sameTab(state.activeDockTab, tab)) {
+    focusDockTab(tab);
+    return;
+  }
+  // In front but the caret is elsewhere — the composer, usually, or a strip
+  // the tab was reached by arrow keys. The press means "let me type into it".
+  if (!terminalHasFocus(mine.info.id)) {
+    requestTerminalFocus(mine.info.id);
+    return;
+  }
+  // In front *and* holding the caret: the press means "let me out", and out is
+  // the composer, which is where the caret lives when it is not in a shell.
+  focusComposer(pane.id);
 }
 
 /**
@@ -3822,6 +3844,33 @@ function retirePane(pane: Pane): void {
   // the live panes — so one left behind could never be refreshed again, and
   // would sit in the strip showing a transcript frozen at whatever it last read.
   closeAgentTabsFor(pane.id);
+  /*
+   * Its terminals and browsers split two ways, on the line `ownerIsShown`
+   * draws. A record whose owner has learned a session id can come back:
+   * resuming that session into any column re-shows it, which is the promise
+   * that makes hiding instead of killing safe, so those are left exactly
+   * alone. A record whose owner never learned one has no way back — it is
+   * keyed to this pane, or to a run that ended before `session.started`
+   * arrived, and both of those identities die here. Keeping it would mean a
+   * live shell running with no tab that can ever reach it again, invisible
+   * until quit.
+   *
+   * So the never-attributed ones, and only those, are genuinely closed. That
+   * is deliberately not a breach of "only the ✕ ends a process": the rule is
+   * about a tab *leaving the screen*, and these are surfaces whose owner has
+   * ceased to exist — the alternative is not a hidden tab but a leak.
+   */
+  const { terminals, browsers } = useApp.getState();
+  for (const terminal of terminals) {
+    if (terminal.owner.paneId === pane.id && terminal.owner.sessionId === undefined) {
+      closeTerminal(terminal.info.id);
+    }
+  }
+  for (const browser of browsers) {
+    if (browser.owner.paneId === pane.id && browser.owner.sessionId === undefined) {
+      closeBrowser(browser.info.id);
+    }
+  }
   // Any catalogue fetch still in flight for it has nowhere to land. Dropping the
   // token both releases the entry and makes the reply's own staleness check
   // fail, which is what stops it writing into a store nothing is subscribed to.
