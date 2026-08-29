@@ -28,7 +28,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createProfile, focusedPane, newSession, setProfile, useApp } from './store';
+import { createProfile, focusedPane, handOffToProfile, newSession, setProfile, useApp } from './store';
 import { paneState, setPaneState } from './pane';
 
 const pane = () => focusedPane();
@@ -298,5 +298,164 @@ describe('the account a fresh session starts on', () => {
     // there was nothing to leave.
     expect(session().activeProfileId).toBe('p2');
     expect(transcript().isEmpty).toBe(true);
+  });
+});
+
+/**
+ * The narrower door (ADR 0003).
+ *
+ * The invariant above did not relax — it sharpened. `setProfile` still drops
+ * the session for an arbitrary pick, because for an arbitrary pick nothing
+ * guarantees the target reaches the transcript's store or should be billed for
+ * it. `handOffToProfile` is allowed to keep the session precisely because it
+ * proves what `setProfile` cannot: the target *shares the store*
+ * (`alsoInProfiles`), is *signed in*, and has a *fresh, unrejected* plan
+ * reading. One rule, two doors: the general one ends the session, the proven
+ * one carries it — and every unproven condition below lands back on "nothing
+ * moves".
+ */
+describe('the hand-off door', () => {
+  /** The row the sidebar would show: `p2` shares the store with `p1`. */
+  const SHARED = {
+    id: 'sess-1111',
+    providerId: 'claude',
+    profileId: 'p1',
+    alsoInProfiles: ['p2'],
+    cwd: '/a',
+    title: 'One conversation',
+    updatedAt: 10,
+  };
+
+  /** A reading fresh enough to act on, far from every limit. */
+  const fresh = () => ({
+    available: true,
+    windows: [{ id: 'five_hour', label: '5 hours', utilization: 20, resetsAt: null }],
+    fetchedAt: Date.now(),
+  });
+
+  /** `p2` proven: reachable, signed in, fresh reading. */
+  function provenTarget(): void {
+    useApp.setState({
+      sessions: [SHARED],
+      authByProfile: { p2: { loggedIn: true } },
+      planUsageByProfile: { p2: fresh() },
+    } as never);
+  }
+
+  it('moves the account and keeps the session — the one thing setProfile never does', async () => {
+    withSelectedSession();
+    provenTarget();
+
+    expect(await handOffToProfile('p2')).toBe(true);
+
+    expect(session().activeProfileId).toBe('p2');
+    // The invariant's other half: the id survives, because the next prompt is
+    // meant to resume THIS conversation under the new account.
+    expect(session().resumeSessionId).toBe('sess-1111');
+  });
+
+  it('says what moved, in the transcript, without resetting it', async () => {
+    withSelectedSession();
+    provenTarget();
+
+    await handOffToProfile('p2');
+    await flushed();
+
+    // Two items: what the user was reading, then the note. A door that reset
+    // the transcript would defeat the entire point of carrying the session.
+    expect(transcript().length).toBe(2);
+    const id = transcript().getListSnapshot().at(-1);
+    const item = transcript().getItem(id ?? '');
+    expect(item?.kind).toBe('notice');
+    expect(item?.text).toContain('Handed off to Work');
+    expect(item?.detail).toContain('profile → Work');
+  });
+
+  it('refuses while a run is live, exactly as the gate does', async () => {
+    withSelectedSession();
+    provenTarget();
+    setSession({ run: LIVE_RUN });
+
+    expect(await handOffToProfile('p2')).toBe(false);
+
+    expect(session().activeProfileId).toBe('p1');
+    expect(session().resumeSessionId).toBe('sess-1111');
+    expect(useApp.getState().banners.at(-1)?.message).toContain('run is still going');
+  });
+
+  it('refuses a target that cannot reach the transcript', async () => {
+    withSelectedSession();
+    provenTarget();
+    // The same session with no sharers: p2's directory does not reach it, so
+    // the resume the door promises would be aimed at a store the account
+    // cannot read — the exact failure setProfile's gate exists to prevent.
+    useApp.setState({ sessions: [{ ...SHARED, alsoInProfiles: [] }] } as never);
+
+    expect(await handOffToProfile('p2')).toBe(false);
+
+    expect(session().activeProfileId).toBe('p1');
+    expect(session().resumeSessionId).toBe('sess-1111');
+    expect(useApp.getState().banners.at(-1)?.message).toContain('Could not hand off');
+  });
+
+  it('refuses a signed-out target', async () => {
+    withSelectedSession();
+    provenTarget();
+    useApp.setState({ authByProfile: { p2: { loggedIn: false } } } as never);
+
+    expect(await handOffToProfile('p2')).toBe(false);
+    expect(session().activeProfileId).toBe('p1');
+    expect(useApp.getState().banners.at(-1)?.detail).toContain('signed out');
+  });
+
+  it('probes an unchecked target rather than guessing, and refuses when the probe fails', async () => {
+    withSelectedSession();
+    provenTarget();
+    // Nobody has asked about p2. The module-scope bridge's `auth.status`
+    // answers with a failure, so the probe learns nothing — and an account
+    // whose sign-in state cannot be established is not one to move work to.
+    useApp.setState({ authByProfile: {} } as never);
+
+    expect(await handOffToProfile('p2')).toBe(false);
+    expect(session().activeProfileId).toBe('p1');
+  });
+
+  it('refuses on a stale reading — six minutes, the recommender’s own bar', async () => {
+    withSelectedSession();
+    provenTarget();
+    useApp.setState({
+      planUsageByProfile: { p2: { ...fresh(), fetchedAt: Date.now() - 7 * 60_000 } },
+    } as never);
+
+    expect(await handOffToProfile('p2')).toBe(false);
+    expect(useApp.getState().banners.at(-1)?.detail).toContain('fresh');
+  });
+
+  it('refuses an account whose own binding window is rejected', async () => {
+    withSelectedSession();
+    provenTarget();
+    useApp.setState({
+      planUsageByProfile: {
+        p2: {
+          available: true,
+          windows: [
+            { id: 'five_hour', label: '5 hours', utilization: 97, resetsAt: null, status: 'rejected' },
+          ],
+          fetchedAt: Date.now(),
+        },
+      },
+    } as never);
+
+    // Handing work to an account that immediately stalls is the failure mode
+    // ADR 0003 names; the provider's own verdict outranks any percentage.
+    expect(await handOffToProfile('p2')).toBe(false);
+    expect(useApp.getState().banners.at(-1)?.detail).toContain('limit is reached');
+  });
+
+  it('does nothing without a session — the plain picker already covers that', async () => {
+    provenTarget();
+
+    expect(await handOffToProfile('p2')).toBe(false);
+    expect(session().activeProfileId).toBe('p1');
   });
 });

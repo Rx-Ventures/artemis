@@ -19,6 +19,7 @@ import { InfoIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
 import { dismissBanner, useApp, type Banner } from '../state/store';
 import { IconButton } from './disabled-reason';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 export function ErrorSurface(): ReactElement | null {
@@ -78,6 +79,29 @@ function BannerRow({ banner }: { readonly banner: Banner }): ReactElement {
       {banner.detail ? (
         <AlertDescription className="font-mono text-2xs leading-snug text-ink-faint">
           {banner.detail}
+        </AlertDescription>
+      ) : null}
+      {banner.action ? (
+        /*
+          In the body rather than beside the dismiss ✕: the action is an answer
+          to the sentence above it ("Continue on Work" under "the 5-hour limit
+          is reached"), and the corner is where banners are killed, not where
+          they are acted on. Dismissed after running — the offer was about the
+          state the banner reported, and acting on it consumes it.
+        */
+        <AlertDescription>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-6 border-line px-2 font-sans text-2xs text-ink"
+            onClick={() => {
+              banner.action?.run();
+              dismissBanner(banner.id);
+            }}
+          >
+            {banner.action.label}
+          </Button>
         </AlertDescription>
       ) : null}
       <AlertAction className="top-1 right-1">
