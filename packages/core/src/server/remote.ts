@@ -228,6 +228,23 @@ function unknownRun(): ServerReply {
   return fail(404, 'invalid_request_error', 'unknown_run', 'No such run for this connection.');
 }
 
+/**
+ * One refusal for "no such conversation" and "not this connection's" alike.
+ *
+ * Worded and coded identically to the session routes' own refusal, and that
+ * identity is the point: a caller able to distinguish the two could ask about
+ * ids until one answered differently, and learn which conversations exist on
+ * the serving machine without ever being allowed to read one.
+ */
+function unknownSession(): ServerReply {
+  return fail(
+    404,
+    'invalid_request_error',
+    'unknown_session',
+    'No such conversation for this connection.',
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Visibility                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -446,6 +463,68 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
       'model_not_found',
       `No model "${runInput.model}" on that account for this connection.`,
     );
+  }
+
+  /*
+   * The resume gate, and it must come before anything that *uses* the session
+   * id.
+   *
+   * -----------------------------------------------------------------------
+   * WHY A SESSION ID IS A CAPABILITY, NOT A PARAMETER
+   * -----------------------------------------------------------------------
+   *
+   * `resumeSessionId` names a stored conversation, and the provider's store
+   * holds every conversation on the machine — the serving user's own local
+   * history included. Nothing downstream of here checks ownership:
+   * `RunRegistry.start` has no notion of one, so it honours the id and the
+   * provider re-opens the transcript.
+   *
+   * That alone would be a read of somebody else's conversation. What makes it
+   * worse is what happens *next*: the run announces its session id, the guard
+   * hears it, and the host records it into the ledger against this connection.
+   * The ledger is keyed on session id and the last writer wins, so the entry
+   * that said "this belongs to the desktop user" is overwritten to say "this
+   * belongs to the caller's token" — and `mayAccess` starts returning true.
+   * The private transcript then becomes durably readable through
+   * `/api/v0/sessions/{id}/messages`, by the ordinary route, forever. A
+   * borrowed id would have laundered itself into an owned one.
+   *
+   * So the id is checked against the same ledger scope the sibling completions
+   * surface checks, with the same refusal the session routes give: "not yours"
+   * and "not there" are one answer, because a caller that could tell them
+   * apart could enumerate which conversations exist on the machine.
+   *
+   * -----------------------------------------------------------------------
+   * WHY THIS IS ALSO BEFORE `resolvePinnedCwd`
+   * -----------------------------------------------------------------------
+   *
+   * Not merely tidy ordering. `resolvePinnedCwd` passes the session id to the
+   * workspace resolver, whose scratch map is keyed on session id alone with no
+   * connection scoping — so naming another connection's session would resolve
+   * this run *into that connection's scratch directory*. Refusing first is
+   * what keeps a foreign id from reaching it at all.
+   *
+   * -----------------------------------------------------------------------
+   * WHY NO LEDGER MEANS REFUSE
+   * -----------------------------------------------------------------------
+   *
+   * The completions surface skips this check when there is no ledger, which is
+   * defensible there: that surface cannot start a conversation it could later
+   * be asked to re-enter, so there is nothing to own. This route can. A build
+   * with no ledger has no way to establish that a session belongs to anybody,
+   * and "cannot prove it is yours" has to read as no — the alternative is a
+   * deployment where every stored conversation on the machine is resumable by
+   * any token, reached by dropping one optional dependency.
+   */
+  if (runInput.resumeSessionId !== undefined) {
+    const ledger = context.ledger;
+    if (ledger === undefined) return unknownSession();
+    const profiles = await visibleProfiles(context, connection);
+    const scope = {
+      workspaceKey: workspaceKeyFor(connection),
+      profileIds: profiles.map((profile) => String(profile.id)),
+    };
+    if (!ledger.mayAccess(scope, String(runInput.resumeSessionId))) return unknownSession();
   }
 
   const pinned = await resolvePinnedCwd(input, runInput.cwd, runInput.resumeSessionId);

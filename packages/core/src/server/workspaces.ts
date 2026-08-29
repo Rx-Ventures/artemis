@@ -116,8 +116,27 @@ export function createWorkspaceResolver(
 ): WorkspaceResolver {
   const root = options.root ?? join(tmpdir(), SCRATCH_ROOT_NAME);
 
-  /** Session id → the scratch directory it is using. */
+  /**
+   * (Connection, session) → the scratch directory it is using.
+   *
+   * Keyed on *both*, not on the session id alone. A scratch directory is
+   * per-connection by construction — `makeScratch` takes the connection id, and
+   * the ledger's own rule keys an ephemeral workspace to the token that caused
+   * it to exist, because scratch is shared with nobody. A map keyed on the
+   * session id alone quietly contradicted that: name another connection's
+   * session id and the resolver hands back *that connection's* directory, so
+   * one token's run lands in another's scratch space.
+   *
+   * The remote route refuses a session id outside the caller's ledger scope
+   * before it ever reaches here, so this is not the only thing standing in the
+   * way. It is the thing that makes the resolver correct on its own terms
+   * rather than correct because of a check somewhere else.
+   */
   const bySession = new Map<string, string>();
+
+  /** The composite key. NUL because neither id may contain one. */
+  const scratchKey = (connectionId: string, sessionId: string): string =>
+    `${connectionId}\u0000${sessionId}`;
   /** Every directory this resolver created, so shutdown can remove them all. */
   const created = new Set<string>();
 
@@ -171,22 +190,34 @@ export function createWorkspaceResolver(
             return { path: await makeScratch(connectionId), ephemeral: true };
           }
 
-          const existing = bySession.get(sessionId);
+          const key = scratchKey(connectionId, sessionId);
+          const existing = bySession.get(key);
           if (existing !== undefined) return { path: existing, ephemeral: true };
 
           const path = await makeScratch(connectionId);
-          bySession.set(sessionId, path);
+          bySession.set(key, path);
           return { path, ephemeral: true };
         }
       }
     },
 
+    /*
+     * Releasing by session id alone stays the signature, because the caller —
+     * a conversation ending — knows which conversation ended and not which
+     * tokens have scratch for it. Every connection's directory for that
+     * session goes, which is the same set the old single-keyed map held.
+     */
     async release(sessionId) {
-      const path = bySession.get(sessionId);
-      if (path === undefined) return;
-      bySession.delete(sessionId);
-      created.delete(path);
-      await removeQuietly(path);
+      const suffix = `\u0000${sessionId}`;
+      const paths: string[] = [];
+      for (const [key, path] of bySession) {
+        if (key.endsWith(suffix)) {
+          bySession.delete(key);
+          created.delete(path);
+          paths.push(path);
+        }
+      }
+      await Promise.all(paths.map(removeQuietly));
     },
 
     async disposeAll() {
