@@ -213,6 +213,20 @@ export interface SessionState extends MirroredState {
   readonly forkOnResume: boolean;
   readonly resumeSessionId: SessionId | null;
   /**
+   * A read that will rebuild this transcript is still in flight.
+   *
+   * Set the moment a resume or an attach resets the transcript, cleared by
+   * whichever read completes the rebuild — success, failure or timeout alike.
+   * It exists for exactly one consumer, `blankTranscript`: between the reset
+   * and the first applied event the transcript holds zero rows, and a pane
+   * with zero rows used to present the new-conversation empty state — over a
+   * live, ticking run — for as long as the history read queued behind main's
+   * config-directory lock. The read being slow is survivable; the pane
+   * claiming "nothing has happened here" while it waits is the lie this flag
+   * removes.
+   */
+  readonly historyLoading: boolean;
+  /**
    * Truncate the resumed conversation to just before this user message on the
    * next run, named by the provider's own id for it. Set by the rewind and
    * fork-from-here controls under a user turn; one-shot, consumed by the run

@@ -51,6 +51,7 @@ const SESSION_KEYS: Readonly<Record<keyof SessionState, true>> = {
   ultracode: true,
   forkOnResume: true,
   resumeSessionId: true,
+  historyLoading: true,
   rewindToMessageId: true,
   models: true,
   modelsLoading: true,

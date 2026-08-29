@@ -165,6 +165,33 @@ export function EmptyState(): ReactElement {
   );
 }
 
+/**
+ * What a zero-row transcript shows while its conversation is still being read
+ * in — a resume's history queued behind main's config-directory lock, or a
+ * live run's replay still in flight.
+ *
+ * Deliberately almost nothing: no logo, no legend, no "press enter". Every one
+ * of those says "nothing has happened here", and the one fact this state knows
+ * is that something *has* — it just is not back from disk yet. So it says
+ * that, in the same quiet mono voice as the resume hint above, and lets the
+ * status line carry the liveness it already shows.
+ *
+ * Same `Empty` shell as {@link EmptyState}, so the wait and the rows that
+ * replace it occupy the same centred column and the swap does not jump.
+ */
+export function ConversationLoading(): ReactElement {
+  const conversation = usePane((s) => s.resumeSessionId ?? s.run?.sessionId ?? null);
+  return (
+    <Empty className="min-h-[60vh] gap-6 px-8 py-12">
+      <p className="animate-pulse font-mono text-2xs text-ink-faint">
+        {conversation
+          ? `catching up with session ${conversation.slice(0, 8)}…`
+          : 'catching up with this conversation…'}
+      </p>
+    </Empty>
+  );
+}
+
 function Hint({ combo, text }: { readonly combo: string; readonly text: string }): ReactElement {
   return (
     <>
