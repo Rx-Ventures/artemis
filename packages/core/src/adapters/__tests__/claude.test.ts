@@ -2154,16 +2154,25 @@ describe('attaching to a live process', () => {
     expect(harness().fake).not.toBe(first.fake);
   });
 
-  it('refuses a turn pointed at a different store', async () => {
-    const { adapter, first, harness } = await firstTurn();
+  it('refuses a turn pointed at a different store while the process holds work', async () => {
+    const { adapter, first } = await firstTurn();
 
-    await adapter.createRun(
-      nextTurn({ env: { ...BASE_INPUT.env, CLAUDE_CONFIG_DIR: '/app/profiles/other' } }),
-    );
-
-    // Which account runs is fixed at spawn — the whole reason #98 locks a session
-    // to its profile. A session id does not resolve in another profile's store.
-    expect(harness().fake).not.toBe(first.fake);
+    /*
+     * This used to fall through to a fresh spawn beside the held process, on
+     * the reasoning that a session id does not resolve in another profile's
+     * store anyway. With `projects/` shared it does resolve — a cross-store
+     * resume is a *hand off* — and a fresh spawn here would put two CLIs on
+     * one JSONL: this process is retained precisely because it is still
+     * writing about the work it holds. So the turn is refused, with the way
+     * out named. The idle case releases and respawns instead — see "a resume
+     * under a different account" below.
+     */
+    await expect(
+      adapter.createRun(
+        nextTurn({ env: { ...BASE_INPUT.env, CLAUDE_CONFIG_DIR: '/app/profiles/other' } }),
+      ),
+    ).rejects.toThrow(/work running under the account it started on/);
+    expect(first.fake.closed).toBe(false);
   });
 
   it('moves the live process onto the new turn’s model and mode', async () => {
@@ -2671,6 +2680,119 @@ describe('rewind', () => {
       }),
     ).rejects.toThrow(/still has work running/);
     expect(fake.closed).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* A hand-off resume: same conversation, different store                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * §5 obstacle 2, pinned. A cross-profile resume deliberately misses the pool —
+ * `canServe` refuses the config-dir mismatch — and spawns a second CLI against
+ * the same (shared) transcript file. The *source* process must be released
+ * first, exactly as the rewind path releases it, or it goes on appending —
+ * a settling turn, a scheduled wakeup — under the CLI that now owns the file:
+ * two writers, one JSONL.
+ *
+ * The invariant is release-before-resume: by the time the fresh spawn exists,
+ * the retained process's transport is down. Work in flight refuses instead,
+ * because a release there destroys the very thing retention exists to protect.
+ */
+describe('a resume under a different account', () => {
+  const tasksChanged = (tasks: readonly unknown[]) =>
+    ({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks,
+      uuid: 'u-tasks',
+      session_id: 'sess-abc',
+    }) as unknown as SDKMessage;
+
+  /** The same conversation, asked for under another profile's store. */
+  const HANDOFF_INPUT: ResolvedRunInput = {
+    ...BASE_INPUT,
+    runId: 'run-2',
+    profileId: 'prof-2',
+    resumeSessionId: 'sess-abc',
+    prompt: 'carry on',
+    env: { CLAUDE_CONFIG_DIR: '/app/profiles/personal' },
+  };
+
+  it('releases the retained source process, then spawns fresh against the store', async () => {
+    const first = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = first.harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'brief work' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    // The work settles; the process is retained on the grace beat — idle in
+    // every sense the user can see, and exactly the state a hand off lands in.
+    fake.messages.push(tasksChanged([]));
+    await vi.waitFor(() => expect(fake.closed).toBe(false));
+
+    const second = installQuery();
+    await adapter.createRun(HANDOFF_INPUT);
+
+    // Release before resume: the source transport is down…
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+    // …and the fresh spawn is a --resume of the same conversation, not an
+    // attach — the config-dir mismatch is a different store by definition.
+    expect(second.harness().options).toMatchObject({ resume: 'sess-abc' });
+  });
+
+  it('refuses while the source process holds real work', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'still going' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    expect(fake.closed).toBe(false);
+
+    // Releasing here would destroy the delegated work retention exists to
+    // protect; spawning without releasing would put two CLIs on one file. The
+    // only honest answer is to refuse and say what is in the way.
+    await expect(adapter.createRun(HANDOFF_INPUT)).rejects.toThrow(
+      /work running under the account it started on/,
+    );
+    expect(fake.closed).toBe(false);
+  });
+
+  it('leaves the ordinary same-store resume exactly as it was', async () => {
+    const { harness } = installQuery();
+    const adapter = createClaudeAdapter();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(
+      tasksChanged([{ task_id: 't1', task_type: 'subagent', description: 'still going' }]),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+
+    // Same store, work in flight: the pool attaches, as it always has. The
+    // hand-off guard must not widen into refusing what `canServe` accepts.
+    const attached = await adapter.createRun({
+      ...BASE_INPUT,
+      runId: 'run-3',
+      resumeSessionId: 'sess-abc',
+      prompt: 'and then?',
+    });
+    expect(fake.closed).toBe(false);
+    expect(attached.runId).toBe('run-3');
+    await attached.dispose();
   });
 });
 

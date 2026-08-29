@@ -1169,6 +1169,40 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         rewind = point;
       }
 
+      /*
+       * A hand-off resume — same conversation, different store — never
+       * attaches: `canServe` refuses the config-dir mismatch below and the
+       * fresh spawn resumes the transcript under the new account. But the
+       * *source* process is still holding that transcript, and left alive it
+       * would go on appending — a settling task's follow-up turn, a scheduled
+       * wakeup — underneath the CLI that now owns the file. Two writers, one
+       * JSONL: the exact clobber the pool exists to prevent, arriving through
+       * the other door.
+       *
+       * The rewind above is the precedent, applied one notch more cautiously:
+       * an open turn or real work refuses and says why — the caller stops it
+       * first, which is what the renderer's hand-off gate already enforces —
+       * while a merely-retained process (grace timers, a prediction still
+       * cooking) is released, and the resume spawns fresh against a file
+       * nobody is writing.
+       */
+      if (
+        alive !== undefined &&
+        input.resumeSessionId !== undefined &&
+        !alive.sharesStore(configDir)
+      ) {
+        if (alive.midTurn || alive.busyWithWork) {
+          throw adapterError(
+            'invalid_request',
+            'This conversation still has work running under the account it started on — stop that work before handing it off.',
+          );
+        }
+        alive.release();
+        // Not attachable from here on, whatever `canServe` would say — the
+        // transport is going down, and its pump may not have noticed yet.
+        alive = undefined;
+      }
+
       if (alive !== undefined && alive.canServe(input, configDir)) {
         diagnostic?.(
           `Run ${input.runId}: continuing on the process already serving session ${input.resumeSessionId ?? '—'}.`,
@@ -2732,6 +2766,31 @@ class ClaudeProcess {
   }
 
   /**
+   * Does this process read and write the store `configDir` names?
+   *
+   * The store is fixed at spawn — it is the config directory the CLI inherited
+   * — so this is an identity fact, not a state one. Split out of
+   * {@link canServe} because a cross-profile resume needs the answer on its
+   * own: a config-dir mismatch there is not merely "cannot attach", it is
+   * "this process must let go of the transcript first". See `createRun`.
+   */
+  sharesStore(configDir: string | undefined): boolean {
+    return configDir === readEnv(this.#input.env, CLAUDE_CONFIG_DIR_ENV);
+  }
+
+  /**
+   * Is a turn open on this process right now?
+   *
+   * Narrower than {@link working}, which also counts live tasks and the settle
+   * grace; narrower than {@link busyWithWork}, which counts a registered
+   * schedule. This is only "is the CLI actively producing a turn" — the one
+   * state in which closing the transport destroys words mid-sentence.
+   */
+  get midTurn(): boolean {
+    return !this.#state.ended;
+  }
+
+  /**
    * Can this process serve the turn described by `input`?
    *
    * The identity checks are the same three facts a session id resolves under —
@@ -2757,7 +2816,7 @@ class ClaudeProcess {
     if (this.#sessionId === undefined) return false;
     if (input.resumeSessionId !== this.#sessionId) return false;
     if (input.cwd !== this.#input.cwd) return false;
-    return configDir === readEnv(this.#input.env, CLAUDE_CONFIG_DIR_ENV);
+    return this.sharesStore(configDir);
   }
 
   /**

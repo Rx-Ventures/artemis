@@ -43,7 +43,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionSummary } from '@rx-artemis/protocol';
 
-import { canReachSession, focusedPane, resumeSession, useApp } from './store';
+import { canReachSession, focusedPane, handOffToProfile, resumeSession, useApp } from './store';
 import { paneState, setPaneState } from './pane';
 import { seedApp } from './testkit';
 
@@ -249,5 +249,66 @@ describe('resuming a shared session the ledger has attributed', () => {
     resumeSession(row);
 
     expect(session().activeProfileId).toBe(row.profileId);
+  });
+});
+
+/**
+ * Handing an *open* shared session to another sharer (ADR 0003, §5).
+ *
+ * The old invariant read "a session cannot switch accounts". What it was
+ * actually protecting — as every describe above shows — is narrower: a session
+ * cannot switch onto an account that cannot read its store, and it cannot be
+ * silently billed to one nobody chose. With `projects/` shared, both
+ * protections survive account movement: `canReachSession` is the floor of the
+ * hand-off door, and the door only ever opens as a chosen act. So the invariant
+ * is restated, not relaxed — *reachability decides who may continue a
+ * conversation; the user decides who does.*
+ */
+describe('handing the open session to another sharer', () => {
+  const fresh = () => ({
+    available: true,
+    windows: [{ id: 'five_hour', label: '5 hours', utilization: 15, resetsAt: null }],
+    fetchedAt: Date.now(),
+  });
+
+  it('keeps the session id across the move — the whole point of the door', async () => {
+    // The open conversation: active on p2, resumable, and the sidebar's row
+    // says p1 ran it last with p2 sharing the store.
+    const row = summary({ profileId: 'p1', alsoInProfiles: ['p2'] });
+    seedApp({
+      sessions: [row],
+      resumeSessionId: 'sess-1',
+      authByProfile: { p1: { loggedIn: true } },
+      planUsageByProfile: { p1: fresh() },
+    } as never);
+
+    expect(await handOffToProfile('p1')).toBe(true);
+
+    expect(session().activeProfileId).toBe('p1');
+    expect(session().resumeSessionId).toBe('sess-1');
+    // And the move announces itself where resumes announce themselves.
+    expect(noticeText()).toContain('Handed off to Personal');
+  });
+
+  it('refuses an account outside the sharing set, however healthy it looks', async () => {
+    seedApp({
+      profiles: [
+        { id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.personal' },
+        { id: 'p2', label: 'Work', providerId: 'claude', configDir: '/u/.work' },
+        { id: 'p3', label: 'Other', providerId: 'claude', configDir: '/u/.other' },
+      ],
+      activeProfileId: 'p2',
+      sessions: [summary({ profileId: 'p1', alsoInProfiles: ['p2'] })],
+      resumeSessionId: 'sess-1',
+      authByProfile: { p3: { loggedIn: true } },
+      planUsageByProfile: { p3: fresh() },
+    } as never);
+
+    // p3 cannot reach the store, so the resume this door promises would fail
+    // seconds after the next prompt — the exact deferred failure the original
+    // invariant existed to prevent. That part did not move an inch.
+    expect(await handOffToProfile('p3')).toBe(false);
+    expect(session().activeProfileId).toBe('p2');
+    expect(session().resumeSessionId).toBe('sess-1');
   });
 });
