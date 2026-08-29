@@ -1,11 +1,18 @@
 /**
- * Agents — the standing instructions every run carries.
+ * The standing prompts — the rule half of the Instructions pane.
  * ============================================================================
+ *
+ * No longer a pane of its own: `InstructionsSection` composes these groups
+ * above the memory banks, on the argument the old nav made from a distance —
+ * a prompt library is the general case of "what the agent is told before the
+ * conversation starts", and the banks are its best-known instance. The file
+ * keeps its name because the section id `agents` is a frozen address, and the
+ * file answering for an address is easier to find when it is named after it.
  *
  * A prompt library and the rules for which accounts each prompt reaches. What
  * the user writes here is appended to the provider's own system prompt on every
- * run, which makes this the one settings pane whose contents the model actually
- * reads — and that fact governs almost every decision below.
+ * run, which makes this the one settings surface whose contents the model
+ * actually reads — and that fact governs almost every decision below.
  *
  * ---------------------------------------------------------------------------
  * A LIST AND AN EDITOR, NOT A PAGE OF EDITORS
@@ -56,14 +63,13 @@ import type {
 } from '@rx-artemis/protocol';
 import { BUILT_IN_AGENT_PROMPTS, promptText, scopeCovers } from '@rx-artemis/protocol';
 
-import { useAgentPrompts, type AgentPromptsPane } from '../../hooks/useAgentPrompts';
-import { useMemoryBanksAvailable } from '../../hooks/useMemoryBanks';
+import type { AgentPromptsPane } from '../../hooks/useAgentPrompts';
 import { newId } from '../../lib/id';
 import { useApp } from '../../state/store';
 import { WithReason } from '../disabled-reason';
 import { MarkdownEditor } from '../MarkdownEditor';
 import { StatusDot, ToneBadge } from '../primitives';
-import { SettingsGroup, SettingsPane } from './pane';
+import { SettingsGroup } from './pane';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -89,17 +95,25 @@ interface ScopeTarget {
   readonly reason: string;
 }
 
-export function AgentsSection(): ReactElement {
-  const pane = useAgentPrompts();
+export function AgentPromptsGroups({
+  pane,
+  banksAvailable,
+}: {
+  readonly pane: AgentPromptsPane;
+  /**
+   * The banks' condition, for the one built-in that depends on them. Handed
+   * down from the pane's single `useMemoryBanks` reading rather than fetched
+   * again here, so the two halves of Instructions cannot disagree about
+   * whether the banks are configured *and* switched on — which is the
+   * conjunction `engine.ts` composes runs with, and the only thing that makes
+   * this row's "not being sent" line true. `null` while unknown, and a
+   * failed read stays unknown rather than becoming a claim of "not available".
+   */
+  readonly banksAvailable: boolean | null;
+}): ReactElement {
   const profiles = useApp((s) => s.profiles);
   const providers = useApp((s) => s.providers);
 
-  // The banks' condition, for the one built-in that depends on them. Read from
-  // the same module the memory-banks pane reads, so the two panes cannot
-  // disagree about whether they are configured *and* switched on — which is
-  // the conjunction `engine.ts` composes runs with, and the only thing that
-  // makes this row's "not being sent" line true.
-  const banksAvailable = useMemoryBanksAvailable();
   const availableBuiltIns = useMemo((): ReadonlySet<BuiltInPromptId> => {
     const available = new Set<BuiltInPromptId>();
     if (banksAvailable === true) available.add('builtin:cerebro');
@@ -144,11 +158,7 @@ export function AgentsSection(): ReactElement {
   };
 
   return (
-    <SettingsPane
-      title="Agents"
-      description="Standing instructions appended to the agent's system prompt on every run. Written once, sent every session."
-      actions={<SaveIndicator pane={pane} />}
-    >
+    <>
       {pane.error !== null ? (
         <p className="text-2xs leading-relaxed text-signal">{pane.error}</p>
       ) : null}
@@ -196,7 +206,7 @@ export function AgentsSection(): ReactElement {
           )}
         </>
       ) : null}
-    </SettingsPane>
+    </>
   );
 }
 
@@ -207,12 +217,14 @@ export function AgentsSection(): ReactElement {
 /**
  * Whether what is on screen is on disk.
  *
- * Present because this pane has no save button — edits land on a debounce — and
- * a surface that writes silently owes the user a way to tell that it did. The
- * idle state says "Saved" rather than nothing, for the same reason: a blank
- * space is indistinguishable from a component that is broken.
+ * Present because the library has no save button — edits land on a debounce —
+ * and a surface that writes silently owes the user a way to tell that it did.
+ * The idle state says "Saved" rather than nothing, for the same reason: a
+ * blank space is indistinguishable from a component that is broken. Exported
+ * for the Instructions pane's title row, which is where a whole-pane indicator
+ * belongs.
  */
-function SaveIndicator({ pane }: { readonly pane: AgentPromptsPane }): ReactElement | null {
+export function SaveIndicator({ pane }: { readonly pane: AgentPromptsPane }): ReactElement | null {
   if (pane.loading || pane.error !== null) return null;
   if (pane.saveState.kind === 'error') {
     return <span className="text-2xs text-signal">{pane.saveState.message}</span>;

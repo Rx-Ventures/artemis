@@ -197,7 +197,9 @@ export function ProfilesSection(): ReactElement {
         )
       }
     >
-      <div className="flex flex-col gap-3">
+      {/* The address the status line's "Manage" scrolls to — see
+          `openSettings(section, { row })`. Frozen like the section ids. */}
+      <div data-settings-row="profile-list" className="flex flex-col gap-3">
         {profiles.length === 0 && !creating ? (
           <p className="text-xs text-ink-muted">No profiles yet.</p>
         ) : null}

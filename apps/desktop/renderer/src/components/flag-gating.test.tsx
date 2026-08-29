@@ -31,7 +31,7 @@ import type {
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { CommandPalette } from '@/components/CommandPalette';
-import { ModelsSection } from '@/components/settings/ModelsSection';
+import { RunsSection } from '@/components/settings/RunsSection';
 import {
   providerOffersFastMode,
   providerOffersUltracode,
@@ -165,9 +165,12 @@ describe('command palette / fast mode', () => {
 });
 
 describe('settings / defaults for the next run', () => {
+  // The switches live in the Runs pane now — the catalogue describes the
+  // lineup, Runs shapes the run — but the gating contract moved with them
+  // unchanged, and these assertions are that contract.
   it('shows both switches, and explains the one this model refuses', () => {
     useModels(CLAUDE_MODELS, 'haiku');
-    mount(<ModelsSection />);
+    mount(<RunsSection />);
 
     expect(screen.getByLabelText('Fast mode')).toBeTruthy();
     expect(screen.getByLabelText('Ultracode')).toBeTruthy();
@@ -176,13 +179,13 @@ describe('settings / defaults for the next run', () => {
 
   it('drops the whole group on a provider that has neither flag', () => {
     useModels(CODEX_MODELS, 'gpt-5.5');
-    mount(<ModelsSection />);
+    mount(<RunsSection />);
 
     expect(screen.queryByLabelText('Fast mode')).toBeNull();
     expect(screen.queryByLabelText('Ultracode')).toBeNull();
     // The heading goes with them rather than sitting over nothing.
     expect(screen.queryByText('Defaults for the next run')).toBeNull();
-    // The catalogue itself is untouched — this is about the flags, not the pane.
-    expect(screen.getByText('GPT-5.5')).toBeTruthy();
+    // The rest of the pane is untouched — this is about the flags, not the pane.
+    expect(screen.getByText('Run summary')).toBeTruthy();
   });
 });

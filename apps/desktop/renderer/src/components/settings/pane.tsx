@@ -2,8 +2,8 @@
  * The furniture every settings pane is built from.
  * ============================================================================
  *
- * Four panes live behind one dialog, and they were written to feel like four
- * views of the same surface rather than four screens that happen to share a
+ * Nine panes live behind one dialog, and they were written to feel like nine
+ * views of the same surface rather than nine screens that happen to share a
  * frame. That only holds if the title block, the setting row and the "pick one
  * of these" control are literally the same components everywhere — the moment
  * one pane hand-rolls its own heading, the section nav starts to read like
@@ -13,11 +13,11 @@
  * WHY `ChoiceList` EXISTS AND IS NOT A ROW OF BUTTONS
  * ---------------------------------------------------------------------------
  *
- * Two panes need the same control: "choose exactly one of these, and show me
- * what each one costs me" — conversation width in Appearance, permission mode
- * in Permissions. Both sets are small, both need a sentence per option, and in
- * both cases the sentence is the entire point (nobody knows what
- * `acceptEdits` means from its name).
+ * Several panes need the same control: "choose exactly one of these, and show
+ * me what each one costs me" — conversation width in Appearance, permission
+ * mode in Permissions & access, the run summary in Runs. The sets are small,
+ * each option needs a sentence, and in every case the sentence is the entire
+ * point (nobody knows what `acceptEdits` means from its name).
  *
  * A `Select` hides the sentences behind a click. A row of `aria-pressed`
  * buttons says "several of these can be on", which is wrong. So this is a real
@@ -94,14 +94,29 @@ export function SettingsPane({
 export interface SettingsGroupProps {
   /** Small caps rule above the group. Omit for a group that needs no name. */
   readonly label?: string;
+  /**
+   * Deep-link target. `openSettings(section, { row })` scrolls the group
+   * carrying this id into view once the pane mounts — see the dialog's anchor
+   * effect. An address like the section ids: once a caller links to it, the
+   * string is frozen even if the group is renamed or rehomed.
+   */
+  readonly anchor?: string;
   readonly children: ReactNode;
   readonly className?: string;
 }
 
 /** A titled band of related settings. The uppercase rule matches the inspector. */
-export function SettingsGroup({ label, children, className }: SettingsGroupProps): ReactElement {
+export function SettingsGroup({
+  label,
+  anchor,
+  children,
+  className,
+}: SettingsGroupProps): ReactElement {
   return (
-    <section className={cn('flex flex-col gap-2', className)}>
+    <section
+      className={cn('flex flex-col gap-2', className)}
+      {...(anchor === undefined ? {} : { 'data-settings-row': anchor })}
+    >
       {label ? (
         <h3 className="chrome-label text-ink-faint">{label}</h3>
       ) : null}

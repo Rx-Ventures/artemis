@@ -1,9 +1,16 @@
 /**
- * Memory banks — Cerebro generalized, as a settings pane.
+ * Memory banks — Cerebro generalized, as the instance half of Instructions.
  * ============================================================================
  *
+ * No longer a pane of its own: `InstructionsSection` composes these groups
+ * under the prompt library, because a bank is one instance of the rule the
+ * prompts state — what the agent is told before the conversation starts. The
+ * file keeps its name for the same reason `AgentsSection.tsx` keeps its own:
+ * the section id `cerebro` is a frozen address that resolves here, and the
+ * file is easier to find when it is named after what the address meant.
+ *
  * The banks run themselves: a sync at every run start, agents drafting into
- * them, pull requests reviewing them. So the pane exists for the two moments
+ * them, pull requests reviewing them. So the surface exists for the two moments
  * automation cannot cover. Onboarding — joining, creating, or adopting a bank
  * — and *inspection*, when a person wants to read what agents have been
  * remembering, prune what no longer holds, and decide which banks this
@@ -41,9 +48,9 @@ import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { MemoryBankInfo, MemoryBankMemory, MemoryBankRole } from '@rx-artemis/protocol';
 
-import { useMemoryBanks, type MemoryBanksPane } from '../../hooks/useMemoryBanks';
+import type { MemoryBanksPane } from '../../hooks/useMemoryBanks';
 import { CodeBlock, Fold, Row, StatusDot, ToneBadge } from '../primitives';
-import { SettingsGroup, SettingsPane } from './pane';
+import { SettingsGroup } from './pane';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,27 +65,33 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-export function MemoryBanksSection(): ReactElement {
-  const pane = useMemoryBanks();
+/**
+ * The whole-library sync, for the Instructions pane's title row.
+ *
+ * Rendered only when there is something to sync and the master gate is up —
+ * the same condition the old pane's `actions` slot used — because a sync
+ * button over a machine with no wired banks is a promise about nothing.
+ */
+export function SyncAllButton({ pane }: { readonly pane: MemoryBanksPane }): ReactElement | null {
+  const hasBanks = (pane.status?.banks.length ?? 0) > 0;
+  if (pane.status === null || !pane.status.masterEnabled || !hasBanks) return null;
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={pane.busy !== null || pane.reading}
+      onClick={() => pane.sync()}
+    >
+      {pane.busy === 'sync' ? 'Syncing…' : 'Sync all'}
+    </Button>
+  );
+}
+
+export function MemoryBankGroups({ pane }: { readonly pane: MemoryBanksPane }): ReactElement {
   const hasBanks = (pane.status?.banks.length ?? 0) > 0;
 
   return (
-    <SettingsPane
-      title="Memory banks"
-      description="Shared, agent-maintained git repositories of durable facts — reviewed like code, installed into every session's memory."
-      actions={
-        pane.status !== null && pane.status.masterEnabled && hasBanks ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={pane.busy !== null || pane.reading}
-            onClick={() => pane.sync()}
-          >
-            {pane.busy === 'sync' ? 'Syncing…' : 'Sync all'}
-          </Button>
-        ) : undefined
-      }
-    >
+    <>
       {pane.error !== null ? (
         <p className="text-2xs leading-relaxed text-signal">{pane.error}</p>
       ) : null}
@@ -98,7 +111,7 @@ export function MemoryBanksSection(): ReactElement {
           className="max-h-32"
         />
       ) : null}
-    </SettingsPane>
+    </>
   );
 }
 

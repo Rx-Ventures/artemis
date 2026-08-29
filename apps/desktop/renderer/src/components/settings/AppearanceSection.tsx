@@ -2,26 +2,24 @@
  * Appearance.
  * ============================================================================
  *
- * A small pane, on purpose — and notably it is not where the theme lives. That
- * control is in the window header next to the settings button (see
- * `ThemeToggle`), because the palette is the one appearance setting whose whole
- * effect is the window itself: everything it changes is already on screen, and
- * putting it behind this dialog would mean covering it up to reach it.
+ * A small pane, on purpose, and smaller than it used to be: the run summary
+ * and the handover rules moved to Runs (they shape what a run *reports and
+ * does*, not how the window looks) and the recent-folders list moved to This
+ * machine (it is a record the installation keeps, not a taste anyone holds).
+ * What is left is genuinely how the app looks and reads.
  *
- * Text size is the one that looks like the same kind of claim and is not, so it
- * is worth being precise about what became settable. The type *scale* is still
+ * Text size is the one that looks like a bigger claim than it is, so it is
+ * worth being precise about what became settable. The type *scale* is still
  * architecture: 11 / 12 / 13 / 14 / 16 / 20 and the ratios between them are
  * fixed, and nothing here can put the transcript at 13 while the chrome labels
  * stay at 11. What the user moves is a single multiplier over the whole scale —
  * the design system's proportions, rendered larger or smaller. That is why it
  * can be offered honestly, and why it is one number rather than a font panel.
  *
- * The rest is genuinely a matter of taste and genuinely wired: how wide the
+ * The rest is a matter of taste and genuinely wired: the theme, how wide the
  * transcript column may grow, whether the model's reasoning is in the thread or
- * folded into the work it belongs to, how much of the block at the end of a run
- * it keeps, whether the sidebar is showing, and which folders the menu above the
- * composer offers. All are persisted and all take effect the moment they are
- * set.
+ * folded into the work it belongs to, whether the sidebar is showing. All are
+ * persisted and all take effect the moment they are set.
  *
  * The thinking switch is the largest of those and the one that had to earn the
  * word "appearance", because it moves rows rather than restyling them: the
@@ -32,17 +30,13 @@
  * rather than beside the effort picker, which is the control that decides
  * whether there is any reasoning to draw.
  *
- * The folder list is the one entry here that is not a preference but a *record*
- * — the app writes it as you work — which is exactly why it needs a pane: it is
- * the only place a folder can be taken back out. See `RecentFolders` below.
- *
- * That last part is the rule this file is written to. Every control below
- * writes to a store action that something actually reads. A "reduced motion" or
- * "compact density" switch would be easy to add and would silently do nothing,
- * which is worse than not offering it — the user changes it, sees no
- * difference, and stops trusting the rest of the pane. When those become real
- * settings they belong here; until then the note at the foot says plainly that
- * they are not settings rather than leaving a suspicious gap.
+ * The rule this file is written to: every control below writes to a store
+ * action that something actually reads. A "reduced motion" or "compact
+ * density" switch would be easy to add and would silently do nothing, which is
+ * worse than not offering it — the user changes it, sees no difference, and
+ * stops trusting the rest of the pane. When those become real settings they
+ * belong here; until then the note at the foot says plainly that they are not
+ * settings rather than leaving a suspicious gap.
  *
  * The word-fade switch is the first of those to graduate. It is deliberately
  * *not* a general "reduce motion" — it governs one animation, the only one in
@@ -52,37 +46,28 @@
  * is not a preference this pane owns.)
  */
 
-import { useMemo, useState, type ReactElement } from 'react';
-import { MinusIcon, PlusIcon, XIcon } from 'lucide-react';
-import { handoffThresholdsWith, type HandoffThreshold } from '@rx-artemis/protocol';
+import { type ReactElement } from 'react';
+import { MinusIcon, PlusIcon } from 'lucide-react';
 
 import { ReasonButton } from '../disabled-reason';
+import { ThemeToggle } from '../ThemeToggle';
 import { ChoiceList, SettingsGroup, SettingsPane, type Choice } from './pane';
 import {
   FONT_SIZE_DEFAULT,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
-  RECENT_FOLDERS_LIMIT,
   SIDEBAR_DEFAULT_WIDTH,
-  forgetFolders,
   setConversationWidth,
   setDockAutoOpen,
-  setAutoHandoff,
   setEscapeStopsRun,
   setFontSize,
-  setHandoffThreshold,
-  setRunSummary,
   setShowThinking,
   setSidebarCollapsed,
   setSidebarWidth,
   setStreamingWordFade,
   useApp,
   type ConversationWidth,
-  type RunSummary,
 } from '../../state/store';
-import { inferHomeDirectory, lastSegment, shortenPath, sortFoldersByName } from '../../lib/paths';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Item,
   ItemActions,
@@ -91,55 +76,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from '@/components/ui/item';
-import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-
-/**
- * One handoff rule's slider.
- *
- * The dragged value lives in local state until the pointer releases, and only
- * the release commits: `setHandoffThreshold` re-judges the readings already in
- * hand, so committing every intermediate value would let a drag *through* the
- * needle latch a handoff the user's finger was still on its way past. The
- * label tracks the drag, because a number that lags the thumb reads as broken.
- *
- * The floor is 50 rather than 1: the store accepts anything, but a slider is
- * an instrument for the usable range, and "hand off when half the budget
- * remains" is already the extreme of what the feature means. The default is
- * always inside [50, 100], so the floor can never hide a shipped value.
- */
-function ThresholdSlider({
-  rule,
-  disabled,
-}: {
-  readonly rule: HandoffThreshold;
-  readonly disabled: boolean;
-}): ReactElement {
-  const [dragging, setDragging] = useState<number | null>(null);
-  const shown = dragging ?? rule.at;
-
-  return (
-    <div className="flex w-full items-center gap-3">
-      <span className="w-14 shrink-0 text-2xs text-ink-muted">{rule.label}</span>
-      <Slider
-        value={[shown]}
-        min={50}
-        max={100}
-        step={1}
-        disabled={disabled}
-        aria-label={`${rule.label} handoff threshold`}
-        onValueChange={(values) => setDragging(values[0] ?? null)}
-        onValueCommit={(values) => {
-          setDragging(null);
-          if (values[0] !== undefined) setHandoffThreshold(rule.id, values[0]);
-        }}
-      />
-      <span className="w-9 shrink-0 text-right font-mono text-2xs tabular-nums text-ink-muted">
-        {shown}%
-      </span>
-    </div>
-  );
-}
 
 /**
  * The three reading modes.
@@ -164,31 +101,6 @@ const WIDTHS: readonly Choice<ConversationWidth>[] = [
     id: 'full',
     label: 'Full width',
     note: 'Use the whole window. Best on a narrow display, or when the window is already only half the screen.',
-  },
-];
-
-/**
- * What each setting keeps of the block a run ends with.
- *
- * Every note says what still appears, not what disappears — the question a
- * user has here is "will I lose the error", and the answer is no in all three
- * cases. Trimming is described as trimming; nothing here is described as off.
- */
-const RUN_SUMMARIES: readonly Choice<RunSummary>[] = [
-  {
-    id: 'always',
-    label: 'After every run',
-    note: 'Duration, turns, tokens and cost. Worth keeping while you are watching spend or comparing models.',
-  },
-  {
-    id: 'failures',
-    label: 'Only when a run is cut short',
-    note: 'A clean run ends quietly. Errors, interruptions and hitting a turn or budget limit still report — each means the answer above is unfinished.',
-  },
-  {
-    id: 'never',
-    label: 'Never',
-    note: 'No accounting at all. A failed run still shows its message and code, because this is the only place either appears.',
   },
 ];
 
@@ -280,170 +192,51 @@ function TextSize(): ReactElement {
   );
 }
 
-/**
- * The folder menu's list, editable.
- * ============================================================================
- *
- * The list above the composer fills itself — every directory worked in goes into
- * it — which is what makes it useful and also what makes it need this pane. A
- * folder opened once by mistake, a client's repository that is no longer
- * anyone's business, a throwaway checkout: all of them sit in a menu the user
- * opens twenty times a day, and none of them can be got rid of from that menu.
- *
- * ## Why removal is offered twice
- *
- * The × on a row and the tick-boxes are the same operation and are both here on
- * purpose. Tidying up after a week of experiments means removing five folders at
- * once, and doing that through five separate row buttons — each one reflowing
- * the list under the cursor as it goes — is the interaction people misclick.
- * Wanting *one* gone, on the other hand, is the common case, and making that
- * cost a tick, a scroll to a button and a click would be worse than the problem.
- *
- * So: the × is the shortcut, the boxes are the batch, and both call
- * `forgetFolders`, which writes and persists once regardless of how many folders
- * it is given.
- *
- * ## No confirmation, deliberately
- *
- * Forgetting a folder destroys nothing — not the directory, not its sessions,
- * not the transcript. The folder comes back the next time it is opened. A
- * confirmation step here would teach the user that this dialog's buttons are
- * dangerous, which is a lesson worth saving for the ones that are.
- */
-function RecentFolders(): ReactElement {
-  const platform = useApp((s) => s.platform);
-  const recentFolders = useApp((s) => s.recentFolders);
-  /*
-   * Selection is by path and is *derived* against the live list rather than
-   * stored as truth. Folders leave this list while the pane is open — the ×
-   * removes one, and the window itself keeps recording as sessions move — and a
-   * tick left behind for a path that is gone would put a stale count on the
-   * remove button.
-   */
-  const [ticked, setTicked] = useState<readonly string[]>([]);
-
-  const folders = useMemo(() => sortFoldersByName(recentFolders), [recentFolders]);
-  const home = useMemo(() => inferHomeDirectory(folders, platform), [folders, platform]);
-  const selected = useMemo(() => folders.filter((f) => ticked.includes(f)), [folders, ticked]);
-
-  const toggle = (path: string, on: boolean): void => {
-    setTicked((current) =>
-      on ? [...current.filter((f) => f !== path), path] : current.filter((f) => f !== path),
-    );
-  };
-
-  const remove = (paths: readonly string[]): void => {
-    forgetFolders(paths);
-    setTicked((current) => current.filter((f) => !paths.includes(f)));
-  };
-
-  if (folders.length === 0) {
-    return (
-      <p className="text-2xs leading-relaxed text-ink-faint">
-        No folders remembered yet. Every directory you work in is added here, up to{' '}
-        {RECENT_FOLDERS_LIMIT} — after that the one you have not opened in the longest makes way.
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <ItemGroup className="gap-2">
-        {folders.map((folder) => {
-          const name = lastSegment(folder);
-          const checked = ticked.includes(folder);
-          return (
-            <Item
-              key={folder}
-              variant="outline"
-              size="sm"
-              className="items-center border-line bg-panel"
-            >
-              <Checkbox
-                checked={checked}
-                onCheckedChange={(next) => toggle(folder, next === true)}
-                // The whole path, not the name. A column of unlabelled boxes is
-                // unusable by ear, and two checkouts of one repository — the
-                // case that put the path on the row in the first place — would
-                // otherwise be two boxes announced identically.
-                aria-label={`Select ${folder}`}
-                className="shrink-0"
-              />
-              <ItemContent>
-                <ItemTitle className="text-xs text-ink">{name}</ItemTitle>
-                <ItemDescription
-                  className="line-clamp-none font-mono text-2xs text-ink-faint"
-                  title={folder}
-                >
-                  {shortenPath(folder, { home, platform, max: 44 })}
-                </ItemDescription>
-              </ItemContent>
-              <ItemActions>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  // Same rule as the checkbox beside it: the path is what makes
-                  // one row's remove button distinguishable from another's.
-                  aria-label={`Forget ${folder}`}
-                  title={`Forget ${name}`}
-                  onClick={() => remove([folder])}
-                >
-                  <XIcon />
-                </Button>
-              </ItemActions>
-            </Item>
-          );
-        })}
-      </ItemGroup>
-
-      <div className="mt-1 flex items-center gap-2">
-        <ReasonButton
-          size="xs"
-          variant="outline"
-          disabled={selected.length === 0}
-          disabledReason="Tick the folders you want removed first."
-          onClick={() => remove(selected)}
-        >
-          {selected.length > 1 ? `Remove ${selected.length} folders` : 'Remove selected'}
-        </ReasonButton>
-        <ReasonButton
-          size="xs"
-          variant="ghost"
-          disabled={selected.length === folders.length}
-          disabledReason="Every folder is already ticked."
-          onClick={() => setTicked(folders)}
-        >
-          Select all
-        </ReasonButton>
-        <span className="text-2xs text-ink-faint">
-          Forgetting a folder leaves it, and its sessions, exactly where they are.
-        </span>
-      </div>
-    </>
-  );
-}
-
 export function AppearanceSection(): ReactElement {
   const width = useApp((s) => s.conversationWidth);
-  const runSummary = useApp((s) => s.runSummary);
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const sidebarWidth = useApp((s) => s.sidebarWidth);
   const wordFade = useApp((s) => s.streamingWordFade);
   const showThinking = useApp((s) => s.showThinking);
   const dockAutoOpen = useApp((s) => s.dockAutoOpen);
   const escapeStopsRun = useApp((s) => s.escapeStopsRun);
-  const autoHandoff = useApp((s) => s.autoHandoff);
-  const handoffOverrides = useApp((s) => s.handoffThresholds);
-  // The resolved rules rather than the raw overrides, so the sliders show the
-  // numbers the feature will actually act on — defaults included, hand-edited
-  // values clamped the same way `considerHandoff` clamps them.
-  const handoffRules = useMemo(() => handoffThresholdsWith(handoffOverrides), [handoffOverrides]);
 
   return (
     <SettingsPane
       title="Appearance"
-      description="How big the app is, how much room the conversation gets, whether you watch the model think, how much it reports when a run ends, whether the sidebar is in the way, whether the side pane may open itself, what Escape does, whether a nearly-spent account hands its work on, and which folders the composer offers."
+      description="How the app looks and reads: its palette, how big it is, how much room the conversation gets, whether you watch the model think, whether the sidebar is in the way, whether the side pane may open itself, and what Escape does."
     >
+      <SettingsGroup label="Theme">
+        <ItemGroup className="gap-2">
+          {/*
+            The second door to a control that also lives in the window header,
+            and the duplication is deliberate — the same judgment the header
+            makes for its own doubled doors (its rail toggles beside the strip
+            they mirror). The header is the *right* home: the palette's whole
+            effect is the window you are looking at, and a modal covers what it
+            changes. But "theme" is also the first word anyone types into a
+            settings surface, and a pane called Appearance that answered "not
+            here" to it would be correct and unhelpful. One control, two doors,
+            one store value — `ThemeToggle` reads and writes the same `theme`
+            either way, so the two can never disagree.
+          */}
+          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+            <ItemContent>
+              <ItemTitle className="text-xs text-ink">Theme</ItemTitle>
+              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
+                System follows the OS and keeps following it after you walk away; light and dark
+                stay put. The same control sits in the window header, where you can watch the app
+                change as you pick — this row exists so the answer is also where you would look
+                for it.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <ThemeToggle />
+            </ItemActions>
+          </Item>
+        </ItemGroup>
+      </SettingsGroup>
+
       <SettingsGroup label="Text size">
         <ItemGroup className="gap-2">
           <TextSize />
@@ -500,15 +293,6 @@ export function AppearanceSection(): ReactElement {
           encrypts its reasoning, has little or nothing to show — the effort is set beside the model
           in the status line.
         </p>
-      </SettingsGroup>
-
-      <SettingsGroup label="Run summary">
-        <ChoiceList
-          label="Run summary"
-          value={runSummary}
-          choices={RUN_SUMMARIES}
-          onChange={setRunSummary}
-        />
       </SettingsGroup>
 
       <SettingsGroup label="Streaming text">
@@ -588,61 +372,6 @@ export function AppearanceSection(): ReactElement {
         </ItemGroup>
       </SettingsGroup>
 
-      <SettingsGroup label="Handing over">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
-            <ItemContent>
-              <ItemTitle className="text-xs text-ink">Hand the work over before the limit</ItemTitle>
-              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
-                Running out of plan mid-conversation loses the expensive part: not the turn, but
-                everything the agent had worked out — which files matter, what it had already
-                tried, what it was about to do. On, Artemis stops the conversation just short of
-                the limit and spends the last of the budget asking for a briefing another session
-                can start from, written to{' '}
-                <span className="font-mono text-ink-muted">.artemis/</span> in the working folder
-                and shown as an artifact.
-                <br />
-                <br />
-                Where it stops is set below, per window. A run in flight is interrupted to do
-                it, so this is off unless you ask for it; every conversation it stops offers a
-                button to carry on regardless.
-              </ItemDescription>
-            </ItemContent>
-            <ItemActions>
-              <Switch
-                id="settings-auto-handoff"
-                aria-label="Hand the work over before the limit"
-                checked={autoHandoff}
-                onCheckedChange={setAutoHandoff}
-              />
-            </ItemActions>
-          </Item>
-
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
-            <ItemContent className="w-full">
-              <ItemTitle className="text-xs text-ink">Where each window hands over</ItemTitle>
-              <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
-                Percent full at which the handover fires. The defaults are deliberately uneven:
-                the 5-hour window refills within the working day, so margin there is cheap; the
-                weekly one is gone for days once spent, so it is ridden closer to the edge; Fable
-                sits between, because its exhaustion takes one model away rather than the
-                account. How much runway a handover needs depends on how you work — the numbers
-                are yours to move.
-              </ItemDescription>
-              <div className="mt-2 flex w-full flex-col gap-2.5">
-                {handoffRules.map((rule) => (
-                  <ThresholdSlider key={rule.id} rule={rule} disabled={!autoHandoff} />
-                ))}
-              </div>
-            </ItemContent>
-          </Item>
-        </ItemGroup>
-      </SettingsGroup>
-
-      <SettingsGroup label="Recent folders">
-        <RecentFolders />
-      </SettingsGroup>
-
       <SettingsGroup label="Sidebar">
         <ItemGroup className="gap-2">
           <Item variant="outline" size="sm" className="items-start border-line bg-panel">
@@ -694,12 +423,11 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <p className="text-2xs leading-relaxed text-ink-faint">
-        The theme is not here — it is in the window header, next to the settings button, so you can
-        see the app change as you pick. Density is not a setting at all: the transcript uses one
-        spacing scale so that message boundaries stay readable at a glance, and text size moves that
-        whole scale at once rather than loosening it. There is no global motion switch either — the
-        only animations in the app are the ones that show something arriving, and the one that runs
-        continuously is the switch above.
+        Density is not a setting: the transcript uses one spacing scale so that message boundaries
+        stay readable at a glance, and text size moves that whole scale at once rather than
+        loosening it. There is no global motion switch either — the only animations in the app are
+        the ones that show something arriving, and the one that runs continuously is the switch
+        above.
       </p>
     </SettingsPane>
   );

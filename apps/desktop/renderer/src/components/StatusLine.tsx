@@ -519,7 +519,13 @@ function ProfileSegment(): ReactElement {
         )}
 
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="text-2xs" onSelect={() => openSettings('profiles')}>
+        <DropdownMenuItem
+          className="text-2xs"
+          // Aimed at the list itself, not just the pane: the pane opens on
+          // whatever it opens on, and "Manage" from this menu means "show me
+          // my profiles", not "show me the top of a page that has them".
+          onSelect={() => openSettings('profiles', { row: 'profile-list' })}
+        >
           Manage
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -929,7 +935,13 @@ function ModelSegment(): ReactElement {
         <ContextRow />
 
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="h-6 gap-1.5 px-2 text-2xs" onSelect={() => openSettings('models')}>
+        <DropdownMenuItem
+          className="h-6 gap-1.5 px-2 text-2xs"
+          // The row anchor is what makes this "Edit quick access" rather than
+          // "open the Models pane": the pins live below the provenance block
+          // and the catalogue header, and the click promised the pins.
+          onSelect={() => openSettings('models', { row: 'quick-access' })}
+        >
           <ListTreeIcon className="size-3 shrink-0" aria-hidden="true" />
           Edit quick access…
           {hidden > 0 ? (

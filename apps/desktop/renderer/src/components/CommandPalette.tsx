@@ -36,12 +36,19 @@
  *
  * ## Settings has one command per section, not one command
  *
- * The settings surface has four panes, and the palette is a search box: a user
+ * The settings surface is nine panes, and the palette is a search box: a user
  * who types "appearance" or "permissions" is naming a *destination*, and a
- * single "Open settings…" row would match neither. So each section gets its own
- * row through `openSettings(section)`, with a plain "Settings…" above them that
- * reopens wherever the user last was — the same thing `mod+,` does, which is
+ * single "Open settings…" row would match neither. So every section gets its
+ * own row through `openSettings(section)` — the This-machine band included,
+ * which used to be missing and made Server and Routines the only settings you
+ * could not type your way to — with a plain "Settings…" above them that
+ * reopens wherever the user last was. The same thing `mod+,` does, which is
  * why that row is the one carrying the shortcut.
+ *
+ * The value strings carry the *old* names as keywords on purpose: "browser"
+ * finds Permissions & access, "advanced" finds This machine, "cerebro" finds
+ * the Memory banks row. Muscle memory is a caller too, and it does not read
+ * release notes.
  *
  * ## Run-shaping flags are commands too
  *
@@ -56,18 +63,21 @@ import { useCallback, useEffect, useState, type ReactElement, type ReactNode } f
 import {
   BotIcon,
   BrainIcon,
+  CalendarClockIcon,
   CpuIcon,
   FolderIcon,
+  GaugeIcon,
   GitForkIcon,
-  GlobeIcon,
   HistoryIcon,
   InfoIcon,
   KeyRoundIcon,
+  LaptopIcon,
   MessageSquarePlusIcon,
   PaintbrushIcon,
   PanelLeftIcon,
   PlugIcon,
   RefreshCwIcon,
+  ServerIcon,
   SettingsIcon,
   ShieldIcon,
   SparklesIcon,
@@ -491,46 +501,73 @@ function RootPage({
           Profiles and credentials…
         </CommandItem>
         <CommandItem
-          value="settings models catalogue quick access fast mode ultracode"
+          value="settings models catalogue quick access pins"
           onSelect={() => openSettings('models')}
         >
           <CpuIcon />
-          Models and defaults…
+          Models and quick access…
         </CommandItem>
         <CommandItem
-          value="settings appearance width density theme motion"
+          value="settings runs fast mode ultracode run summary handoff hand over spend"
+          onSelect={() => openSettings('runs')}
+        >
+          <GaugeIcon />
+          Runs…
+        </CommandItem>
+        <CommandItem
+          value="settings instructions agents prompts standing system prompt global prompt injection"
+          onSelect={() => openSettings('agents')}
+        >
+          <BotIcon />
+          Instructions and standing prompts…
+        </CommandItem>
+        {/*
+          A second door into the Instructions pane, kept because "memory banks"
+          and "cerebro" are what people type — and aimed one level deeper than
+          the row above through the anchor, at the banks themselves. The id is
+          the historical address; `openSettings` resolves it.
+        */}
+        <CommandItem
+          value="settings memory banks cerebro team memories shared knowledge instructions"
+          onSelect={() => openSettings('cerebro', { row: 'memory-banks' })}
+        >
+          <BrainIcon />
+          Memory banks…
+        </CommandItem>
+        <CommandItem
+          value="settings permissions access tools allow deny directories browser chrome preview external default logins"
+          onSelect={() => openSettings('permissions')}
+        >
+          <ShieldIcon />
+          Permissions and access…
+        </CommandItem>
+        <CommandItem
+          value="settings appearance width density theme motion text size sidebar thinking"
           onSelect={() => openSettings('appearance')}
         >
           <PaintbrushIcon />
           Appearance…
         </CommandItem>
         <CommandItem
-          value="settings browser chrome preview external default logins"
-          onSelect={() => openSettings('browser')}
+          value="settings server lend serve models http api port connections tokens"
+          onSelect={() => openSettings('server')}
         >
-          <GlobeIcon />
-          Browser…
+          <ServerIcon />
+          Server…
         </CommandItem>
         <CommandItem
-          value="settings permissions tools allow deny directories"
-          onSelect={() => openSettings('permissions')}
+          value="settings routines schedule scheduled cron appointments"
+          onSelect={() => openSettings('routines')}
         >
-          <ShieldIcon />
-          Permissions and tools…
+          <CalendarClockIcon />
+          Routines…
         </CommandItem>
         <CommandItem
-          value="settings agents prompts instructions system prompt global prompt injection"
-          onSelect={() => openSettings('agents')}
+          value="settings this machine advanced shared claude config scripts recent folders beta updates channel"
+          onSelect={() => openSettings('advanced')}
         >
-          <BotIcon />
-          Agents and standing prompts…
-        </CommandItem>
-        <CommandItem
-          value="settings memory banks cerebro team memories shared knowledge"
-          onSelect={() => openSettings('cerebro')}
-        >
-          <BrainIcon />
-          Memory banks…
+          <LaptopIcon />
+          This machine…
         </CommandItem>
       </CommandGroup>
 

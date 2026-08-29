@@ -25,7 +25,8 @@ import {
 import { useRoutines } from '@/hooks/useRoutines';
 import { formatRelative, formatUntil } from '../../lib/format';
 import { shortenPath } from '../../lib/paths';
-import { useApp } from '../../state/store';
+import { activeModels, useApp } from '../../state/store';
+import { usePane } from '../../state/paneContext';
 import { SettingsPane } from './pane';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -34,7 +35,9 @@ import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -294,6 +297,127 @@ function RoutineCard({
   );
 }
 
+/** A Radix `SelectItem` may not carry an empty value, so "no model" wears a sentinel. */
+const PROVIDER_DEFAULT = '__provider-default__';
+const NO_PINS: readonly string[] = [];
+
+/**
+ * The routine's model, chosen from the catalogue rather than typed.
+ *
+ * This was a free-text input, which meant a routine could be aimed at a model
+ * that does not exist and nobody would learn it until the appointment fired
+ * and the provider shrugged — the one failure mode a *scheduled* run cannot
+ * afford, because there is no person at the keyboard to read the error. The
+ * picker offers the same catalogue every other model control reads: the
+ * pane's live-preferred list when the routine bills the provider the window
+ * is on, and the provider descriptor's built-in lineup otherwise.
+ *
+ * The profile's pinned models lead the menu, in the quick picker's own order,
+ * because a routine is usually aimed at a model its owner already switches
+ * between. Free text survives in exactly one case — a provider with no
+ * catalogue at all — where a picker would be an empty menu over a field that
+ * used to work. And a stored model the catalogue no longer lists stays
+ * choosable under its own name, flagged, rather than being silently blanked:
+ * editing a routine's schedule must not cost it its model.
+ */
+function ModelField({
+  profileId,
+  value,
+  onChange,
+}: {
+  readonly profileId: string;
+  readonly value: string;
+  readonly onChange: (next: string) => void;
+}): ReactElement {
+  const profiles = useApp((s) => s.profiles);
+  const providers = useApp((s) => s.providers);
+  const paneProviderId = usePane((s) => s.activeProviderId);
+  const paneCatalogue = usePane(activeModels);
+  // The raw entry, defaulted *outside* the selector: `?? []` inside it would
+  // hand zustand a fresh identity on every read and loop the render.
+  const pins = usePane((s) => s.quickModelIdsByProfile[profileId]) ?? NO_PINS;
+
+  const providerId = profiles.find((profile) => profile.id === profileId)?.providerId;
+  const catalogue =
+    providerId !== undefined && providerId === paneProviderId
+      ? paneCatalogue
+      : (providers.find((provider) => provider.id === providerId)?.models ?? []);
+
+  if (catalogue.length === 0) {
+    // No catalogue to validate against, so the honest control is the old one:
+    // free text, sent as typed.
+    return (
+      <Field>
+        <FieldLabel htmlFor="routine-model" className="chrome-label text-ink-faint">
+          Model (optional)
+        </FieldLabel>
+        <Input
+          id="routine-model"
+          value={value}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="Provider default"
+          onChange={(event) => onChange(event.target.value)}
+          className="font-mono text-xs md:text-xs"
+        />
+        <FieldDescription className="text-2xs">
+          This provider published no model list, so the id is sent as written.
+        </FieldDescription>
+      </Field>
+    );
+  }
+
+  const known = catalogue.some((model) => model.id === value);
+  const pinned = catalogue.filter((model) => pins.includes(model.id));
+  const rest = pinned.length === 0 ? catalogue : catalogue.filter((model) => !pins.includes(model.id));
+
+  return (
+    <Field>
+      <FieldLabel className="chrome-label text-ink-faint">Model (optional)</FieldLabel>
+      <Select
+        value={value === '' ? PROVIDER_DEFAULT : value}
+        onValueChange={(next) => onChange(next === PROVIDER_DEFAULT ? '' : next)}
+      >
+        <SelectTrigger className="text-xs" aria-label="Model">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={PROVIDER_DEFAULT} className="text-xs">
+            Provider default
+          </SelectItem>
+          {value !== '' && !known ? (
+            <SelectItem value={value} className="font-mono text-xs">
+              {value} — not in the catalogue
+            </SelectItem>
+          ) : null}
+          {pinned.length > 0 ? (
+            <SelectGroup>
+              <SelectLabel className="text-2xs text-ink-faint">Pinned</SelectLabel>
+              {pinned.map((model) => (
+                <SelectItem key={model.id} value={model.id} className="text-xs">
+                  {model.displayName ?? model.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+          {rest.length > 0 ? (
+            <SelectGroup>
+              {pinned.length > 0 ? (
+                <SelectLabel className="text-2xs text-ink-faint">Catalogue</SelectLabel>
+              ) : null}
+              {rest.map((model) => (
+                <SelectItem key={model.id} value={model.id} className="text-xs">
+                  {model.displayName ?? model.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
 function RoutineForm({
   routine,
   busy,
@@ -415,20 +539,7 @@ function RoutineForm({
                 </Select>
               </Field>
 
-              <Field>
-                <FieldLabel htmlFor="routine-model" className="chrome-label text-ink-faint">
-                  Model (optional)
-                </FieldLabel>
-                <Input
-                  id="routine-model"
-                  value={model}
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="Provider default"
-                  onChange={(event) => setModel(event.target.value)}
-                  className="font-mono text-xs md:text-xs"
-                />
-              </Field>
+              <ModelField profileId={profileId} value={model} onChange={setModel} />
             </div>
 
             <Field>

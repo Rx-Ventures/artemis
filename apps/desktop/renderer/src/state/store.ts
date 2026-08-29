@@ -180,10 +180,19 @@ export type Screen = 'chat' | 'profiles';
  * renaming the value would have churned files owned by four different people
  * for no behavioural gain. The section is the second axis: `screen` says
  * whether settings is up, this says what it is showing.
+ *
+ * An id is an address, not a label, so ids outlive the panes they named.
+ * `browser` and `cerebro` no longer have panes of their own — the browser
+ * switches live under Permissions & access, the banks under Instructions — but
+ * every deep link and every preferences file that says `cerebro` is still a
+ * correct request, so the ids stay in the union and
+ * {@link resolveSettingsSection} says where each one lands today. Renaming a
+ * *pane* is cheap; renaming an *address* breaks callers that were never wrong.
  */
 export type SettingsSection =
   | 'profiles'
   | 'models'
+  | 'runs'
   | 'appearance'
   | 'browser'
   | 'permissions'
@@ -192,6 +201,40 @@ export type SettingsSection =
   | 'server'
   | 'routines'
   | 'advanced';
+
+/**
+ * Where every settings address lands today.
+ *
+ * Total over the union on purpose: a section that forgets to name its home is
+ * a compile error here, not a deep link that silently opens the wrong pane. A
+ * future merge adds a row to this map; it never edits a caller.
+ *
+ *  - `browser` — its two switches were always permission questions, and they
+ *    moved in with the pane that answers the rest of them.
+ *  - `cerebro` — memory banks are one instance of "what the agent is told
+ *    before the conversation starts", and they live with the rule now.
+ *
+ * Everything else is its own home, including `agents` (the Instructions pane
+ * kept the id it was born with) and `advanced` (the This-machine pane, same).
+ */
+const SETTINGS_SECTION_HOMES: Readonly<Record<SettingsSection, SettingsSection>> = {
+  profiles: 'profiles',
+  models: 'models',
+  runs: 'runs',
+  appearance: 'appearance',
+  browser: 'permissions',
+  permissions: 'permissions',
+  agents: 'agents',
+  cerebro: 'agents',
+  server: 'server',
+  routines: 'routines',
+  advanced: 'advanced',
+};
+
+/** Resolve an address — possibly historical — to the pane that answers for it. */
+export function resolveSettingsSection(section: SettingsSection): SettingsSection {
+  return SETTINGS_SECTION_HOMES[section];
+}
 
 /**
  * How wide the transcript column is allowed to grow.
@@ -869,6 +912,16 @@ export interface AppState {
    * a transient — which is why it is not reset by {@link closeSettings}.
    */
   readonly settingsSection: SettingsSection;
+  /**
+   * A row inside the section to scroll to once the pane mounts, or `null`.
+   *
+   * The second half of a deep link: {@link openSettings} aims the dialog at a
+   * pane, and this aims it at a row *within* the pane (`data-settings-row` in
+   * the markup). Transient, unlike the section — it is consumed by the scroll
+   * and cleared, because "where a link once pointed" is not a preference and
+   * must not fire again the next time the dialog opens on its own.
+   */
+  readonly settingsRow: string | null;
   /** Whether the ⌘K command palette is open. */
   readonly paletteOpen: boolean;
   /** Whether the run/capability inspector dialog is open. */
@@ -1247,9 +1300,14 @@ function cleanLayout(value: unknown): Record<string, number> | undefined {
 /** The default reading width, and the fallback for a value that fails validation. */
 export const DEFAULT_CONVERSATION_WIDTH: ConversationWidth = 'comfortable';
 
+// Every *address*, not every pane: `browser` and `cerebro` stay valid so that
+// a preferences file written by an older build restores through `oneOf` and
+// then resolves to wherever those rows live now, instead of being dropped and
+// landing the user back on Profiles.
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'profiles',
   'models',
+  'runs',
   'appearance',
   'browser',
   'permissions',
@@ -2004,7 +2062,11 @@ export const useApp = create<AppState>(() => ({
   banners: [],
 
   screen: 'chat',
-  settingsSection: prefs.settingsSection ?? 'profiles',
+  // Resolved on the way in, so a `browser` or `cerebro` persisted by an older
+  // build lands on the pane that answers for it today rather than on a nav
+  // entry that no longer exists.
+  settingsSection: resolveSettingsSection(prefs.settingsSection ?? 'profiles'),
+  settingsRow: null,
   paletteOpen: false,
   infoOpen: false,
 
@@ -7021,20 +7083,38 @@ export function setScreen(screen: Screen): void {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Open the settings surface, optionally on a specific pane.
+ * Open the settings surface, optionally on a specific pane, optionally on a
+ * specific row of it.
  *
  * Omitting the section reopens wherever the user was last, which is the right
  * default for the generic "⌘, / gear" entry points. Passing one is for the
  * deep links — "manage models" under the model picker, "permissions" from a
  * denied tool call — where the whole point of the click was a destination.
+ * The section goes through {@link resolveSettingsSection}, so a caller aimed
+ * at an id whose pane has since merged still arrives somewhere true.
+ *
+ * `row` sharpens the aim to a `data-settings-row` id inside the pane; the
+ * dialog scrolls it into view once the pane has mounted. Always written — as
+ * the row, or as `null` — because a leftover anchor from the *previous* deep
+ * link firing on a plain ⌘, would be the dialog remembering an intention
+ * nobody has anymore.
  */
-export function openSettings(section?: SettingsSection): void {
+export function openSettings(
+  section?: SettingsSection,
+  options?: { readonly row?: string },
+): void {
   useApp.setState({
     screen: 'profiles',
     paletteOpen: false,
-    ...(section === undefined ? {} : { settingsSection: section }),
+    ...(section === undefined ? {} : { settingsSection: resolveSettingsSection(section) }),
+    settingsRow: options?.row ?? null,
   });
   savePrefs();
+}
+
+/** The dialog has scrolled to the anchored row; the intention is spent. */
+export function clearSettingsRow(): void {
+  useApp.setState({ settingsRow: null });
 }
 
 /**
@@ -7062,7 +7142,10 @@ export function closeSettings(): void {
 }
 
 export function setSettingsSection(section: SettingsSection): void {
-  useApp.setState({ settingsSection: section });
+  // The row anchor goes with the section change: it described a destination in
+  // the pane being navigated away from, and a stale one would scroll the next
+  // pane to whatever happened to share the id.
+  useApp.setState({ settingsSection: resolveSettingsSection(section), settingsRow: null });
   savePrefs();
 }
 

@@ -223,45 +223,25 @@ export function useMemoryBanks(): MemoryBanksPane {
 /**
  * Just "is the memory-banks prompt actually being sent?".
  *
- * The Agents pane needs this one boolean, to decide whether its built-in
- * prompt row is currently reaching the model. Reaching for
- * {@link useMemoryBanks} there would work and would also pull a preflight
- * that shells out to `cerebro doctor`, all to answer a yes/no question on a
- * pane that shows neither.
+ * The prompt library needs this one boolean, to decide whether its built-in
+ * memory-banks row is currently reaching the model. This used to be its own
+ * hook with its own `status` spawn; now that the library and the banks share
+ * the Instructions pane — and therefore one {@link useMemoryBanks} reading —
+ * it is a pure derivation of that reading, which is the strongest form of the
+ * promise the hook made: the two halves cannot disagree, because they are
+ * looking at the same photograph.
  *
  * Master on **and** at least one enabled bank present, which is the same
  * conjunction `engine.ts` composes runs with. Two sources of truth for "is
- * this prompt live" is the one failure this pane must not have: it would tell
- * the user a prompt is being sent that main is quietly withholding, or the
- * reverse.
+ * this prompt live" is the one failure this surface must not have: it would
+ * tell the user a prompt is being sent that main is quietly withholding, or
+ * the reverse.
  *
- * `null` while the read is in flight, and *stays* `null` if it fails. Not
- * `false`: "not available" is a claim the pane puts on screen next to a prompt
- * it says is not being sent, and a failed read is not evidence for it.
+ * `null` while there is no reading — in flight, or failed. Not `false`: "not
+ * available" is a claim the pane puts on screen next to a prompt it says is
+ * not being sent, and a failed read is not evidence for it.
  */
-export function useMemoryBanksAvailable(): boolean | null {
-  const [available, setAvailable] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    const channel = banksChannel();
-    if (channel === null) return undefined;
-
-    let cancelled = false;
-    void (async () => {
-      const result = await call(() => channel.status({}));
-      if (cancelled) return;
-      if (result.ok) {
-        setAvailable(
-          result.value.masterEnabled &&
-            result.value.banks.some((bank) => bank.enabled && bank.exists),
-        );
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return available;
+export function banksAvailability(status: MemoryBanksStatus | null): boolean | null {
+  if (status === null) return null;
+  return status.masterEnabled && status.banks.some((bank) => bank.enabled && bank.exists);
 }
