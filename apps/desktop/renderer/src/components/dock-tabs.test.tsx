@@ -55,6 +55,11 @@ vi.mock('@/lib/terminalSessions', () => ({
   disposeTerminalSession: vi.fn(),
   setTerminalSessionHooks: vi.fn(),
   retheme: vi.fn(),
+  // `null` is the state before any terminal has fitted — the store falls back
+  // to its 80×24 guess, which is what the `started` ledger asserts against.
+  preferredTerminalSize: vi.fn(() => null),
+  getTerminalSelection: vi.fn(() => ''),
+  onTerminalSelectionChange: vi.fn(() => () => undefined),
 }));
 
 /** Terminals the fake main process is holding, and what was asked of them. */
@@ -113,8 +118,17 @@ Object.defineProperty(globalThis, 'artemis', {
 });
 
 const { DockPane } = await import('@/components/DockPane');
-const { closePane, closeTerminal, focusedPane, openTerminal, splitPane, toggleTerminal, useApp } =
-  await import('@/state/store');
+const {
+  closePane,
+  closeTerminal,
+  focusedPane,
+  focusPane,
+  openTerminal,
+  splitPane,
+  toggleBrowser,
+  toggleTerminal,
+  useApp,
+} = await import('@/state/store');
 const { setPaneState } = await import('@/state/pane');
 const { registerComposer } = await import('@/lib/composerFocus');
 // The module the store actually calls — mocked above, so its fns are spies.
@@ -130,17 +144,33 @@ function renderDock(): ReturnType<typeof render> {
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Back to one column, whatever the previous test left: several tests split,
+  // and a surviving column would shift every owner badge and tab count after
+  // it — the pane cleanup `tasks-pane.test.tsx` also does, for the reason it
+  // gives. *Before* the ledgers are reset, and with a tick for the fake
+  // bridge's promises to land: retiring a pane closes its unowned shells, and
+  // those closes must not be mistaken for the next test's.
+  for (const extra of useApp.getState().grid.flatMap((row) => row.panes).slice(1)) {
+    setPaneState(extra, { run: null, resumeSessionId: null });
+    closePane(extra.id);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
   started = [];
   closed = [];
   closedBrowsers = [];
   counter = 0;
   useApp.setState({
-    preview: null,
+    previews: [],
+    files: [],
     terminals: [],
     browsers: [],
     activeDockTab: null,
     visibleDockTabs: [],
+    // The 2.0 default, restated so a test that widened the scope cannot leak
+    // into its neighbours.
+    dockScope: 'pane',
+    terminalSplits: [],
   });
   setPaneState(focusedPane(), { cwd: '/Users/me/project', run: null, resumeSessionId: null });
   vi.mocked(terminalSessions.terminalHasFocus).mockReturnValue(false);
@@ -386,7 +416,7 @@ describe('the dock with both kinds in it', () => {
       await openTerminal();
     });
     act(() => {
-      useApp.setState({ preview: { ...preview, owner: { paneId: focusedPane().id } } });
+      useApp.setState({ previews: [{ ...preview, id: 'p1', owner: { paneId: focusedPane().id } }] });
     });
     renderDock();
 
@@ -408,7 +438,9 @@ describe('the dock with both kinds in it', () => {
     });
     act(() => {
       useApp.setState({
-        preview: { ...preview, owner: { paneId: focusedPane().id, sessionId: 'sess-a' } },
+        previews: [
+          { ...preview, id: 'p1', owner: { paneId: focusedPane().id, sessionId: 'sess-a' } },
+        ],
       });
     });
 
@@ -416,9 +448,47 @@ describe('the dock with both kinds in it', () => {
       setPaneState(focusedPane(), { resumeSessionId: 'sess-b' });
     });
 
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
     expect(useApp.getState().terminals).toHaveLength(1);
     expect(closed).toEqual([]);
+  });
+
+  /*
+   * The de-singletoning, asserted at the layer the bug lived: two panes, two
+   * previews, and the second's arrival leaves the first exactly where it was.
+   * Injected as records rather than through `openPreview` because the fake
+   * bridge here has no preview half — what is under test is the state model.
+   */
+  it('lets each conversation keep its own preview', async () => {
+    // Captured before the split: `splitPane` focuses the pane it creates.
+    const main = focusedPane();
+    let side!: Pane;
+    act(() => {
+      const pane = splitPane('right');
+      if (pane === null) throw new Error('the grid refused the split this test needs');
+      side = pane;
+    });
+    act(() => {
+      useApp.setState({
+        previews: [
+          { ...preview, id: 'p1', owner: { paneId: main.id } },
+          { ...preview, path: '/tmp/other.md', title: 'OTHER.md', id: 'p2', owner: { paneId: side.id } },
+        ],
+        dockScope: 'all',
+      });
+    });
+
+    // Both drawn, each under its own conversation.
+    expect(
+      useApp.getState().visibleDockTabs.filter((tab) => tab.kind === 'preview'),
+    ).toHaveLength(2);
+
+    act(() => {
+      closePane(side.id);
+    });
+
+    // Pane B's preview died with its conversation; pane A's is untouched.
+    expect(useApp.getState().previews.map((one) => one.id)).toEqual(['p1']);
   });
 });
 
@@ -595,5 +665,218 @@ describe('closing a pane', () => {
       setPaneState(focusedPane(), { resumeSessionId: 'sess-live' });
     });
     expect(useApp.getState().visibleDockTabs).toEqual([{ kind: 'terminal', id: 't1' }]);
+  });
+});
+
+/** A browser record, injected: these tests are about what happens to a page
+ *  that exists, and the fake bridge here has no `browser.open`. */
+function aBrowser(id: string, paneId: string): void {
+  useApp.setState((s) => ({
+    browsers: [
+      ...s.browsers,
+      {
+        info: {
+          id,
+          openedAt: 0,
+          state: { url: 'https://x.example', title: 'X', loading: false, canGoBack: false, canGoForward: false },
+        },
+        owner: { paneId },
+      },
+    ],
+  }));
+}
+
+/*
+ * ⌘⇧B. The ⌘J bug's twin, recorded when PR #271 fixed the shell half and left
+ * deliberately for the rebuild: `toggleBrowser`'s second press called
+ * `closeBrowser`, which destroyed the page — scroll position, session cookie,
+ * half-filled form — from the same muscle memory that used to kill shells.
+ * The walk below is the ⌘J walk: at every state, nothing is destroyed.
+ */
+describe('⌘⇧B, the browser focus toggle', () => {
+  it('brings the existing page forward instead of destroying anything', () => {
+    act(() => {
+      aBrowser('b1', focusedPane().id);
+      useApp.setState({ activeDockTab: null });
+    });
+
+    act(() => {
+      toggleBrowser(focusedPane());
+    });
+
+    expect(useApp.getState().activeDockTab).toEqual({ kind: 'browser', id: 'b1' });
+    expect(closedBrowsers).toEqual([]);
+  });
+
+  it('NEVER closes: a press on the front browser hands the caret back, and the page lives', async () => {
+    act(() => {
+      aBrowser('b1', focusedPane().id);
+    });
+    act(() => {
+      useApp.setState({ activeDockTab: { kind: 'browser', id: 'b1' } });
+    });
+
+    const caretCameHome = vi.fn();
+    const unregister = registerComposer(focusedPane().id, caretCameHome);
+    try {
+      act(() => {
+        toggleBrowser(focusedPane());
+        toggleBrowser(focusedPane());
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // However many times it is pressed: the caret moves, the page lives.
+      expect(caretCameHome).toHaveBeenCalled();
+      expect(closedBrowsers).toEqual([]);
+      expect(useApp.getState().browsers).toHaveLength(1);
+      expect(useApp.getState().activeDockTab).toEqual({ kind: 'browser', id: 'b1' });
+    } finally {
+      unregister();
+    }
+  });
+});
+
+/*
+ * The scope: the strip follows the focused conversation, with `all` as the
+ * explicit everything view. The claims here are the store-level halves of what
+ * `dock.test.ts` pins for the pure rules — that focus moves the strip, that
+ * nothing is destroyed by being out of scope, and that the strip's own actions
+ * follow the scope in view rather than silently acting on the focused column.
+ */
+describe('the dock scoped to the focused conversation', () => {
+  function twoColumnsWithShells(): Promise<{ left: Pane; right: Pane }> {
+    const left = focusedPane();
+    return (async () => {
+      await openTerminal(left);
+      const right = splitPane('right');
+      if (right === null) throw new Error('the grid refused the split this test needs');
+      setPaneState(right, { cwd: '/Users/me/elsewhere', run: null, resumeSessionId: null });
+      await openTerminal(right);
+      return { left, right };
+    })();
+  }
+
+  it('shows only the focused conversation’s tabs, and follows focus', async () => {
+    let panes!: { left: Pane; right: Pane };
+    await act(async () => {
+      panes = await twoColumnsWithShells();
+    });
+
+    // The split focused the right pane, so the strip is the right pane's dock.
+    expect(useApp.getState().visibleDockTabs).toEqual([{ kind: 'terminal', id: 't2' }]);
+
+    act(() => {
+      focusPane(panes.left.id);
+    });
+
+    // Focus moved; the strip followed. Nothing was closed on the way.
+    expect(useApp.getState().visibleDockTabs).toEqual([{ kind: 'terminal', id: 't1' }]);
+    expect(useApp.getState().terminals).toHaveLength(2);
+    expect(closed).toEqual([]);
+  });
+
+  it('widens to every conversation on the chip, and narrows back', async () => {
+    await act(async () => {
+      await twoColumnsWithShells();
+    });
+    renderDock();
+
+    // The chip exists only when there is a second conversation to widen into.
+    const chip = screen.getByRole('button', { name: 'Show every conversation’s tabs' });
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    expect(useApp.getState().dockScope).toBe('all');
+    expect(useApp.getState().visibleDockTabs).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Show only this conversation’s tabs' }));
+    });
+    expect(useApp.getState().visibleDockTabs).toHaveLength(1);
+  });
+
+  it('labels every tab with its owner in the all view', async () => {
+    await act(async () => {
+      await twoColumnsWithShells();
+    });
+    act(() => {
+      useApp.setState({ dockScope: 'all' });
+    });
+    renderDock();
+
+    // Four identical terminal icons in a split was the recorded failure; the
+    // badge is the fix, so it is part of the accessible name, not decoration.
+    expect(screen.getByRole('tab', { name: /zsh \(pane 1\)/ })).not.toBeNull();
+    expect(screen.getByRole('tab', { name: /zsh \(pane 2\)/ })).not.toBeNull();
+  });
+
+  it('opens the + in the conversation in view, not the focused one', async () => {
+    let panes!: { left: Pane; right: Pane };
+    await act(async () => {
+      panes = await twoColumnsWithShells();
+    });
+    // Widen the scope, focus the left column, and bring the *right* column's
+    // shell forward — the exact arrangement where "the focused pane" is the
+    // wrong answer.
+    act(() => {
+      useApp.setState({ dockScope: 'all' });
+      focusPane(panes.left.id);
+      useApp.setState({ activeDockTab: { kind: 'terminal', id: 't2' } });
+    });
+    renderDock();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open another terminal' }));
+    });
+
+    // The new shell opened where the user was looking: the right column's
+    // directory, not the focused left one's.
+    expect(started[2]).toEqual({ id: 't3', cwd: '/Users/me/elsewhere' });
+  });
+});
+
+/*
+ * The split: a conversation's shells side by side. A view toggle over mounted
+ * slots — the tabs stay, the processes are untouched, and folding back is the
+ * same button. What is worth pinning is the store half: the split keys on the
+ * conversation, and the toggle never closes anything.
+ */
+describe('splitting a conversation’s terminals', () => {
+  it('offers the split once the conversation has two shells, and splits them', async () => {
+    await act(async () => {
+      await openTerminal();
+      await openTerminal();
+    });
+    renderDock();
+
+    const split = screen.getByRole('button', { name: 'Split the terminals' });
+    await act(async () => {
+      fireEvent.click(split);
+    });
+
+    // The split is on, keyed to the conversation, and nothing was killed —
+    // both tabs are still there and both shells still running.
+    expect(useApp.getState().terminalSplits).toHaveLength(1);
+    expect(closed).toEqual([]);
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+
+    // And folding back is the same control, still killing nothing.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Fold the terminals back into tabs' }));
+    });
+    expect(useApp.getState().terminalSplits).toHaveLength(0);
+    expect(closed).toEqual([]);
+  });
+
+  it('does not offer a split to a conversation with one shell', async () => {
+    await act(async () => {
+      await openTerminal();
+    });
+    renderDock();
+
+    expect(screen.queryByRole('button', { name: 'Split the terminals' })).toBeNull();
   });
 });

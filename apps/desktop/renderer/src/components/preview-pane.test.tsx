@@ -107,11 +107,14 @@ function openTheMarker(): void {
 /**
  * The pane on its own. It carries an `IconButton`, which is a tooltip trigger,
  * and Radix requires a provider above one — the app has it at the root.
+ *
+ * By id, because previews are a list now — one per conversation — and the
+ * pane draws the one its tab names. The fixtures all use `p1`.
  */
 function renderPane(): ReturnType<typeof render> {
   return render(
     <TooltipProvider>
-      <PreviewPane />
+      <PreviewPane id="p1" />
     </TooltipProvider>,
   );
 }
@@ -133,7 +136,7 @@ beforeEach(() => {
   forgetFolds();
   appTranscript().reset();
   appTranscript().flush();
-  useApp.setState({ preview: null });
+  useApp.setState({ previews: [] });
   seedApp({
     providers: [
       {
@@ -229,21 +232,23 @@ describe('the Preview affordance', () => {
     await waitFor(() => {
       expect(screen.getByText('Could not preview this file')).not.toBeNull();
     });
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 });
 
 /**
  * Stamp a preview with the conversation that owns it.
  *
- * The tests below write `preview` straight into the store rather than going
+ * The tests below write `previews` straight into the store rather than going
  * through `openPreview`, which is what makes them tests of the *pane* and not of
  * the IPC round trip. They still have to name an owner, because a preview
  * belonging to no conversation is one the store is entitled to close — that is
- * the whole of `reconcilePreview`, and it runs on every store write.
+ * the preview half of `reconcileDock`, and it runs on every store write.
  */
-function owned<T extends object>(preview: T): T & { readonly owner: { readonly paneId: string } } {
-  return { ...preview, owner: { paneId: focusedPane().id } };
+function owned<T extends object>(
+  preview: T,
+): T & { readonly id: string; readonly owner: { readonly paneId: string } } {
+  return { ...preview, id: 'p1', owner: { paneId: focusedPane().id } };
 }
 
 describe('the preview pane', () => {
@@ -254,13 +259,13 @@ describe('the preview pane', () => {
 
   it('frames the URL the main process returned, and never a path', () => {
     useApp.setState({
-      preview: owned({
+      previews: [owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      }),
+      })],
     });
     renderPane();
 
@@ -276,13 +281,13 @@ describe('the preview pane', () => {
    */
   it('sandboxes the frame with scripts but never with same-origin', () => {
     useApp.setState({
-      preview: owned({
+      previews: [owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      }),
+      })],
     });
     renderPane();
 
@@ -299,13 +304,13 @@ describe('the preview pane', () => {
    */
   it('renders markdown in place rather than framing it', () => {
     useApp.setState({
-      preview: owned({
+      previews: [owned({
         kind: 'markdown',
         text: '# Release notes\n\nShipped **today**.',
         title: 'NOTES.md',
         path: '/Users/me/project/NOTES.md',
         bytes: 36,
-      }),
+      })],
     });
     renderPane();
 
@@ -317,13 +322,13 @@ describe('the preview pane', () => {
 
   it('shows HTML written into markdown as text, never as markup', () => {
     useApp.setState({
-      preview: owned({
+      previews: [owned({
         kind: 'markdown',
         text: 'before\n\n<script>window.stolen = 1;</script>\n\nafter',
         title: 'NOTES.md',
         path: '/Users/me/project/NOTES.md',
         bytes: 48,
-      }),
+      })],
     });
     const { container } = renderPane();
 
@@ -343,13 +348,13 @@ describe('the preview pane', () => {
    */
   it('closes from its tab, which is all the renderer has to do', () => {
     useApp.setState({
-      preview: owned({
+      previews: [owned({
         kind: 'frame' as const,
         url: 'artemis-preview://abc123/',
         title: 'report.html',
         path: '/Users/me/project/report.html',
         bytes: 1157,
-      }),
+      })],
     });
     render(
       <TooltipProvider>
@@ -358,6 +363,6 @@ describe('the preview pane', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Close report.html' }));
-    expect(useApp.getState().preview).toBeNull();
+    expect(useApp.getState().previews).toEqual([]);
   });
 });

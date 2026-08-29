@@ -70,7 +70,7 @@ Object.defineProperty(globalThis, 'artemis', {
 
 const { DockPane } = await import('@/components/DockPane');
 const { Markdown } = await import('@/components/Markdown');
-const { closeFile, focusedPane, openFile, useApp } = await import('@/state/store');
+const { closeFile, focusedPane, openFile, pinFile, useApp } = await import('@/state/store');
 const { setPaneState } = await import('@/state/pane');
 const { resetFileReach } = await import('@/lib/fileReach');
 
@@ -117,7 +117,7 @@ beforeEach(() => {
   onDisk = new Set(['/Users/me/project/src/store.ts']);
   answer = fileAnswer();
   resetFileReach();
-  useApp.setState({ preview: null, files: [], terminals: [], activeDockTab: null, visibleDockTabs: [] });
+  useApp.setState({ previews: [], files: [], terminals: [], activeDockTab: null, visibleDockTabs: [] });
   setPaneState(focusedPane(), { cwd: '/Users/me/project', run: null, resumeSessionId: null });
 });
 
@@ -305,9 +305,36 @@ describe('opening a file into the dock', () => {
    * which is most of what reading code is. The strip runs down the side now,
    * so a second tab costs 34 vertical pixels in a column that scrolls.
    */
-  it('opens a second file beside the first, rather than replacing it', async () => {
+  /*
+   * The transient slot — e-catch's cap on skim debris. A file opened from a
+   * link is following the reading, so the next file *replaces* it: one tab
+   * follows the skim, and forty links across a long session stay one tab.
+   */
+  it('replaces a transient file with the next one, in the same slot', async () => {
     await act(async () => {
       await openFile({ path: 'src/store.ts' });
+    });
+    expect(useApp.getState().files[0]?.pinned).toBe(false);
+
+    answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
+    await act(async () => {
+      await openFile({ path: 'src/dock.ts' });
+    });
+    renderDock();
+
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(useApp.getState().files.map((one) => one.title)).toEqual(['dock.ts']);
+  });
+
+  it('opens a second file beside a pinned first, rather than replacing it', async () => {
+    await act(async () => {
+      await openFile({ path: 'src/store.ts' });
+    });
+    // The pin is the reader saying "this one stays" — after it, the transient
+    // slot is free again and the next file gets a tab of its own. Reading two
+    // files together is one pin away, which is the price of the cap above.
+    act(() => {
+      pinFile(useApp.getState().files[0]?.id ?? '');
     });
     answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
     await act(async () => {
@@ -321,11 +348,14 @@ describe('opening a file into the dock', () => {
     expect(screen.getByText('two')).not.toBeNull();
   });
 
-  it('brings a file already open to the front instead of opening it twice', async () => {
+  it('brings a file already open to the front instead of opening it twice — and pins it', async () => {
     await act(async () => {
       await openFile({ path: 'src/store.ts' });
     });
     const first = useApp.getState().files[0]?.id;
+    act(() => {
+      pinFile(first ?? '');
+    });
 
     answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
     await act(async () => {
@@ -344,11 +374,17 @@ describe('opening a file into the dock', () => {
     // asked to look at something.
     expect(useApp.getState().files[0]?.id).toBe(first);
     expect(useApp.getState().activeDockTab).toEqual({ kind: 'file', id: first });
+    // And coming back is the promotion: a file reached for twice is being
+    // read, not skimmed, so it leaves the transient slot on its own.
+    expect(useApp.getState().files[0]?.pinned).toBe(true);
   });
 
   it('closes one tab without touching the other', async () => {
     await act(async () => {
       await openFile({ path: 'src/store.ts' });
+    });
+    act(() => {
+      pinFile(useApp.getState().files[0]?.id ?? '');
     });
     answer = fileAnswer({ path: '/Users/me/project/src/dock.ts', title: 'dock.ts' });
     await act(async () => {

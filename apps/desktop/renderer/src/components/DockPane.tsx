@@ -14,6 +14,16 @@
  * for, a page either of them opened — and `state/dock.ts` explains why that is
  * one surface rather than several. This is the drawing half of it.
  *
+ * ## Whose dock is it? The conversation's.
+ *
+ * The strip is scoped to the focused conversation by default and shows every
+ * visible conversation's tabs only when the scope chip says `all` — the same
+ * `dockScope` the delegated list has always read, generalised to the whole
+ * rail per ADR 0002. In the `all` view every tab wears a small pane number so
+ * a 2×2 split's four shells are four labelled things rather than four
+ * identical icons, and the strip's action buttons act on the conversation *in
+ * view* (`dockActionPane`), never silently on the focused column.
+ *
  * ## The strip is hand-rolled, and `ui/tabs.tsx` is right there
  *
  * shadcn's `Tabs` wraps Radix, which gives correct roving focus and correct
@@ -51,22 +61,33 @@
  * `hidden` on the element would leave the page painted over an empty pane —
  * the hiding has to happen in the main process, which is why `BrowserPane`
  * takes `visible` rather than reading the active tab itself.
+ *
+ * The terminal split leans on the same arrangement: splitting shows several of
+ * the already-mounted slots at once inside a container whose display changes,
+ * so no xterm element moves, and the `ResizeObserver` each `TerminalView`
+ * already runs refits every cell as the grid takes shape.
  */
 
-import { useCallback, useRef, type KeyboardEvent, type ReactElement } from 'react';
+import { useCallback, useMemo, useRef, type KeyboardEvent, type ReactElement } from 'react';
 import {
   BotIcon,
   FileCodeIcon,
   FileTextIcon,
   GlobeIcon,
+  LayoutGridIcon,
+  PinIcon,
   PlusIcon,
+  Rows2Icon,
   SquareArrowOutUpRightIcon,
   TerminalIcon,
   UsersIcon,
-  XIcon, FolderIcon,} from 'lucide-react';
+  XIcon,
+  FolderIcon,
+} from 'lucide-react';
 
 import {
   agentViewIsLive,
+  allPanes,
   closeAgentTab,
   closeFile,
   closeFiles,
@@ -74,10 +95,17 @@ import {
   closeTasks,
   closeTerminal,
   closeBrowser,
+  dockActionPane,
+  dockTabHomePaneId,
   focusDockTab,
   liveTaskCount,
+  MAX_SPLIT_TERMINALS,
   openTerminal,
+  pinFile,
+  setDockScope,
   taskCount,
+  terminalSplitFor,
+  toggleTerminalSplit,
   sameTab,
   tabKey,
   useApp,
@@ -130,6 +158,25 @@ function DockStrip({
   readonly active: DockTab | null;
 }): ReactElement {
   const strip = useRef<HTMLDivElement>(null);
+  const scope = useApp((s) => s.dockScope);
+  // Whether the window even has a second conversation to widen the scope to.
+  // With one pane the chip would be a control that changes nothing.
+  const severalPanes = useApp((s) => allPanes(s).length > 1);
+  // The conversation the strip's actions belong to: the one in view, which is
+  // the focused pane's under `'pane'` scope and the active tab's under `'all'`.
+  const actionPane = useApp((s) => dockActionPane(s));
+  const splitOn = useApp((s) => terminalSplitFor(s, actionPane));
+  /*
+   * Owner badges exist only in the `all` view of a split window — the one
+   * arrangement where two identical icons can belong to two conversations.
+   * Everywhere else the answer to "whose is this tab" is "the conversation
+   * you are looking at", and a number would be noise.
+   */
+  const badged = scope === 'all' && severalPanes;
+  const panes = useApp(allPanes);
+  const shellsInView = tabs.filter(
+    (tab) => tab.kind === 'terminal' && dockTabHomePaneId(tab) === actionPane.id,
+  ).length;
 
   /*
    * Up/down move between tabs, Home/End jump to the ends — what a vertical
@@ -174,6 +221,36 @@ function DockStrip({
     // A footer costs the strip nothing when it fits and keeps the button
     // reachable when it does not.
     <div className="flex w-[34px] shrink-0 flex-col border-r border-line">
+      {/*
+        The scope chip, generalised from the delegated list to the whole rail.
+
+        It heads the strip rather than the footer because it changes what the
+        strip *is* — this conversation's tabs, or everyone's — and a control
+        that reframes a list belongs above it, where the tasks pane has always
+        drawn its own copy of the same choice. One `dockScope` feeds both, so
+        the strip and the delegated rows can never disagree about scope.
+
+        Rendered only when a second conversation exists to widen into; a
+        one-pane window's dock is already both readings at once.
+      */}
+      {severalPanes ? (
+        <IconButton
+          label={
+            scope === 'all'
+              ? 'Show only this conversation’s tabs'
+              : 'Show every conversation’s tabs'
+          }
+          size="icon-xs"
+          aria-pressed={scope === 'all'}
+          onClick={() => setDockScope(scope === 'all' ? 'pane' : 'all')}
+          className={cn(
+            'mx-auto my-0.5 shrink-0',
+            scope === 'all' ? 'text-ink' : 'text-ink-faint',
+          )}
+        >
+          <LayoutGridIcon />
+        </IconButton>
+      ) : null}
       <div
         ref={strip}
         role="tablist"
@@ -197,9 +274,34 @@ function DockStrip({
         className="flex min-h-0 flex-col items-stretch gap-px overflow-y-auto"
       >
         {tabs.map((tab) => (
-          <DockTabButton key={tabKey(tab)} tab={tab} active={sameTab(tab, active)} />
+          <DockTabButton
+            key={tabKey(tab)}
+            tab={tab}
+            active={sameTab(tab, active)}
+            // The badge is the pane's ordinal in the grid, which is also the
+            // order the scoped strip walks conversations in — so tab groups
+            // and numbers count the same way.
+            ownerBadge={badged ? ownerBadgeFor(tab, panes) : null}
+          />
         ))}
       </div>
+      {/*
+        The split: this conversation's shells side by side. In the footer with
+        the `+` because the two are the same kind of statement about the same
+        scope — "more of this conversation's terminals on screen" — and only
+        offered once there are two shells to arrange.
+      */}
+      {shellsInView >= 2 ? (
+        <IconButton
+          label={splitOn ? 'Fold the terminals back into tabs' : 'Split the terminals'}
+          size="icon-xs"
+          aria-pressed={splitOn}
+          onClick={() => toggleTerminalSplit(actionPane)}
+          className={cn('mx-auto my-0.5 shrink-0', splitOn ? 'text-ink' : 'text-ink-faint')}
+        >
+          <Rows2Icon />
+        </IconButton>
+      ) : null}
       {/*
         Still one button, and still a terminal.
 
@@ -209,11 +311,15 @@ function DockStrip({
         means "another of these" everywhere else. The browser has its own
         control in the header beside the terminal's, which is where a reader
         looks for "open a thing" — see `AppHeader`.
+
+        It opens in the conversation the strip is showing — `dockActionPane` —
+        not silently in the focused column, which under the `all` scope could
+        be a conversation whose tabs are nowhere near the pointer.
       */}
       <IconButton
         label="Open another terminal"
         size="icon-xs"
-        onClick={() => void openTerminal()}
+        onClick={() => void openTerminal(dockActionPane())}
         className="mx-auto my-0.5 shrink-0 text-ink-faint"
       >
         <PlusIcon />
@@ -222,24 +328,49 @@ function DockStrip({
   );
 }
 
+/**
+ * The number a tab wears in the all-conversations view, and the words behind
+ * it. The ordinal is the owning pane's position in the grid — the same order
+ * the strip groups by — so "2" always means "the second column".
+ */
+function ownerBadgeFor(
+  tab: DockTab,
+  panes: readonly { readonly id: string }[],
+): { readonly text: string; readonly label: string } | null {
+  const home = dockTabHomePaneId(tab);
+  if (home === null) return null;
+  const index = panes.findIndex((pane) => pane.id === home);
+  if (index < 0) return null;
+  return { text: String(index + 1), label: `pane ${String(index + 1)}` };
+}
+
 function DockTabButton({
   tab,
   active,
+  ownerBadge,
 }: {
   readonly tab: DockTab;
   readonly active: boolean;
+  readonly ownerBadge: { readonly text: string; readonly label: string } | null;
 }): ReactElement | null {
-  if (tab.kind === 'preview') return <PreviewTabButton active={active} />;
-  if (tab.kind === 'file') return <FileTabButton id={tab.id} active={active} />;
-  if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} />;
-  if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} />;
-  if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} />;
+  if (tab.kind === 'preview') return <PreviewTabButton id={tab.id} active={active} ownerBadge={ownerBadge} />;
+  if (tab.kind === 'file') return <FileTabButton id={tab.id} active={active} ownerBadge={ownerBadge} />;
+  if (tab.kind === 'terminal') return <TerminalTabButton id={tab.id} active={active} ownerBadge={ownerBadge} />;
+  if (tab.kind === 'browser') return <BrowserTabButton id={tab.id} active={active} ownerBadge={ownerBadge} />;
+  if (tab.kind === 'tasks') return <TasksTabButton paneId={tab.paneId} active={active} ownerBadge={ownerBadge} />;
   // Named rather than left to a fallthrough. The `default` case used to assume
   // `agent` was the only kind left, which is true right up until it is not —
   // adding `files` to the union turned a compile error into the only warning
   // anyone got.
-  if (tab.kind === 'files') return <FilesTabButton paneId={tab.paneId} active={active} />;
-  return <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} />;
+  if (tab.kind === 'files') return <FilesTabButton paneId={tab.paneId} active={active} ownerBadge={ownerBadge} />;
+  return (
+    <AgentTabButton paneId={tab.paneId} taskId={tab.taskId} active={active} ownerBadge={ownerBadge} />
+  );
+}
+
+interface OwnerBadge {
+  readonly text: string;
+  readonly label: string;
 }
 
 /**
@@ -256,8 +387,11 @@ function TabShell({
   icon,
   onSelect,
   onClose,
+  onPromote,
   closeLabel,
   muted,
+  ownerBadge,
+  ended,
 }: {
   readonly active: boolean;
   readonly label: string;
@@ -265,13 +399,27 @@ function TabShell({
   readonly icon: ReactElement;
   readonly onSelect: () => void;
   /**
-   * What the ✕ does — which is not the same thing on all three tabs. A preview's
-   * destroys a snapshot, a terminal's kills a shell, and the delegated list's
-   * closes a view of work that goes on running either way.
+   * What the ✕ does — which is not the same thing on all these tabs. A
+   * preview's destroys a snapshot, a terminal's kills a shell, and the
+   * delegated list's closes a view of work that goes on running either way.
    */
   readonly onClose: () => void;
+  /** A double-click's meaning, where a tab has one: pinning a transient file. */
+  readonly onPromote?: () => void;
   readonly closeLabel: string;
   readonly muted?: boolean;
+  /**
+   * The pane number worn in the all-conversations view. `null` everywhere
+   * else — see `DockStrip`, which decides when owners need saying.
+   */
+  readonly ownerBadge: OwnerBadge | null;
+  /**
+   * True for a live surface whose process has ended. Its own mark rather than
+   * a reuse of `muted`, because muted also means "loading" and "settled", and
+   * "the shell behind this tab is gone" was recorded as indistinguishable at
+   * a glance — the dot says it without hover.
+   */
+  readonly ended?: boolean;
 }): ReactElement {
   return (
     <div
@@ -298,6 +446,7 @@ function TabShell({
         event.preventDefault();
         onClose();
       }}
+      onDoubleClick={onPromote}
     >
       <button
         type="button"
@@ -305,17 +454,36 @@ function TabShell({
         aria-selected={active}
         // Roving tabindex: one stop for the whole strip, arrows move within it.
         tabIndex={active ? 0 : -1}
-        title={title}
+        title={ownerBadge === null ? title : `${ownerBadge.label} · ${title}`}
         onClick={onSelect}
-        aria-label={label}
+        aria-label={ownerBadge === null ? label : `${label} (${ownerBadge.label})`}
         // `muted` is a terminal that has exited or a view still loading. It was
         // a strike-through on the name; with the name gone it dims the icon,
         // which says the same thing in the room a 34px column has.
         className={cn('grid size-6 place-items-center outline-none', muted === true && 'opacity-50')}
       >
         {icon}
-        <span className="sr-only">{label}</span>
+        <span className="sr-only">{ownerBadge === null ? label : `${label} (${ownerBadge.label})`}</span>
       </button>
+      {ownerBadge !== null ? (
+        // Bottom-left, opposite the ✕'s corner, so the two marks cannot
+        // collide. Presentational: the number is already in the button's
+        // accessible name above.
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-0 left-0.5 text-3xs tabular-nums text-ink-faint"
+        >
+          {ownerBadge.text}
+        </span>
+      ) : null}
+      {ended === true ? (
+        // The exited mark: a hollow dot where the owner badge would sit in the
+        // scoped view. Decoration for the eye; the words live in the tooltip.
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-0.5 bottom-0.5 size-1.5 rounded-full border border-ink-faint"
+        />
+      ) : null}
       <button
         type="button"
         aria-label={closeLabel}
@@ -345,9 +513,17 @@ function TabShell({
   );
 }
 
-function PreviewTabButton({ active }: { readonly active: boolean }): ReactElement | null {
-  const preview = useApp((s) => s.preview);
-  if (preview === null) return null;
+function PreviewTabButton({
+  id,
+  active,
+  ownerBadge,
+}: {
+  readonly id: string;
+  readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
+}): ReactElement | null {
+  const preview = useApp((s) => s.previews.find((one) => one.id === id));
+  if (preview === undefined) return null;
 
   return (
     <TabShell
@@ -363,9 +539,10 @@ function PreviewTabButton({ active }: { readonly active: boolean }): ReactElemen
           <FileTextIcon className="size-3 shrink-0" aria-hidden="true" />
         )
       }
-      onSelect={() => focusDockTab({ kind: 'preview' })}
-      onClose={closePreview}
+      onSelect={() => focusDockTab({ kind: 'preview', id })}
+      onClose={() => closePreview(id)}
       closeLabel={`Close ${preview.title}`}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -379,13 +556,20 @@ function PreviewTabButton({ active }: { readonly active: boolean }): ReactElemen
  *
  * Its ✕ is the preview's, not the terminal's: it drops a snapshot the renderer
  * is holding, and the link that opened it is still in the transcript.
+ *
+ * A transient tab — the conversation's follow-the-reading slot, which the next
+ * file replaces — dims the way a settled tab does, and says so in the tooltip.
+ * Double-click pins it, which is the gesture editors have taught for exactly
+ * this promotion; the viewer's header carries the same action as a button.
  */
 function FileTabButton({
   id,
   active,
+  ownerBadge,
 }: {
   readonly id: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement | null {
   const file = useApp((s) => s.files.find((one) => one.id === id));
   if (file === undefined) return null;
@@ -394,11 +578,14 @@ function FileTabButton({
     <TabShell
       active={active}
       label={file.title}
-      title={file.path}
+      title={file.pinned ? file.path : `${file.path} — transient; double-click to pin`}
       icon={<FileCodeIcon className="size-3 shrink-0" aria-hidden="true" />}
       onSelect={() => focusDockTab({ kind: 'file', id })}
       onClose={() => closeFile(id)}
+      onPromote={file.pinned ? undefined : () => pinFile(id)}
       closeLabel={`Close ${file.title}`}
+      muted={!file.pinned}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -406,9 +593,11 @@ function FileTabButton({
 function TerminalTabButton({
   id,
   active,
+  ownerBadge,
 }: {
   readonly id: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement | null {
   const record = useApp((s) => s.terminals.find((terminal) => terminal.info.id === id));
   if (record === undefined) return null;
@@ -417,14 +606,21 @@ function TerminalTabButton({
     <TabShell
       active={active}
       label={record.title}
-      title={`${record.info.shell} · ${record.info.cwd}`}
+      title={
+        record.exited
+          ? `${record.info.shell} · ${record.info.cwd} — exited`
+          : `${record.info.shell} · ${record.info.cwd}`
+      }
       icon={<TerminalIcon className="size-3 shrink-0" aria-hidden="true" />}
       onSelect={() => focusDockTab({ kind: 'terminal', id })}
       onClose={() => closeTerminal(id)}
       closeLabel={`Close ${record.title}`}
       // A shell that has ended keeps its tab so its last words stay readable —
-      // struck through, so it is plain that nothing is listening any more.
+      // dimmed, and wearing the ended dot, so it is plain without a hover that
+      // nothing is listening any more.
       muted={record.exited}
+      ended={record.exited}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -442,9 +638,11 @@ function TerminalTabButton({
 function BrowserTabButton({
   id,
   active,
+  ownerBadge,
 }: {
   readonly id: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement | null {
   const record = useApp((s) => s.browsers.find((browser) => browser.info.id === id));
   if (record === undefined) return null;
@@ -464,6 +662,7 @@ function BrowserTabButton({
       // Dimmed while the page is on its way, which is the one piece of progress
       // this strip has room for — the address bar has the stop button.
       muted={loading}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -487,9 +686,11 @@ function BrowserTabButton({
 function FilesTabButton({
   paneId,
   active,
+  ownerBadge,
 }: {
   readonly paneId: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement {
   return (
     <TabShell
@@ -500,6 +701,7 @@ function FilesTabButton({
       onSelect={() => focusDockTab({ kind: 'files', paneId })}
       onClose={() => closeFiles(paneId)}
       closeLabel="Close the folder browser"
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -507,9 +709,11 @@ function FilesTabButton({
 function TasksTabButton({
   paneId,
   active,
+  ownerBadge,
 }: {
   readonly paneId: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement | null {
   // Two numbers rather than one object: a selector that allocates returns a new
   // identity every call, which zustand reads as a change and React resolves by
@@ -537,6 +741,7 @@ function TasksTabButton({
       // Nothing is running: the tab is a record rather than a readout, and it
       // reads as one.
       muted={live === 0}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -558,10 +763,12 @@ function AgentTabButton({
   paneId,
   taskId,
   active,
+  ownerBadge,
 }: {
   readonly paneId: string;
   readonly taskId: string;
   readonly active: boolean;
+  readonly ownerBadge: OwnerBadge | null;
 }): ReactElement | null {
   const key = `${paneId}:${taskId}`;
   const title = useApp((s) => s.agentViews.find((one) => one.key === key)?.title);
@@ -580,6 +787,7 @@ function AgentTabButton({
       // Struck through once the agent has finished, the same way an exited
       // shell's tab is: the transcript is a record now rather than a readout.
       muted={!live}
+      ownerBadge={ownerBadge}
     />
   );
 }
@@ -596,11 +804,44 @@ function DockBody({
   readonly active: DockTab | null;
 }): ReactElement {
   const terminals = useApp((s) => s.terminals);
+  const splits = useApp((s) => s.terminalSplits);
   const showPreview = active?.kind === 'preview';
+
+  /*
+   * Which terminals the split shows, when it shows any.
+   *
+   * Computed here with `useMemo` rather than in a store selector, because the
+   * answer is an array and a selector that allocates returns a new identity
+   * every call — the re-render-for-ever hazard `TasksTabButton` documents.
+   * The inputs are the four stable store values this component already
+   * subscribes to.
+   *
+   * The set is the active terminal's *conversation's* shells, in strip order,
+   * capped at `MAX_SPLIT_TERMINALS` — T3's four, because a fifth cell in the
+   * narrowest panel on screen is a porthole. Shells past the cap keep their
+   * tabs and stay reachable one click away.
+   */
+  const splitIds = useMemo(() => {
+    if (active?.kind !== 'terminal') return [];
+    const mine = terminals.find((one) => one.info.id === active.id);
+    if (mine === undefined) return [];
+    const key = mine.owner.sessionId ?? mine.owner.paneId;
+    if (!splits.includes(key)) return [];
+    return tabs
+      .filter((tab): tab is DockTab & { kind: 'terminal' } => tab.kind === 'terminal')
+      .map((tab) => tab.id)
+      .filter((id) => {
+        const record = terminals.find((one) => one.info.id === id);
+        return record !== undefined && (record.owner.sessionId ?? record.owner.paneId) === key;
+      })
+      .slice(0, MAX_SPLIT_TERMINALS);
+  }, [active, terminals, splits, tabs]);
+
+  const splitting = splitIds.length >= 2;
 
   return (
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {showPreview ? <PreviewPane /> : null}
+      {showPreview && active?.kind === 'preview' ? <PreviewPane id={active.id} /> : null}
       {/*
        * Keyed by the tab's id, so switching between two open files scrolls each
        * from where that file was left rather than inheriting the other's
@@ -619,24 +860,52 @@ function DockBody({
       {active?.kind === 'agent' ? (
         <AgentPane key={tabKey(active)} viewKey={`${active.paneId}:${active.taskId}`} />
       ) : null}
-      {tabs.map((tab) => {
-        if (tab.kind !== 'terminal') return null;
-        const record = terminals.find((one) => one.info.id === tab.id);
-        if (record === undefined) return null;
-        const shown = active?.kind === 'terminal' && active.id === tab.id;
-        return (
-          <div
-            key={tab.id}
-            // `hidden` rather than unmounting: see the file header. An inactive
-            // terminal keeps its element in this slot and simply stops being
-            // painted, so switching tabs never re-parents a live xterm.
-            hidden={!shown}
-            className={cn('min-h-0 min-w-0 flex-1 flex-col', shown ? 'flex' : 'hidden')}
-          >
-            <TerminalView id={record.info.id} />
-          </div>
-        );
-      })}
+      {/*
+       * One container for every terminal slot, so the split is a change of
+       * *display* on an element whose children never move. `contents` when
+       * tabbed — the slots behave as direct children of the panel column, as
+       * they always did — and a grid when split. No xterm element is
+       * re-parented either way; see the file header.
+       *
+       * Two shells stack (the dock is the narrowest panel on screen; side by
+       * side they would be two portholes), three or four take the 2×2.
+       */}
+      <div
+        className={cn(
+          splitting
+            ? 'grid min-h-0 min-w-0 flex-1 gap-px'
+            : 'contents',
+          splitting && splitIds.length === 2 && 'grid-rows-2',
+          splitting && splitIds.length > 2 && 'grid-cols-2 grid-rows-2',
+        )}
+      >
+        {tabs.map((tab) => {
+          if (tab.kind !== 'terminal') return null;
+          const record = terminals.find((one) => one.info.id === tab.id);
+          if (record === undefined) return null;
+          const shown = splitting
+            ? splitIds.includes(tab.id)
+            : active?.kind === 'terminal' && active.id === tab.id;
+          return (
+            <div
+              key={tab.id}
+              // `hidden` rather than unmounting: see the file header. An inactive
+              // terminal keeps its element in this slot and simply stops being
+              // painted, so switching tabs never re-parents a live xterm.
+              hidden={!shown}
+              className={cn(
+                'min-h-0 min-w-0 flex-col',
+                shown ? 'flex' : 'hidden',
+                // Inside the split grid a cell must not `flex-1` against the
+                // column — the grid owns the sizing.
+                shown && !splitting && 'flex-1',
+              )}
+            >
+              <TerminalView id={record.info.id} />
+            </div>
+          );
+        })}
+      </div>
       {/*
        * Mounted for every browser, like the terminals above, and for a stronger
        * version of the same reason. A terminal that unmounted would re-parent a

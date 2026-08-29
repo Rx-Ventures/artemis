@@ -81,8 +81,11 @@ import { type ReactElement } from 'react';
 import { useApp } from '../state/store';
 import { Markdown } from './Markdown';
 
-export function PreviewPane(): ReactElement | null {
-  const preview = useApp((s) => s.preview);
+export function PreviewPane({ id }: { readonly id: string }): ReactElement | null {
+  // By id, because the window holds one preview *per conversation* now rather
+  // than one in total — see `AppState.previews`. The id names which of them
+  // this pane is drawing, exactly as `FileViewer` is told which file.
+  const preview = useApp((s) => s.previews.find((one) => one.id === id));
   if (!preview) return null;
 
   return (

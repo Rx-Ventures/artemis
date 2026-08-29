@@ -81,6 +81,7 @@
 import {
   Fragment,
   useCallback,
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -88,11 +89,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { XIcon } from 'lucide-react';
+import { PanelRightOpenIcon, XIcon } from 'lucide-react';
 
 import { lastSegment } from '../lib/paths';
 import { isSessionDrag, readSessionDrag, resolveSessionDrag } from '../lib/sessionDrag';
 import {
+  DOCK_MIN_WIDTH,
+  DOCK_SHEET_BELOW,
   SPLIT_MIN_HEIGHT,
   SPLIT_MIN_WIDTH,
   canSplit,
@@ -101,6 +104,7 @@ import {
   openSessionBeside,
   paneCount,
   resumeSession,
+  setDockSheetOpen,
   setPaneLayout,
   useApp,
 } from '../state/store';
@@ -209,6 +213,26 @@ export function WorkingArea(): ReactElement {
   // dock opens or closes and never when a tab is switched, renamed, or when a
   // shell prints a line.
   const showDock = useApp((s) => s.visibleDockTabs.length > 0);
+  /*
+   * Rail or sheet, decided by measurement rather than by a breakpoint on the
+   * window: the sidebar takes a slice of the window before this area gets
+   * one, so the width that matters is this element's own. `narrow` is state
+   * fed by a `ResizeObserver` on the wrapper — the same instrument every
+   * terminal already trusts for its own box.
+   */
+  const area = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const element = area.current;
+    if (element === null) return;
+    const measure = (): void => {
+      setNarrow(element.getBoundingClientRect().width < DOCK_SHEET_BELOW);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   /*
    * Whether a session is being dragged over this area.
@@ -257,6 +281,7 @@ export function WorkingArea(): ReactElement {
 
   return (
     <div
+      ref={area}
       className="relative flex min-h-0 min-w-0 flex-1"
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -265,7 +290,67 @@ export function WorkingArea(): ReactElement {
       // the overlay would be left on screen with nothing to dismiss it.
       onDragEnd={endDrag}
     >
-      {showDock ? <DockSplit>{conversations}</DockSplit> : conversations}
+      {showDock && !narrow ? <DockSplit>{conversations}</DockSplit> : conversations}
+      {showDock && narrow ? <DockSheet /> : null}
+    </div>
+  );
+}
+
+/**
+ * The dock as a sheet, on a window too narrow to split.
+ *
+ * T3's answer adopted whole: below the breakpoint a side-by-side dock and
+ * conversation are two unusable columns, so the dock lies *over* the
+ * conversation instead — full height, pinned right, wide enough to be a real
+ * terminal but never the whole window, so the conversation stays visibly
+ * underneath as the thing to come back to.
+ *
+ * A sheet needs the one control a rail never did: a way to be put away
+ * without closing anything. `dockSheetOpen` is that — the ›| button hides the
+ * sheet, every deliberate open or tab focus brings it back (see
+ * `focusDockTab`), and while hidden a slim reopen handle keeps the way back
+ * on screen, because a dock that can only be reopened by opening *another*
+ * surface is a trapdoor.
+ *
+ * The put-away renders nothing of the dock at all, and can afford to: every
+ * live surface survives unmounting by design — terminals park, browsers tell
+ * main to detach on unmount (`useBrowserLayout`'s cleanup), snapshots rebuild
+ * from state. The sheet leans on exactly the guarantees the rail already
+ * required.
+ */
+function DockSheet(): ReactElement {
+  const open = useApp((s) => s.dockSheetOpen);
+  const tabCount = useApp((s) => s.visibleDockTabs.length);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setDockSheetOpen(true)}
+        title={`Show the dock — ${String(tabCount)} ${tabCount === 1 ? 'tab' : 'tabs'}`}
+        className="absolute inset-y-0 right-0 z-30 flex w-4 items-center justify-center border-l border-line bg-panel/80 text-ink-faint hover:text-ink"
+      >
+        <PanelRightOpenIcon className="size-3" aria-hidden="true" />
+        <span className="sr-only">Show the dock</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="absolute inset-y-0 right-0 z-30 flex w-[min(480px,85%)] flex-col border-l border-line bg-panel shadow-2xl">
+      <div className="flex h-6 shrink-0 items-center justify-end border-b border-line px-1">
+        <IconButton
+          label="Put the dock away"
+          size="icon-xs"
+          onClick={() => setDockSheetOpen(false)}
+          className="text-ink-faint"
+        >
+          <PanelRightOpenIcon />
+        </IconButton>
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <DockPane />
+      </div>
     </div>
   );
 }
@@ -329,7 +414,10 @@ function DockSplit({ children }: { readonly children: ReactNode }): ReactElement
       */}
       <ResizablePanel
         id={DOCK_PANEL}
-        minSize={SPLIT_MIN_WIDTH}
+        // The dock's own floor, deliberately lower than a conversation's: a
+        // companion panel is allowed to be cramped when the user drags it
+        // cramped, and 360px made "a narrow tail of logs" impossible to have.
+        minSize={DOCK_MIN_WIDTH}
         className="flex min-w-0 border-l border-line"
       >
         <DockPane />
