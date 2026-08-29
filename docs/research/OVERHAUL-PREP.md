@@ -519,6 +519,10 @@ research (§8) was pointed at exactly this question in T3 Code's pane design.
    `MAX_PANES` is 8.
 5. The dock `+` button lives *inside* the scrolling tab column, so enough tabs scroll
    it out of view. (Plus the stale xterm theme fallbacks already noted in §1.)
+6. Found while fixing 1–5 (PR #271): **⌘⇧B has the same shape as the ⌘J bug** —
+   `toggleBrowser` destroys the page on a second press. Left as-is there to keep
+   scope; the dock rebuild's browser surface must fix it (toggle = focus, only ✕
+   destroys).
 
 **Recorded pain points** (from `_layout.md`, `e-catch`, and in-code comments): tabs eat
 horizontal space in the narrowest panel on screen; nothing caps `file` tabs
