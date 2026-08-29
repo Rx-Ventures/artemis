@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  *
- * The five conditions, and the one that matters most: waiting outranks running.
+ * The six conditions, and the two rankings that matter: waiting outranks
+ * running, and a requested stop outranks them both.
  *
  * `activityOf` is a pure function of the run and the queue length precisely so
  * this can be exhaustive without mounting anything. The rendering tests below
@@ -36,6 +37,35 @@ describe('activityOf', () => {
 
   it('reports waiting when the provider says so', () => {
     expect(activityOf(run({ status: 'awaiting_permission' }), 0).kind).toBe('waiting');
+  });
+
+  it('reports stopping the moment a stop has been asked for', () => {
+    // The request, not the outcome: `run.end` is seconds away on a busy turn,
+    // and "running" for all of them is the stop button reading as broken.
+    expect(activityOf(run({ status: 'running', interruptRequested: true }), 0).kind).toBe(
+      'stopping',
+    );
+  });
+
+  it('lets a requested stop outrank a parked permission', () => {
+    // The interrupt withdraws the question — the adapter denies pending
+    // prompts on the way down — so sending the user to answer it would send
+    // them to answer nothing.
+    expect(
+      activityOf(run({ status: 'awaiting_permission', interruptRequested: true }), 1).kind,
+    ).toBe('stopping');
+  });
+
+  it('does not let a stale stop flag outlive the run it stopped', () => {
+    expect(activityOf(run({ status: 'ended', interruptRequested: true }), 0).kind).toBe(
+      'settled',
+    );
+  });
+
+  it('keeps the clock climbing while the provider winds down', () => {
+    // The counter is the proof the renderer is alive; freezing it on the click
+    // would make a working stop indistinguishable from a hang.
+    expect(activityOf(run({ status: 'running', interruptRequested: true }), 0).since).toBe(AT);
   });
 
   it('reports waiting when the renderer holds a queued request', () => {

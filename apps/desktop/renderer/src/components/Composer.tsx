@@ -36,6 +36,7 @@ import {
   CircleStopIcon,
   FileTextIcon,
   GitForkIcon,
+  LoaderCircleIcon,
   PaperclipIcon,
   SendHorizontalIcon,
   XIcon,
@@ -295,6 +296,23 @@ export function Composer(): ReactElement {
    * is what the title promises.
    */
   const stops = live && !sendable;
+
+  /*
+   * The click has been answered but the run has not ended yet.
+   *
+   * Everything between those two moments belongs to the provider — the
+   * interrupt is an IPC call into a control channel that takes seconds to wind
+   * a busy turn down — and for all of it this button used to sit unchanged,
+   * offering a Stop that had already been pressed. `interruptRun` writes the
+   * flag before it touches the wire, so this is true in the same frame as the
+   * click; what it buys is the difference between "stopping…" and a button
+   * that looks broken for exactly as long as it is working.
+   *
+   * Gated on `isLive` at the selector, like `queuedSteers` above: `run.end`
+   * settles the pane and this must settle with it, not linger on a run that
+   * is over.
+   */
+  const stopping = usePane((s) => isLive(s) && s.run?.interruptRequested === true);
 
   /** Slots left, per kind — the two have separate budgets. */
   const imageCount = attachments.filter(isImageAttachment).length;
@@ -900,14 +918,30 @@ export function Composer(): ReactElement {
               this is not the arrow that was there a moment ago.
             */}
             {stops ? (
+              /*
+                Acknowledged the moment it is pressed. The glyph becomes the
+                house spinner and the button goes quiet — pressing it again
+                could do nothing more than the first press already did, and a
+                Stop still offering itself after being clicked is what reads
+                as the app not having heard. Escape stays live the whole time
+                (`interruptRun` is idempotent and deliberately un-gated), so
+                the run is never left without a stop if the first one is lost.
+              */
               <Button
                 variant="ghost"
                 onClick={() => void interruptRun(pane)}
-                aria-label={`Stop the run (${keyLabel('escape')})`}
-                title={`Stop the run (${keyLabel('escape')})`}
-                className="size-7 shrink-0 p-0 text-signal hover:bg-signal/10 hover:text-signal"
+                disabled={stopping}
+                aria-label={
+                  stopping ? 'Stopping the run…' : `Stop the run (${keyLabel('escape')})`
+                }
+                title={stopping ? 'Stopping the run…' : `Stop the run (${keyLabel('escape')})`}
+                className="size-7 shrink-0 p-0 text-signal hover:bg-signal/10 hover:text-signal disabled:opacity-100"
               >
-                <CircleStopIcon />
+                {stopping ? (
+                  <LoaderCircleIcon className="animate-spin" />
+                ) : (
+                  <CircleStopIcon />
+                )}
               </Button>
             ) : (
               <Button
