@@ -8712,9 +8712,15 @@ export async function submitPrompt(
    * enough to start a competing continuation: ask the main registry once and
    * adopt its retained stream first. This also makes steering recover
    * immediately, without requiring the user to wait for or time a refresh.
+   *
+   * By every session id the pane knows, not just `resumeSessionId`: the
+   * promotion that writes that field can itself be the thing that was lost
+   * (an app restart mid-run, a dropped `run.end`), and then the conversation's
+   * id survives only on the ended run record. `sessionIdsOf` carries both.
    */
-  if (!isLive(state) && state.resumeSessionId !== null) {
-    await restoreLiveRunBindings([state.resumeSessionId]);
+  const knownSessionIds = sessionIdsOf(state);
+  if (!isLive(state) && knownSessionIds.length > 0) {
+    await restoreLiveRunBindings(knownSessionIds);
     state = paneState(pane);
   }
 
@@ -8920,6 +8926,27 @@ export async function submitPrompt(
   // The browser preferences are the window's, not the pane's — see `AppState`.
   const windowState = useApp.getState();
 
+  /*
+   * The conversation to continue. `resumeSessionId` when the promotion landed;
+   * otherwise the ended run's own session id, under exactly the promotion's
+   * conditions — same profile, same directory. A lost `run.end` then costs
+   * nothing, while a deliberate profile or directory switch still starts
+   * fresh: a session belongs to the account it started on.
+   *
+   * The ended run is read off `state`, not `continuation`: the new run record
+   * replaced it in pane state above, and `state` is the snapshot from before
+   * that write. The steer fall-through never needs the fallback — its local
+   * end performs the promotion, which `continuation` picks up fresh.
+   */
+  const endedRun = state.run !== null && state.run.status === 'ended' ? state.run : null;
+  const continueFrom =
+    continuation.resumeSessionId ??
+    (endedRun?.sessionId !== undefined &&
+    endedRun.profileId === state.activeProfileId &&
+    endedRun.cwd === state.cwd
+      ? endedRun.sessionId
+      : null);
+
   const input: RunInput = {
     providerId: state.activeProviderId,
     profileId: state.activeProfileId,
@@ -8945,9 +8972,9 @@ export async function submitPrompt(
     ...(capabilities.permissionModes.includes(state.permissionMode)
       ? { permissionMode: state.permissionMode }
       : {}),
-    ...(continuation.resumeSessionId && capabilities.resumeSession
+    ...(continueFrom && capabilities.resumeSession
       ? {
-          resumeSessionId: continuation.resumeSessionId,
+          resumeSessionId: continueFrom,
           ...(continuation.forkOnResume && capabilities.forkSession ? { forkSession: true } : {}),
           ...(continuation.rewindToMessageId !== null && capabilities.rewind
             ? { rewindToMessageId: continuation.rewindToMessageId }
