@@ -476,6 +476,25 @@ describe.skipIf(process.platform === 'win32')('node-pty itself', () => {
       const info = await terminals.start({ cwd: process.cwd(), cols: 80, rows: 24 });
       expect(info.shell).toMatch(/\/(zsh|bash|sh|fish|dash|ksh)$/);
 
+      /*
+       * Let the shell finish saying hello before speaking to it. This spawns
+       * the developer's real login shell, and input written while a heavy zsh
+       * config is still evaluating its dotfiles can be half-swallowed by
+       * line-editor initialisation — the first command runs, the `exit` line
+       * vanishes, and the test times out on exactly the machines whose shells
+       * take longest to start. "Settled" is output that has arrived and then
+       * stayed still for one sample interval; the write races nothing after
+       * that.
+       */
+      const settleDeadline = Date.now() + 10_000;
+      let lastSeen = -1;
+      while (Date.now() < settleDeadline) {
+        const seen = output.join('').length;
+        if (seen > 0 && seen === lastSeen) break;
+        lastSeen = seen;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+
       terminals.write(info.id, 'printf ARTEMIS_PTY_OK\rexit\r');
 
       const deadline = Date.now() + 15_000;
