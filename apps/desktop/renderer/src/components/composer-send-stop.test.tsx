@@ -61,7 +61,7 @@ const CAPABILITIES = {
 };
 
 /** Seed a window with one provider, and a run only if `live`. */
-function setUp({ live = false, steering = true, draft = '' } = {}): void {
+function setUp({ live = false, steering = true, draft = '', stopping = false } = {}): void {
   const capabilities = { ...CAPABILITIES, midRunSteering: steering };
   seedApp({
     providers: [
@@ -91,6 +91,7 @@ function setUp({ live = false, steering = true, draft = '' } = {}): void {
           cwd: '/w',
           capabilities,
           startedAt: 0,
+          ...(stopping ? { interruptRequested: true } : {}),
         }
       : null,
   });
@@ -155,6 +156,21 @@ describe('the button at the end of the composer', () => {
 
     expect(send()).toBeNull();
     expect(stop()).not.toBeNull();
+  });
+
+  it('answers a stop that has been pressed, rather than offering it again', () => {
+    // The seconds between the click and `run.end` belong to the provider, and
+    // an unchanged Stop for all of them is the "SUPER slow and laggy" report:
+    // a button that is working looking exactly like one that is broken. The
+    // acknowledged state is read from the run — `interruptRun` writes it
+    // synchronously — so this is what the click looks like one frame later.
+    setUp({ live: true, stopping: true });
+    mount(<Composer />);
+
+    expect(send()).toBeNull();
+    expect(stop()).toBeNull();
+    const acknowledged = screen.getByLabelText('Stopping the run…') as HTMLButtonElement;
+    expect(acknowledged.disabled).toBe(true);
   });
 
   it('keeps a run stoppable when the composer holds text it cannot send', () => {

@@ -9326,12 +9326,44 @@ async function replayMissedTail(pane: Pane, runId: RunId, stillLive: boolean): P
   }
 }
 
+/**
+ * Ask the run in this pane to stop, and say so on screen *now*.
+ *
+ * The acknowledgement is written before the wire is touched, and that ordering
+ * is the fix for "the stop button is slow": the interrupt itself is an IPC call
+ * that awaits the adapter, which awaits the provider's own control channel, and
+ * the `run.end` that finally settles the pane arrives seconds later on a busy
+ * turn. None of that can be hurried from here — what can be fixed is the pane
+ * spending the whole wait claiming the run is still happily working. So
+ * `interruptRequested` lands synchronously with the click, the button and the
+ * activity line read it, and the round-trip is awaited only for its failure.
+ *
+ * A refusal takes the acknowledgement back. The flag is what disables the
+ * button, and a button that stayed dead after main said "no" would leave the
+ * run with no stop at all.
+ *
+ * Deliberately *not* short-circuited on a flag already set: the acknowledged
+ * button is disabled, so Escape is the only retry there is, and a retry that
+ * never reached the wire would make a lost interrupt permanent.
+ */
 export async function interruptRun(pane: Pane = focusedPane()): Promise<void> {
   const { bridge } = resolveBridge();
   const run = paneState(pane).run;
   if (!bridge || !run || run.status === 'ended') return;
+  setPaneState(pane, (s) =>
+    s.run && s.run.runId === run.runId && s.run.status !== 'ended'
+      ? { run: { ...s.run, interruptRequested: true } }
+      : {},
+  );
   const result = await call(() => bridge.runs.interrupt({ runId: run.runId }));
   if (!result.ok) {
+    // Guarded on the id: by now the pane may hold a different run, and its
+    // acknowledgement — if it has one — is not this call's to withdraw.
+    setPaneState(pane, (s) =>
+      s.run && s.run.runId === run.runId && s.run.interruptRequested === true
+        ? { run: { ...s.run, interruptRequested: false } }
+        : {},
+    );
     reportFailure('Could not interrupt the run', result.error);
     return;
   }
@@ -9976,6 +10008,10 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
       // having finished before its first event was applied.
       endReason: undefined,
       error: undefined,
+      // Likewise: the stop that ended the previous turn was answered by its own
+      // `run.end`. Riding the spread into this one, it would open the new turn
+      // with its stop button already dead.
+      interruptRequested: false,
       /*
        * The registry starts this run's own prompt numbering at zero — a
        * continuation opens with no prompt, and `#recordPrompt` skips empty
