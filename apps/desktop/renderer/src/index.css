@@ -431,6 +431,12 @@
  * win. Hues never move, so a diff is the same green in both palettes and the
  * semantic separations argued for above still hold.
  *
+ * This pass was judged on its own rather than as a rider on the dark verdict:
+ * round five rendered it as variant 5e — the symmetric light table below —
+ * against 5f's split-tone, which kept the dark rail over light content. 5e
+ * won, judged 2026-08-29, and 5f was considered and passed over. The table
+ * below is the judged palette, settled rather than provisional.
+ *
  * Ratios against `--panel`, which is the worst case for the greys and the best
  * for nothing: ink 17.3, ink-muted 8.1, ink-faint 5.5, beam 6.8, cyan 6.3,
  * sage 6.1, mint 5.7, amber 6.1, signal 6.1. `--ink-faint` is the one to watch
