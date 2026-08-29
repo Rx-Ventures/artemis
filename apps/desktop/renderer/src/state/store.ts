@@ -1922,6 +1922,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     ultracode: prefs.ultracode ?? false,
     forkOnResume: false,
     resumeSessionId: null,
+    historyLoading: false,
     rewindToMessageId: null,
     models: [],
     modelsLoading: false,
@@ -4187,6 +4188,36 @@ export function isLive(state: SessionState): boolean {
   return state.run !== null && state.run.status !== 'ended';
 }
 
+/** What a transcript with zero rows stands for. See {@link blankTranscript}. */
+export type BlankTranscript = 'loading' | 'empty';
+
+/**
+ * What a pane whose transcript has no rows is actually showing.
+ *
+ * The transcript column renders rows when it has them; this decides what the
+ * blank underneath them means, and it is the render predicate behind the
+ * new-conversation empty state — extracted so the store's tests can hold it to
+ * the same account the screen is held to.
+ *
+ * Zero rows used to mean the empty state unconditionally, and that was the
+ * screenshotted lie: every reopen path resets the transcript *before* it reads
+ * — {@link resumeSession} ahead of {@link openSessionContents},
+ * {@link attachRun} ahead of {@link replayEarlierTurns} — and the read behind
+ * them queues on main's process-wide config-directory lock. For as long as it
+ * queued, a conversation with a live, ticking run presented "nothing has ever
+ * happened here", complete with keyboard hints and a footnote naming the very
+ * session it claimed not to have.
+ *
+ * So a blank is only "empty" when nothing contradicts it: no read in flight
+ * ({@link SessionState.historyLoading}) and no live run bound. A live run with
+ * nothing replayed yet — a fresh continuation, a long silent tool call — is
+ * the same answer for the same reason: the conversation exists, it just has
+ * not arrived.
+ */
+export function blankTranscript(state: SessionState): BlankTranscript {
+  return state.historyLoading || isLive(state) ? 'loading' : 'empty';
+}
+
 /**
  * True while leaving this conversation would walk away from something running.
  *
@@ -6100,6 +6131,10 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     activeProviderId: handle.providerId,
     activeProfileId: handle.profileId,
     cwd: handle.cwd,
+    // The reset above took every row; the two reads below put them back. Until
+    // they do — or give up — this pane is a conversation being read in, not a
+    // new one. See `blankTranscript`, and the clear in the `finally`.
+    historyLoading: true,
     permissionQueue: [],
     ...(sameSession ? {} : { tasks: [], dismissedTasks: [], tasksRequested: false }),
     // The session the next prompt continues is this run's own. Set now rather
@@ -6160,6 +6195,12 @@ async function attachRun(pane: Pane, handle: RunHandle): Promise<void> {
     const pending = replayBuffers.get(handle.runId) ?? [];
     replayBuffers.delete(handle.runId);
     for (const event of pending) if (event.seq > lastSeq) applyAgentEvent(event);
+    // The rebuild is over, however it went. Guarded on the run still being
+    // this one: a pane re-pointed mid-flight has a newer claim on the flag,
+    // and this attach clearing it would blank the next conversation's wait.
+    if (paneState(pane).run?.runId === handle.runId) {
+      setPaneState(pane, { historyLoading: false });
+    }
   }
 }
 
@@ -7947,7 +7988,11 @@ export async function deleteSession(session: SessionSummary): Promise<boolean> {
   // prompt at the destroyed transcript just the same.
   for (const pane of allLivePanes()) {
     setPaneState(pane, (p) =>
-      p.resumeSessionId === session.id ? { resumeSessionId: null } : {},
+      // `historyLoading` with it: a read for the destroyed transcript can only
+      // fail now, and its guard keys on the id this just cleared.
+      p.resumeSessionId === session.id
+        ? { resumeSessionId: null, historyLoading: false }
+        : {},
     );
   }
   savePrefs();
@@ -8354,6 +8399,9 @@ export function newSession(
     setPaneState(pane, {
       run: null,
       resumeSessionId: null,
+      // Any read still in flight belongs to the conversation being erased; its
+      // own guard will drop the answer, and a fresh column must not wait on it.
+      historyLoading: false,
       rewindToMessageId: null,
       permissionQueue: [],
       tasks: [],
@@ -8538,6 +8586,10 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     activeProfileId: resumeProfileId,
     cwd: session.cwd,
     resumeSessionId: session.id,
+    // The transcript was reset above and `openSessionContents` has not read
+    // yet: the blank between them is a conversation on its way, and must
+    // present as one. See `blankTranscript`.
+    historyLoading: true,
     forkOnResume: false,
     rewindToMessageId: null,
     permissionQueue: [],
@@ -8706,7 +8758,11 @@ export function openSessionBeside(
  */
 async function openSessionContents(session: SessionSummary, pane: Pane): Promise<void> {
   const { bridge } = resolveBridge();
-  if (!bridge) return;
+  if (!bridge) {
+    // Nothing will ever read this history, so nothing must claim to be.
+    setPaneState(pane, { historyLoading: false });
+    return;
+  }
 
   const listed = await call(() => bridge.runs.list({}));
   // Selection can move while the registry is being asked — the same race
@@ -8754,8 +8810,13 @@ async function loadSessionHistory(session: SessionSummary, pane: Pane): Promise<
   // Selection can move while this is in flight — a fast second click, or a new
   // session. Applying a stale transcript over the current one would show the
   // wrong conversation, so drop it. Checked against *this column*: the other
-  // one moving on is not this transcript's business.
+  // one moving on is not this transcript's business. The flag stays with the
+  // newer conversation's flow for the same reason the answer is dropped.
   if (paneState(pane).resumeSessionId !== session.id) return;
+
+  // Answered — with rows, with nothing, or with a failure noted below. The
+  // blank must stop claiming a read is in flight either way.
+  setPaneState(pane, { historyLoading: false });
 
   if (!res.ok) {
     // Non-fatal: the session still resumes, the user just cannot see what came

@@ -165,6 +165,7 @@ import { detectFileEdit } from '../lib/diff';
 import { previewablePath } from '../lib/preview';
 import {
   activeCapabilities,
+  blankTranscript,
   isLive,
   openFile,
   openPreview,
@@ -204,7 +205,7 @@ import {
 } from '../state/transcript';
 import { DiffView } from './DiffView';
 import { ActivityIndicator } from './Activity';
-import { EmptyState } from './EmptyState';
+import { ConversationLoading, EmptyState } from './EmptyState';
 import { InlinePermission } from './InlinePermission';
 import { Markdown } from './Markdown';
 import { CodeBlock, Fold, StatusDot, ToneBadge, toneClasses, type Tone } from './primitives';
@@ -266,6 +267,13 @@ export function Transcript(): ReactElement {
    * `scrollTop`, landing you partway up a conversation you had just opened.
    */
   const conversationId = usePane((s) => s.run?.sessionId ?? s.resumeSessionId ?? null);
+  /**
+   * What the blank under zero rows means — a conversation still being read in,
+   * or genuinely nothing. The store owns the answer (`blankTranscript`) so its
+   * tests can hold the screen's predicate to account; this component only
+   * consults it, and only when there are no rows to draw instead.
+   */
+  const blank = usePane(blankTranscript);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -385,7 +393,15 @@ export function Transcript(): ReactElement {
           ref={contentRef}
           className={cn('mx-auto flex w-full flex-col gap-0.5 px-4 py-4', COLUMN_MAX[width])}
         >
-          {rows.length === 0 ? <EmptyState /> : rows.map((id) => <Row key={id} id={id} />)}
+          {rows.length === 0 ? (
+            blank === 'loading' ? (
+              <ConversationLoading />
+            ) : (
+              <EmptyState />
+            )
+          ) : (
+            rows.map((id) => <Row key={id} id={id} />)
+          )}
           {/* What the pane is doing, riding the conversation's tail: inside the
               content column so it sits at the bottom of the text itself —
               pushed down by every row that streams in, scrolling with the
