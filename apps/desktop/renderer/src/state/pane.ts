@@ -53,6 +53,7 @@ import type {
   AgentError,
   BackgroundTask,
   Capabilities,
+  HandoffTrigger,
   PermissionMode,
   PermissionRequest,
   ProfileId,
@@ -349,16 +350,20 @@ export interface SessionState extends MirroredState {
   /** Prompts sent in this column, newest last. Renderer-local, never persisted. */
   readonly promptHistory: readonly string[];
   /**
-   * Where this conversation is in an automatic handoff. See `autoHandoff.ts`.
+   * Where this conversation is in a hand off. See `autoHandoff.ts`.
    *
-   * Per column rather than per profile, because a handoff is a document about
-   * *this* conversation's work — two panes on one account that cross the same
-   * threshold have two different things to write down.
+   * Per column rather than per profile, because a hand off is about *this*
+   * conversation's work — two panes on one account that cross the same
+   * threshold have two different conversations to move or write down.
    *
    *   none       nothing has crossed a threshold, or the feature is off.
    *   stopping   a threshold was crossed and the turn in flight is being
-   *              interrupted to make room for the handoff.
-   *   asked      the handoff prompt has been sent; the agent is writing it.
+   *              interrupted to make room for the hand off.
+   *   offered    the run is stopped and the picker is open (ADR 0003): the
+   *              user is choosing a target account, a continuity note, or
+   *              staying put. {@link handoffOffer} carries what tripped.
+   *   asked      the continuity-note prompt has been sent; the agent is
+   *              writing the document.
    *   done       it has been written. New turns are refused until the user
    *              says otherwise, which is the point of stopping.
    *   dismissed  the user overrode it. Nothing more is asked of them in this
@@ -366,12 +371,30 @@ export interface SessionState extends MirroredState {
    *
    * `stopping` is separate from `asked` for one specific reason: the run being
    * interrupted emits its own `run.end`, and a single latch would read that as
-   * "the handoff document is written" before it had even been requested — which
+   * "the continuity note is written" before it had even been requested — which
    * blocked the conversation without ever asking for a handover. Only `asked`
    * is promoted by a run ending, and by then the only run that can end is the
-   * one that was started to write the document.
+   * one that was started to write the document. `offered` shares the same
+   * property from the other side: no run is started while the picker is open,
+   * so nothing a `run.end` could do promotes it.
    */
-  readonly handoff: 'none' | 'stopping' | 'asked' | 'done' | 'dismissed';
+  readonly handoff: 'none' | 'stopping' | 'offered' | 'asked' | 'done' | 'dismissed';
+  /**
+   * The open hand-off question, while {@link handoff} is `offered`.
+   *
+   * What the picker renders from: which rule tripped and the reading that
+   * tripped it (`HandoffTrigger` carries the window, so the reset time is on
+   * it), and when the offer opened — the reference clock its facts were first
+   * judged at. Candidate facts are deliberately *not* stored here: the picker
+   * reads them live from `planUsageByProfile`/`authByProfile`, because an
+   * offer can sit open while a poll lands, and a snapshot would show meters
+   * the window knows are stale.
+   *
+   * `null` in every other state. Cleared by all three ways out — choose,
+   * decline to the note, dismiss — and at every conversation boundary, the
+   * same rule the rest of the per-conversation fields follow.
+   */
+  readonly handoffOffer: { readonly trigger: HandoffTrigger; readonly at: number } | null;
   /**
    * What is typed into this column's composer and not yet sent.
    *

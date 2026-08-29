@@ -94,6 +94,12 @@ import {
   setHandoff,
   HANDOFF_BLOCK_DETAIL,
 } from './autoHandoff';
+import {
+  describeBindingLimit,
+  describeBlock,
+  handoffCandidates,
+  handoffTargetBlock,
+} from './handoffTargets';
 import { call, resolveBridge, type BridgeMode } from '../lib/bridge';
 import {
   describeWorkspace,
@@ -361,12 +367,30 @@ export type FileState = FilesReadResponse & {
   readonly pinned: boolean;
 };
 
+/**
+ * The one thing a banner can offer to do about itself.
+ *
+ * Most banners report; a few can *repair*, and the repair belongs on the
+ * banner because that is where the user is looking when it applies — the
+ * rate-limit door ("Continue on <profile>") is the motivating case. The
+ * closure re-validates when clicked, not when offered: a banner can sit on
+ * screen for minutes, and acting on the world as it was when the banner was
+ * pushed would move a conversation on stale facts.
+ */
+export interface BannerAction {
+  /** Verb-first and short: "Continue on Work". */
+  readonly label: string;
+  /** Runs on click. The surface dismisses the banner after calling this. */
+  readonly run: () => void;
+}
+
 /** A dismissible message on the error surface. */
 export interface Banner {
   readonly id: string;
   readonly level: 'error' | 'warn' | 'info';
   readonly message: string;
   readonly detail?: string;
+  readonly action?: BannerAction;
   readonly ts: number;
 }
 
@@ -2165,6 +2189,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     filesRequested: false,
     promptHistory: [],
     handoff: 'none',
+    handoffOffer: null,
     draft: '',
     parkedDrafts: {},
     ...overrides,
@@ -5511,12 +5536,18 @@ export function pendingPermission(state: SessionState): PermissionRequest | unde
 
 const MAX_BANNERS = 4;
 
-export function pushBanner(level: Banner['level'], message: string, detail?: string): void {
+export function pushBanner(
+  level: Banner['level'],
+  message: string,
+  detail?: string,
+  action?: BannerAction,
+): void {
   const banner: Banner = {
     id: newId('bnr'),
     level,
     message,
     ...(detail === undefined ? {} : { detail }),
+    ...(action === undefined ? {} : { action }),
     ts: Date.now(),
   };
   useApp.setState((s) => ({ banners: [...s.banners, banner].slice(-MAX_BANNERS) }));
@@ -5937,8 +5968,8 @@ function considerHandoff(): void {
     setHandoff(pane, 'stopping');
     pane.transcript.note(
       'warn',
-      `Handing this work over — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
-      'Artemis is asking for a handover document while there is still budget to write one. Turn this off in Appearance → Handing over.',
+      `Handing off — the ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%`,
+      'Artemis stopped before the wall while there is still budget to move the work or write a continuity note. Turn this off in Settings → Runs.',
     );
 
     void requestHandoff(pane, trigger, now);
@@ -5946,17 +5977,24 @@ function considerHandoff(): void {
 }
 
 /**
- * Stop whatever is running, then ask for the document.
+ * Stop whatever is running, then ask the *user* — and only then the agent.
  *
  * The interrupt comes first and is awaited: a provider mid-turn will not take
- * the prompt as its own turn, and sending it anyway would either queue it
- * behind the work being abandoned or fold it into that work as a steer. Neither
- * produces a document.
+ * a prompt as its own turn, and sending one anyway would either queue it
+ * behind the work being abandoned or fold it into that work as a steer.
  *
- * `submitPrompt` is used rather than a bespoke call so the handoff request is an
- * ordinary turn in every respect — it appears in the transcript as a prompt, it
- * is subject to the same capability gating, and the run it starts ends the way
- * any other does.
+ * The wait below is also what sequences a chosen move safely (§5 obstacle 1):
+ * `settled` resolves on the interrupted run's `run.end`, and that same event —
+ * one write, earlier in the same handler — promotes `endedSessionId` into
+ * `resumeSessionId` while the pane's profile still matches the run's. So by
+ * the time the picker opens, the conversation the user might move is already
+ * the one the pane will resume; a picker opened before the settle could move
+ * the profile under the promotion's feet and silently drop it.
+ *
+ * Then the fork (ADR 0003): when another reachable account could take the
+ * work, the informed picker opens and *nothing more happens until the user
+ * chooses*. When no candidate passes — reachability, auth, freshness or plain
+ * count — it degrades to what this function always did: the continuity note.
  */
 async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
   if (isLive(paneState(pane))) {
@@ -5976,7 +6014,22 @@ async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number):
     // punishing them for a provider that ignored an interrupt.
     return abandonHandoff(pane, 'the run would not stop');
   }
-  // Promoted only now, once the interrupted run's `run.end` is behind us: from
+  if (offerHandoff(pane, trigger)) return;
+  await requestContinuityNote(pane, trigger, now);
+}
+
+/**
+ * Ask the agent for the continuity note — today's document path, verbatim.
+ *
+ * `submitPrompt` is used rather than a bespoke call so the request is an
+ * ordinary turn in every respect — it appears in the transcript as a prompt,
+ * it is subject to the same capability gating, and the run it starts ends the
+ * way any other does. Reached two ways, deliberately the same both times: the
+ * trigger found no candidate to offer, or the user looked at the candidates
+ * and declined ({@link declineHandoffOffer}).
+ */
+async function requestContinuityNote(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
+  // Promoted only once the interrupted run's `run.end` is behind us: from
   // here the next run to end is the one this prompt starts, which is exactly
   // what `asked` means.
   setHandoff(pane, 'asked');
@@ -5986,6 +6039,117 @@ async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number):
   // refusal means no document exists. `done` would block the conversation over
   // a handover that was never written.
   if (!sent) abandonHandoff(pane, 'the prompt could not be sent');
+}
+
+/**
+ * Open the picker, if there is a choice worth opening it over.
+ *
+ * The bar for opening is one candidate that could actually be chosen —
+ * reachable, not known signed out, fresh-reading, not rejected. Candidates
+ * blocked on facts still *render*, disabled with their reasons, but a picker
+ * whose every row is dead is a question with no answers, and the ADR's own
+ * fallback for that is the continuity note.
+ *
+ * `unchecked` counts as chooseable here: sign-in has simply never been asked
+ * about — the ordinary state on a fresh launch — and the probes fired below
+ * usually answer before the user has read the dialog. The *move* re-validates
+ * against the answered probe either way (`handOffToProfile`).
+ *
+ * Returns whether the picker opened, so the caller knows to stand down.
+ */
+function offerHandoff(pane: Pane, trigger: HandoffTrigger): boolean {
+  const state = paneState(pane);
+  const sessionId = state.resumeSessionId;
+  // No resumable session means no conversation a target could continue —
+  // there is nothing to move, only something to write down.
+  if (sessionId === null) return false;
+  const summary = state.sessions.find((s) => s.id === sessionId);
+  // A session the listing has not seen yet cannot prove any target reaches
+  // it. Reachability is the floor, so the honest answer is the note.
+  if (summary === undefined) return false;
+
+  const app = useApp.getState();
+  const now = Date.now();
+  const candidates = handoffCandidates(state.profiles, state.activeProfileId, (id) =>
+    canReachSession(summary, id),
+  );
+  const chooseable = candidates.some((profile) => {
+    const block = handoffTargetBlock({
+      profile,
+      reachable: true,
+      auth: app.authByProfile[profile.id],
+      usage: app.planUsageByProfile[profile.id],
+      now,
+    });
+    return block === null || block.kind === 'unchecked';
+  });
+  if (!chooseable) return false;
+
+  // The cheap gate, fired for every row at the moment the question opens (§5
+  // obstacle 6): by the time the user has read the dialog, "signed out" is a
+  // fact on the row rather than a surprise after the choice.
+  for (const profile of candidates) {
+    if (app.authByProfile[profile.id] === undefined) void readAuthStatus(profile.id);
+  }
+
+  setPaneState(pane, { handoffOffer: { trigger, at: now } });
+  setHandoff(pane, 'offered');
+  return true;
+}
+
+/**
+ * The user chose a target in the picker. The chosen act, performed.
+ *
+ * All the safety lives in {@link handOffToProfile}, which re-validates every
+ * gate at the moment of the act — the picker's rows were drawn from the same
+ * facts, but a dialog can sit open across a poll. A refusal leaves the offer
+ * open with the banner saying why: the world changed, the question has not.
+ */
+export async function chooseHandoffTarget(
+  profileId: ProfileId,
+  pane: Pane = focusedPane(),
+): Promise<boolean> {
+  const offer = paneState(pane).handoffOffer;
+  if (offer == null) return false;
+
+  const moved = await handOffToProfile(profileId, pane);
+  if (!moved) return false;
+
+  // The latch comes off entirely rather than parking on a terminal state: the
+  // conversation now bills an account with room, and if *that* account later
+  // crosses a threshold, the trigger has every right to fire again.
+  setPaneState(pane, { handoffOffer: null });
+  setHandoff(pane, 'none');
+  return true;
+}
+
+/**
+ * The user declined the move and asked for the continuity note instead —
+ * ADR 0003's degraded hand off, exactly as it ran before the picker existed.
+ */
+export function declineHandoffOffer(pane: Pane = focusedPane()): void {
+  const offer = paneState(pane).handoffOffer;
+  if (offer == null) return;
+  setPaneState(pane, { handoffOffer: null });
+  void requestContinuityNote(pane, offer.trigger, Date.now());
+}
+
+/**
+ * The user closed the picker without choosing anything: keep working here.
+ *
+ * `dismissed`, the same standing door out the feature has always had — nothing
+ * moves, nothing is written, and nothing re-asks for the rest of the
+ * conversation, however full the account gets. Escape must not be a trap.
+ */
+export function dismissHandoffOffer(pane: Pane = focusedPane()): void {
+  if (paneState(pane).handoffOffer == null) return;
+  setPaneState(pane, { handoffOffer: null });
+  setHandoff(pane, 'dismissed');
+  pane.transcript.note(
+    'info',
+    'Staying on this account',
+    'Nothing moves and nothing more will be asked in this conversation. The account is still nearly spent.',
+  );
 }
 
 /**
@@ -7042,12 +7206,16 @@ function applyProfile(pane: Pane, profile: ProfileMetadata): void {
  *
  * ## What that costs, stated plainly
  *
- * Switching accounts mid-conversation is no longer possible. Hitting a plan
- * limit halfway through a session means starting a new session on the other
- * account rather than continuing this one there. That is a real loss, and it is
- * the honest one: continuing "there" was never actually happening — it was
- * resuming a transcript the new account cannot see, or billing it for one it
- * never had.
+ * Switching accounts mid-conversation through *this* gesture is not possible.
+ * Hitting a plan limit halfway through a session no longer strands the work,
+ * though: {@link handOffToProfile} is the one narrower door through this gate —
+ * it moves the account while *keeping* the session, and it may do so exactly
+ * because it verifies what this function cannot: that the target's config
+ * directory reaches the transcript's store, that the target is signed in, and
+ * that its plan reading is fresh enough to act on (ADR 0003). This function
+ * stays the general answer because for an arbitrary pick from the account menu
+ * none of that is known — continuing "there" would be resuming a transcript
+ * the new account cannot see, or billing it for one it never had.
  *
  * A live run refuses outright rather than ending itself, for the reason `setCwd`
  * gives: killing work in progress is not plausibly what someone reaching for the
@@ -7091,6 +7259,231 @@ export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): vo
       `The account moved to ${profile.label}, and a session only resumes under the account it was created on.`,
     );
   }
+}
+
+/**
+ * Hand this conversation to another account — the narrower door (ADR 0003).
+ *
+ * ## The invariant, restated rather than relaxed
+ *
+ * `setProfile` drops the session because for an arbitrary pick nothing
+ * guarantees the target can read the transcript or should be billed for it.
+ * This door keeps the session because it proves those things first, one gate
+ * per §5 obstacle:
+ *
+ *  - **Reachability.** The target's config directory must reach the session's
+ *    store (`canReachSession`, off the listing's `alsoInProfiles`). A summary
+ *    the sidebar has not listed yet cannot be verified and is refused — the
+ *    door is only ever *offered* from surfaces that already checked.
+ *  - **Auth.** A target nobody has probed is probed here (`checkAuthStatus`
+ *    behind `readAuthStatus` — cheap, one subprocess), and a signed-out target
+ *    is refused: the move would fail on credentials one prompt later, after
+ *    the user thought it worked.
+ *  - **Freshness.** The target's plan reading must clear the recommender's
+ *    six-minute bar, and its binding window must not be `rejected`. Handing
+ *    work to an account that immediately stalls is the failure mode ADR 0003
+ *    exists to avoid.
+ *  - **A settled pane.** A live run refuses outright, exactly as `setProfile`
+ *    does — and, subtler, this is what sequences the move *after* `run.end`'s
+ *    promotion of `endedSessionId` into `resumeSessionId` (store.ts run.end):
+ *    the promotion only happens while the pane's profile still matches the
+ *    run's, so a move that raced it would silently drop the conversation.
+ *    Requiring a settled pane means the promotion has already landed by the
+ *    time anything here writes.
+ *
+ * ## What actually moves
+ *
+ * `applyProfile`, not a bespoke write — the same funnel every other account
+ * change goes through, so the model catalogue, slash commands, session list
+ * and auth state all re-resolve for the new account (§5 obstacle 4). What it
+ * deliberately does *not* touch is `resumeSessionId`: the next prompt resumes
+ * this session under the new account, the provider spawns against the shared
+ * store (the adapter releases the source process first — see
+ * `claude.ts createRun`), and `SessionOwners` re-attributes the session when
+ * that run starts, which is what moves the sidebar row's badge.
+ *
+ * The recalled model choice is reconciled after the catalogue lands: an id the
+ * new account's live catalogue cannot place is moved to the provider default,
+ * with a note, rather than sent to a run that will refuse it.
+ *
+ * Returns whether the move happened. Refusals say why — a door that silently
+ * does nothing reads as the app being broken.
+ */
+export async function handOffToProfile(
+  profileId: ProfileId,
+  pane: Pane = focusedPane(),
+): Promise<boolean> {
+  const state = paneState(pane);
+  const profile = state.profiles.find((p) => p.id === profileId);
+  // A stale render of a deleted profile; same silence as `setProfile`.
+  if (!profile) return false;
+  if (profileId === state.activeProfileId) return false;
+
+  if (isLive(state)) {
+    pushBanner(
+      'warn',
+      'A run is still going',
+      'Interrupt it first. Handing a conversation off moves which account continues it, and that cannot change under a run.',
+    );
+    return false;
+  }
+
+  const sessionId = state.resumeSessionId;
+  if (sessionId === null) {
+    pushBanner(
+      'warn',
+      'There is no conversation to hand off',
+      'This column has no resumable session. Picking the account from the status line does the same thing here.',
+    );
+    return false;
+  }
+
+  const summary = state.sessions.find((s) => s.id === sessionId);
+  const gate = (): ReturnType<typeof handoffTargetBlock> =>
+    handoffTargetBlock({
+      profile,
+      reachable: summary !== undefined && canReachSession(summary, profileId),
+      auth: useApp.getState().authByProfile[profileId],
+      usage: useApp.getState().planUsageByProfile[profileId],
+      now: Date.now(),
+    });
+
+  let block = gate();
+  if (block?.kind === 'unchecked') {
+    // The cheap probe, at the moment of the act. §5 obstacle 6: nothing else
+    // pre-checks sign-in, and a target that fails on credentials after being
+    // chosen is worse than a beat of latency before the move.
+    await readAuthStatus(profileId);
+    block = gate();
+  }
+  if (block !== null) {
+    pushBanner(
+      'warn',
+      `Could not hand off to ${profile.label}`,
+      `That account ${describeBlock(block)}${block.kind === 'exhausted' ? '' : '.'} The conversation stays where it is.`,
+    );
+    return false;
+  }
+
+  // Re-read after the await: a continuation turn can claim the pane while the
+  // auth probe is out, and moving the account under a live run is exactly what
+  // every gate above exists to prevent.
+  const settled = paneState(pane);
+  if (isLive(settled) || settled.resumeSessionId !== sessionId) {
+    pushBanner('warn', 'The conversation moved on', 'Nothing was handed off.');
+    return false;
+  }
+
+  applyProfile(pane, profile);
+
+  // The note `resumeSession` writes for a switch, in this door's own words —
+  // silently changing which account the next prompt bills is the one thing the
+  // status line exists to keep answerable.
+  pane.transcript.note(
+    'info',
+    `Handed off to ${profile.label}`,
+    `Switched profile → ${profile.label}. The conversation continues here, and the next prompt resumes it under the new account — its row in the sidebar follows once that run starts.`,
+  );
+
+  void reconcileModelForHandoff(pane, profile, sessionId);
+  return true;
+}
+
+/**
+ * After a hand off, make the model choice one the new account can serve.
+ *
+ * §5 obstacle 4's tail: the recalled choice may name a model the target does
+ * not offer, and `activeModel` deliberately carries an unplaceable id through
+ * as itself — the catalogue is an offer, not an allow-list — which is right in
+ * general and wrong here, where a *live* catalogue for exactly this account is
+ * about to answer. So: wait for the refresh `applyProfile` kicked off (this
+ * one supersedes it via the request token), and only if the confirmed
+ * catalogue cannot place the id — `carryModelId` in `refreshModels` has
+ * already tried vocabulary migration — move to the provider default, say so,
+ * and file the change under the session so reopening it does not resurrect an
+ * id the account cannot run.
+ */
+async function reconcileModelForHandoff(
+  pane: Pane,
+  profile: ProfileMetadata,
+  sessionId: SessionId,
+): Promise<void> {
+  await refreshModels(pane);
+  const state = paneState(pane);
+  // The pane moved on while the catalogue was in flight; whatever arrived
+  // belongs to nobody now.
+  if (state.activeProfileId !== profile.id || state.resumeSessionId !== sessionId) return;
+  if (state.model === null) return;
+  // Judge only against a catalogue the account confirmed. The built-in
+  // fallback proves absence of nothing.
+  if (state.models.length === 0) return;
+  if (state.models.some((m) => m.id === state.model)) return;
+
+  const wanted = state.model;
+  setModel(null, pane);
+  pane.transcript.note(
+    'warn',
+    'The model choice moved to the provider default',
+    `${profile.label} does not offer ${wanted}, so the next prompt runs on ${activeModel(paneState(pane))?.label ?? 'the provider default'} instead.`,
+  );
+}
+
+/**
+ * The rate-limit banner, grown a door (§5 phase 1).
+ *
+ * A run dying `rate_limit` used to end in `describeError`'s shrug — "code
+ * rate_limit · HTTP 429 · retryable", with `retryable` decorating nothing.
+ * This names what actually happened (the binding window and when it resets,
+ * from the account's polled reading) and, when a reachable, signed-in,
+ * fresh-reading target exists, offers to continue the conversation there.
+ *
+ * The target is `planRecommendation`'s — the same account the profile menu
+ * would steer new work to — held to the hand-off gates on top: it must reach
+ * this session's store, must not be the account that just died, and must not
+ * be blocked by anything {@link handoffTargetBlock} checks. An unchecked
+ * sign-in state is the one gate allowed through at *offer* time: the probe is
+ * fired here so the answer is usually in hand by the click, and
+ * {@link handOffToProfile} re-validates every gate — auth included — at the
+ * moment of the act, which is the moment that matters. No candidate, no door;
+ * the banner still names the window either way, which is most of the point.
+ *
+ * Nothing here retries, moves, or latches anything: the door *is* the manual
+ * move, one click wide, and declining it costs nothing (ADR 0003).
+ */
+function pushRateLimitDoor(pane: Pane, run: RunState, error: AgentError): void {
+  const app = useApp.getState();
+  const now = Date.now();
+  const detail = describeBindingLimit(app.planUsageByProfile[run.profileId], now) ?? describeError(error);
+
+  let action: BannerAction | undefined;
+  const state = paneState(pane);
+  const sessionId = state.resumeSessionId;
+  const summary = sessionId === null ? undefined : state.sessions.find((s) => s.id === sessionId);
+  const recommended = planRecommendation(app.profiles, app.planUsageByProfile, now);
+  const profile =
+    recommended === null ? undefined : app.profiles.find((p) => p.id === recommended.profileId);
+
+  if (summary !== undefined && profile !== undefined && profile.id !== run.profileId) {
+    const block = handoffTargetBlock({
+      profile,
+      reachable: canReachSession(summary, profile.id),
+      auth: app.authByProfile[profile.id],
+      usage: app.planUsageByProfile[profile.id],
+      now,
+    });
+    if (block === null || block.kind === 'unchecked') {
+      if (block !== null) void readAuthStatus(profile.id);
+      const target = profile;
+      action = {
+        label: `Continue on ${target.label}`,
+        run: () => {
+          void handOffToProfile(target.id, pane);
+        },
+      };
+    }
+  }
+
+  pushBanner('error', `Run failed: ${error.message}`, detail, action);
 }
 
 /**
@@ -9057,6 +9450,8 @@ export function newSession(
       // room is a question for the next reading, not a state to inherit — and a
       // fresh session that opened already refusing prompts would be absurd.
       handoff: 'none',
+      // An open picker was a question about the conversation being erased.
+      handoffOffer: null,
     });
   }
 
@@ -9240,6 +9635,8 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     tasks: [],
     dismissedTasks: [],
     tasksRequested: false,
+    // The question belonged to the conversation this column is leaving.
+    handoffOffer: null,
     // Same rule as `setProvider`: a catalogue belongs to a provider, so
     // landing on a different one has to drop it rather than show the previous
     // provider's models under the new one's name.
@@ -11044,7 +11441,15 @@ function applyAgentEvent(event: AgentEvent): void {
           : s.run,
       }));
       if (event.error) {
-        pushBanner('error', `Run failed: ${event.error.message}`, describeError(event.error));
+        if (event.error.code === 'rate_limit') {
+          // The limit wall grows a door: name the window that tripped and when
+          // it resets, and — when another account could take the work — offer
+          // to continue there. Read after the write above, because the door
+          // hangs off the `resumeSessionId` that write may just have promoted.
+          pushRateLimitDoor(pane, run, event.error);
+        } else {
+          pushBanner('error', `Run failed: ${event.error.message}`, describeError(event.error));
+        }
       }
       // A backgrounded conversation that has finished is no longer holding
       // anything the provider's own file does not — except this end card. A few
