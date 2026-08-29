@@ -310,7 +310,22 @@ rejected-window override: `planHeadroom` (usage.ts:409). Relative burn rate:
 ([`planLoad.ts:97`](../../packages/protocol/src/planLoad.ts)). The usage rings already
 render on the same status-line row. This is join work, not plumbing work.
 
-Proposed shape (each row of the picker knows three new facts):
+**The unified navigator (user spec, 2026-08-29 — supersedes the separate-popover
+shape below; the per-row facts still apply inside it).** The profile and model
+chips open ONE popover: a Finder-column navigator, columns revealed left to
+right as picks land — **Profile → Model → Effort** — with a footer of toggles
+that exist only when the picked combination supports them: fast mode (gated by
+model + effort) and the permission level. The status-line chips themselves stay
+(model + permission remain the always-visible pair per the elision rule); their
+menus unify. Column details: the profile column carries the usage-aware rows
+(live meters, resets, signed-out badges, Recommended on top) and is
+disabled-with-reason mid-run; the model column keeps per-profile pins first,
+catalogue behind search, `$`-pips and exhaustion inline, the "Edit quick
+access…" door; the effort column is the thinking ladder including ultracode
+(still mutually exclusive with fast mode); context readout and plan meters stay
+in the footer. This is also the row vocabulary the §5 hand-off picker reuses.
+
+Per-row facts (each row of the navigator knows three new facts):
 
 1. **Exhaustion state** — a model whose `model_scoped` weekly bucket is `rejected`
    renders present-but-disabled *with the reason and the reset time inline*, following
