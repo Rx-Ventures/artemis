@@ -242,6 +242,17 @@ export function mapCodexNotification(
 ): readonly AgentEvent[] {
   if (state.ended) return [];
 
+  /*
+   * Nothing precedes `session.started` — the contract's first rule, enforced
+   * rather than assumed. This case is real on 0.147, not defensive:
+   * `thread/resume` replays the thread's token usage in the same flush as its
+   * response, ahead of the session announcement the adapter synthesizes from
+   * that response. Mapping the replay would both put `usage` before
+   * `session.started` and count previous turns' tokens — already paid for —
+   * into this run's final total.
+   */
+  if (!state.sessionStarted && method !== CODEX_NOTIFICATION.threadStarted) return [];
+
   const payload = asRecord(params);
 
   switch (method) {
@@ -539,11 +550,22 @@ function mapThinkingDelta(
  * `contextTokens` comes from `last.totalTokens` rather than the running total,
  * because it answers a different question — how full the window is right now,
  * not how much has been billed.
+ *
+ * ## Only the live turn's reports count
+ *
+ * A resumed thread replays its most recent turn's usage right after the
+ * `thread/resume` response, before this run's turn begins — tokens the run
+ * that spent them already reported. The replay names the turn it belongs to,
+ * so a report for a turn this run is not running is someone else's bill and
+ * is dropped rather than summed.
  */
 function mapTokenUsage(
   payload: Record<string, unknown>,
   state: CodexMapperState,
 ): readonly AgentEvent[] {
+  const reportedTurnId = readString(payload, 'turnId');
+  if (reportedTurnId !== undefined && reportedTurnId !== state.turnId) return [];
+
   const usage = asRecord(payload['tokenUsage']);
   const last = asRecord(usage['last']) as unknown as CodexTokenUsageBreakdown;
   const lastRecord = asRecord(last);
