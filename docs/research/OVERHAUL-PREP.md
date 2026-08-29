@@ -670,16 +670,26 @@ back to the ended run's session id under exactly the promotion's own conditions 
 same profile, same directory — so the account-invariant is preserved. Three
 regression tests; 417 renderer state tests green.
 
-**Codex follow-ups (B) — evidence gathered, loop not yet built.** The forensic
-signature: **25 of 32 Codex session ids have no rollout file on disk** — persistence
-collapsed almost entirely after 08-21, so `thread/resume` has nothing to resume; plus
-same-day evidence of Codex writing into two different homes (`~/.codex` vs the
-profile dir — an env-leak shape). Two loop candidates mapped: extend the codex
-adapter's `FAKE_APP_SERVER` tests to cover `thread/resume` (today: zero adapter-level
-resume coverage), and a two-turn real-binary probe of rollout persistence under an
-isolated `CODEX_HOME`. Also: the missing-rollout server error currently surfaces as a
-generic transport failure — `isMissingRollout` exists but is never consulted on the
-resume path.
+**Codex follow-ups (B) — root-caused and FIXED (PR #272).** The real bug, found by
+a live probe and reproduced deterministically: **codex-cli 0.147 answers
+`thread/resume` with the thread object and emits no `thread/started` notification —
+and the adapter only announced sessions from that notification.** A resumed run
+therefore had no `session.started`, no recorded session id, and `send()` had no
+thread to name: the literal "cannot send follow-up messages," even for sessions
+whose rollout exists. Fixed by treating the resume/fork *response* as the
+announcement (deduplicated if a server ever sends both), plus a mapper guard
+holding events until `session.started`, plus dropping replayed usage from turns
+this run didn't start (it was double-counting the prior turn's tokens into
+`run.end`). Rider fix: the missing-rollout server error (`-32600 no rollout
+found`) now routes through `isMissingRollout` into an actionable
+`invalid_request` message instead of an opaque transport failure. The forensic
+missing-rollout mystery resolved benignly: 0.147 **persists rollouts correctly**
+when adapter-driven (probe verdict: PERSISTED under an isolated `CODEX_HOME`),
+and no env leak exists in the adapter — the historical 25-of-32 gap is most
+likely an older CLI build; the "two homes" evidence was user-run `codex` in
+terminals (which deliberately strip `CODEX_HOME`) plus read-only version checks.
+Adapter-level resume coverage went from zero to 64 tests; `codex:smoke` is now a
+root script with a two-turn resume mode.
 
 **Phantom done, upstream half (C) — bounded, not yet closed.** The store-level fix
 above stops the *consequences* (rival runs), but the upstream loss of `run.end`
