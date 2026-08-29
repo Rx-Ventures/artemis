@@ -154,7 +154,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
  * dash paints a dot, and a dot at the twelve o'clock position reads as a sliver
  * of usage on a window that has none.
  */
-function UsageRing({
+export function UsageRing({
   utilization,
   status,
 }: {
@@ -234,7 +234,7 @@ function UsageRing({
  * `window` is nullable because the trigger has to occupy space before the first
  * reading lands — see {@link PLACEHOLDER_SLOTS}.
  */
-interface MeterSlot {
+export interface MeterSlot {
   readonly key: string;
   readonly label: string;
   readonly window: PlanUsageWindow | null;
@@ -296,7 +296,10 @@ function fableWindow(usage: PlanUsage | null): PlanUsageWindow | null {
  * meter did before any of this and it keeps a provider with its own vocabulary
  * showing a real number instead of three dashes.
  */
-function meterSlots(usage: PlanUsage | null): readonly MeterSlot[] {
+// Exported for the run navigator's footer, which draws the same three rings —
+// same slots, same skip rules — so the two surfaces cannot disagree about
+// which windows are worth a ring.
+export function meterSlots(usage: PlanUsage | null): readonly MeterSlot[] {
   const slots: MeterSlot[] = [];
 
   const fiveHour = focusedWindow(usage, 'five_hour');

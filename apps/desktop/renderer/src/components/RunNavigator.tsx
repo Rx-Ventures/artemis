@@ -1,0 +1,942 @@
+/**
+ * The run navigator.
+ * ============================================================================
+ *
+ * One surface for the whole "who runs it, on what, how hard" decision. The
+ * profile chip and the model chip on the status line both open this popover: a
+ * Finder-style column navigator, columns revealed left to right as picks land
+ * — **Profile → Model → Effort** — with a footer of toggles that exist only
+ * when the picked combination supports them (fast mode, the permission level)
+ * and the read-only facts that travel with the choice (context, plan meters).
+ *
+ * ## Why one surface
+ *
+ * The two chips used to open two menus, and the split was profile-blind in
+ * exactly the way that mattered: the model menu offered Fable identically
+ * whether that account's Fable weekly window was untouched or `rejected`,
+ * because nothing in it read `planUsageByProfile`. The data path was already
+ * profile-aware — catalogues are fetched per account, pins are per profile —
+ * only the decision path was not. Unifying the menus is what lets every model
+ * row know the three facts (`modelFacts.ts`): exhaustion, pressure and cost
+ * posture, joined through `modelIdentity` rather than string equality.
+ *
+ * The chips themselves stay on the bar — model and permission remain the
+ * always-visible pair — and so does every door the old menus held: Manage,
+ * "Edit quick access…", the run-reports note, the disabled-with-reason states.
+ * A merged surface may merge chrome; it may not remove information.
+ *
+ * ## Picks do not close the surface
+ *
+ * A Finder column's whole point is that a pick lands and the next column
+ * answers it: pick a profile and the model column re-reads that account's
+ * pins and pressure; pick a model and the effort ladder narrows to its rungs.
+ * Closing on every pick would turn three related choices back into three menu
+ * trips. Escape and clicking away close it, as they close every menu.
+ *
+ * ## Row vocabulary is deliberately reusable
+ *
+ * `ModelFactRow`, `CostPips` and `PressureDot` are exported: the §5 hand-off
+ * picker presents the same decision — candidates with live meters and
+ * disabled-with-reason exhaustion — and must speak the same language rather
+ * than a dialect of it.
+ */
+
+import { Fragment, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { ListTreeIcon, SearchIcon } from 'lucide-react';
+import { bindingWindow, isProfileEnabled } from '@rx-artemis/protocol';
+import type {
+  PermissionMode,
+  PlanRecommendation,
+  PlanUsage,
+  ProfileId,
+  ProfileMetadata,
+  ProviderDescriptor,
+  ProviderId,
+  ProviderModelOption,
+} from '@rx-artemis/protocol';
+
+import { usePermissionModes } from '../hooks/useCapability';
+import { formatTokens } from '../lib/format';
+import { shortenPath } from '../lib/paths';
+import {
+  ULTRACODE_LEVEL,
+  activeCapabilities,
+  activeModel,
+  activeModels,
+  activeProviderLabel,
+  activeThinkingLevel,
+  isLive,
+  learnedContextWindow,
+  openSettings,
+  planRecommendation,
+  quickModels,
+  setFastMode,
+  setModel,
+  setPermissionMode,
+  setProfile,
+  setThinkingLevel,
+  thinkingLevels,
+  useApp,
+} from '../state/store';
+import {
+  costPosture,
+  modelExhaustion,
+  modelPressure,
+  recommendModel,
+  type CostPosture,
+  type ModelPressure,
+} from '../state/modelFacts';
+import { hiddenModelCount, navigatorColumns, navigatorFooter, navigatorModelRows } from '../state/runNavigator';
+import { usePane, usePaneRef } from '../state/paneContext';
+import { UsageRing, meterSlots, toneFor } from './PlanUsageMeter';
+import { ProfileSwatch } from './primitives';
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
+
+/* -------------------------------------------------------------------------- */
+/* Permission-mode vocabulary                                                 */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Here rather than in `StatusLine` because both surfaces speak it — the mode
+ * chip on the bar and the footer's permission control — and the import must
+ * run one way (`StatusLine` imports this file, never the reverse).
+ */
+export const MODE_LABELS: Record<PermissionMode, string> = {
+  plan: 'plan',
+  default: 'ask',
+  acceptEdits: 'accept edits',
+  auto: 'auto',
+  dontAsk: 'never ask',
+  bypassPermissions: 'bypass',
+};
+
+export const MODE_NOTES: Record<PermissionMode, string> = {
+  plan: 'Research and propose only. No file is written and no command runs.',
+  default: 'Prompt for anything not already allowed.',
+  acceptEdits: 'Auto-approve file edits; prompt for everything else.',
+  auto: 'The provider’s own classifier decides, and prompts on risk.',
+  dontAsk: 'Never prompt — deny instead of asking.',
+  bypassPermissions: 'Approve everything. Every tool call runs without asking.',
+};
+
+/* -------------------------------------------------------------------------- */
+/* The surface                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The navigator's content, rendered inside whichever chip's menu opened it.
+ *
+ * Both chips mount this same component, which is what "their menus unify"
+ * means in practice: one implementation, one set of rules, anchored at the
+ * chip that was clicked. Only one can be open at a time, so the user only
+ * ever sees one navigator.
+ */
+export function RunNavigatorContent(): ReactElement {
+  const modelRevealed = usePane((s) => navigatorColumns(s).model);
+  const effortRevealed = usePane((s) => navigatorColumns(s).effort);
+
+  return (
+    <DropdownMenuContent align="start" side="top" className="w-fit p-0">
+      <div className="flex items-stretch divide-x divide-line">
+        <ProfileColumn />
+        {modelRevealed ? <ModelColumn /> : null}
+        {effortRevealed ? <EffortColumn /> : null}
+      </div>
+      <NavigatorFooter />
+    </DropdownMenuContent>
+  );
+}
+
+/** Shared column chrome: fixed width, its own scroll, one text column. */
+function Column({
+  children,
+  className,
+}: {
+  readonly children: ReactNode;
+  readonly className?: string;
+}): ReactElement {
+  return (
+    <div className={cn('flex max-h-80 w-56 flex-col overflow-y-auto p-1', className)}>
+      {children}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Column 1: Profile                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every profile, grouped by the provider that owns it.
+ *
+ * Providers keep their catalogue order — the order `providers:list` reported —
+ * so the sections do not reshuffle as accounts are added. A profile whose
+ * provider is not in that list still gets a section, keyed by its raw id: an
+ * account is not worth hiding because the build it belongs to is missing, and
+ * that is exactly when someone needs to see it.
+ */
+function profilesByProvider(
+  profiles: readonly ProfileMetadata[],
+  providers: readonly ProviderDescriptor[],
+): readonly { readonly id: ProviderId; readonly label: string; readonly profiles: readonly ProfileMetadata[] }[] {
+  const order = new Map<ProviderId, string>();
+  for (const provider of providers) order.set(provider.id, provider.label);
+  for (const profile of profiles) {
+    if (!order.has(profile.providerId)) order.set(profile.providerId, profile.providerId);
+  }
+
+  const sections = [];
+  for (const [id, label] of order) {
+    const owned = profiles.filter((p) => p.providerId === id);
+    if (owned.length > 0) sections.push({ id, label, profiles: owned });
+  }
+  return sections;
+}
+
+/**
+ * The first column: which account runs.
+ *
+ * The rules are the profile menu's, unchanged — this column *is* that menu,
+ * rehomed:
+ *
+ * - **Not scoped to the active provider.** A profile belongs to exactly one
+ *   CLI, so the provider follows the account; grouping by provider is what
+ *   makes one flat list readable and puts "switching account can switch CLI"
+ *   in front of the person doing it.
+ * - **A disabled profile is missing, unless it is the one running.** Hiding is
+ *   the entire effect of `disabled`; the running account stays because a radio
+ *   group whose value names no row paints no check, and the row says why it is
+ *   there rather than looking like the filter leaked.
+ * - **Mid-run the rows go quiet, with the reason above them once.** `setProfile`
+ *   refuses mid-run — a session belongs to the account it started on — and this
+ *   is where that is said *before* the click rather than in a banner after it.
+ *   The column still opens: it also holds Manage and every account's sign-in
+ *   state, none of which a run has any bearing on.
+ */
+function ProfileColumn(): ReactElement {
+  const pane = usePaneRef();
+  const profiles = useApp((s) => s.profiles);
+  const providers = useApp((s) => s.providers);
+  const activeId = usePane((s) => s.activeProfileId);
+  const live = usePane(isLive);
+
+  const selectable = useMemo(
+    () => profiles.filter((p) => isProfileEnabled(p) || p.id === activeId),
+    [profiles, activeId],
+  );
+  const sections = useMemo(
+    () => profilesByProvider(selectable, providers),
+    [selectable, providers],
+  );
+
+  return (
+    <Column>
+      {/* Suppressed rather than disabled while a run is going: this row is an
+          action ("take me there") and there is nowhere to be taken. The line
+          below says why, which is more use than a greyed shortcut. */}
+      {live ? null : <RecommendedProfile />}
+
+      {live ? (
+        <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+          A run is going. A session belongs to the account it started on, so accounts move
+          when it ends.
+        </p>
+      ) : null}
+
+      {sections.length === 0 ? (
+        /*
+          Two different dead ends, and they need different sentences. "No
+          profile exists" is the first-run state and the answer is to make
+          one; "every profile is disabled" is a thing the user did, and the
+          answer is to undo it — telling them nothing exists would be a lie
+          about their own accounts.
+        */
+        <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+          {profiles.length === 0
+            ? 'No profile exists yet. A run needs an account, which comes from a profile.'
+            : 'Every profile is disabled. A run needs an account — turn one back on in Manage.'}
+        </p>
+      ) : (
+        <DropdownMenuRadioGroup
+          value={activeId ?? ''}
+          onValueChange={(value) => setProfile(value as ProfileId, pane)}
+        >
+          {sections.map((section, index) => (
+            <Fragment key={section.id}>
+              {/*
+               * The heading is dropped when there is only one provider, where
+               * it would label a distinction the user does not have. It
+               * appears the moment a second one exists, which is also the
+               * moment picking a profile starts changing which CLI runs.
+               */}
+              {sections.length > 1 ? (
+                <>
+                  {index > 0 ? <DropdownMenuSeparator /> : null}
+                  <DropdownMenuLabel className="text-2xs text-ink-faint">
+                    {section.label}
+                  </DropdownMenuLabel>
+                </>
+              ) : null}
+              {section.profiles.map((candidate) => (
+                <ProfileItem key={candidate.id} id={candidate.id} locked={live} />
+              ))}
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
+      )}
+
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        className="text-2xs"
+        // Aimed at the list itself, not just the pane: "Manage" from this
+        // surface means "show me my profiles", not "show me the top of a page
+        // that has them".
+        onSelect={() => openSettings('profiles', { row: 'profile-list' })}
+      >
+        Manage
+      </DropdownMenuItem>
+    </Column>
+  );
+}
+
+/**
+ * The sentence behind the Recommended row, which is where the whole argument
+ * lives. The row is a name; this is the case for it, and it has to be
+ * *self-correcting* — a reader who disagrees should be able to see which step
+ * they disagree with, because every basis is a different quality of evidence.
+ * (See `PlanRecommendationBasis` for what each claim is allowed to mean.)
+ */
+function explainRecommendation(recommendation: PlanRecommendation): string {
+  const share = `${String(Math.round(recommendation.headroom))}% free on its ${recommendation.binding.label} limit`;
+  const across = `across ${String(recommendation.candidates)} accounts`;
+
+  const basis =
+    recommendation.basis === 'same-plan'
+      ? `${share} — the most room ${across} on this plan.`
+      : recommendation.basis === 'weighted'
+        ? // The plan is named because the number on its own now understates the
+          // pick — 30% of a Max 20x window is six Pro windows.
+          `${share}, and ${recommendation.plan?.label ?? 'its plan'} is the largest plan in play — the most actual capacity ${across}, not the largest percentage.`
+        : `${share} — the largest share of its own plan ${across}. They are on different plans, and providers report only percentages, never how much a plan holds, so this is not a comparison of capacity.`;
+
+  if (!recommendation.assumedPlan || recommendation.basis !== 'weighted') return basis;
+  return `${basis} That tier is an assumption — the provider reports a plan family, never which tier of it — so set the exact plan on the profile if it is wrong.`;
+}
+
+/**
+ * Which account has room right now, at the top of the column.
+ *
+ * A `DropdownMenuItem` outside the radio group rather than a duplicate radio
+ * row inside it: two radio items with one value both paint their check, which
+ * reads as two accounts active at once — and the recommendation is an action
+ * ("take me there"), not a fifth state of the choice below. It renders nothing
+ * when there is no comparison to make — one account, stale readings, metered
+ * billing; `recommendProfile` holds those rules and explains each.
+ */
+function RecommendedProfile(): ReactElement | null {
+  const pane = usePaneRef();
+  const profiles = useApp((s) => s.profiles);
+  const usageByProfile = useApp((s) => s.planUsageByProfile);
+
+  /*
+   * `Date.now()` is captured at mount, not on every render, and that is exactly
+   * right here: Radix mounts this content when the surface opens, so the
+   * staleness rule is re-judged at the moment the user is about to act on the
+   * answer. A `useApp` selector could not return this — see `planRecommendation`.
+   */
+  const recommendation = useMemo(
+    () => planRecommendation(profiles, usageByProfile, Date.now()),
+    [profiles, usageByProfile],
+  );
+  if (recommendation === null) return null;
+
+  const profile = profiles.find((p) => p.id === recommendation.profileId);
+  if (!profile) return null;
+
+  const why = explainRecommendation(recommendation);
+
+  return (
+    <>
+      <DropdownMenuLabel className="text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
+      <DropdownMenuItem
+        className="gap-1.5 text-2xs"
+        onSelect={() => setProfile(profile.id, pane)}
+        title={why}
+      >
+        <ProfileSwatch color={profile.color} />
+        <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
+/**
+ * One profile row: swatch, name, quiet facts beside it, and how full the
+ * account is at the row's end — the binding window, coloured on the same
+ * thresholds as the rings (`toneFor`), read down the column so ten accounts
+ * can be compared without reading each one. Rendered straight off the polled
+ * map, never a fetch: a cache-miss escalation per row would spawn one CLI
+ * subprocess per profile every time the surface opened.
+ */
+function ProfileItem({
+  id,
+  locked = false,
+}: {
+  readonly id: ProfileId;
+  /** A run is going, so no row is selectable. The column says why once, above. */
+  readonly locked?: boolean;
+}): ReactElement | null {
+  const profile = useApp((s) => s.profiles.find((p) => p.id === id));
+  const status = useApp((s) => s.authByProfile[id]);
+  const usage = useApp((s) => s.planUsageByProfile[id]);
+  const polledTier = usage?.subscriptionType;
+  const platform = useApp((s) => s.platform);
+  if (!profile) return null;
+
+  const path = shortenPath(profile.configDir, { platform, max: 60 });
+  /*
+   * The plan tier, from whichever source has it. Gated on *not having been
+   * checked and found signed out* rather than on having been checked and found
+   * signed in — the same rule the chip's amber follows. The auth probe's own
+   * answer wins where there is one, because it is the more direct read; the
+   * polled `subscriptionType` covers every fresh launch, where `authByProfile`
+   * is empty until the profiles screen has been opened.
+   */
+  const tier =
+    status?.loggedIn === false ? undefined : (status?.subscriptionType ?? polledTier);
+
+  /*
+   * `bindingWindow` rather than a particular window or an average: a plan is
+   * as full as its tightest limit. Absent until the poll has been round, and
+   * absent forever on metered billing — both render nothing rather than a zero.
+   */
+  const binding = bindingWindow(usage);
+  const capacity = binding?.utilization ?? null;
+  // The provider's live verdict, when one has been heard. A rejected account
+  // showing its last polled percentage is the menu repeating the exact
+  // misreading the verdict corrects.
+  const rejected = binding?.status === 'rejected';
+
+  return (
+    <DropdownMenuRadioItem
+      value={profile.id}
+      disabled={locked}
+      className="gap-2 text-2xs"
+      /*
+        Selecting a profile keeps the surface open: the pick lands and the
+        model column to the right re-answers for the new account, which is the
+        entire point of a column navigator. Escape still closes.
+      */
+      onSelect={(event) => event.preventDefault()}
+      title={
+        [
+          status?.email,
+          rejected
+            ? `its ${binding?.label ?? ''} limit is reached — requests are being refused`
+            : capacity === null
+              ? undefined
+              : `${String(Math.round(capacity))}% of its ${binding?.label ?? ''} limit used`,
+          path,
+        ]
+          .filter(Boolean)
+          .join(' — ') || path
+      }
+    >
+      {/*
+       * The name is the only flexible thing on the row: `min-w-0`+`truncate` on
+       * it, `shrink-0` on the texts after it, so under pressure the name elides
+       * and the tier survives.
+       */}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <ProfileSwatch color={profile.color} />
+        <span className="min-w-0 truncate text-ink">{profile.label}</span>
+        {tier !== undefined ? <span className="shrink-0 text-ink-faint">{tier}</span> : null}
+        {isProfileEnabled(profile) ? null : (
+          <span className="shrink-0 text-ink-faint italic">disabled</span>
+        )}
+        {status !== undefined && !status.loggedIn ? (
+          <span className="shrink-0 text-amber">signed out</span>
+        ) : null}
+      </span>
+      {rejected ? (
+        <span className="shrink-0 tabular-nums text-signal">out</span>
+      ) : capacity === null ? null : (
+        <span className={cn('shrink-0 tabular-nums', toneFor(capacity))}>
+          {Math.round(capacity)}%
+        </span>
+      )}
+    </DropdownMenuRadioItem>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Column 2: Model                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The second column: which model, with the three facts on every row.
+ *
+ * Pins first, catalogue behind the search, "Edit quick access…" as the door to
+ * the full list — the old picker's shape, kept. What is new is that each row
+ * now reads the profile's plan: exhaustion disables it with the reason and
+ * reset inline, pressure tints its meter dot, and cost posture prints the
+ * exact `MODEL_LOAD` multiplier so "fable = 8× sonnet against your plan" is
+ * visible at selection time rather than discovered at the weekly wall.
+ */
+function ModelColumn(): ReactElement {
+  const pane = usePaneRef();
+  const profileId = usePane((s) => s.activeProfileId);
+  const catalogue = usePane(activeModels);
+  const quick = usePane(quickModels);
+  const selected = usePane(activeModel);
+  const providerLabel = usePane(activeProviderLabel);
+  // What the *run* reports it is actually using, which can differ from what
+  // was asked for — the provider may substitute. Shown once it is known.
+  const running = usePane((s) => s.run?.model);
+  const usage = useApp((s) =>
+    profileId === null ? undefined : s.planUsageByProfile[profileId],
+  );
+
+  const [query, setQuery] = useState('');
+  // Captured per mount — Radix mounts this content on open, so exhaustion and
+  // recommendation are judged at the moment the user is about to act.
+  const [now] = useState(() => Date.now());
+
+  const listed = useMemo(
+    () => navigatorModelRows(catalogue, quick, selected, query),
+    [catalogue, quick, selected, query],
+  );
+  const recommendation = useMemo(
+    () => recommendModel(quick, selected, usage, now),
+    [quick, selected, usage, now],
+  );
+
+  if (catalogue.length === 0) {
+    // Revealed but dead, with the same sentence the chip's disabled state
+    // carries — the column must not vanish while the chip explains.
+    return (
+      <Column>
+        <DropdownMenuLabel className="text-2xs text-ink-faint">Model</DropdownMenuLabel>
+        <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+          {providerLabel} does not offer a model choice, so Artemis sends no model and the
+          provider picks its own.
+        </p>
+      </Column>
+    );
+  }
+
+  const hidden = hiddenModelCount(catalogue.length, listed.length);
+  // The search earns its box only when it can reach something the list does
+  // not already show — a search over a list you can see all of is furniture.
+  const searchable = hidden > 0 || catalogue.length > 8 || query.trim().length > 0;
+
+  return (
+    <Column className="w-64">
+      {recommendation !== null ? (
+        <>
+          <DropdownMenuLabel className="text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
+          <DropdownMenuItem
+            className="gap-1.5 text-2xs"
+            onSelect={() => setModel(recommendation.model.id, pane)}
+            title={`${String(Math.round(recommendation.headroom))}% of its ${recommendation.binding.label} window is unused, against ${String(Math.round(recommendation.selectedHeadroom))}% for ${selected?.label ?? 'the selected model'} — ranked across ${String(recommendation.candidates)} pinned models.`}
+          >
+            <span className="min-w-0 flex-1 truncate text-ink">{recommendation.model.label}</span>
+            <CostPips posture={costPosture(recommendation.model)} />
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+        </>
+      ) : null}
+
+      {searchable ? (
+        <div className="relative mx-1 mb-1">
+          <SearchIcon
+            className="pointer-events-none absolute top-1/2 left-1.5 size-3 -translate-y-1/2 text-ink-faint"
+            aria-hidden="true"
+          />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            /*
+              The menu owns every printable key for typeahead; without the
+              stop, typing into this box would also walk the focus through the
+              rows below it. Navigation keys are let through on purpose —
+              Escape must still close, arrows must still move.
+            */
+            onKeyDown={(event) => {
+              if (event.key.length === 1 || event.key === 'Backspace') event.stopPropagation();
+            }}
+            placeholder="Search all models…"
+            aria-label="Search models"
+            spellCheck={false}
+            className="h-6 w-full rounded-md border border-line bg-inset/60 pr-2 pl-6 font-mono text-2xs text-ink outline-none placeholder:text-ink-faint focus:border-ring"
+          />
+        </div>
+      ) : null}
+
+      <DropdownMenuRadioGroup
+        value={selected?.id ?? ''}
+        onValueChange={(value) => setModel(value, pane)}
+      >
+        {listed.map((model) => (
+          <ModelFactRow key={model.id} model={model} usage={usage ?? null} now={now} />
+        ))}
+      </DropdownMenuRadioGroup>
+
+      {listed.length === 0 ? (
+        <p className="px-2 py-3 text-center text-2xs text-ink-faint">
+          No model matches “{query}”.
+        </p>
+      ) : null}
+
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        className="h-6 gap-1.5 px-2 text-2xs"
+        // The row anchor is what makes this "Edit quick access" rather than
+        // "open the Models pane": the pins live below the provenance block
+        // and the catalogue header, and the click promised the pins.
+        onSelect={() => openSettings('models', { row: 'quick-access' })}
+      >
+        <ListTreeIcon className="size-3 shrink-0" aria-hidden="true" />
+        Edit quick access…
+        {hidden > 0 ? (
+          <span className="ml-auto font-mono text-2xs text-ink-faint">{hidden} more</span>
+        ) : null}
+      </DropdownMenuItem>
+
+      {running && running !== selected?.resolvedModel && running !== selected?.id ? (
+        <p className="px-2 pt-0.5 pb-1.5 font-mono text-2xs text-ink-faint">
+          this run reports: {running}
+        </p>
+      ) : null}
+    </Column>
+  );
+}
+
+/**
+ * One model row that knows the three facts.
+ *
+ * Anatomy: name flush left; `$`-pips with the exact multiplier beside it; the
+ * pressure dot and the binding window's number at the trailing edge, read down
+ * the column exactly like the profile rows' caps. An exhausted model keeps its
+ * place, struck through, with the reason and reset inline — the `GatedItem`
+ * precedent: a row that vanishes is a model the user concludes was taken away.
+ *
+ * Exported for the §5 hand-off picker, which presents the same decision and
+ * must speak the same row vocabulary.
+ */
+export function ModelFactRow({
+  model,
+  usage,
+  now,
+}: {
+  readonly model: ProviderModelOption;
+  readonly usage: PlanUsage | null;
+  readonly now: number;
+}): ReactElement {
+  const exhausted = modelExhaustion(model, usage, now);
+  const pressure = modelPressure(model, usage);
+  const cost = costPosture(model);
+
+  return (
+    /*
+     * Name flush left, tick on the right — shadcn's radio item reserves the
+     * left gutter for its indicator, which would indent every name past the
+     * labels around it; the indicator moves to the trailing edge instead so
+     * the surface keeps one text column.
+     */
+    <DropdownMenuRadioItem
+      value={model.id}
+      disabled={exhausted !== null}
+      // A pick lands and the effort column re-answers; the surface stays open.
+      onSelect={(event) => event.preventDefault()}
+      className="py-1 pr-7 pl-2 text-xs data-disabled:opacity-100 [&>span:first-child]:right-2 [&>span:first-child]:left-auto"
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              'min-w-0 truncate',
+              exhausted === null ? 'text-ink' : 'text-ink-faint line-through',
+            )}
+          >
+            {model.label}
+          </span>
+          <CostPips posture={cost} />
+          {pressure !== null ? (
+            <span className="ml-auto flex shrink-0 items-center gap-1">
+              <PressureDot pressure={pressure} />
+              {pressure.window.status === 'rejected' ? (
+                <span className="tabular-nums text-signal">out</span>
+              ) : pressure.utilization === null ? null : (
+                <span className={cn('tabular-nums', toneFor(pressure.utilization, pressure.window.status))}>
+                  {Math.round(pressure.utilization)}%
+                </span>
+              )}
+            </span>
+          ) : null}
+        </span>
+        {exhausted !== null ? (
+          <span className="text-2xs leading-snug text-ink-faint no-underline">
+            {exhausted.reason}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuRadioItem>
+  );
+}
+
+/**
+ * Cost posture as `$` pips with the exact multiplier beside them.
+ *
+ * The settled decision, verbatim: the multipliers are `MODEL_LOAD`'s own —
+ * haiku 0.25× · sonnet 1× · opus 4× · fable 8× — printed in the row detail so
+ * the burn rate is visible at selection time. Absent for a family the table
+ * has never heard of: no pips is honest, a confident `1×` is a guess.
+ */
+export function CostPips({ posture }: { readonly posture: CostPosture | null }): ReactElement | null {
+  if (posture === null) return null;
+  const multiplier =
+    posture.multiplier >= 1 ? String(posture.multiplier) : posture.multiplier.toFixed(2);
+  return (
+    <span
+      className="flex shrink-0 items-baseline gap-0.5 font-mono text-2xs text-ink-faint"
+      title={`Relative burn against your plan: ${multiplier}× a Sonnet run.`}
+    >
+      <span aria-hidden="true">{'$'.repeat(posture.pips)}</span>
+      <span>{multiplier}×</span>
+    </span>
+  );
+}
+
+/**
+ * The row's meter dot: pressure at a glance, matching `PlanUsageMeter`
+ * semantics — a warning verdict tints it whatever the percentage reads, and a
+ * rejected window draws full (solid signal) regardless.
+ */
+export function PressureDot({ pressure }: { readonly pressure: ModelPressure }): ReactElement {
+  const { window, utilization } = pressure;
+  const tone =
+    window.status === 'rejected'
+      ? 'bg-signal'
+      : window.status === 'warning'
+        ? 'bg-amber'
+        : utilization === null
+          ? 'bg-line'
+          : utilization >= 90
+            ? 'bg-signal'
+            : utilization >= 75
+              ? 'bg-amber'
+              : 'bg-mint';
+  return (
+    <span
+      aria-hidden="true"
+      title={`${window.label} is the window that binds this model`}
+      className={cn('size-1.5 shrink-0 rounded-full', tone)}
+    />
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Column 3: Effort                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The third column: the thinking ladder, `low` up to ultracode.
+ *
+ * One list, not a submenu — a column navigator's last column *is* the ladder.
+ * Ultracode is the top rung rather than a switch (see `ULTRACODE_LEVEL` for
+ * the translation) and remains mutually exclusive with fast mode: picking it
+ * clears the flag in the action itself (`setThinkingLevel`), so the footer's
+ * switch below cannot disagree with the rung chosen here. A rung the selected
+ * model cannot do is disabled and unexplained, the same deliberate silence the
+ * old ladder kept — the answer is always "this model does not do that".
+ */
+function EffortColumn(): ReactElement | null {
+  const pane = usePaneRef();
+  const levels = usePane(thinkingLevels);
+  const current = usePane(activeThinkingLevel);
+  if (levels.length === 0) return null;
+
+  return (
+    <Column className="w-64">
+      <DropdownMenuLabel className="text-2xs text-ink-faint">Thinking</DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={current ?? ''}
+        onValueChange={(value) => setThinkingLevel(value, pane)}
+      >
+        {levels.map((level) => (
+          <DropdownMenuRadioItem
+            key={level.id}
+            value={level.id}
+            disabled={!level.available}
+            onSelect={(event) => event.preventDefault()}
+            className="items-start text-2xs"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className={cn(level.id === ULTRACODE_LEVEL ? 'text-beam-text' : 'text-ink')}>
+                {level.label}
+              </span>
+              <span className="text-2xs leading-snug text-ink-faint">{level.note}</span>
+            </span>
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+    </Column>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Footer                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** Shared chrome for a footer row: label, then control at the trailing edge. */
+function ShapeRow({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <div className="flex h-6 items-center gap-2 px-2">
+      <span className="shrink-0 text-2xs text-ink-faint">{label}</span>
+      <span className="ml-auto flex min-w-0 items-center">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The footer: toggles that exist only when the picked combination supports
+ * them, and the read-only facts that travel with the choice.
+ *
+ * Fast mode keeps the model popover's exact rules (`navigatorFooter` holds
+ * them): hidden when the *provider* has no such concept, disabled without a
+ * reason when the *model* does not — the answer is always "this model does not
+ * do that", which the dead switch already says. The permission level is the
+ * same choice the mode chip owns, offered here because it completes "what will
+ * the next prompt do" without a second trip; the chip stays on the bar as the
+ * always-visible pair's other half. Context readout and plan meters stay in
+ * the footer — both answer "how much room is left" for the combination picked
+ * above them.
+ */
+function NavigatorFooter(): ReactElement | null {
+  const fastPresence = usePane((s) => navigatorFooter(s).fastMode);
+  const fastShown = usePane((s) => navigatorFooter(s).fastModeOn);
+  const modes = usePermissionModes();
+  const window = usePane(learnedContextWindow);
+  const profileId = usePane((s) => s.activeProfileId);
+  const planSupported = usePane((s) => activeCapabilities(s).planUsageReporting);
+  const usage = useApp((s) =>
+    profileId === null ? null : (s.planUsageByProfile[profileId] ?? null),
+  );
+  const pane = usePaneRef();
+  const mode = usePane((s) => s.permissionMode);
+
+  const slots = planSupported && usage?.available === true ? meterSlots(usage) : [];
+  const anything =
+    fastPresence !== 'absent' || modes.length > 0 || window !== undefined || slots.length > 0;
+  if (!anything) return null;
+
+  return (
+    <div className="border-t border-line p-1">
+      {fastPresence !== 'absent' ? (
+        <ShapeRow label="Fast mode">
+          <Switch
+            checked={fastShown}
+            disabled={fastPresence === 'disabled'}
+            onCheckedChange={(next) => setFastMode(next, pane)}
+            aria-label="Fast mode"
+            className="scale-90"
+          />
+        </ShapeRow>
+      ) : null}
+
+      {modes.length > 0 ? (
+        <DropdownMenuSub>
+          {/*
+            `[&>svg:last-child]:ml-0` kills the `ml-auto` shadcn puts on the
+            submenu chevron: two `ml-auto` elements in one flex row split the
+            free space between them, and only the value should push.
+          */}
+          <DropdownMenuSubTrigger className="h-6 gap-2 px-2 py-0 text-2xs [&>svg:last-child]:ml-0">
+            <span className="text-ink-faint">Permission</span>
+            <span
+              className={cn(
+                'ml-auto',
+                mode === 'bypassPermissions' && modes.includes(mode)
+                  ? 'text-signal'
+                  : modes.includes(mode)
+                    ? 'text-ink'
+                    : 'text-amber',
+              )}
+            >
+              {modes.includes(mode) ? MODE_LABELS[mode] : `${mode} (not accepted)`}
+            </span>
+          </DropdownMenuSubTrigger>
+          {/* Fixed width for the notes to wrap at, not a min-width for
+              max-content to blow past — the lesson the thinking ladder taught. */}
+          <DropdownMenuSubContent className="w-72">
+            <DropdownMenuLabel className="text-2xs text-ink-faint">
+              When should the agent ask before acting?
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={mode}
+              onValueChange={(value) => setPermissionMode(value as PermissionMode, pane)}
+            >
+              {modes.map((value) => (
+                <DropdownMenuRadioItem key={value} value={value} className="items-start text-2xs">
+                  <span className="flex min-w-0 flex-col">
+                    <span className={cn(value === 'bypassPermissions' ? 'text-signal' : 'text-ink')}>
+                      {MODE_LABELS[value]}
+                    </span>
+                    <span className="text-2xs leading-snug text-ink-faint">{MODE_NOTES[value]}</span>
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
+
+      {window !== undefined ? (
+        /*
+          A fact, not a control: the number is *learned* from a completed run
+          rather than declared by the catalogue, so it is blank until this
+          model has run once. Blank is the honest state.
+        */
+        <ShapeRow label="Context">
+          <span className="font-mono text-2xs text-ink-muted">{formatTokens(window)}</span>
+        </ShapeRow>
+      ) : null}
+
+      {slots.length > 0 ? (
+        <ShapeRow label="Plan">
+          <span className="flex items-center gap-2">
+            {slots.map((slot) => (
+              <span key={slot.key} className="flex shrink-0 items-center gap-1">
+                <span className="font-mono text-2xs text-ink-faint">{slot.label}</span>
+                <UsageRing
+                  utilization={slot.window?.utilization ?? null}
+                  status={slot.window?.status}
+                />
+              </span>
+            ))}
+          </span>
+        </ShapeRow>
+      ) : null}
+    </div>
+  );
+}
