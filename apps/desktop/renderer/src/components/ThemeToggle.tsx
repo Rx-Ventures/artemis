@@ -93,7 +93,12 @@ export function ThemeToggle(): ReactElement {
       // `no-drag` for the reason every other control up here carries it: the
       // header is the window's drag region, and without it a press on a segment
       // starts moving the window instead of choosing a palette.
-      className="no-drag flex shrink-0 items-center gap-0.5 rounded-[min(var(--radius-md),12px)] border border-line bg-inset p-0.5"
+      // `rounded-md` says what `min(var(--radius-md),12px)` used to compute:
+      // `--radius` is 8px now, so the clamp never bites and the arbitrary
+      // value was a number pretending to be a decision. The track's edge is a
+      // hairline — Console's `.seg3` is `border: var(--hair)`, an alpha of the
+      // ink rather than a drawn rule.
+      className="no-drag flex shrink-0 items-center gap-0.5 rounded-md border border-hairline bg-inset p-0.5"
     >
       {OPTIONS.map((option) => {
         // Driven from the value rather than a `data-[state=checked]` selector.
@@ -108,7 +113,10 @@ export function ThemeToggle(): ReactElement {
                 value={option.id}
                 aria-label={option.name}
                 className={cn(
-                  'flex size-6 cursor-pointer items-center justify-center rounded-[min(var(--radius-sm),9px)] border outline-none transition-colors',
+                  // `rounded-sm` — 4.8px against the mockup's 5px segment,
+                  // one step inside the track's own radius, which is what
+                  // keeps a nested rounded rectangle from looking bulged.
+                  'flex size-6 cursor-pointer items-center justify-center rounded-sm border outline-none transition-colors',
                   'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
                   active
                     ? 'border-beam/30 bg-beam/10 text-beam-text'

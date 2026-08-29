@@ -173,11 +173,19 @@ export function ActivityIndicator(): ReactElement | null {
     >
       {/* The rule that used to be here is now the composer's top border — see
           {@link ActivityRule}. What is left is the part a rule cannot say:
-          which of the five conditions this is, why, and for how long. */}
-      <div className="flex items-center gap-2 font-mono text-2xs tracking-wide text-ink-faint">
+          which of the five conditions this is, why, and for how long.
+
+          `chrome-label`, because this line is Artemis talking about itself —
+          "waiting", "needs your answer to continue" — and the app's voice is
+          the sans in sentence case now. The counter keeps the mono and the
+          tabular figures: it is a measurement, it changes once a second, and
+          proportional digits make it jitter while it counts. */}
+      <div className="chrome-label flex items-center gap-2 text-ink-faint">
         <span className={tone}>{state.kind === 'failed' ? 'failed' : state.kind}</span>
         <span className="min-w-0 truncate">{state.because}</span>
-        {elapsed ? <span className="ml-auto shrink-0 tabular-nums">{elapsed}</span> : null}
+        {elapsed ? (
+          <span className="ml-auto shrink-0 font-mono tabular-nums">{elapsed}</span>
+        ) : null}
       </div>
     </div>
   );

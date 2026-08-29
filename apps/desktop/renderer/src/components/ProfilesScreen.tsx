@@ -328,7 +328,10 @@ function ProfileCard({
   }, [signedIn]);
 
   return (
-    <Card size="sm" className={cn('bg-panel ring-1', active ? 'ring-beam/50' : 'ring-line')}>
+    <Card
+      size="sm"
+      className={cn('rounded-lg border-hairline', active ? 'bg-wash-strong' : 'bg-panel')}
+    >
       <CardContent className="flex flex-col gap-1.5">
         {/*
           Only problems get a badge.
@@ -339,7 +342,9 @@ function ProfileCard({
           the only badge that needs acting on, was sitting in a line of green
           and orange reassurance.
 
-          Neither fact is lost. Active is the card's beam ring, which reads
+          Neither fact is lost. Active is the card's wash fill — the same
+          "this is the one" ground every other selected row and tab in the app
+          now uses, in place of the beam ring it used to carry — which reads
           faster than a word and does not compete for the same slot; signed-in
           is the account line below, which names the account rather than
           asserting that one exists.
@@ -416,7 +421,7 @@ function ProfileCard({
           zero rather than as an unanswered question.
         */}
         {signedIn ? (
-          <div className="mt-1 border-t border-line pt-2">
+          <div className="mt-1 border-t border-hairline pt-2">
             <ProfilePlanUsage
               profileId={profile.id}
               supported={usageSupported}
@@ -476,7 +481,7 @@ function ProfileCard({
               </AlertDialogDescription>
             </AlertDialogHeader>
 
-            <div className="flex items-start gap-2 rounded-lg border border-line bg-inset/60 px-3 py-2">
+            <div className="flex items-start gap-2 rounded-lg border border-hairline bg-inset/60 px-3 py-2">
               <Switch
                 id={`delete-history-${profile.id}`}
                 size="sm"
@@ -533,7 +538,7 @@ function CreateProfileFlow({ onDone }: { readonly onDone: () => void }): ReactEl
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
+    <Card size="sm" className="rounded-lg border-hairline bg-wash-strong">
       <CardContent className="flex flex-col gap-3">
         <h2 className="text-sm font-medium text-ink">Sign in</h2>
         <SignInStep profileId={createdId} onDone={onDone} />
@@ -813,7 +818,7 @@ function AvailabilityField({
   return (
     <Field>
       <FieldLabel className="chrome-label text-ink-faint">Availability</FieldLabel>
-      <div className="flex flex-col gap-3 rounded-lg border border-line bg-inset/60 px-3 py-2.5">
+      <div className="flex flex-col gap-3 rounded-lg border border-hairline bg-inset/60 px-3 py-2.5">
         <AvailabilityToggle
           id="profile-auto-select"
           label="Suggest automatically"
@@ -938,7 +943,7 @@ function ColorField({
         aria-label="Profile colour"
         value={normalized ?? suggestColor(seed)}
         onChange={(event) => onChange(event.target.value)}
-        className="size-8 shrink-0 cursor-pointer appearance-none rounded-md border border-line bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
+        className="size-8 shrink-0 cursor-pointer appearance-none rounded-md border border-hairline bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
       />
       <Input
         value={value}
@@ -1197,7 +1202,7 @@ function ProfileForm({ profile, onDone, onCancel }: FormProps): ReactElement {
   }
 
   return (
-    <Card size="sm" className="bg-panel ring-1 ring-beam/35">
+    <Card size="sm" className="rounded-lg border-hairline bg-wash-strong">
       <CardContent>
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="gap-4">

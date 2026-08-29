@@ -341,7 +341,18 @@ export function WorkingDirectoryChip(): ReactElement {
                 // placeholder the header and the sidebar show, and colouring one
                 // of the three left this control disagreeing with them about how
                 // alarming an unconfigured app is.
-                className="h-5 min-w-0 gap-1.5 px-1.5 font-mono text-2xs font-normal text-ink-faint"
+                //
+                // No resting fill, unlike the status line's chips below the
+                // field: 7D `.wd` is quiet text sitting *above* the composer
+                // card, a heading for what follows rather than one more setting
+                // on it, and a chip here would put three filled rows in a
+                // stack. The wash arrives on hover and stays while the menu is
+                // open, which is the whole of the chrome this control needs.
+                // `dark:hover:` is spelled out because the ghost variant's own
+                // `dark:hover:bg-muted/50` outranks an unscoped override.
+                // The path stays monospaced — it is a machine's string, and the
+                // branch beside it is read off session history.
+                className="h-[22px] min-w-0 gap-1.5 rounded-md px-2 font-mono text-2xs font-normal text-ink-faint hover:bg-wash aria-expanded:bg-wash dark:hover:bg-wash"
               >
                 <FolderIcon className="size-3 shrink-0" aria-hidden="true" />
                 <span className={cn('truncate', !unset && 'text-ink-muted')}>

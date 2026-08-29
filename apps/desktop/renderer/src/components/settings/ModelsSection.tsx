@@ -130,7 +130,7 @@ export function ModelsSection(): ReactElement {
       <Provenance live={live} providerLabel={providerLabel} error={error} />
 
       {catalogue.length === 0 ? (
-        <Empty className="border border-dashed border-line py-10">
+        <Empty className="border border-dashed border-hairline py-10">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <BoxesIcon />
@@ -163,7 +163,7 @@ function Provenance({
   readonly error: string | null;
 }): ReactElement {
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-line bg-inset/60 px-3 py-2">
+    <div className="flex flex-col gap-1.5 rounded-lg border border-hairline bg-inset/60 px-3 py-2">
       <div className="flex items-center gap-2">
         <ToneBadge tone={live ? 'sage' : 'amber'}>{live ? 'live' : 'built-in'}</ToneBadge>
         <span className="text-2xs leading-relaxed text-ink-muted">
@@ -256,7 +256,7 @@ function Catalogue({
     // — `openSettings('models', { row: 'quick-access' })` — so this group has
     // to keep answering to it even if the group itself is renamed.
     <SettingsGroup label="Quick access" anchor="quick-access">
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3 px-3 py-2.5">
         <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-faint">
           {curated
             ? `The picker under the composer shows only the ${quickIds.length} models ticked here, in catalogue order.`
@@ -289,7 +289,7 @@ function Catalogue({
       </div>
 
       {searchable ? (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-3 py-2.5">
           <div className="relative min-w-0 flex-1">
             <SearchIcon
               className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-ink-faint"
@@ -312,7 +312,7 @@ function Catalogue({
         </div>
       ) : null}
 
-      <ItemGroup className="gap-2">
+      <ItemGroup className="gap-0 divide-y divide-hairline">
         {shown.map((model) => (
           <ModelRow
             key={model.id}
@@ -330,7 +330,7 @@ function Catalogue({
           legitimately empty, and it needs saying — an empty ItemGroup under a
           populated search box reads as a broken pane rather than as no hits. */}
       {shown.length === 0 ? (
-        <p className="py-4 text-center text-2xs text-ink-faint">
+        <p className="px-3 py-4 text-center text-2xs text-ink-faint">
           No model matches “{query}”.
         </p>
       ) : null}
@@ -338,16 +338,18 @@ function Catalogue({
       {/* `null` is a real, reachable state — "send no model at all and let the
           CLI decide" — and it is not one of the rows, so it needs its own way
           back. Offered only when a model is actually chosen. */}
-      <ReasonButton
-        size="xs"
-        variant="ghost"
-        className="self-start text-ink-faint"
-        disabled={selectedId === null}
-        disabledReason="Runs already use whatever the installed CLI selects."
-        onClick={() => setModel(null)}
-      >
-        Send no model — let the CLI choose
-      </ReasonButton>
+      <div className="px-3 py-2.5">
+        <ReasonButton
+          size="xs"
+          variant="ghost"
+          className="text-ink-faint"
+          disabled={selectedId === null}
+          disabledReason="Runs already use whatever the installed CLI selects."
+          onClick={() => setModel(null)}
+        >
+          Send no model — let the CLI choose
+        </ReasonButton>
+      </div>
     </SettingsGroup>
   );
 }
@@ -395,11 +397,7 @@ function ModelRow({
   const pressure = modelPressure(model, usage);
 
   return (
-    <Item
-      variant="outline"
-      size="sm"
-      className={cn('items-start bg-panel', selected ? 'border-beam/45' : 'border-line')}
-    >
+    <Item size="sm" className={cn('items-start', selected && 'rounded-md bg-wash-strong')}>
       <ItemMedia className="pt-0.5">
         <Checkbox
           checked={pinned}

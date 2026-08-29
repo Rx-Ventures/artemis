@@ -140,7 +140,7 @@ export function Sidebar(): ReactElement | null {
           ref={asideRef}
           style={{ width }}
           aria-label="Sessions"
-          className="relative flex shrink-0 flex-col border-r border-line bg-panel"
+          className="relative flex shrink-0 flex-col border-r border-hairline bg-panel"
         >
           {/*
             A caption over the list, and the chevron that shuts it.
@@ -151,7 +151,7 @@ export function Sidebar(): ReactElement | null {
             column is, give it a way to close, and let the action sit with the
             list it acts on.
           */}
-          <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-3">
+          <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3">
             <span className="chrome-label text-ink-faint">Sessions</span>
             <IconButton
               label={`Hide the sidebar (${keyLabel('mod+b')})`}
@@ -172,10 +172,17 @@ export function Sidebar(): ReactElement | null {
               rows, the headings, the counts — is a record of work that already
               exists.
             */}
+            {/*
+              `rounded-lg` — the full `--radius`, not the `sm` size's clamped
+              6px. This is the Console language's `.newb`, which takes the
+              control radius one step up from the rows beneath it: the button
+              that starts something should not be the same shape as a record of
+              something already started.
+            */}
             <Button
               size="sm"
               onClick={() => newSession(pane)}
-              className="w-full min-w-0 justify-center gap-1.5 bg-beam text-beam-ink hover:bg-beam-dim"
+              className="w-full min-w-0 justify-center gap-1.5 rounded-lg bg-beam text-beam-ink hover:bg-beam-dim"
             >
               <PlusIcon />
               <span className="truncate">New session</span>

@@ -203,21 +203,23 @@ function PendingQuestion({
         }
       }}
       /*
-       * Cyan, not amber. The permission card's border and shield say "a risk
-       * decision is waiting"; this is the agent asking the user something, and
-       * dressing it in the warning colour would spend the app's one alarm on a
-       * multiple-choice question. `--line-strong` still carries the emphasised
-       * edge, so the card is as findable by scrolling as the amber one.
+       * 7D's `.ask` shape — a tinted card behind a 45% edge — in cyan rather
+       * than amber. The shape is what the three parked-run cards share, because
+       * all three stop the run until they are answered and all three have to be
+       * findable by scrolling. The hue is what tells them apart: the permission
+       * card's amber says "a risk decision is waiting", and dressing a
+       * multiple-choice question in the warning colour would spend the app's one
+       * alarm on the agent being polite.
        */
-      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
+      className="rounded-lg border border-cyan/45 bg-cyan/6 outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
     >
-      <div className="flex items-start gap-2 border-b border-line px-2.5 py-2">
+      <div className="flex items-start gap-2 border-b border-hairline px-2.5 py-2">
         <MessageCircleQuestionMarkIcon
           className="mt-0.5 size-3.5 shrink-0 text-cyan"
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-ink">
+          <p className="text-sm font-semibold text-ink">
             {prompt.questions.length === 1
               ? 'The agent has a question'
               : `The agent has ${String(prompt.questions.length)} questions`}
@@ -228,7 +230,7 @@ function PendingQuestion({
         </div>
       </div>
 
-      <div className="flex flex-col divide-y divide-line">
+      <div className="flex flex-col divide-y divide-hairline">
         {prompt.questions.map((question, index) => (
           <QuestionBlock
             key={question.question}
@@ -258,7 +260,10 @@ function PendingQuestion({
         </Alert>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-line bg-inset/50 px-2.5 py-2">
+      {/* One surface, as `.ask` has: the buttons sit on the card rather than on
+          a strip of their own, and the rule above them is what separates
+          reading from answering. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-2.5 py-2">
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => send([])}>
           Skip
         </Button>
@@ -389,7 +394,7 @@ function QuestionBlock({
           spellCheck={false}
           placeholder="Sent alongside your choice, so the agent has your reasoning."
           onChange={(event) => onNotes(event.target.value)}
-          className="min-h-12 bg-inset text-2xs md:text-2xs"
+          className="min-h-12 bg-wash text-2xs md:text-2xs"
         />
       </div>
     </div>
@@ -416,8 +421,10 @@ function OptionRow({
   return (
     <div
       className={cn(
+        // The chosen row has to clear the card it sits on, and the card is now
+        // a cyan wash itself — 5% inside 6% is a row nobody can see is picked.
         'rounded-md border px-2 py-1.5 transition-colors',
-        checked ? 'border-cyan/45 bg-cyan/5' : 'border-line hover:border-line-strong',
+        checked ? 'border-cyan/45 bg-cyan/15' : 'border-hairline hover:border-hairline-strong',
       )}
     >
       <div className="flex items-start gap-2">
@@ -482,7 +489,7 @@ function AnsweredRecord({
   const settled = item.state === 'answered';
 
   return (
-    <div className="rounded-md border border-line px-2.5 py-1.5">
+    <div className="rounded-lg border border-hairline bg-wash px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <MessageCircleQuestionMarkIcon
           className="size-3 shrink-0 text-ink-faint"

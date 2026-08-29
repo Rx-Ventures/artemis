@@ -196,7 +196,15 @@ export function CommandPalette(): ReactElement {
               }
             }}
           />
-          <CommandList className="max-h-[22rem]">
+          {/*
+           * The highlight is a wash, scoped here rather than restated on every
+           * row: shadcn highlights a command row with the `muted` surface,
+           * which is a grey step — and a grey step on a floating surface is the
+           * elevation model the palette stopped believing in. A wash is a
+           * fraction of the ink over whatever is beneath, so it reads the same
+           * on the popover as it would anywhere else.
+           */}
+          <CommandList className="max-h-[22rem] [&_[data-slot=command-item][data-selected=true]]:bg-wash-strong">
             {page === 'root' ? (
               <RootPage onPage={setPage} onClose={close} query={search} />
             ) : page === 'sessions' ? (
@@ -705,7 +713,7 @@ function SessionsPage({ onClose }: { readonly onClose: () => void }): ReactEleme
     <>
       <CommandEmpty>No session matches that.</CommandEmpty>
       {resuming.supported ? null : (
-        <p className="border-b border-line bg-raised px-3 py-2 text-2xs leading-snug text-ink-muted">
+        <p className="border-b border-hairline bg-wash px-3 py-2 text-2xs leading-snug text-ink-muted">
           {resuming.reason} These are listed for reference only — picking one would not carry the
           conversation forward, so they cannot be selected.
         </p>

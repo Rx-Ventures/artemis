@@ -59,7 +59,7 @@ export function BugReportCard(): ReactElement {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex shrink-0 items-center gap-2 border-t border-line px-2.5 py-2 text-2xs text-ink-muted transition-colors hover:bg-raised/50 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="flex shrink-0 items-center gap-2 border-t border-hairline px-2.5 py-2 text-2xs text-ink-muted transition-colors hover:bg-wash hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         <BugIcon aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
         <span className="min-w-0 flex-1 truncate text-left">Report a bug</span>

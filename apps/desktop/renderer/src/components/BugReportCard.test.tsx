@@ -4,7 +4,7 @@
  * The bug report card and its form.
  *
  * Two things are worth pinning. The first is placement, for the reason
- * `UpdateCard.test` gives about the row it replaced: this card is the only place
+ * the update chip's tests give about the row it replaced: this card is the only place
  * the app offers to report anything, and a card that silently stopped being
  * mounted looks exactly like an app nobody has bugs with. So the sidebar case
  * asserts it is *there*, unconditionally — no update pushed, nothing pending.

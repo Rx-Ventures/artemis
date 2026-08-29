@@ -78,7 +78,7 @@ export function SlashCommandMenu({
           match the user wanted and look identical to a list that had found
           everything — the failure this whole feature exists to end.
         */
-        className="pointer-events-auto max-h-64 overflow-y-auto rounded-md border border-border bg-inset py-1 shadow-lg"
+        className="pointer-events-auto max-h-64 overflow-y-auto rounded-xl border border-hairline-strong bg-float p-1 shadow-lg"
       >
         {matches.map((match, index) => (
           <li
@@ -95,8 +95,16 @@ export function SlashCommandMenu({
             }}
             onMouseMove={() => onHighlight(index)}
             className={cn(
-              'flex cursor-pointer items-baseline gap-2 px-2.5 py-1 text-sm',
-              index === highlight && 'bg-accent',
+              'flex cursor-pointer items-baseline gap-2 rounded-md px-2.5 py-1 text-sm',
+              /*
+                `bg-accent` was shadcn's *hover surface* token, which this
+                design points at `--float` — the menu's own ground. The
+                highlighted row was therefore painted the same colour as the
+                menu it sat in. 7D `.si.on` is the 8% wash with the ink brought
+                up to full, which is a step off whatever is under it by
+                construction.
+              */
+              index === highlight && 'bg-wash-strong text-ink',
             )}
           >
             <span className="truncate font-mono">/{match.label}</span>
@@ -105,9 +113,14 @@ export function SlashCommandMenu({
               It is what the user will actually be sending, so hiding it would
               be a lie — but it is not what they are looking for, so it does not
               get to be the brightest thing in the row.
+
+              Right-aligned and in the sans face, unlike the command beside it:
+              the name is a literal you type and stays monospaced, this is a
+              note about where it came from. Pushing it to the trailing edge is
+              what keeps the names themselves on one vertical rule.
             */}
             {match.prefix !== undefined && (
-              <span className="truncate text-xs text-muted-foreground">{match.prefix}</span>
+              <span className="ml-auto truncate pl-2 text-2xs text-ink-faint">{match.prefix}</span>
             )}
           </li>
         ))}

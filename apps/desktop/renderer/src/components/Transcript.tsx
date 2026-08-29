@@ -66,11 +66,12 @@
  *    below still declares `group/message` and `data-align`, because those are
  *    the hooks `bubble.tsx` itself selects on — renaming the group would
  *    quietly break a vendored file's own styling.
- *  - **The user bubble is `tinted`, not `default`.** `default` fills with
+ *  - **The user bubble is `surface`, not `default`.** `default` fills with
  *    `--primary`, which here is beam at 73% lightness. A one-line prompt would
  *    survive that; a pasted twenty-line spec is a floodlight in a dark room
- *    someone is sitting in for eight hours. `tinted` is the same beam hue at
- *    30% lightness — unmistakably "yours", legible in `--ink`, and quiet.
+ *    someone is sitting in for eight hours. `surface` is `--wash-user` — the
+ *    same beam at 24% over whatever is beneath it — so a prompt is unmistakably
+ *    "yours", legible in `--ink`, and quiet at any length.
  *  - **The agent bubble is `ghost`.** Agent output here is code-heavy markdown
  *    — fenced blocks, tables, diff-adjacent prose — not chat banter. A filled
  *    80%-wide blob would both squeeze the code and fight `.md`, which already
@@ -424,7 +425,7 @@ export function Transcript(): ReactElement {
           variant="outline"
           size="xs"
           onClick={jumpToEnd}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-4xl bg-raised px-3 shadow-lg shadow-black/40"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border-hairline-strong bg-float px-3 shadow-lg shadow-black/40"
         >
           <ArrowDownIcon />
           Jump to latest
@@ -612,14 +613,14 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
       <Bubble
         align="end"
         /*
-         * A surface, not the accent.
+         * A wash of the accent, not the accent.
          *
-         * This was `tinted`, which derives its fill from `--primary` — the beam
-         * — at reduced chroma. That put the accent on the single most repeated
-         * element in the app: every prompt anyone has ever typed, stacked down
-         * the column. Sheet spends colour rarely and on things that mean
-         * something, and "the user said this" is structure rather than signal —
-         * the alignment and the tail already carry it.
+         * This was `tinted`, which derives its fill from `--primary` at reduced
+         * chroma and computed a different colour in each theme; then it was a
+         * neutral surface, which lost the one thing a prompt bubble is for.
+         * `surface` is now 7D's own answer — `--wash-user`, 24% beam over
+         * whatever is beneath — so the most repeated element in the app is
+         * unmistakably the user's without being lit up.
          *
          * `surface` is a variant of its own rather than `ghost` plus classes.
          * `ghost` is the "no bubble at all" variant — it zeroes the radius, the
@@ -644,15 +645,12 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             columns no longer line up. A prompt that is really a wall of code
             belongs in backticks or a file, not in the bubble's own typeface.
 
-            `rounded-br-sm` is the tail — the one square corner points back at
-            the author, which is what makes an aligned bubble read as *from*
-            someone rather than merely offset. */}
-        {/* `raised` is the third of Sheet's four surfaces — one step off the
-            panel the transcript sits on, which is exactly the separation a
-            bubble needs to read as one. The hairline is `--line` for the same
-            reason the fill is a surface: `beam/25` was the accent again, one
-            layer out. */}
-        <BubbleContent className="rounded-2xl rounded-br-sm px-3.5 py-2 text-sm whitespace-pre-wrap">
+            One radius, off the scale — 7D's `--r-bub` is the same 8px every card
+            in the pane takes, which `rounded-lg` now is. The tail went with it:
+            a square corner cut into a 21px radius was legible, and cut into an
+            8px one it is a rendering artefact. Alignment and the accent wash are
+            what say who spoke, and both say it louder than a corner did. */}
+        <BubbleContent className="rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
           {/* Attachments above the text, in the order the model receives them.
               A transcript that showed them the other way round would be a
               record of a prompt nobody sent.
@@ -672,7 +670,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                     // Capped rather than full-bleed: a tall screenshot at full
                     // width would push the prompt it belongs to off the screen,
                     // and this is a record of what was sent, not a viewer.
-                    className="max-h-48 max-w-full rounded-md border border-line object-contain"
+                    className="max-h-48 max-w-full rounded-md border border-hairline object-contain"
                   />
                 ) : (
                   /* A file has no picture, so the record of it is its name and
@@ -683,7 +681,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
                   <span
                     key={attachment.id}
                     title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
-                    className="flex max-w-full items-center gap-1.5 rounded-md border border-line px-2 py-1 font-mono text-2xs text-ink-muted"
+                    className="flex max-w-full items-center gap-1.5 rounded-md border border-hairline px-2 py-1 font-mono text-2xs text-ink-muted"
                   >
                     <PaperclipIcon className="size-3 shrink-0" />
                     <span className="truncate text-ink">{attachment.name}</span>
@@ -722,7 +720,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             tooltip="Fork from here — branch a new conversation, keeping this one"
             aria-label="Fork the conversation from this message"
             onClick={() => void rewindConversationTo(item.id, { fork: true }, pane)}
-            className="size-auto rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="size-auto rounded-sm p-1 text-ink-faint outline-none hover:bg-wash-strong hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <GitForkIcon className="size-3" aria-hidden="true" />
           </ReasonButton>
@@ -733,7 +731,7 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
             tooltip="Rewind to here — wind the conversation back to before this message"
             aria-label="Rewind the conversation to before this message"
             onClick={() => void rewindConversationTo(item.id, { fork: false }, pane)}
-            className="size-auto rounded p-1 text-ink-faint outline-none hover:bg-raised/60 hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="size-auto rounded-sm p-1 text-ink-faint outline-none hover:bg-wash-strong hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <Undo2Icon className="size-3" aria-hidden="true" />
           </ReasonButton>
@@ -812,13 +810,32 @@ function thinkingPreview(item: ThinkingItem): string {
 const REDACTED = 'This thinking block was encrypted or withheld by the provider.';
 
 /**
- * The block itself, in the same sage well wherever it is opened from.
+ * A block the provider withheld: the machine's own notice, in a machine's own
+ * box.
+ *
+ * The one square surface left in the thinking row, and the reason it survived
+ * the rest of it going: this is not the model thinking where you can read it,
+ * it is the transport telling you there is nothing to read. `rounded-none` is
+ * `--radius-machine` — see the note beside it in `index.css`, which names this
+ * block by name.
+ */
+function RedactedBlock(): ReactElement {
+  return (
+    <div className="rounded-none border border-hairline bg-wash px-3 py-2 font-mono text-2xs leading-relaxed text-ink-faint">
+      {REDACTED}
+    </div>
+  );
+}
+
+/**
+ * The block itself, marked by a rule rather than boxed in.
  *
  * Sans, like the answer it precedes. Thinking is the model talking to itself in
- * sentences — not a log, despite arriving in a well — so it follows the same
- * rule as every other stretch of prose in the pane. The sage well and the 11px
- * size are what mark it as private and secondary; the typeface was never
- * carrying that and only made it harder to skim.
+ * sentences, so it follows the same rule as every other stretch of prose in the
+ * pane; the rule down the left and the 11px size are what mark it as private and
+ * secondary, and the italic is 7D's own tell for it (`.thinkbody`,
+ * docs/design/7d-full.html). The sage well this used to be was a grey slab in
+ * the middle of the thread saying nothing the rule does not.
  *
  * This is the treatment for a block someone went and *opened* — inside a marker,
  * or by clicking a collapsed row. Thinking the reader asked to have on screen
@@ -826,9 +843,10 @@ const REDACTED = 'This thinking block was encrypted or withheld by the provider.
  * given there.
  */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
+  if (item.redacted) return <RedactedBlock />;
   return (
-    <div className="rounded-none border border-sage/25 bg-inset px-3 py-2 text-2xs leading-relaxed break-words whitespace-pre-wrap text-sage/85">
-      {item.redacted ? REDACTED : item.text}
+    <div className="border-l-2 border-line py-0.5 pl-3 text-2xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted italic">
+      {item.text}
     </div>
   );
 }
@@ -859,9 +877,10 @@ function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
  * request, and it costs one text node per flush rather than a parse.
  */
 function ThinkingProse({ item }: { readonly item: ThinkingItem }): ReactElement {
+  if (item.redacted) return <RedactedBlock />;
   return (
     <div className="border-l-2 border-sage/30 py-0.5 pl-3 text-xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
-      {item.redacted ? REDACTED : item.text}
+      {item.text}
     </div>
   );
 }
@@ -935,8 +954,9 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
         }
       >
         {/* The reader asking for reasoning in general is what earns it the prose
-            treatment; a block prised open out of curiosity is still output being
-            inspected, and keeps the well. */}
+            treatment — 12px, in the sage aside. A block prised open out of
+            curiosity is the same shape one size down, in the neutral rule: still
+            an aside, but not one anybody asked to keep on screen. */}
         {shown ? <ThinkingProse item={item} /> : <ThinkingBody item={item} />}
       </Fold>
     </Line>
@@ -1056,11 +1076,22 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
 
   return (
     <div
+      /*
+       * 7D's `.step`: a wash of the ink, a hairline, and the 8px every card in
+       * the pane takes. The fill is `--wash` rather than a step down the grey
+       * scale, so the card sits on whatever surface the column is drawn on and
+       * reads the same in both themes.
+       *
+       * The hairline goes to 12% for a card that is open or holding an
+       * artifact — the two states that have earned an edge you can see — and
+       * neither carries a second fill, because a card that changes colour when
+       * you open it reads as a state change rather than a disclosure.
+       */
       className={cn(
-        'rounded-lg border bg-panel/60',
-        failed ? 'border-signal/35' : 'border-line',
-        open && 'border-line-strong',
-        artifact && 'border-line-strong bg-raised/40',
+        'rounded-lg border bg-wash',
+        failed ? 'border-signal/35' : 'border-hairline',
+        open && !failed && 'border-hairline-strong',
+        artifact && 'border-hairline-strong',
       )}
     >
       {/*
@@ -1080,7 +1111,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
             aria-expanded={open}
             onClick={() => setOpen(!open)}
             aria-label={open ? 'Hide the diff' : 'Show the diff'}
-            className="shrink-0 rounded p-0.5 text-ink-faint outline-none hover:bg-raised/60 focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="shrink-0 rounded-sm p-0.5 text-ink-faint outline-none hover:bg-wash-strong focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <ChevronRightIcon
               className={cn('size-3 transition-transform', open && 'rotate-90')}
@@ -1088,7 +1119,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
             />
           </button>
 
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-panel">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-hairline bg-wash-strong">
             {artifact.kind === 'page' ? (
               <AppWindowIcon className="size-3.5 text-cyan" aria-hidden="true" />
             ) : (
@@ -1131,7 +1162,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-raised/40 focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-wash-strong focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <Icon
             className={cn(
@@ -1185,7 +1216,7 @@ function ToolCard({ item }: { readonly item: ToolItem }): ReactElement {
       )}
 
       {open ? (
-        <div className="flex flex-col gap-1.5 border-t border-line px-2.5 py-2">
+        <div className="flex flex-col gap-1.5 border-t border-hairline px-2.5 py-2">
           {edit ? <DiffView edit={edit} /> : null}
 
           <Fold
@@ -1498,9 +1529,17 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
   return (
     <Line label="end" tone={tone} ts={item.ts} className="mt-1.5 mb-2">
       <div
+        /*
+         * 7D draws the end of a run as mono meta between two faint rules; this
+         * keeps the card, because a failed run puts an error message and a code
+         * under the same heading and a line between rules has nowhere to put
+         * them. What it takes from `.end` is the register — the same wash and
+         * hairline as the work above it, mono for the accounting, and no
+         * uppercase anywhere.
+         */
         className={cn(
           'rounded-lg border px-2.5 py-1.5',
-          failed ? 'border-signal/40 bg-signal/5' : 'border-line bg-panel/60',
+          failed ? 'border-signal/40 bg-signal/5' : 'border-hairline bg-wash',
         )}
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

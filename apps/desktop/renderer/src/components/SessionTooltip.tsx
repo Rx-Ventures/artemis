@@ -78,7 +78,10 @@ export function SessionTooltip({
         </p>
       ) : null}
 
-      <div aria-hidden="true" className="h-px bg-line" />
+      {/* A hairline, not `--line`: this rule separates the title from the
+          facts under it and separates nothing else, which is exactly the
+          decorative seam Console draws in alpha. */}
+      <div aria-hidden="true" className="h-px bg-hairline-strong" />
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5">
         {rows.map((row) => (

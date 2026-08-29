@@ -298,18 +298,23 @@ describe('the command bar carries the way into search', () => {
  * that went missing. Asserted on the class list rather than on computed style
  * because jsdom does not run Tailwind — what is being checked is that the
  * variant does not *strip* the geometry, which is a fact about the class list.
+ *
+ * The values moved with the 7D pass — the bubble takes the 8px `rounded-lg`
+ * every card in the pane takes and the tail is gone — so the classes asserted
+ * on are the ones `Transcript` actually passes. What is being pinned is
+ * unchanged: whatever the caller sets is what survives.
  */
 describe('the prompt bubble', () => {
   it('keeps its radius, padding and width cap on the surface variant', () => {
     render(
       <Bubble align="end" variant="surface">
-        <BubbleContent className="rounded-2xl rounded-br-sm px-3.5 py-2">hello</BubbleContent>
+        <BubbleContent className="rounded-lg px-3 py-2">hello</BubbleContent>
       </Bubble>,
     );
 
     const content = screen.getByText('hello');
-    expect(content.className).toContain('rounded-2xl');
-    expect(content.className).toContain('px-3.5');
+    expect(content.className).toContain('rounded-lg');
+    expect(content.className).toContain('px-3');
     expect(content.className).not.toContain('rounded-none');
     expect(content.className).not.toContain('p-0');
   });

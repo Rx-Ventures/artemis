@@ -131,7 +131,7 @@ function MasterGroup({ pane }: { readonly pane: MemoryBanksPane }): ReactElement
 
   return (
     <SettingsGroup label={on ? 'On for Artemis' : 'Off for Artemis'}>
-      <div className="flex items-start gap-3 rounded-md border border-line bg-panel px-3 py-2.5">
+      <div className="flex items-start gap-3 px-3 py-2.5">
         <StatusDot tone={on ? 'mint' : 'amber'} />
         <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-muted">
           {on
@@ -159,7 +159,7 @@ function BanksGroup({ pane }: { readonly pane: MemoryBanksPane }): ReactElement 
   const banks = pane.status?.banks ?? [];
   return (
     <SettingsGroup label={`Banks (${banks.length})`}>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col divide-y divide-hairline">
         {banks.map((bank) => (
           <BankCard key={bank.slug} bank={bank} pane={pane} />
         ))}
@@ -181,7 +181,7 @@ function BankCard({
   const [memoriesOpen, setMemoriesOpen] = useState(false);
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-1.5 px-3 py-2.5">
       <div className="flex items-center gap-2">
         <StatusDot tone={bank.enabled && bank.exists ? 'mint' : 'amber'} />
         <span className="font-mono text-xs font-medium text-ink">{bank.slug}</span>
@@ -292,7 +292,7 @@ function MemoryCard({
   const provenance = [memory.added, memory.author].filter((part) => part !== null).join(' · ');
 
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-1 rounded-md border border-hairline bg-panel px-3 py-2.5">
       <div className="flex items-center gap-2">
         <span className="font-mono text-xs font-medium text-ink">{memory.name}</span>
         <ToneBadge tone="neutral">{memory.type}</ToneBadge>
@@ -434,7 +434,7 @@ function AddGroup({
   return (
     <SettingsGroup label={first ? 'Set up' : 'Add a bank'}>
       {first ? (
-        <p className="text-2xs leading-relaxed text-ink-muted">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-muted">
           No memory bank is on this machine yet. Join your team&apos;s bank from its git remote,
           create a fresh local one (shareable later — the CLI travels inside it), or adopt a
           folder that already is a bank. From then on it maintains itself: agents record durable
@@ -443,12 +443,14 @@ function AddGroup({
       ) : null}
 
       {pane.preflight === null ? (
-        <p className="text-2xs leading-relaxed text-ink-faint">Checking what this machine needs…</p>
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
+          Checking what this machine needs…
+        </p>
       ) : (
         <RequirementList pane={pane} />
       )}
 
-      <div className="flex flex-col gap-2 rounded-md border border-line bg-panel px-3 py-2.5">
+      <div className="flex flex-col gap-2 px-3 py-2.5">
         <div className="flex items-center gap-1">
           {(['join', 'create', 'adopt'] as const).map((candidate) => (
             <Button
@@ -548,7 +550,7 @@ function RequirementList({ pane }: { readonly pane: MemoryBanksPane }): ReactEle
   const checks = pane.preflight?.checks ?? [];
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-1.5 px-3 py-2.5">
       {checks.map((entry) => (
         <div key={entry.id} className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2 text-2xs">

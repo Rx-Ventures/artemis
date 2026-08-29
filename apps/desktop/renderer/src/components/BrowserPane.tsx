@@ -191,11 +191,17 @@ function AddressBar({ id, url, loading }: {
         autoComplete="off"
         aria-label="Address"
         className={cn(
-          // `bg-inset`, and it used to say `bg-surface` — a token that has never
-          // existed, so the class generated nothing and the field had no fill at
-          // all. An address bar is a well you type a machine string into, which
-          // is what `--inset` is for.
-          'min-w-0 flex-1 rounded-sm bg-inset px-2 py-1 text-xs text-ink outline-none',
+          // The mockup's `.bchrome .url` (docs/design/7d-full.html): a wash on
+          // the stronger hairline, rounded, in mono. It used to be `bg-inset`
+          // — before that `bg-surface`, a token that has never existed, so the
+          // class generated nothing and the field had no fill at all. 7D's
+          // washes replace the grey steps `--inset` was one of, and the ring
+          // that reads as an input is `--hairline-strong` rather than an
+          // absence of edge.
+          //
+          // Mono, because what goes in here is an address: a machine string,
+          // and the one place in this row where `l` and `1` have to differ.
+          'min-w-0 flex-1 rounded-md border border-hairline-strong bg-wash px-2 py-1 font-mono text-xs text-ink outline-none',
           'placeholder:text-ink-faint focus-visible:ring-2 focus-visible:ring-ring/50',
           loading && 'text-ink-muted',
         )}
@@ -216,7 +222,12 @@ function NavButton({ label, onClick, disabled, children }: {
       type="button"
       variant="ghost"
       size="icon"
-      className="size-6 shrink-0"
+      // `.bchrome .bi` from docs/design/7d-full.html: a rounded square that is
+      // nothing until the pointer is on it, and then a wash. The `ghost`
+      // variant's own hover is `--muted`, a grey step from the palette 7D
+      // replaced, so it is overridden here rather than left to disagree with
+      // the tab strip two centimetres to the left.
+      className="size-6 shrink-0 rounded-md hover:bg-wash"
       aria-label={label}
       title={label}
       disabled={disabled === true}
@@ -288,7 +299,7 @@ export function BrowserPane({ id, visible }: {
           // palette, which meant one warning in the app was a different yellow
           // from every other warning — and a colour nothing checks for gamut or
           // contrast, since the palette test only knows about ours.
-          className="flex shrink-0 items-start gap-1.5 border-b border-line bg-amber/10 px-2.5 py-1.5 text-xs text-ink"
+          className="flex shrink-0 items-start gap-1.5 border-b border-hairline bg-amber/10 px-2.5 py-1.5 text-xs text-ink"
         >
           <TriangleAlertIcon className="mt-0.5 size-3 shrink-0 text-amber" aria-hidden="true" />
           <span className="min-w-0">{failure}</span>

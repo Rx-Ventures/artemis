@@ -74,8 +74,8 @@ export function SettingsPane({
   children,
 }: SettingsPaneProps): ReactElement {
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-start gap-3">
+    <div className="flex flex-col gap-3.5">
+      <div className="mb-1 flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight text-ink">{title}</h2>
           <p className="mt-0.5 text-2xs leading-relaxed text-ink-faint">{description}</p>
@@ -92,7 +92,7 @@ export function SettingsPane({
 /* -------------------------------------------------------------------------- */
 
 export interface SettingsGroupProps {
-  /** Small caps rule above the group. Omit for a group that needs no name. */
+  /** The card's header row. Omit for a group that needs no name. */
   readonly label?: string;
   /**
    * Deep-link target. `openSettings(section, { row })` scrolls the group
@@ -105,7 +105,21 @@ export interface SettingsGroupProps {
   readonly className?: string;
 }
 
-/** A titled band of related settings. The uppercase rule matches the inspector. */
+/**
+ * A card of related settings: header row, hairline rule, then the rows.
+ *
+ * The group used to be a small-caps label with loose cards floating under it,
+ * one outlined box per setting. That drew the same edge twice — once around
+ * each row and once, implicitly, around the band they belonged to — and at nine
+ * groups per pane the result was a column of boxes with no visible grouping.
+ * Console's `.sgroup` puts the border where the grouping is: *the group* is the
+ * card, its label is a header row over a hairline, and each setting inside is a
+ * row separated from its neighbour by another hairline.
+ *
+ * The body is deliberately unpadded, so rows reach the card's edges and their
+ * separators are full-bleed. A child that is not a row (a note, a table, a
+ * form) carries its own `px-3 py-2.5` — see any section for the shape.
+ */
 export function SettingsGroup({
   label,
   anchor,
@@ -114,13 +128,13 @@ export function SettingsGroup({
 }: SettingsGroupProps): ReactElement {
   return (
     <section
-      className={cn('flex flex-col gap-2', className)}
+      className={cn('overflow-hidden rounded-lg border border-hairline', className)}
       {...(anchor === undefined ? {} : { 'data-settings-row': anchor })}
     >
       {label ? (
-        <h3 className="chrome-label text-ink-faint">{label}</h3>
+        <h3 className="border-b border-hairline px-3 py-2 text-xs font-medium text-ink">{label}</h3>
       ) : null}
-      {children}
+      <div className="flex flex-col divide-y divide-hairline">{children}</div>
     </section>
   );
 }
@@ -169,16 +183,23 @@ export function ChoiceList<T extends string>({
    * the disabled ones — is unchanged; only the mechanics moved.
    *
    * The row is a `<label>` wrapping the control, which is what makes the whole
-   * card clickable without re-implementing hit-testing, and what lets the focus
-   * ring live on the card via `has-focus-visible` while focus itself sits on
+   * row clickable without re-implementing hit-testing, and what lets the focus
+   * ring live on the row via `has-focus-visible` while focus itself sits on
    * the real radio.
+   *
+   * The rows are rows, not cards: this list sits inside a `SettingsGroup`,
+   * which is already the card, and an outlined box per option inside an
+   * outlined group was the doubled edge Console deletes. Selection is a wash
+   * rather than a border — the same fill the navigator and the section nav use
+   * for "this is the one", so one language answers "which is chosen" across
+   * every surface.
    */
   return (
     <RadioGroup
       aria-label={label}
       value={value}
       onValueChange={(next) => onChange(next as T)}
-      className={cn('flex flex-col gap-1.5', className)}
+      className={cn('flex flex-col gap-0.5 p-1.5', className)}
     >
       {choices.map((choice) => {
         const checked = choice.id === value;
@@ -186,11 +207,9 @@ export function ChoiceList<T extends string>({
           <label
             key={choice.id}
             className={cn(
-              'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors',
-              'has-focus-visible:border-ring has-focus-visible:ring-3 has-focus-visible:ring-ring/50',
-              checked
-                ? 'border-beam/45 bg-beam/5'
-                : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
+              'flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
+              'has-focus-visible:ring-3 has-focus-visible:ring-ring/50',
+              checked ? 'bg-wash-strong' : 'hover:bg-wash',
               choice.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
             )}
           >

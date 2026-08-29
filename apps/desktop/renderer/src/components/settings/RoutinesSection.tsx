@@ -230,7 +230,10 @@ function RoutineCard({
   const profile = profiles.find((entry) => entry.id === routine.profileId);
 
   return (
-    <Card>
+    // The card primitive still writes its own `border-line` and `rounded-md`;
+    // Console draws a card at the surface radius with a hairline, so the call
+    // site says so rather than the shared primitive being bent for one pane.
+    <Card className="rounded-lg border-hairline">
       <CardContent className="flex flex-col gap-2 p-3">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">
@@ -280,7 +283,7 @@ function RoutineCard({
         </button>
 
         {routine.history.length > 0 ? (
-          <div className="flex flex-col gap-1 border-t border-line pt-2">
+          <div className="flex flex-col gap-1 border-t border-hairline pt-2">
             {routine.history.slice(0, 3).map((row) => (
               <div key={`${row.firedAt}`} className="flex items-center gap-2 text-2xs">
                 <ToneBadge tone={outcomeTone(row)}>{outcomeLabel(row)}</ToneBadge>
@@ -469,7 +472,7 @@ function RoutineForm({
   };
 
   return (
-    <Card>
+    <Card className="rounded-lg border-hairline">
       <CardContent className="p-3">
         <form onSubmit={submit}>
           <FieldGroup className="gap-3">

@@ -116,7 +116,7 @@ function Defaults(): ReactElement | null {
 
   return (
     <SettingsGroup label="Defaults for the next run">
-      <ItemGroup className="gap-2">
+      <ItemGroup className="gap-0 divide-y divide-hairline">
         {offersFast ? (
           <FlagRow
             id="settings-fast-mode"
@@ -159,7 +159,7 @@ function FlagRow({
 }): ReactElement {
   const disabled = reason !== undefined;
   return (
-    <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+    <Item size="sm" className="items-start">
       <ItemContent>
         <ItemTitle className="text-xs text-ink">
           {title}
@@ -297,12 +297,14 @@ export function RunsSection(): ReactElement {
           choices={RUN_SUMMARIES}
           onChange={setRunSummary}
         />
-        <ScopeNote>One answer for the whole app on this machine.</ScopeNote>
+        <div className="px-3 py-2.5">
+          <ScopeNote>One answer for the whole app on this machine.</ScopeNote>
+        </div>
       </SettingsGroup>
 
       <SettingsGroup label="Handing over">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Hand the work over before the limit</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -331,7 +333,7 @@ export function RunsSection(): ReactElement {
             </ItemActions>
           </Item>
 
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+          <Item size="sm" className="items-start">
             <ItemContent className="w-full">
               <ItemTitle className="text-xs text-ink">Where each window hands over</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">

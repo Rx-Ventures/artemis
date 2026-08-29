@@ -118,15 +118,20 @@ function mount(ui: ReactNode): void {
 /**
  * Whether a row is drawn as the open one.
  *
- * The marker is a left border and a raised ground on the row's button — see the
- * `active` branch in `SessionList`. Asserted on the class rather than on a
- * computed style because jsdom has no stylesheet: what is being pinned down is
- * that the component decided the row was open, which is the half that broke.
+ * The marker is a *ground*: `bg-wash-strong` on the row's button — see the
+ * `active` branch in `SessionList`. It used to be a left border as well, and
+ * the Console pass took that away because the language marks a selection by
+ * fill and not by edge; the fill is what both spellings always agreed on, so
+ * this assertion did not have to change its subject, only its token.
+ *
+ * Asserted on the class rather than on a computed style because jsdom has no
+ * stylesheet: what is being pinned down is that the component decided the row
+ * was open, which is the half that broke.
  */
 function marked(title: string): boolean {
   const button = screen.getByText(title).closest('button');
   if (!button) throw new Error(`no row button for “${title}”`);
-  return button.className.includes('bg-raised/60');
+  return button.className.includes('bg-wash-strong');
 }
 
 /**

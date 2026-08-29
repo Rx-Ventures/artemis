@@ -286,7 +286,10 @@ function RemoteChip(): ReactElement | null {
       type="button"
       onClick={() => openSettings('remote')}
       title={`Showing ${name} — click for the connection`}
-      className="no-drag flex shrink-0 items-center gap-1 rounded-full border border-line bg-panel px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:text-ink"
+      // Round, because it always was: Console changes what a chip is *made*
+      // of — an alpha edge over a wash, rather than a grey step with a solid
+      // rule around it — and leaves the shapes alone.
+      className="no-drag flex shrink-0 items-center gap-1 rounded-full border border-hairline-strong bg-wash px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-wash-strong hover:text-ink"
     >
       <CastIcon className="size-3" aria-hidden="true" />
       <span className="max-w-[10rem] truncate">{name}</span>
@@ -318,9 +321,9 @@ export function AppHeader(): ReactElement {
       // The rule at the bottom is doing real work: the header and the app body
       // below it are both `bg-abyss`, so without it the window chrome and the
       // conversation are one continuous field and the title reads as though it
-      // belongs to the transcript. `border-line` rather than anything heavier,
+      // belongs to the transcript. A hairline rather than anything heavier,
       // to match the seam the dock's tab strip already draws.
-      className="drag-region flex h-11 shrink-0 items-center gap-1 border-b border-line bg-abyss px-2"
+      className="drag-region flex h-11 shrink-0 items-center gap-1 border-b border-hairline bg-abyss px-2"
     >
       {/*
         The left third: the way back to the sessions list — only while the list
@@ -508,6 +511,13 @@ function OpenMenu({
  * Amber, matching the sidebar dot and the activity indicator: three surfaces,
  * one colour, one meaning. Clicking focuses the first waiting pane; see
  * `focusWaitingPane` for why "first" is layout order.
+ *
+ * A *toned* chip rather than a solid amber tile — Console's `.pill.mode`:
+ * amber text, an amber edge at 45%, an amber wash behind. The solid version
+ * was the loudest object in a bar whose other three controls are outlines, and
+ * it said "error" at a glance when what it means is "something is parked".
+ * Nothing is lost by the change: the hue is the signal, the badge is the only
+ * amber thing up here, and it still renders only when the count is non-zero.
  */
 function WaitingBadge(): ReactElement | null {
   const waiting = useApp((s) => s.waitingSessions.length);
@@ -524,12 +534,13 @@ function WaitingBadge(): ReactElement | null {
       onClick={() => {
         focusWaitingPane();
       }}
-      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm bg-amber px-2 text-2xs font-medium text-amber-ink transition-opacity hover:opacity-90"
+      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-md border border-amber/45 bg-amber/10 px-2 text-2xs font-medium text-amber transition-colors hover:bg-amber/20"
     >
-      {/* `amber-ink`, not `abyss`: text on the amber fill is what that token
-          is derived for, and `abyss` is a surface that merely happened to be
-          dark enough under the old palette. */}
-      <StatusDot tone="neutral" className="bg-amber-ink/70" />
+      {/* The dot is `tone="amber"` now rather than a hole punched in the fill
+          with `amber-ink`. On a wash there is no fill to punch: the ink token
+          exists for text sitting *on* solid amber, and over a 10% tint it is
+          whatever the theme's foreground happens to be. */}
+      <StatusDot tone="amber" />
       {waiting} waiting
     </button>
   );
@@ -589,11 +600,19 @@ function UpdateChip(): ReactElement | null {
         if (ready) restartForUpdate();
         else if (!busy) installUpdate();
       }}
+      /*
+       * A toned chip, like the waiting badge beside it: the tone at 45% for
+       * the edge, a wash of the same tone on hover. `font-mono` stays — the
+       * chip's payload is a version string, which is machine output, and the
+       * rule Console keeps is that mono means exactly that rather than
+       * "chrome". `rounded-md` is the control radius; it was `rounded-sm`,
+       * which is the radius this language gives to key caps and swatches.
+       */
       className={cn(
-        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm border px-2 font-mono text-2xs transition-colors',
+        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-md border px-2 font-mono text-2xs transition-colors',
         failed
-          ? 'border-signal/50 text-signal hover:bg-signal/10'
-          : 'border-beam/50 text-beam-text hover:bg-beam/10',
+          ? 'border-signal/45 text-signal hover:bg-signal/10'
+          : 'border-beam/45 text-beam-text hover:bg-beam/10',
         busy && 'opacity-60',
       )}
     >
@@ -652,7 +671,18 @@ function SearchEntry(): ReactElement {
       type="button"
       onClick={togglePalette}
       aria-label={`Search sessions and commands (${keyLabel('mod+k')})`}
-      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-sm border border-line bg-inset px-2 text-2xs text-ink-faint transition-colors hover:border-line-strong hover:text-ink-muted lg:flex"
+      /*
+       * The Console field, shared with the sidebar's filter: `rounded-lg`, a
+       * hairline-strong edge, a wash ground. The geometry — centred, `max-w-md`,
+       * `hidden lg:flex` — is what the paragraph above argues for and is not
+       * what changed.
+       *
+       * Hover answers in the ground rather than in the edge. It used to darken
+       * the border to `line-strong`, which is a token held to 3:1 for controls
+       * that are *owed* contrast; borrowing it for a hover state meant the
+       * quietest control in the bar produced the hardest line in it.
+       */
+      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-lg border border-hairline-strong bg-wash px-2 text-2xs text-ink-faint transition-colors hover:bg-wash-strong hover:text-ink-muted lg:flex"
     >
       <SearchIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">Search sessions and commands</span>

@@ -94,7 +94,14 @@ export function TerminalView({ id }: { readonly id: TerminalId }): ReactElement 
         // Clicking anywhere in the pane should put the caret in the shell,
         // including on the padding beside the last short line.
         onMouseDown={() => focusTerminal(id)}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden px-2 py-1.5"
+        // `bg-wash`, and squarely: this is the mockup's `.term`
+        // (docs/design/7d-full.html), a machine well that takes a fraction of
+        // the ink rather than a fill of its own. xterm's theme background is
+        // transparent on purpose — see `artemisTheme` — so this is the surface
+        // the shell actually prints onto. No radius: rounding a scrollback
+        // would clip the first and last cell of the corner rows, and square is
+        // the tell for output the app did not write.
+        className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-none bg-wash px-2 py-1.5"
       />
       {/*
         The terminal→chat bridge. Floated over the terminal's corner rather
@@ -111,9 +118,11 @@ export function TerminalView({ id }: { readonly id: TerminalId }): ReactElement 
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => quoteTerminalSelection(id)}
           // No shadow, deliberately: elevation is reserved for overlays
-          // (`designLanguage.test.ts`), and the border on a `--panel` fill is
-          // already the language's way of saying "detached".
-          className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded-sm border border-line bg-panel px-1.5 py-0.5 text-2xs text-ink-muted hover:text-ink"
+          // (`designLanguage.test.ts`), and the hairline on a `--panel` fill is
+          // already the language's way of saying "detached". Rounded, unlike
+          // the well behind it — this is a control a person operates, which is
+          // exactly the line `--radius` is drawn along.
+          className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded-md border border-hairline bg-panel px-1.5 py-0.5 text-2xs text-ink-muted hover:bg-wash hover:text-ink"
         >
           <MessageSquarePlusIcon className="size-3" aria-hidden="true" />
           Add to chat

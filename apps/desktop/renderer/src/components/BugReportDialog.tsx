@@ -80,7 +80,7 @@ export function BugReportDialog({ onClose }: { readonly onClose: () => void }): 
    * The navigation itself is the anchor's, not this handler's — `main/security.ts`
    * routes an external URL to the system browser and refuses to navigate this
    * window, which is what makes a plain link the safe way out (the same reasoning
-   * `UpdateCard` follows for its releases link). This runs alongside it: park the
+   * `UpdateChip` follows for its releases link). This runs alongside it: park the
    * untrimmed body on the clipboard when the URL could not carry all of it, then
    * close.
    */

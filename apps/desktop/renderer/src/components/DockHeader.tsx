@@ -64,7 +64,10 @@ export function DockHeader({
     <div
       data-slot="dock-header"
       className={cn(
-        'flex h-[26px] shrink-0 items-center gap-2 border-b border-line',
+        // `border-hairline`, not `border-line`: 7D's seam between regions is a
+        // fraction of the ink rather than a grey step, so this rule sits at the
+        // same weight as the strip's edge beside it instead of a shade darker.
+        'flex h-[26px] shrink-0 items-center gap-2 border-b border-hairline',
         inset === 'text' ? 'px-3' : 'px-1.5',
         className,
       )}

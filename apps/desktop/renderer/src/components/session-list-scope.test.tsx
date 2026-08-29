@@ -199,7 +199,10 @@ describe('the session list', () => {
 
     const heading = screen.getByRole('button', { name: /web/ });
     expect(heading.getAttribute('aria-expanded')).toBe('false');
-    expect(within(heading).getByText('·1')).not.toBeNull();
+    // The bare number, at the far end of the heading. It carried a `·` when it
+    // sat against the project's name; the Console pass right-aligns it, and a
+    // separator between two things at opposite ends joins nothing.
+    expect(within(heading).getByText('1')).not.toBeNull();
   });
 
   it('remembers which projects are folded', () => {

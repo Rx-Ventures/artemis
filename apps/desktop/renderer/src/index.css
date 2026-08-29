@@ -356,8 +356,28 @@
   --destructive: var(--signal);
   --destructive-foreground: var(--signal-ink);
 
-  --border: var(--line);
-  --input: var(--line);
+  /* ---- The 7D surface language ------------------------------------------
+     Round seven's verdict, applied whole (docs/design/7d-full.html): edges
+     become *alpha* — a fraction of the ink over whatever is beneath — and
+     fills become washes of the same construction, instead of grey steps
+     picked per surface. Ink-relative on purpose: one definition serves both
+     themes, because the ink flips with them.
+
+     `--line` and `--line-strong` remain, verbatim, above. `palette.test.ts`
+     holds `--line-strong` to 3:1 for the components that are *owed* contrast
+     — scrollbar thumbs, unchecked radios — and those keep it. What moves to
+     hairlines is the decorative seam: panel edges, card outlines, rules.
+     The validator ignores `color-mix` declarations by construction (its
+     regex matches only literal oklch), and that is a feature: these tokens
+     are derived from tokens it already checks. */
+  --hairline: color-mix(in srgb, var(--ink) 7%, transparent);
+  --hairline-strong: color-mix(in srgb, var(--ink) 12%, transparent);
+  --wash: color-mix(in srgb, var(--ink) 3.5%, transparent);
+  --wash-strong: color-mix(in srgb, var(--ink) 8%, transparent);
+  --wash-user: color-mix(in srgb, var(--beam) 24%, transparent);
+
+  --border: var(--hairline);
+  --input: var(--hairline-strong);
   --ring: var(--beam);
 
   /* Charts. Ordered so the first two are maximally distinguishable, and
@@ -581,6 +601,11 @@
   --color-inset: var(--inset);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-wash: var(--wash);
+  --color-wash-strong: var(--wash-strong);
+  --color-wash-user: var(--wash-user);
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-ink-faint: var(--ink-faint);

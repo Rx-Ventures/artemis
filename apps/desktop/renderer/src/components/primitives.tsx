@@ -39,7 +39,7 @@ export type Tone = 'neutral' | 'beam' | 'cyan' | 'sage' | 'mint' | 'amber' | 'si
 
 /** Foreground + border, for outline treatments. */
 const TONE_OUTLINE: Record<Tone, string> = {
-  neutral: 'border-line text-ink-muted',
+  neutral: 'border-hairline text-ink-muted',
   beam: 'border-beam/40 text-beam-text',
   cyan: 'border-cyan/40 text-cyan',
   sage: 'border-sage/40 text-sage',
@@ -88,8 +88,12 @@ export interface ToneBadgeProps {
 }
 
 /**
- * A hairline, uppercase, monospaced chip — the transcript's label for what a
+ * A hairline chip in the app's own voice — the transcript's label for what a
  * block *is*.
+ *
+ * `chrome-label`, so it is the sans in sentence case: this is Artemis speaking,
+ * and the uppercase mono it used to be spent the machine's typeface on the one
+ * kind of text in the pane the machine did not produce.
  *
  * Built on shadcn's `Badge` in its `outline` variant rather than replacing it:
  * use `Badge` directly for emphasis badges (counts, "new", a destructive
@@ -347,13 +351,19 @@ export interface CodeBlockProps {
  * `whitespace-pre-wrap` plus `break-words`: agent output arrives with
  * arbitrarily long unbroken tokens (paths, base64, minified JSON) and a pane
  * that scrolls sideways forever is unreadable.
+ *
+ * Square, and it stays square: this is the raw-output well `index.css` names
+ * when it explains `--radius-machine`. The fill is the same `--wash` the cards
+ * around it take — 7D gives a pre and a card the same 3.5% of the ink — so what
+ * separates the two is the corner and the typeface, which is the distinction
+ * that means something.
  */
 export function CodeBlock({ text, tone = 'neutral', className }: CodeBlockProps): ReactElement {
   return (
     <pre
       className={cn(
-        'max-h-72 overflow-auto rounded-none border bg-inset px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
-        tone === 'error' ? 'border-signal/35 text-signal' : 'border-line text-ink-muted',
+        'max-h-72 overflow-auto rounded-none border bg-wash px-2.5 py-2 font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap',
+        tone === 'error' ? 'border-signal/35 text-signal' : 'border-hairline text-ink-muted',
         className,
       )}
     >
@@ -411,7 +421,10 @@ export function CopyButton({
       onClick={copy}
       aria-label={copied ? 'Copied' : label}
       className={cn(
-        'grid size-6 place-items-center rounded-sm border border-line bg-panel/85 text-ink-faint opacity-0 backdrop-blur-[2px] transition hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+        // The one edge in here that is not a 7% seam: this button floats over
+        // whatever the code block happens to say, and a hairline over arbitrary
+        // content is an edge you cannot find.
+        'grid size-6 place-items-center rounded-sm border border-hairline-strong bg-panel/85 text-ink-faint opacity-0 backdrop-blur-[2px] transition hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
         copied ? 'text-mint opacity-100' : 'group-hover/copy:opacity-100',
         className,
       )}

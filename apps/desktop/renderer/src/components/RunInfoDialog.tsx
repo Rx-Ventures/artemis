@@ -79,7 +79,7 @@ export function RunInfoDialog(): ReactElement {
   return (
     <Dialog open={open} onOpenChange={setInfo}>
       <DialogContent className="flex max-h-[calc(100%-4rem)] w-full max-w-lg flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
-        <DialogHeader className="border-b border-line px-4 py-3">
+        <DialogHeader className="border-b border-hairline px-4 py-3">
           <DialogTitle className="text-sm font-semibold tracking-tight text-ink">
             Run details
           </DialogTitle>
@@ -137,7 +137,7 @@ function Section({
   return (
     <section className="mb-3">
       <h3 className="mb-1 chrome-label text-ink-faint">{title}</h3>
-      <div className="rounded-md border border-line bg-inset/60 px-2 py-1.5">{children}</div>
+      <div className="rounded-lg border border-hairline bg-inset/60 px-2 py-1.5">{children}</div>
     </section>
   );
 }
@@ -325,7 +325,7 @@ function CapabilityMatrix(): ReactElement {
           </div>
         );
       })}
-      <div className="mt-1.5 border-t border-line pt-1.5">
+      <div className="mt-1.5 border-t border-hairline pt-1.5">
         <span className="text-2xs text-ink-faint">permission modes</span>
         <div className="mt-1 flex flex-wrap gap-1">
           {capabilities.permissionModes.length === 0 ? (

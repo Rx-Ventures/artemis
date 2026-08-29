@@ -40,9 +40,14 @@ import { cn } from '@/lib/utils';
 export function DiffView({ edit }: { readonly edit: FileEdit }): ReactElement {
   const Icon = edit.whole ? FilePlus2Icon : FilePenLineIcon;
 
+  // Square, and it stays square — this is the first of the surfaces
+  // `--radius-machine` is named for. 7D moves the fill and the seam onto the ink
+  // (`--wash`, `--hairline`) and drops the separate fill the header strip used
+  // to carry: a bar inside a card in a different colour from the card is a
+  // second surface where there is only one thing.
   return (
-    <div className="overflow-hidden rounded-none border border-line bg-inset">
-      <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-2.5 py-1">
+    <div className="overflow-hidden rounded-none border border-hairline bg-wash">
+      <div className="flex items-center gap-2 border-b border-hairline px-2.5 py-1">
         <Icon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
         {/* `dir="rtl"` with LTR text: a path too long for the column keeps its
             tail — the filename — rather than its root, which is the half that
@@ -75,7 +80,7 @@ export function DiffView({ edit }: { readonly edit: FileEdit }): ReactElement {
       </div>
 
       {edit.truncated ? (
-        <p className="border-t border-line px-2.5 py-1 font-mono text-2xs text-amber">
+        <p className="border-t border-hairline px-2.5 py-1 font-mono text-2xs text-amber">
           Diff clipped — this edit is larger than Artemis will render inline.
         </p>
       ) : null}
@@ -87,7 +92,7 @@ const ROW_STYLES: Record<DiffRow['kind'], string> = {
   add: 'bg-mint/8 text-mint',
   del: 'bg-signal/8 text-signal',
   ctx: 'text-ink-faint',
-  gap: 'bg-raised/30 text-ink-faint',
+  gap: 'bg-wash-strong text-ink-faint',
 };
 
 const GUTTER_MARKS: Record<DiffRow['kind'], string> = {
@@ -112,10 +117,10 @@ function Line({ row }: { readonly row: DiffRow }): ReactElement {
     <tr className={ROW_STYLES[row.kind]}>
       {/* Line numbers are `select-none` so copying a diff yields the code and
           not a column of integers glued to the front of every line. */}
-      <td className="w-10 border-r border-line/60 px-1.5 text-right align-top text-ink-faint/70 tabular-nums select-none">
+      <td className="w-10 border-r border-hairline px-1.5 text-right align-top text-ink-faint/70 tabular-nums select-none">
         {row.oldNo ?? ''}
       </td>
-      <td className="w-10 border-r border-line/60 px-1.5 text-right align-top text-ink-faint/70 tabular-nums select-none">
+      <td className="w-10 border-r border-hairline px-1.5 text-right align-top text-ink-faint/70 tabular-nums select-none">
         {row.newNo ?? ''}
       </td>
       <td className="w-full px-2 align-top break-words whitespace-pre-wrap">

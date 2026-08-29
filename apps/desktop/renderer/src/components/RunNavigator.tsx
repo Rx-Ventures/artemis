@@ -146,8 +146,34 @@ export function RunNavigatorContent(): ReactElement {
   const effortRevealed = usePane((s) => navigatorColumns(s).effort);
 
   return (
-    <DropdownMenuContent align="start" side="top" className="w-fit p-0">
-      <div className="flex items-stretch divide-x divide-line">
+    <DropdownMenuContent
+      align="start"
+      side="top"
+      /*
+       * `rounded-xl` restates the surface radius the primitive hardcodes at
+       * `rounded-lg`: this is a popover body, and Console draws those one step
+       * softer than the rows inside them so the corner reads as an edge of the
+       * window rather than of a row.
+       *
+       * The row rules are scoped here rather than repeated on thirty menu
+       * items: a navigator row is highlighted with a wash — a fraction of the
+       * ink over whatever is beneath — not with the `accent` surface shadcn
+       * reaches for, which is `--float` in dark and so disappears against the
+       * popover it sits on. The picked row keeps the lighter wash underneath
+       * the highlight, so "what is selected" survives the pointer moving away
+       * from it.
+       */
+      className={cn(
+        'w-fit rounded-xl p-0',
+        '[&_[data-slot=dropdown-menu-item]]:rounded-md [&_[data-slot=dropdown-menu-radio-item]]:rounded-md',
+        '[&_[data-slot=dropdown-menu-item]:focus]:bg-wash-strong',
+        '[&_[data-slot=dropdown-menu-radio-item]:focus]:bg-wash-strong',
+        '[&_[data-slot=dropdown-menu-sub-trigger]:focus]:bg-wash-strong',
+        '[&_[data-slot=dropdown-menu-sub-trigger][data-state=open]]:bg-wash-strong',
+        '[&_[data-slot=dropdown-menu-radio-item][data-state=checked]]:bg-wash',
+      )}
+    >
+      <div className="flex items-stretch divide-x divide-hairline">
         <ProfileColumn />
         {modelRevealed ? <ModelColumn /> : null}
         {effortRevealed ? <EffortColumn /> : null}
@@ -282,7 +308,7 @@ function ProfileColumn(): ReactElement {
               {sections.length > 1 ? (
                 <>
                   {index > 0 ? <DropdownMenuSeparator /> : null}
-                  <DropdownMenuLabel className="text-2xs text-ink-faint">
+                  <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">
                     {section.label}
                   </DropdownMenuLabel>
                 </>
@@ -367,7 +393,7 @@ function RecommendedProfile(): ReactElement | null {
 
   return (
     <>
-      <DropdownMenuLabel className="text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
+      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
       <DropdownMenuItem
         className="gap-1.5 text-2xs"
         onSelect={() => setProfile(profile.id, pane)}
@@ -527,7 +553,7 @@ function ModelColumn(): ReactElement {
     // carries — the column must not vanish while the chip explains.
     return (
       <Column>
-        <DropdownMenuLabel className="text-2xs text-ink-faint">Model</DropdownMenuLabel>
+        <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Model</DropdownMenuLabel>
         <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
           {providerLabel} does not offer a model choice, so Artemis sends no model and the
           provider picks its own.
@@ -545,7 +571,7 @@ function ModelColumn(): ReactElement {
     <Column className="w-64">
       {recommendation !== null ? (
         <>
-          <DropdownMenuLabel className="text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
+          <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
           <DropdownMenuItem
             className="gap-1.5 text-2xs"
             onSelect={() => setModel(recommendation.model.id, pane)}
@@ -578,7 +604,7 @@ function ModelColumn(): ReactElement {
             placeholder="Search all models…"
             aria-label="Search models"
             spellCheck={false}
-            className="h-6 w-full rounded-md border border-line bg-inset/60 pr-2 pl-6 font-mono text-2xs text-ink outline-none placeholder:text-ink-faint focus:border-ring"
+            className="h-6 w-full rounded-md border border-hairline-strong bg-inset/60 pr-2 pl-6 font-mono text-2xs text-ink outline-none placeholder:text-ink-faint focus:border-ring"
           />
         </div>
       ) : null}
@@ -754,7 +780,7 @@ function EffortColumn(): ReactElement | null {
 
   return (
     <Column className="w-64">
-      <DropdownMenuLabel className="text-2xs text-ink-faint">Thinking</DropdownMenuLabel>
+      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Thinking</DropdownMenuLabel>
       <DropdownMenuRadioGroup
         value={current ?? ''}
         onValueChange={(value) => setThinkingLevel(value, pane)}
@@ -833,7 +859,7 @@ function NavigatorFooter(): ReactElement | null {
   if (!anything) return null;
 
   return (
-    <div className="border-t border-line p-1">
+    <div className="border-t border-hairline p-1">
       {fastPresence !== 'absent' ? (
         <ShapeRow label="Fast mode">
           <Switch
@@ -869,8 +895,17 @@ function NavigatorFooter(): ReactElement | null {
             </span>
           </DropdownMenuSubTrigger>
           {/* Fixed width for the notes to wrap at, not a min-width for
-              max-content to blow past — the lesson the thinking ladder taught. */}
-          <DropdownMenuSubContent className="w-72">
+              max-content to blow past — the lesson the thinking ladder taught.
+              The row rules are restated because a submenu is portalled out of
+              the content above and inherits none of its scoped classes. */}
+          <DropdownMenuSubContent
+            className={cn(
+              'w-72 rounded-xl',
+              '[&_[data-slot=dropdown-menu-radio-item]]:rounded-md',
+              '[&_[data-slot=dropdown-menu-radio-item]:focus]:bg-wash-strong',
+              '[&_[data-slot=dropdown-menu-radio-item][data-state=checked]]:bg-wash',
+            )}
+          >
             <DropdownMenuLabel className="text-2xs text-ink-faint">
               When should the agent ask before acting?
             </DropdownMenuLabel>
