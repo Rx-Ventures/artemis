@@ -7168,6 +7168,12 @@ function applyProfile(pane: Pane, profile: ProfileMetadata): void {
     // likely the same one, so showing it until the new account replies beats
     // flashing the picker back to the built-in list and forward again.
     ...(switched ? { models: [], modelsError: null } : {}),
+    // And the selection with it, not just the catalogue. Clearing the list
+    // alone leaves `model` naming a row that is no longer on offer, which
+    // `activeModel` renders as an unlisted id and `startRun` sends verbatim to
+    // a CLI that has never heard of it. Same rule, same reason, as the resume
+    // path — see `providerDefaultChoice`.
+    ...(switched ? PROVIDER_DEFAULT_CHOICE : {}),
   });
   if (switched) useApp.setState({ sessions: [] });
   savePrefs();
@@ -7887,6 +7893,49 @@ export interface ModelChoice {
   readonly effort: string | null;
   readonly fastMode: boolean;
   readonly ultracode: boolean;
+}
+
+/**
+ * The choice a column lands on when it has no business keeping the one it has.
+ *
+ * `null` is "the provider's default" for both ids, so this is not a model — it
+ * is the absence of a preference, which is the only honest state to be in the
+ * moment the column changes provider. See {@link providerDefaultChoice}.
+ */
+const PROVIDER_DEFAULT_CHOICE: ModelChoice = {
+  model: null,
+  effort: null,
+  fastMode: false,
+  ultracode: false,
+};
+
+/**
+ * What to carry across a provider change, given what the conversation remembers.
+ *
+ * Inheriting the column's current model is right *within* a provider — that is
+ * the rule `sessionModelMemory.test.ts` pins, and it is why a brand-new
+ * conversation starts on whatever you were just using. Across providers it is
+ * wrong, and quietly so: a model id belongs to the catalogue that named it, so
+ * an OpenCode id left selected under Claude names nothing the Claude adapter has
+ * heard of.
+ *
+ * Nothing downstream repairs it, which is why this has to. `carryModelId`
+ * returns an id present in neither catalogue *unchanged* — deliberately, so a
+ * pin belonging to another provider survives a switch — and `activeModel` passes
+ * an unlisted id through as itself, because the catalogue is what the UI offers
+ * and never an allow-list. So the stale id reaches `RunInput.model` intact and
+ * the run starts on a model the CLI cannot resolve.
+ *
+ * A remembered choice always wins: it was made *for this conversation*, under
+ * this provider, so it is the one fact here that outranks both rules.
+ */
+function providerDefaultChoice(
+  sessionId: SessionId,
+  providerChanged: boolean,
+): Partial<ModelChoice> {
+  const recalled = recalledModelChoice(sessionId);
+  if (recalled !== undefined) return recalled;
+  return providerChanged ? PROVIDER_DEFAULT_CHOICE : {};
 }
 
 /**
@@ -9644,8 +9693,9 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
     // The model this conversation was last being run on, where it has ever said.
     // Spread last so it wins, and spread as a whole or not at all: half a choice
     // is a combination nobody picked. No entry leaves the column on what it was
-    // using — see `AppState.modelBySession`.
-    ...(recalledModelChoice(session.id) ?? {}),
+    // using — *unless* the provider changed under it, in which case what it was
+    // using names nothing here. See `providerDefaultChoice`.
+    ...providerDefaultChoice(session.id, state.activeProviderId !== session.providerId),
   });
   // Opening a session is a deliberate act on one column, so that column takes
   // the focus — which is what makes ⌘K, the run inspector and settings point
