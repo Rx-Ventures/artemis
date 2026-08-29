@@ -25,8 +25,18 @@ const bubbleVariants = cva(
           "*:data-[slot=bubble-content]:bg-secondary *:data-[slot=bubble-content]:text-secondary-foreground [&>[data-slot=bubble-content]:is(button,a):hover]:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]",
         muted:
           "*:data-[slot=bubble-content]:bg-muted [&>[data-slot=bubble-content]:is(button,a):hover]:bg-[color-mix(in_oklch,var(--muted),var(--foreground)_5%)]",
+        /*
+         * The light-mode chroma multipliers are tuned to the current
+         * `--primary`, and have to move when it does. With the deep violet
+         * primary (C 0.19 in light) the registry's original c*0.4 / c*0.5
+         * computed C 0.076 at L93 and 0.095 at L88, where hue 264's sRGB
+         * ceilings are 0.033 and 0.058 — both clipped, and the browser's
+         * gamut mapping turned the tint grey-blue. c*0.16 / c*0.25 land at
+         * C 0.030 and 0.048, inside gamut. Dark keeps c*0.4 / c*0.5: at
+         * L30/L35 the same hue has room to spare.
+         */
         tinted:
-          "*:data-[slot=bubble-content]:bg-[oklch(from_var(--primary)_0.93_calc(c*0.4)_h)] *:data-[slot=bubble-content]:text-foreground dark:*:data-[slot=bubble-content]:bg-[oklch(from_var(--primary)_0.3_calc(c*0.4)_h)] [&>[data-slot=bubble-content]:is(button,a):hover]:bg-[oklch(from_var(--primary)_0.88_calc(c*0.5)_h)] dark:[&>[data-slot=bubble-content]:is(button,a):hover]:bg-[oklch(from_var(--primary)_0.35_calc(c*0.5)_h)]",
+          "*:data-[slot=bubble-content]:bg-[oklch(from_var(--primary)_0.93_calc(c*0.16)_h)] *:data-[slot=bubble-content]:text-foreground dark:*:data-[slot=bubble-content]:bg-[oklch(from_var(--primary)_0.3_calc(c*0.4)_h)] [&>[data-slot=bubble-content]:is(button,a):hover]:bg-[oklch(from_var(--primary)_0.88_calc(c*0.25)_h)] dark:[&>[data-slot=bubble-content]:is(button,a):hover]:bg-[oklch(from_var(--primary)_0.35_calc(c*0.5)_h)]",
         /*
          * A plain surface: one step off the panel, with the hairline and the
          * geometry every other variant gets.

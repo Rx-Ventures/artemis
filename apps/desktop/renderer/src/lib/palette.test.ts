@@ -1,13 +1,14 @@
 /**
  * The palette's own claims, re-derived from the stylesheet on every run.
  *
- * `index.css` makes four promises in prose. Prose does not fail a build, so
+ * `index.css` makes five promises in prose. Prose does not fail a build, so
  * this reads the actual file and checks them:
  *
  *   1. every token falls inside sRGB with no clipping
  *   2. every ink and semantic colour clears WCAG AA on both grounds
  *   3. the accent and the five semantics are at least 40° apart in hue
  *   4. `--line-strong` clears 3:1 against the surfaces it draws boundaries on
+ *   5. `--beam` — a fill now, not a text colour — clears 3:1 on both grounds
  *
  * Three real errors were caught by exactly this check while the palette was
  * being written — a teal accent above the sRGB ceiling, `--cyan` sitting on the
@@ -49,8 +50,25 @@ const THEMES = {
   light: tokensIn('\n.light {'),
 } as const;
 
-/** Text and semantic colours, which are read rather than merely seen. */
-const READABLE = ['ink', 'ink-muted', 'ink-faint', 'beam', 'cyan', 'sage', 'mint', 'amber', 'signal'];
+/**
+ * Text and semantic colours, which are read rather than merely seen.
+ *
+ * `beam-text` stands where `beam` used to. The accent is a deep fill now —
+ * docs/design/_seeds.md records the split — so the fill is owed 3:1 as a
+ * component (checked below) and its derived text companion is what carries
+ * the 4.5 duty here. Putting `beam` back in this list would fail honestly.
+ */
+const READABLE = [
+  'ink',
+  'ink-muted',
+  'ink-faint',
+  'beam-text',
+  'cyan',
+  'sage',
+  'mint',
+  'amber',
+  'signal',
+];
 
 /** The accent plus the five semantics — the set that must stay tellable apart. */
 const MEANINGFUL = ['beam', 'cyan', 'sage', 'mint', 'amber', 'signal'];
@@ -92,6 +110,17 @@ describe.each(Object.entries(THEMES))('%s theme', (theme, tokens) => {
     for (const ground of ['abyss', 'panel'] as const) {
       const ratio = contrastRatio(tokens['line-strong']!, tokens[ground]!);
       expect(ratio, `--line-strong on --${ground} in ${theme}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('holds the accent fill at 3:1 or better on both grounds', () => {
+    // --beam left READABLE when it became a fill — buttons, rings, the
+    // shuttle — and --beam-text took over accent-as-text duty. A fill is
+    // still a meaningful component, so it is owed 3:1 under 1.4.11, and the
+    // seed derivation walks the accent until it clears exactly this.
+    for (const ground of ['abyss', 'panel'] as const) {
+      const ratio = contrastRatio(tokens['beam']!, tokens[ground]!);
+      expect(ratio, `--beam on --${ground} in ${theme}`).toBeGreaterThanOrEqual(3);
     }
   });
 });

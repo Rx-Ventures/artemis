@@ -182,7 +182,7 @@ export function ChoiceList<T extends string>({
             <RadioGroupItem
               value={choice.id}
               disabled={choice.disabled ?? false}
-              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-beam data-[state=checked]:text-beam"
+              className="mt-[3px] shrink-0 border-line-strong data-[state=checked]:border-beam data-[state=checked]:text-beam-text"
             />
             <span className="flex min-w-0 flex-col gap-0.5">
               <span

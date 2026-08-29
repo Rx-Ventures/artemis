@@ -271,7 +271,7 @@ function UsageBlock(): ReactElement {
       )}
       <Row label="cost">
         {costing ? (
-          <span className="text-beam">{formatUsd(usage.costUsd)}</span>
+          <span className="text-beam-text">{formatUsd(usage.costUsd)}</span>
         ) : (
           <span className="text-ink-faint">not reported</span>
         )}

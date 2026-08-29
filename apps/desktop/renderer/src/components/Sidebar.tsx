@@ -284,7 +284,7 @@ function Rail({
         label={collapsed ? `Show sessions (${keyLabel('mod+b')})` : 'Sessions'}
         onClick={() => setSidebarCollapsed(!collapsed)}
         size="icon-sm"
-        className={collapsed ? 'text-ink-faint' : 'bg-raised text-beam'}
+        className={collapsed ? 'text-ink-faint' : 'bg-raised text-beam-text'}
       >
         <PanelLeftOpenIcon />
       </IconButton>

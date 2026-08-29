@@ -26,9 +26,10 @@
  * different silhouette.
  *
  * What is new is the colour. The mark is `currentColor` and takes it from
- * context; the accent it sits in is `--beam`, `oklch(86% 0.14 192)`, which is
- * where the palette landed after the bow was drawn — the violet the old drawing
- * carried is gone, and nothing here names a hue.
+ * context; the accent family it sits in is the seed palette's blue-violet at
+ * 264 — `--beam-text` beside text, where `EmptyState` sets it — and nothing
+ * here names a hue, which is why the mark rode through the teal palette and
+ * this one without an edit.
  *
  * ## It is the app icon, not a cousin of it
  *
@@ -43,8 +44,8 @@
  *
  * The only deliberate differences are the two that have to differ:
  *
- *   - `currentColor` instead of the icon's literal `#31eee8`, so the mark takes
- *     its colour from context — `--beam` on a dark surface, `--beam-ink` on a
+ *   - `currentColor` instead of the icon's literal `#265adf`, so the mark takes
+ *     its colour from context — `--beam-text` beside text, `--beam-ink` on a
  *     beam fill. The hex in the icon file *is* `--beam` resolved to sRGB; it is
  *     spelled out there only because an `.icns` has no cascade to inherit from.
  *   - A cropped `viewBox`. The icon's generous margin is tile inset, which macOS

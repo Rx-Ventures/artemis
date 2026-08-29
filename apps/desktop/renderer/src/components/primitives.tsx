@@ -40,7 +40,7 @@ export type Tone = 'neutral' | 'beam' | 'cyan' | 'sage' | 'mint' | 'amber' | 'si
 /** Foreground + border, for outline treatments. */
 const TONE_OUTLINE: Record<Tone, string> = {
   neutral: 'border-line text-ink-muted',
-  beam: 'border-beam/40 text-beam',
+  beam: 'border-beam/40 text-beam-text',
   cyan: 'border-cyan/40 text-cyan',
   sage: 'border-sage/40 text-sage',
   mint: 'border-mint/40 text-mint',
@@ -62,7 +62,7 @@ const TONE_FILL: Record<Tone, string> = {
 /** Text only. */
 const TONE_TEXT: Record<Tone, string> = {
   neutral: 'text-ink-muted',
-  beam: 'text-beam',
+  beam: 'text-beam-text',
   cyan: 'text-cyan',
   sage: 'text-sage',
   mint: 'text-mint',

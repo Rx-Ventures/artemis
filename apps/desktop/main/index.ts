@@ -240,9 +240,11 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     show: false,
     // Hex, and the one colour in this app that lives outside index.css: it is
     // read by Chromium before any stylesheet exists, so it cannot be a token.
-    // Both are `--abyss` as that palette renders it — the dark one was
-    // `#0b0a09`, left behind when the greys moved from the warm hue to 285, and
-    // the light one was a plain white that no palette contains.
+    // Both are `--abyss` resolved to sRGB via `lib/oklch.ts` — the seed
+    // canvas, `oklch(15.5% 0 0)` dark and `oklch(96.5% 0 0)` light. The
+    // values before these were the 250-tinted greys of the teal palette,
+    // which is exactly the staleness this comment exists to prevent: when
+    // `--abyss` moves, these two hexes move with it.
     //
     // This follows the OS and not the in-app setting, which is a real gap and a
     // deliberately small one. The main process cannot see the renderer's
@@ -254,7 +256,7 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     // Chromium fills during a fast resize, where being one palette out for a
     // frame is a cosmetic near-miss rather than the launch flash the boot script
     // in `index.html` exists to prevent.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0a0c' : '#f4f4f6',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c0c0c' : '#f3f3f3',
     autoHideMenuBar: process.platform !== 'darwin',
     // No native title bar: the app's own header is the title bar. What that
     // costs, and what has to be drawn in its place, is in `window.ts`.

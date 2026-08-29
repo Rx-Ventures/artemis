@@ -77,7 +77,7 @@ const DOTFILE = /^\./;
 function EntryIcon({ entry }: { readonly entry: DirectoryEntry }): ReactElement {
   const style = 'size-3.5 shrink-0';
   if (entry.kind === 'directory') {
-    return <FolderIcon className={cn(style, 'text-beam')} aria-hidden="true" />;
+    return <FolderIcon className={cn(style, 'text-beam-text')} aria-hidden="true" />;
   }
   // `other` is a socket, a device, or a symlink pointing at nothing. It gets
   // the blank page and the muted row below, because it is a real thing in the
@@ -274,7 +274,7 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
                 }}
                 className="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left text-xs text-ink-muted transition-colors hover:bg-raised/50 hover:text-ink"
               >
-                <CornerLeftUpIcon className="size-3.5 shrink-0 text-beam" aria-hidden="true" />
+                <CornerLeftUpIcon className="size-3.5 shrink-0 text-beam-text" aria-hidden="true" />
                 {/* Mono, because it is a path fragment rather than a name — and
                     two dots in the body font read as an ellipsis that lost a
                     letter. */}
