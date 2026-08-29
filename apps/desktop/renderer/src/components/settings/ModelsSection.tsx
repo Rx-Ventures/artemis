@@ -53,10 +53,12 @@
 
 import { useMemo, useState, type ReactElement } from 'react';
 import { BoxesIcon, RefreshCwIcon, SearchIcon, TriangleAlertIcon } from 'lucide-react';
-import type { ProviderModelOption } from '@rx-artemis/protocol';
+import type { PlanUsage, ProviderModelOption } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ToneBadge } from '../primitives';
+import { CostPips, PressureDot } from '../RunNavigator';
+import { toneFor } from '../PlanUsageMeter';
 import { SettingsGroup, SettingsPane } from './pane';
 import {
   activeEffortLevels,
@@ -67,7 +69,9 @@ import {
   setModel,
   setQuickModels,
   toggleQuickModel,
+  useApp,
 } from '../../state/store';
+import { costPosture, modelExhaustion, modelPressure } from '../../state/modelFacts';
 import { usePane } from '../../state/paneContext';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
@@ -227,6 +231,18 @@ function Catalogue({
   const quickIds = usePane(paneQuickModelIds);
   const selectedId = usePane((s) => s.model);
   const curated = quickIds.length > 0;
+  /*
+    The same three facts the run navigator and the palette put on their rows,
+    from the same helpers and the same polled map — three surfaces, one system.
+    Read-only: this pane renders the whole catalogue at once, and a fetch per
+    row would spawn a subprocess per model.
+  */
+  const profileId = usePane((s) => s.activeProfileId);
+  const usage = useApp((s) =>
+    profileId === null ? null : (s.planUsageByProfile[profileId] ?? null),
+  );
+  // Captured at mount: the facts are judged when the pane opens.
+  const [now] = useState(() => Date.now());
 
   const [query, setQuery] = useState('');
   const searchable = catalogue.length > SEARCH_THRESHOLD;
@@ -304,6 +320,8 @@ function Catalogue({
             efforts={efforts}
             pinned={quickIds.includes(model.id)}
             selected={model.id === selectedId}
+            usage={usage}
+            now={now}
           />
         ))}
       </ItemGroup>
@@ -361,14 +379,20 @@ function ModelRow({
   efforts,
   pinned,
   selected,
+  usage,
+  now,
 }: {
   readonly model: ProviderModelOption;
   readonly efforts: ReturnType<typeof activeEffortLevels>;
   readonly pinned: boolean;
   readonly selected: boolean;
+  readonly usage: PlanUsage | null;
+  readonly now: number;
 }): ReactElement {
   const effort = effortSummary(model, efforts);
   const name = model.displayName ?? model.label;
+  const exhausted = modelExhaustion(model, usage, now);
+  const pressure = modelPressure(model, usage);
 
   return (
     <Item
@@ -389,12 +413,20 @@ function ModelRow({
 
       <ItemContent>
         <ItemTitle className="flex-wrap text-xs text-ink">
-          {name}
+          <span className={cn(exhausted !== null && 'text-ink-faint line-through')}>{name}</span>
+          <CostPips posture={costPosture(model)} />
           {selected ? <ToneBadge tone="beam">in use</ToneBadge> : null}
           {model.supportsFastMode ? <ToneBadge tone="mint">fast mode</ToneBadge> : null}
           {model.supportsUltracode ? <ToneBadge tone="cyan">ultracode</ToneBadge> : null}
           {model.adaptiveThinking ? <ToneBadge tone="sage">adaptive</ToneBadge> : null}
         </ItemTitle>
+
+        {/* The navigator's exhaustion fact, in the catalogue's own register:
+            present, struck through above, and explained here with the reset
+            time — never hidden. Same helper, same wording, three surfaces. */}
+        {exhausted !== null ? (
+          <p className="text-2xs leading-snug text-signal">{exhausted.reason}</p>
+        ) : null}
 
         <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
           {model.note}
@@ -410,6 +442,18 @@ function ModelRow({
             <span>→ {model.resolvedModel}</span>
           ) : null}
           {effort ? <span>effort: {effort}</span> : null}
+          {/* Pressure, as the navigator draws it: the window that binds *this*
+              model, its number in the meter's own tones. */}
+          {pressure !== null && pressure.window.status !== 'rejected' ? (
+            <span className="flex items-center gap-1">
+              <PressureDot pressure={pressure} />
+              {pressure.utilization === null ? null : (
+                <span className={cn('tabular-nums', toneFor(pressure.utilization, pressure.window.status))}>
+                  {Math.round(pressure.utilization)}% of {pressure.window.label}
+                </span>
+              )}
+            </span>
+          ) : null}
         </div>
       </ItemContent>
 
@@ -417,8 +461,10 @@ function ModelRow({
         <ReasonButton
           size="xs"
           variant={selected ? 'secondary' : 'outline'}
-          disabled={selected}
-          disabledReason="Already the model the next run will use."
+          disabled={selected || exhausted !== null}
+          disabledReason={
+            selected ? 'Already the model the next run will use.' : exhausted?.reason
+          }
           onClick={() => setModel(model.id)}
         >
           {selected ? 'Current' : 'Use'}
