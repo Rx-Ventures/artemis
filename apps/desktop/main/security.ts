@@ -45,6 +45,24 @@ export interface SecurityPolicy {
   readonly devServerOrigin: string | null;
   /** Absolute `file:` URL of the built renderer entry point. */
   readonly rendererFileUrl: string;
+  /**
+   * The one remote Artemis origin the user has configured, or null.
+   *
+   * A getter rather than a value because it changes at runtime — the user
+   * connects to a machine from Settings and the grant must apply without a
+   * relaunch — and reading it fresh per decision is what makes "withdrawn"
+   * mean withdrawn. See `remoteAccess.ts` for where it is stored and how it
+   * is validated; nothing reaches this getter that `normalizeRemoteOrigin`
+   * did not accept.
+   *
+   * What it widens, exactly: the CSP's `connect-src` and the network
+   * lockdown's request allowance, for this origin alone. What it deliberately
+   * does **not** widen: navigation (the window may still never *show* the
+   * remote origin), frame trust (`isTrustedFrame` still refuses it, so a
+   * remote server can never call privileged IPC), and every other CSP
+   * directive — the remote machine can be fetched from, and that is all.
+   */
+  readonly remoteOrigin?: () => string | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -87,21 +105,44 @@ export interface SecurityPolicy {
  */
 const THEME_BOOT_HASH = "'sha256-yRY6nRklLH9xjg6E1SchWH7UfjpaDTMnCFAe/HvBO/o='";
 
-const PRODUCTION_CSP = [
-  "default-src 'none'",
-  `script-src 'self' ${THEME_BOOT_HASH}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "media-src 'self' data: blob:",
-  "worker-src 'self' blob:",
-  `frame-src ${PREVIEW_SCHEME}:`,
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-].join('; ');
+/**
+ * `connect-src`, and the one runtime variation in either policy.
+ *
+ * The remote bridge mode (ADR 0004) has the renderer fetch another machine's
+ * Artemis directly, and `connect-src 'self'` refuses that by design. The
+ * widening is **the configured origin only, never a wildcard**: the value
+ * interpolated here has been through `normalizeRemoteOrigin`, is a bare
+ * `http(s)` origin the user typed into Settings, and is absent from the
+ * policy entirely until they do. The static meta-tag policy in
+ * `renderer/index.html` cannot name a runtime origin, so its `connect-src`
+ * carries the scheme-wide grant and *this* header is where the narrowing to
+ * one origin actually happens — the same division of labour the meta tag
+ * already has with `ws://localhost:*`, which the production header has never
+ * granted. The request lockdown in `applySessionPolicy` narrows to the same
+ * single origin independently, so a failure of either layer still leaves one
+ * exact-origin gate standing.
+ */
+function connectSrc(remoteOrigin: string | null): string {
+  return remoteOrigin === null ? "connect-src 'self'" : `connect-src 'self' ${remoteOrigin}`;
+}
+
+function productionCsp(remoteOrigin: string | null): string {
+  return [
+    "default-src 'none'",
+    `script-src 'self' ${THEME_BOOT_HASH}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    connectSrc(remoteOrigin),
+    "media-src 'self' data: blob:",
+    "worker-src 'self' blob:",
+    `frame-src ${PREVIEW_SCHEME}:`,
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+  ].join('; ');
+}
 
 /**
  * Development CSP.
@@ -120,15 +161,16 @@ const PRODUCTION_CSP = [
  * script is covered in dev by `'unsafe-inline'` like every other inline script,
  * which is the whole reason that relaxation is not shipped.
  */
-function developmentCsp(origin: string): string {
+function developmentCsp(origin: string, remoteOrigin: string | null): string {
   const wsOrigin = origin.replace(/^http/, 'ws');
+  const remote = remoteOrigin === null ? '' : ` ${remoteOrigin}`;
   return [
     "default-src 'none'",
     `script-src 'self' 'unsafe-inline' ${origin}`,
     `style-src 'self' 'unsafe-inline' ${origin}`,
     `img-src 'self' data: blob: ${origin}`,
     `font-src 'self' data: ${origin}`,
-    `connect-src 'self' ${origin} ${wsOrigin}`,
+    `connect-src 'self' ${origin} ${wsOrigin}${remote}`,
     "media-src 'self' data: blob:",
     "worker-src 'self' blob:",
     `frame-src ${PREVIEW_SCHEME}:`,
@@ -203,6 +245,26 @@ export function windowSecurityPreferences(preloadPath: string, extraArguments: r
 /* -------------------------------------------------------------------------- */
 /* Session-level policy                                                       */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Is this a request to the one configured remote Artemis?
+ *
+ * Exact-origin, http(s) only, and read through the policy's getter so a
+ * withdrawn grant stops matching on the next request. Kept apart from
+ * {@link isAllowedUrl} on purpose — see the call site in the request lockdown.
+ */
+function isRemoteOriginUrl(url: string, policy: SecurityPolicy): boolean {
+  const remote = policy.remoteOrigin?.() ?? null;
+  if (remote === null) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  return parsed.origin === remote;
+}
 
 function isAllowedUrl(url: string, policy: SecurityPolicy): boolean {
   if (url === 'about:blank') return true;
@@ -321,7 +383,24 @@ export function openExternalSafely(url: string): void {
  * Call once, on `app.whenReady()`, before any window is created.
  */
 export function applySessionPolicy(session: Session, policy: SecurityPolicy): void {
-  const csp = policy.devServerOrigin ? developmentCsp(policy.devServerOrigin) : PRODUCTION_CSP;
+  /*
+   * Resolved per response rather than once, because the remote-origin grant
+   * changes at runtime (see `SecurityPolicy.remoteOrigin`). Cached against the
+   * current origin so the string join does not run per request — the value
+   * changes when the user reconfigures a machine, not per fetch.
+   */
+  let cspForOrigin: string | null = null;
+  let cachedCsp: string | null = null;
+  const currentCsp = (): string => {
+    const remote = policy.remoteOrigin?.() ?? null;
+    if (cachedCsp === null || cspForOrigin !== remote) {
+      cspForOrigin = remote;
+      cachedCsp = policy.devServerOrigin
+        ? developmentCsp(policy.devServerOrigin, remote)
+        : productionCsp(remote);
+    }
+    return cachedCsp;
+  };
 
   session.webRequest.onHeadersReceived((details, callback) => {
     // A preview response sets its own policy and must keep it. Overwriting it
@@ -344,7 +423,7 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
       if (name.toLowerCase() === 'content-security-policy-report-only') continue;
       headers[name] = Array.isArray(value) ? value : [String(value)];
     }
-    headers['Content-Security-Policy'] = [csp];
+    headers['Content-Security-Policy'] = [currentCsp()];
     headers['X-Content-Type-Options'] = ['nosniff'];
     callback({ responseHeaders: headers });
   });
@@ -376,6 +455,14 @@ export function applySessionPolicy(session: Session, policy: SecurityPolicy): vo
   // cancelled. In a packaged build this list contains no network origin at all.
   session.webRequest.onBeforeRequest((details, callback) => {
     if (isAllowedUrl(details.url, policy)) {
+      callback({ cancel: false });
+      return;
+    }
+    // The configured remote Artemis, for *requests* only. Deliberately not in
+    // `isAllowedUrl`: that function also decides what may become the window's
+    // page and which frames may call IPC, and the remote machine must be
+    // fetchable without ever being either of those things.
+    if (isRemoteOriginUrl(details.url, policy)) {
       callback({ cancel: false });
       return;
     }

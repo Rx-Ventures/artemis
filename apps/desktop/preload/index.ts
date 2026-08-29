@@ -64,6 +64,8 @@ import {
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
   type RunsStartRequest,
+  type RemoteAccessConfigureRequest,
+  type RemoteAccessStatusRequest,
   type ServerCatalogueRequest,
   type ServerConfigureRequest,
   type ServerCreateConnectionRequest,
@@ -807,6 +809,15 @@ const bridge: ArtemisBridge = Object.freeze({
       invoke(IPC.serverDeleteConnection, request),
     catalogue: (request: ServerCatalogueRequest) => invoke(IPC.serverCatalogue, request),
     onChange: serverStates.subscribe,
+  }),
+
+  /**
+   * The one remote-origin grant. An origin travels in, an origin travels
+   * back; the token never crosses this bridge — see the channel comment.
+   */
+  remote: Object.freeze({
+    status: (request: RemoteAccessStatusRequest) => invoke(IPC.remoteStatus, request),
+    configure: (request: RemoteAccessConfigureRequest) => invoke(IPC.remoteConfigure, request),
   }),
 
   /** Scheduled runs. Five verbs and a push; the scheduler itself is main's. */

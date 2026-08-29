@@ -492,6 +492,25 @@ export const IPC = {
    */
   serverCatalogue: 'artemis:server:catalogue',
 
+  /**
+   * Remote access: driving *another* machine's Artemis from this window.
+   *
+   * Two channels, and neither carries the token. What main needs to know is
+   * the **origin** — because the renderer's Content-Security-Policy and the
+   * request lockdown both live in main, and each must be widened to exactly
+   * the one origin the user configured before a single remote fetch can leave
+   * the window (see `main/security.ts`). The token stays renderer-side with
+   * the rest of the remote-bridge state: it is the same class of credential as
+   * the connection tokens `ServerState` already carries into the renderer on
+   * purpose, and main has no use for it.
+   *
+   * `configure` with `origin: null` withdraws the grant. The change applies to
+   * the *next* request — an entered remote mode keeps working until the
+   * renderer reloads out of it, which is the renderer's own act.
+   */
+  remoteStatus: 'artemis:remote:status',
+  remoteConfigure: 'artemis:remote:configure',
+
   /** The routines and their firing history, for the first paint. */
   routinesList: 'artemis:routines:list',
   /** Create a routine. */
@@ -2254,6 +2273,30 @@ export interface ServerStateResponse {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Remote access                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** Empty; there is exactly one remote-origin grant and main owns it. */
+export type RemoteAccessStatusRequest = Record<string, never>;
+
+/**
+ * Grant, replace or withdraw the one remote origin this window may reach.
+ *
+ * The origin only — scheme, host, port — never a path and never the token.
+ * Main normalizes and validates it (see `normalizeRemoteOrigin`) and refuses
+ * anything that is not a plain `http(s)` origin, so a renderer cannot use this
+ * channel to open the CSP wider than one address the user typed.
+ */
+export interface RemoteAccessConfigureRequest {
+  readonly origin: string | null;
+}
+
+/** Every remote-access channel answers with the origin as stored. */
+export interface RemoteAccessStatusResponse {
+  readonly origin: string | null;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Routines                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -2372,6 +2415,8 @@ export type IpcRequestMap = {
   [IPC.serverRenameConnection]: ServerRenameConnectionRequest;
   [IPC.serverDeleteConnection]: ServerDeleteConnectionRequest;
   [IPC.serverCatalogue]: ServerCatalogueRequest;
+  [IPC.remoteStatus]: RemoteAccessStatusRequest;
+  [IPC.remoteConfigure]: RemoteAccessConfigureRequest;
   [IPC.routinesList]: RoutinesListRequest;
   [IPC.routinesCreate]: RoutinesCreateRequest;
   [IPC.routinesUpdate]: RoutinesUpdateRequest;
@@ -2457,6 +2502,8 @@ export type IpcResponseMap = {
   [IPC.serverRenameConnection]: ServerStateResponse;
   [IPC.serverDeleteConnection]: ServerStateResponse;
   [IPC.serverCatalogue]: ServerCatalogueResponse;
+  [IPC.remoteStatus]: RemoteAccessStatusResponse;
+  [IPC.remoteConfigure]: RemoteAccessStatusResponse;
   [IPC.routinesList]: RoutinesStateResponse;
   [IPC.routinesCreate]: RoutinesStateResponse;
   [IPC.routinesUpdate]: RoutinesStateResponse;
@@ -3073,6 +3120,19 @@ export interface ArtemisBridge {
     catalogue(request: ServerCatalogueRequest): Promise<IpcResult<ServerCatalogueResponse>>;
     /** Subscribe to phase and configuration changes. */
     onChange(listener: (state: ServerState) => void): Unsubscribe;
+  };
+
+  /**
+   * The one remote-origin grant. See the channel comment in {@link IPC} for
+   * why this carries an origin and never a token.
+   */
+  readonly remote: {
+    /** The origin as stored, or null when none is configured. */
+    status(request: RemoteAccessStatusRequest): Promise<IpcResult<RemoteAccessStatusResponse>>;
+    /** Grant, replace or withdraw the origin. Answers with what landed. */
+    configure(
+      request: RemoteAccessConfigureRequest,
+    ): Promise<IpcResult<RemoteAccessStatusResponse>>;
   };
 
   readonly routines: {

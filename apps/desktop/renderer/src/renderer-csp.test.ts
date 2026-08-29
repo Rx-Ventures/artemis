@@ -104,6 +104,37 @@ describe("the renderer's meta CSP", () => {
     // for React — so the terminal added no new permission at all.
     expect(directive(metaCsp, 'style-src')).toContain("'unsafe-inline'");
   });
+
+  /**
+   * The remote-mode split (ADR 0004): where each layer's connect-src grant
+   * ends, and why the division is not a loosened posture wearing a comment.
+   *
+   * Remote mode fetches one user-configured origin. A static meta tag cannot
+   * name a runtime value, so `connect-src` splits across the layers: this tag
+   * carries the scheme-wide grant (its honest limit), and the *narrowing to
+   * exactly one origin* lives in the two layers that can read the
+   * configuration — the header CSP and the webRequest lockdown, both covered
+   * behaviourally in `main/security.test.ts`. What this block pins is the
+   * shape of the split itself: the meta widens connect-src and nothing else,
+   * and the header builder interpolates a single normalized origin rather
+   * than any wildcard.
+   */
+  it('widens connect-src for remote mode, and only connect-src', () => {
+    expect(directive(metaCsp, 'connect-src')).toContain('http:');
+    expect(directive(metaCsp, 'connect-src')).toContain('https:');
+    // The breadth must not leak into the directives that gate execution.
+    expect(directive(metaCsp, 'script-src')).not.toContain('http');
+    expect(directive(metaCsp, 'frame-src')).toBe(`frame-src ${scheme}:`);
+    expect(directive(metaCsp, 'default-src')).toBe("default-src 'self'");
+  });
+
+  it('leaves the exact-origin narrowing to the header, which never wildcards', () => {
+    // The header builder takes the one configured origin and nothing wider —
+    // the interpolation is the contract, and a `*` anywhere near connect-src
+    // in `security.ts` would be the wildcard ADR 0004 forbids.
+    expect(SECURITY_TS).toContain("`connect-src 'self' ${remoteOrigin}`");
+    expect(SECURITY_TS).not.toMatch(/connect-src[^`\n]*\*/);
+  });
 });
 
 /**

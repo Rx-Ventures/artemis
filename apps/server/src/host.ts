@@ -23,6 +23,7 @@ import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
   createCatalogue,
   createDefaultProviderRegistry,
+  createPushFeed,
   createSessionLedger,
   createWorkspaceResolver,
   managedEnvKeys,
@@ -31,6 +32,7 @@ import {
   RunRegistry,
   type Catalogue,
   type ProviderRegistry,
+  type PushFeed,
   type RunSource,
   type SessionLedger,
   type SessionSource,
@@ -48,6 +50,8 @@ export interface HeadlessHost {
   readonly ledger: SessionLedger;
   readonly runSource: RunSource;
   readonly sessionSource: SessionSource;
+  /** Every push the server can stream to a remote client. See `server/feed.ts`. */
+  readonly feed: PushFeed;
   dispose(): Promise<void>;
 }
 
@@ -104,6 +108,24 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
   const workspaces = createWorkspaceResolver();
   const ledger = createSessionLedger(dataDir);
 
+  /*
+   * The push feed: every agent event, stamped with the account its run bills
+   * so the routes can filter per connection. Subscribed once, here, because
+   * the feed's sequence numbers are the remote client's replay cursor and a
+   * second subscription would number every event twice. `runs.get` covers
+   * live and recently-ended runs, so even a run's own `run.end` still finds
+   * its profile.
+   */
+  const feed = createPushFeed();
+  runs.subscribe((event) => {
+    const profileId = runs.get(event.runId)?.profileId;
+    feed.publish(
+      'artemis:push:agent-event',
+      event,
+      profileId === undefined ? {} : { profileId: String(profileId) },
+    );
+  });
+
   const runSource: RunSource = {
     startRun: (input) =>
       runs.start({
@@ -128,6 +150,21 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     },
     disposeRun: async (runId) => {
       await runs.dispose(runId as RunId);
+    },
+
+    // The observation surface (ADR 0004). No `liveWork`: the headless host
+    // keeps no background-work ledger, and the route's contract makes the
+    // empty answer it degrades to an honest one.
+    listRuns: async (query) => runs.list(query.cwd),
+    getRun: async (runId) => runs.get(runId as RunId),
+    runEvents: async (query) => {
+      const after = query.afterSeq ?? -1;
+      const events = runs.eventsSince(query.runId as RunId, after);
+      // The buffer drops from the front, so a first event that is not the one
+      // immediately after `after` is the only evidence that something was
+      // lost — the same derivation the desktop's engine makes.
+      const first = events[0];
+      return { events, truncated: first !== undefined && first.seq > after + 1 };
     },
   };
 
@@ -165,6 +202,7 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     ledger,
     runSource,
     sessionSource,
+    feed,
     dispose: async () => {
       await runs.disposeAll();
       await ledger.flush();

@@ -61,7 +61,6 @@ import type {
   AgentEvent,
   OpenAiChatRequest,
   OpenAiModelList,
-  ServerErrorBody,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
@@ -94,7 +93,10 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import type { PushFeed } from './feed.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
+import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
+import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
 /* -------------------------------------------------------------------------- */
@@ -195,6 +197,14 @@ export interface ServerContext {
    * carries per-connection.
    */
   readonly allowedHosts?: readonly string[] | 'any';
+  /**
+   * The push feed the event stream serves. Absent means this build has no
+   * live feed to offer and `/api/v0/events` answers `501` — a catalogue-only
+   * deployment, and every test that is not about the stream.
+   */
+  readonly feed?: PushFeed;
+  /** Tuning for the event stream. Injected by tests; defaults apply live. */
+  readonly remoteStream?: RemoteStreamOptions;
 }
 
 /**
@@ -236,23 +246,6 @@ export interface ServerStreamReply {
 /* -------------------------------------------------------------------------- */
 /* Routing                                                                    */
 /* -------------------------------------------------------------------------- */
-
-const JSON_HEADERS: Readonly<Record<string, string>> = {
-  'content-type': 'application/json; charset=utf-8',
-  // The catalogue describes live accounts and can change between two polls.
-  // Nothing here should ever be served from a client's disk cache.
-  'cache-control': 'no-store',
-};
-
-const CORS_HEADERS: Readonly<Record<string, string>> = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
-  // `x-api-key` alongside the standard header because Anthropic-shaped clients
-  // send that one, and a client that has to be reconfigured to talk to a
-  // compatibility layer is a compatibility layer that did not work.
-  'access-control-allow-headers': 'authorization, content-type, x-api-key',
-  'access-control-max-age': '600',
-};
 
 /** Hosts a request may legitimately claim to have been sent to. See the file comment. */
 const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
@@ -390,6 +383,18 @@ export async function handleServerRequest(
       'not_implemented',
       `Artemis's server does not run turns yet — it publishes its catalogue only. ${path} is planned; list what is available at /v1/models.`,
     );
+  }
+
+  /*
+   * The remote bridge surface (ADR 0004): the run list, per-run replay and
+   * control verbs, the terminals, and the event stream. Dispatched before the
+   * read-only method gate below because several of its routes are POSTs, and
+   * routed as one block because every one of them shares the same visibility
+   * rule — what this connection's allowance can see — which lives in one
+   * module rather than being re-derived per path. See `remote.ts`.
+   */
+  if (isRemotePath(path)) {
+    return handleRemoteRequest({ request, context, connection, method, path, url });
   }
 
   if (method !== 'GET' && method !== 'HEAD') {
@@ -579,6 +584,27 @@ function indexBody(context: ServerContext): Record<string, unknown> {
         path: `${apiPrefix}/models/{profile}/{model}`,
         description: 'One route, in full.',
       },
+      // The remote bridge surface, named only when this build serves it —
+      // the index's rule is that every path on it actually answers.
+      ...(context.runs?.listRuns === undefined
+        ? []
+        : [
+            {
+              method: 'GET',
+              path: `${apiPrefix}/runs`,
+              description: 'Live runs visible to your connection.',
+            },
+          ]),
+      ...(context.feed === undefined
+        ? []
+        : [
+            {
+              method: 'GET',
+              path: `${apiPrefix}/events`,
+              description:
+                'The event stream (SSE). Resume with Last-Event-ID; gaps are reported, not hidden.',
+            },
+          ]),
     ],
     // Said out loud rather than left to a 401: a catalogue that changes when an
     // account is added is worth re-reading, and a client that does not know the
@@ -750,15 +776,6 @@ function constantTimeEquals(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-function ok(body: unknown): ServerReply {
-  return { status: 200, headers: { ...JSON_HEADERS, ...CORS_HEADERS }, body };
-}
-
-function fail(status: number, type: string, code: string, message: string): ServerReply {
-  const body: ServerErrorBody = { error: { message, type, code } };
-  return { status, headers: { ...JSON_HEADERS, ...CORS_HEADERS }, body };
-}
-
 /* -------------------------------------------------------------------------- */
 /* The socket                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -791,6 +808,10 @@ export interface ArtemisServerOptions {
   readonly sessions?: SessionSource;
   /** See {@link ServerContext.allowedHosts}. */
   readonly allowedHosts?: readonly string[] | 'any';
+  /** See {@link ServerContext.feed}. */
+  readonly feed?: PushFeed;
+  /** See {@link ServerContext.remoteStream}. */
+  readonly remoteStream?: RemoteStreamOptions;
   /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
@@ -864,6 +885,8 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
           ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
           ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+          ...(options.feed === undefined ? {} : { feed: options.feed }),
+          ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),
         },
       );
     } catch (error) {

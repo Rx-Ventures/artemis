@@ -9,10 +9,19 @@
 
 import type { IpcResult, ArtemisBridge } from '@rx-artemis/protocol';
 import { createMockBridge } from './mockBridge';
+import { createRemoteBridge } from './remoteBridge';
+import { readRemoteConfig } from './remoteConfig';
 
 export type BridgeMode =
   /** The preload script ran and `window.artemis` is real. */
   | 'preload'
+  /**
+   * The user connected this window to another machine's Artemis (ADR 0004):
+   * the same interface, served over HTTP plus the event stream, so the whole
+   * existing UI draws the remote machine. Entered and left by a reload — see
+   * `remoteConfig.ts` for why the binding is not swapped live.
+   */
+  | 'remote'
   /** Dev only: no preload, so a scripted fake is standing in. */
   | 'mock'
   /** Nothing to talk to. The app renders a dead-end screen. */
@@ -30,7 +39,14 @@ export function resolveBridge(): BridgeBinding {
   if (binding) return binding;
 
   const injected = typeof window === 'undefined' ? undefined : window.artemis;
-  if (injected) {
+  const remote = readRemoteConfig();
+  if (remote?.active === true && (injected !== undefined || import.meta.env.DEV)) {
+    // Before the plain preload branch, because that is what "connected" means:
+    // this window's world is the remote machine's. The local bridge still
+    // rides along for what stays local — window chrome, updates, the prefs
+    // file — and for the way back out.
+    binding = { mode: 'remote', bridge: createRemoteBridge(remote, injected ?? null) };
+  } else if (injected) {
     binding = { mode: 'preload', bridge: injected };
   } else if (import.meta.env.DEV) {
     binding = { mode: 'mock', bridge: createMockBridge() };
@@ -38,6 +54,21 @@ export function resolveBridge(): BridgeBinding {
     binding = { mode: 'unavailable', bridge: null };
   }
   return binding;
+}
+
+/**
+ * Does this window have real native chrome behind it?
+ *
+ * The header's traffic-light gutter and window controls used to key on
+ * `mode === 'preload'`, which was two facts fused: "the UI is drawn locally"
+ * and "an Electron window is hosting it". Remote mode splits them — the
+ * conversation lives elsewhere while the window is exactly as native as it
+ * ever was — so the chrome question is asked of the *host*, not the mode.
+ */
+export function hasNativeWindowChrome(): boolean {
+  const { mode } = resolveBridge();
+  if (mode === 'preload') return true;
+  return mode === 'remote' && typeof window !== 'undefined' && window.artemis !== undefined;
 }
 
 /**

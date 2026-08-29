@@ -64,3 +64,14 @@ export {
   type ServerStreamReply,
   type SessionSource,
 } from './http.js';
+
+export {
+  createPushFeed,
+  type FeedEvent,
+  type FeedReplay,
+  type FeedScope,
+  type PushFeed,
+  type PushFeedOptions,
+} from './feed.js';
+
+export { type RemoteStreamOptions } from './remote.js';

@@ -105,6 +105,8 @@ import {
   type RunsStopTaskRequest,
   type RunsEventsRequest,
   type RunsListRequest,
+  type RemoteAccessConfigureRequest,
+  type RemoteAccessStatusRequest,
   type RunsLiveWorkRequest,
   type RunsRespondPermissionRequest,
   type RunsSendRequest,
@@ -2268,6 +2270,30 @@ export function validateServerCatalogue(raw: unknown): ServerCatalogueRequest {
   const request = requireRequest(raw);
   const refresh = optionalBoolean(request['refresh'], 'refresh');
   return refresh === undefined ? {} : { refresh };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Remote access                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** @see validateServerStatus */
+export function validateRemoteStatus(raw: unknown): RemoteAccessStatusRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * An origin string or an explicit null. Shape only — whether the string is an
+ * acceptable origin is `normalizeRemoteOrigin`'s question, answered in the
+ * handler so the refusal can carry a sentence rather than a validation error.
+ */
+export function validateRemoteConfigure(raw: unknown): RemoteAccessConfigureRequest {
+  const request = requireRequest(raw);
+  const origin = request['origin'];
+  if (origin !== null && typeof origin !== 'string') {
+    throw new ValidationError('origin', 'must be a string or null');
+  }
+  return { origin };
 }
 
 /* -------------------------------------------------------------------------- */

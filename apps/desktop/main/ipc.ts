@@ -76,6 +76,7 @@ import type { EngineHost } from './engine.js';
 import {
   toIpcError,
   UntrustedSenderError,
+  ValidationError,
   WorkspaceError,
 } from './errors.js';
 import { createLogger } from './log.js';
@@ -91,6 +92,7 @@ import {
   TERMINAL_SCAN_POLICY,
 } from './redact.js';
 import { isTrustedFrame, type SecurityPolicy } from './security.js';
+import { normalizeRemoteOrigin, type RemoteAccess } from './remoteAccess.js';
 import type { ServerHost } from './server.js';
 import type { RoutineHost } from './routines.js';
 import { readSharedConfigStatus } from './sharedConfig.js';
@@ -114,6 +116,8 @@ import {
   validateRunsSend,
   validateRunsStart,
   validateServerCatalogue,
+  validateRemoteConfigure,
+  validateRemoteStatus,
   validateRoutinesList,
   validateRoutinesCreate,
   validateRoutinesUpdate,
@@ -222,6 +226,7 @@ export interface IpcLayerOptions {
   readonly browsers: BrowserHost;
   readonly server: ServerHost;
   readonly routines: RoutineHost;
+  readonly remoteAccess: RemoteAccess;
 }
 
 /** Handle for tearing the IPC layer down again. */
@@ -236,7 +241,7 @@ export interface IpcLayer {
  * so a hot-reloaded main process has to be able to unregister.
  */
 export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
-  const { engine, policy, updater, terminals, browsers, server, routines } = options;
+  const { engine, policy, updater, terminals, browsers, server, routines, remoteAccess } = options;
 
   /**
    * Drop the conversations a program started, leaving the person's own.
@@ -697,6 +702,35 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async (request) => ({
         profiles: await server.catalogue({ refresh: request.refresh === true }),
       }),
+    },
+
+    /* ---------------------------------------------------------------- */
+    /* Remote access                                                    */
+    /* ---------------------------------------------------------------- */
+
+    /*
+     * The one remote-origin grant — see the channel comment in the protocol
+     * and `remoteAccess.ts` for the design. `configure` refuses with a
+     * sentence rather than storing a mangled value: the string ends up inside
+     * a CSP directive, and "stored something adjacent to what you typed" is
+     * the failure mode normalization exists to prevent.
+     */
+    [IPC.remoteStatus]: {
+      validate: validateRemoteStatus,
+      handle: async () => ({ origin: remoteAccess.origin() }),
+    },
+
+    [IPC.remoteConfigure]: {
+      validate: validateRemoteConfigure,
+      handle: async (request) => {
+        if (request.origin !== null && normalizeRemoteOrigin(request.origin) === null) {
+          throw new ValidationError(
+            'origin',
+            'must be an http(s) address, like http://kronos.tailnet-name.ts.net:6472',
+          );
+        }
+        return { origin: await remoteAccess.configure(request.origin) };
+      },
     },
 
     /* ---------------------------------------------------------------- */

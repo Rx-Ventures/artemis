@@ -83,6 +83,7 @@
 
 import { type ReactElement } from 'react';
 import {
+  CastIcon,
   ChevronRightIcon,
   CopyIcon,
   LoaderCircleIcon,
@@ -101,7 +102,8 @@ import { keyLabel } from '../hooks/useHotkeys';
 import { useWindowState } from '../hooks/useWindowState';
 import { installUpdate, restartForUpdate, useUpdateState } from '../hooks/useUpdateState';
 import { updatePercent, type UpdateStep } from '@rx-artemis/protocol';
-import { resolveBridge } from '../lib/bridge';
+import { hasNativeWindowChrome, resolveBridge } from '../lib/bridge';
+import { describeRemote, readRemoteConfig } from '../lib/remoteConfig';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
 import { ArrowDownIcon, FolderIcon, SearchIcon } from 'lucide-react';
@@ -142,14 +144,18 @@ const TRAFFIC_LIGHT_GUTTER = 76;
  * would leave a 76px hole at the start of the bar for as long as the user was
  * in full screen. It closes, and reopens on the way out.
  *
- * The other two are static: no other platform has traffic lights, and a browser
- * tab in dev (`bridgeMode !== 'preload'`) has no window chrome at all.
+ * The other two are static: no other platform has traffic lights, and a
+ * window with no native chrome behind it — dev's browser tab — has none to
+ * leave room for. Remote mode is *not* that case: the conversation lives on
+ * another machine but the window is exactly as native as ever, which is what
+ * `hasNativeWindowChrome` answers.
  */
 function useTrafficLightGutter(fullScreen: boolean): number {
   const platform = useApp((s) => s.platform);
-  const bridgeMode = useApp((s) => s.bridgeMode);
+  // Subscribed so the gutter re-answers after bootstrap settles the mode.
+  useApp((s) => s.bridgeMode);
 
-  if (platform !== 'darwin' || bridgeMode !== 'preload' || fullScreen) return 0;
+  if (platform !== 'darwin' || !hasNativeWindowChrome() || fullScreen) return 0;
   return TRAFFIC_LIGHT_GUTTER;
 }
 
@@ -177,9 +183,9 @@ function WindowControls({ maximized, focused }: {
   readonly focused: boolean;
 }): ReactElement | null {
   const platform = useApp((s) => s.platform);
-  const bridgeMode = useApp((s) => s.bridgeMode);
+  useApp((s) => s.bridgeMode);
 
-  if (platform === 'darwin' || bridgeMode !== 'preload') return null;
+  if (platform === 'darwin' || !hasNativeWindowChrome()) return null;
 
   // Fire and forget. Each channel does answer with the resulting state, but the
   // state this renders from is already on its way over the push channel — and
@@ -239,6 +245,33 @@ function useSessionTitle(): string {
   });
 }
 
+/**
+ * Says, permanently, that this window is showing another machine.
+ *
+ * A chip in the window's own chrome rather than a banner or a toast, because
+ * the fact is standing: every conversation, run and terminal on screen lives
+ * on the named machine, and a user who forgets that mid-keystroke types into
+ * the wrong computer. Clicking it opens the Remote settings section, which is
+ * where the way back out lives.
+ */
+function RemoteChip(): ReactElement | null {
+  const bridgeMode = useApp((s) => s.bridgeMode);
+  if (bridgeMode !== 'remote') return null;
+  const config = readRemoteConfig();
+  const name = config === null ? 'remote' : describeRemote(config);
+  return (
+    <button
+      type="button"
+      onClick={() => openSettings('remote')}
+      title={`Showing ${name} — click for the connection`}
+      className="no-drag flex shrink-0 items-center gap-1 rounded-full border border-line bg-panel px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:text-ink"
+    >
+      <CastIcon className="size-3" aria-hidden="true" />
+      <span className="max-w-[10rem] truncate">{name}</span>
+    </button>
+  );
+}
+
 export function AppHeader(): ReactElement {
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const cwd = usePane((s) => s.cwd);
@@ -276,6 +309,7 @@ export function AppHeader(): ReactElement {
       </IconButton>
 
       <div className="mx-1 flex min-w-0 flex-1 items-center gap-1.5">
+        <RemoteChip />
         {project === null ? (
           /* Faint, not amber. This is a placeholder for a value nobody has set
              yet, sitting in the window's own chrome — it is not a warning, and

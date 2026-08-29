@@ -1,0 +1,821 @@
+/**
+ * The remote bridge: `window.artemis`, served by another machine (ADR 0004).
+ * ============================================================================
+ *
+ * A drop-in fourth answer to `resolveBridge()`. Every namespace the renderer
+ * already speaks is implemented here over HTTP against a serving Artemis —
+ * the run list is `GET /api/v0/runs`, the live feed is the SSE event stream,
+ * a permission answer is a POST — so the entire existing UI renders the
+ * remote machine without learning a second vocabulary. The mock bridge
+ * proved the interface is implementable without Electron; this is the same
+ * proof with a network attached.
+ *
+ * Three rules shape what is real and what degrades:
+ *
+ *  1. **Runs, sessions and terminals cross the wire.** They are data and
+ *     verbs, and the server serves them. Anything the server refuses (an
+ *     older build, an observe-only phase) surfaces as the refusal it sent —
+ *     a sentence, not a hang.
+ *
+ *  2. **Local machinery stays local.** Window chrome, app updates, the menu
+ *     and the prefs file describe the window the user is sitting at, not the
+ *     machine they are looking at — so they delegate to the *local* preload
+ *     bridge when one exists (production) and stub benignly when none does
+ *     (dev against the mock). Nothing about the local window should change
+ *     because the conversation lives elsewhere.
+ *
+ *  3. **What cannot cross the wire degrades absent-with-reason.** The
+ *     browser dock is a `WebContentsView` composited over the serving
+ *     machine's window; previews and file reads reach the serving machine's
+ *     disk through channels this surface deliberately does not have; native
+ *     dialogs open on the wrong machine's screen. Each answers with a
+ *     sentence naming the constraint, through the same failure paths the
+ *     existing UI already renders — a transcript note, a disabled control —
+ *     never a silent no-op.
+ *
+ * The token rides in `Authorization` on every request and never in a URL,
+ * where it would land in the access log of every proxy on the path.
+ */
+
+import type {
+  AgentEvent,
+  ArtemisBridge,
+  IpcResult,
+  ProfileMetadata,
+  ProviderDescriptor,
+  ProviderEffortOption,
+  ProviderModelOption,
+  RemoteGapPayload,
+  RunsListResponse,
+  ServerConnectionInfo,
+  ServerErrorBody,
+  ServerLiveWorkBody,
+  ServerModel,
+  ServerProfile,
+  ServerRunBody,
+  ServerRunEventsBody,
+  ServerRunInterruptBody,
+  ServerRunPermissionBody,
+  ServerRunsBody,
+  ServerRunSendBody,
+  ServerTerminalBody,
+  ServerTerminalReplayBody,
+  ServerTerminalsBody,
+  TerminalEvent,
+  UpdateState,
+  WindowState,
+} from '@rx-artemis/protocol';
+import {
+  createSseDecoder,
+  REMOTE_EVENTS_PATH,
+  REMOTE_LIVE_WORK_PATH,
+  REMOTE_RUNS_PATH,
+  REMOTE_STREAM_GAP,
+  REMOTE_STREAM_HELLO,
+  REMOTE_TERMINALS_PATH,
+  remoteRunPath,
+  remoteTerminalPath,
+  SERVER_API_VERSION,
+} from '@rx-artemis/protocol';
+
+import { describeRemote, type RemoteBridgeConfig } from './remoteConfig';
+
+/* -------------------------------------------------------------------------- */
+/* Result helpers                                                             */
+/* -------------------------------------------------------------------------- */
+
+const ok = <T,>(value: T): IpcResult<T> => ({ ok: true, value });
+
+/** A capability that deliberately does not cross the wire. */
+const absent = <T,>(message: string): IpcResult<T> => ({
+  ok: false,
+  error: { code: 'invalid_request', message },
+});
+
+const BROWSER_REASON =
+  'The browser dock renders in the serving machine’s own window and does not cross the remote wire.';
+const FILES_REASON =
+  'That file lives on the serving machine, and this connection has no channel for reading its disk.';
+const LOCAL_SETTINGS_REASON =
+  'That is managed on the serving machine itself, in its own Settings.';
+const DIALOG_REASON =
+  'A native dialog would open on this machine and pick a folder the serving machine cannot see.';
+
+/* -------------------------------------------------------------------------- */
+/* The bridge                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Build the bridge for one configured connection.
+ *
+ * `local` is the preload bridge when this window has one — rule 2 above. The
+ * returned object is complete from the first tick; everything network-backed
+ * resolves lazily behind its promises.
+ */
+export function createRemoteBridge(
+  config: RemoteBridgeConfig,
+  local: ArtemisBridge | null,
+  options: {
+    /**
+     * Ends the event-stream pump. Production passes nothing — the binding
+     * lives exactly as long as the window and leaving remote mode is a reload
+     * — but a test that builds several bridges needs the earlier ones' pumps
+     * to stop consuming its scripted responses.
+     */
+    readonly signal?: AbortSignal;
+  } = {},
+): ArtemisBridge {
+  const origin = config.origin.replace(/\/+$/, '');
+  const authorization = `Bearer ${config.token}`;
+  const ended = (): boolean => options.signal?.aborted === true;
+
+  /* ------------------------------------------------------------------ */
+  /* Transport                                                          */
+  /* ------------------------------------------------------------------ */
+
+  async function http<T>(
+    path: string,
+    init: { readonly method?: string; readonly body?: unknown } = {},
+  ): Promise<IpcResult<T>> {
+    let response: Response;
+    try {
+      response = await fetch(`${origin}${path}`, {
+        method: init.method ?? 'GET',
+        headers: {
+          authorization,
+          accept: 'application/json',
+          ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      });
+    } catch (cause) {
+      return {
+        ok: false,
+        error: {
+          code: 'transport',
+          message: `Could not reach ${describeRemote(config)}: ${
+            cause instanceof Error ? cause.message : 'the request failed'
+          }. Is the tailnet up?`,
+          retryable: true,
+        },
+      };
+    }
+
+    let body: unknown = undefined;
+    try {
+      body = await response.json();
+    } catch {
+      // A body-less reply to a failed request still deserves a sentence.
+    }
+
+    if (!response.ok) {
+      const serverError = (body as Partial<ServerErrorBody> | undefined)?.error;
+      return {
+        ok: false,
+        error: {
+          code:
+            response.status === 401 || response.status === 403
+              ? 'auth'
+              : response.status >= 500 && response.status !== 501
+                ? 'provider_unavailable'
+                : 'invalid_request',
+          message:
+            serverError?.message ??
+            `${describeRemote(config)} answered ${String(response.status)}.`,
+          retryable: response.status >= 500,
+        },
+      };
+    }
+
+    return ok(body as T);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* The catalogue, read once and shared                                */
+  /* ------------------------------------------------------------------ */
+
+  const CATALOGUE_TTL_MS = 60_000;
+  let cataloguePromise: Promise<IpcResult<readonly ServerProfile[]>> | null = null;
+  let catalogueAt = 0;
+
+  function catalogue(refresh = false): Promise<IpcResult<readonly ServerProfile[]>> {
+    const stale = Date.now() - catalogueAt > CATALOGUE_TTL_MS;
+    if (cataloguePromise === null || refresh || stale) {
+      catalogueAt = Date.now();
+      cataloguePromise = http<{ profiles: readonly ServerProfile[] }>(
+        `/api/${SERVER_API_VERSION}/profiles${refresh ? '?refresh=1' : ''}`,
+      ).then((result) => {
+        // A failed read is returned to its caller and not cached: the next
+        // caller should retry rather than inherit a network blip forever.
+        if (!result.ok) cataloguePromise = null;
+        return result.ok ? ok(result.value.profiles) : result;
+      });
+    }
+    return cataloguePromise;
+  }
+
+  let connectionPromise: Promise<IpcResult<ServerConnectionInfo>> | null = null;
+  function connectionInfo(): Promise<IpcResult<ServerConnectionInfo>> {
+    connectionPromise ??= http<ServerConnectionInfo>(`/api/${SERVER_API_VERSION}/connection`).then(
+      (result) => {
+        if (!result.ok) connectionPromise = null;
+        return result;
+      },
+    );
+    return connectionPromise;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* The event stream                                                   */
+  /* ------------------------------------------------------------------ */
+
+  const agentListeners = new Set<(event: AgentEvent) => void>();
+  const terminalListeners = new Set<(event: TerminalEvent) => void>();
+
+  /**
+   * The resume cursor: the highest feed seq this window has applied, or null
+   * before the first hello. Sent as `Last-Event-ID` on every reconnect, which
+   * is what makes a Wi-Fi blip a replay rather than a hole — and what keeps
+   * the server's deliberate interrupt-on-disconnect from reading a blip as a
+   * departure: the stream is re-attached long before the server's grace
+   * window closes.
+   */
+  let lastSeq: number | null = null;
+
+  function dispatch(message: { id?: string; event?: string; data: string }): void {
+    if (message.event === REMOTE_STREAM_HELLO) {
+      try {
+        const hello = JSON.parse(message.data) as { seq?: number };
+        // Only when this window has no cursor yet: a reconnect keeps its own,
+        // which is behind the head by exactly the replay now arriving.
+        if (lastSeq === null && typeof hello.seq === 'number') lastSeq = hello.seq;
+      } catch {
+        // A malformed hello costs the cursor's starting point, nothing more.
+      }
+      return;
+    }
+
+    if (message.event === REMOTE_STREAM_GAP) {
+      /*
+       * The server is telling us events are unrecoverably gone. Nothing to
+       * re-request here: the renderer already owns the recovery — the stall
+       * sweep compares each handle's `lastSeq` against what the pane applied
+       * and re-pulls `runs:events` per run — so the honest response is to
+       * advance the cursor past the hole and let that machinery heal the
+       * transcripts, rather than pretending the stream was continuous.
+       */
+      try {
+        const gap = JSON.parse(message.data) as Partial<RemoteGapPayload>;
+        if (typeof gap.firstSeq === 'number') lastSeq = Math.max(lastSeq ?? 0, gap.firstSeq - 1);
+      } catch {
+        // An unreadable gap notice changes nothing the sweep will not fix.
+      }
+      return;
+    }
+
+    if (message.id !== undefined && /^\d+$/.test(message.id)) lastSeq = Number(message.id);
+
+    if (message.event === 'artemis:push:agent-event') {
+      try {
+        const event = JSON.parse(message.data) as AgentEvent;
+        for (const listener of [...agentListeners]) listener(event);
+      } catch {
+        // One malformed frame must not kill the feed.
+      }
+      return;
+    }
+
+    if (message.event === 'artemis:push:terminal-event') {
+      try {
+        const event = JSON.parse(message.data) as TerminalEvent;
+        for (const listener of [...terminalListeners]) listener(event);
+      } catch {
+        // As above.
+      }
+    }
+  }
+
+  /**
+   * Read the stream for as long as the binding lives, reconnecting with
+   * backoff.
+   *
+   * Backoff caps at five seconds — far inside the server's
+   * interrupt-on-disconnect grace, so a dropped socket costs a few seconds of
+   * replay, never a stopped run.
+   */
+  async function pump(): Promise<void> {
+    let failures = 0;
+    while (!ended()) {
+      try {
+        const response = await fetch(`${origin}${REMOTE_EVENTS_PATH}`, {
+          headers: {
+            authorization,
+            accept: 'text/event-stream',
+            ...(lastSeq === null ? {} : { 'last-event-id': String(lastSeq) }),
+          },
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        if (!response.ok || response.body === null) {
+          throw new Error(`the event stream answered ${String(response.status)}`);
+        }
+        failures = 0;
+        const decoder = createSseDecoder();
+        const text = new TextDecoder();
+        const reader = response.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || ended()) break;
+          for (const message of decoder.feed(text.decode(value, { stream: true }))) {
+            dispatch(message);
+          }
+        }
+      } catch {
+        // Fall through to the retry below; the cursor survives.
+      }
+      if (ended()) break;
+      failures += 1;
+      const delay = Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000);
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  void pump();
+
+  /* ------------------------------------------------------------------ */
+  /* Catalogue → renderer shapes                                        */
+  /* ------------------------------------------------------------------ */
+
+  function toProfileMetadata(profile: ServerProfile): ProfileMetadata {
+    return {
+      id: profile.id,
+      label: profile.label,
+      providerId: profile.provider.id,
+      // The remote store's directory is a fact about the serving machine's
+      // disk that this surface deliberately cannot see. Empty rather than
+      // invented; every write that would need it degrades with a reason.
+      configDir: '',
+      ...(profile.disabled ? { disabled: true } : {}),
+    };
+  }
+
+  function toModelOption(model: ServerModel): ProviderModelOption {
+    return {
+      id: model.id,
+      label: model.label,
+      ...(model.displayName === undefined ? {} : { displayName: model.displayName }),
+      ...(model.resolvedModel === undefined ? {} : { resolvedModel: model.resolvedModel }),
+      note: model.note,
+      effortLevels: model.thinkingLevels.map((level) => level.id),
+      ...(model.fastMode ? { supportsFastMode: true } : {}),
+      ...(model.ultracode ? { supportsUltracode: true } : {}),
+      ...(model.adaptiveThinking ? { adaptiveThinking: true } : {}),
+      ...(model.tier === undefined ? {} : { tier: model.tier }),
+    };
+  }
+
+  /** Thinking levels across a profile's models, deduplicated in first-seen order. */
+  function effortOptions(profile: ServerProfile): readonly ProviderEffortOption[] {
+    const seen = new Map<string, ProviderEffortOption>();
+    for (const model of profile.models) {
+      for (const level of model.thinkingLevels) {
+        if (!seen.has(level.id)) {
+          seen.set(level.id, { id: level.id, label: level.label, note: level.note });
+        }
+      }
+    }
+    return [...seen.values()];
+  }
+
+  /**
+   * One descriptor per provider present in the catalogue.
+   *
+   * The serving machine's registry is not enumerable from here, so providers
+   * with no serving account simply do not appear — a remote window offers
+   * what the machine actually serves, which is the catalogue's own rule
+   * ("hidden, not merely refused" applies to the connection's allowance too).
+   */
+  function toDescriptors(profiles: readonly ServerProfile[]): readonly ProviderDescriptor[] {
+    const byProvider = new Map<string, ServerProfile[]>();
+    for (const profile of profiles) {
+      const group = byProvider.get(profile.provider.id) ?? [];
+      group.push(profile);
+      byProvider.set(profile.provider.id, group);
+    }
+    return [...byProvider.values()].map((group) => {
+      const exemplar = group.find((profile) => profile.available) ?? group[0] as ServerProfile;
+      return {
+        id: exemplar.provider.id,
+        kind: exemplar.provider.kind,
+        label: exemplar.provider.label,
+        capabilities: exemplar.capabilities,
+        models: exemplar.models.map(toModelOption),
+        effortLevels: effortOptions(exemplar),
+        available: group.some((profile) => profile.available),
+        ...(group.some((profile) => profile.available)
+          ? {}
+          : { unavailableReason: exemplar.unavailableReason ?? 'Unavailable on the serving machine.' }),
+      };
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Local delegation                                                   */
+  /* ------------------------------------------------------------------ */
+
+  const stubWindowState = (): WindowState => ({
+    maximized: false,
+    fullScreen: false,
+    focused: typeof document === 'undefined' ? true : document.hasFocus(),
+  });
+
+  const idleUpdateState = (): UpdateState => ({
+    phase: 'idle',
+    version: null,
+    message: null,
+    releaseUrl: null,
+    progress: null,
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* The surface                                                        */
+  /* ------------------------------------------------------------------ */
+
+  return {
+    // The local app's version — it is the software actually running — with
+    // the mode visible the way the mock's `-mock` suffix is: this bridge
+    // never masquerades as a plain local one.
+    version: `${local?.version ?? '0.0.0'}+remote`,
+    platform: local?.platform ?? 'darwin',
+
+    profiles: {
+      list: async (request) => {
+        const read = await catalogue();
+        if (!read.ok) return read;
+        const profiles = read.value
+          .filter(
+            (profile) =>
+              request.providerId === undefined || profile.provider.id === request.providerId,
+          )
+          .map(toProfileMetadata);
+        return ok({ profiles });
+      },
+      create: async () => absent('Accounts are managed on the serving machine.'),
+      update: async () => absent('Accounts are managed on the serving machine.'),
+      remove: async () => absent('Accounts are managed on the serving machine.'),
+      suggestDir: async () => absent('Accounts are managed on the serving machine.'),
+    },
+
+    providers: {
+      list: async (request) => {
+        const read = await catalogue(request.refresh === true);
+        return read.ok ? ok({ providers: toDescriptors(read.value) }) : read;
+      },
+      models: async (request) => {
+        const read = await catalogue();
+        if (!read.ok) return read;
+        const profile = read.value.find((candidate) => candidate.id === request.profileId);
+        if (profile === undefined) {
+          return absent('No such account on the serving machine.');
+        }
+        return ok({ models: profile.models.map(toModelOption), live: profile.live });
+      },
+      // The serving machine's command discovery would need its provider CLI
+      // and its working directory; an empty list is the contract's ordinary
+      // "menu stays shut until the first message".
+      commands: async () => ok({ commands: [] }),
+    },
+
+    runs: {
+      start: async (request) => {
+        const reply = await http<ServerRunBody>(REMOTE_RUNS_PATH, {
+          method: 'POST',
+          body: { input: request.input },
+        });
+        return reply.ok ? ok({ run: reply.value.run }) : reply;
+      },
+      send: async (request) => {
+        const reply = await http<ServerRunSendBody>(remoteRunPath(request.runId, 'send'), {
+          method: 'POST',
+          body: {
+            text: request.text,
+            ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
+          },
+        });
+        return reply.ok
+          ? ok({ runId: request.runId, deliveredImmediately: reply.value.deliveredImmediately })
+          : reply;
+      },
+      interrupt: async (request) => {
+        const reply = await http<ServerRunInterruptBody>(
+          remoteRunPath(request.runId, 'interrupt'),
+          { method: 'POST', body: {} },
+        );
+        return reply.ok
+          ? ok({ runId: request.runId, stillQueued: reply.value.stillQueued })
+          : reply;
+      },
+      stopTask: async (request) => {
+        const reply = await http<unknown>(remoteRunPath(request.runId, 'stop-task'), {
+          method: 'POST',
+          body: { taskId: request.taskId },
+        });
+        return reply.ok ? ok({ runId: request.runId, taskId: request.taskId }) : reply;
+      },
+      respondToPermission: async (request) => {
+        const reply = await http<ServerRunPermissionBody>(
+          remoteRunPath(request.runId, 'respond-permission'),
+          { method: 'POST', body: { requestId: request.requestId, decision: request.decision } },
+        );
+        return reply.ok ? ok({ requestId: request.requestId }) : reply;
+      },
+      dispose: async (request) => {
+        const reply = await http<unknown>(remoteRunPath(request.runId, 'dispose'), {
+          method: 'POST',
+          body: {},
+        });
+        return reply.ok ? ok({ runId: request.runId }) : reply;
+      },
+      list: async (request) => {
+        const reply = await http<ServerRunsBody>(REMOTE_RUNS_PATH);
+        if (!reply.ok) return reply;
+        const runs =
+          request.cwd === undefined
+            ? reply.value.runs
+            : reply.value.runs.filter((run) => run.cwd === request.cwd);
+        return ok({ runs } satisfies RunsListResponse);
+      },
+      liveWork: async () => {
+        const reply = await http<ServerLiveWorkBody>(REMOTE_LIVE_WORK_PATH);
+        // "Known to be working" is allowed to be empty and is never "the rest
+        // are finished" — so a server too old for the route degrades to the
+        // same safe answer instead of erroring every poll.
+        if (!reply.ok) return ok({ sessionIds: [], working: [], delegated: [] });
+        const { sessionIds, working, delegated } = reply.value;
+        return ok({ sessionIds, working, delegated });
+      },
+      events: async (request) => {
+        const suffix = request.afterSeq === undefined ? '' : `?after=${String(request.afterSeq)}`;
+        const reply = await http<ServerRunEventsBody>(
+          `${remoteRunPath(request.runId, 'events')}${suffix}`,
+        );
+        return reply.ok
+          ? ok({ runId: request.runId, events: reply.value.events, truncated: reply.value.truncated })
+          : reply;
+      },
+      onEvent: (listener) => {
+        agentListeners.add(listener);
+        return () => {
+          agentListeners.delete(listener);
+        };
+      },
+      // Suggestions are generated after `run.end` on the serving machine and
+      // do not ride the stream yet; a composer with no suggestion is the
+      // documented cold state, not a failure.
+      onSuggestion: () => () => undefined,
+    },
+
+    sessions: {
+      // The stored-history surface is ledger-scoped per connection and lands
+      // with the remote-session phase; empty lists are its honest cold state.
+      list: async () => ok({ sessions: [], hasMore: false }),
+      listAll: async () => ok({ sessions: [], hasMore: false }),
+      messages: async () =>
+        absent('This connection cannot read the serving machine’s stored sessions yet.'),
+      subagentMessages: async () =>
+        absent('Subagent transcripts do not cross the remote wire.'),
+      rename: async () => absent(LOCAL_SETTINGS_REASON),
+      delete: async () => absent(LOCAL_SETTINGS_REASON),
+      tag: async () => absent(LOCAL_SETTINGS_REASON),
+    },
+
+    workspace: {
+      pickDirectory: async () => {
+        // The one directory this connection can honestly offer is its own
+        // pin: the folder the token was bound to when it was minted.
+        const info = await connectionInfo();
+        if (!info.ok) return info;
+        if (info.value.workspace.kind === 'directory') {
+          return ok({ path: info.value.workspace.path });
+        }
+        return absent(DIALOG_REASON);
+      },
+      describe: async (request) => {
+        // A pure naming fallback: the serving machine's repositories are not
+        // walkable from here, so the directory's own name is the honest
+        // answer and the header renders it exactly as it would a plain
+        // folder.
+        const segments = request.path.split('/').filter((part) => part.length > 0);
+        return ok({ path: request.path, name: segments.at(-1) ?? request.path });
+      },
+    },
+
+    sharedConfig: {
+      status: async () => ok({ root: '', rootMissing: [], dirs: [] }),
+    },
+
+    memoryBanks: {
+      status: async () =>
+        ok({ cliAvailable: false, masterEnabled: false, banks: [], profiles: [] }),
+      memories: async () => absent(LOCAL_SETTINGS_REASON),
+      preflight: async () =>
+        ok({
+          ready: false,
+          checks: [
+            {
+              id: 'remote',
+              label: 'Remote connection',
+              state: 'fail' as const,
+              detail: 'Memory banks live on the serving machine and are managed there.',
+              remedy: null,
+            },
+          ],
+        }),
+      add: async () => absent(LOCAL_SETTINGS_REASON),
+      sync: async () => absent(LOCAL_SETTINGS_REASON),
+      retire: async () => absent(LOCAL_SETTINGS_REASON),
+      setEnabled: async () => absent(LOCAL_SETTINGS_REASON),
+      forget: async () => absent(LOCAL_SETTINGS_REASON),
+      setMasterEnabled: async () => absent(LOCAL_SETTINGS_REASON),
+    },
+
+    agentPrompts: {
+      list: async () =>
+        absent('Standing instructions are composed on the serving machine, where runs start.'),
+      save: async () =>
+        absent('Standing instructions are composed on the serving machine, where runs start.'),
+    },
+
+    preview: {
+      open: async () => absent(FILES_REASON),
+    },
+
+    files: {
+      read: async () => absent(FILES_REASON),
+      list: async () => absent(FILES_REASON),
+      // An empty subset means no path renders as a link, which is exactly
+      // what a machine whose files cannot be opened should show.
+      check: async () => ok({ reachable: [] }),
+    },
+
+    github: {
+      // No `gh` reachable from here; an empty result set leaves every link a
+      // link, which is the channel's own contract for "could not answer".
+      pullRequests: async () => ok({ results: [] }),
+    },
+
+    terminal: {
+      start: async (request) => {
+        const reply = await http<ServerTerminalBody>(REMOTE_TERMINALS_PATH, {
+          method: 'POST',
+          body: { cwd: request.cwd, cols: request.cols, rows: request.rows },
+        });
+        return reply.ok ? ok({ terminal: reply.value.terminal }) : reply;
+      },
+      write: async (request) => {
+        const reply = await http<unknown>(remoteTerminalPath(request.id, 'write'), {
+          method: 'POST',
+          body: { data: request.data },
+        });
+        return reply.ok ? ok({ id: request.id }) : reply;
+      },
+      resize: async (request) => {
+        const reply = await http<unknown>(remoteTerminalPath(request.id, 'resize'), {
+          method: 'POST',
+          body: { cols: request.cols, rows: request.rows },
+        });
+        return reply.ok ? ok({ id: request.id }) : reply;
+      },
+      close: async (request) => {
+        const reply = await http<unknown>(remoteTerminalPath(request.id, 'close'), {
+          method: 'POST',
+          body: {},
+        });
+        return reply.ok ? ok({ id: request.id }) : reply;
+      },
+      list: async () => {
+        const reply = await http<ServerTerminalsBody>(REMOTE_TERMINALS_PATH);
+        // A serving build without remote terminals lists none rather than
+        // erroring the reload path that asks.
+        return reply.ok ? ok({ terminals: reply.value.terminals }) : ok({ terminals: [] });
+      },
+      replay: async (request) => {
+        const reply = await http<ServerTerminalReplayBody>(
+          remoteTerminalPath(request.id, 'replay'),
+        );
+        return reply.ok
+          ? ok({ id: request.id, data: reply.value.data, truncated: reply.value.truncated })
+          : reply;
+      },
+      onEvent: (listener) => {
+        terminalListeners.add(listener);
+        return () => {
+          terminalListeners.delete(listener);
+        };
+      },
+    },
+
+    browser: {
+      open: async () => absent(BROWSER_REASON),
+      navigate: async () => absent(BROWSER_REASON),
+      command: async () => absent(BROWSER_REASON),
+      layout: async () => absent(BROWSER_REASON),
+      close: async () => absent(BROWSER_REASON),
+      list: async () => ok({ browsers: [] }),
+      onEvent: () => () => undefined,
+    },
+
+    usagePlan: {
+      // Plan usage is read by spawning provider CLIs on the serving machine,
+      // which this surface does not ask for yet. `null` is the documented
+      // cold-start answer and renders as "no reading", never as an error.
+      cached: async () => ok({ usage: null }),
+      refresh: async () => ok({ usage: null }),
+      onChange: () => () => undefined,
+    },
+
+    auth: {
+      status: async (request) => {
+        const read = await catalogue();
+        if (!read.ok) return read;
+        const profile = read.value.find((candidate) => candidate.id === request.profileId);
+        if (profile === undefined) return absent('No such account on the serving machine.');
+        return ok({
+          status: {
+            loggedIn: profile.available,
+            ...(profile.available ? {} : { error: profile.unavailableReason ?? 'Unavailable.' }),
+          },
+          signInCommand: '# Sign this account in on the serving machine itself.',
+        });
+      },
+      signOut: async () => absent(LOCAL_SETTINGS_REASON),
+    },
+
+    /*
+     * Rule 2: the window, the updater, the menu, the prefs file and the
+     * remote-origin grant all describe the machine the user is sitting at.
+     * Delegated to the local preload bridge when one exists; stubbed with the
+     * mock's own honest fallbacks when none does.
+     */
+    window: local?.window ?? {
+      minimize: async () => ok({ state: stubWindowState() }),
+      toggleMaximize: async () => ok({ state: stubWindowState() }),
+      close: async () => ok({ state: stubWindowState() }),
+      state: async () => ok({ state: stubWindowState() }),
+      onStateChange: () => () => undefined,
+    },
+
+    updates: local?.updates ?? {
+      state: async () => ok({ state: idleUpdateState() }),
+      install: async () => ok({ state: idleUpdateState() }),
+      restart: async () => ok({ state: idleUpdateState() }),
+      dismiss: async () => ok({ state: idleUpdateState() }),
+      setChannel: async () => ok({ state: idleUpdateState() }),
+      onChange: () => () => undefined,
+    },
+
+    prefsFile: local?.prefsFile ?? {
+      read: () => globalThis.localStorage?.getItem('artemis.prefs.v1') ?? null,
+      write: (json: string) => {
+        try {
+          globalThis.localStorage?.setItem('artemis.prefs.v1', json);
+        } catch {
+          // A full quota is not worth an error over a preference.
+        }
+      },
+    },
+
+    menu: local?.menu ?? {
+      onOpenSettings: () => () => undefined,
+    },
+
+    server: {
+      status: async () => absent(LOCAL_SETTINGS_REASON),
+      start: async () => absent(LOCAL_SETTINGS_REASON),
+      stop: async () => absent(LOCAL_SETTINGS_REASON),
+      configure: async () => absent(LOCAL_SETTINGS_REASON),
+      createConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      renameConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      deleteConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      catalogue: async () => {
+        // The one server read worth answering: the catalogue *is* what this
+        // connection sees, and the pane that asks renders exactly that.
+        const read = await catalogue();
+        return read.ok ? ok({ profiles: read.value }) : read;
+      },
+      onChange: () => () => undefined,
+    },
+
+    remote: local?.remote ?? {
+      status: async () => ok({ origin: config.origin }),
+      configure: async ({ origin: next }) => ok({ origin: next }),
+    },
+
+    routines: {
+      list: async () => absent('Routines fire on the serving machine and are managed there.'),
+      create: async () => absent('Routines fire on the serving machine and are managed there.'),
+      update: async () => absent('Routines fire on the serving machine and are managed there.'),
+      remove: async () => absent('Routines fire on the serving machine and are managed there.'),
+      runNow: async () => absent('Routines fire on the serving machine and are managed there.'),
+      onChange: () => () => undefined,
+    },
+  };
+}

@@ -27,6 +27,7 @@
  * | `planLoad`      | what live runs reserve, so the chooser is not blind to them |
  * | `openai`        | the chat-completions dialect, and the ruling on every param |
  * | `server`        | the local HTTP server: routes, catalogue shapes, state      |
+ * | `remote`        | the remote bridge surface: routes, bodies, SSE framing      |
  * | `routine`       | scheduled runs: the record, schedule shapes, minute math    |
  * | `sharedConfig`  | what a shared `~/.claude` covers, and how to describe it    |
  * | `github`        | `parsePullRequestUrl`, `PullRequestSummary`                 |
@@ -57,6 +58,7 @@ export * from './terminal.js';
 export * from './browser.js';
 export * from './openai.js';
 export * from './server.js';
+export * from './remote.js';
 export * from './routine.js';
 export * from './sharedConfig.js';
 export * from './github.js';

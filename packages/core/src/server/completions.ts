@@ -48,6 +48,7 @@ import type {
   RunHandle,
   RunId,
   ServerModel,
+  SessionDelegatedWork,
 } from '@rx-artemis/protocol';
 
 /* -------------------------------------------------------------------------- */
@@ -90,6 +91,44 @@ export interface RunSource {
 
   /** Release the run's resources once its reply has been written. */
   disposeRun(runId: RunId): Promise<void>;
+
+  /* ------------------------------------------------------------------------
+   * The remote bridge's observation surface (ADR 0004).
+   *
+   * Optional as a set: a host that provides none of them serves completions
+   * exactly as before and the remote routes answer 501, which is what a
+   * catalogue-only or pre-remote build honestly is. They are on this seam
+   * rather than a second one because they are the same narrowing discipline
+   * over the same engine — the server may ask exactly these questions, and a
+   * route cannot reach anything the host did not choose to expose here.
+   * ---------------------------------------------------------------------- */
+
+  /** Live runs, as `runs:list` reports them to a window. */
+  listRuns?(query: { readonly cwd?: string }): Promise<readonly RunHandle[]>;
+
+  /** One run's handle — live or recently finished — for the visibility gate. */
+  getRun?(runId: RunId): Promise<RunHandle | undefined>;
+
+  /**
+   * A run's retained events, exactly as `runs:events` replays them, with the
+   * same `truncated` honesty flag.
+   */
+  runEvents?(query: { readonly runId: RunId; readonly afterSeq?: number }): Promise<{
+    readonly events: readonly AgentEvent[];
+    readonly truncated: boolean;
+  }>;
+
+  /**
+   * Conversations still holding background work, as `runs:live-work` answers.
+   * Absent when the host keeps no such ledger; the route reports empty sets,
+   * which the response contract already defines as "nothing known", never
+   * "nothing running".
+   */
+  liveWork?(): Promise<{
+    readonly sessionIds: readonly string[];
+    readonly working: readonly string[];
+    readonly delegated: readonly SessionDelegatedWork[];
+  }>;
 }
 
 /** Everything one turn needs, resolved by the caller before this is entered. */

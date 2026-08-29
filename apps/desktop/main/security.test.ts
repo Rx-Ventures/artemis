@@ -221,3 +221,118 @@ describe('window preferences', () => {
     expect(preferences.additionalArguments).toEqual(['--artemis-version=0.0.0']);
   });
 });
+
+/**
+ * The remote-origin widening (ADR 0004), and its exact edges.
+ *
+ * Remote mode needs the renderer to fetch one user-configured origin, and the
+ * two runtime walls — the CSP header and the request lockdown — must open for
+ * exactly that origin and nothing else. The assertions below pin all four
+ * edges: the header names the origin verbatim (no wildcard), the lockdown
+ * passes requests to it, a *withdrawn* grant stops matching on the very next
+ * request, and neither navigation nor frame trust ever follows the grant —
+ * the remote machine may be fetched from, and that is all.
+ */
+describe('the remote-origin grant', () => {
+  const REMOTE = 'http://kronos.tail1234.ts.net:6472';
+
+  type BeforeRequestHandler = (
+    details: { url: string },
+    callback: (response: { cancel: boolean }) => void,
+  ) => void;
+  type HeadersHandler = (
+    details: { url: string; responseHeaders: Record<string, string[]> },
+    callback: (response: { responseHeaders?: Record<string, string[]> }) => void,
+  ) => void;
+
+  function sessionFor(remoteOrigin: () => string | null): {
+    csp: (url: string) => string;
+    allows: (url: string) => boolean;
+  } {
+    let onHeaders: HeadersHandler | undefined;
+    let onBefore: BeforeRequestHandler | undefined;
+    const session = {
+      webRequest: {
+        onHeadersReceived: (handler: HeadersHandler) => {
+          onHeaders = handler;
+        },
+        onBeforeRequest: (handler: BeforeRequestHandler) => {
+          onBefore = handler;
+        },
+      },
+      setPermissionRequestHandler: () => undefined,
+      setPermissionCheckHandler: () => undefined,
+      setDevicePermissionHandler: () => undefined,
+    };
+    applySessionPolicy(session as unknown as Session, {
+      devServerOrigin: null,
+      rendererFileUrl: RENDERER_FILE_URL,
+      remoteOrigin,
+    });
+    if (onHeaders === undefined || onBefore === undefined) {
+      throw new Error('applySessionPolicy installed no webRequest handlers');
+    }
+    const headers = onHeaders;
+    const before = onBefore;
+    return {
+      csp: (url: string): string => {
+        let policy = '';
+        headers({ url, responseHeaders: {} }, (response) => {
+          policy = response.responseHeaders?.['Content-Security-Policy']?.[0] ?? '';
+        });
+        return policy;
+      },
+      allows: (url: string): boolean => {
+        let allowed = false;
+        before({ url }, (response) => {
+          allowed = !response.cancel;
+        });
+        return allowed;
+      },
+    };
+  }
+
+  it('names exactly the configured origin in connect-src, and no wildcard', () => {
+    const { csp } = sessionFor(() => REMOTE);
+    const policy = csp(RENDERER_FILE_URL);
+    expect(policy).toContain(`connect-src 'self' ${REMOTE}`);
+    expect(policy).not.toContain('connect-src *');
+    // Scheme-wide grants belong to the static meta fallback alone; the header
+    // is the narrowing layer and must never carry one.
+    expect(policy).not.toMatch(/connect-src [^;]*\shttp:(\s|;|$)/);
+  });
+
+  it('keeps connect-src at self with no grant configured', () => {
+    const { csp } = sessionFor(() => null);
+    expect(csp(RENDERER_FILE_URL)).toContain("connect-src 'self';");
+  });
+
+  it('lets requests through to the origin, and only the origin', () => {
+    const { allows } = sessionFor(() => REMOTE);
+    expect(allows(`${REMOTE}/api/v0/events`)).toBe(true);
+    expect(allows('http://kronos.tail1234.ts.net:9999/api')).toBe(false);
+    expect(allows('http://evil.example/api')).toBe(false);
+    expect(allows('ws://kronos.tail1234.ts.net:6472/socket')).toBe(false);
+  });
+
+  it('stops matching the moment the grant is withdrawn', () => {
+    let origin: string | null = REMOTE;
+    const { allows, csp } = sessionFor(() => origin);
+    expect(allows(`${REMOTE}/api/v0/runs`)).toBe(true);
+    origin = null;
+    expect(allows(`${REMOTE}/api/v0/runs`)).toBe(false);
+    expect(csp(RENDERER_FILE_URL)).toContain("connect-src 'self';");
+  });
+
+  it('never trusts a frame on the remote origin for IPC', () => {
+    // The grant is for *requests*. A frame that somehow showed the remote
+    // machine's page must not be able to call privileged handlers.
+    expect(
+      isTrustedFrame(`${REMOTE}/index.html`, true, {
+        devServerOrigin: null,
+        rendererFileUrl: RENDERER_FILE_URL,
+        remoteOrigin: () => REMOTE,
+      }),
+    ).toBe(false);
+  });
+});

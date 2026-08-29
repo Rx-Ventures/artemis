@@ -73,6 +73,7 @@ import {
 import {
   createArtemisServer,
   createCatalogue,
+  createPushFeed,
   createWorkspaceResolver,
   sweepStaleWorkspaces,
   type ArtemisServer,
@@ -269,6 +270,53 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     disposeRun: async (runId) => {
       await options.engine.require().disposeRun(runId);
     },
+
+    // The observation surface (ADR 0004): the same reads `runs:list` and
+    // `runs:events` answer for a window, exposed so a remote bridge can draw
+    // this machine. Thin passthroughs — visibility filtering happens in the
+    // routes, against the connection that asked.
+    listRuns: (query) => options.engine.require().listRuns(query),
+    getRun: async (runId) => options.engine.require().getRun(runId as never),
+    runEvents: async (query) =>
+      options.engine.require().runEvents({
+        runId: query.runId as never,
+        ...(query.afterSeq === undefined ? {} : { afterSeq: query.afterSeq }),
+      }),
+    liveWork: async () => {
+      const engine = options.engine.require();
+      return {
+        sessionIds: engine.liveWorkSessions(),
+        working: engine.workingSessions(),
+        delegated: engine.delegatedWork(),
+      };
+    },
+  };
+
+  /**
+   * The push feed the event stream serves, wired to the engine on first bind.
+   *
+   * Lazily, because the engine does not exist yet when this host is created —
+   * and once, because the feed's sequence numbers are the stream's replay
+   * cursor and a re-subscribe per bind would double every event. Each agent
+   * event is stamped with the account its run bills, which is what lets the
+   * routes keep an allowance-restricted token from hearing other accounts'
+   * work.
+   */
+  const feed = createPushFeed({
+    onError: (error) => log.debug('A feed listener threw', error),
+  });
+  let feedWired = false;
+  const wireFeed = (): void => {
+    if (feedWired) return;
+    feedWired = true;
+    options.engine.require().subscribe((event) => {
+      const profileId = options.engine.require().getRun(event.runId)?.profileId;
+      feed.publish(
+        'artemis:push:agent-event',
+        event,
+        profileId === undefined ? {} : { profileId },
+      );
+    });
   };
 
   const catalogue: Catalogue = createCatalogue({
@@ -494,7 +542,9 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
     lastError = null;
     options.broadcast(snapshot());
 
+    wireFeed();
     const instance = createArtemisServer({
+      feed,
       port: config.port,
       // Read on every request, so a revoked token stops working immediately
       // rather than at the next restart. See `ArtemisServerOptions.connections`.
