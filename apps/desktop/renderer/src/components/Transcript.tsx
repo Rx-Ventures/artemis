@@ -1536,7 +1536,7 @@ function Stat({
   return (
     <span className="flex items-baseline gap-1">
       <span className="font-mono text-2xs text-ink-faint">{label}</span>
-      <span className={cn('font-mono text-2xs', emphasis ? 'text-beam' : 'text-ink-muted')}>
+      <span className={cn('font-mono text-2xs', emphasis ? 'text-beam-text' : 'text-ink-muted')}>
         {value}
       </span>
     </span>

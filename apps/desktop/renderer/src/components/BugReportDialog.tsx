@@ -114,7 +114,7 @@ export function BugReportDialog({ onClose }: { readonly onClose: () => void }): 
       <DialogContent className="w-full max-w-lg sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm font-semibold tracking-tight text-ink">
-            <BugIcon aria-hidden="true" className="size-4 text-beam" />
+            <BugIcon aria-hidden="true" className="size-4 text-beam-text" />
             Report a bug
           </DialogTitle>
           <DialogDescription className="text-2xs leading-snug">

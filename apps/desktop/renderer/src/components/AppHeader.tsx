@@ -423,9 +423,12 @@ function WaitingBadge(): ReactElement | null {
       onClick={() => {
         focusWaitingPane();
       }}
-      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm bg-amber px-2 text-2xs font-medium text-abyss transition-opacity hover:opacity-90"
+      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm bg-amber px-2 text-2xs font-medium text-amber-ink transition-opacity hover:opacity-90"
     >
-      <StatusDot tone="neutral" className="bg-abyss/70" />
+      {/* `amber-ink`, not `abyss`: text on the amber fill is what that token
+          is derived for, and `abyss` is a surface that merely happened to be
+          dark enough under the old palette. */}
+      <StatusDot tone="neutral" className="bg-amber-ink/70" />
       {waiting} waiting
     </button>
   );
@@ -489,7 +492,7 @@ function UpdateChip(): ReactElement | null {
         'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm border px-2 font-mono text-2xs transition-colors',
         failed
           ? 'border-signal/50 text-signal hover:bg-signal/10'
-          : 'border-beam/50 text-beam hover:bg-beam/10',
+          : 'border-beam/50 text-beam-text hover:bg-beam/10',
         busy && 'opacity-60',
       )}
     >

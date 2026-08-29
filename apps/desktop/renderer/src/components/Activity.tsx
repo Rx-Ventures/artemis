@@ -145,7 +145,7 @@ export function ActivityIndicator(): ReactElement | null {
   if (state.kind === 'settled') return null;
 
   const tone =
-    state.kind === 'waiting' ? 'text-amber' : state.kind === 'failed' ? 'text-signal' : 'text-beam';
+    state.kind === 'waiting' ? 'text-amber' : state.kind === 'failed' ? 'text-signal' : 'text-beam-text';
 
   return (
     <div
