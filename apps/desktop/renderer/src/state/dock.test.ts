@@ -6,7 +6,7 @@
  * is an edge case about conversations moving between columns, and none of them
  * needs a window, a store or a running shell to state.
  *
- * The four claims worth pinning, because each fails silently:
+ * The claims worth pinning, because each fails silently:
  *
  *  - **A terminal follows its conversation**, including into a different column
  *    after a resume. Getting this wrong strands a running shell with no tab.
@@ -17,6 +17,8 @@
  *    re-homes a tab onto work it has nothing to do with.
  *  - **Closing a tab activates its left neighbour**, not the first tab and not
  *    nothing.
+ *  - **Scope filters what is drawn, never what exists** — the ADR 0002 rule
+ *    that makes the focused-conversation default safe to have.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,8 +27,8 @@ import {
   learnSessionId,
   nextActiveTab,
   ownerIsShown,
-  PREVIEW_TAB,
   sameTab,
+  shownOwning,
   tabKey,
   visibleTabs,
   type BrowserRecord,
@@ -47,19 +49,23 @@ function terminal(id: string, owner: DockOwner): TerminalRecord {
 }
 
 const term = (id: string): DockTab => ({ kind: 'terminal', id });
+const preview = (id: string): DockTab => ({ kind: 'preview', id });
 
 describe('tab identity', () => {
-  it('tells the preview apart from a terminal, and terminals from each other', () => {
-    expect(sameTab(PREVIEW_TAB, { kind: 'preview' })).toBe(true);
+  it('tells a preview apart from a terminal, and terminals from each other', () => {
+    expect(sameTab(preview('p1'), { kind: 'preview', id: 'p1' })).toBe(true);
+    // Two previews are two tabs now — the window singleton is gone, so the
+    // id is the identity, exactly as it is for a file.
+    expect(sameTab(preview('p1'), preview('p2'))).toBe(false);
     expect(sameTab(term('a'), term('a'))).toBe(true);
     expect(sameTab(term('a'), term('b'))).toBe(false);
-    expect(sameTab(PREVIEW_TAB, term('a'))).toBe(false);
+    expect(sameTab(preview('p1'), term('a'))).toBe(false);
     expect(sameTab(null, null)).toBe(true);
-    expect(sameTab(null, PREVIEW_TAB)).toBe(false);
+    expect(sameTab(null, preview('p1'))).toBe(false);
   });
 
   it('gives keys that cannot collide across the two kinds', () => {
-    expect(tabKey(PREVIEW_TAB)).not.toBe(tabKey(term('preview')));
+    expect(tabKey(preview('x'))).not.toBe(tabKey(term('x')));
   });
 });
 
@@ -126,31 +132,25 @@ describe('ownerIsShown', () => {
   });
 });
 
-describe('learnSessionId', () => {
-  it('adopts the id its own run has learned', () => {
-    const owner: DockOwner = { paneId: 'pane1', runId: 'run1' };
-    const shown = [{ paneId: 'pane1', runId: 'run1', sessionId: 'sess1' }];
-    expect(learnSessionId(owner, shown)).toBe('sess1');
-  });
-
-  it('has nothing to adopt once it has one', () => {
-    const owner: DockOwner = { paneId: 'pane1', runId: 'run1', sessionId: 'sess1' };
-    expect(learnSessionId(owner, [{ paneId: 'pane1', runId: 'run1', sessionId: 'sess2' }])).toBeNull();
-  });
-
+describe('shownOwning', () => {
   /*
-   * The stale case. If the pane has moved on to another run, its session id
-   * belongs to work this owner has nothing to do with, and taking it would
-   * silently re-home the tab onto a different conversation.
+   * `ownerIsShown` with the answer attached: the strip groups tabs under the
+   * conversation that owns them, and the group a session-owned surface joins is
+   * the one *showing the session*, wherever that is — not the column the
+   * surface happened to be opened in.
    */
-  it('refuses a session id from a run that has since been replaced', () => {
-    const owner: DockOwner = { paneId: 'pane1', runId: 'run1' };
-    expect(learnSessionId(owner, [{ paneId: 'pane1', runId: 'run2', sessionId: 'sess2' }])).toBeNull();
+  it('names the conversation showing the owner, not the column it was opened in', () => {
+    const owner: DockOwner = { paneId: 'pane1', sessionId: 'sess1' };
+    const shown: readonly ShownConversation[] = [
+      { paneId: 'pane1', sessionId: 'other' },
+      { paneId: 'pane2', sessionId: 'sess1' },
+    ];
+    expect(shownOwning(owner, shown)?.paneId).toBe('pane2');
   });
 
-  it('has nothing to adopt when its pane is gone', () => {
-    const owner: DockOwner = { paneId: 'pane1', runId: 'run1' };
-    expect(learnSessionId(owner, [{ paneId: 'pane2', sessionId: 'sess2' }])).toBeNull();
+  it('agrees with ownerIsShown about absence', () => {
+    expect(shownOwning({ paneId: 'pane1', sessionId: 's' }, [{ paneId: 'pane1' }])).toBeUndefined();
+    expect(shownOwning({ paneId: 'gone' }, [{ paneId: 'pane1' }])).toBeUndefined();
   });
 });
 
@@ -160,15 +160,19 @@ describe('visibleTabs', () => {
 
   it('puts the preview first and terminals in the order they were opened', () => {
     const tabs = visibleTabs(
-      { paneId: 'pane1' },
+      [{ id: 'p1', owner: { paneId: 'pane1' } }],
       [terminal('t1', { paneId: 'pane1' }), terminal('t2', { paneId: 'pane1' })],
       here,
     );
-    expect(tabs.map(tabKey)).toEqual(['preview', 'terminal:t1', 'terminal:t2']);
+    expect(tabs.map(tabKey)).toEqual(['preview:p1', 'terminal:t1', 'terminal:t2']);
   });
 
   it('hides everything belonging to a conversation that has left', () => {
-    const tabs = visibleTabs({ paneId: 'pane1' }, [terminal('t1', { paneId: 'pane1' })], away);
+    const tabs = visibleTabs(
+      [{ id: 'p1', owner: { paneId: 'pane1' } }],
+      [terminal('t1', { paneId: 'pane1' })],
+      away,
+    );
     expect(tabs).toEqual([]);
   });
 
@@ -178,11 +182,135 @@ describe('visibleTabs', () => {
    */
   it('shows only the tabs of conversations that are on screen', () => {
     const tabs = visibleTabs(
-      null,
+      [],
       [terminal('mine', { paneId: 'pane1' }), terminal('theirs', { paneId: 'pane2' })],
       here,
     );
     expect(tabs.map(tabKey)).toEqual(['terminal:mine']);
+  });
+
+  /*
+   * Conversation-major grouping — ADR 0002's answer to four identical icons in
+   * a 2×2. Each visible conversation's surfaces sit together, in grid order,
+   * rather than every conversation's terminals pooling by kind.
+   */
+  it('groups a split window’s tabs by conversation, in grid order', () => {
+    const both: readonly ShownConversation[] = [{ paneId: 'pane1' }, { paneId: 'pane2' }];
+    const tabs = visibleTabs(
+      [{ id: 'p2', owner: { paneId: 'pane2' } }],
+      [terminal('t1', { paneId: 'pane1' }), terminal('t2', { paneId: 'pane2' })],
+      both,
+      [],
+      [{ id: 'f1', owner: { paneId: 'pane1' } }],
+    );
+    expect(tabs.map(tabKey)).toEqual([
+      // Everything pane1's conversation owns…
+      'file:f1',
+      'terminal:t1',
+      // …then everything pane2's does.
+      'preview:p2',
+      'terminal:t2',
+    ]);
+  });
+
+  /*
+   * A session-owned surface joins the group of the conversation showing it —
+   * whichever column that is. The alternative files the tab under a column
+   * that is showing something else entirely.
+   */
+  it('files a session-owned tab under the pane showing its session', () => {
+    const both: readonly ShownConversation[] = [
+      { paneId: 'pane1' },
+      { paneId: 'pane2', sessionId: 'sess1' },
+    ];
+    const tabs = visibleTabs(
+      [],
+      [
+        terminal('mine', { paneId: 'pane1' }),
+        // Opened in pane1 once, but its session now shows in pane2.
+        terminal('moved', { paneId: 'pane1', sessionId: 'sess1' }),
+      ],
+      both,
+    );
+    expect(tabs.map(tabKey)).toEqual(['terminal:mine', 'terminal:moved']);
+  });
+});
+
+/*
+ * The scope: the strip drawn for one conversation. This is the dock's 2.0
+ * default — surfaces belong to conversations, and the strip follows the
+ * focused one — with `null` as the explicit everything view. What it must
+ * never do is *destroy*: the same records with the other scope still produce
+ * every tab, which is the drawn-versus-exists line the whole dock stands on.
+ */
+describe('visibleTabs scoped to one pane', () => {
+  const both: readonly ShownConversation[] = [{ paneId: 'pane1' }, { paneId: 'pane2' }];
+  const terminals = [terminal('t1', { paneId: 'pane1' }), terminal('t2', { paneId: 'pane2' })];
+
+  it('draws only the focused conversation’s tabs', () => {
+    const tabs = visibleTabs([], terminals, both, [], [], [], true, 'pane1');
+    expect(tabs.map(tabKey)).toEqual(['terminal:t1']);
+  });
+
+  it('draws everything again the moment the scope widens', () => {
+    // Same records, same conversations — only the scope changed. Nothing was
+    // destroyed by being out of scope.
+    const tabs = visibleTabs([], terminals, both, [], [], [], true, null);
+    expect(tabs.map(tabKey)).toEqual(['terminal:t1', 'terminal:t2']);
+  });
+
+  it('follows a conversation’s surfaces into the focused pane, wherever they were opened', () => {
+    const showing: readonly ShownConversation[] = [
+      { paneId: 'pane1', sessionId: 'sess1' },
+      { paneId: 'pane2' },
+    ];
+    // Opened in pane2 back when it showed sess1; pane1 shows sess1 now.
+    const moved = [terminal('t9', { paneId: 'pane2', sessionId: 'sess1' })];
+    expect(visibleTabs([], moved, showing, [], [], [], true, 'pane1').map(tabKey)).toEqual([
+      'terminal:t9',
+    ]);
+    expect(visibleTabs([], moved, showing, [], [], [], true, 'pane2')).toEqual([]);
+  });
+
+  it('scopes the per-pane tabs — files, tasks, agents — the same way', () => {
+    const busy: readonly ShownConversation[] = [
+      { paneId: 'pane1', hasTasks: true, filesRequested: true },
+      { paneId: 'pane2', hasTasks: true },
+    ];
+    const tabs = visibleTabs([], [], busy, [{ paneId: 'pane2', taskId: 'task1' }], [], [], true, 'pane2');
+    expect(tabs.map(tabKey)).toEqual(['tasks:pane2', 'agent:pane2:task1']);
+  });
+});
+
+/*
+ * Previews, plural: one per conversation, none for the window. The singleton
+ * behaviour — previewing in pane B replacing pane A's — is the bug ADR 0002
+ * names, so the rule gets its own describe.
+ */
+describe('two previews side by side', () => {
+  it('draws each conversation’s preview, in its group', () => {
+    const both: readonly ShownConversation[] = [{ paneId: 'pane1' }, { paneId: 'pane2' }];
+    const tabs = visibleTabs(
+      [
+        { id: 'p1', owner: { paneId: 'pane1' } },
+        { id: 'p2', owner: { paneId: 'pane2' } },
+      ],
+      [],
+      both,
+    );
+    expect(tabs.map(tabKey)).toEqual(['preview:p1', 'preview:p2']);
+  });
+
+  it('drops only the preview whose conversation left', () => {
+    const tabs = visibleTabs(
+      [
+        { id: 'p1', owner: { paneId: 'pane1' } },
+        { id: 'p2', owner: { paneId: 'gone' } },
+      ],
+      [],
+      [{ paneId: 'pane1' }],
+    );
+    expect(tabs.map(tabKey)).toEqual(['preview:p1']);
   });
 });
 
@@ -210,10 +338,10 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
   }
 
   it('keeps the tasks tab out of the strip', () => {
-    expect(visibleTabs(null, [], busy, [], [], [], false)).toEqual([]);
+    expect(visibleTabs([], [], busy, [], [], [], false)).toEqual([]);
     // And the flag defaulting to true is every release before it: same state,
     // tab present.
-    expect(visibleTabs(null, [], busy).map(tabKey)).toEqual(['tasks:pane1']);
+    expect(visibleTabs([], [], busy).map(tabKey)).toEqual(['tasks:pane1']);
   });
 
   it('lets the tasks tab in when the user asked for it', () => {
@@ -223,7 +351,7 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
     // The delegated tab is the one surface here with two origins, and only the
     // uninvited one is what this setting is about. Suppressing the press too
     // leaves the header's Delegated button enabled and inert.
-    expect(visibleTabs(null, [], asked, [], [], [], false).map(tabKey)).toEqual(['tasks:pane1']);
+    expect(visibleTabs([], [], asked, [], [], [], false).map(tabKey)).toEqual(['tasks:pane1']);
   });
 
   it('will not let it in on the flag alone', () => {
@@ -231,13 +359,13 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
     // whose rows were dismissed answers no, and a stale request must not
     // resurrect it. The two are read in that order, never as alternatives.
     const stale: readonly ShownConversation[] = [{ paneId: 'pane1', tasksRequested: true }];
-    expect(visibleTabs(null, [], stale, [], [], [], false)).toEqual([]);
-    expect(visibleTabs(null, [], stale, [], [], [], true)).toEqual([]);
+    expect(visibleTabs([], [], stale, [], [], [], false)).toEqual([]);
+    expect(visibleTabs([], [], stale, [], [], [], true)).toEqual([]);
   });
 
   it('keeps an agent-opened page out, and leaves the user’s own alone', () => {
     const tabs = visibleTabs(
-      null,
+      [],
       [],
       here,
       [],
@@ -250,10 +378,10 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
 
   it('reveals what arrived while it was off, the moment it is back on', () => {
     const records = [browser('hidden', true)];
-    expect(visibleTabs(null, [], busy, [], [], records, false)).toEqual([]);
+    expect(visibleTabs([], [], busy, [], [], records, false)).toEqual([]);
     // Same records, same conversations — only the permission changed. This is
     // `setDockAutoOpen`'s reveal: nothing was destroyed by being suppressed.
-    expect(visibleTabs(null, [], busy, [], [], records, true).map(tabKey)).toEqual([
+    expect(visibleTabs([], [], busy, [], [], records, true).map(tabKey)).toEqual([
       'browser:hidden',
       'tasks:pane1',
     ]);
@@ -261,7 +389,7 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
 
   it('touches nothing the user opened: preview, file, shells, agent tabs', () => {
     const tabs = visibleTabs(
-      { paneId: 'pane1' },
+      [{ id: 'p1', owner: { paneId: 'pane1' } }],
       [terminal('t1', { paneId: 'pane1' })],
       here,
       [{ paneId: 'pane1', taskId: 'task9' }],
@@ -269,12 +397,12 @@ describe('visibleTabs with the dock forbidden to open on its own', () => {
       [],
       false,
     );
-    expect(tabs.map(tabKey)).toEqual(['preview', 'file:f1', 'terminal:t1', 'agent:pane1:task9']);
+    expect(tabs.map(tabKey)).toEqual(['preview:p1', 'file:f1', 'terminal:t1', 'agent:pane1:task9']);
   });
 });
 
 describe('nextActiveTab', () => {
-  const strip = [PREVIEW_TAB, term('a'), term('b'), term('c')];
+  const strip = [preview('p1'), term('a'), term('b'), term('c')];
 
   it('leaves a still-visible tab alone', () => {
     expect(nextActiveTab(term('b'), strip, strip)).toEqual(term('b'));
@@ -285,22 +413,22 @@ describe('nextActiveTab', () => {
    * was, so the neighbour to its left is the least disorienting place to land.
    */
   it('falls to the neighbour on the left when its tab goes', () => {
-    const after = [PREVIEW_TAB, term('a'), term('c')];
+    const after = [preview('p1'), term('a'), term('c')];
     expect(nextActiveTab(term('b'), after, strip)).toEqual(term('a'));
   });
 
   it('keeps walking left past tabs that also went', () => {
-    const after = [PREVIEW_TAB, term('c')];
-    expect(nextActiveTab(term('b'), after, strip)).toEqual(PREVIEW_TAB);
+    const after = [preview('p1'), term('c')];
+    expect(nextActiveTab(term('b'), after, strip)).toEqual(preview('p1'));
   });
 
   it('takes the first tab when the one that went was leftmost', () => {
     const after = [term('a'), term('b'), term('c')];
-    expect(nextActiveTab(PREVIEW_TAB, after, strip)).toEqual(term('a'));
+    expect(nextActiveTab(preview('p1'), after, strip)).toEqual(term('a'));
   });
 
   it('is null when the strip is empty, and adopts a tab when it was', () => {
     expect(nextActiveTab(term('a'), [], strip)).toBeNull();
-    expect(nextActiveTab(null, [PREVIEW_TAB], [])).toEqual(PREVIEW_TAB);
+    expect(nextActiveTab(null, [preview('p1')], [])).toEqual(preview('p1'));
   });
 });

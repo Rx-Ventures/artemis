@@ -225,6 +225,12 @@ const sessions = new Map<TerminalId, TerminalSession>();
 /** Callbacks the store installs once, so this module need not import it. */
 export interface TerminalSessionHooks {
   readonly onTitle: (id: TerminalId, title: string) => void;
+  /**
+   * A URL in the buffer was activated (⌘-click, or Ctrl off macOS). The store
+   * decides what opening means — this module knows nothing about browsers,
+   * docks or panes, only that the user pointed at an address.
+   */
+  readonly onLink?: (id: TerminalId, url: string) => void;
 }
 
 let hooks: TerminalSessionHooks = { onTitle: () => undefined };
@@ -280,6 +286,7 @@ export function ensureTerminalSession(id: TerminalId, replay?: string): Terminal
   if (replay !== undefined && replay !== '') term.write(replay);
 
   term.onTitleChange((title) => hooks.onTitle(id, title));
+  registerUrlLinks(id, term);
 
   /*
    * Input goes straight out, unbuffered and unexamined.
@@ -315,6 +322,97 @@ export function ensureTerminalSession(id: TerminalId, replay?: string): Terminal
 /** Write output into a terminal, if this window is holding one for it. */
 export function writeToTerminal(id: TerminalId, data: string): void {
   sessions.get(id)?.term.write(data);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Links                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What counts as an address in a scroll of shell output.
+ *
+ * Schemed URLs only, deliberately: a dev server prints `http://localhost:5173`
+ * and a failing fetch prints the endpoint, and those are the two things worth
+ * a click. Guessing at bare hostnames would linkify half of every `pip
+ * install` log. Trailing punctuation is stripped after the match because
+ * prose wraps URLs in it — "see https://example.com." is not a link to a page
+ * called `com.`.
+ */
+const URL_PATTERN = /https?:\/\/[^\s"'<>`]+/g;
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}]+$/;
+
+/**
+ * Teach one terminal to answer ⌘-click on a URL.
+ *
+ * A hand-rolled provider rather than the web-links addon, for two reasons that
+ * are really one: the addon's default action is "open externally", and the
+ * whole point here is the opposite — the URL opens *beside the conversation*,
+ * through {@link TerminalSessionHooks.onLink}, so the dev server lands in the
+ * dock rather than in Chrome. Single buffer lines only; a URL that wraps
+ * matches up to the wrap, which is the standard terminal trade and not worth
+ * the reflow bookkeeping to beat.
+ *
+ * Activation wants the modifier (⌘, or Ctrl elsewhere), which is the terminal
+ * convention for the same reason it is anywhere text is selectable: a plain
+ * click in a terminal means "put the caret here", and a link that hijacked it
+ * would make selecting a URL impossible.
+ */
+function registerUrlLinks(id: TerminalId, term: Terminal): void {
+  term.registerLinkProvider({
+    provideLinks(lineNumber, callback) {
+      const line = term.buffer.active.getLine(lineNumber - 1);
+      if (line === undefined) {
+        callback(undefined);
+        return;
+      }
+      const text = line.translateToString(true);
+      const links: {
+        range: { start: { x: number; y: number }; end: { x: number; y: number } };
+        text: string;
+        activate: (event: MouseEvent, uri: string) => void;
+      }[] = [];
+      for (const match of text.matchAll(URL_PATTERN)) {
+        const url = match[0].replace(TRAILING_PUNCTUATION, '');
+        if (url.length === 0) continue;
+        links.push({
+          // 1-based columns, per xterm's buffer addressing.
+          range: {
+            start: { x: match.index + 1, y: lineNumber },
+            end: { x: match.index + url.length, y: lineNumber },
+          },
+          text: url,
+          activate(event) {
+            if (!event.metaKey && !event.ctrlKey) return;
+            hooks.onLink?.(id, url);
+          },
+        });
+      }
+      callback(links.length > 0 ? links : undefined);
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Selection                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** The selected text in one terminal, or `''`. */
+export function getTerminalSelection(id: TerminalId): string {
+  return sessions.get(id)?.term.getSelection() ?? '';
+}
+
+/**
+ * Hear about one terminal's selection changing. Returns the unsubscribe.
+ *
+ * What the "add to chat" affordance hangs off: the button should exist while
+ * there is a selection and not before, and polling a terminal for that would
+ * be this module's own no-React-state rule broken in the other direction.
+ */
+export function onTerminalSelectionChange(id: TerminalId, listener: () => void): () => void {
+  const session = sessions.get(id);
+  if (session === undefined) return () => undefined;
+  const subscription = session.term.onSelectionChange(listener);
+  return () => subscription.dispose();
 }
 
 /**
@@ -370,12 +468,32 @@ export function fitTerminal(id: TerminalId): void {
   }
 
   const { cols, rows } = session.term;
-  if (cols === before.cols && rows === before.rows) return;
   if (cols < 1 || rows < 1) return;
+  // Remembered even when nothing changed: a fit that *confirms* a size is as
+  // good a measurement as one that moves it, and the first fit after boot is
+  // usually exactly that.
+  lastFittedSize = { cols, rows };
+  if (cols === before.cols && rows === before.rows) return;
 
   const { bridge } = resolveBridge();
   if (!bridge) return;
   void call(() => bridge.terminal.resize({ id, cols, rows }));
+}
+
+/**
+ * The dock cell size, as last measured by any fit.
+ *
+ * `openTerminal`'s answer to the hardcoded 80×24: a shell prints its first
+ * prompt at whatever size it is born at, and that prompt is drawn once — the
+ * refit one frame later corrects the grid, not the history. Any terminal that
+ * has fitted has measured the box the next one will almost certainly open
+ * into, so the guess only stays a guess for the first shell a window ever
+ * starts.
+ */
+let lastFittedSize: { readonly cols: number; readonly rows: number } | null = null;
+
+export function preferredTerminalSize(): { readonly cols: number; readonly rows: number } | null {
+  return lastFittedSize;
 }
 
 /** Put the caret in a terminal, now, if it is somewhere it can be seen. */

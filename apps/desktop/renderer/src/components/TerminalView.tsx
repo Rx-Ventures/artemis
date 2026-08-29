@@ -12,15 +12,31 @@
  * concerned, and the live element is moved into it imperatively. That is what
  * lets a terminal survive its tab being hidden and shown, and it is why a
  * re-render here costs nothing no matter how fast the shell is printing.
+ *
+ * The one piece of React state here — whether a selection exists — is a
+ * boolean about the *user's hand*, not about the stream, so it changes at
+ * human speed and costs nothing. It gates the "Add to chat" affordance: the
+ * terminal→chat bridge, which turns a selected stack trace into a fenced
+ * block in the conversation's composer.
  */
 
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { MessageSquarePlusIcon } from 'lucide-react';
 import type { TerminalId } from '@rx-artemis/protocol';
 
-import { attachTerminal, detachTerminal, fitTerminal, focusTerminal } from '../lib/terminalSessions';
+import {
+  attachTerminal,
+  detachTerminal,
+  fitTerminal,
+  focusTerminal,
+  getTerminalSelection,
+  onTerminalSelectionChange,
+} from '../lib/terminalSessions';
+import { quoteTerminalSelection } from '../state/store';
 
 export function TerminalView({ id }: { readonly id: TerminalId }): ReactElement {
   const slot = useRef<HTMLDivElement>(null);
+  const [hasSelection, setHasSelection] = useState(false);
 
   useEffect(() => {
     const element = slot.current;
@@ -54,21 +70,55 @@ export function TerminalView({ id }: { readonly id: TerminalId }): ReactElement 
     const observer = new ResizeObserver(() => fitTerminal(id));
     observer.observe(element);
 
+    // Selection is xterm's fact; this only mirrors "is there one" so the
+    // bridge button can come and go with the user's hand. Subscribed here
+    // rather than in a second effect because it shares the attach's lifetime:
+    // a parked terminal has no button to show.
+    const selection = onTerminalSelectionChange(id, () =>
+      setHasSelection(getTerminalSelection(id).length > 0),
+    );
+
     return () => {
       cancelAnimationFrame(first);
       observer.disconnect();
+      selection();
       // Back to the parking lot, still running. Only `closeTerminal` disposes.
       detachTerminal(id);
     };
   }, [id]);
 
   return (
-    <div
-      ref={slot}
-      // Clicking anywhere in the pane should put the caret in the shell,
-      // including on the padding beside the last short line.
-      onMouseDown={() => focusTerminal(id)}
-      className="min-h-0 min-w-0 flex-1 overflow-hidden px-2 py-1.5"
-    />
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={slot}
+        // Clicking anywhere in the pane should put the caret in the shell,
+        // including on the padding beside the last short line.
+        onMouseDown={() => focusTerminal(id)}
+        className="min-h-0 min-w-0 flex-1 overflow-hidden px-2 py-1.5"
+      />
+      {/*
+        The terminal→chat bridge. Floated over the terminal's corner rather
+        than parked in a header the terminal otherwise does not have, and only
+        while a selection exists — a standing button would be chrome in the
+        one surface whose whole value is being nothing but the shell.
+
+        `onMouseDown.preventDefault()` so the click cannot move focus and
+        collapse the very selection it is about to quote.
+      */}
+      {hasSelection ? (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => quoteTerminalSelection(id)}
+          // No shadow, deliberately: elevation is reserved for overlays
+          // (`designLanguage.test.ts`), and the border on a `--panel` fill is
+          // already the language's way of saying "detached".
+          className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded-sm border border-line bg-panel px-1.5 py-0.5 text-2xs text-ink-muted hover:text-ink"
+        >
+          <MessageSquarePlusIcon className="size-3" aria-hidden="true" />
+          Add to chat
+        </button>
+      ) : null}
+    </div>
   );
 }

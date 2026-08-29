@@ -82,12 +82,23 @@ import type { PaneId } from './pane';
  * that genuinely need a string — a React `key` and a `Set` — and nowhere else.
  */
 export type DockTab =
-  | { readonly kind: 'preview' }
+  /**
+   * A file the agent wrote, framed or rendered. One tab per conversation.
+   *
+   * Keyed by id where it used to be a constant, because the constant was the
+   * bug: one preview for the whole window meant previewing something in pane B
+   * silently replaced what pane A was reading — the window-singleton behaviour
+   * ADR 0002 exists to end. The id is minted by `openPreview`, which keeps it
+   * to **one preview per conversation**: a second artifact previewed in the
+   * same conversation replaces that conversation's preview in place, keeping
+   * the id so the strip does not reshuffle, and touches nobody else's.
+   */
+  | { readonly kind: 'preview'; readonly id: string }
   /**
    * A file, shown as text. One tab each.
    *
-   * This was keyed by nothing for a long time — one file at a time, like
-   * {@link PREVIEW_TAB} — on the grounds that a tab per file would let a reader
+   * This was keyed by nothing for a long time — one file at a time, as the
+   * preview then was — on the grounds that a tab per file would let a reader
    * skimming one paragraph fill the strip with eight of them. What that traded
    * away turned out to be the more valuable half: following a second link
    * *replaced* the first, so two files could not be read together, and reading
@@ -95,7 +106,11 @@ export type DockTab =
    *
    * The strip is the reason it is affordable now. It runs down the side rather
    * than across the top, so a ninth tab costs 34 vertical pixels in a column
-   * that scrolls, not a slice of the composer's width.
+   * that scrolls, not a slice of the composer's width. And the skim-debris
+   * problem the old constant guarded against — forty tabs across a long
+   * session — is answered by *transience* rather than by a singleton: a file
+   * opens into a transient tab that the next file replaces, and only a pinned
+   * one claims a lasting place in the strip. See `FileState.pinned`.
    *
    * Opening a path that is already open focuses that tab instead of adding a
    * second — see `openFile`, which is what keeps a link clicked twice from
@@ -127,8 +142,8 @@ export type DockTab =
    * What one conversation has delegated. One tab, however many tasks — the list
    * is the pane's content, not the strip's.
    *
-   * Keyed by pane rather than being a constant beside {@link PREVIEW_TAB},
-   * because unlike a preview there can be two of these on screen at once: a
+   * Keyed by pane rather than being a constant, because there can be two of
+   * these on screen at once: a
    * split with an agent working in each column has two sets of delegated work,
    * and they are not the same list. The pane is the right key rather than the
    * run — the rows outlive the run that launched them, which is the entire
@@ -152,14 +167,11 @@ export type DockTab =
    */
   | { readonly kind: 'agent'; readonly paneId: PaneId; readonly taskId: string };
 
-/** The preview tab. A constant, because there is only ever one. */
-export const PREVIEW_TAB: DockTab = { kind: 'preview' };
-
 /** A stable string for one tab. For React keys and set membership only. */
 export function tabKey(tab: DockTab): string {
   switch (tab.kind) {
     case 'preview':
-      return 'preview';
+      return `preview:${tab.id}`;
     case 'file':
       return `file:${tab.id}`;
     case 'files':
@@ -347,27 +359,66 @@ export function learnSessionId(
 /* -------------------------------------------------------------------------- */
 
 /**
- * The tabs to draw, left to right.
+ * Which shown conversation is showing this owner, if any.
  *
- * Preview first, terminals after in the order they were opened, tasks last.
- * Fixed rather than most-recent-first, because a strip that reorders itself
- * moves the ✕ the user was aiming at — the same reason `sessionOrderHold` exists
- * for the sidebar.
+ * The same three-case precedence {@link ownerIsShown} decides with, returning
+ * the conversation instead of a boolean — because the strip now *groups* tabs
+ * under the conversation that owns them, and a yes/no cannot say which group a
+ * session-owned terminal resumed into a different column belongs to.
+ */
+export function shownOwning(
+  owner: DockOwner,
+  shown: readonly ShownConversation[],
+): ShownConversation | undefined {
+  if (owner.sessionId !== undefined) {
+    return shown.find((one) => one.sessionId === owner.sessionId);
+  }
+  if (owner.runId !== undefined) {
+    return shown.find((one) => one.paneId === owner.paneId && one.runId === owner.runId);
+  }
+  return shown.find((one) => one.paneId === owner.paneId);
+}
+
+/**
+ * The tabs to draw, left to right — grouped by the conversation that owns them.
  *
- * Tasks pin to the end for a sharper version of that argument. It is the one tab
- * nobody opens: the agent delegates something and it appears, mid-turn, without
- * anyone reaching for it. Anywhere but the end, that arrival would shift every
- * tab to its right out from under a pointer already on the way to one.
+ * ## Conversation-major, not kind-major
  *
- * It appears with the first task and stays while any row remains — settled rows
- * included, since the moment work finishes is when its result is worth reading.
- * Its ✕ dismisses the tab and nothing else: the rows are still there, the
- * subagents are still running, and the next thing delegated brings it back. See
- * `closeTasks` in the store for why that is a weaker ✕ than the two beside it,
- * and `hasTasks` for where a dismissed column stops answering yes.
+ * The strip used to interleave every visible conversation's tabs by kind: all
+ * previews, then all terminals, then all browsers. In a 2×2 split that made
+ * four terminals from four conversations four identical unlabelled icons — the
+ * "whose dock is it?" problem e-catch left open, and ADR 0002 answers: a
+ * surface belongs to a conversation, so the strip walks the conversations in
+ * grid order and lays each one's surfaces out together. Within a conversation
+ * the old order holds exactly: preview, files, terminals, browsers, the folder
+ * browser, tasks, and its opened agents.
+ *
+ * Both orders are *fixed* — the point was never the sequence but that a strip
+ * must not reorder itself and move the ✕ the user was aiming at, the same
+ * reason `sessionOrderHold` exists for the sidebar. Grid order only changes
+ * when panes open or close, which is the user's own hand.
+ *
+ * ## `focus` is the scope
+ *
+ * When `focus` names a pane, only the conversation shown in *that pane* emits
+ * tabs — the dock scoped to the focused conversation, which is the 2.0
+ * default. `null` is the all-panes toggle: every shown conversation's group,
+ * in grid order. The records behind the hidden groups are untouched either
+ * way; scope decides what is drawn, never what exists. That distinction is the
+ * same one the terminal's hide-versus-kill rule rests on, one level up.
+ *
+ * Tasks stay pinned late in their group for the old reason, sharpened: it is
+ * the one tab nobody opens — the agent delegates something and it appears,
+ * mid-turn — and anywhere earlier, that arrival would shift tabs out from
+ * under a pointer already on the way to one. Its ✕ dismisses the tab and
+ * nothing else; see `closeTasks` in the store.
  */
 export function visibleTabs(
-  previewOwner: DockOwner | null,
+  /**
+   * The open previews, in the order their conversations opened them. One per
+   * conversation — `openPreview` enforces that — so a group never holds two.
+   */
+  previews: readonly { readonly id: string; readonly owner: DockOwner }[],
   terminals: readonly TerminalRecord[],
   shown: readonly ShownConversation[],
   /**
@@ -410,25 +461,39 @@ export function visibleTabs(
    * reveals them on the next reconcile.
    */
   agentSurfaces: boolean = true,
+  /**
+   * The pane whose conversation the strip is scoped to, or `null` for every
+   * visible conversation. See the header: scope filters what is drawn, and
+   * must never decide what exists.
+   */
+  focus: PaneId | null = null,
 ): readonly DockTab[] {
   const tabs: DockTab[] = [];
-  if (previewOwner !== null && ownerIsShown(previewOwner, shown)) tabs.push(PREVIEW_TAB);
-  // Beside the preview rather than at the end: both are "a file this
-  // conversation put on screen", and the two arriving in different places would
-  // make the strip's order look arbitrary.
-  for (const file of files) {
-    if (ownerIsShown(file.owner, shown)) tabs.push({ kind: 'file', id: file.id });
-  }
-  for (const terminal of terminals) {
-    if (ownerIsShown(terminal.owner, shown)) tabs.push({ kind: 'terminal', id: terminal.info.id });
-  }
-  // After the shells rather than before them, which is only a convention — but
-  // a fixed one, so that opening a browser never shifts a terminal's ✕.
-  for (const browser of browsers) {
-    if (browser.agentOpened === true && !agentSurfaces) continue;
-    if (ownerIsShown(browser.owner, shown)) tabs.push({ kind: 'browser', id: browser.info.id });
-  }
-  for (const one of shown) {
+  const scoped = focus === null ? shown : shown.filter((one) => one.paneId === focus);
+
+  for (const one of scoped) {
+    for (const preview of previews) {
+      if (shownOwning(preview.owner, shown) === one) tabs.push({ kind: 'preview', id: preview.id });
+    }
+    // Beside the preview rather than at the end: both are "a file this
+    // conversation put on screen", and the two arriving in different places
+    // would make the group's order look arbitrary.
+    for (const file of files) {
+      if (shownOwning(file.owner, shown) === one) tabs.push({ kind: 'file', id: file.id });
+    }
+    for (const terminal of terminals) {
+      if (shownOwning(terminal.owner, shown) === one) {
+        tabs.push({ kind: 'terminal', id: terminal.info.id });
+      }
+    }
+    // After the shells rather than before them, which is only a convention —
+    // but a fixed one, so that opening a browser never shifts a terminal's ✕.
+    for (const browser of browsers) {
+      if (browser.agentOpened === true && !agentSurfaces) continue;
+      if (shownOwning(browser.owner, shown) === one) {
+        tabs.push({ kind: 'browser', id: browser.info.id });
+      }
+    }
     // Before the delegated list, because it is a view of the *place* the column
     // is working rather than of what it has done there — and a fixed order so
     // opening one never shifts the other's ✕.
@@ -484,7 +549,7 @@ export function nextActiveTab(
 /* -------------------------------------------------------------------------- */
 
 /**
- * The dock's arrangement, as it goes into preferences.
+ * One conversation's dock arrangement, as it goes into preferences.
  *
  * **An arrangement, not a session.** That distinction is the whole design here,
  * and it is what makes each field honest about how much it can promise.
@@ -499,6 +564,15 @@ export function nextActiveTab(
  * Storing a terminal's title would be the tempting mistake: a tab that says
  * `vim` and holds a new `zsh` is worse than one that says `zsh`, because the
  * first is a claim and the second is a fact.
+ *
+ * What changed under ADR 0002 is the *key*, not the shape. This used to be one
+ * window-level record of whatever the focused pane had at quit — the honest
+ * ninety per cent of a world where the dock was the window's. Surfaces belong
+ * to conversations now, so preferences hold a map of these **per session id**
+ * ({@link parseDockArrangements}), and each conversation's arrangement comes
+ * back when *that conversation* is next opened. Session ids are the one dock
+ * identity that survives a relaunch — pane ids are minted fresh per launch,
+ * which is why nothing in here may ever key on one.
  */
 export interface DockLayout {
   /** URLs of the browsers that were open, in tab order. */
@@ -587,6 +661,57 @@ export function parseDockLayout(value: unknown): DockLayout {
 export const MAX_RESTORED_TERMINALS = 8;
 export const MAX_RESTORED_BROWSERS = 8;
 export const MAX_RESTORED_FILES = 8;
+
+/**
+ * How many conversations' arrangements preferences keep.
+ *
+ * A bound on the map, not on any one restore — each entry is already clamped by
+ * the ceilings above when it is read. Without this the map would grow by one
+ * entry per conversation that ever opened a surface and shrink only when the
+ * user emptied a dock by hand, which is a preferences file that expands for
+ * ever. Twelve covers every conversation anyone plausibly rotates between;
+ * the capture keeps the most recently touched (see `captureDockArrangements`
+ * in the store, which appends touched sessions last).
+ */
+export const MAX_STORED_ARRANGEMENTS = 12;
+
+/**
+ * Read the per-session arrangement map back, tolerating anything.
+ *
+ * `parseDockLayout`'s posture, one level up: preferences are JSON a user can
+ * edit and a previous build wrote, so the map, its keys and every entry are
+ * checked rather than trusted. A malformed map restores nothing — never a
+ * reason to fail a launch — and a malformed entry costs only itself.
+ *
+ * Entries that parse to nothing at all are dropped rather than kept: an empty
+ * arrangement restores nothing, so storing it would only crowd real entries
+ * out of the {@link MAX_STORED_ARRANGEMENTS} window.
+ *
+ * The cap keeps the *last* entries rather than the first, because the capture
+ * writes most-recently-touched last — so a hand-grown or ancient map loses its
+ * stalest conversations, which is the eviction the cap means.
+ */
+export function parseDockArrangements(value: unknown): Record<string, DockLayout> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const out: Record<string, DockLayout> = {};
+  for (const [sessionId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (sessionId.length === 0) continue;
+    const layout = parseDockLayout(entry);
+    const empty =
+      layout.browsers.length === 0 &&
+      layout.terminals === 0 &&
+      layout.files.length === 0 &&
+      layout.preview === null;
+    if (!empty) out[sessionId] = layout;
+  }
+  const keys = Object.keys(out);
+  if (keys.length <= MAX_STORED_ARRANGEMENTS) return out;
+  const kept: Record<string, DockLayout> = {};
+  for (const key of keys.slice(keys.length - MAX_STORED_ARRANGEMENTS)) {
+    kept[key] = out[key] as DockLayout;
+  }
+  return kept;
+}
 
 /**
  * Every tab kind, for validating a stored one.

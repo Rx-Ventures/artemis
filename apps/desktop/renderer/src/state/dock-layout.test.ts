@@ -15,6 +15,8 @@ import {
   MAX_RESTORED_BROWSERS,
   MAX_RESTORED_FILES,
   MAX_RESTORED_TERMINALS,
+  MAX_STORED_ARRANGEMENTS,
+  parseDockArrangements,
   parseDockLayout,
   type DockTab,
 } from './dock';
@@ -151,5 +153,76 @@ describe('parseDockLayout', () => {
 
     expect(layout).not.toHaveProperty('terminalTitles');
     expect(layout.terminals).toBe(3);
+  });
+});
+
+/*
+ * The per-session map — the shape ADR 0002's restart rule persists through.
+ * Each entry is a `DockLayout` and inherits every guard above; what is new is
+ * the map itself, which is one more thing a hand-edited preferences file gets
+ * to be wrong about, and one more list that must not grow without bound.
+ */
+describe('parseDockArrangements', () => {
+  it('reads a map this build wrote, entry by entry', () => {
+    const map = parseDockArrangements({
+      'sess-a': { browsers: ['https://a.example'], terminals: 1, files: [], preview: null, activeKind: 'terminal' },
+      'sess-b': { browsers: [], terminals: 0, files: ['notes.md'], preview: null, activeKind: null },
+    });
+
+    expect(Object.keys(map)).toEqual(['sess-a', 'sess-b']);
+    expect(map['sess-a']?.terminals).toBe(1);
+    expect(map['sess-b']?.files).toEqual(['notes.md']);
+  });
+
+  it.each([
+    ['nothing at all', undefined],
+    ['null', null],
+    ['a string', 'nope'],
+    ['an array', [{ terminals: 3 }]],
+  ])('restores nothing from %s', (_label, value) => {
+    expect(parseDockArrangements(value)).toEqual({});
+  });
+
+  it('drops a malformed entry without costing its neighbours', () => {
+    const map = parseDockArrangements({
+      'sess-good': { terminals: 2 },
+      'sess-bad': 'not-a-layout',
+    });
+
+    // The bad entry parses to an empty layout, and an empty layout restores
+    // nothing — storing it would only crowd real entries out of the cap.
+    expect(Object.keys(map)).toEqual(['sess-good']);
+  });
+
+  it('drops entries with nothing to restore', () => {
+    const map = parseDockArrangements({
+      'sess-empty': { browsers: [], terminals: 0, files: [], preview: null, activeKind: 'terminal' },
+    });
+
+    expect(map).toEqual({});
+  });
+
+  it('SAFETY: clamps every entry the way the single layout is clamped', () => {
+    // The per-session map multiplies the launch-time blast radius of a
+    // hostile file by the number of entries, so each entry keeps the same
+    // ceilings — and the map itself is capped below.
+    const map = parseDockArrangements({ 'sess-a': { terminals: 9999 } });
+
+    expect(map['sess-a']?.terminals).toBe(MAX_RESTORED_TERMINALS);
+  });
+
+  it('SAFETY: keeps only the most recent conversations past the cap', () => {
+    const grown: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_STORED_ARRANGEMENTS + 5; i += 1) {
+      grown[`sess-${String(i)}`] = { terminals: 1 };
+    }
+
+    const map = parseDockArrangements(grown);
+
+    // Last entries win, because the capture appends most-recently-touched
+    // last: the stalest conversations are the ones a bounded map should shed.
+    expect(Object.keys(map)).toHaveLength(MAX_STORED_ARRANGEMENTS);
+    expect(map['sess-0']).toBeUndefined();
+    expect(map[`sess-${String(MAX_STORED_ARRANGEMENTS + 4)}`]).toBeDefined();
   });
 });

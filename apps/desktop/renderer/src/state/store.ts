@@ -111,7 +111,9 @@ import { entriesFiling, sessionKey } from '../lib/sessionGroups';
 import {
   disposeTerminalSession,
   ensureTerminalSession,
+  getTerminalSelection,
   noteTerminalExit,
+  preferredTerminalSize,
   requestTerminalFocus,
   retheme,
   setTerminalSessionHooks,
@@ -122,14 +124,17 @@ import { focusComposer } from '../lib/composerFocus';
 import {
   EMPTY_DOCK_LAYOUT,
   MAX_RESTORED_BROWSERS,
+  MAX_RESTORED_FILES,
   MAX_RESTORED_TERMINALS,
+  MAX_STORED_ARRANGEMENTS,
+  parseDockArrangements,
   parseDockLayout,
   type DockLayout,
   learnSessionId,
   nextActiveTab,
   ownerIsShown,
-  PREVIEW_TAB,
   sameTab,
+  shownOwning,
   visibleTabs,
   type DockOwner,
   type DockTab,
@@ -283,7 +288,7 @@ export type ResolvedTheme = 'light' | 'dark';
 // module it reaches for the state — `state/dock.ts` is the model, not a second
 // public surface, and a component importing from both would have to know which
 // half lives where.
-export { PREVIEW_TAB, sameTab, tabKey, visibleTabs } from './dock';
+export { sameTab, tabKey, visibleTabs } from './dock';
 export type { DockOwner, DockTab, ShownConversation, TerminalRecord } from './dock';
 
 /**
@@ -306,14 +311,22 @@ export type PreviewOwner = DockOwner;
 /**
  * What is being previewed, as the pane needs it.
  *
- * The protocol's answer, plus the one thing the renderer knows and the main
- * process cannot: whose it is. Everything else came back from `preview.open` —
- * the renderer builds none of it, and in particular does not construct the URL.
- * That is the shape of the whole feature in one type: the renderer names a path
- * it read out of a tool call, and gets back either something it is allowed to
- * frame or text it can render itself.
+ * The protocol's answer, plus the two things the renderer knows and the main
+ * process cannot: whose it is, and which tab it is. Everything else came back
+ * from `preview.open` — the renderer builds none of it, and in particular does
+ * not construct the URL. That is the shape of the whole feature in one type:
+ * the renderer names a path it read out of a tool call, and gets back either
+ * something it is allowed to frame or text it can render itself.
+ *
+ * `id` is the tab's identity, minted on open, exactly as a file tab's is — the
+ * path is not it, because a conversation previewing a second artifact keeps
+ * its tab (and therefore its place in the strip) while everything under the id
+ * is replaced.
  */
-export type PreviewState = PreviewOpenResponse & { readonly owner: PreviewOwner };
+export type PreviewState = PreviewOpenResponse & {
+  readonly id: string;
+  readonly owner: PreviewOwner;
+};
 
 /**
  * The file the dock is showing, as the viewer needs it.
@@ -331,6 +344,19 @@ export type FileState = FilesReadResponse & {
   readonly owner: DockOwner;
   /** 1-based, from a `path:line` reference. Absent when the link named no line. */
   readonly line?: number;
+  /**
+   * Whether this tab has been promised a lasting place in the strip.
+   *
+   * e-catch's answer to the forty-tabs problem, and the half of it that
+   * matters is the *absence*: a file opened from a link is transient — the
+   * next file this conversation opens **replaces** it, tab and all — until
+   * something says it is being read rather than skimmed. Pinning says it
+   * (see `pinFile`), and so does opening a second look at the same path,
+   * which is `openFile`'s existing focus-not-duplicate rule doing double
+   * duty. One transient slot per conversation is what keeps a long session's
+   * skim debris to a single tab instead of a strip of forty.
+   */
+  readonly pinned: boolean;
 };
 
 /** A dismissible message on the error surface. */
@@ -521,20 +547,24 @@ export interface AppState {
    */
   readonly paneLayout: Readonly<Record<string, number>>;
   /**
-   * The page the preview pane is showing, or `null` when there is no such pane.
+   * The open previews, in the order their conversations opened them.
    *
-   * Window-owned rather than pane-owned, and that is a claim about what a
-   * preview *is*: not part of a conversation, but a thing the window is showing
-   * you — the same status as the palette or the settings dialog. One at a time,
-   * for the same reason there is one palette. Opening a second artifact
-   * replaces the first, which is also what makes the affordance safe to put on
-   * every tool card without the grid filling up with frames.
+   * This was `preview: PreviewState | null` — one for the window, "the same
+   * status as the palette" — and that claim is the one ADR 0002 overturns: a
+   * preview is a file *this conversation* wrote, and a window singleton meant
+   * previewing something in pane B silently replaced what pane A was reading.
+   * So the window now holds a list, exactly as it holds {@link files}, with
+   * the singleton rule kept where it was true all along: **one per
+   * conversation**, enforced by `openPreview`, which is still what makes the
+   * affordance safe to put on every tool card without the grid filling up
+   * with frames.
    *
-   * Deliberately not persisted. A {@link PreviewState.url} names a snapshot the
-   * main process is holding in memory; after a restart there is nothing behind
-   * it, and restoring one would reopen the pane onto a 404.
+   * The *contents* are still not persisted. A {@link PreviewState.url} names a
+   * snapshot the main process is holding in memory; after a restart there is
+   * nothing behind it, and restoring one would reopen the pane onto a 404.
+   * What survives is the path, per session — see `captureDockArrangements`.
    */
-  readonly preview: PreviewState | null;
+  readonly previews: readonly PreviewState[];
   /**
    * Every file the dock is showing as text, in the order they were opened.
    *
@@ -769,8 +799,16 @@ export interface AppState {
    */
   readonly dockAutoOpen: boolean;
   /**
-   * Whether the dock's delegated view shows this column's work or every
-   * column's. See `_layout.md` item 5.
+   * Whether the dock shows the focused conversation's surfaces or every
+   * visible conversation's. See `_layout.md` item 5 and ADR 0002.
+   *
+   * This began as the delegated view's scope chip alone; the 2.0 dock
+   * generalises it to the whole strip, which is the chip's own argument taken
+   * seriously: the dock names a conversation, so the focused conversation's
+   * surfaces are the honest default, and "everything, everywhere" is a view
+   * you switch into on purpose. One value governs both the strip and the
+   * delegated list — a dock whose tabs were scoped one way and whose rows
+   * were scoped another would be two answers to one question.
    *
    * A window value rather than a pane one, and that is the point of it: the
    * question it answers — "is anything, anywhere, still going" — is about the
@@ -778,6 +816,33 @@ export interface AppState {
    * depending on which conversation you happened to ask from.
    */
   readonly dockScope: 'pane' | 'all';
+  /**
+   * Whether the dock's sheet is open, on windows too narrow for a rail.
+   *
+   * Only read in sheet mode — see `WorkingArea`, which decides *when* the dock
+   * is a sheet from the working area's width. In rail mode the dock has no
+   * open/closed state of its own: it exists while it has tabs. A sheet lies
+   * *over* the conversation instead of beside it, so it needs the thing a rail
+   * never did — a way to be put away without closing anything — and this is
+   * that. Not persisted: it answers to this window's width right now, and a
+   * stored copy would open a sheet over a window that has since grown a rail.
+   */
+  readonly dockSheetOpen: boolean;
+  /**
+   * Conversations whose terminals are shown split rather than tabbed.
+   *
+   * Keyed by conversation — session id where one exists, pane id before — for
+   * the reason every dock fact now is: the split is an arrangement of *a
+   * conversation's* shells, and it should survive the conversation moving
+   * between columns. An array rather than a `Set` so the value is stable
+   * between real changes and cheap to compare, like `runningSessions`.
+   *
+   * Not persisted, deliberately: a split of one live shell and one dead one is
+   * a fact about processes, and restart restores fresh shells — an arrangement,
+   * not a session. The split state would be a claim about windows onto work
+   * that no longer exists.
+   */
+  readonly terminalSplits: readonly string[];
   /**
    * Whether Escape stops a run.
    *
@@ -1270,6 +1335,28 @@ export const SPLIT_MIN_WIDTH = 360;
 export const SPLIT_MIN_HEIGHT = 220;
 
 /**
+ * The narrowest the dock may be dragged, in pixels.
+ *
+ * Its own floor rather than {@link SPLIT_MIN_WIDTH}, because the constraint
+ * being expressed is different in kind. A conversation column has to fit a
+ * tool call and a composer before it is usable at all; the dock's panel is a
+ * *companion* — a tail of logs, a preview being glanced at — and the recorded
+ * complaint was precisely that it could not be made narrow. 240px is the strip
+ * plus a terminal at roughly fifty columns: cramped on purpose when the user
+ * asks for cramped, and one drag away from roomy.
+ */
+export const DOCK_MIN_WIDTH = 240;
+
+/**
+ * Below this working-area width, the dock stops being a rail and becomes a
+ * sheet over the conversation. T3 Code draws the same line at 980px for the
+ * same reason: two `SPLIT_MIN_WIDTH`-class columns side by side stop being two
+ * usable things and start being two unusable ones. Measured against the
+ * working area rather than the window, so a wide sidebar counts against it.
+ */
+export const DOCK_SHEET_BELOW = 900;
+
+/**
  * Sanity bounds for a *stored* divider position.
  *
  * Deliberately looser than the pixel floors above, and not a second copy of
@@ -1395,6 +1482,12 @@ interface Prefs {
    */
   modelBySession?: Record<string, ModelChoice>;
   dockLayout?: unknown;
+  /**
+   * Each conversation's dock arrangement, keyed by session id. The
+   * per-session half of what `dockLayout` used to be alone; see
+   * {@link captureDockArrangements} for the split between the two.
+   */
+  dockLayouts?: unknown;
   fastMode?: boolean;
   ultracode?: boolean;
   conversationWidth?: ConversationWidth;
@@ -1475,30 +1568,153 @@ function stringList(value: unknown): readonly string[] | undefined {
  * profile list arrives.
  */
 /**
- * What the dock looks like right now, in the form that survives a restart.
+ * What the dock looks like right now, in the forms that survive a restart.
  *
- * Read off the *focused* pane rather than every one of them. A split window's
- * two columns own two docks, and a stored layout that reopened both would have
- * to remember which column each tab belonged to — through a restart in which
- * pane identity is minted fresh. The focused column is the one the user was
- * looking at, and restoring that is the honest ninety per cent.
+ * Two captures, split on the one identity question a relaunch poses. Pane ids
+ * are minted fresh per launch and session ids are not, so:
+ *
+ *  - **Surfaces owned by a session** go into a map keyed by that session id
+ *    ({@link captureDockArrangements}), and come back when the session is next
+ *    opened — whichever column that happens in, this launch or the next. This
+ *    is ADR 0002's restart rule: each conversation's arrangement, not just the
+ *    focused pane's.
+ *  - **Surfaces no session ever learned about** — a shell opened on a blank
+ *    column that never started a conversation — have no durable name at all,
+ *    so the legacy single layout ({@link captureDockLayout}) keeps carrying
+ *    exactly those for the focused pane, restored at boot into the fresh blank
+ *    pane, which is the same conversationless place they lived before. That
+ *    field is also what a build older than this one reads, so it keeps being
+ *    written.
  */
 function captureDockLayout(state: AppState): DockLayout {
   const paneId = state.focusedPaneId;
+  const sessionless = (owner: DockOwner): boolean =>
+    owner.paneId === paneId && owner.sessionId === undefined;
   return {
     browsers: state.browsers
-      .filter((record) => record.owner.paneId === paneId)
+      .filter((record) => sessionless(record.owner))
       .map((record) => record.info.state.url)
       .filter((url) => url.length > 0)
       .slice(0, MAX_RESTORED_BROWSERS),
     terminals: Math.min(
-      state.terminals.filter((record) => record.owner.paneId === paneId && !record.exited).length,
+      state.terminals.filter((record) => sessionless(record.owner) && !record.exited).length,
       MAX_RESTORED_TERMINALS,
     ),
-    files: state.files.filter((one) => one.owner.paneId === paneId).map((one) => one.path),
-    preview: state.preview?.path ?? null,
+    files: state.files.filter((one) => sessionless(one.owner)).map((one) => one.path),
+    preview: state.previews.find((one) => sessionless(one.owner))?.path ?? null,
     activeKind: state.activeDockTab?.kind ?? null,
   };
+}
+
+/**
+ * The per-session arrangements, carried across saves.
+ *
+ * A module value rather than store state, because nothing renders it: it is
+ * write-only until the next launch reads it back, exactly like the legacy
+ * `dockLayout` field — except this one is also *updated* between saves, since
+ * a session's live surfaces change while the app runs. Seeded from
+ * preferences below, at module scope, before the store exists.
+ */
+let dockArrangements: Record<string, DockLayout> = {};
+
+/**
+ * Sessions whose arrangement this launch has taken responsibility for.
+ *
+ * The set answers the one question the capture cannot answer from live state
+ * alone: does a session with *no* live surfaces mean "the user closed them
+ * all" (delete the stored entry) or "that conversation simply was not opened
+ * this launch" (keep it)? A session lands here when it is restored, and when
+ * any capture sees it owning a surface; from then on the live records are the
+ * truth about it, including the truth that there is nothing left.
+ */
+const dockSessionsTouched = new Set<string>();
+
+/** Sessions already given their arrangement back this launch. Restore is once:
+ *  after it, the live records are the truth, and a second restore would open
+ *  duplicates of shells the user may since have closed on purpose. */
+const dockSessionsRestored = new Set<string>();
+
+/**
+ * Bring the per-session map up to date with what the window holds now.
+ *
+ * Walks the live surface records once, grouped by owning session. Sessions
+ * owning something get a fresh entry — appended in touch order, which is what
+ * makes {@link MAX_STORED_ARRANGEMENTS}' keep-the-last-N eviction mean
+ * keep-the-most-recent. Touched sessions owning nothing lose their entry: the
+ * user emptied that dock, and restoring it anyway next launch would overrule
+ * them. Untouched sessions keep whatever the last launch wrote, verbatim —
+ * this launch knows nothing about them and says nothing.
+ *
+ * A terminal that has exited is not counted, matching the legacy capture: the
+ * arrangement stores how many *working* shells to reopen, and resurrecting a
+ * tab that existed only to show a stack trace would be restoring the one part
+ * of it that is gone.
+ */
+function captureDockArrangements(state: AppState): Record<string, DockLayout> {
+  const bySession = new Map<string, { browsers: string[]; terminals: number; files: string[]; preview: string | null }>();
+  const entry = (sessionId: string): { browsers: string[]; terminals: number; files: string[]; preview: string | null } => {
+    const existing = bySession.get(sessionId);
+    if (existing !== undefined) return existing;
+    const fresh = { browsers: [], terminals: 0, files: [], preview: null };
+    bySession.set(sessionId, fresh);
+    return fresh;
+  };
+
+  for (const record of state.browsers) {
+    const url = record.info.state.url;
+    if (record.owner.sessionId !== undefined && url.length > 0) {
+      entry(record.owner.sessionId).browsers.push(url);
+    }
+  }
+  for (const record of state.terminals) {
+    if (record.owner.sessionId !== undefined && !record.exited) {
+      entry(record.owner.sessionId).terminals += 1;
+    }
+  }
+  for (const one of state.files) {
+    if (one.owner.sessionId !== undefined) entry(one.owner.sessionId).files.push(one.path);
+  }
+  for (const one of state.previews) {
+    if (one.owner.sessionId !== undefined) entry(one.owner.sessionId).preview = one.path;
+  }
+
+  /*
+   * Which tab was in front is only meaningful for the session that owns it —
+   * writing the window's front kind into every entry would put, say, a
+   * terminal in front of a conversation that had only a browser.
+   */
+  const active = state.activeDockTab;
+  const activeSession =
+    active === null ? undefined : dockTabOwner(active, state)?.sessionId;
+
+  const next: Record<string, DockLayout> = {};
+  // Untouched entries first and in their stored order, so recency ordering is
+  // preserved across launches that never open the old conversations.
+  for (const [sessionId, layout] of Object.entries(dockArrangements)) {
+    if (!dockSessionsTouched.has(sessionId) && !bySession.has(sessionId)) {
+      next[sessionId] = layout;
+    }
+  }
+  for (const [sessionId, gathered] of bySession) {
+    dockSessionsTouched.add(sessionId);
+    next[sessionId] = {
+      browsers: gathered.browsers.slice(0, MAX_RESTORED_BROWSERS),
+      terminals: Math.min(gathered.terminals, MAX_RESTORED_TERMINALS),
+      files: gathered.files.slice(0, MAX_RESTORED_FILES),
+      preview: gathered.preview,
+      activeKind: sessionId === activeSession ? (active?.kind ?? null) : null,
+    };
+  }
+
+  // The cap, applied the way the parser applies it: last entries win, because
+  // last is most recently touched.
+  const keys = Object.keys(next);
+  if (keys.length > MAX_STORED_ARRANGEMENTS) {
+    for (const key of keys.slice(0, keys.length - MAX_STORED_ARRANGEMENTS)) delete next[key];
+  }
+
+  dockArrangements = next;
+  return next;
 }
 
 function quickModelMap(raw: Record<string, unknown>): Record<string, readonly string[]> {
@@ -1819,6 +2035,7 @@ function savePrefs(): void {
     quickModelIdsByProfile: s.quickModelIdsByProfile,
     modelBySession: s.modelBySession,
     dockLayout: captureDockLayout(s),
+    dockLayouts: captureDockArrangements(s),
     conversationWidth: s.conversationWidth,
     runSummary: s.runSummary,
     fontSize: s.fontSize,
@@ -1856,6 +2073,14 @@ function savePrefs(): void {
 }
 
 const prefs = loadPrefs();
+
+/*
+ * The per-session arrangements, read once with everything else. Parsed here
+ * rather than in `loadPrefs` because no store field holds them — the map lives
+ * at module level (see `dockArrangements`) and is consulted when a session is
+ * next opened, not rendered.
+ */
+dockArrangements = parseDockArrangements(prefs.dockLayouts);
 
 /*
  * Resolved once, and applied before the store exists.
@@ -2003,13 +2228,18 @@ export const useApp = create<AppState>(() => ({
   sessionOrderHold: {},
   focusedPaneId: firstPane.id,
   paneLayout: prefs.paneLayout ?? {},
-  preview: null,
+  previews: [],
   files: [],
   terminals: [],
   browsers: [],
   agentViews: [],
   activeDockTab: null,
   visibleDockTabs: [],
+  // Open, because a sheet's closed state only means anything once a sheet
+  // exists — and the first tab opened on a narrow window should appear, not
+  // arrive pre-dismissed.
+  dockSheetOpen: true,
+  terminalSplits: [],
 
   providers: [],
   profiles: [],
@@ -2570,6 +2800,10 @@ export function setTheme(theme: Theme): void {
 export function focusPane(paneId: PaneId): void {
   if (useApp.getState().focusedPaneId === paneId) return;
   useApp.setState({ focusedPaneId: paneId });
+  // The dock follows the focused conversation when its scope says `'pane'`,
+  // and focus is a window write — the pane subscriptions that usually run the
+  // reconcile never hear it.
+  reconcileDock();
   savePrefs();
 }
 
@@ -2631,17 +2865,39 @@ export async function openPreview(path: string, pane: Pane = focusedPane()): Pro
    * between naming the path and getting the bytes back the user may have
    * resumed a different session into this column, and stamping the preview with
    * the conversation that was there when the click happened would hand it an
-   * owner that is already gone — `reconcilePreview` would then close it
+   * owner that is already gone — the reconcile would then close it
    * immediately, which looks like the button not working.
    */
-  useApp.setState({
-    preview: { ...res.value, owner: ownerFor(pane) },
+  const owner = ownerFor(pane);
+
+  /*
+   * One preview per conversation — the singleton rule, kept where it was true.
+   *
+   * A second artifact previewed by the *same* conversation replaces its
+   * preview in place, keeping the tab's id so the strip does not reshuffle
+   * under the click. A different conversation's preview is a different tab and
+   * is left entirely alone, which is the whole point of the previews being a
+   * list: previewing in pane B must not replace what pane A is reading.
+   */
+  const open = useApp
+    .getState()
+    .previews.find((one) => sameConversation(one.owner, owner));
+  const id = open?.id ?? `preview${(previewCounter += 1)}`;
+  const next: PreviewState = { ...res.value, id, owner };
+
+  useApp.setState((s) => ({
+    previews:
+      open === undefined ? [...s.previews, next] : s.previews.map((one) => (one === open ? next : one)),
     // Opening an artifact is a request to look at it. With a terminal already
     // in the rail the tab would otherwise appear behind the one in front, and
     // the click would read as having done nothing.
-    activeDockTab: PREVIEW_TAB,
-  });
+    activeDockTab: { kind: 'preview', id },
+    dockSheetOpen: true,
+  }));
 }
+
+/** Preview tab ids, monotonic for the window's life — `fileCounter`'s twin. */
+let previewCounter = 0;
 
 /** Which conversation a pane is showing, in the shape the dock records. */
 function ownerFor(pane: Pane): DockOwner {
@@ -2655,15 +2911,33 @@ function ownerFor(pane: Pane): DockOwner {
 }
 
 /**
- * Close the preview tab. Nothing to tell the main process — see `preview.ts`.
+ * Do two owners name the same conversation?
+ *
+ * Weaker than equality on purpose: a conversation's owner stamp changes as it
+ * lives — a run id per turn, a session id once `session.started` arrives — and
+ * two stamps taken either side of such a change still name one conversation.
+ * The session id settles it when both sides have one. Failing that, the same
+ * *column* is the same conversation exactly while neither side has learned a
+ * session: a column-owned surface stays with the column as it is used (that is
+ * `ownerIsShown`'s third case), whereas an owner that has a session id a fresh
+ * stamp lacks belongs to a conversation that has since left this column.
+ */
+function sameConversation(a: DockOwner, b: DockOwner): boolean {
+  if (a.sessionId !== undefined || b.sessionId !== undefined) return a.sessionId === b.sessionId;
+  return a.paneId === b.paneId;
+}
+
+/**
+ * Close one preview tab. Nothing to tell the main process — see `preview.ts`.
  *
  * Which tab comes forward is not decided here: dropping the preview is enough,
  * and {@link reconcileDock} settles the strip on the write. See
  * {@link AppState.visibleDockTabs} for why that is the only place it happens.
  */
-export function closePreview(): void {
-  if (useApp.getState().preview === null) return;
-  useApp.setState({ preview: null });
+export function closePreview(id: string): void {
+  const { previews } = useApp.getState();
+  if (!previews.some((one) => one.id === id)) return;
+  useApp.setState({ previews: previews.filter((one) => one.id !== id) });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2694,6 +2968,13 @@ export function closePreview(): void {
 export async function openFile(
   reference: FileReference,
   pane: Pane = focusedPane(),
+  /**
+   * `pin` opens the file straight into a lasting tab, skipping the transient
+   * slot. Only a restore asks for it: the files coming back were open at quit,
+   * which is as deliberate as keeping ever gets, and restoring three of them
+   * through the transient slot would leave one.
+   */
+  intent: { readonly pin?: boolean } = {},
 ): Promise<void> {
   const { bridge } = resolveBridge();
   if (!bridge) return;
@@ -2710,13 +2991,16 @@ export async function openFile(
   const line = reference.line === undefined ? {} : { line: reference.line };
 
   /*
-   * The same path, opened twice, is one tab.
+   * The same path, opened twice, is one tab — and a pinned one now.
    *
    * A link clicked again — or the same file reached from the browser and from
    * the transcript — is a request to *look at* it, not to have two of it. So an
    * open tab for this path in this conversation is re-read (the bytes may have
    * moved on) and brought forward, keeping its id so the strip does not
-   * reshuffle under the click.
+   * reshuffle under the click. Coming back is also the strongest evidence the
+   * strip gets that a file is being read rather than skimmed, so the return
+   * promotes a transient tab to a pinned one — the same judgement an editor's
+   * preview tab makes of a second open.
    *
    * Scoped by owner as well as by path, because two columns on two checkouts
    * can hold the same relative path pointing at different files.
@@ -2725,16 +3009,63 @@ export async function openFile(
     .getState()
     .files.find((one) => one.path === path && one.owner.paneId === owner.paneId);
 
+  /*
+   * A different path lands in the conversation's transient slot, if it has
+   * one. This is e-catch's cap on skim debris: each conversation gets one
+   * tab that follows the reading, and only a pin (or a re-open, above) grants
+   * a lasting place. The replacement keeps the slot's *position* — the new
+   * state is written over the old index — so the strip does not reshuffle,
+   * but it is a new tab with a new id: the file behind it is not the one the
+   * old id named, and a viewer keyed by id must not inherit the other file's
+   * scroll position.
+   */
+  const transient = open === undefined && intent.pin !== true
+    ? useApp
+        .getState()
+        .files.find((one) => !one.pinned && sameConversation(one.owner, owner))
+    : undefined;
+
   const id = open?.id ?? `file${(fileCounter += 1)}`;
-  const next: FileState = { ...res.value, id, owner, ...line };
+  const next: FileState = {
+    ...res.value,
+    id,
+    owner,
+    ...line,
+    pinned: open !== undefined || intent.pin === true,
+  };
 
   useApp.setState((s) => ({
-    files: open === undefined ? [...s.files, next] : s.files.map((one) => (one === open ? next : one)),
+    files:
+      open !== undefined
+        ? s.files.map((one) => (one === open ? next : one))
+        : transient !== undefined
+          ? s.files.map((one) => (one === transient ? next : one))
+          : [...s.files, next],
     // Clicking a path is a request to look at it. With a terminal already in the
     // rail the tab would otherwise open behind the one in front, and the click
     // would read as having done nothing.
     activeDockTab: { kind: 'file', id },
+    dockSheetOpen: true,
   }));
+}
+
+/**
+ * Give a file tab its lasting place in the strip.
+ *
+ * The other half of the transient slot: pinning is the reader saying "this one
+ * stays", after which the next file the conversation opens gets a fresh
+ * transient tab beside it instead of replacing it. One-way by design — an
+ * unpin control would be a second way to close a tab that already has a ✕,
+ * and the ✕ answers to the same intent with less ceremony.
+ */
+export function pinFile(id: string): void {
+  useApp.setState((s) => {
+    const index = s.files.findIndex((one) => one.id === id);
+    if (index < 0 || (s.files[index] as FileState).pinned) return s;
+    const files = [...s.files];
+    files[index] = { ...(files[index] as FileState), pinned: true };
+    return { ...s, files };
+  });
 }
 
 /** Tab ids, monotonic for the window's life. Never reused, so a closed tab's
@@ -3217,6 +3548,47 @@ function showsTasks(state: SessionState): boolean {
   return state.tasks.some((task) => !state.dismissedTasks.includes(task.id));
 }
 
+/**
+ * Whose is this tab?
+ *
+ * The strip's tabs carry ids, not owners; the owners live on the records the
+ * ids name. Per-pane tabs — the folder browser, the delegated list, an agent
+ * transcript — *are* their pane, which is an owner with no run and no session:
+ * exactly the pane-only identity `DockOwner` already models.
+ *
+ * `undefined` only for a tab whose record has just been closed under it, a
+ * state one reconcile wide.
+ */
+export function dockTabOwner(tab: DockTab, state: AppState = useApp.getState()): DockOwner | undefined {
+  switch (tab.kind) {
+    case 'preview':
+      return state.previews.find((one) => one.id === tab.id)?.owner;
+    case 'file':
+      return state.files.find((one) => one.id === tab.id)?.owner;
+    case 'terminal':
+      return state.terminals.find((one) => one.info.id === tab.id)?.owner;
+    case 'browser':
+      return state.browsers.find((one) => one.info.id === tab.id)?.owner;
+    default:
+      return { paneId: tab.paneId };
+  }
+}
+
+/**
+ * The pane currently *showing* a tab's conversation — not necessarily the pane
+ * it was opened in, which is the difference `shownOwning` exists to resolve.
+ * `null` for a tab whose conversation is off screen; the strip never draws
+ * one, so a caller holding a drawn tab can treat this as total.
+ */
+export function dockTabHomePaneId(
+  tab: DockTab,
+  state: AppState = useApp.getState(),
+): PaneId | null {
+  const owner = dockTabOwner(tab, state);
+  if (owner === undefined) return null;
+  return shownOwning(owner, describeShown())?.paneId ?? null;
+}
+
 function describeShown(): readonly ShownConversation[] {
   const next = allPanes().map((pane) => {
     const state = paneState(pane);
@@ -3287,7 +3659,7 @@ function describeShown(): readonly ShownConversation[] {
  */
 function reconcileDock(): void {
   const state = useApp.getState();
-  const { preview, files, terminals, browsers, activeDockTab, visibleDockTabs, agentViews } =
+  const { previews, files, terminals, browsers, activeDockTab, visibleDockTabs, agentViews } =
     state;
 
   /*
@@ -3303,7 +3675,7 @@ function reconcileDock(): void {
    * most four, reading one field each.
    */
   if (
-    preview === null &&
+    previews.length === 0 &&
     files.length === 0 &&
     terminals.length === 0 &&
     browsers.length === 0 &&
@@ -3329,7 +3701,7 @@ function reconcileDock(): void {
   const shown = describeShown();
 
   const patch: {
-    preview?: PreviewState | null;
+    previews?: readonly PreviewState[];
     files?: readonly FileState[];
     terminals?: readonly TerminalRecord[];
     browsers?: readonly BrowserRecord[];
@@ -3337,16 +3709,22 @@ function reconcileDock(): void {
     visibleDockTabs?: readonly DockTab[];
   } = {};
 
-  let nextPreview = preview;
-  if (nextPreview !== null) {
-    const learned = learnSessionId(nextPreview.owner, shown);
-    if (learned !== null) {
-      nextPreview = { ...nextPreview, owner: { ...nextPreview.owner, sessionId: learned } };
-    }
-    // Destroyed, not hidden. The tile in the transcript is the way back.
-    if (!ownerIsShown(nextPreview.owner, shown)) nextPreview = null;
-    if (nextPreview !== preview) patch.preview = nextPreview;
-  }
+  // Previews get the files' treatment exactly — they are the same kind of
+  // thing, a list of snapshots — with the same two moves: adopt the session id
+  // once the owning run learns it, and destroy the view when its conversation
+  // leaves the screen. Destroyed, not hidden: the tile in the transcript is
+  // the way back.
+  const adoptedPreviews = previews.map((one) => {
+    const learned = learnSessionId(one.owner, shown);
+    return learned === null ? one : { ...one, owner: { ...one.owner, sessionId: learned } };
+  });
+  const keptPreviews = adoptedPreviews.filter((one) => ownerIsShown(one.owner, shown));
+  const nextPreviews =
+    keptPreviews.length === previews.length &&
+    keptPreviews.every((one, index) => one === previews[index])
+      ? previews
+      : keptPreviews;
+  if (nextPreviews !== previews) patch.previews = nextPreviews;
 
   // The same two moves, for the same reasons: adopt the session id once the run
   // learns it, and destroy the view when its conversation leaves the screen. The
@@ -3392,13 +3770,21 @@ function reconcileDock(): void {
   if (nextBrowsers !== browsers) patch.browsers = nextBrowsers;
 
   const visible = visibleTabs(
-    nextPreview?.owner ?? null,
+    nextPreviews,
     nextTerminals,
     shown,
     agentViews,
     nextFiles,
     nextBrowsers,
     state.dockAutoOpen,
+    /*
+     * The scope. `'pane'` draws only the focused conversation's tabs — the
+     * 2.0 default, and the answer to "whose dock is it" — and `'all'` is the
+     * explicit everything view. Only the drawing is scoped: every adoption
+     * and destruction above ran against the full `shown`, because narrowing
+     * *those* would have focus changes destroying the other pane's previews.
+     */
+    state.dockScope === 'pane' ? state.focusedPaneId : null,
   );
   const moved =
     visible.length !== visibleDockTabs.length ||
@@ -3431,8 +3817,32 @@ function reconcileDock(): void {
  */
 export function focusDockTab(tab: DockTab): void {
   if (sameTab(useApp.getState().activeDockTab, tab)) return;
-  useApp.setState({ activeDockTab: tab });
+  // Bringing a tab forward is a request to look at it, which on a narrow
+  // window includes presenting the sheet it lives in. A no-op in rail mode.
+  useApp.setState({ activeDockTab: tab, dockSheetOpen: true });
   if (tab.kind === 'terminal') requestTerminalFocus(tab.id);
+}
+
+/**
+ * The pane a dock-level action should act on: the one whose conversation the
+ * strip is showing.
+ *
+ * With the dock scoped to the focused conversation the two coincide and this
+ * is `focusedPane()`. Scoped to all panes they can differ — the strip shows
+ * several conversations and the tab in front names one of them — and an
+ * action button on that strip (`+`, the split) must follow what is *in view*,
+ * not silently act on a column the user may not even be looking at. That was
+ * the old `+`'s bug: four terminals from four panes, and the button opened a
+ * fifth in whichever pane happened to hold focus.
+ */
+export function dockActionPane(state: AppState = useApp.getState()): Pane {
+  if (state.dockScope === 'pane' || state.activeDockTab === null) return focusedPane(state);
+  const owner = dockTabOwner(state.activeDockTab, state);
+  if (owner === undefined) return focusedPane(state);
+  const shown = describeShown();
+  const home = shownOwning(owner, shown);
+  if (home === undefined) return focusedPane(state);
+  return allPanes(state).find((pane) => pane.id === home.paneId) ?? focusedPane(state);
 }
 
 /**
@@ -3459,7 +3869,16 @@ export async function openTerminal(pane: Pane = focusedPane()): Promise<void> {
     return;
   }
 
-  const res = await call(() => bridge.terminal.start({ cwd, cols: 80, rows: 24 }));
+  /*
+   * The guess is informed where it can be: once any terminal has fitted, the
+   * dock's cell size is a measured fact, and the next shell should start at it
+   * rather than at 80×24 — a shell's first prompt is drawn once, at whatever
+   * width it was told, and the correction one frame later cannot redraw it.
+   * The literal only remains for the first terminal a window ever opens,
+   * where there is genuinely nothing to measure yet.
+   */
+  const size = preferredTerminalSize() ?? { cols: 80, rows: 24 };
+  const res = await call(() => bridge.terminal.start({ cwd, cols: size.cols, rows: size.rows }));
   if (!res.ok) {
     pane.transcript.note('warn', 'Could not open a terminal', res.error.message);
     return;
@@ -3492,6 +3911,11 @@ export async function openTerminal(pane: Pane = focusedPane()): Promise<void> {
   useApp.setState((state) => ({
     terminals: [...state.terminals, record],
     activeDockTab: { kind: 'terminal', id: info.id },
+    // Asking for a shell is asking to see it — on a narrow window, that
+    // includes the sheet it lives in. The same line rides every deliberate
+    // open below, and only the deliberate ones: an agent's arrivals never
+    // touch this flag, for `dockAutoOpen`'s reason.
+    dockSheetOpen: true,
   }));
   // Redeemed by `attachTerminal` once `TerminalView` has mounted, so that ⌘J
   // leaves you able to type into the shell you just asked for.
@@ -3518,7 +3942,8 @@ export function toggleTerminal(pane: Pane = focusedPane()): void {
   const state = useApp.getState();
   const shown = describeShown();
   const mine = state.terminals.find(
-    (terminal) => terminal.owner.paneId === pane.id && ownerIsShown(terminal.owner, shown),
+    (terminal) =>
+      ownedByConversationOf(terminal.owner, pane) && ownerIsShown(terminal.owner, shown),
   );
   if (mine === undefined) {
     void openTerminal(pane);
@@ -3542,6 +3967,24 @@ export function toggleTerminal(pane: Pane = focusedPane()): void {
   // In front *and* holding the caret: the press means "let me out", and out is
   // the composer, which is where the caret lives when it is not in a shell.
   focusComposer(pane.id);
+}
+
+/**
+ * Does this owner belong to the conversation this pane is showing?
+ *
+ * The toggles' lookup, and different from "is the owner's pane this pane" in
+ * the one case that used to misfire: a conversation resumed into a different
+ * column still owns its shell, and ⌘J pressed there should bring that shell
+ * forward rather than open a rival — the surface follows the conversation,
+ * which is the whole of ADR 0002 in one keypress. Matching goes by the
+ * conversation the pane is showing, with the pane itself as the identity of a
+ * conversation that has never run anything (`ownerIsShown`'s third case).
+ */
+function ownedByConversationOf(owner: DockOwner, pane: Pane): boolean {
+  if (owner.sessionId !== undefined) {
+    return owner.sessionId === sessionShownBy(paneState(pane));
+  }
+  return owner.paneId === pane.id;
 }
 
 /**
@@ -3569,6 +4012,106 @@ export function closeTerminal(id: TerminalId): void {
 
   const { bridge } = resolveBridge();
   if (bridge) void call(() => bridge.terminal.close({ id }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Terminal splits                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many of a conversation's shells a split will show at once.
+ *
+ * Four — T3 Code's ceiling for a terminal group, adopted with its reasoning: a
+ * fifth cell in a panel this narrow is a porthole, not a terminal. Shells past
+ * the ceiling keep their tabs and are simply not part of the grid.
+ */
+export const MAX_SPLIT_TERMINALS = 4;
+
+/**
+ * The identity a conversation's dock facts are keyed under.
+ *
+ * The session id where one exists — the durable name, the one the arrangement
+ * map uses — and the pane id before there is one, which is the same "a
+ * conversation that has never run anything is its column" reading
+ * `ownerIsShown` makes.
+ */
+function conversationKeyOf(pane: Pane): string {
+  return sessionShownBy(paneState(pane)) ?? pane.id;
+}
+
+/** Is this conversation showing its shells side by side? */
+export function terminalSplitFor(state: AppState, pane: Pane): boolean {
+  return state.terminalSplits.includes(conversationKeyOf(pane));
+}
+
+/**
+ * Show a conversation's shells side by side, or fold them back into tabs.
+ *
+ * A view toggle, not a process action: every shell keeps running and keeps its
+ * tab either way, exactly as hiding does. What changes is that the dock body
+ * draws up to {@link MAX_SPLIT_TERMINALS} of the conversation's terminals in a
+ * grid instead of one at a time — the tail -f beside the pnpm dev, which is
+ * most of why anyone opens a second shell.
+ */
+export function toggleTerminalSplit(pane: Pane = dockActionPane()): void {
+  const key = conversationKeyOf(pane);
+  useApp.setState((s) => ({
+    terminalSplits: s.terminalSplits.includes(key)
+      ? s.terminalSplits.filter((one) => one !== key)
+      : [...s.terminalSplits, key],
+  }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Terminal ↔ chat bridges                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Carry a terminal selection into its conversation's composer.
+ *
+ * T3's bridge, in Artemis's grammar: the shell and the chat sit an inch apart
+ * and the way to show the agent a stack trace was still copy, click, paste.
+ * This appends the selection to the owning conversation's draft as a fenced
+ * block — *appends*, never replaces, because the draft may already hold the
+ * question the trace is evidence for — and hands the caret to the composer,
+ * which is where the user's next act (writing the question) happens.
+ *
+ * The pane is resolved through the owner rather than taken from focus, for the
+ * reason `TaskRow` threads its pane: the dock is a window-level surface, and
+ * the focused pane is exactly the wrong pane whenever the terminal in view
+ * belongs to the other column of a split.
+ */
+export function quoteTerminalSelection(id: TerminalId): void {
+  const text = getTerminalSelection(id).trimEnd();
+  if (text.length === 0) return;
+
+  const owner = useApp.getState().terminals.find((one) => one.info.id === id)?.owner;
+  const pane =
+    owner === undefined
+      ? focusedPane()
+      : (allPanes().find((one) => ownedByConversationOf(owner, one)) ?? focusedPane());
+
+  setPaneState(pane, (s) => ({
+    draft: `${s.draft.length > 0 ? `${s.draft.trimEnd()}\n\n` : ''}\`\`\`\n${text}\n\`\`\`\n`,
+  }));
+  focusComposer(pane.id);
+}
+
+/**
+ * Open a URL clicked in a terminal, beside the conversation it came from.
+ *
+ * The other bridge, and additive on both counts: terminals never linkified at
+ * all before this, and the page opens in the conversation's own dock browser —
+ * a dev server's "ready on localhost:5173" becomes the page one ⌘-click
+ * later, without the trip through an external browser and back.
+ */
+function openTerminalLink(id: TerminalId, url: string): void {
+  const owner = useApp.getState().terminals.find((one) => one.info.id === id)?.owner;
+  const pane =
+    owner === undefined
+      ? focusedPane()
+      : (allPanes().find((one) => ownedByConversationOf(owner, one)) ?? focusedPane());
+  void openBrowser(pane, url);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3601,6 +4144,7 @@ export async function openBrowser(pane: Pane = focusedPane(), query?: string): P
   useApp.setState((state) => ({
     browsers: [...state.browsers, record],
     activeDockTab: { kind: 'browser', id: record.info.id },
+    dockSheetOpen: true,
   }));
 }
 
@@ -3663,18 +4207,29 @@ export function closeBrowser(id: BrowserId): void {
 }
 
 /**
- * The focused conversation's browser — the existing one, or a new one.
+ * The focused conversation's browser — opened, brought forward, or left.
  *
- * `toggleTerminal`'s twin, and the same argument: a key that opened a second
- * page every time it was pressed would fill the strip, so it opens one and
- * brings that one forward afterwards. The `+` menu is the deliberate way to get
- * another.
+ * `toggleTerminal`'s twin, and now the same *kind* of twin all the way down: a
+ * key that opened a second page every time it was pressed would fill the
+ * strip, so it opens one and works with that one afterwards; the header's
+ * button is the deliberate way to get another.
+ *
+ * It is a **focus** toggle, and it never destroys. The second press used to
+ * call {@link closeBrowser} — the exact shape of the ⌘J bug PR #271 fixed for
+ * shells, left in place there to keep that change's scope and fixed here: a
+ * page has a scroll position, a session cookie and possibly a half-filled
+ * form, so the key that opens one being the only thing besides the ✕ that
+ * could destroy one broke the rule the whole dock stands on (see
+ * `state/dock.ts`: only the ✕ ends a live surface). The second press now
+ * means "let me back out", and out is the composer — a page cannot hold the
+ * app's caret the way a shell does, so there is no third state to bounce
+ * through.
  */
 export function toggleBrowser(pane: Pane = focusedPane()): void {
   const state = useApp.getState();
   const shown = describeShown();
   const mine = state.browsers.find(
-    (browser) => browser.owner.paneId === pane.id && ownerIsShown(browser.owner, shown),
+    (browser) => ownedByConversationOf(browser.owner, pane) && ownerIsShown(browser.owner, shown),
   );
   if (mine === undefined) {
     void openBrowser(pane);
@@ -3682,8 +4237,13 @@ export function toggleBrowser(pane: Pane = focusedPane()): void {
   }
 
   const tab: DockTab = { kind: 'browser', id: mine.info.id };
-  if (sameTab(state.activeDockTab, tab)) closeBrowser(mine.info.id);
-  else focusDockTab(tab);
+  if (!sameTab(state.activeDockTab, tab)) {
+    focusDockTab(tab);
+    return;
+  }
+  // In front already: the press means "let me out", and the page is left
+  // exactly as it is. Only the ✕ ends it.
+  focusComposer(pane.id);
 }
 
 /** Which pane a browser belongs to, for reporting a failure where it happened. */
@@ -3762,7 +4322,11 @@ const autoOpened = new Set<string>();
  */
 function maybeAutoOpen(pane: Pane, artifact: Artifact): void {
   const state = useApp.getState();
-  const showing = state.preview;
+  // *This conversation's* preview, not the window's — condition 4 narrowed to
+  // where it was always about: the reader this artifact could interrupt is the
+  // one already reading a preview beside this conversation. What another pane
+  // is previewing is none of this pane's business, in either direction.
+  const showing = state.previews.find((one) => sameConversation(one.owner, ownerFor(pane))) ?? null;
   const sameFile = showing !== null && showing.path === artifact.path;
 
   // A revision of what is already framed refreshes it, whatever else is true:
@@ -5134,7 +5698,7 @@ export function installTerminalFeed(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
 
-  setTerminalSessionHooks({ onTitle: setTerminalTitle });
+  setTerminalSessionHooks({ onTitle: setTerminalTitle, onLink: openTerminalLink });
 
   return bridge.terminal.onEvent((event) => {
     if (event.type === 'data') {
@@ -5523,11 +6087,8 @@ export async function bootstrap(): Promise<void> {
 }
 
 /**
- * Put the dock back the way it was.
- *
- * Runs once, after the panes exist — a terminal is started in *the pane's*
- * directory, which is restored from preferences a few lines above this, so the
- * order matters and is not incidental.
+ * Reopen one arrangement into one pane. The shared machinery of the two
+ * restores below; see them for *when* each runs.
  *
  * ## An arrangement, not a session
  *
@@ -5537,18 +6098,19 @@ export async function bootstrap(): Promise<void> {
  * tabs are the workspace's shape rather than its contents, which is what every
  * editor that restores a window also means by it.
  *
+ * Files come back pinned — see `openFile`'s `pin` — because three of them
+ * restored through the transient slot would leave one, and because a tab that
+ * was open at quit has already outlived a skim.
+ *
  * ## Failures are silent on purpose
  *
  * Every step can legitimately fail — a file the agent has since deleted, a
  * directory that has moved, a page that will not load. None of them is worth a
- * banner at launch: the user did not ask for this to happen, they asked for it
- * *last time*, and a warning about a tab they may not have wanted back is worse
+ * banner: the user did not ask for this to happen, they asked for it *last
+ * time*, and a warning about a tab they may not have wanted back is worse
  * than the tab quietly not appearing.
  */
-async function restoreDockLayout(): Promise<void> {
-  const layout = useApp.getState().dockLayout;
-  const pane = focusedPane();
-
+async function reopenArrangement(layout: DockLayout, pane: Pane): Promise<void> {
   for (const url of layout.browsers) {
     await openBrowser(pane, url).catch(() => undefined);
   }
@@ -5559,7 +6121,7 @@ async function restoreDockLayout(): Promise<void> {
   // restored file has no line to be at — the reader was not sent there, they
   // left it open.
   for (const path of layout.files) {
-    await openFile({ path }).catch(() => undefined);
+    await openFile({ path }, pane, { pin: true }).catch(() => undefined);
   }
   if (layout.preview !== null) await openPreview(layout.preview, pane).catch(() => undefined);
 
@@ -5570,6 +6132,68 @@ async function restoreDockLayout(): Promise<void> {
   if (wanted === null) return;
   const match = useApp.getState().visibleDockTabs.find((tab) => tab.kind === wanted);
   if (match) focusDockTab(match);
+}
+
+/**
+ * Put the conversationless dock back the way it was, at boot.
+ *
+ * Runs once, after the panes exist — a terminal is started in *the pane's*
+ * directory, which is restored from preferences a few lines above this, so the
+ * order matters and is not incidental.
+ *
+ * This is the narrow half of what boot restore used to be. The old rule
+ * restored the whole focused pane's dock here, because the window owned one
+ * dock and the focused pane was the honest ninety per cent; under ADR 0002
+ * every surface a session learned about is filed under that session and comes
+ * back when the *conversation* is next opened ({@link restoreSessionArrangement}),
+ * not draped over the blank pane a launch starts with. What still belongs
+ * here is exactly what has no session to be filed under — shells and pages
+ * opened on a column that never started a conversation — restored into the
+ * fresh blank column, which is the same conversationless place they lived.
+ */
+async function restoreDockLayout(): Promise<void> {
+  await reopenArrangement(useApp.getState().dockLayout, focusedPane());
+}
+
+/**
+ * Give a conversation its dock back, when it is next opened.
+ *
+ * The per-session half of restart, and the moment is the point: the map keys
+ * on session ids because they are the identity that survives a relaunch, so
+ * the restore fires when a session is *resumed*, into whatever pane resumed
+ * it. Ownership is stamped after each open's await, exactly as every open
+ * documents — the pane is showing the session by then, so the fresh surfaces
+ * are session-owned and file themselves back under the same key.
+ *
+ * Once per session per launch, and only into a session that owns no live
+ * surfaces. Both guards protect the same truth from different directions: the
+ * live records are the authority the moment they exist. A session revisited
+ * within a launch re-shows its hidden terminals by `ownerIsShown` — restoring
+ * on top of that would duplicate them — and a session whose shells the user
+ * ✕'d has said what it wants its dock to be, which is empty.
+ */
+async function restoreSessionArrangement(sessionId: SessionId, pane: Pane): Promise<void> {
+  if (dockSessionsRestored.has(sessionId)) return;
+  dockSessionsRestored.add(sessionId);
+
+  const layout = dockArrangements[sessionId];
+  if (layout === undefined) return;
+
+  const { terminals, browsers, files, previews } = useApp.getState();
+  const owns = (owner: DockOwner): boolean => owner.sessionId === sessionId;
+  if (
+    terminals.some((one) => owns(one.owner)) ||
+    browsers.some((one) => owns(one.owner)) ||
+    files.some((one) => owns(one.owner)) ||
+    previews.some((one) => owns(one.owner))
+  ) {
+    return;
+  }
+
+  // From here on, this launch owns the entry: the capture will rewrite it from
+  // the live records, including down to nothing if the user closes everything.
+  dockSessionsTouched.add(sessionId);
+  await reopenArrangement(layout, pane);
 }
 
 export async function refreshProviders(refresh = false): Promise<void> {
@@ -7339,6 +7963,21 @@ export function setShowThinking(on: boolean): void {
 }
 
 /**
+ * Point the dock at this conversation, or at every visible one.
+ *
+ * `reconcileDock` runs on the write for the reason `setDockAutoOpen`'s does:
+ * the scope is a window value, so no pane subscription will run it, and the
+ * strip has to change in the same frame as the chip that was clicked. The
+ * records are untouched in both directions — scope decides what is drawn,
+ * never what exists.
+ */
+export function setDockScope(scope: 'pane' | 'all'): void {
+  useApp.setState({ dockScope: scope });
+  reconcileDock();
+  savePrefs();
+}
+
+/**
  * Decide whether the dock may open, or grow a tab, without being asked.
  *
  * `reconcileDock` runs on the write, which is what makes the switch take
@@ -7346,15 +7985,17 @@ export function setShowThinking(on: boolean): void {
  * agent put up (their records survive — see `visibleTabs`), and turning it on
  * reveals whatever arrived while it was off.
  */
-export function setDockScope(scope: 'pane' | 'all'): void {
-  useApp.setState({ dockScope: scope });
-  savePrefs();
-}
-
 export function setDockAutoOpen(on: boolean): void {
   useApp.setState({ dockAutoOpen: on });
   savePrefs();
   reconcileDock();
+}
+
+/** Open or put away the dock's sheet. Only sheet mode calls it — see
+ *  {@link AppState.dockSheetOpen} for why a rail has no such state. */
+export function setDockSheetOpen(open: boolean): void {
+  if (useApp.getState().dockSheetOpen === open) return;
+  useApp.setState({ dockSheetOpen: open });
 }
 
 export function setEscapeStopsRun(on: boolean): void {
@@ -8671,6 +9312,11 @@ export function resumeSession(session: SessionSummary, pane: Pane = focusedPane(
   // a session from another project leaves the previous project's name sitting
   // over the new project's sessions.
   if (switchedCwd) void refreshWorkspace(target);
+  // The conversation's dock comes back with the conversation — the per-session
+  // half of restart, and a no-op in every case but a session's first opening
+  // since the arrangement was stored. Not awaited: shells and pages must not
+  // hold up the transcript read above them.
+  void restoreSessionArrangement(session.id, target);
 }
 
 /**
