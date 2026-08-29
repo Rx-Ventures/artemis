@@ -17,6 +17,7 @@
     "typecheck:clean": "tsc -b --clean && tsc -b --pretty",
     "smoke": "pnpm run build:libs && tsx scripts/smoke.ts",
     "acp:probe": "tsx scripts/acp-probe.ts",
+    "codex:smoke": "pnpm run build:libs && tsx scripts/smoke-codex.ts",
     "opencode:smoke": "tsx scripts/opencode-smoke.ts",
     "release": "tsx scripts/release.ts",
     "next-version": "tsx scripts/nextVersion.ts",

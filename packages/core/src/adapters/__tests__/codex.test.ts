@@ -14,7 +14,7 @@
  * the run exercises them. Still no real `codex` binary.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -26,6 +26,7 @@ import type {
   PermissionMode,
   ProfileId,
   RunId,
+  SessionId,
 } from '@rx-artemis/protocol';
 
 import {
@@ -624,42 +625,112 @@ describe('toApprovalResponse', () => {
 /* Permission lifecycle on the stream                                         */
 /* -------------------------------------------------------------------------- */
 
+/** Which script the scripted app server follows. */
+type FakeScenario = 'approval' | 'turn' | 'missing-rollout' | 'steer-reject';
+
 /**
  * A scripted stand-in for `codex app-server`, speaking just enough of the
- * protocol to park a run on one approval: it answers the handshake, opens a
- * thread and a turn, then sends a single command-execution approval request
- * and goes quiet. Everything else it is asked gets a `result: null`, which is
- * what lets `turn/interrupt` during dispose come back cleanly.
+ * protocol to play one scenario:
+ *
+ *  - `approval` parks a run on one command-execution approval: it answers the
+ *    handshake, opens a thread and a turn, then sends a single approval
+ *    request and goes quiet.
+ *  - `turn` plays a full turn lifecycle — `thread/started`, `turn/started`,
+ *    `turn/completed` — so a run reaches `run.end` on its own. `thread/resume`
+ *    behaves as 0.147 really does, probed live: the thread comes back in the
+ *    response, nothing announces it, and the thread's prior token usage is
+ *    replayed in the same flush.
+ *  - `missing-rollout` refuses `thread/resume` with the verbatim wording
+ *    Codex 0.147 uses when a thread's rollout file is gone.
+ *  - `steer-reject` opens a turn that never completes and refuses
+ *    `turn/steer`, so `send()`'s failure path is reachable.
+ *
+ * Everything else it is asked gets a `result: null`, which is what lets
+ * `turn/interrupt` during dispose come back cleanly. Every frame it receives
+ * is appended to a JSONL file first, so a test can assert on what the adapter
+ * actually sent — for the resume path, *which* method went on the wire is the
+ * decision under test.
  *
  * The shebang pins the exact Node running this test, so the fake needs no
  * PATH lookup to start.
  */
-const FAKE_APP_SERVER = `#!${process.execPath}
+function fakeAppServerScript(scenario: FakeScenario, framesPath: string): string {
+  return `#!${process.execPath}
 'use strict';
+const fs = require('node:fs');
+const SCENARIO = ${JSON.stringify(scenario)};
+const FRAMES = ${JSON.stringify(framesPath)};
 let buffer = '';
 const write = (frame) => process.stdout.write(JSON.stringify(frame) + '\\n');
 const handle = (message) => {
+  fs.appendFileSync(FRAMES, JSON.stringify(message) + '\\n');
   if (message.method === 'initialize') {
     write({ id: message.id, result: { userAgent: 'fake-codex' } });
     return;
   }
   if (message.method === 'thread/start') {
     write({ id: message.id, result: { thread: { id: 'thread-1' } } });
+    if (SCENARIO !== 'approval') {
+      write({ method: 'thread/started', params: { thread: { id: 'thread-1', cwd: process.cwd() } } });
+    }
+    return;
+  }
+  if (message.method === 'thread/resume') {
+    if (SCENARIO === 'missing-rollout') {
+      write({
+        id: message.id,
+        error: { code: -32600, message: 'no rollout found for thread id ' + message.params.threadId },
+      });
+      return;
+    }
+    // Verbatim 0.147, probed live: the response carries the thread and
+    // *nothing announces it* — no thread/started — while the thread's token
+    // usage from previous turns is replayed immediately. One write, so both
+    // frames land in one chunk the way a real pipe delivers them.
+    process.stdout.write(
+      JSON.stringify({
+        id: message.id,
+        result: {
+          thread: { id: message.params.threadId, cwd: process.cwd(), cliVersion: '0.147.0' },
+        },
+      }) + '\\n' + JSON.stringify({
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: message.params.threadId,
+          turnId: 'turn-0',
+          tokenUsage: {
+            total: { totalTokens: 110, inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 },
+            last: { totalTokens: 110, inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 },
+          },
+        },
+      }) + '\\n',
+    );
     return;
   }
   if (message.method === 'turn/start') {
     write({ id: message.id, result: { turn: { id: 'turn-1' } } });
-    write({
-      id: 999,
-      method: 'item/commandExecution/requestApproval',
-      params: {
-        threadId: 'thread-1',
-        turnId: 'turn-1',
-        itemId: 'item-1',
-        command: 'rm -rf ./build',
-        cwd: process.cwd(),
-      },
-    });
+    if (SCENARIO === 'approval') {
+      write({
+        id: 999,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'item-1',
+          command: 'rm -rf ./build',
+          cwd: process.cwd(),
+        },
+      });
+      return;
+    }
+    write({ method: 'turn/started', params: { turn: { id: 'turn-1' } } });
+    if (SCENARIO === 'turn') {
+      write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+    }
+    return;
+  }
+  if (message.method === 'turn/steer' && SCENARIO === 'steer-reject') {
+    write({ id: message.id, error: { code: -32600, message: 'steer refused: no live turn' } });
     return;
   }
   if (typeof message.method === 'string' && message.id !== undefined) {
@@ -679,20 +750,31 @@ process.stdin.on('data', (chunk) => {
   }
 });
 `;
+}
 
 interface FakeRunHarness {
   readonly run: Run;
   readonly events: readonly AgentEvent[];
   /** Resolve the first event matching `predicate`, seen already or still to come. */
   waitFor(predicate: (event: AgentEvent) => boolean): Promise<AgentEvent>;
+  /** Every frame the fake has received so far, parsed, in arrival order. */
+  frames(): Promise<readonly Record<string, unknown>[]>;
   cleanup(): Promise<void>;
 }
 
+interface StartFakeRunOptions {
+  readonly scenario?: FakeScenario;
+  readonly resumeSessionId?: SessionId;
+}
+
 /** Start a real CodexRun against the scripted server, with its stream pumped. */
-async function startFakeRun(): Promise<FakeRunHarness> {
+async function startFakeRun(options?: StartFakeRunOptions): Promise<FakeRunHarness> {
   const dir = await mkdtemp(path.join(tmpdir(), 'artemis-codex-fake-'));
   const script = path.join(dir, 'fake-codex.cjs');
-  await writeFile(script, FAKE_APP_SERVER, { mode: 0o755 });
+  const framesPath = path.join(dir, 'frames.jsonl');
+  await writeFile(script, fakeAppServerScript(options?.scenario ?? 'approval', framesPath), {
+    mode: 0o755,
+  });
   const codexHome = path.join(dir, 'home');
   await mkdir(codexHome);
 
@@ -704,6 +786,9 @@ async function startFakeRun(): Promise<FakeRunHarness> {
     prompt: 'build the thing',
     runId: 'run-fake' as RunId,
     env: { [CODEX_HOME_ENV]: codexHome },
+    ...(options?.resumeSessionId === undefined
+      ? {}
+      : { resumeSessionId: options.resumeSessionId }),
   });
 
   const events: AgentEvent[] = [];
@@ -745,13 +830,23 @@ async function startFakeRun(): Promise<FakeRunHarness> {
     });
   };
 
+  // The fake appends each frame before it answers, so by the time an event
+  // provoked by a request reaches this side, the request is on disk.
+  const frames = async (): Promise<readonly Record<string, unknown>[]> => {
+    const text = await readFile(framesPath, 'utf8').catch(() => '');
+    return text
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  };
+
   const cleanup = async (): Promise<void> => {
     await run.dispose();
     await pumpDone;
     await rm(dir, { recursive: true, force: true });
   };
 
-  return { run, events, waitFor, cleanup };
+  return { run, events, waitFor, frames, cleanup };
 }
 
 describe('CodexRun — permission.resolved on the stream', () => {
@@ -822,6 +917,133 @@ describe('CodexRun — permission.resolved on the stream', () => {
       // The resolution must land on the stream, ahead of the terminal event.
       const types = harness.events.map((event) => event.type);
       expect(types.indexOf('permission.resolved')).toBeLessThan(types.indexOf('run.end'));
+    } finally {
+      await harness.cleanup();
+    }
+  });
+});
+
+describe('CodexRun — resuming a thread', () => {
+  /*
+   * Why these exist: `resumeSessionId` is the seam every follow-up message in
+   * an existing Codex conversation goes through, and nothing at the adapter
+   * level proved what it puts on the wire. "Cannot send follow-up messages in
+   * Codex sessions" is the failure these pin down from both ends — the
+   * request that must be `thread/resume` rather than a fresh `thread/start`,
+   * and what the user is told when the server has no rollout left to resume.
+   */
+
+  const RESUME_ID = 'thread-9' as SessionId;
+
+  it('opens a fresh run with thread/start and never thread/resume', async () => {
+    const harness = await startFakeRun({ scenario: 'turn' });
+    try {
+      const end = await harness.waitFor((event) => event.type === 'run.end');
+      if (end.type !== 'run.end') throw new Error('unreachable');
+      expect(end.reason).toBe('completed');
+
+      const methods = (await harness.frames()).map((frame) => frame['method']);
+      expect(methods).toContain('thread/start');
+      expect(methods).not.toContain('thread/resume');
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('resumes with thread/resume, naming the stored thread id', async () => {
+    const harness = await startFakeRun({ scenario: 'turn', resumeSessionId: RESUME_ID });
+    try {
+      await harness.waitFor((event) => event.type === 'run.end');
+
+      const frames = await harness.frames();
+      expect(frames.map((frame) => frame['method'])).not.toContain('thread/start');
+      const resume = frames.find((frame) => frame['method'] === 'thread/resume');
+      expect(resume?.['params']).toMatchObject({ threadId: RESUME_ID });
+      // The turn must go to the resumed thread, not to a fresh one.
+      const turn = frames.find((frame) => frame['method'] === 'turn/start');
+      expect(turn?.['params']).toMatchObject({ threadId: RESUME_ID });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('announces the resumed session with resumedFrom, and completes', async () => {
+    /*
+     * The reported bug, reproduced: 0.147 sends no `thread/started` for a
+     * resumed thread, so an adapter waiting for the notification never emits
+     * `session.started` — no session id is recorded, `send()` has no thread
+     * to name, and every follow-up message fails. The announcement has to
+     * come from the `thread/resume` response instead, and it has to come
+     * *first*: the usage replayed alongside the response belongs to turns
+     * already paid for, not to this run.
+     */
+    const harness = await startFakeRun({ scenario: 'turn', resumeSessionId: RESUME_ID });
+    try {
+      const started = await harness.waitFor((event) => event.type === 'session.started');
+      if (started.type !== 'session.started') throw new Error('unreachable');
+      expect(started.sessionId).toBe(RESUME_ID);
+      expect(started.resumedFrom).toBe(RESUME_ID);
+
+      const end = await harness.waitFor((event) => event.type === 'run.end');
+      if (end.type !== 'run.end') throw new Error('unreachable');
+      expect(end.reason).toBe('completed');
+
+      expect(harness.events[0]?.type).toBe('session.started');
+      // The replayed pre-turn usage is dropped, not re-reported: emitting it
+      // would put `usage` ahead of `session.started` and count the previous
+      // turns' tokens into this run's final total.
+      expect(harness.events.some((event) => event.type === 'usage')).toBe(false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('says the history is gone when the rollout is missing, not "transport"', async () => {
+    /*
+     * The server's answer for a deleted — or never-persisted — rollout is a
+     * -32600 whose message is the only signal (see `isMissingRollout`). Left
+     * to `#connect`'s generic catch, that surfaced as an opaque `transport`
+     * error naming the wire method and a JSON-RPC code; the user trying to
+     * continue a conversation was told nothing actionable. The honest answer
+     * is that the thread's history no longer exists and a new conversation is
+     * the way forward.
+     */
+    const harness = await startFakeRun({
+      scenario: 'missing-rollout',
+      resumeSessionId: RESUME_ID,
+    });
+    try {
+      const end = await harness.waitFor((event) => event.type === 'run.end');
+      if (end.type !== 'run.end') throw new Error('unreachable');
+      expect(end.reason).toBe('error');
+      expect(end.error?.code).toBe('invalid_request');
+      expect(end.error?.message).toBe(
+        `Codex has no stored history for session ${RESUME_ID} — its rollout file is gone, so this conversation cannot be continued. Start a new conversation.`,
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('surfaces a rejected steer as a transport failure from send()', async () => {
+    // Pins current behaviour: the server refusing `turn/steer` makes `send()`
+    // throw rather than silently dropping the user's follow-up. The run
+    // itself stays alive — only the steer failed.
+    const harness = await startFakeRun({ scenario: 'steer-reject' });
+    try {
+      await harness.waitFor((event) => event.type === 'session.started');
+
+      let thrown: unknown;
+      try {
+        await harness.run.send('and another thing');
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isAdapterError(thrown)).toBe(true);
+      if (!isAdapterError(thrown)) throw new Error('unreachable');
+      expect(thrown.agentError.code).toBe('transport');
+      expect(thrown.message).toMatch(/Could not steer the Codex turn/);
+      expect(harness.events.some((event) => event.type === 'run.end')).toBe(false);
     } finally {
       await harness.cleanup();
     }

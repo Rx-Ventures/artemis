@@ -1505,19 +1505,49 @@ class CodexRun implements Run {
       return requireThreadId(response);
     }
 
-    if (this.#input.forkSession === true) {
-      const response = await session.request(CODEX_METHOD.threadFork, {
-        threadId: resume,
-        cwd: this.#input.cwd,
-      });
-      return requireThreadId(response);
+    try {
+      const response =
+        this.#input.forkSession === true
+          ? await session.request(CODEX_METHOD.threadFork, {
+              threadId: resume,
+              cwd: this.#input.cwd,
+            })
+          : await session.request(CODEX_METHOD.threadResume, {
+              threadId: resume,
+              cwd: this.#input.cwd,
+            });
+      const threadId = requireThreadId(response);
+      /*
+       * Announce the session ourselves. `thread/started` fires for *new*
+       * threads only — verified against 0.147, which answers `thread/resume`
+       * with the thread object and announces nothing — so a run that waited
+       * for the notification never emitted `session.started`, never recorded
+       * a session id, and left `send()` with no thread to name: every
+       * follow-up message failed. The response is the same `{ thread }`
+       * payload the notification carries, so it maps directly; on a server
+       * that announces both, `mapThreadStarted` deduplicates.
+       */
+      this.#onNotification(CODEX_NOTIFICATION.threadStarted, response);
+      return threadId;
+    } catch (error) {
+      /*
+       * "No rollout found" is the server saying the thread's history file no
+       * longer exists — deleted, or never persisted in the first place. Left
+       * to `#connect`'s generic catch it surfaced as a `transport` error
+       * naming the wire method and a JSON-RPC code, which told the user
+       * trying to send a follow-up message nothing actionable. This is a
+       * fact about the request rather than the transport, and the only way
+       * forward is a fresh thread — so say exactly that.
+       */
+      if (isMissingRollout(error)) {
+        throw adapterError(
+          'invalid_request',
+          `Codex has no stored history for session ${resume} — its rollout file is gone, so this conversation cannot be continued. Start a new conversation.`,
+          { cause: error },
+        );
+      }
+      throw error;
     }
-
-    const response = await session.request(CODEX_METHOD.threadResume, {
-      threadId: resume,
-      cwd: this.#input.cwd,
-    });
-    return requireThreadId(response);
   }
 
   async #startTurn(session: AppServerSession, threadId: string): Promise<void> {

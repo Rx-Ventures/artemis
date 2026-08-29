@@ -27,11 +27,17 @@
  * doing. Set `CODEX_SMOKE_HOME` to use a different directory. The *workspace*
  * the agent runs in is always a fresh `mkdtemp` that is removed on the way out.
  *
+ * Set `CODEX_SMOKE_RESUME=1` for a second turn: after the first run ends, the
+ * script checks whether Codex left a rollout file for the session on disk —
+ * printed loudly as PERSISTED or MISSING, because a session with no rollout is
+ * one no follow-up message can ever reach — then resumes the session and
+ * checks that its `session.started` carries `resumedFrom`.
+ *
  * Exit codes: `0` the run ended normally, `1` the run ended in an error or
  * broke the event contract, `2` the script could not get as far as starting.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,6 +63,15 @@ const MODE = (process.env['CODEX_SMOKE_MODE'] ?? 'plan') as PermissionMode;
  * talked into doing something; `allow` exercises the accept path.
  */
 const ANSWER = process.env['CODEX_SMOKE_ANSWER'] === 'allow' ? 'allow' : 'deny';
+
+/**
+ * Run a second, resumed turn after the first completes.
+ *
+ * Off by default because it doubles what the smoke costs. This is the probe
+ * for "cannot send follow-up messages": did turn one leave a rollout file on
+ * disk, and does `thread/resume` then reach it?
+ */
+const RESUME = process.env['CODEX_SMOKE_RESUME'] === '1';
 
 function label(event: AgentEvent): string {
   switch (event.type) {
@@ -145,6 +160,26 @@ function checkContract(events: readonly AgentEvent[]): string[] {
   return problems;
 }
 
+/**
+ * Locate the rollout file a session should have left on disk.
+ *
+ * Codex writes one JSONL per thread under `$CODEX_HOME/sessions/`, sharded by
+ * date (`YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl`), with the thread
+ * id in the filename. Found-or-not is the whole answer: a session Artemis can
+ * name but Codex never persisted is one no follow-up message can ever reach.
+ */
+async function findRolloutFile(codexHome: string, sessionId: string): Promise<string | undefined> {
+  const root = join(codexHome, 'sessions');
+  try {
+    const entries = await readdir(root, { recursive: true });
+    const match = entries.find((entry) => entry.includes(sessionId));
+    return match === undefined ? undefined : join(root, match);
+  } catch {
+    // No sessions directory at all — nothing was ever persisted there.
+    return undefined;
+  }
+}
+
 async function main(): Promise<number> {
   const workspace = await mkdtemp(join(tmpdir(), 'artemis-codex-smoke-'));
   console.log(`workspace  ${workspace}`);
@@ -212,6 +247,67 @@ async function main(): Promise<number> {
     console.log('event contract: VIOLATED');
     for (const problem of problems) console.log(`  ✗ ${problem}`);
     exitCode = 1;
+  }
+
+  // The follow-up-message probe, ported from `opencode-smoke.ts`: resume the
+  // session the first turn created and watch what comes back.
+  const sessionId = events.find((e) => e.type === 'session.started')?.sessionId;
+  if (RESUME && sessionId === undefined) {
+    console.log('\n✗ resume requested, but the first run never reported a session id');
+    exitCode = 1;
+  }
+  if (RESUME && sessionId !== undefined) {
+    // Disk first, server second: whether a rollout file exists is a fact this
+    // script can read without asking Codex, and it decides how to interpret
+    // whatever `thread/resume` says next.
+    const rollout = await findRolloutFile(CODEX_HOME, sessionId);
+    if (rollout === undefined) {
+      console.log(
+        `\n!!! rollout MISSING — nothing for ${sessionId} under ${join(CODEX_HOME, 'sessions')}`,
+      );
+      exitCode = 1;
+    } else {
+      console.log(`\n✓ rollout PERSISTED — ${rollout}`);
+    }
+
+    console.log(`\nresuming ${sessionId}`);
+    try {
+      const resumed = await adapter.createRun({
+        ...input,
+        runId: 'smoke-run-2',
+        prompt: 'In one word, what did you just say?',
+        resumeSessionId: sessionId,
+      });
+
+      let resumedFrom: string | undefined;
+      for await (const event of resumed.events) {
+        console.log(`${String(event.seq).padStart(3)} ${event.type.padEnd(18)} ${label(event)}`);
+        if (event.type === 'session.started') resumedFrom = event.resumedFrom;
+        if (event.type === 'permission.request') {
+          console.log(`      → ${ANSWER}`);
+          await resumed.respondToPermission(
+            event.requestId,
+            ANSWER === 'allow' ? { behavior: 'allow' } : { behavior: 'deny' },
+          );
+        }
+        if (event.type === 'run.end' && event.reason === 'error') exitCode = 1;
+      }
+      await resumed.dispose();
+
+      // A resumed stream that does not say so would splice into the renderer
+      // as a brand-new conversation.
+      if (resumedFrom === sessionId) {
+        console.log(`\n✓ resume — session.started carried resumedFrom ${resumedFrom}`);
+      } else {
+        console.log(`\n✗ resume — resumedFrom was ${resumedFrom ?? 'absent'}, expected ${sessionId}`);
+        exitCode = 1;
+      }
+    } catch (error) {
+      console.error(
+        `\n✗ resume failed to start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      exitCode = 1;
+    }
   }
 
   await rm(workspace, { recursive: true, force: true });

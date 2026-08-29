@@ -46,6 +46,19 @@ function feed(
   return mapCodexNotification(method, params as JsonValue, state);
 }
 
+/**
+ * A state whose session has been announced, which is when turn and item
+ * notifications really arrive — the mapper holds everything until then, so a
+ * fresh state would reduce these tests to asserting on the hold.
+ */
+function startedState(
+  options?: Parameters<typeof createCodexMapperState>[1],
+): CodexMapperState {
+  const state = makeState(options);
+  feed(state, 'thread/started', { thread: { id: 'th-1', cwd: '/work' } });
+  return state;
+}
+
 /** The event sequence a real single-message turn produces, in observed order. */
 function runSimpleTurn(state: CodexMapperState): AgentEvent[] {
   const events: AgentEvent[] = [];
@@ -116,6 +129,19 @@ describe('the ordering contract', () => {
     expect(feed(state, 'turn/completed', { turn: { id: 'tu-2', status: 'completed' } })).toEqual([]);
   });
 
+  it('holds everything until the session is announced', () => {
+    // Real on 0.147, not defensive: `thread/resume` replays the thread's
+    // token usage ahead of any announcement. Mapping it would put `usage`
+    // before `session.started` and bill this run for turns it never ran.
+    const state = makeState();
+    const events = feed(state, 'thread/tokenUsage/updated', {
+      tokenUsage: { last: { totalTokens: 110, inputTokens: 100, outputTokens: 10 } },
+    });
+
+    expect(events).toEqual([]);
+    expect(state.usageTotal.seen).toBe(false);
+  });
+
   it('ignores a second thread/started rather than emitting a second session.started', () => {
     const state = makeState();
     feed(state, 'thread/started', { thread: { id: 'th-1', cwd: '/work' } });
@@ -179,17 +205,17 @@ describe('text', () => {
   });
 
   it('ignores an empty delta', () => {
-    const state = makeState();
+    const state = startedState();
     expect(feed(state, 'item/agentMessage/delta', { itemId: 'it-1', delta: '' })).toEqual([]);
   });
 
   it('ignores a delta with no item id', () => {
-    const state = makeState();
+    const state = startedState();
     expect(feed(state, 'item/agentMessage/delta', { delta: 'orphan' })).toEqual([]);
   });
 
   it('does not echo the user message back into the transcript', () => {
-    const state = makeState();
+    const state = startedState();
     const started = feed(state, 'item/started', { item: { type: 'userMessage', id: 'it-0' } });
     const completed = feed(state, 'item/completed', { item: { type: 'userMessage', id: 'it-0' } });
 
@@ -200,7 +226,7 @@ describe('text', () => {
 
 describe('thinking', () => {
   it('maps both reasoning delta channels', () => {
-    const state = makeState();
+    const state = startedState();
     const text = feed(state, 'item/reasoning/textDelta', { itemId: 'r-1', delta: 'considering' });
     const summary = feed(state, 'item/reasoning/summaryTextDelta', { itemId: 'r-1', delta: 'plan' });
 
@@ -209,7 +235,7 @@ describe('thinking', () => {
   });
 
   it('emits nothing when a reasoning item completes', () => {
-    const state = makeState();
+    const state = startedState();
     // Re-emitting the item's content here would duplicate the whole block,
     // which already arrived as deltas.
     expect(
@@ -229,7 +255,7 @@ describe('tool calls', () => {
   };
 
   it('brackets a shell command with tool.start and tool.end', () => {
-    const state = makeState();
+    const state = startedState();
     const [start] = feed(state, 'item/started', { item: commandItem });
     const [end] = feed(state, 'item/completed', {
       item: { ...commandItem, status: 'completed', exitCode: 0, aggregatedOutput: 'one\n', durationMs: 12 },
@@ -253,7 +279,7 @@ describe('tool calls', () => {
   });
 
   it('reports a non-zero exit as a failed tool, not a failed run', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: commandItem });
     const [end] = feed(state, 'item/completed', {
       item: { ...commandItem, status: 'failed', exitCode: 2, aggregatedOutput: 'nope' },
@@ -271,7 +297,7 @@ describe('tool calls', () => {
     // Caught by the end-to-end smoke test: `declined` carries no exit code, so
     // before this was handled it fell through to `ok` and a command the user
     // had just refused rendered as one that ran and succeeded.
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: commandItem });
     const [end] = feed(state, 'item/completed', {
       item: { ...commandItem, status: 'declined' },
@@ -282,7 +308,7 @@ describe('tool calls', () => {
   });
 
   it('reports a refused file change as denied, not as an error', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: { type: 'fileChange', id: 'fc-1', changes: [] } });
     const [end] = feed(state, 'item/completed', {
       item: { type: 'fileChange', id: 'fc-1', status: 'declined' },
@@ -294,7 +320,7 @@ describe('tool calls', () => {
   });
 
   it('still reports a genuinely failed file change as an error', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: { type: 'fileChange', id: 'fc-2', changes: [] } });
     const [end] = feed(state, 'item/completed', {
       item: { type: 'fileChange', id: 'fc-2', status: 'failed' },
@@ -304,7 +330,7 @@ describe('tool calls', () => {
   });
 
   it('names a file change by its paths', () => {
-    const state = makeState();
+    const state = startedState();
     const [start] = feed(state, 'item/started', {
       item: { type: 'fileChange', id: 'fc-1', changes: [{ path: 'src/a.ts' }, { path: 'src/b.ts' }] },
     });
@@ -313,7 +339,7 @@ describe('tool calls', () => {
   });
 
   it('names an MCP call server.tool', () => {
-    const state = makeState();
+    const state = startedState();
     const [start] = feed(state, 'item/started', {
       item: { type: 'mcpToolCall', id: 'mcp-1', server: 'railway', tool: 'deploy', arguments: { id: 7 } },
     });
@@ -322,7 +348,7 @@ describe('tool calls', () => {
   });
 
   it('surfaces an MCP error as a failed tool', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: { type: 'mcpToolCall', id: 'm-1', server: 's', tool: 't' } });
     const [end] = feed(state, 'item/completed', {
       item: { type: 'mcpToolCall', id: 'm-1', server: 's', tool: 't', error: { message: 'boom' } },
@@ -333,14 +359,14 @@ describe('tool calls', () => {
   });
 
   it('ignores a duplicate item/started for an id already open', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: commandItem });
     expect(feed(state, 'item/started', { item: commandItem })).toEqual([]);
     expect(state.openToolCalls.size).toBe(1);
   });
 
   it('emits exactly one tool.end even if item/completed arrives twice', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: commandItem });
     const first = feed(state, 'item/completed', { item: { ...commandItem, exitCode: 0 } });
     const second = feed(state, 'item/completed', { item: { ...commandItem, exitCode: 0 } });
@@ -350,7 +376,7 @@ describe('tool calls', () => {
   });
 
   it('drops an item type it does not model, without throwing', () => {
-    const state = makeState();
+    const state = startedState();
     expect(feed(state, 'item/started', { item: { type: 'imageGeneration', id: 'ig-1' } })).toEqual([]);
     expect(feed(state, 'item/completed', { item: { type: 'imageGeneration', id: 'ig-1' } })).toEqual([]);
   });
@@ -358,7 +384,7 @@ describe('tool calls', () => {
 
 describe('flushCodexToolCalls', () => {
   it('cancels every open call so no spinner is left running', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: { type: 'commandExecution', id: 'c-1', command: 'sleep 60' } });
     feed(state, 'item/started', { item: { type: 'webSearch', id: 'w-1', query: 'artemis' } });
 
@@ -371,7 +397,7 @@ describe('flushCodexToolCalls', () => {
   });
 
   it('does not re-close a call that already ended', () => {
-    const state = makeState();
+    const state = startedState();
     feed(state, 'item/started', { item: { type: 'commandExecution', id: 'c-1', command: 'ls' } });
     feed(state, 'item/completed', { item: { type: 'commandExecution', id: 'c-1', command: 'ls', exitCode: 0 } });
 
@@ -397,7 +423,7 @@ describe('flushCodexToolCalls', () => {
 
 describe('usage', () => {
   it('reports each notification as a delta, not a cumulative total', () => {
-    const state = makeState();
+    const state = startedState();
     const [event] = feed(state, 'thread/tokenUsage/updated', {
       tokenUsage: {
         total: { totalTokens: 27236, inputTokens: 27053, cachedInputTokens: 14080, outputTokens: 183 },
@@ -455,8 +481,31 @@ describe('usage', () => {
   });
 
   it('ignores a usage notification with no `last` breakdown', () => {
-    const state = makeState();
+    const state = startedState();
     expect(feed(state, 'thread/tokenUsage/updated', { tokenUsage: { total: { totalTokens: 1 } } })).toEqual([]);
+  });
+
+  it('drops usage replayed from a turn this run did not start', () => {
+    const state = startedState();
+
+    // The replay a resumed thread sends before any turn of its own begins —
+    // the previous turn's bill, already reported by the run that spent it.
+    expect(
+      feed(state, 'thread/tokenUsage/updated', {
+        turnId: 'tu-0',
+        tokenUsage: { last: { totalTokens: 110, inputTokens: 100, outputTokens: 10 } },
+      }),
+    ).toEqual([]);
+    expect(state.usageTotal.seen).toBe(false);
+
+    // The live turn's own report still lands.
+    feed(state, 'turn/started', { turn: { id: 'tu-1' } });
+    const [event] = feed(state, 'thread/tokenUsage/updated', {
+      turnId: 'tu-1',
+      tokenUsage: { last: { totalTokens: 50, inputTokens: 40, outputTokens: 10 } },
+    });
+    expect(event).toMatchObject({ type: 'usage' });
+    expect(state.usageTotal.inputTokens).toBe(40);
   });
 });
 
@@ -540,7 +589,7 @@ describe('run.end', () => {
 
 describe('turn/started', () => {
   it('records the turn id, which turn/steer cannot work without', () => {
-    const state = makeState();
+    const state = startedState();
     const events = feed(state, 'turn/started', { turn: { id: 'tu-42', status: 'inProgress' } });
 
     expect(events).toEqual([]);
@@ -550,7 +599,8 @@ describe('turn/started', () => {
 
 describe('robustness', () => {
   it('drops every notification it does not model, silently', () => {
-    const state = makeState();
+    const state = startedState();
+    const seqBefore = state.seq;
     for (const method of [
       'mcpServer/startupStatus/updated',
       'hook/started',
@@ -564,7 +614,8 @@ describe('robustness', () => {
     ]) {
       expect(feed(state, method, { anything: true })).toEqual([]);
     }
-    expect(state.seq).toBe(0);
+    // Dropped means dropped: no event, and no `seq` burned either.
+    expect(state.seq).toBe(seqBefore);
   });
 
   it('survives payloads of entirely the wrong shape', () => {
