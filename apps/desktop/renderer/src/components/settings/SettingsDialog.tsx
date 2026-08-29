@@ -41,35 +41,44 @@
  * open", kept because every existing `setScreen('profiles')` call site is a
  * correct request to open this — and the pane is `settingsSection`. Neither is
  * local state: the command palette, the model picker's "manage models" link and
- * the ⌘, hotkey all need to open this dialog *on a particular pane*, and a
- * component that owned its own section could not be aimed from outside.
+ * the ⌘, hotkey all need to open this dialog *on a particular pane* — sometimes
+ * on a particular row of it (`settingsRow`, the `data-settings-row` anchors) —
+ * and a component that owned its own section could not be aimed from outside.
+ * Sections are *addresses*: the store's `resolveSettingsSection` maps ids whose
+ * panes have since merged onto the pane that answers for them now, so old deep
+ * links and old preference files keep working across reorganisations.
  */
 
-import type { ReactElement } from 'react';
+import { useEffect, useRef, type ReactElement } from 'react';
 import {
   BotIcon,
   BoxesIcon,
-  BrainIcon,
   CalendarClockIcon,
-  GlobeIcon,
+  GaugeIcon,
   KeyRoundIcon,
+  LaptopIcon,
   PaletteIcon,
   ServerIcon,
   ShieldIcon,
-  SlidersHorizontalIcon,
 } from 'lucide-react';
 
 import { ProfilesSection } from '../ProfilesScreen';
 import { AdvancedSection } from './AdvancedSection';
-import { AgentsSection } from './AgentsSection';
 import { AppearanceSection } from './AppearanceSection';
-import { BrowserSection } from './BrowserSection';
-import { MemoryBanksSection } from './MemoryBanksSection';
+import { InstructionsSection } from './InstructionsSection';
 import { ModelsSection } from './ModelsSection';
 import { PermissionsSection } from './PermissionsSection';
+import { RunsSection } from './RunsSection';
 import { ServerSection } from './ServerSection';
 import { RoutinesSection } from './RoutinesSection';
-import { closeSettings, setSettingsSection, useApp, type SettingsSection } from '../../state/store';
+import {
+  clearSettingsRow,
+  closeSettings,
+  resolveSettingsSection,
+  setSettingsSection,
+  useApp,
+  type SettingsSection,
+} from '../../state/store';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -89,99 +98,161 @@ interface SectionEntry {
   readonly icon: ReactElement;
 }
 
+interface NavBand {
+  /** The small-caps rule over the band. */
+  readonly label: string;
+  readonly sections: readonly SectionEntry[];
+}
+
 /**
- * The nav, in the order the panes were designed to be met.
+ * The nav: two bands, each in the order its panes were designed to be met.
  *
- * Profiles first because without one nothing else in this dialog can be
- * answered: the model catalogue is fetched with a profile's credential, and the
- * permission modes come from the provider that profile names.
+ * The bands are the real division in what this dialog holds. Everything in
+ * the first configures *your* work — accounts, models, runs, what the agent is
+ * told and allowed, how it all looks. Everything in the second is about the
+ * app as a fixture on this computer: lending the accounts out, spending them
+ * on a schedule, and the facts that stay behind when a profile moves on. A
+ * flat list buried that seam, and the panes at the bottom read as an appendix
+ * rather than as a different kind of question.
+ *
+ * Only canonical ids appear here. The historical addresses — `browser`,
+ * `cerebro` — still resolve (see `resolveSettingsSection`), they just no
+ * longer earn a row: a nav entry per address would draw two doors into one
+ * room.
+ *
+ * Exported for the nav-shape test, which exists so that a future rename or
+ * reorder breaks an assertion instead of a deep link.
  */
-const SECTIONS: readonly SectionEntry[] = [
+export const SETTINGS_NAV: readonly NavBand[] = [
   {
-    id: 'profiles',
-    label: 'Profiles',
-    hint: 'Accounts and sign-in',
-    icon: <KeyRoundIcon aria-hidden="true" />,
+    label: 'Settings',
+    sections: [
+      // Profiles first because without one nothing else in this dialog can be
+      // answered: the model catalogue is fetched with a profile's credential,
+      // and the permission modes come from the provider that profile names.
+      {
+        id: 'profiles',
+        label: 'Profiles',
+        hint: 'Accounts and sign-in',
+        icon: <KeyRoundIcon aria-hidden="true" />,
+      },
+      {
+        id: 'models',
+        label: 'Models',
+        hint: 'Catalogue and quick access',
+        icon: <BoxesIcon aria-hidden="true" />,
+      },
+      // After the catalogue and before everything the run carries: Runs is
+      // where the next run's shape is decided — flags, the end-of-run report,
+      // the handover — and deciding it means knowing what the models can do,
+      // which is the pane directly above.
+      {
+        id: 'runs',
+        label: 'Runs',
+        hint: 'Speed, spend, handover',
+        icon: <GaugeIcon aria-hidden="true" />,
+      },
+      // The id keeps its historical name: deep links (`openSettings('agents')`)
+      // predate the rename, and an id is an address, not a label. The pane
+      // holds the standing prompts *and* the memory banks — the rule and its
+      // best instance, in that order; see `InstructionsSection` for the
+      // argument, which used to live here as a note about their adjacency.
+      {
+        id: 'agents',
+        label: 'Instructions',
+        hint: 'Prompts and memory banks',
+        icon: <BotIcon aria-hidden="true" />,
+      },
+      // After what the agent is told, what it is allowed: the browser
+      // switches live in here now — "whose browser" was always a permission
+      // question, and the old nav's answer (a separate pane, parked adjacent,
+      // "in the same breath") was the weaker form of putting them in the same
+      // sentence. The `browser` id still resolves to this pane.
+      {
+        id: 'permissions',
+        label: 'Permissions & access',
+        hint: 'What runs without asking',
+        icon: <ShieldIcon aria-hidden="true" />,
+      },
+      // Last in the band because nothing depends on it and it changes nothing
+      // about a run: pure taste, safely explored after the questions with
+      // consequences are settled.
+      {
+        id: 'appearance',
+        label: 'Appearance',
+        hint: 'Theme, width and layout',
+        icon: <PaletteIcon aria-hidden="true" />,
+      },
+    ],
   },
   {
-    id: 'models',
-    label: 'Models',
-    hint: 'Catalogue and quick access',
-    icon: <BoxesIcon aria-hidden="true" />,
-  },
-  {
-    id: 'appearance',
-    label: 'Appearance',
-    hint: 'Width and layout',
-    icon: <PaletteIcon aria-hidden="true" />,
-  },
-  // After appearance and before permissions on purpose: whose browser the
-  // agent drives is a comfort question until it is a permission question, and
-  // meeting it beside the pane that decides what runs without asking keeps the
-  // two in the same breath.
-  {
-    id: 'browser',
-    label: 'Browser',
-    hint: 'Whose browser pages open in',
-    icon: <GlobeIcon aria-hidden="true" />,
-  },
-  {
-    id: 'permissions',
-    label: 'Permissions',
-    hint: 'What runs without asking',
-    icon: <ShieldIcon aria-hidden="true" />,
-  },
-  // Above the memory banks because it is the general case of what their pane is
-  // one instance of: what the agent is told before the conversation starts. A
-  // user who meets a bank first has met an example without the rule.
-  {
-    id: 'agents',
-    label: 'Agents',
-    hint: 'Standing instructions',
-    icon: <BotIcon aria-hidden="true" />,
-  },
-  // The id keeps its historical name: deep links (`openSettings('cerebro')`)
-  // and muscle memory predate the rename, and an id is an address, not a label.
-  {
-    id: 'cerebro',
-    label: 'Memory banks',
-    hint: 'Shared agent memory',
-    icon: <BrainIcon aria-hidden="true" />,
-  },
-  // Below everything that describes what Artemis does for its own user, because
-  // this is the one pane that is not about that: it decides whether *other
-  // programs* may use the accounts every pane above it configures. Meeting it
-  // before Profiles would be being offered the door before the room.
-  {
-    id: 'server',
-    label: 'Server',
-    hint: 'Lend models to other apps',
-    icon: <ServerIcon aria-hidden="true" />,
-  },
-  // Beside the server on purpose: both panes are the app acting without a
-  // person at the keyboard — one lends the accounts out, this one spends them
-  // on a schedule. A user weighing one has the vocabulary for the other.
-  {
-    id: 'routines',
-    label: 'Routines',
-    hint: 'Runs on a schedule',
-    icon: <CalendarClockIcon aria-hidden="true" />,
-  },
-  // Last, and last on purpose: nothing above it depends on anything in it, and
-  // what it holds are arrangements Artemis hands to the user to perform rather
-  // than settings it applies. Meeting it before Profiles would be meeting the
-  // exception before the rule.
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    hint: 'Scripts you run yourself',
-    icon: <SlidersHorizontalIcon aria-hidden="true" />,
+    label: 'This machine',
+    sections: [
+      // First in its band but below everything that describes what Artemis
+      // does for its own user, because this is the one pane that is not about
+      // that: it decides whether *other programs* may use the accounts the
+      // band above configures. Meeting it before Profiles would be being
+      // offered the door before the room.
+      {
+        id: 'server',
+        label: 'Server',
+        hint: 'Lend models to other apps',
+        icon: <ServerIcon aria-hidden="true" />,
+      },
+      // Beside the server on purpose: both panes are the app acting without a
+      // person at the keyboard — one lends the accounts out, this one spends
+      // them on a schedule. A user weighing one has the vocabulary for the
+      // other.
+      {
+        id: 'routines',
+        label: 'Routines',
+        hint: 'Runs on a schedule',
+        icon: <CalendarClockIcon aria-hidden="true" />,
+      },
+      // Last, and last on purpose: nothing above it depends on anything in
+      // it. The id keeps its historical name — the pane was called Advanced
+      // when its contract was "scripts you run yourself", and the address
+      // outlives the contract. What it holds now is whatever is scoped to
+      // this installation: the shared-config scripts, the folder record, the
+      // update channel.
+      {
+        id: 'advanced',
+        label: 'This machine',
+        hint: 'Scripts, folders, updates',
+        icon: <LaptopIcon aria-hidden="true" />,
+      },
+    ],
   },
 ];
 
 export function SettingsDialog(): ReactElement {
   const open = useApp((s) => s.screen === 'profiles');
-  const section = useApp((s) => s.settingsSection);
+  // Resolved on the way out as well as on the way in: `openSettings` and
+  // `setSettingsSection` already canonicalise, but a persisted value from an
+  // older build reaches this component without passing through either, and a
+  // nav highlighting nothing is what an unresolved `cerebro` would produce.
+  const section = resolveSettingsSection(useApp((s) => s.settingsSection));
+  const row = useApp((s) => s.settingsRow);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  /*
+   * The second half of a deep link: scroll the anchored row into view once the
+   * pane holding it has mounted. One frame after, not immediately — the panes
+   * render synchronously but the dialog itself arrives through a portal, and
+   * measuring before layout settles scrolls to where the row was about to be.
+   * The anchor is then spent (`clearSettingsRow`), so switching sections or
+   * reopening later does not replay a scroll nobody asked for twice.
+   */
+  useEffect(() => {
+    if (!open || row === null) return undefined;
+    const frame = requestAnimationFrame(() => {
+      bodyRef.current
+        ?.querySelector(`[data-settings-row="${row}"]`)
+        ?.scrollIntoView({ block: 'start' });
+      clearSettingsRow();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, section, row]);
 
   return (
     <Dialog
@@ -211,58 +282,76 @@ export function SettingsDialog(): ReactElement {
         <div className="flex min-h-0 flex-1">
           <nav
             aria-label="Settings sections"
-            className="flex w-52 shrink-0 flex-col gap-0.5 border-r border-line p-2"
+            className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line p-2"
           >
-            {SECTIONS.map((entry) => {
-              const active = entry.id === section;
-              return (
-                <Button
-                  key={entry.id}
-                  // Not `variant="secondary"` for the active row, which is what
-                  // this reached for first: `--secondary` resolves to the
-                  // `raised` surface, and inside a popover — which is one step
-                  // *above* raised — the "selected" fill came out darker than
-                  // the panel it sits on and read as nothing at all. Brass is
-                  // the app's selection colour everywhere else (the active
-                  // profile card, the chosen option in a `ChoiceList`), so the
-                  // nav uses it too rather than inventing a third language.
-                  variant="ghost"
-                  size="lg"
-                  // `aria-current` rather than `aria-pressed`: these are
-                  // navigation, not toggles. A screen reader should say "current
-                  // page", not "pressed".
-                  aria-current={active ? 'page' : undefined}
+            {SETTINGS_NAV.map((band, index) => (
+              <div key={band.label} className="flex flex-col gap-0.5">
+                <h3
                   className={cn(
-                    'h-auto w-full justify-start gap-2.5 px-2.5 py-2 text-left',
-                    // A border rather than a ring: `Button` already draws
-                    // `border border-transparent`, so colouring it costs no
-                    // layout, while `ring-*` on this component collides with
-                    // the focus ring it declares for itself.
-                    active
-                      ? 'border-beam/30 bg-beam/10 text-ink hover:bg-beam/15'
-                      : 'text-ink-muted',
+                    'chrome-label px-2.5 pb-1 text-ink-faint',
+                    index === 0 ? 'pt-1' : 'pt-3',
                   )}
-                  onClick={() => setSettingsSection(entry.id)}
                 >
-                  <span className={cn('shrink-0', active ? 'text-beam' : 'text-ink-faint')}>
-                    {entry.icon}
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="text-xs leading-snug font-medium">{entry.label}</span>
-                    <span className="text-2xs leading-snug font-normal text-ink-faint">
-                      {entry.hint}
-                    </span>
-                  </span>
-                </Button>
-              );
-            })}
+                  {band.label}
+                </h3>
+                {band.sections.map((entry) => {
+                  const active = entry.id === section;
+                  return (
+                    <Button
+                      key={entry.id}
+                      // Not `variant="secondary"` for the active row, which is
+                      // what this reached for first: `--secondary` resolves to
+                      // the `raised` surface, and inside a popover — which is
+                      // one step *above* raised — the "selected" fill came out
+                      // darker than the panel it sits on and read as nothing at
+                      // all. Brass is the app's selection colour everywhere
+                      // else (the active profile card, the chosen option in a
+                      // `ChoiceList`), so the nav uses it too rather than
+                      // inventing a third language.
+                      variant="ghost"
+                      size="lg"
+                      // `aria-current` rather than `aria-pressed`: these are
+                      // navigation, not toggles. A screen reader should say
+                      // "current page", not "pressed".
+                      aria-current={active ? 'page' : undefined}
+                      className={cn(
+                        'h-auto w-full justify-start gap-2.5 px-2.5 py-2 text-left',
+                        // A border rather than a ring: `Button` already draws
+                        // `border border-transparent`, so colouring it costs no
+                        // layout, while `ring-*` on this component collides
+                        // with the focus ring it declares for itself.
+                        active
+                          ? 'border-beam/30 bg-beam/10 text-ink hover:bg-beam/15'
+                          : 'text-ink-muted',
+                      )}
+                      onClick={() => setSettingsSection(entry.id)}
+                    >
+                      <span className={cn('shrink-0', active ? 'text-beam' : 'text-ink-faint')}>
+                        {entry.icon}
+                      </span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="text-xs leading-snug font-medium">{entry.label}</span>
+                        <span className="text-2xs leading-snug font-normal text-ink-faint">
+                          {entry.hint}
+                        </span>
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
 
           {/* `min-h-0` on the row above plus this one is what makes the scroll
               land here instead of on the dialog. Removing either turns the
-              content pane into a growing box and the modal into a page. */}
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="mx-auto w-full max-w-3xl px-6 py-5">
+              content pane into a growing box and the modal into a page.
+
+              Keyed by section so switching panes remounts the scroller at the
+              top: the scroll position belongs to the pane being read, and
+              arriving halfway down Permissions because Appearance was long is
+              the dialog remembering the wrong thing. */}
+          <ScrollArea key={section} className="min-h-0 flex-1">
+            <div ref={bodyRef} className="mx-auto w-full max-w-3xl px-6 py-5">
               <SectionBody section={section} />
             </div>
           </ScrollArea>
@@ -284,16 +373,21 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
   switch (section) {
     case 'models':
       return <ModelsSection />;
+    case 'runs':
+      return <RunsSection />;
     case 'appearance':
       return <AppearanceSection />;
-    case 'browser':
-      return <BrowserSection />;
+    // The historical addresses share their homes' cases. They cannot arrive
+    // here in practice — `SettingsDialog` resolves before rendering — but the
+    // switch stays exhaustive over the union, so a legacy id someone routes
+    // straight in still lands in the right room instead of failing to compile
+    // away the case.
     case 'permissions':
+    case 'browser':
       return <PermissionsSection />;
     case 'agents':
-      return <AgentsSection />;
     case 'cerebro':
-      return <MemoryBanksSection />;
+      return <InstructionsSection />;
     case 'server':
       return <ServerSection />;
     case 'routines':

@@ -15,11 +15,10 @@
 
 export { SettingsDialog } from './SettingsDialog';
 export { ModelsSection } from './ModelsSection';
+export { RunsSection } from './RunsSection';
 export { AppearanceSection } from './AppearanceSection';
-export { BrowserSection } from './BrowserSection';
 export { PermissionsSection } from './PermissionsSection';
-export { AgentsSection } from './AgentsSection';
-export { MemoryBanksSection } from './MemoryBanksSection';
+export { InstructionsSection } from './InstructionsSection';
 export { ServerSection } from './ServerSection';
 export { RoutinesSection } from './RoutinesSection';
 export { AdvancedSection } from './AdvancedSection';

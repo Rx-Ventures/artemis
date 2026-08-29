@@ -29,7 +29,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-/* Radix's slider (the handoff thresholds) needs an observer jsdom lacks. */
+/* Radix primitives in the pane measure with an observer jsdom lacks. */
 class NoopObserver {
   observe(): void {}
   unobserve(): void {}

@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  *
- * The Agents pane: what a person sees, and what they are prevented from
- * claiming.
+ * The prompt library (the rule half of the Instructions pane): what a person
+ * sees, and what they are prevented from claiming.
  *
  * Composition is settled in `protocol/agentPrompts.test.ts` and storage in
  * `main/agentPrompts.test.ts`. What is left here is the pane's own judgements,
@@ -37,7 +37,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 
 import { BUILT_IN_AGENT_PROMPTS, NO_CAPABILITIES } from '@rx-artemis/protocol';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { AgentsSection } from '@/components/settings/AgentsSection';
+import { InstructionsSection } from '@/components/settings/InstructionsSection';
 import { seedApp } from '@/state/testkit';
 
 /* -------------------------------------------------------------------------- */
@@ -83,7 +83,7 @@ const CEREBRO_ROW = {
 
 /** The library the next `list` answers with. Reassigned per test before rendering. */
 let library: unknown[] = [];
-/** Whether the stubbed Cerebro reports itself installed. */
+/** Whether the stubbed banks report an enabled bank behind an open master gate. */
 let cerebroInstalled = true;
 /** Every document the pane has saved, oldest first. */
 let saved: { prompts: unknown[] }[] = [];
@@ -92,6 +92,12 @@ let saved: { prompts: unknown[] }[] = [];
  * Installed once, before the first render: `resolveBridge` memoises its binding
  * on first use, so a stub swapped in later would never be seen. Behaviour is
  * varied through the variables above instead.
+ *
+ * The banks channel answers with the smallest status that decides the one
+ * thing this file cares about — whether the built-in memory-banks prompt is
+ * actually being sent. The pane derives that from the same reading its banks
+ * half renders from (`banksAvailability`), so the stub is the shared source of
+ * both.
  */
 (globalThis.window as unknown as { artemis: unknown }).artemis = {
   agentPrompts: {
@@ -101,18 +107,37 @@ let saved: { prompts: unknown[] }[] = [];
       return { ok: true as const, value: { document: request.document } };
     },
   },
-  cerebro: {
+  memoryBanks: {
     status: async () => ({
       ok: true as const,
-      value: { installed: cerebroInstalled, repoPath: '/x', remote: null, source: null, memories: 0, validationErrors: 0, projects: 0, profiles: [] },
+      value: {
+        masterEnabled: cerebroInstalled,
+        banks: cerebroInstalled
+          ? [
+              {
+                slug: 'team',
+                path: '/x/team',
+                remote: null,
+                role: 'readwrite',
+                enabled: true,
+                exists: true,
+                isDefault: true,
+                memories: 0,
+                validationErrors: 0,
+                projects: 0,
+              },
+            ]
+          : [],
+      },
     }),
+    preflight: async () => ({ ok: true as const, value: { ready: true, checks: [] } }),
   },
 };
 
 function renderPane(): void {
   render(
     <TooltipProvider>
-      <AgentsSection />
+      <InstructionsSection />
     </TooltipProvider>,
   );
 }

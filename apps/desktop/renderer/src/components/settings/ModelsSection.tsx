@@ -25,14 +25,13 @@
  *     they are looking at, and a failed refresh is a footnote on a working
  *     list rather than an error that replaces it.
  *
- *  3. **The flags are properties of a model, not of the app.** Fast mode and
- *     ultracode are stored as standing preferences — see `setFastMode` — but
- *     only one model at a time decides whether they mean anything. So the
- *     toggles are gated on the *selected* model and, when they are unavailable,
- *     say so in a sentence instead of vanishing. With no model chosen at all
- *     the provider picks one at run time and Artemis cannot know whether the flag
- *     would be honoured, which is a different reason and gets a different
- *     sentence.
+ *  3. **This pane describes the lineup; it does not shape the run.** The fast
+ *     mode and ultracode switches lived here once, on the argument that the
+ *     flags are properties of a model. They still are — the badges on each row
+ *     say which models honour them — but *setting* them is a decision about
+ *     the next run, and it lives with the rest of those decisions in the Runs
+ *     pane. What stays here is the catalogue's testimony: which models exist,
+ *     what each accepts, and which of them reach the picker.
  *
  * The quick-access checkboxes edit this profile's entry in
  * `quickModelIdsByProfile`, which the status-line picker narrows itself to. An
@@ -63,17 +62,11 @@ import {
   activeEffortLevels,
   activeModels,
   activeProviderLabel,
-  providerOffersFastMode,
-  providerOffersUltracode,
   paneQuickModelIds,
   refreshModels,
-  selectedModelOption,
-  setFastMode,
   setModel,
   setQuickModels,
-  setUltracode,
   toggleQuickModel,
-  useApp,
 } from '../../state/store';
 import { usePane } from '../../state/paneContext';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -89,7 +82,6 @@ import {
   ItemTitle,
 } from '@/components/ui/item';
 import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
 export function ModelsSection(): ReactElement {
@@ -132,8 +124,6 @@ export function ModelsSection(): ReactElement {
       }
     >
       <Provenance live={live} providerLabel={providerLabel} error={error} />
-
-      <Defaults />
 
       {catalogue.length === 0 ? (
         <Empty className="border border-dashed border-line py-10">
@@ -192,132 +182,6 @@ function Provenance({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fast mode / ultracode                                                      */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Why a per-model flag cannot be set right now, or `undefined`.
- *
- * Two answers, because they ask two different things of the user: choose a
- * model, or choose a *different* model. There used to be a third — "this
- * provider has no models at all" — and it is gone because that case no longer
- * reaches here: a provider with nothing to ask does not get the row. See
- * `providerOffersFastMode`.
- */
-function flagReason(
-  flag: 'fast mode' | 'ultracode',
-  selected: ProviderModelOption | undefined,
-  supported: boolean,
-): string | undefined {
-  if (!selected) {
-    return `No model is chosen, so the provider picks one at run time and Artemis cannot tell whether ${flag} would be honoured. Choose a model below.`;
-  }
-  if (!supported) {
-    return `${selected.displayName ?? selected.label} does not accept ${flag}.`;
-  }
-  return undefined;
-}
-
-/**
- * The two standing flags — for the providers that have them.
- *
- * A flag no model in this catalogue offers is not rendered at all, which is the
- * one place this app hides a control instead of explaining it. The rule it bends
- * to is worth stating: an explained-disabled control is better than a hidden one
- * *because the user can act on the explanation*. "Codex does not accept fast
- * mode" is not actionable — there is no model to switch to and no setting to
- * change — so the switch would sit dead forever under a sentence that reads like
- * an error. The per-*model* case is still explained, because switching models is
- * exactly the action that fixes it.
- *
- * With neither flag offered the whole group goes, rather than leaving a heading
- * over nothing.
- */
-function Defaults(): ReactElement | null {
-  const selected = usePane(selectedModelOption);
-  const offersFast = usePane(providerOffersFastMode);
-  const offersUltra = usePane(providerOffersUltracode);
-  const fastMode = usePane((s) => s.fastMode);
-  const ultracode = usePane((s) => s.ultracode);
-
-  if (!offersFast && !offersUltra) return null;
-
-  return (
-    <SettingsGroup label="Defaults for the next run">
-      <ItemGroup className="gap-2">
-        {offersFast ? (
-          <FlagRow
-            id="settings-fast-mode"
-            title="Fast mode"
-            description="Trade reasoning depth for latency. Sent only when the chosen model accepts it — the preference itself survives a switch to one that does not."
-            checked={fastMode}
-            reason={flagReason('fast mode', selected, selected?.supportsFastMode === true)}
-            onChange={setFastMode}
-          />
-        ) : null}
-        {offersUltra ? (
-          <FlagRow
-            id="settings-ultracode"
-            title="Ultracode"
-            description="Spend materially more compute on a single turn. The opposite trade to fast mode, and independent of it: a model may offer either, both or neither."
-            checked={ultracode}
-            reason={flagReason('ultracode', selected, selected?.supportsUltracode === true)}
-            onChange={setUltracode}
-          />
-        ) : null}
-      </ItemGroup>
-    </SettingsGroup>
-  );
-}
-
-function FlagRow({
-  id,
-  title,
-  description,
-  checked,
-  reason,
-  onChange,
-}: {
-  readonly id: string;
-  readonly title: string;
-  readonly description: string;
-  readonly checked: boolean;
-  readonly reason: string | undefined;
-  readonly onChange: (on: boolean) => void;
-}): ReactElement {
-  const disabled = reason !== undefined;
-  return (
-    <Item variant="outline" size="sm" className="items-start border-line bg-panel">
-      <ItemContent>
-        <ItemTitle className="text-xs text-ink">
-          {title}
-          {disabled ? <ToneBadge tone="neutral">unavailable</ToneBadge> : null}
-        </ItemTitle>
-        <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
-          {description}
-        </ItemDescription>
-        {/*
-          The reason is rendered *inline* as well as on the switch's tooltip.
-          A tooltip is the right home for an explanation the user goes looking
-          for; it is the wrong home for the one thing they need in order to
-          understand why the control in front of them is dead.
-        */}
-        {reason ? <p className="text-2xs leading-relaxed text-amber">{reason}</p> : null}
-      </ItemContent>
-      <ItemActions>
-        <Switch
-          id={id}
-          aria-label={title}
-          checked={checked && !disabled}
-          disabled={disabled}
-          onCheckedChange={onChange}
-        />
-      </ItemActions>
-    </Item>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Catalogue                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -372,7 +236,10 @@ function Catalogue({
   );
 
   return (
-    <SettingsGroup label="Quick access">
+    // The anchor is the address the status line's "Edit quick access…" aims at
+    // — `openSettings('models', { row: 'quick-access' })` — so this group has
+    // to keep answering to it even if the group itself is renamed.
+    <SettingsGroup label="Quick access" anchor="quick-access">
       <div className="flex items-start gap-3">
         <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-faint">
           {curated

@@ -21,8 +21,10 @@
  *     chooser, not a replacement for it — a folder the app has never been in has
  *     no other way in.
  *
- * The Appearance half asserts that removal exists in both shapes the user needs
- * — one row, or a ticked set — and that neither touches the working directory.
+ * The This-machine half (the list is edited in the pane at the `advanced` id
+ * now — a record the installation keeps, not a taste) asserts that removal
+ * exists in both shapes the user needs — one row, or a ticked set — and that
+ * neither touches the working directory.
  *
  * As elsewhere, `renderer/tsconfig.json` excludes test files, so the assertions
  * are behavioural rather than typed.
@@ -34,7 +36,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Composer } from '@/components/Composer';
-import { AppearanceSection } from '@/components/settings/AppearanceSection';
+import { AdvancedSection } from '@/components/settings/AdvancedSection';
 import { useApp } from '@/state/store';
 import { appSession, seedApp } from '@/state/testkit';
 
@@ -220,12 +222,12 @@ describe('the folder menu', () => {
   });
 });
 
-describe('appearance / recent folders', () => {
+describe('this machine / recent folders', () => {
   const rowNames = (): readonly string[] =>
     screen.getAllByRole('checkbox').map((box) => box.getAttribute('aria-label') ?? '');
 
   it('lists the folders alphabetically, as the menu does', () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     // Rows are labelled by path — two checkouts of one repository would sound
     // identical otherwise — and ordered by name, so `web` is last despite being
@@ -238,7 +240,7 @@ describe('appearance / recent folders', () => {
   });
 
   it('forgets one folder from its own row', async () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Forget /Users/me/work/api' }));
 
@@ -247,7 +249,7 @@ describe('appearance / recent folders', () => {
   });
 
   it('forgets a ticked set in one go', async () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select /Users/me/work/api' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select /Users/me/archive/docs' }));
@@ -259,7 +261,7 @@ describe('appearance / recent folders', () => {
   });
 
   it('ticks every folder at once', async () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Remove 3 folders' }));
@@ -268,7 +270,7 @@ describe('appearance / recent folders', () => {
   });
 
   it('will not remove until something is ticked, and says so', async () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     const remove = screen.getByRole('button', { name: 'Remove selected' });
     // The app's rule for every gated control: present, disabled, and carrying
@@ -282,7 +284,7 @@ describe('appearance / recent folders', () => {
   });
 
   it('leaves the working directory where it is', async () => {
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     // `web` is the directory the session is running in. Forgetting it is
     // bookkeeping; moving it would end a session from a settings pane.
@@ -294,7 +296,7 @@ describe('appearance / recent folders', () => {
 
   it('says what the list is when it is empty', () => {
     seedApp({ recentFolders: [] });
-    mount(<AppearanceSection />);
+    mount(<AdvancedSection />);
 
     expect(screen.getByText(/No folders remembered yet/)).toBeTruthy();
   });
