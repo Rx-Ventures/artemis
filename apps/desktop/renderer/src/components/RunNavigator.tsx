@@ -148,6 +148,10 @@ export function RunNavigatorContent(): ReactElement {
 
   return (
     <DropdownMenuContent
+      // The hook the posture rule keys on — index.css re-anchors the popper
+      // wrapper to the palette's resting place when it holds this content.
+      // `side`/`align` remain as the fallback for any engine without `:has`.
+      data-run-navigator=""
       align="start"
       side="top"
       /*
