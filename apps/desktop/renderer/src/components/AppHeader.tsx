@@ -3,16 +3,22 @@
  * ============================================================================
  *
  *     ┌──────────────────────────────────────────────────────────────────┐
- *     │ ●●● [◧] artemis › Wire the seam           [>_] [⚙]   [–][□][✕] │
+ *     │ ●●● [◧?] artemis › Wire…  [ ⌕ Search  ⌘K ]  [⋮][⚙]|[◫☀☾] [–□✕] │
  *     └──────────────────────────────────────────────────────────────────┘
- *       ↑    ↑   ↑                                 ↑   ↑        ↑
- *       │    │   │                                 │   │        └ Windows and
- *       │    │   │                                 │   │          Linux only
- *       │    │   │                                 │   └ settings
- *       │    │   │                                 └ terminal
- *       │    │   └ what the focused pane shows
- *       │    └ show/hide the sidebar — always present
+ *       ↑    ↑    ↑               ↑                  ↑  ↑   ↑      ↑
+ *       │    │    │               │                  │  │   │      └ Windows/
+ *       │    │    │               │                  │  │   │        Linux
+ *       │    │    │               │                  │  │   └ theme
+ *       │    │    │               │                  │  └ settings
+ *       │    │    │               │                  └ the opener (kebab)
+ *       │    │    │               └ the way into the palette, centred
+ *       │    │    └ what the focused pane shows
+ *       │    └ show the sidebar — rendered only while the list is closed
  *       └ macOS traffic lights: the system's own, drawn over this bar
+ *
+ * Three groups, and the outer two flex equally from a zero basis — that is
+ * what centres the search on the window rather than on the leftovers. This is
+ * round seven's frame (docs/design/7d-full.html), landed 2026-08-30.
  *
  * ## This bar replaced the title bar rather than sitting under it
  *
@@ -39,15 +45,16 @@
  * `WorkingArea`. That is why the title is read through `usePane` (which falls
  * back to the focused pane outside a pane) rather than off the app store.
  *
- * ## Splitting is not here
+ * ## Splitting is in the opener, not on the bar
  *
- * The bar used to carry a split-right and a split-down button. They are gone:
- * this is window chrome, and a header that grows a control per pane operation
- * competes with the panes' own captions for the same job. Splitting is reached
- * by `⌘\` and `⌘⇧\` (`App.tsx`) and by "Open beside" in the command palette;
- * closing stays on each pane's caption, where the thing being closed is
- * unambiguous. Only the two controls that act on *the window rather than the
- * grid* are left — the focused conversation's terminal, and settings.
+ * The bar once carried a split-right and a split-down button, and later a row
+ * of four surface toggles. Both generations had the same flaw: a header that
+ * grows a control per operation competes with the panes' own captions for the
+ * same job, and rarely-pressed buttons spend the window's most permanent
+ * chrome. The kebab menu (`OpenMenu`) is the standing answer — every surface
+ * and both splits, one quiet control, each row teaching its own shortcut.
+ * Closing stays on each pane's caption, where the thing being closed is
+ * unambiguous.
  *
  * ## Why the app grew a header
  *
@@ -57,11 +64,11 @@
  * wrong on its own terms — that bar says *what the next prompt will do*, and
  * "is the sidebar showing" is not that. So the window got a bar of its own.
  *
- * That original reason is gone: the sidebar collapses to a rail and reopens
- * itself. The toggle stays here anyway, because the top-left corner is where a
- * person looks for window chrome — which is a reason to keep it rather than an
- * obligation to. The status line no longer carries a copy; an earlier change
- * removed it and left both file headers claiming otherwise.
+ * The rail-era answer — the sidebar reopens itself, the header keeps a
+ * permanent copy — is retired with the rail (2026-08-30). The toggle now has
+ * one home at a time: on the list's own caption while it is open, and here,
+ * in the strip that never disappears, exactly while it is not. That is the
+ * original argument, kept, without the standing duplicate.
  *
  * ## New session is not here either
  *
@@ -86,13 +93,17 @@ import {
   CastIcon,
   ChevronRightIcon,
   CopyIcon,
+  EllipsisVerticalIcon,
+  FolderIcon,
+  GlobeIcon,
   LoaderCircleIcon,
   MinusIcon,
-  PanelLeftCloseIcon,
   PanelLeftIcon,
+  PlusIcon,
   Settings2Icon,
   SquareIcon,
-  GlobeIcon,
+  SquareSplitHorizontalIcon,
+  SquareSplitVerticalIcon,
   SquareTerminalIcon,
   UsersIcon,
   XIcon,
@@ -106,10 +117,12 @@ import { hasNativeWindowChrome, resolveBridge } from '../lib/bridge';
 import { describeRemote, readRemoteConfig } from '../lib/remoteConfig';
 import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
-import { ArrowDownIcon, FolderIcon, SearchIcon } from 'lucide-react';
+import { ArrowDownIcon, SearchIcon } from 'lucide-react';
 import {
   focusWaitingPane,
+  newSession,
   openSettings,
+  splitPane,
   togglePalette,
   toggleBrowser,
   toggleFiles,
@@ -122,6 +135,15 @@ import { usePane, usePaneRef } from '../state/paneContext';
 import { IconButton } from './disabled-reason';
 import { StatusDot } from './primitives';
 import { ThemeToggle } from './ThemeToggle';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 /**
  * Room reserved for the macOS traffic lights, in pixels.
@@ -264,7 +286,10 @@ function RemoteChip(): ReactElement | null {
       type="button"
       onClick={() => openSettings('remote')}
       title={`Showing ${name} — click for the connection`}
-      className="no-drag flex shrink-0 items-center gap-1 rounded-full border border-line bg-panel px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:text-ink"
+      // Round, because it always was: Console changes what a chip is *made*
+      // of — an alpha edge over a wash, rather than a grey step with a solid
+      // rule around it — and leaves the shapes alone.
+      className="no-drag flex shrink-0 items-center gap-1 rounded-full border border-hairline-strong bg-wash px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:bg-wash-strong hover:text-ink"
     >
       <CastIcon className="size-3" aria-hidden="true" />
       <span className="max-w-[10rem] truncate">{name}</span>
@@ -296,130 +321,175 @@ export function AppHeader(): ReactElement {
       // The rule at the bottom is doing real work: the header and the app body
       // below it are both `bg-abyss`, so without it the window chrome and the
       // conversation are one continuous field and the title reads as though it
-      // belongs to the transcript. `border-line` rather than anything heavier,
+      // belongs to the transcript. A hairline rather than anything heavier,
       // to match the seam the dock's tab strip already draws.
-      className="drag-region flex h-11 shrink-0 items-center gap-1 border-b border-line bg-abyss px-2"
+      className="drag-region flex h-11 shrink-0 items-center gap-1 border-b border-hairline bg-abyss px-2"
     >
-      <IconButton
-        label={`${collapsed ? 'Show' : 'Hide'} the sidebar (${keyLabel('mod+b')})`}
-        onClick={toggleSidebar}
-        className="no-drag shrink-0 text-ink-muted"
-      >
-        {collapsed ? <PanelLeftIcon /> : <PanelLeftCloseIcon />}
-      </IconButton>
-
-      <div className="mx-1 flex min-w-0 flex-1 items-center gap-1.5">
-        <RemoteChip />
-        {project === null ? (
-          /* Faint, not amber. This is a placeholder for a value nobody has set
-             yet, sitting in the window's own chrome — it is not a warning, and
-             it was colouring the first thing in the header on every fresh
-             launch. The empty state says "not ready to run" in as many words,
-             which is where that belongs. */
-          <span className="shrink-0 text-xs text-ink-faint">No project</span>
-        ) : (
-          /* Full path on hover — the basename alone is ambiguous across
-             checkouts, and two worktrees of the same repo share it. */
-          <span title={cwd} className="max-w-[14rem] shrink-0 truncate text-xs font-medium text-ink">
-            {project}
-          </span>
-        )}
-        <ChevronRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
-        <h1 className="min-w-0 truncate text-xs font-normal text-ink-muted">{title}</h1>
+      {/*
+        The left third: the way back to the sessions list — only while the list
+        is closed — then identity. The toggle used to be permanent here, and the
+        sidebar kept a rail to reopen itself besides: two homes both occupied.
+        Now the control has one home at a time. Open, it is the chevron on the
+        list's own caption; closed, it is this button, in the one strip that
+        never disappears. `⌘B` works in both states either way.
+      */}
+      <div className="flex min-w-0 flex-1 basis-0 items-center gap-1">
+        {collapsed ? (
+          <IconButton
+            label={`Show the sidebar (${keyLabel('mod+b')})`}
+            onClick={toggleSidebar}
+            className="no-drag shrink-0 text-ink-muted"
+          >
+            <PanelLeftIcon />
+          </IconButton>
+        ) : null}
+        <div className="mx-1 flex min-w-0 items-center gap-1.5">
+          <RemoteChip />
+          {project === null ? (
+            /* Faint, not amber. This is a placeholder for a value nobody has
+               set yet, sitting in the window's own chrome — it is not a
+               warning, and it was colouring the first thing in the header on
+               every fresh launch. The empty state says "not ready to run" in
+               as many words, which is where that belongs. */
+            <span className="shrink-0 text-xs text-ink-faint">No project</span>
+          ) : (
+            /* Full path on hover — the basename alone is ambiguous across
+               checkouts, and two worktrees of the same repo share it. */
+            <span
+              title={cwd}
+              className="max-w-[14rem] shrink-0 truncate text-xs font-medium text-ink"
+            >
+              {project}
+            </span>
+          )}
+          <ChevronRightIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
+          <h1 className="min-w-0 truncate text-xs font-normal text-ink-muted">{title}</h1>
+        </div>
       </div>
 
+      {/*
+        The centre third: the way in. Centred on the *window*, not on whatever
+        is left after the title — the two groups either side flex equally, so a
+        long session name ellipsises instead of shoving the bar off the centre
+        line. See `SearchEntry` for why it is a button dressed as a field.
+      */}
       <SearchEntry />
 
-      {/*
-        `toggleTerminal` opens the focused conversation's shell, brings it
-        forward, or bounces the caret between it and the composer — never
-        closes it; the ✕ on the tab is the only thing that ends a shell. See
-        the store for why repeating it does not stack up terminals nobody
-        asked for.
-      */}
-      <UpdateChip />
-      <WaitingBadge />
+      {/* The right third. Status first, then the opener, then the app. */}
+      <div className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-1">
+        <UpdateChip />
+        <WaitingBadge />
+        <OpenMenu delegated={delegated} pane={pane} />
+        <IconButton
+          label={`Settings (${keyLabel('mod+,')})`}
+          onClick={() => openSettings()}
+          className="no-drag shrink-0 text-ink-faint"
+        >
+          <Settings2Icon />
+        </IconButton>
+        {/*
+          Last in the row, and the only control here that is not a button.
 
-      <IconButton
-        label={`Terminal (${keyLabel('mod+j')})`}
-        onClick={() => toggleTerminal(pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <SquareTerminalIcon />
-      </IconButton>
-      {/*
-        Beside the terminal, because it is the same kind of control: a live
-        thing this conversation can put in the rail, opened or brought forward
-        by pressing the same button twice. `toggleBrowser` is `toggleTerminal`'s
-        twin down in the store, including the part that keeps a second press
-        from stacking up pages nobody asked for.
-      */}
-      <IconButton
-        label={`Browser (${keyLabel('mod+shift+b')})`}
-        onClick={() => toggleBrowser(pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <GlobeIcon />
-      </IconButton>
-      {/*
-        After the terminal rather than before it, because that is the order the
-        two appear in down in the strip — terminals, then delegated work pinned
-        to the end. Two controls for one rail should not disagree about which way
-        round it is.
+          It sits beside Settings rather than inside it because it is the one
+          preference whose whole effect is the window you are looking at — the
+          transcript, the sidebar, this header. Everything behind a modal would
+          be covered by the modal you opened to change it.
 
-        Disabled rather than hidden when there is nothing delegated, which is the
-        rule `disabled-reason.tsx` sets out: a control that vanishes teaches
-        nothing, and this is the one surface that says what the button is for.
-      */}
-      <IconButton
-        label="Delegated work"
-        disabled={delegated === 0}
-        disabledReason="Nothing delegated in this conversation yet."
-        onClick={() => toggleTasks(pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <UsersIcon />
-      </IconButton>
-      {/*
-        Last of the surfaces, before settings.
+          A separator ahead of it: the controls to the left act on the
+          *conversation* and this one acts on the application. Without the rule
+          they read as a row of peers.
+        */}
+        <div className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden="true" />
+        <ThemeToggle />
 
-        Settings ends the row because it is the only control here that is not
-        about the conversation in front of you, and everything that opens
-        something in the dock sits together on its near side. Never disabled:
-        unlike delegated work there is always a folder, so the question this
-        answers is always answerable.
-      */}
-      <IconButton
-        label="The working folder"
-        onClick={() => toggleFiles(pane)}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <FolderIcon />
-      </IconButton>
-      <IconButton
-        label={`Settings (${keyLabel('mod+,')})`}
-        onClick={() => openSettings()}
-        className="no-drag shrink-0 text-ink-faint"
-      >
-        <Settings2Icon />
-      </IconButton>
-      {/*
-        Last in the row, and the only control here that is not a button.
-
-        It sits beside Settings rather than inside it because it is the one
-        preference whose whole effect is the window you are looking at — the
-        transcript, the sidebar, this header. Everything behind a modal would be
-        covered by the modal you opened to change it.
-
-        A separator ahead of it: the three to the left act on the *conversation*
-        (its shell, its delegated work, its settings) and this one acts on the
-        application. Without the rule they read as a row of four peers.
-      */}
-      <div className="mx-0.5 h-4 w-px shrink-0 bg-line" aria-hidden="true" />
-      <ThemeToggle />
-
-      <WindowControls maximized={windowState.maximized} focused={windowState.focused} />
+        <WindowControls maximized={windowState.maximized} focused={windowState.focused} />
+      </div>
     </header>
+  );
+}
+
+/**
+ * The opener — one kebab where four icon buttons stood.
+ *
+ * Terminal, browser, delegated work and the working folder each had a header
+ * button, which put four rarely-pressed controls in the window's most
+ * permanent chrome and still taught nobody the chords. A menu answers both:
+ * the header carries one quiet control, and every row states its shortcut, so
+ * the list is the legend the app otherwise keeps only in the empty state.
+ *
+ * A kebab and not a plus, deliberately. Most of these rows *reveal* something
+ * that already exists — the shell, the page, the folder, the work — and a `+`
+ * promises creation. The two rows that do create sit in their own group at the
+ * foot, under the word that says so.
+ *
+ * Delegated work keeps its disabled-with-reason contract from the button it
+ * replaces: shown, struck through by the platform's disabled styling, with the
+ * sentence in `title` — never hidden.
+ */
+function OpenMenu({
+  delegated,
+  pane,
+}: {
+  readonly delegated: number;
+  readonly pane: ReturnType<typeof usePaneRef>;
+}): ReactElement {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <IconButton label="Open a surface" className="no-drag shrink-0 text-ink-faint">
+          <EllipsisVerticalIcon />
+        </IconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="text-2xs text-ink-faint">
+          Open in the dock
+        </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => toggleTerminal(pane)}>
+          <SquareTerminalIcon />
+          Terminal
+          <DropdownMenuShortcut>{keyLabel('mod+j')}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => toggleBrowser(pane)}>
+          <GlobeIcon />
+          Browser
+          <DropdownMenuShortcut>{keyLabel('mod+shift+b')}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => toggleFiles(pane)}>
+          <FolderIcon />
+          Working folder
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={delegated === 0}
+          title={delegated === 0 ? 'Nothing delegated in this conversation yet.' : undefined}
+          onSelect={() => toggleTasks(pane)}
+        >
+          <UsersIcon />
+          Delegated work
+          {delegated > 0 ? <DropdownMenuShortcut>{delegated}</DropdownMenuShortcut> : null}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-2xs text-ink-faint">
+          Split this conversation
+        </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => splitPane('right')}>
+          <SquareSplitHorizontalIcon />
+          Split right
+          <DropdownMenuShortcut>{keyLabel('mod+\\')}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => splitPane('down')}>
+          <SquareSplitVerticalIcon />
+          Split down
+          <DropdownMenuShortcut>{keyLabel('mod+shift+\\')}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-2xs text-ink-faint">New</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => newSession(pane)}>
+          <PlusIcon />
+          New session
+          <DropdownMenuShortcut>{keyLabel('mod+n')}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -441,6 +511,13 @@ export function AppHeader(): ReactElement {
  * Amber, matching the sidebar dot and the activity indicator: three surfaces,
  * one colour, one meaning. Clicking focuses the first waiting pane; see
  * `focusWaitingPane` for why "first" is layout order.
+ *
+ * A *toned* chip rather than a solid amber tile — Console's `.pill.mode`:
+ * amber text, an amber edge at 45%, an amber wash behind. The solid version
+ * was the loudest object in a bar whose other three controls are outlines, and
+ * it said "error" at a glance when what it means is "something is parked".
+ * Nothing is lost by the change: the hue is the signal, the badge is the only
+ * amber thing up here, and it still renders only when the count is non-zero.
  */
 function WaitingBadge(): ReactElement | null {
   const waiting = useApp((s) => s.waitingSessions.length);
@@ -457,12 +534,13 @@ function WaitingBadge(): ReactElement | null {
       onClick={() => {
         focusWaitingPane();
       }}
-      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm bg-amber px-2 text-2xs font-medium text-amber-ink transition-opacity hover:opacity-90"
+      className="no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-md border border-amber/45 bg-amber/10 px-2 text-2xs font-medium text-amber transition-colors hover:bg-amber/20"
     >
-      {/* `amber-ink`, not `abyss`: text on the amber fill is what that token
-          is derived for, and `abyss` is a surface that merely happened to be
-          dark enough under the old palette. */}
-      <StatusDot tone="neutral" className="bg-amber-ink/70" />
+      {/* The dot is `tone="amber"` now rather than a hole punched in the fill
+          with `amber-ink`. On a wash there is no fill to punch: the ink token
+          exists for text sitting *on* solid amber, and over a 10% tint it is
+          whatever the theme's foreground happens to be. */}
+      <StatusDot tone="amber" />
       {waiting} waiting
     </button>
   );
@@ -522,11 +600,19 @@ function UpdateChip(): ReactElement | null {
         if (ready) restartForUpdate();
         else if (!busy) installUpdate();
       }}
+      /*
+       * A toned chip, like the waiting badge beside it: the tone at 45% for
+       * the edge, a wash of the same tone on hover. `font-mono` stays — the
+       * chip's payload is a version string, which is machine output, and the
+       * rule Console keeps is that mono means exactly that rather than
+       * "chrome". `rounded-md` is the control radius; it was `rounded-sm`,
+       * which is the radius this language gives to key caps and swatches.
+       */
       className={cn(
-        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-sm border px-2 font-mono text-2xs transition-colors',
+        'no-drag flex h-[22px] shrink-0 items-center gap-1.5 rounded-md border px-2 font-mono text-2xs transition-colors',
         failed
-          ? 'border-signal/50 text-signal hover:bg-signal/10'
-          : 'border-beam/50 text-beam-text hover:bg-beam/10',
+          ? 'border-signal/45 text-signal hover:bg-signal/10'
+          : 'border-beam/45 text-beam-text hover:bg-beam/10',
         busy && 'opacity-60',
       )}
     >
@@ -585,7 +671,18 @@ function SearchEntry(): ReactElement {
       type="button"
       onClick={togglePalette}
       aria-label={`Search sessions and commands (${keyLabel('mod+k')})`}
-      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-sm border border-line bg-inset px-2 text-2xs text-ink-faint transition-colors hover:border-line-strong hover:text-ink-muted lg:flex"
+      /*
+       * The Console field, shared with the sidebar's filter: `rounded-lg`, a
+       * hairline-strong edge, a wash ground. The geometry — centred, `max-w-md`,
+       * `hidden lg:flex` — is what the paragraph above argues for and is not
+       * what changed.
+       *
+       * Hover answers in the ground rather than in the edge. It used to darken
+       * the border to `line-strong`, which is a token held to 3:1 for controls
+       * that are *owed* contrast; borrowing it for a hover state meant the
+       * quietest control in the bar produced the hardest line in it.
+       */
+      className="no-drag mx-2 hidden h-6 w-full max-w-md min-w-0 items-center gap-2 rounded-lg border border-hairline-strong bg-wash px-2 text-2xs text-ink-faint transition-colors hover:bg-wash-strong hover:text-ink-muted lg:flex"
     >
       <SearchIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">Search sessions and commands</span>

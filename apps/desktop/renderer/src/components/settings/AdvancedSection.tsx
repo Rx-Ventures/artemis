@@ -194,8 +194,8 @@ export function AdvancedSection(): ReactElement {
       description="What belongs to this installation rather than to you: the links on its disk, the folders it remembers, the releases it is offered. None of it travels with a profile."
     >
       <SettingsGroup label="Shared Claude config">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Share one ~/.claude across profiles</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -222,31 +222,37 @@ export function AdvancedSection(): ReactElement {
           </Item>
         </ItemGroup>
 
-        {showStatus ? <StatusBlock dirs={dirs} reading={reading} intended={on} /> : null}
+        {showStatus ? (
+          <div className="px-3 py-2.5">
+            <StatusBlock dirs={dirs} reading={reading} intended={on} />
+          </div>
+        ) : null}
 
         {mode === null ? (
-          <p className="text-2xs leading-relaxed text-ink-faint">
+          <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
             Artemis does not link anything itself. Turn this on and it writes the script; you read
             it and run it.
           </p>
         ) : dirs.length === 0 ? (
-          <Empty className="border border-dashed border-line py-10">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <KeyRoundIcon />
-              </EmptyMedia>
-              <EmptyTitle className="text-ink">No Claude profiles to name</EmptyTitle>
-              <EmptyDescription className="text-2xs">
-                {/* Deliberately not "nothing to link": in the undo direction
-                    there may well be links out there, on profiles that have
-                    since been deleted from Artemis. A script with no
-                    directories in it is the honest thing to withhold, and
-                    claiming there is nothing to undo would not be. */}
-                A script needs directories to act on, and no Claude profile is registered. Add one
-                in Profiles and it will appear here.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <div className="px-3 py-2.5">
+            <Empty className="border border-dashed border-hairline py-10">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <KeyRoundIcon />
+                </EmptyMedia>
+                <EmptyTitle className="text-ink">No Claude profiles to name</EmptyTitle>
+                <EmptyDescription className="text-2xs">
+                  {/* Deliberately not "nothing to link": in the undo direction
+                      there may well be links out there, on profiles that have
+                      since been deleted from Artemis. A script with no
+                      directories in it is the honest thing to withhold, and
+                      claiming there is nothing to undo would not be. */}
+                  A script needs directories to act on, and no Claude profile is registered. Add one
+                  in Profiles and it will appear here.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
         ) : (
           <ScriptBlock dirs={dirs} mode={mode} status={reading.status} />
         )}
@@ -257,8 +263,8 @@ export function AdvancedSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Updates">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Offer beta releases</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -360,7 +366,7 @@ function RecentFolders(): ReactElement {
 
   if (folders.length === 0) {
     return (
-      <p className="text-2xs leading-relaxed text-ink-faint">
+      <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
         No folders remembered yet. Every directory you work in is added here, up to{' '}
         {RECENT_FOLDERS_LIMIT} — after that the one you have not opened in the longest makes way.
       </p>
@@ -369,17 +375,12 @@ function RecentFolders(): ReactElement {
 
   return (
     <>
-      <ItemGroup className="gap-2">
+      <ItemGroup className="gap-0 divide-y divide-hairline">
         {folders.map((folder) => {
           const name = lastSegment(folder);
           const checked = ticked.includes(folder);
           return (
-            <Item
-              key={folder}
-              variant="outline"
-              size="sm"
-              className="items-center border-line bg-panel"
-            >
+            <Item key={folder} size="sm" className="items-center">
               <Checkbox
                 checked={checked}
                 onCheckedChange={(next) => toggle(folder, next === true)}
@@ -417,7 +418,7 @@ function RecentFolders(): ReactElement {
         })}
       </ItemGroup>
 
-      <div className="mt-1 flex items-center gap-2">
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <ReasonButton
           size="xs"
           variant="outline"
@@ -483,7 +484,7 @@ function StatusBlock({
   }, [dirs, status]);
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-1.5 rounded-md border border-hairline bg-panel px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-3">
         <h4 className="chrome-label text-ink-faint">On disk</h4>
         <Button
@@ -686,7 +687,7 @@ function Verdict({
   if (!disagrees && skipped.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-1 border-t border-line pt-1.5">
+    <div className="flex flex-col gap-1 border-t border-hairline pt-1.5">
       {disagrees ? (
         <p className="text-2xs leading-relaxed text-amber">
           {intended
@@ -759,7 +760,7 @@ function ScriptBlock({
   const sharing = mode === 'share';
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 px-3 py-2.5">
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-2xs leading-relaxed text-ink-muted">
           {sharing ? (

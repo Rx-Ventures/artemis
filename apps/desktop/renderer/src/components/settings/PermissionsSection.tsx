@@ -157,7 +157,7 @@ export function PermissionsSection(): ReactElement {
     >
       <SettingsGroup label="Default permission mode">
         {modes.length === 0 ? (
-          <Empty className="border border-dashed border-line py-10">
+          <Empty className="mx-3 my-2.5 border border-dashed border-hairline py-10">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <ShieldIcon />
@@ -177,11 +177,11 @@ export function PermissionsSection(): ReactElement {
               choices={choices}
               onChange={setPermissionMode}
             />
-            <p className="text-2xs leading-relaxed text-ink-faint">
+            <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
               Applies to the next run. A run already in flight keeps the mode it started with.
             </p>
             {orphaned ? (
-              <p className="text-2xs leading-relaxed text-amber">
+              <p className="px-3 py-2.5 text-2xs leading-relaxed text-amber">
                 “{mode}” was chosen under a different provider. {providerLabel} does not accept it,
                 so the next run will use the provider’s own default until you pick one above.
               </p>
@@ -194,8 +194,8 @@ export function PermissionsSection(): ReactElement {
           asking, and these decide what the agent may reach while it runs —
           the same question, asked of the web. See the file header. */}
       <SettingsGroup label="Agent browsing">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Browse with your Chrome</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -221,8 +221,8 @@ export function PermissionsSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Pages opened for you">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Open pages in your default browser</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -264,7 +264,7 @@ export function PermissionsSection(): ReactElement {
           placeholder={'/Users/you/notes'}
           description="Absolute paths outside the working directory that the agent may read and write."
         />
-        <p className="text-2xs leading-relaxed text-ink-faint">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           Until these are real settings, tool policy comes from wherever the provider’s own CLI
           reads it — its config file for this project. Artemis sends no allow list, no deny list and no
           extra directories, so nothing here is silently overriding what you configured there.
@@ -286,7 +286,7 @@ function ToolPolicyField({
   readonly placeholder: string;
 }): ReactElement {
   return (
-    <Field>
+    <Field className="px-3 py-2.5">
       <FieldLabel htmlFor={id} className="chrome-label text-ink-faint">
         {label}
       </FieldLabel>

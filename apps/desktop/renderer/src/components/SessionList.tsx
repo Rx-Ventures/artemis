@@ -3,11 +3,13 @@
  * ============================================================================
  *
  *                               [ filter… ]
- *     ▾ artemis ·22 ────────────────────────
- *         Wire the adapter seam
- *         ⌥ main · ▪ Work
- *     ▸ api ·9 ─────────────────────────────
- *     ▾ cli ·3 ─────────────────────────────
+ *     ▾ ▪ artemis                        22
+ *      ┌──────────────────────────────────┐
+ *      │  Wire the adapter seam           │  ← open: a wash, no edge
+ *      │  ⌥ main · ▪ Work                 │
+ *      └──────────────────────────────────┘
+ *     ▸ ▪ api                             9
+ *     ▾ ▪ cli                             3
  *         Profile store encryption
  *         ▪ Home
  *
@@ -331,7 +333,7 @@ export function SessionList(): ReactElement {
   const total = sessions.length;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+    <div className="flex min-h-0 flex-1 flex-col border-t border-hairline">
       {/*
        * The filter is the only thing left on this row. A "Sessions" title sat
        * here, folding the whole list from one control — a caption for a list
@@ -346,13 +348,21 @@ export function SessionList(): ReactElement {
               className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-ink-faint"
               aria-hidden="true"
             />
+            {/*
+              The Console field: `rounded-lg`, a hairline-strong edge and a
+              wash ground. Height is untouched — this is a 24px field in a
+              224px column and the shape is the only thing the language
+              changes. The wash is stated rather than inherited because
+              `Input`'s own ground is `dark:bg-input/30`, an alpha of the
+              *border* token, which is not a fill in this vocabulary.
+            */}
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter…"
               aria-label="Filter sessions"
               spellCheck={false}
-              className="h-6 rounded-md pl-6.5 text-2xs md:text-2xs"
+              className="h-6 rounded-lg border-hairline-strong bg-wash pl-6.5 text-2xs md:text-2xs dark:bg-wash"
             />
           </div>
         </div>
@@ -381,7 +391,7 @@ export function SessionList(): ReactElement {
          * blanket banner to say.
          */}
         {!listing.supported ? (
-          <p className="border-y border-line bg-raised px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
+          <p className="border-y border-hairline bg-wash px-2.5 py-1.5 text-2xs leading-snug text-ink-muted">
             {listing.reason} Its own sessions are not in this list; everything below belongs to the
             other accounts.
           </p>
@@ -480,7 +490,7 @@ const GroupHeading = memo(function GroupHeading({
       type="button"
       onClick={() => toggleProjectCollapsed(project)}
       aria-expanded={!collapsed}
-      className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+      className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-wash"
     >
       <ChevronDownIcon
         aria-hidden="true"
@@ -507,14 +517,13 @@ const GroupHeading = memo(function GroupHeading({
       <FolderIcon aria-hidden="true" className="size-2.5 shrink-0 text-beam-text" />
       <span
         className={cn(
-          'min-w-0 truncate text-2xs font-medium tracking-tight',
+          'chrome-label min-w-0 truncate',
           current ? 'text-ink-muted' : 'text-ink-faint',
         )}
       >
         {name ?? 'No project'}
       </span>
-      <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
-      <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+      <GroupCount count={count} />
     </button>
   );
 
@@ -569,7 +578,7 @@ const PinnedHeading = memo(function PinnedHeading({
         onClick={() => togglePinnedCollapsed()}
         aria-expanded={!collapsed}
         title="Sessions you have kept in front of you, from every project."
-        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-wash"
       >
         <ChevronDownIcon
           aria-hidden="true"
@@ -579,11 +588,8 @@ const PinnedHeading = memo(function PinnedHeading({
           )}
         />
         <PinIcon aria-hidden="true" className="size-2.5 shrink-0 text-beam-text" />
-        <span className="min-w-0 truncate text-2xs font-medium tracking-tight text-ink-muted">
-          Pinned
-        </span>
-        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
-        <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+        <span className="chrome-label min-w-0 truncate text-ink-muted">Pinned</span>
+        <GroupCount count={count} />
       </button>
     </div>
   );
@@ -614,7 +620,7 @@ const ArchiveHeading = memo(function ArchiveHeading({
         onClick={() => toggleArchivedExpanded()}
         aria-expanded={!collapsed}
         title="Sessions you have put away. Still on disk, still resumable."
-        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-raised/70"
+        className="flex h-full w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-left transition-colors hover:bg-wash"
       >
         <ChevronDownIcon
           aria-hidden="true"
@@ -624,15 +630,42 @@ const ArchiveHeading = memo(function ArchiveHeading({
           )}
         />
         <ArchiveIcon aria-hidden="true" className="size-2.5 shrink-0 text-ink-faint" />
-        <span className="min-w-0 truncate text-2xs font-medium tracking-tight text-ink-faint">
-          Archived
-        </span>
-        <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">·{count}</span>
-        <span aria-hidden="true" className="ml-1 h-px min-w-0 flex-1 bg-line" />
+        <span className="chrome-label min-w-0 truncate text-ink-faint">Archived</span>
+        <GroupCount count={count} />
       </button>
     </div>
   );
 });
+
+/**
+ * How many sessions the group holds, at the far end of its heading.
+ *
+ * Right-aligned and on its own, which is the Console language's `.grp .ct`
+ * (`margin-left: auto`, muted, regular weight). What it replaced was `·22`
+ * hard against the project's name with a hairline rule running out to the
+ * edge — a mid-dot doing the work of a gap, and a rule drawn *because* the
+ * count had nowhere else to be. Pushing the number to the end gives every
+ * heading one column of counts to read down, and the rule has nothing left to
+ * separate.
+ *
+ * `tabular-nums` stays and `font-mono` goes: this is chrome, and mono in this
+ * vocabulary means the machine produced the string. Lining figures are what
+ * keep a column of counts from wobbling, and the sans face has them.
+ *
+ * The leading space is load-bearing and invisible, in that order. The heading
+ * is a button, so its text *is* its accessible name, and the mid-dot was the
+ * only thing keeping "artemis" and "22" from being announced as "artemis22".
+ * A space says the same thing better and costs nothing on screen: leading
+ * whitespace at the start of a line box is dropped in layout, so the number
+ * still sits flush against the heading's trailing edge.
+ */
+function GroupCount({ count }: { readonly count: number }): ReactElement {
+  return (
+    <span className="chrome-label ml-auto shrink-0 tabular-nums text-ink-faint">
+      {` ${String(count)}`}
+    </span>
+  );
+}
 
 /**
  * What to call this project.
@@ -979,9 +1012,29 @@ const Row = memo(function Row({
         tooltip={<SessionTooltip session={session} profile={profile} running={running} />}
         tooltipSide="right"
         onClick={() => resumeSession(session)}
+        /*
+         * Selection is a fill, not an edge.
+         *
+         * The open row used to carry a 2px beam border down its leading side
+         * with a raised ground behind it — two marks for one fact, and the
+         * border was the louder of the pair on a row whose own text is 12px.
+         * Console marks the chosen thing by *ground*: `bg-wash-strong` and the
+         * title in full ink, the same pair the dock's scope buttons use, so a
+         * selected row and a selected tab are recognisably one idea. Dropping
+         * the border also takes the 2px indent off the leading edge, which is
+         * what let the title start on the same vertical rule as its heading.
+         *
+         * The hover wash is spelled twice because `ghost` sets
+         * `dark:hover:bg-muted/50`, and a `.dark`-scoped selector outranks a
+         * bare `hover:` no matter which order Tailwind emits them in.
+         *
+         * `rounded-md` rather than `lg`: the rows are the many, and the one
+         * control here that starts something — New session, one row up in
+         * `Sidebar` — keeps the larger radius to itself.
+         */
         className={cn(
-          'h-full w-full flex-col items-start justify-center gap-0.5 rounded-lg border-l-2 border-transparent px-2 py-1.5 text-left font-normal',
-          active && 'border-beam/70 bg-raised/60',
+          'h-full w-full flex-col items-start justify-center gap-0.5 rounded-md px-2 py-1.5 text-left font-normal hover:bg-wash dark:hover:bg-wash',
+          active && 'bg-wash-strong text-ink',
           // Put away, and it should look it — but still legible, because these
           // rows are only on screen when the user went looking for them.
           archived && 'opacity-60',
@@ -1343,7 +1396,9 @@ function RenameField({
       onFocus={(event) => event.target.select()}
       aria-label={`Rename session: ${session.title}`}
       spellCheck={false}
-      className="h-full w-full rounded-lg px-2 text-xs md:text-xs"
+      // The same field shape as the filter above it — see the note there for
+      // why the ground is stated rather than inherited.
+      className="h-full w-full rounded-lg border-hairline-strong bg-wash px-2 text-xs md:text-xs dark:bg-wash"
     />
   );
 }
@@ -1369,7 +1424,7 @@ function NothingHere({
   return (
     <Empty className="gap-2 px-3 py-6">
       <EmptyHeader className="gap-1.5">
-        <EmptyMedia variant="icon" className="mb-0 size-7 bg-raised/70">
+        <EmptyMedia variant="icon" className="mb-0 size-7 rounded-lg bg-wash-strong">
           <InboxIcon className="size-3.5 text-ink-faint" aria-hidden="true" />
         </EmptyMedia>
         <EmptyTitle className="text-xs text-ink-muted">

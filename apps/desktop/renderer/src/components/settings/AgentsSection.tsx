@@ -170,7 +170,7 @@ export function AgentPromptsGroups({
       {!pane.loading && pane.error === null ? (
         <>
           <SettingsGroup label="Prompts">
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5 p-1.5">
               {pane.prompts.map((prompt) => (
                 <PromptRow
                   key={prompt.id}
@@ -183,7 +183,7 @@ export function AgentPromptsGroups({
                 />
               ))}
             </div>
-            <div>
+            <div className="px-3 py-2.5">
               <Button size="sm" variant="outline" onClick={addPrompt}>
                 <PlusIcon aria-hidden="true" />
                 New prompt
@@ -278,10 +278,8 @@ function PromptRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors',
-        selected
-          ? 'border-beam/45 bg-beam/5'
-          : 'border-line bg-panel hover:border-line-strong hover:bg-raised',
+        'flex items-center gap-2.5 rounded-md px-3 py-2 transition-colors',
+        selected ? 'bg-wash-strong' : 'hover:bg-wash',
       )}
     >
       {/*
@@ -358,12 +356,12 @@ function PromptEditor({
   return (
     <SettingsGroup label={builtIn ? `${prompt.name} — Artemis's own` : 'Prompt'}>
       {builtIn ? (
-        <p className="text-2xs leading-relaxed text-ink-muted">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-muted">
           {builtIn.summary} Artemis wrote this one and keeps it current, so it is shown rather than
           edited. It is only sent when {builtIn.requires}.
         </p>
       ) : (
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 px-3 py-2.5">
           <label className="flex min-w-0 flex-1 flex-col gap-1">
             <span className="chrome-label text-ink-faint">
               Name
@@ -380,29 +378,37 @@ function PromptEditor({
       )}
 
       {unavailable ? (
-        <p className="flex items-center gap-1.5 text-2xs leading-relaxed text-ink-faint">
+        <p className="flex items-center gap-1.5 px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           <StatusDot tone="amber" />
           Not being sent right now — {builtIn?.requires} is not true on this machine.
         </p>
       ) : null}
 
-      <MarkdownEditor
-        // Keyed by the caller, so this component never has to reconcile a
-        // document change against a live ProseMirror instance. See
-        // `MarkdownEditor` — `value` is read exactly once.
-        value={builtIn ? promptText(prompt) : prompt.markdown}
-        onChange={(markdown) => patch({ markdown })}
-        readOnly={builtIn !== undefined}
-        // Deliberately not the prompt's name. `MarkdownEditor` hands its
-        // attributes to ProseMirror once, at construction, so a label built
-        // from a field the user can rename would keep announcing the old name
-        // for as long as the editor stays mounted — and the editor is
-        // deliberately *not* remounted on a rename, so that renaming does not
-        // discard the undo history. A stale accessible name is worse than a
-        // general one; the group heading above carries the prompt's identity.
-        ariaLabel="Prompt instructions"
-        placeholder="Always run the typechecker before saying a change is done…"
-      />
+      {/* A genuine nested well, not a row: the editor keeps its own box so the
+          typed text reads as a document rather than a settings field, and the
+          wrapper's padding is what keeps that box off the card's edge. Its
+          border color comes from the same call-site override the rest of this
+          pane leans on — `MarkdownEditor` itself is out of scope here. */}
+      <div className="px-3 py-2.5">
+        <MarkdownEditor
+          // Keyed by the caller, so this component never has to reconcile a
+          // document change against a live ProseMirror instance. See
+          // `MarkdownEditor` — `value` is read exactly once.
+          value={builtIn ? promptText(prompt) : prompt.markdown}
+          onChange={(markdown) => patch({ markdown })}
+          readOnly={builtIn !== undefined}
+          // Deliberately not the prompt's name. `MarkdownEditor` hands its
+          // attributes to ProseMirror once, at construction, so a label built
+          // from a field the user can rename would keep announcing the old name
+          // for as long as the editor stays mounted — and the editor is
+          // deliberately *not* remounted on a rename, so that renaming does not
+          // discard the undo history. A stale accessible name is worse than a
+          // general one; the group heading above carries the prompt's identity.
+          ariaLabel="Prompt instructions"
+          placeholder="Always run the typechecker before saying a change is done…"
+          className="border-hairline"
+        />
+      </div>
 
       <ScopePicker prompt={prompt} targets={targets} onChange={(scope) => patch({ scope })} />
     </SettingsGroup>
@@ -474,7 +480,7 @@ function ScopePicker({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-2 px-3 py-2.5">
       <span className="chrome-label text-ink-faint">
         Applies to
       </span>
@@ -504,7 +510,7 @@ function ScopePicker({
       </label>
 
       {all ? null : (
-        <div className="flex flex-col gap-1 border-t border-line pt-2">
+        <div className="flex flex-col gap-1 border-t border-hairline pt-2">
           {targets.length === 0 ? (
             <span className="text-2xs text-ink-faint">
               No profiles yet — add one in Profiles and it will appear here.

@@ -220,7 +220,7 @@ function DockStrip({
     // one control for "another of these" was the thing that scrolled away.
     // A footer costs the strip nothing when it fits and keeps the button
     // reachable when it does not.
-    <div className="flex w-[34px] shrink-0 flex-col border-r border-line">
+    <div className="flex w-[34px] shrink-0 flex-col border-r border-hairline">
       {/*
         The scope chip, generalised from the delegated list to the whole rail.
 
@@ -243,9 +243,14 @@ function DockStrip({
           size="icon-xs"
           aria-pressed={scope === 'all'}
           onClick={() => setDockScope(scope === 'all' ? 'pane' : 'all')}
+          // The mockup's `.scope` is a pill at the head of the strip
+          // (docs/design/7d-full.html): `rounded-full` on a hairline, filled
+          // when it is the wider reading. Ours carries a glyph rather than the
+          // word "pane" because it is a toggle and not a caption, but it takes
+          // the same shape so the head of the strip reads as one thing.
           className={cn(
-            'mx-auto my-0.5 shrink-0',
-            scope === 'all' ? 'text-ink' : 'text-ink-faint',
+            'mx-auto my-1 shrink-0 rounded-full border border-hairline',
+            scope === 'all' ? 'bg-wash-strong text-ink' : 'text-ink-faint hover:bg-wash',
           )}
         >
           <LayoutGridIcon />
@@ -256,22 +261,19 @@ function DockStrip({
         role="tablist"
         aria-label="Dock tabs"
         onKeyDown={onKeyDown}
-        // Same height and border as a pane's caption, so the two read as one
-        // row rather than as two applications side by side — the rule
-        // `PreviewPane` set when it was the only thing in this rail.
         // 34px of icons down the left edge. `overflow-y-auto` rather than
         // `-x`: a dock with nine tabs scrolls vertically, where there is room,
         // instead of eating the width of the panel it is labelling. `min-h-0`
         // is what lets the list shrink under the footer instead of pushing it
         // out of the rail.
         //
-        // No vertical padding, because the active tab is a *filled* row: a gap
-        // above the first one leaves its fill floating below the top border
-        // with a sliver of panel showing through, which reads as a mistake
-        // rather than as breathing room. The tabs meet the edges; the gap
-        // between them is `gap-px`, which is the hairline the design language
-        // already uses.
-        className="flex min-h-0 flex-col items-stretch gap-px overflow-y-auto"
+        // Padded and centred, which is the opposite of what this said while the
+        // tabs were full-bleed filled rows: those had to meet the strip's edges
+        // or their fill floated with a sliver of panel showing through it. A
+        // 7D tab is a *rounded button* (`.dstrip .dt` in
+        // docs/design/7d-full.html), so it wants air on every side — the strip
+        // supplies it here and the gap between tabs goes to the mockup's 4px.
+        className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto py-1.5"
       >
         {tabs.map((tab) => (
           <DockTabButton
@@ -297,7 +299,10 @@ function DockStrip({
           size="icon-xs"
           aria-pressed={splitOn}
           onClick={() => toggleTerminalSplit(actionPane)}
-          className={cn('mx-auto my-0.5 shrink-0', splitOn ? 'text-ink' : 'text-ink-faint')}
+          className={cn(
+            'mx-auto my-0.5 shrink-0 rounded-md',
+            splitOn ? 'bg-wash-strong text-ink' : 'text-ink-faint hover:bg-wash',
+          )}
         >
           <Rows2Icon />
         </IconButton>
@@ -320,7 +325,7 @@ function DockStrip({
         label="Open another terminal"
         size="icon-xs"
         onClick={() => void openTerminal(dockActionPane())}
-        className="mx-auto my-0.5 shrink-0 text-ink-faint"
+        className="mx-auto my-0.5 shrink-0 rounded-md text-ink-faint hover:bg-wash"
       >
         <PlusIcon />
       </IconButton>
@@ -429,15 +434,17 @@ function TabShell({
        * the top of the panel, which is where a reader looks for "what am I
        * looking at" — the strip's job here is only "which of these".
        *
-       * The active marker is a left hairline in the accent rather than a filled
-       * tab, because a vertical strip has no shared edge with the panel to
-       * merge into the way a horizontal one does.
+       * The active marker is the *fill*, not an accent rule down the left edge.
+       * The rule was there because a full-bleed tab in a vertical strip has no
+       * shared edge with the panel to merge into, so the fill alone had nothing
+       * to make it read as selected. A 7D tab is a discrete rounded button
+       * (`.dstrip .dt.on` in docs/design/7d-full.html) — a shape with its own
+       * outline — so `bg-wash-strong` is legible as "this one" without a second
+       * mark, and the beam stops being spent on something the fill already says.
        */
       className={cn(
-        'group relative flex shrink-0 items-center justify-center border-l-2 py-1.5',
-        active
-          ? 'border-beam bg-raised/60 text-ink'
-          : 'border-transparent text-ink-faint hover:bg-raised/30',
+        'group relative flex size-7 shrink-0 items-center justify-center rounded-md',
+        active ? 'bg-wash-strong text-ink' : 'text-ink-faint hover:bg-wash',
       )}
       // Middle-click closes, as it does on every other tab strip. On `auxiliary`
       // rather than `click` because a middle button never produces a `click`.
@@ -469,9 +476,13 @@ function TabShell({
         // Bottom-left, opposite the ✕'s corner, so the two marks cannot
         // collide. Presentational: the number is already in the button's
         // accessible name above.
+        //
+        // A pill on a hairline rather than a bare digit — the `.ob` badge from
+        // docs/design/7d-full.html. At this size the ring is what separates
+        // "whose tab is this" from a stray character in the icon beneath it.
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-0 left-0.5 text-3xs tabular-nums text-ink-faint"
+          className="pointer-events-none absolute -bottom-0.5 left-0 rounded-full border border-hairline bg-panel px-1 text-3xs leading-none tabular-nums text-ink-faint"
         >
           {ownerBadge.text}
         </span>
@@ -490,7 +501,9 @@ function TabShell({
         title={closeLabel}
         onClick={onClose}
         className={cn(
-          'absolute top-0 right-0 grid size-3.5 place-items-center rounded-xs bg-panel text-ink-faint transition-opacity hover:bg-line-strong/60 hover:text-ink',
+          // `rounded-full`, because it now sits on a rounded tab: a square chip
+          // pinned to a 6px corner reads as a corner that broke off.
+          'absolute top-0 right-0 grid size-3.5 place-items-center rounded-full bg-panel text-ink-faint transition-opacity hover:bg-wash-strong hover:text-ink',
           /*
            * Pinned to the tab's top-right corner rather than sitting beside the
            * icon. A 34px column has no room for two targets in a row, and an ✕

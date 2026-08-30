@@ -431,7 +431,11 @@ describe('pin', () => {
       b.hasAttribute('aria-expanded'),
     );
 
-    expect(headings.map((h) => h.textContent)).toEqual(['Pinned·1', 'w·1']);
+    // `Pinned 1`, not `Pinned·1`: the Console pass moved the count to the far
+    // end of the heading, where a mid-dot joining it to the name would be
+    // joining two things a whole heading apart. The space is what keeps the
+    // button's accessible name from reading "Pinned1" — see `GroupCount`.
+    expect(headings.map((h) => h.textContent)).toEqual(['Pinned 1', 'w 1']);
     // Above the projects, and open — a pin is a request to keep something in
     // view, so the section it makes is not folded shut on arrival.
     expect(headings[0]?.getAttribute('aria-expanded')).toBe('true');
@@ -481,7 +485,7 @@ describe('pin', () => {
     await waitFor(() => expect(screen.queryByText('An earlier session')).toBeNull());
     // The count survives the fold: it is the one thing worth reading while the
     // section is shut.
-    expect(screen.getByRole('button', { name: /Pinned/ }).textContent).toBe('Pinned·1');
+    expect(screen.getByRole('button', { name: /Pinned/ }).textContent).toBe('Pinned 1');
     expect(useApp.getState().pinnedSessions).toEqual([`p1:${SESSION.id}`]);
   });
 

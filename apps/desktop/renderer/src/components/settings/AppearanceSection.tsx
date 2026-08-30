@@ -140,7 +140,7 @@ function TextSize(): ReactElement {
   const fontSize = useApp((s) => s.fontSize);
 
   return (
-    <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+    <Item size="sm" className="items-start">
       <ItemContent>
         <ItemTitle className="text-xs text-ink">
           Base text size
@@ -207,7 +207,7 @@ export function AppearanceSection(): ReactElement {
       description="How the app looks and reads: its palette, how big it is, how much room the conversation gets, whether you watch the model think, whether the sidebar is in the way, whether the side pane may open itself, and what Escape does."
     >
       <SettingsGroup label="Theme">
-        <ItemGroup className="gap-2">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
           {/*
             The second door to a control that also lives in the window header,
             and the duplication is deliberate — the same judgment the header
@@ -220,7 +220,7 @@ export function AppearanceSection(): ReactElement {
             one store value — `ThemeToggle` reads and writes the same `theme`
             either way, so the two can never disagree.
           */}
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Theme</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -238,7 +238,7 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Text size">
-        <ItemGroup className="gap-2">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
           <TextSize />
         </ItemGroup>
       </SettingsGroup>
@@ -253,8 +253,8 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Thinking">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Show the model’s reasoning</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -284,7 +284,7 @@ export function AppearanceSection(): ReactElement {
             </ItemActions>
           </Item>
         </ItemGroup>
-        <p className="mt-1 text-2xs leading-relaxed text-ink-faint">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           {/* Said here rather than left to be discovered, because the switch is
               the obvious thing to blame for an empty transcript: it governs
               where thinking is drawn, and cannot conjure a block the provider
@@ -296,8 +296,8 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Streaming text">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Fade in each word</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -320,8 +320,8 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Side pane">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Open on its own</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -345,8 +345,8 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Keyboard">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Escape stops the run</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -373,8 +373,8 @@ export function AppearanceSection(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="Sidebar">
-        <ItemGroup className="gap-2">
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+        <ItemGroup className="gap-0 divide-y divide-hairline">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">Hide the sidebar</ItemTitle>
               <ItemDescription className="line-clamp-none text-2xs leading-relaxed text-ink-faint">
@@ -392,7 +392,7 @@ export function AppearanceSection(): ReactElement {
             </ItemActions>
           </Item>
 
-          <Item variant="outline" size="sm" className="items-start border-line bg-panel">
+          <Item size="sm" className="items-start">
             <ItemContent>
               <ItemTitle className="text-xs text-ink">
                 Width

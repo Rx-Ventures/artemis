@@ -36,7 +36,7 @@ export function ScheduledStrip(): ReactElement | null {
   const hidden = state.routines.length - shown.length;
 
   return (
-    <div className="shrink-0 border-b border-line px-2 pb-2">
+    <div className="shrink-0 border-b border-hairline px-2 pb-2">
       <div className="flex h-6 items-center px-1">
         <span className="chrome-label text-ink-faint">Scheduled</span>
       </div>
@@ -45,7 +45,7 @@ export function ScheduledStrip(): ReactElement | null {
           <button
             key={routine.id}
             type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-raised"
+            className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-wash"
             // The pane is where a routine is acted on; the strip only reports.
             onClick={() => openSettings('routines')}
           >
@@ -71,7 +71,7 @@ export function ScheduledStrip(): ReactElement | null {
         {hidden > 0 ? (
           <button
             type="button"
-            className="rounded-sm px-1.5 py-1 text-left text-2xs text-ink-faint hover:bg-raised"
+            className="rounded-md px-1.5 py-1 text-left text-2xs text-ink-faint hover:bg-wash"
             onClick={() => openSettings('routines')}
           >
             and {hidden} more…

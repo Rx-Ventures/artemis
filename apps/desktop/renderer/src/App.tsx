@@ -38,12 +38,13 @@
  * sliver — so its own close button could not bring it back, and the toggle had
  * to live somewhere always-mounted. The header was that somewhere.
  *
- * The sidebar collapses to a rail now, so it reopens itself and the header is
- * no longer holding a control on someone else's behalf. What it holds is what
- * belongs to the *window* rather than to any one pane: the name of what this
- * window is pointed at, the way into settings, and the Electron drag region.
- * The sidebar toggle stays because the top-left corner is where a person looks
- * for it, not because nowhere else can hold it.
+ * That is true again (2026-08-30, the 7D pass): the rail era in between gave
+ * the sidebar a way to reopen itself, and the rail turned out to be a column
+ * of doubles standing beside the thing it doubled. Collapsed is `null` once
+ * more, and the header shows the way back exactly while it is needed — one
+ * control, one home at a time. What the bar holds otherwise is what belongs
+ * to the *window*: the name of what it is pointed at, the way into the
+ * palette (centred), the opener, settings, the theme, and the drag region.
  *
  * ## The sidebar floats
  *
@@ -52,11 +53,8 @@
  * project, most recently worked in first, and a row click carries provider,
  * profile, directory and transcript across together.
  *
- * Under it, in the same margin, is a second card that exists only when the
- * updater has something to say. That is the whole of the update surface while
- * the sidebar is showing — see `UpdateCard`. When it is hidden the sidebar
- * collapses to a rail rather than to nothing, so the card has somewhere to
- * point to and there is no second update component standing in for it.
+ * The update surface is the chip in the header — one home that never
+ * disappears, whatever the sidebar is doing. See `UpdateChip` in `AppHeader`.
  *
  * ## The status line belongs to the composer, not to the window
  *

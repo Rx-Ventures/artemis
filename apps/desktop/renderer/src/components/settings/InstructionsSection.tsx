@@ -54,7 +54,7 @@ export function InstructionsSection(): ReactElement {
         Memory-banks row scrolls to.
       */}
       <div data-settings-row="memory-banks" className="flex flex-col gap-5">
-        <div className="flex flex-col gap-1 border-t border-line pt-4">
+        <div className="flex flex-col gap-1 border-t border-hairline pt-4">
           <h3 className="chrome-label text-ink-faint">Memory banks</h3>
           <p className="text-2xs leading-relaxed text-ink-faint">
             The prompts above are instructions you state; the banks are the instance agents keep

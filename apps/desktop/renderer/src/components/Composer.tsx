@@ -76,6 +76,20 @@ import {
   type AttachmentRejection,
 } from '../lib/attachments';
 import { registerComposer } from '../lib/composerFocus';
+import { COLUMN_MAX } from './Transcript';
+
+/**
+ * The column the composer sits on — the transcript's, exactly.
+ *
+ * Every row this file lays out (the directory chip, the queued-steer strip,
+ * the field itself, the hand-off strip) takes this class instead of a private
+ * `max-w-4xl`. The private cap is how the input ended up narrower than the
+ * messages above it: three surfaces, three opinions about one column. Now the
+ * transcript's `COLUMN_MAX` is the only opinion (2026-08-30, the 7D pass).
+ */
+function useColumnMax(): string {
+  return COLUMN_MAX[useApp((s) => s.conversationWidth)];
+}
 import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
 import { ActivityRule } from './Activity';
 import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
@@ -117,6 +131,7 @@ function reportRejections(rejected: readonly AttachmentRejection[]): void {
 }
 
 export function Composer(): ReactElement {
+  const columnMax = useColumnMax();
   /**
    * How far back through `promptHistory` recall has walked. `null` is "not
    * recalling" — the distinction matters, because index 0 is a real entry.
@@ -469,9 +484,10 @@ export function Composer(): ReactElement {
    * The composer used to sit in a darker bar drawn across the foot of the
    * window, which read as a second surface the transcript ended at. It is the
    * same document: the input is the last thing in the column, not furniture
-   * beneath it. So the input carries its own border (see `Textarea`) and floats
-   * on the window background, with the status line under it — nothing boxes
-   * either of them in.
+   * beneath it. So the field draws its own card — the wrapper below carries the
+   * hairline and the wash, not the `Textarea` primitive — and floats on the
+   * window background, with the status line under it; nothing boxes either of
+   * them in.
    *
    * The seam itself is the exception, and it is one line.
    *
@@ -496,7 +512,7 @@ export function Composer(): ReactElement {
         prompt do"; this answers "where am I", which is the frame the rest sits
         inside. Reading order matches: place, then prompt, then settings.
       */}
-      <div className="mx-auto flex w-full max-w-4xl items-center px-3 pt-1.5">
+      <div className={cn('mx-auto flex w-full items-center px-3 pt-1.5', columnMax)}>
         <WorkingDirectoryChip />
       </div>
 
@@ -512,28 +528,36 @@ export function Composer(): ReactElement {
         it by design.
       */}
       {queuedSteers > 0 && (
-        <div className="mx-auto flex w-full max-w-4xl items-center gap-1.5 px-3 pt-1">
-          <span className="min-w-0 truncate text-2xs text-ink-faint">
-            {queuedSteers === 1
-              ? '1 message queued — read at the next pause, or after this turn'
-              : `${queuedSteers} messages queued — read at the next pause, or after this turn`}
-          </span>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() => void interruptRun(pane)}
-            title="Interrupt the current step — queued messages survive and are read immediately"
-            className="h-5 shrink-0 gap-1 px-1.5 text-2xs font-normal text-ink-muted hover:text-ink"
-          >
-            <CircleStopIcon className="size-3 shrink-0" aria-hidden="true" />
-            Read it now
-          </Button>
+        <div className={cn('mx-auto w-full px-3 pt-1', columnMax)}>
+          {/*
+            7D's `.queue` strip: a hairline row on a wash, not bare text. It is
+            a standing state above the field rather than a line of prose, and
+            the card it sits over is bordered too — an unbounded sentence there
+            reads as part of the transcript.
+          */}
+          <div className="flex items-center gap-1.5 rounded-md border border-hairline bg-wash px-2.5 py-1.5">
+            <span className="min-w-0 truncate text-2xs text-ink-muted">
+              {queuedSteers === 1
+                ? '1 message queued — read at the next pause, or after this turn'
+                : `${queuedSteers} messages queued — read at the next pause, or after this turn`}
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => void interruptRun(pane)}
+              title="Interrupt the current step — queued messages survive and are read immediately"
+              className="ml-auto h-5 shrink-0 gap-1 rounded-md px-1.5 text-2xs font-normal text-beam-text hover:bg-wash-strong hover:text-beam-text dark:hover:bg-wash-strong"
+            >
+              <CircleStopIcon className="size-3 shrink-0" aria-hidden="true" />
+              Read it now
+            </Button>
+          </div>
         </div>
       )}
 
       {/* One child now that Stop has moved inside the field; the row is what
           centres the composer and gives it its margins. */}
-      <div className="mx-auto flex w-full max-w-4xl items-end px-3 pt-1 pb-1">
+      <div className={cn('mx-auto flex w-full items-end px-3 pt-1 pb-1', columnMax)}>
         {/*
           The positioning context for Send is this element, not `WithReason`.
           `WithReason` renders its children bare — no wrapper, no `className` —
@@ -552,7 +576,24 @@ export function Composer(): ReactElement {
         */}
         <div
           className={cn(
-            'relative min-w-0 flex-1 rounded-md',
+            /*
+              The card. 7D `.cin`: an 11px radius, the stronger hairline (12%
+              of the ink rather than 7%) and a 4% wash for a fill — the field
+              is the one surface in the column a person operates, so it is the
+              one thing allowed to be drawn as an object rather than as text
+              on the window. The textarea inside it is transparent and
+              borderless; this element carries the edge for the whole card,
+              attachments and buttons included.
+            */
+            'relative min-w-0 flex-1 rounded-xl border border-hairline-strong bg-wash',
+            /*
+              Focus is drawn out here for the same reason: a ring on the
+              textarea would trace a second, smaller rectangle inside the one
+              the eye is already reading as the field. `focus-within` rather
+              than `focus-visible` because the ring belongs to whichever child
+              has the caret, and a textarea is focus-visible on click anyway.
+            */
+            'focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50',
             // `ring-offset-bg` named no token — there is no `--color-bg`, so
             // the offset had no colour and Tailwind emitted nothing. And
             // `ring-accent` is shadcn's *hover surface*, not the accent colour,
@@ -826,7 +867,15 @@ export function Composer(): ReactElement {
                 // read, so it takes the same face as the bubble it becomes and
                 // as the answer that comes back. The two have to move together:
                 // see the note on the user bubble in `Transcript.tsx`.
-                'max-h-[35vh] min-h-9 w-full resize-none bg-inset py-2 pr-18 pl-2.5 text-sm leading-relaxed md:text-sm',
+                'max-h-[35vh] min-h-9 w-full resize-none py-2 pr-18 pl-3 text-sm leading-relaxed md:text-sm',
+                /*
+                  Every edge and fill the primitive draws is surrendered to the
+                  card wrapper above — border, background and focus ring alike.
+                  `dark:bg-transparent` is not redundant with `bg-transparent`:
+                  the primitive's `dark:bg-input/30` is a `.dark`-scoped rule
+                  and outranks the unscoped one whatever the source order.
+                */
+                'border-transparent bg-transparent focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent',
                 locked && 'cursor-not-allowed',
               )}
             />
@@ -843,9 +892,14 @@ export function Composer(): ReactElement {
             drift to the middle of a tall field and stop lining up with the line
             being typed.
 
-            Ghost, not the accent fill. Send is the default action of the Enter
-            key, not a call to action competing with the text — the brightest
-            thing in the composer should be what the user is writing.
+            Send is the filled square now, and the ghost argument that used to
+            sit here — that a fill would out-shout the sentence being written —
+            was an argument about a composer with no edges of its own. The card
+            draws those edges now (7D `.cin`), and inside a card the primary
+            action is the thing that is expected to be filled; a ghost arrow in
+            the corner of a bordered field reads as decoration rather than as
+            the button Enter presses. Attach stays a ghost beside it, which is
+            what makes the pair legible as one action and one accessory.
 
             Icons only. The words carried nothing the glyphs and the Enter hint
             in the empty state do not; `aria-label` and the titles keep them
@@ -900,22 +954,22 @@ export function Composer(): ReactElement {
               }
               aria-label="Attach a file"
               title="Attach a file — or paste or drop one"
-              className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+              className="size-7 shrink-0 rounded-md p-0 text-ink-muted hover:bg-wash-strong hover:text-ink dark:hover:bg-wash-strong"
             >
               <PaperclipIcon />
             </ReasonButton>
 
             {/*
               Send and Stop share this slot; see `stops` above for which is on
-              screen when. Both are the same 28px ghost square in the same
-              place, so the swap is a change of glyph rather than of layout —
-              nothing moves under the pointer as a run starts or ends.
+              screen when. Both are the same 28px filled square in the same
+              place, so the swap is a change of colour and glyph rather than of
+              layout — nothing moves under the pointer as a run starts or ends.
 
-              Signal-toned rather than the `destructive` fill it used to wear
-              outside the field. In here a filled red square would be the
-              brightest thing in the composer, which is a strange thing for the
-              window to shout while it is working; the colour is enough to say
-              this is not the arrow that was there a moment ago.
+              Signal rather than beam, and filled rather than tinted. The two
+              buttons have to be told apart at a glance while the pointer is
+              already over the slot, and at 28px a hue swap on one filled shape
+              does that where a fill-versus-ghost swap would read as the button
+              having gone away.
             */}
             {stops ? (
               /*
@@ -928,14 +982,14 @@ export function Composer(): ReactElement {
                 the run is never left without a stop if the first one is lost.
               */
               <Button
-                variant="ghost"
+                variant="default"
                 onClick={() => void interruptRun(pane)}
                 disabled={stopping}
                 aria-label={
                   stopping ? 'Stopping the run…' : `Stop the run (${keyLabel('escape')})`
                 }
                 title={stopping ? 'Stopping the run…' : `Stop the run (${keyLabel('escape')})`}
-                className="size-7 shrink-0 p-0 text-signal hover:bg-signal/10 hover:text-signal disabled:opacity-100"
+                className="size-7 shrink-0 rounded-md bg-signal p-0 text-signal-ink hover:bg-signal/85 disabled:opacity-100"
               >
                 {stopping ? (
                   <LoaderCircleIcon className="animate-spin" />
@@ -945,7 +999,7 @@ export function Composer(): ReactElement {
               </Button>
             ) : (
               <Button
-                variant="ghost"
+                variant="default"
                 onClick={send}
                 // No `ReasonButton` and no reason to attach: the one state that
                 // had one — locked mid-run — is now Stop, and the disabled
@@ -953,7 +1007,7 @@ export function Composer(): ReactElement {
                 disabled={!sendable}
                 aria-label={`Send the prompt (${keyLabel('enter')})`}
                 title={`Send the prompt (${keyLabel('enter')})`}
-                className="size-7 shrink-0 p-0 text-ink-muted hover:text-ink"
+                className="size-7 shrink-0 rounded-md bg-beam p-0 text-beam-ink hover:bg-beam/85"
               >
                 <SendHorizontalIcon />
               </Button>
@@ -994,8 +1048,13 @@ function AttachmentStrip({
 }): ReactElement | null {
   if (attachments.length === 0) return null;
 
+  /*
+   * Inside the card, so the strip takes the card's inset rather than a margin
+   * under itself — 7D `.att` pads from the field's own edge and lets the
+   * textarea's own padding provide the gap below.
+   */
   return (
-    <ul className="mb-1.5 flex flex-wrap items-start gap-1.5" aria-label="Attachments">
+    <ul className="flex flex-wrap items-start gap-1.5 px-2 pt-2" aria-label="Attachments">
       {attachments.map((attachment) => (
         <li key={attachment.id} className="relative">
           {isImageAttachment(attachment) ? (
@@ -1006,7 +1065,7 @@ function AttachmentStrip({
               // content the user added and can remove.
               alt={attachment.name ?? 'Attached image'}
               title={attachment.name ?? 'Attached image'}
-              className="size-14 rounded-md border border-line object-cover"
+              className="size-14 rounded-md border border-hairline object-cover"
             />
           ) : (
             /*
@@ -1016,7 +1075,7 @@ function AttachmentStrip({
             */
             <div
               title={`${attachment.name} — ${formatBytes(attachmentBytes(attachment))}`}
-              className="flex h-14 max-w-56 items-center gap-2 rounded-md border border-line bg-inset px-2.5"
+              className="flex h-14 max-w-56 items-center gap-2 rounded-md border border-hairline bg-wash px-2.5"
             >
               <FileTextIcon className="size-4 shrink-0 text-ink-muted" />
               <span className="min-w-0">
@@ -1049,7 +1108,7 @@ function AttachmentStrip({
             }}
             aria-label={`Remove ${attachment.name ?? 'this image'}`}
             title="Remove"
-            className="absolute -top-1 -right-1 flex size-4.5 items-center justify-center rounded-full border border-line bg-panel text-ink-muted opacity-80 transition-opacity hover:text-ink hover:opacity-100 focus-visible:opacity-100"
+            className="absolute -top-1 -right-1 flex size-4.5 items-center justify-center rounded-full border border-hairline-strong bg-panel text-ink-muted opacity-80 transition-opacity hover:text-ink hover:opacity-100 focus-visible:opacity-100"
           >
             <XIcon className="size-3" />
           </button>
@@ -1076,11 +1135,12 @@ function AttachmentStrip({
 function HandoffStrip(): ReactElement | null {
   const pane = usePaneRef();
   const state = usePane((s) => s.handoff);
+  const columnMax = useColumnMax();
   if (state !== 'done') return null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-3 pt-1.5">
-      <div className="flex items-start gap-3 border border-amber/40 bg-panel px-3 py-2">
+    <div className={cn('mx-auto w-full px-3 pt-1.5', columnMax)}>
+      <div className="flex items-start gap-3 rounded-lg border border-amber/40 bg-panel px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-2xs font-medium text-amber">This conversation has been handed over</p>
           <p className="mt-0.5 text-2xs leading-relaxed text-ink-faint">{HANDOFF_BLOCK_DETAIL}</p>
@@ -1089,7 +1149,7 @@ function HandoffStrip(): ReactElement | null {
           type="button"
           size="sm"
           variant="outline"
-          className="h-6 shrink-0 border-line px-2 text-2xs"
+          className="h-6 shrink-0 border-hairline-strong px-2 text-2xs"
           onClick={() => dismissHandoff(pane)}
         >
           Keep working here

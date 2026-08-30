@@ -127,7 +127,7 @@ function AgentEmpty({
  */
 function AgentError({ message }: { readonly message: string }): ReactElement {
   return (
-    <p className="shrink-0 border-b border-line bg-raised/40 px-2 py-1 text-3xs text-ink-faint">
+    <p className="shrink-0 border-b border-hairline bg-wash px-2 py-1 text-3xs text-ink-faint">
       Could not read this agent: {message}
     </p>
   );

@@ -213,7 +213,9 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
           onClick={() => {
             if (parent !== null) setAt(parent);
           }}
-          className="shrink-0 text-ink-faint"
+          // The browser's nav buttons two tabs away take the same shape and the
+          // same hover; `ghost`'s own `--muted` is a grey step 7D replaced.
+          className="shrink-0 rounded-md text-ink-faint hover:bg-wash"
         >
           <ChevronLeftIcon />
         </IconButton>
@@ -230,7 +232,7 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
           label="Read this folder again"
           size="icon-xs"
           onClick={() => void read(at)}
-          className="shrink-0 text-ink-faint"
+          className="shrink-0 rounded-md text-ink-faint hover:bg-wash"
         >
           <RefreshCwIcon className={cn(loading && 'animate-spin')} />
         </IconButton>
@@ -249,7 +251,14 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
           This folder is empty.
         </div>
       ) : (
-        <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1" aria-label="Folder">
+        // Inset on all four sides, because the rows are rounded now: a
+        // `rounded-md` row that runs to the pane's edge has its corners cut off
+        // by the very edge it is supposed to stand clear of. The 6px pad is the
+        // mockup's `.flist` (docs/design/7d-full.html).
+        <ul
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5"
+          aria-label="Folder"
+        >
           {/*
             The way back, in the list rather than only in the header.
 
@@ -272,7 +281,7 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
                 onClick={() => {
                   setAt(parent);
                 }}
-                className="flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left text-xs text-ink-muted transition-colors hover:bg-raised/50 hover:text-ink"
+                className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-ink-muted transition-colors hover:bg-wash hover:text-ink"
               >
                 <CornerLeftUpIcon className="size-3.5 shrink-0 text-beam-text" aria-hidden="true" />
                 {/* Mono, because it is a path fragment rather than a name — and
@@ -294,10 +303,10 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
                   else void openFile({ path: next }, pane);
                 }}
                 className={cn(
-                  'flex w-full min-w-0 items-center gap-2 px-2.5 py-1 text-left text-xs transition-colors',
+                  'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors',
                   entry.kind === 'other'
                     ? 'cursor-default text-ink-faint'
-                    : 'text-ink-muted hover:bg-raised/50 hover:text-ink',
+                    : 'text-ink-muted hover:bg-wash hover:text-ink',
                 )}
               >
                 <EntryIcon entry={entry} />
@@ -312,7 +321,7 @@ export function FilesPane({ paneId }: { readonly paneId: PaneId }): ReactElement
           {listing.truncated ? (
             /* Said rather than hidden: a list that stops silently reads as a
                complete account of a folder that is not. */
-            <li className="px-2.5 py-2 text-2xs text-amber">
+            <li className="px-2 py-2 text-2xs text-amber">
               This folder holds more than can be listed at once. Showing the
               first {listing.entries.length}.
             </li>

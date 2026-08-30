@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Instrument — round seven, the surface</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+/* ── Instrument. Round seven: the surface treatment.
+   Round six varied the arrangement and held the treatment — the wrong way
+   round, because the treatment is what makes an app look modern. Here the
+   arrangement is identical in all four files and the language block below
+   is the only thing that differs.
+   Colour is round five's verdict, imported from _seed_build.py.
+   To change this file: python3 docs/design/_round7_build.py
+   ─────────────────────────────────────────────────────────────────────── */
+:root {
+  --void: oklch(14% 0 0); --bg: oklch(15.5% 0 0); --chrome: oklch(19.5% 0 0);
+  --well: oklch(17% 0 0); --bar: oklch(22.5% 0 0); --ph-bg: oklch(19.5% 0 0);
+  --line: oklch(33.5% 0 0); --line-2: oklch(56.5% 0 0); --ink: oklch(96% 0 0);
+  --ink-2: oklch(77% 0 0); --ink-3: oklch(62% 0 0); --accent: oklch(52% 0.21 264);
+  --accent-ink: oklch(97% 0.014 264); --accent-text: oklch(61.5% 0.14 264); --tool: oklch(80% 0.1 210);
+  --think: oklch(64% 0.035 310); --dele: oklch(61.5% 0.14 264); --ok: oklch(84% 0.17 150);
+  --warn: oklch(85% 0.155 85); --warn-ink: oklch(18% 0.035 85); --err: oklch(70% 0.18 25);
+  --add-bg: oklch(84% 0.17 150 / 0.1); --del-bg: oklch(70% 0.18 25 / 0.1); --gate-bg: oklch(85% 0.155 85 / 0.07);
+  --syn-kw: oklch(61.5% 0.14 264); --syn-st: oklch(84% 0.17 150); --syn-fn: oklch(96% 0 0);
+  --syn-nu: oklch(85% 0.155 85);
+
+  --warn-line: color-mix(in srgb, var(--warn) 45%, transparent);
+  --warn-fill: var(--gate-bg);
+
+  /* today's treatment: 3px, solid hairlines, mono chrome, no depth */
+  --r-win: 6px; --r-panel: 3px; --r-ctl: 3px; --r-card: 3px; --r-bub: 3px;
+  --r-comp: 3px; --r-code: 2px; --r-send: 3px;
+  --hair: 1px solid var(--line); --hair-top: 1px solid var(--line);
+  --hair-sb: 1px solid var(--line); --hair-main: 1px solid var(--line);
+  --hair-mh: 1px solid var(--line); --hair-in: 1px solid var(--line-2);
+  --hair-ico: 1px solid var(--line); --hair-user: 1px solid var(--line);
+  --h-top: 44px; --h-mh: 28px; --h-ctl: 22px; --h-btn: 26px; --h-tx: 42px;
+  --pad-top: 11px; --pad-body: 9px; --gap-body: 9px; --pad-sb: 0px; --pad-mh: 9px;
+  --pad-thread: 11px 12px; --pad-thread-q: 10px; --pad-comp: 0 9px 8px; --pad-comp-q: 0 8px 7px;
+  --pad-tx: 8px 10px; --pad-cbar: 3px 4px 4px; --pad-bub: 6px 9px; --pad-card: 7px 9px;
+  --pad-step: 5px 8px; --pad-row: 5px 10px; --pad-grp: 9px 10px 5px; --pad-ctl: 9px; --pad-code: 1px 4px;
+  --gap-msg: 9px; --w-sb: 194px; --w-col: 100%; --w-rp: 320px;
+  --fs-msg: 13px; --fs-ctl: 11px; --fs-meta: 11px; --fs-row: 11.5px; --fs-title: 12px; --w-title: 600;
+  --f-grp: 10px var(--mono); --tr-grp: 0.11em; --case-grp: uppercase;
+  --f-meta: 10.5px var(--mono); --f-code: 11.5px var(--mono); --f-pre: 10.5px/1.55 var(--mono);
+  --fill-ctl: transparent; --fill-ico: transparent; --fill-in: var(--well); --fill-on: var(--well);
+  --fill-card: var(--well); --fill-pre: var(--well); --fill-user: var(--well); --fill-code: var(--well);
+  --chrome-top: var(--chrome); --chrome-sb: var(--chrome); --chrome-main: var(--chrome);
+  --sh-win: none; --sh-comp: none;
+  --sans: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --fs: 13px;
+}
+html.light {
+  --void: oklch(93.5% 0 0); --bg: oklch(96.5% 0 0); --chrome: oklch(100% 0 0);
+  --well: oklch(95.5% 0 0); --bar: oklch(94% 0 0); --ph-bg: oklch(100% 0 0);
+  --line: oklch(89% 0 0); --line-2: oklch(64% 0 0); --ink: oklch(22% 0 0);
+  --ink-2: oklch(43% 0 0); --ink-3: oklch(52% 0 0); --accent: oklch(48% 0.19 264);
+  --accent-ink: oklch(98% 0.005 264); --accent-text: oklch(48% 0.19 264); --tool: oklch(48% 0.08 210);
+  --think: oklch(50% 0.03 310); --dele: oklch(48% 0.19 264); --ok: oklch(50% 0.13 150);
+  --warn: oklch(50% 0.098 85); --warn-ink: oklch(98% 0.005 85); --err: oklch(52% 0.19 25);
+  --add-bg: oklch(50% 0.13 150 / 0.1); --del-bg: oklch(52% 0.19 25 / 0.1); --gate-bg: oklch(50% 0.098 85 / 0.07);
+  --syn-kw: oklch(48% 0.19 264); --syn-st: oklch(50% 0.13 150); --syn-fn: oklch(22% 0 0);
+  --syn-nu: oklch(50% 0.098 85);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--void); color: var(--ink); font: var(--fs)/1.6 var(--sans);
+  padding: 26px; -webkit-font-smoothing: antialiased; }
+.page { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 7px; }
+.kicker { font: 10.5px var(--mono); letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 6px; }
+.note { color: var(--ink-2); font-size: 13.5px; max-width: 82ch; margin-bottom: 6px; }
+.note b { color: var(--ink); font-weight: 600; }
+a.back { color: var(--accent-text); text-decoration: none; font: 11px var(--mono); }
+.vnav { display: flex; gap: 6px; align-items: center; margin: 12px 0 2px; flex-wrap: wrap; }
+.vnav a { font: 10.5px var(--mono); color: var(--ink-3); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+.vnav a.on { color: var(--accent-text); border-color: var(--accent-text); }
+.spec { display: flex; gap: 22px; flex-wrap: wrap; margin: 14px 0 4px; padding: 12px 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.spec .col { display: flex; flex-direction: column; gap: 4px; }
+.spec .lab { font: 9.5px var(--mono); letter-spacing: 0.13em; color: var(--ink-3); }
+.spec .val { font: 11px var(--mono); color: var(--ink-2); }
+.ctl { display: flex; gap: 16px; align-items: center; margin: 13px 0 2px; flex-wrap: wrap; }
+.segs { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.segs button { font: 10.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase;
+  background: transparent; color: var(--ink-3); border: 0; border-right: 1px solid var(--line);
+  padding: 5px 11px; cursor: pointer; }
+.segs button:last-child { border-right: 0; }
+.segs button.on { background: var(--accent); color: var(--accent-ink); }
+.segs .lab { font: 9.5px var(--mono); color: var(--ink-3); padding: 5px 9px; letter-spacing: 0.13em; }
+.screen { display: none; } .screen.on { display: block; }
+.scap { font: 10.5px var(--mono); color: var(--ink-3); margin-top: 12px; }
+.scap b { color: var(--ink-2); font-weight: 400; }
+.fitnote { font: 10.5px var(--mono); color: var(--ink-3); }
+.fitnote b { color: var(--ink-2); font-weight: 400; }
+.foot { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.box { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: var(--chrome); }
+.box h3 { font-size: 12.5px; margin-bottom: 8px; color: var(--ink); font-weight: 600; }
+.box h3.cost { color: var(--warn); }
+.box li { font-size: 13px; color: var(--ink-2); margin-bottom: 5px; }
+.box ul { margin-left: 15px; }
+.box b { color: var(--ink); font-weight: 600; }
+
+/* ── the window ─────────────────────────────────────────────────────────── */
+.win { margin-top: 14px; width: 1400px; height: 1000px; flex: none; background: var(--bg);
+  border: 1px solid var(--line); border-radius: var(--r-win); overflow: hidden;
+  display: flex; flex-direction: column; box-shadow: var(--sh-win); }
+
+/* topbar — one bar, height set by the language */
+.top { height: var(--h-top); flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 0 var(--pad-top); border-bottom: var(--hair-top); background: var(--chrome-top); }
+.lights { display: flex; gap: 7px; margin-right: 5px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-2); display: block; opacity: 0.55; }
+.title { font-size: var(--fs-title); font-weight: var(--w-title); color: var(--ink); letter-spacing: -0.01em; }
+.title s { text-decoration: none; color: var(--ink-3); font-weight: 400; margin: 0 7px; }
+.top .sp { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: var(--h-ctl);
+  padding: 0 var(--pad-ctl); border: var(--hair); border-radius: var(--r-ctl);
+  font-size: var(--fs-ctl); color: var(--ink-2); background: var(--fill-ctl); }
+.pill b { color: var(--ink); font-weight: 550; }
+.pill .cv { color: var(--ink-3); font-size: 9px; }
+.pill.mode { color: var(--warn); border-color: var(--warn-line); background: var(--warn-fill); }
+.pill.go { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 550; }
+.ico { width: var(--h-ctl); height: var(--h-ctl); border-radius: var(--r-ctl); display: grid;
+  place-items: center; color: var(--ink-3); font-size: 13px; border: var(--hair-ico); background: var(--fill-ico); }
+
+.body { flex: 1; display: flex; min-height: 0; gap: var(--gap-body); padding: var(--pad-body); }
+
+/* ── sidebar ────────────────────────────────────────────────────────────── */
+.sb { width: var(--w-sb); flex: none; display: flex; flex-direction: column; gap: 8px;
+  background: var(--chrome-sb); border: var(--hair-sb); border-radius: var(--r-panel);
+  padding: var(--pad-sb); overflow: hidden; }
+.newb { height: var(--h-btn); border-radius: var(--r-ctl); background: var(--accent);
+  color: var(--accent-ink); font-size: var(--fs-ctl); font-weight: 550; display: grid;
+  place-items: center; letter-spacing: 0.01em; }
+.srch { height: var(--h-btn); border-radius: var(--r-ctl); border: var(--hair-in);
+  background: var(--fill-in); display: flex; align-items: center; gap: 7px;
+  padding: 0 10px; font-size: var(--fs-ctl); color: var(--ink-3); }
+.sb .list { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+.grp { font: var(--f-grp); color: var(--ink-3); letter-spacing: var(--tr-grp);
+  text-transform: var(--case-grp); padding: var(--pad-grp); }
+.row { display: flex; align-items: center; gap: 8px; padding: var(--pad-row);
+  border-radius: var(--r-ctl); font-size: var(--fs-row); color: var(--ink-2); }
+.row.on { background: var(--fill-on); color: var(--ink); }
+.row .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent;
+  border: 1px solid var(--line-2); }
+.row .dot.run { background: var(--tool); border-color: var(--tool); }
+.row .dot.gate { background: var(--warn); border-color: var(--warn); }
+.row .dot.done { background: var(--ok); border-color: var(--ok); }
+.row .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb .me { display: flex; align-items: center; gap: 8px; padding: var(--pad-row); font-size: var(--fs-ctl); color: var(--ink-3); }
+.sb .me i { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); display: block; }
+
+/* ── main column ────────────────────────────────────────────────────────── */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background: var(--chrome-main); border: var(--hair-main); border-radius: var(--r-panel); overflow: hidden; }
+.mh { height: var(--h-mh); flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 0 var(--pad-mh); border-bottom: var(--hair-mh); font-size: var(--fs-ctl); color: var(--ink-2); }
+.mh .sp { flex: 1; }
+.mh .st { font: var(--f-meta); color: var(--ink-3); }
+.mh .st .p { color: var(--ok); } .mh .st .m { color: var(--err); margin-left: 5px; }
+.thread { flex: 1; overflow: hidden; padding: var(--pad-thread); display: flex;
+  flex-direction: column; justify-content: flex-end; gap: var(--gap-msg); }
+.col { width: 100%; max-width: var(--w-col); margin: 0 auto; display: flex;
+  flex-direction: column; gap: var(--gap-msg); }
+.msg { display: flex; flex-direction: column; gap: 7px; }
+.msg.u { align-items: flex-end; }
+.bub { background: var(--fill-user); border: var(--hair-user); border-radius: var(--r-bub);
+  padding: var(--pad-bub); font-size: var(--fs-msg); color: var(--ink); max-width: 86%; }
+.prose { font-size: var(--fs-msg); color: var(--ink-2); line-height: 1.65; }
+.prose b { color: var(--ink); font-weight: 600; }
+code { font: var(--f-code); color: var(--accent-text); background: var(--fill-code);
+  padding: var(--pad-code); border-radius: var(--r-code); }
+
+.think { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta);
+  color: var(--ink-3); }
+.think .cv { font-size: 9px; }
+.thinkbody { font-size: var(--fs-meta); color: var(--ink-3); font-style: italic;
+  border-left: 2px solid var(--line); padding-left: 11px; line-height: 1.6; }
+
+.step { display: flex; align-items: center; gap: 9px; padding: var(--pad-step);
+  border: var(--hair); border-radius: var(--r-card); background: var(--fill-card); font-size: var(--fs-meta); }
+.step .ic { color: var(--tool); font-size: 12px; }
+.step .nm { color: var(--ink); font-weight: 550; }
+.step .ar { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .tm { margin-left: auto; color: var(--ink-3); font: var(--f-meta); }
+.step .cv { color: var(--ink-3); font-size: 11px; }
+
+.plan { border: var(--hair); border-radius: var(--r-card); background: var(--fill-card);
+  padding: var(--pad-card); display: flex; flex-direction: column; gap: 4px; }
+.pl { display: flex; gap: 9px; font-size: var(--fs-meta); color: var(--ink-3); }
+.pl .m { width: 11px; flex: none; }
+.pl.done { text-decoration: line-through; }
+.pl.done .m { color: var(--ok); }
+.pl.now { color: var(--ink); } .pl.now .m { color: var(--warn); }
+
+.patch { border: var(--hair); border-radius: var(--r-card); overflow: hidden; background: var(--fill-card); }
+.patch .ph { display: flex; align-items: center; gap: 9px; padding: var(--pad-step); font: var(--f-meta); }
+.patch .ph .f { color: var(--ink); font-weight: 550; }
+.patch .ph .n { margin-left: auto; }
+.patch .ph .n .p { color: var(--ok); } .patch .ph .n .m { color: var(--err); margin-left: 5px; }
+.patch .ph .cv { color: var(--ink-3); }
+.patch pre { font: var(--f-pre); background: var(--fill-pre); padding: 7px 0; white-space: normal; }
+.patch pre > span { display: block; padding: 0 var(--pad-mh); white-space: pre; }
+.patch .a { background: var(--add-bg); color: var(--ok); }
+.patch .d { background: var(--del-bg); color: var(--err); }
+.patch .c { color: var(--ink-3); }
+
+.ask { border: 1px solid var(--warn-line); border-radius: var(--r-card); background: var(--warn-fill);
+  padding: var(--pad-card); display: flex; flex-direction: column; gap: 7px; }
+.ask .at { font-size: var(--fs-msg); color: var(--ink); font-weight: 600; }
+.ask .ac { font: var(--f-meta); }
+.ask .aw { font-size: var(--fs-meta); color: var(--ink-2); }
+.ask .ab { display: flex; gap: 7px; margin-top: 2px; }
+.ask .b { height: var(--h-ctl); display: inline-flex; align-items: center; padding: 0 var(--pad-ctl);
+  border: var(--hair); border-radius: var(--r-ctl); font-size: var(--fs-ctl); color: var(--ink-2); }
+.ask .b.go { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); font-weight: 600; }
+
+/* ── composer ───────────────────────────────────────────────────────────── */
+.comp { flex: none; padding: var(--pad-comp); }
+.cin { max-width: var(--w-col); margin: 0 auto; border: var(--hair-in); border-radius: var(--r-comp);
+  background: var(--fill-in); box-shadow: var(--sh-comp); overflow: hidden; }
+.cin .tx { padding: var(--pad-tx); font-size: var(--fs-msg); color: var(--ink-3); min-height: var(--h-tx); }
+.cbar { display: flex; align-items: center; gap: 6px; padding: var(--pad-cbar); }
+.cbar .sp { flex: 1; }
+.send { width: var(--h-ctl); height: var(--h-ctl); border-radius: var(--r-send); background: var(--accent);
+  color: var(--accent-ink); display: grid; place-items: center; font-size: 12px; }
+.hint { font: var(--f-meta); color: var(--ink-3); }
+
+/* ── right panel ────────────────────────────────────────────────────────── */
+.rp { width: var(--w-rp); flex: none; background: var(--chrome-sb); border: var(--hair-sb);
+  border-radius: var(--r-panel); padding: var(--pad-sb); display: flex; flex-direction: column; gap: 9px; overflow: hidden; }
+.rp .rh { display: flex; align-items: center; font-size: var(--fs-ctl); color: var(--ink); font-weight: 550; }
+.rp .rh .n { margin-left: auto; font: var(--f-meta); }
+.rp .rh .n .p { color: var(--ok); } .rp .rh .n .m { color: var(--err); margin-left: 5px; }
+.fr { display: flex; align-items: center; gap: 8px; padding: var(--pad-row); border-radius: var(--r-ctl);
+  font: var(--f-meta); color: var(--ink-2); }
+.fr .f { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fr .n { margin-left: auto; flex: none; }
+.fr .n .p { color: var(--ok); } .fr .n .m { color: var(--err); margin-left: 5px; }
+.rp .sub { font: var(--f-grp); letter-spacing: var(--tr-grp); text-transform: var(--case-grp);
+  color: var(--ink-3); padding: var(--pad-grp); }
+.rp pre { font: var(--f-pre); background: var(--fill-pre); border-radius: var(--r-card);
+  padding: 8px 0; white-space: normal; overflow: hidden; }
+.rp pre > span { display: block; padding: 0 10px; white-space: pre; }
+.rp .a { background: var(--add-bg); color: var(--ok); }
+.rp .d { background: var(--del-bg); color: var(--err); }
+.rp .c { color: var(--ink-3); }
+.rp .foot2 { margin-top: auto; display: flex; gap: 6px; }
+.rp .foot2 .b { flex: 1; height: var(--h-btn); border: var(--hair); border-radius: var(--r-ctl);
+  display: grid; place-items: center; font-size: var(--fs-ctl); color: var(--ink-2); }
+.rp .foot2 .b.go { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 550; }
+
+/* ── grid of panes ──────────────────────────────────────────────────────── */
+.stack { flex: 1; display: flex; flex-direction: column; gap: var(--gap-body); min-width: 0; }
+.prow { flex: 1; display: flex; gap: var(--gap-body); min-height: 0; min-width: 0; }
+.main.q .thread { padding: var(--pad-thread-q); }
+.main.q .comp { padding: var(--pad-comp-q); }
+.main.q { min-width: 0; }
+.main.dim { opacity: 0.72; }
+
+</style>
+</head>
+<body>
+<div class="page">
+  <a class="back" href="index.html">← the design record</a>
+  <div class="vnav"><a class="on" href="7a-instrument.html">7A · Instrument</a> <a class="" href="7b-measured.html">7B · Measured</a> <a class="" href="7c-air.html">7C · Air</a> <a class="" href="7d-console.html">7D · Console</a></div>
+  <div class="kicker" style="margin-top:10px">7A · CONTROL — THE TREATMENT TODAY</div>
+  <h1>Instrument</h1>
+  <p class="note">The treatment that ships today, applied to this round's arrangement so the variable really is the treatment. 3px radii, a solid hairline around every region, 11px uppercase mono for anything that is not prose, 22px controls, and depth deliberately deleted.</p>
+  <p class="note">It is an <b>instrument panel</b>, and it is a coherent one — round three chose it on purpose. The question this round asks is whether it is what Artemis should look like now.</p>
+  <div class="spec">
+    <div class="col"><div class="lab">RADIUS</div><div class="val">3px</div></div>
+    <div class="col"><div class="lab">HAIRLINE</div><div class="val">solid, everywhere</div></div>
+    <div class="col"><div class="lab">TOP CHROME</div><div class="val">44px + 28px</div></div>
+    <div class="col"><div class="lab">PROSE</div><div class="val">13px · column 100%</div></div>
+    <div class="col"><div class="lab">CHROME LABELS</div><div class="val">mono, uppercase</div></div>
+  </div>
+  <div class="ctl">
+    <div class="segs" id="screens"><span class="lab">SCREEN</span><button class="on" data-v="work">Work</button><button class="" data-v="grid">Grid</button><button class="" data-v="review">Review</button><button class="" data-v="focus">Focus</button></div>
+    <div class="segs" id="themes"><span class="lab">THEME</span>
+      <button class="on" data-v="dark">Dark</button><button data-v="light">Light</button></div>
+    <div class="fitnote"></div>
+  </div>
+  <div class="screen on" data-screen="work"><div class="scap"><b>Work</b> — one conversation — the treatment at rest</div><div class="win"><div class="top">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="title">artemis<s>/</s>The sandbox lets a write escape</div>
+      <div class="sp"></div>
+      <span class="pill"><b>Opus 5</b> 1M<span class="cv">▾</span></span>
+      <span class="pill mode">Plan<span class="cv">▾</span></span>
+      <span class="pill">storrence-dev<span class="cv">▾</span></span>
+      <div class="ico">⌕</div><div class="ico">⚙</div>
+    </div>
+    <div class="body"><div class="sb">
+        <div class="newb">New conversation</div>
+        <div class="srch">⌕ Search conversations</div>
+        <div class="list">
+            <div class="grp">Today</div>
+            <div class="row on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span></div>
+            <div class="row"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span></div>
+            <div class="grp">Yesterday</div>
+            <div class="row"><i class="dot"></i><span class="t">Probe the capability flags</span></div>
+            <div class="row"><i class="dot done"></i><span class="t">OpenCode model configurator</span></div>
+            <div class="grp">Last 7 days</div>
+            <div class="row"><i class="dot"></i><span class="t">Setup wizard for any bank</span></div>
+            <div class="row"><i class="dot"></i><span class="t">Local-only bank, no remote</span></div>
+        </div>
+        <div class="me"><i></i>storrence-dev · 78% left</div>
+      </div>
+      <div class="main">
+          
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="think"><span class="cv">▾</span>Thought for 4s</div>
+              <div class="thinkbody">Scope is attached when a tab spawns — but the dock can adopt a tab from another pane, and that path may never re-derive it.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="plan">
+                <div class="pl done"><span class="m">✓</span>Reproduce the escape in a scoped pane</div>
+                <div class="pl done"><span class="m">✓</span>Trace scopePath through adoptTab</div>
+                <div class="pl now"><span class="m">◐</span>Re-derive scope at adoption</div>
+                <div class="pl"><span class="m">○</span>Cover the drag path in dock.test.ts</div>
+              </div></div>
+              <div class="msg a"><div class="patch">
+                <div class="ph"><span class="f">state/dock.ts</span>
+                  <span class="n"><span class="p">+7</span><span class="m">−2</span></span>
+                  <span class="cv">›</span></div>
+                <pre><span class="c">  function adoptTab(tab, pane) {</span>
+<span class="d">-   return { ...tab, paneId: pane.id }</span>
+<span class="a">+   // a tab that changes hands re-derives its scope; the</span>
+<span class="a">+   // one it arrived with belonged to the pane it left.</span>
+<span class="a">+   return { ...tab, paneId: pane.id,</span>
+<span class="a">+     scopePath: scopeFor(pane.session) }</span>
+<span class="c">  }</span></pre></div></div>
+              <div class="msg a"><div class="ask">
+                <div class="at">Write outside the repo?</div>
+                <div class="ac"><code>~/.config/artemis/settings.json</code></div>
+                <div class="aw">This pane is scoped to <b>artemis</b>. The path is outside it.</div>
+                <div class="ab"><span class="b">Deny</span><span class="b">Allow for session</span>
+                  <span class="b go">Approve</span></div>
+              </div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="pill">＋</span><span class="pill">@ files</span><div class="sp"></div><span class="hint">⏎ send · ⇧⏎ newline</span><div class="send">↑</div></div>
+        </div></div>
+        </div>
+    </div></div></div>
+  <div class="screen" data-screen="grid"><div class="scap"><b>Grid</b> — four panes — does the treatment survive the capability</div><div class="win"><div class="top">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="title">artemis<s>/</s>4 conversations</div>
+      <div class="sp"></div>
+      <span class="pill"><b>Opus 5</b> 1M<span class="cv">▾</span></span>
+      <span class="pill mode">Plan<span class="cv">▾</span></span>
+      <span class="pill">storrence-dev<span class="cv">▾</span></span>
+      <div class="ico">⌕</div><div class="ico">⚙</div>
+    </div>
+    <div class="body"><div class="sb">
+        <div class="newb">New conversation</div>
+        <div class="srch">⌕ Search conversations</div>
+        <div class="list">
+            <div class="grp">Today</div>
+            <div class="row on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span></div>
+            <div class="row"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span></div>
+            <div class="grp">Yesterday</div>
+            <div class="row"><i class="dot"></i><span class="t">Probe the capability flags</span></div>
+            <div class="row"><i class="dot done"></i><span class="t">OpenCode model configurator</span></div>
+            <div class="grp">Last 7 days</div>
+            <div class="row"><i class="dot"></i><span class="t">Setup wizard for any bank</span></div>
+            <div class="row"><i class="dot"></i><span class="t">Local-only bank, no remote</span></div>
+        </div>
+        <div class="me"><i></i>storrence-dev · 78% left</div>
+      </div>
+      <div class="stack">
+        <div class="prow">
+          <div class="main q">
+          <div class="mh">sandbox escape<div class="sp"></div><span class="st"><span class="p">+69</span><span class="m">−3</span></span></div>
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="hint">⏎ send</span><div class="sp"></div><div class="send">↑</div></div>
+        </div></div>
+        </div>
+          <div class="main q dim">
+          <div class="mh">dock arrangement<div class="sp"></div></div>
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="hint">⏎ send</span><div class="sp"></div><div class="send">↑</div></div>
+        </div></div>
+        </div>
+        </div>
+        <div class="prow">
+          <div class="main q dim">
+          <div class="mh">setup wizard<div class="sp"></div></div>
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="hint">⏎ send</span><div class="sp"></div><div class="send">↑</div></div>
+        </div></div>
+        </div>
+          <div class="main q dim">
+          <div class="mh">capability flags<div class="sp"></div></div>
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="hint">⏎ send</span><div class="sp"></div><div class="send">↑</div></div>
+        </div></div>
+        </div>
+        </div>
+      </div>
+    </div></div></div>
+  <div class="screen" data-screen="review"><div class="scap"><b>Review</b> — changed code beside the conversation</div><div class="win"><div class="top">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="title">artemis<s>/</s>The sandbox lets a write escape</div>
+      <div class="sp"></div>
+      <span class="pill"><b>Opus 5</b> 1M<span class="cv">▾</span></span>
+      <span class="pill mode">Plan<span class="cv">▾</span></span>
+      <span class="pill">storrence-dev<span class="cv">▾</span></span>
+      <div class="ico">⌕</div><div class="ico">⚙</div>
+    </div>
+    <div class="body"><div class="sb">
+        <div class="newb">New conversation</div>
+        <div class="srch">⌕ Search conversations</div>
+        <div class="list">
+            <div class="grp">Today</div>
+            <div class="row on"><i class="dot gate"></i><span class="t">The sandbox lets a write escape</span></div>
+            <div class="row"><i class="dot run"></i><span class="t">Dock remembers its arrangement</span></div>
+            <div class="grp">Yesterday</div>
+            <div class="row"><i class="dot"></i><span class="t">Probe the capability flags</span></div>
+            <div class="row"><i class="dot done"></i><span class="t">OpenCode model configurator</span></div>
+            <div class="grp">Last 7 days</div>
+            <div class="row"><i class="dot"></i><span class="t">Setup wizard for any bank</span></div>
+            <div class="row"><i class="dot"></i><span class="t">Local-only bank, no remote</span></div>
+        </div>
+        <div class="me"><i></i>storrence-dev · 78% left</div>
+      </div>
+      <div class="main">
+          <div class="mh">sandbox escape<div class="sp"></div><span class="st"><span class="p">+69</span><span class="m">−3</span></span></div>
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="think"><span class="cv">▾</span>Thought for 4s</div>
+              <div class="thinkbody">Scope is attached when a tab spawns — but the dock can adopt a tab from another pane, and that path may never re-derive it.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="patch">
+                <div class="ph"><span class="f">state/dock.ts</span>
+                  <span class="n"><span class="p">+7</span><span class="m">−2</span></span>
+                  <span class="cv">›</span></div>
+                <pre><span class="c">  function adoptTab(tab, pane) {</span>
+<span class="d">-   return { ...tab, paneId: pane.id }</span>
+<span class="a">+   // a tab that changes hands re-derives its scope; the</span>
+<span class="a">+   // one it arrived with belonged to the pane it left.</span>
+<span class="a">+   return { ...tab, paneId: pane.id,</span>
+<span class="a">+     scopePath: scopeFor(pane.session) }</span>
+<span class="c">  }</span></pre></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="pill">＋</span><span class="pill">@ files</span><div class="sp"></div><span class="hint">⏎ send · ⇧⏎ newline</span><div class="send">↑</div></div>
+        </div></div>
+        </div>
+      <div class="rp">
+          <div class="rh">Changes<span class="n"><span class="p">+69</span><span class="m">−3</span></span></div>
+          <div>
+            <div class="fr"><span class="f">state/dock.ts</span><span class="n"><span class="p">+7</span><span class="m">−2</span></span></div>
+            <div class="fr"><span class="f">lib/scope.ts</span><span class="n"><span class="p">+24</span><span class="m">−0</span></span></div>
+            <div class="fr"><span class="f">state/dock.test.ts</span><span class="n"><span class="p">+38</span><span class="m">−1</span></span></div>
+          </div>
+          <div class="sub">state/dock.ts</div>
+          <pre><span class="c">  function adoptTab(tab, pane) {</span>
+<span class="d">-   return { ...tab, paneId: pane.id }</span>
+<span class="a">+   // a tab that changes hands re-derives</span>
+<span class="a">+   // its scope; the one it arrived with</span>
+<span class="a">+   // belonged to the pane it left.</span>
+<span class="a">+   return { ...tab, paneId: pane.id,</span>
+<span class="a">+     scopePath: scopeFor(pane.session) }</span>
+<span class="c">  }</span></pre>
+          <div class="foot2"><div class="b">Revert</div><div class="b go">Commit</div></div>
+        </div>
+    </div></div></div>
+  <div class="screen" data-screen="focus"><div class="scap"><b>Focus</b> — sidebar away, one column, nothing else</div><div class="win"><div class="top">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="title">artemis<s>/</s>The sandbox lets a write escape</div>
+      <div class="sp"></div>
+      <span class="pill"><b>Opus 5</b> 1M<span class="cv">▾</span></span>
+      <span class="pill mode">Plan<span class="cv">▾</span></span>
+      <span class="pill">storrence-dev<span class="cv">▾</span></span>
+      <div class="ico">⌕</div><div class="ico">⚙</div>
+    </div>
+    <div class="body">
+      <div class="main">
+          
+          <div class="thread"><div class="col">
+              <div class="msg u"><div class="bub">The sandbox lets a write escape — the browser tab reached <code>~/.config</code> while the pane was scoped to the repo. Find where the scope is dropped.</div></div>
+              <div class="msg a"><div class="think"><span class="cv">▾</span>Thought for 4s</div>
+              <div class="thinkbody">Scope is attached when a tab spawns — but the dock can adopt a tab from another pane, and that path may never re-derive it.</div></div>
+              <div class="msg a"><div class="step">
+                <span class="ic">⌕</span><span class="nm">Searched</span>
+                <span class="ar"><code>scopePath</code> · 14 files</span><span class="tm">0.4s</span>
+                <span class="cv">›</span></div></div>
+              <div class="msg a"><div class="patch">
+                <div class="ph"><span class="f">state/dock.ts</span>
+                  <span class="n"><span class="p">+7</span><span class="m">−2</span></span>
+                  <span class="cv">›</span></div>
+                <pre><span class="c">  function adoptTab(tab, pane) {</span>
+<span class="d">-   return { ...tab, paneId: pane.id }</span>
+<span class="a">+   // a tab that changes hands re-derives its scope; the</span>
+<span class="a">+   // one it arrived with belonged to the pane it left.</span>
+<span class="a">+   return { ...tab, paneId: pane.id,</span>
+<span class="a">+     scopePath: scopeFor(pane.session) }</span>
+<span class="c">  }</span></pre></div></div>
+              <div class="msg a"><div class="prose"><b>adoptTab</b> carries the old pane's <code>scopePath</code> across. A tab dragged out of a repo-scoped pane keeps the permissive scope, and the browser inherits it. The fix re-derives scope at adoption; the test covers the drag path.</div></div>
+          </div></div>
+          <div class="comp"><div class="cin">
+          <div class="tx">Re-derive scope at adoption, then cover the drag path…</div>
+          <div class="cbar"><span class="pill">＋</span><span class="pill">@ files</span><div class="sp"></div><span class="hint">⏎ send · ⇧⏎ newline</span><div class="send">↑</div></div>
+        </div></div>
+        </div>
+    </div></div></div>
+  <div class="foot">
+    <div class="box"><h3>What this treatment buys</h3><ul>
+      <li><b>Density.</b> Nothing on screen is bigger than it needs to be, which is why four panes fit without apology.</li>
+      <li><b>The hairline grid is honest.</b> Every region has a visible edge; nothing is ambiguous about where a surface starts.</li>
+      <li><b>It ships.</b> Zero conversion.</li>
+    </ul></div>
+    <div class="box"><h3 class="cost">What it costs</h3><ul>
+      <li><b>It reads as a tool from 2015.</b> The 3px radius plus solid hairlines plus uppercase mono chrome is the terminal-emulator idiom; against T3 Code, Codex or Claude Code it looks like a different generation of software.</li>
+      <li><b>The mono chrome shouts.</b> Uppercase 11px monospace at 0.14em is a strong voice used for ordinary labels — a lot of visual weight spent on words nobody reads twice.</li>
+      <li><b>No breathing room in the transcript.</b> 9px between messages and a full-width column means prose runs to whatever width the pane happens to be.</li>
+    </ul></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  function seg(id, fn) {
+    var box = document.getElementById(id);
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      [].forEach.call(box.querySelectorAll('button'), function (x) { x.classList.toggle('on', x === b); });
+      fn(b.dataset.v); fit();
+    });
+  }
+  seg('screens', function (v) {
+    [].forEach.call(document.querySelectorAll('.screen'), function (s) {
+      s.classList.toggle('on', s.dataset.screen === v);
+    });
+  });
+  seg('themes', function (v) { root.classList.toggle('light', v === 'light'); });
+  var page = document.querySelector('.page'), W = 1400, H = 1000, one = false;
+  function fit() {
+    // a hidden tab reports clientWidth 0; scale(0) would blank the window.
+    var avail = page.clientWidth || document.documentElement.clientWidth || W;
+    var s = one ? 1 : Math.max(0.2, Math.min(1, avail / W));
+    [].forEach.call(document.querySelectorAll('.win'), function (win) {
+      win.style.transformOrigin = 'top left';
+      win.style.transform = 'scale(' + s + ')';
+      win.style.marginBottom = (H * s - H + 16) + 'px';
+    });
+    var note = document.querySelector('.fitnote');
+    note.innerHTML = one ? 'showing 1:1 — <b>click the window</b> to fit'
+                         : 'scaled to ' + Math.round(s * 100) + '% — <b>click the window</b> for 1:1';
+    document.body.style.overflowX = one ? 'auto' : 'hidden';
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('.win')) { one = !one; fit(); }
+  });
+  addEventListener("resize", fit); addEventListener("visibilitychange", fit); fit();
+})();
+</script>
+
+</body>
+</html>

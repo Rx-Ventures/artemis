@@ -64,7 +64,116 @@ code { font: 12px var(--mono); color: var(--accent); }
 <div class="wrap">
 
   <h1>Design</h1>
-  <p class="lede"><b>Round five.</b> The layout is settled, the language axes are named. What is being decided now is where a palette <b>comes from</b>: a <code>{canvas, accent}</code> seed pair with every other token computed, or nineteen hand decisions. Newest first; the earlier rounds stand below as the record.</p>
+  <p class="lede"><b>Round seven.</b> Colour is settled and the arrangement is drawn. What is being decided now is the <b>surface treatment</b> — radius, hairline, density, type and depth. Round six varied the arrangement and held the treatment constant, which was the wrong thing to hold: the treatment is what makes an application look like it was built this year. Newest first; the earlier rounds stand below as the record.</p>
+
+  <div class="meta">ROUND SEVEN · THE SURFACE</div>
+
+  <div class="settled" style="border-left-color:var(--accent)">
+    <h3 style="color:var(--accent)">7D IS THE DIRECTION · THE FULL PASS IS DRAWN</h3>
+    <p><b><a href="7d-full.html" style="color:var(--accent);text-decoration:none">7d-full.html</a></b> — Console applied to <b>ten Artemis surfaces</b>, not one conversation: a live run and a settled transcript, the 2×2, the dock at split terminals and on its browser tab, the run navigator, the command palette, settings in two bands, the rate-limit door with the hand-off picker, and first run. Press <b>1–9</b> for screens, <b>L</b> to swap theme; every screen is linkable as <code>7d-full.html#navigator</code>.</p>
+    <p>The arrangement there is <b>Artemis's own</b> — rail, session list, pane grid, dock — because round six's arrangement question is still open and independent of this one. What the full pass settles is only what the app <i>looks</i> like, on what ships today.</p>
+  </div>
+
+  <div class="settled">
+    <h3>WHY THE AXES SWAPPED</h3>
+    <p>Round six moved the furniture and every variant still read as the same application, because Artemis's look is not its layout — it is <b>3px radii, a solid hairline around every region, and 11px uppercase mono for anything that is not prose</b>. That is an instrument panel, chosen deliberately in round three. This round asked whether it is still the right choice.</p>
+    <p>So the axes swap: <b>the arrangement is identical in all four files</b> — the three-region shape T3 Code actually uses, threads left, one conversation on a centred column, an optional panel right, one topbar — and what differs is radius, border, density, type and depth. The numbers in <b>7B are read from T3 Code's own <code>index.css</code></b> (<code>docs/research/T3-DESIGN-RESEARCH.md</code> §1.2), not guessed at.</p>
+    <p><b>Check the grid screen before deciding.</b> T3 Code is a single-conversation app; Artemis is a multi-pane harness, and round two settled that the 2×2 does not go away. A treatment that only looks good at one pane is not the answer.</p>
+  </div>
+
+  <a class="card" href="7a-instrument.html">
+    <div class="hd"><span class="n">7A</span><h2>Instrument</h2><span class="tag">THE TREATMENT TODAY</span></div>
+    <p class="bet"><b>What ships today</b>, applied to this round's arrangement so the variable really is the treatment: 3px radii, solid hairlines everywhere, uppercase mono chrome, 22px controls, depth deliberately deleted.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Density — nothing is bigger than it needs to be, which is why four panes fit without apology.</div>
+      <div class="cost"><span class="lab">COSTS</span>It reads as a tool from a decade ago: 3px plus solid hairlines plus uppercase mono is the terminal-emulator idiom.</div>
+    </div>
+  </a>
+
+  <a class="card" href="7b-measured.html">
+    <div class="hd"><span class="n">7B</span><h2>Measured</h2><span class="tag">T3 CODE, BY THE NUMBERS</span></div>
+    <p class="bet"><b>T3 Code's own geometry, not an impression of it.</b> Radius <code>0.625rem</code>, controls <code>0.5rem</code>, hairlines as <b>alpha</b> — 6% of the ink, 10% on inputs — one <b>52px topbar</b> replacing a 44px header plus a 28px pane bar, the transcript on a <b>768px column</b>, surfaces as computed lifts. Chrome stops being mono, which removes most of what reads as «terminal app».</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The ask, measured: the reference's geometry with our palette in it. Alpha edges separate surfaces without drawing a grid over the window.</div>
+      <div class="cost"><span class="lab">COSTS</span>Space — 30px controls and 16px message gaps are expensive at four panes, and a 768px column leaves half a wide window as margin.</div>
+    </div>
+  </a>
+
+  <a class="card" href="7c-air.html">
+    <div class="hd"><span class="n">7C</span><h2>Air</h2><span class="tag">BRACKET: FURTHER</span></div>
+    <p class="bet">One notch past T3 Code, so judging picks a point on a line rather than approving the only point shown. 16px radii, <b>no hairline anywhere</b> — regions separated by fill and space alone — 15px prose, 22px between messages, a composer floating on a real shadow.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The calmest of the four; with no borders the eye has nothing to do but read.</div>
+      <div class="cost"><span class="lab">COSTS</span>Four panes stop working, and with no edges the pane boundary — and which pane is focused — goes with them.</div>
+    </div>
+  </a>
+
+  <a class="card" href="7d-console.html" style="border-color:var(--accent)">
+    <div class="hd"><span class="n">7D</span><h2>Console</h2><span class="tag" style="color:var(--accent);border-color:var(--accent)">CHOSEN · SEE THE FULL PASS</span></div>
+    <p class="bet"><b>The middle, and probably the honest answer.</b> Every modern move from 7B — rounded surfaces, alpha hairlines, sans chrome in sentence case, a real composer card — at a density that still fits four conversations on a laptop. The claim: what dates the app is the 3px radius, the hairline grid and the uppercase mono, <i>not</i> the compactness.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>It survives the grid screen, which is the test 7C fails and 7B strains against — and it is the least risky conversion, being token-level.</div>
+      <div class="cost"><span class="lab">COSTS</span>A compromise can read as unresolved: slightly tight beside 7B, slightly loose beside 7A. Still two bars where 7B has one.</div>
+    </div>
+  </a>
+
+  <div class="meta" style="margin-top:30px">ROUND SIX · THE ARRANGEMENT</div>
+
+  <div class="settled">
+    <h3>OPEN — AND ASKING A DIFFERENT QUESTION</h3>
+    <p>These five answer <b>where things go</b>, which is a real question and still open — but none of them changes how the app <i>looks</i>, because the treatment was held constant. Read them for the arrangement argument; read round seven for the surface. The two verdicts are independent: any round-seven treatment can be applied to any round-six arrangement.</p>
+    <p>Five arrangements of the same session, on round five's tokens. Each file carries <b>four screens</b> — work, grid, review, focus — and a live <b>dark/light toggle</b>. The grid screen is not optional: an arrangement that only works at one pane count is not an arrangement, and round two settled that the 2×2 does not go away.</p>
+    <p>Four products were read first — <b>T3 Code, Codex, Claude Code, OpenCode</b>. All four give changed code a home of its own; Artemis is alone in leaving diffs inside tool cards in the scrollback. Two of them disagree about where run controls belong — a window toolbar or a cluster round the composer — and Artemis today does neither. Those are the two questions this round is really asking. Brief: <code>_round6.md</code>.</p>
+  </div>
+
+  <p class="lede"><b>All five are generated from one session</b> by <code>_round6_build.py</code> — the same turns, tool calls, diff and permission gate, written once and emitted into every file. Colour is imported from <code>_seed_build.py</code> so the tokens are the shipped ones by construction, type is held at Archivo and JetBrains Mono, and the radii are the shipped values. Anything you see differing between the five is the arrangement and nothing else.</p>
+
+  <a class="card" href="6a-control.html">
+    <div class="hd"><span class="n">6A</span><h2>Control</h2><span class="tag">THE ARRANGEMENT TODAY</span></div>
+    <p class="bet"><b>What ships today</b>, re-rendered here so the four proposals have something to beat. Rail and list left, a grid of conversations centre, the dock right behind its own vertical icon rail, and every run control on a status line under each pane.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The per-pane truth is already right — four panes can hold four models and four modes, and nothing has to be migrated.</div>
+      <div class="cost"><span class="lab">COSTS</span>Changed code has no home; the status line repeats five segments per pane; session status is one coloured dot.</div>
+    </div>
+  </a>
+
+  <a class="card" href="6b-toolbar.html">
+    <div class="hd"><span class="n">6B</span><h2>Toolbar</h2><span class="tag">T3 CODE POSTURE</span></div>
+    <p class="bet"><b>The window owns the controls.</b> A real toolbar under the title bar carries profile, model, mode and sandbox as chips, then the surface toggles and the git actions. The session list deepens into a project → thread tree; the status line shrinks to whether this pane is waiting on you.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>One place to look, and git finally gets a home — the biggest thing all four references have that Artemis does not.</div>
+      <div class="cost"><span class="lab">COSTS</span>It must answer «which pane?» every time: in a 2×2, three panes are described by a bar that is not about them.</div>
+    </div>
+  </a>
+
+  <a class="card" href="6c-controlroom.html">
+    <div class="hd"><span class="n">6C</span><h2>Control room</h2><span class="tag">CODEX POSTURE</span></div>
+    <p class="bet"><b>Review is the point.</b> The right edge becomes a review panel — the session's working tree, file by file and hunk by hunk, with read/unread marks walked by <code>j</code>/<code>k</code> and stage/revert/commit at the foot. The terminal moves to a bottom drawer where output is wide; the sidebar grows a review queue, routines and delegated work.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>The work is always on screen, hunk-level read/unread makes a long diff finishable, and the terminal finally gets width.</div>
+      <div class="cost"><span class="lab">COSTS</span>The most horizontal space of the five — in a 2×2 the panes land near the 360px split minimum.</div>
+    </div>
+  </a>
+
+  <a class="card" href="6d-deck.html">
+    <div class="hd"><span class="n">6D</span><h2>Deck</h2><span class="tag">CLAUDE CODE POSTURE</span></div>
+    <p class="bet"><b>Everything is a pane.</b> There is no dock: diff, terminal, tasks and browser are panes with headers and grab handles in the same grid as conversations. Run controls cluster round the composer with a usage ring, and each pane header carries a detail dial — brief / normal / full.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>One spatial model instead of two, controls where the hands are, and a per-pane detail dial so watched sessions can be quiet.</div>
+      <div class="cost"><span class="lab">COSTS</span>Artifacts stop belonging to conversations (ADR 0002), and eight pane headers cost more chrome than one 34px rail.</div>
+    </div>
+  </a>
+
+  <a class="card" href="6e-cockpit.html">
+    <div class="hd"><span class="n">6E</span><h2>Cockpit</h2><span class="tag">OPENCODE POSTURE</span></div>
+    <p class="bet"><b>Ambient context, always.</b> Sessions become tabs in the window chrome; the right edge is a context panel that never leaves — context pressure, spend, the live plan, changed files, delegated work, servers — and the bottom of the window is a single spine carrying what is true of the focused pane.</p>
+    <div class="pair">
+      <div class="win"><span class="lab">BUYS</span>Nothing hides behind a hover, and one spine replaces the status line's twenty segments in a 2×2.</div>
+      <div class="cost"><span class="lab">COSTS</span>The spine and the tabs both imply one session — the variant most in tension with the grid, shown in a grid so the tension is visible.</div>
+    </div>
+  </a>
+
+  <div class="meta" style="margin-top:30px">THE RECORD BELOW · ROUNDS ONE TO FIVE</div>
 
   <div class="settled">
     <h3>SETTLED IN ROUND TWO</h3>

@@ -99,13 +99,15 @@ function Connected(): ReactElement {
     // was cleared out from under us, the honest offer is the way home.
     return (
       <SettingsGroup label="Connection">
-        <p className="text-2xs leading-relaxed text-ink-faint">
-          This window is in remote mode but its connection record is unreadable.
-        </p>
-        <div>
-          <Button size="sm" variant="outline" onClick={disconnect}>
-            Return to this machine
-          </Button>
+        <div className="flex flex-col gap-2 px-3 py-2.5">
+          <p className="text-2xs leading-relaxed text-ink-faint">
+            This window is in remote mode but its connection record is unreadable.
+          </p>
+          <div>
+            <Button size="sm" variant="outline" onClick={disconnect}>
+              Return to this machine
+            </Button>
+          </div>
         </div>
       </SettingsGroup>
     );
@@ -113,36 +115,40 @@ function Connected(): ReactElement {
 
   return (
     <SettingsGroup label="Connection">
-      <div className="flex items-center gap-3 rounded-md border border-line bg-panel px-3 py-2">
-        <CastIcon className="size-4 shrink-0 text-ink-muted" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium text-ink">{describeRemote(config)}</div>
-          <div className="truncate font-mono text-2xs text-ink-faint">
-            {config.origin} · {maskToken(config.token)}
+      <div className="px-3 py-2.5">
+        <div className="flex items-center gap-3 rounded-md border border-hairline bg-panel px-3 py-2.5">
+          <CastIcon className="size-4 shrink-0 text-ink-muted" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-ink">{describeRemote(config)}</div>
+            <div className="truncate font-mono text-2xs text-ink-faint">
+              {config.origin} · {maskToken(config.token)}
+            </div>
           </div>
+          {probe.status === 'checking' ? (
+            <span className="shrink-0 text-2xs text-ink-faint">Checking…</span>
+          ) : probe.status === 'ok' ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-2xs text-ink-faint">
+              <StatusDot tone="mint" />
+              {probe.accounts === 1
+                ? '1 account served'
+                : `${String(probe.accounts)} accounts served`}
+            </span>
+          ) : (
+            <span
+              className="flex shrink-0 items-center gap-1.5 text-2xs text-amber"
+              title={probe.message}
+            >
+              <StatusDot tone="amber" />
+              Unreachable
+            </span>
+          )}
+          <Button size="sm" variant="outline" className="shrink-0" onClick={disconnect}>
+            Disconnect
+          </Button>
         </div>
-        {probe.status === 'checking' ? (
-          <span className="shrink-0 text-2xs text-ink-faint">Checking…</span>
-        ) : probe.status === 'ok' ? (
-          <span className="flex shrink-0 items-center gap-1.5 text-2xs text-ink-faint">
-            <StatusDot tone="mint" />
-            {probe.accounts === 1 ? '1 account served' : `${String(probe.accounts)} accounts served`}
-          </span>
-        ) : (
-          <span
-            className="flex shrink-0 items-center gap-1.5 text-2xs text-amber"
-            title={probe.message}
-          >
-            <StatusDot tone="amber" />
-            Unreachable
-          </span>
-        )}
-        <Button size="sm" variant="outline" className="shrink-0" onClick={disconnect}>
-          Disconnect
-        </Button>
       </div>
       {probe.status === 'failed' ? (
-        <p className="text-2xs leading-relaxed text-ink-faint">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           {probe.message} A wrong token and a machine off the tailnet look the same from here;
           check both on the serving side, or disconnect to work on this machine.
         </p>
@@ -201,7 +207,7 @@ function Connect(): ReactElement {
   return (
     <>
       <SettingsGroup label="Connect to a machine">
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 px-3 py-2.5">
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-ink">Address</span>
             <span className="text-2xs leading-relaxed text-ink-faint">
@@ -254,7 +260,7 @@ function Connect(): ReactElement {
       </SettingsGroup>
 
       <SettingsGroup label="What changes">
-        <p className="text-2xs leading-relaxed text-ink-faint">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           This window becomes a view of the other machine: its conversations, its live runs, its
           shells. Your own profiles, terminals and files stay untouched underneath and come back
           when you disconnect. What cannot cross the wire — this machine's browser dock, native

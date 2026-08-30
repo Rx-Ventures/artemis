@@ -1,6 +1,48 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.1.0
+
+The console treatment. 2.0 settled what Artemis's colours are; 2.1 settles
+what its surfaces feel like — judged the same slow way, against a control and
+two brackets, on every screen the app has (design record: rounds six and
+seven, `docs/design/`).
+
+- **Rounded, quieter, same density.** The 3px radii become 8px, and the app's
+  chrome voice drops the uppercase monospace for the sans in sentence case.
+  What dated the window was never its compactness — it was the terminal-
+  emulator costume. The grid still fits four conversations; they just stop
+  looking like instrument panels.
+
+- **One column, three surfaces.** The transcript, the composer and the status
+  line now share a single measure. The input and the chips under it used to
+  pin themselves narrower than the messages above them, so nothing lined up
+  and the drift grew with the pane. The profile, model, mode and sandbox
+  chips — and the usage rings — end exactly where the conversation does.
+
+- **The header earns its middle.** Search sits centred on the window at real
+  width, with the way in (`⌘K`) printed on it. The four surface buttons —
+  terminal, browser, folder, delegated work — fold into one opener menu that
+  also carries both splits and New session, each row teaching its shortcut.
+  Settings and the theme control keep their corner.
+
+- **The sidebar toggle has one home at a time.** The 46px navigator rail is
+  gone; its icons were doubles. The list's own caption closes it, and while
+  it is closed the header — the one strip that never disappears — shows the
+  way back. `⌘B` works in both states, as before.
+
+- **The dollar signs are gone.** Model rows in the navigator, the palette and
+  settings no longer price a choice in `$` pips and multipliers. The pressure
+  dot and the plan meters stay — they are facts; the pips were an opinion.
+
+- **A conversation crossing providers leaves its model behind.** Clicking
+  from an OpenCode session into a Claude one used to carry the selected model
+  id across, and the next prompt would hand a name like `luna` to a CLI that
+  has never heard of it. On a provider change the whole model choice — model,
+  effort, fast mode, ultracode — now resets to the arriving provider's
+  default, unless the conversation itself remembers what it last ran on,
+  which still wins.
+
 ## What's new in 2.0.0
 
 Artemis 2.0. One overhaul, shipped whole: how the window looks, how you pick

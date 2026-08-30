@@ -150,7 +150,7 @@ function Caption({
           type="button"
           onClick={() => pinFile(id)}
           title="Keep this tab — the next file opened will otherwise replace it"
-          className="flex shrink-0 items-center gap-1 rounded-xs px-1 font-mono text-2xs text-ink-faint hover:text-ink"
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 font-mono text-2xs text-ink-faint hover:bg-wash hover:text-ink"
         >
           <PinIcon className="size-2.5" aria-hidden="true" />
           pin
@@ -164,7 +164,11 @@ function Caption({
       </span>
       {truncated || clipped ? (
         <span
-          className="shrink-0 rounded-sm border border-amber/40 px-1.5 font-mono text-2xs text-amber"
+          // A pill on the amber, the way every other badge in the dock is now
+          // a pill on a hairline. The colour is the exception the shape is
+          // not: "partial" is a warning about what is on screen, so it keeps
+          // `--amber` rather than dissolving into a wash.
+          className="shrink-0 rounded-full border border-amber/40 px-1.5 font-mono text-2xs text-amber"
           title={
             truncated
               ? 'This file is larger than Artemis reads into a view. What is shown is the beginning of it.'

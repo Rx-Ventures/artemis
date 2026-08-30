@@ -282,7 +282,7 @@ export function SettingsDialog(): ReactElement {
         // shrink this to a tooltip-sized box on any real window.
         className="flex h-[min(46rem,calc(100dvh-3rem))] w-[calc(100vw-3rem)] max-w-[68rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[68rem]"
       >
-        <DialogHeader className="shrink-0 gap-1 border-b border-line px-4 py-3">
+        <DialogHeader className="shrink-0 gap-1 border-b border-hairline px-4 py-3">
           <DialogTitle className="text-sm font-semibold tracking-tight text-ink">
             Settings
           </DialogTitle>
@@ -294,7 +294,7 @@ export function SettingsDialog(): ReactElement {
         <div className="flex min-h-0 flex-1">
           <nav
             aria-label="Settings sections"
-            className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line p-2"
+            className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-hairline p-2"
           >
             {SETTINGS_NAV.map((band, index) => (
               <div key={band.label} className="flex flex-col gap-0.5">
@@ -313,13 +313,15 @@ export function SettingsDialog(): ReactElement {
                       key={entry.id}
                       // Not `variant="secondary"` for the active row, which is
                       // what this reached for first: `--secondary` resolves to
-                      // the `raised` surface, and inside a popover — which is
+                      // the `raised` surface, and inside a dialog — which is
                       // one step *above* raised — the "selected" fill came out
                       // darker than the panel it sits on and read as nothing at
-                      // all. Brass is the app's selection colour everywhere
-                      // else (the active profile card, the chosen option in a
-                      // `ChoiceList`), so the nav uses it too rather than
-                      // inventing a third language.
+                      // all. A wash cannot have that problem: it is a fraction
+                      // of the ink laid over whatever is beneath, so it lifts
+                      // the row off its own ground wherever the row is. Selected
+                      // is `wash-strong`, hover is `wash`, which is the same
+                      // pair the navigator columns and the `ChoiceList` use —
+                      // one language for "this is the one".
                       variant="ghost"
                       size="lg"
                       // `aria-current` rather than `aria-pressed`: these are
@@ -327,18 +329,14 @@ export function SettingsDialog(): ReactElement {
                       // "current page", not "pressed".
                       aria-current={active ? 'page' : undefined}
                       className={cn(
-                        'h-auto w-full justify-start gap-2.5 px-2.5 py-2 text-left',
-                        // A border rather than a ring: `Button` already draws
-                        // `border border-transparent`, so colouring it costs no
-                        // layout, while `ring-*` on this component collides
-                        // with the focus ring it declares for itself.
+                        'h-auto w-full justify-start gap-2.5 rounded-md px-2.5 py-2 text-left',
                         active
-                          ? 'border-beam/30 bg-beam/10 text-ink hover:bg-beam/15'
-                          : 'text-ink-muted',
+                          ? 'bg-wash-strong text-ink hover:bg-wash-strong'
+                          : 'text-ink-muted hover:bg-wash',
                       )}
                       onClick={() => setSettingsSection(entry.id)}
                     >
-                      <span className={cn('shrink-0', active ? 'text-beam-text' : 'text-ink-faint')}>
+                      <span className={cn('shrink-0', active ? 'text-ink' : 'text-ink-faint')}>
                         {entry.icon}
                       </span>
                       <span className="flex min-w-0 flex-col">

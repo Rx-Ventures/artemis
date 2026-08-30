@@ -144,7 +144,7 @@ function OpenPicker(): ReactElement | null {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-1" role="listbox" aria-label="Accounts that can take this conversation">
+        <div className="flex flex-col gap-1.5" role="listbox" aria-label="Accounts that can take this conversation">
           {candidates.map((candidate) => (
             <CandidateRow
               key={candidate.id}
@@ -244,11 +244,15 @@ function CandidateRow({
       type="button"
       disabled={blocked || busy}
       onClick={() => onChoose(profile.id)}
+      // A card per candidate, at the surface radius: this is a list of accounts
+      // to weigh, not a menu to run down, and the hairline is what says each row
+      // is a whole answer. Hover fills with a wash rather than lifting to
+      // `raised` — nothing in the flow lifts, and the border does the rest.
       className={cn(
-        'flex flex-col gap-0.5 rounded-md border border-line px-2.5 py-1.5 text-left text-xs',
+        'flex flex-col gap-0.5 rounded-lg border border-hairline px-3 py-2 text-left text-xs',
         blocked
           ? 'cursor-default opacity-80'
-          : 'hover:border-ring hover:bg-raised focus-visible:border-ring focus-visible:outline-none',
+          : 'hover:border-hairline-strong hover:bg-wash focus-visible:border-ring focus-visible:outline-none',
       )}
     >
       <span className="flex min-w-0 items-center gap-1.5">

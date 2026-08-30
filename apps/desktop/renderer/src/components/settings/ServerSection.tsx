@@ -245,7 +245,7 @@ function StatusGroup({ pane }: { readonly pane: ServerPane }): ReactElement {
 
   return (
     <SettingsGroup label="Status">
-      <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel px-3 py-2.5">
+      <div className="flex flex-col gap-2 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <StatusDot tone={phaseTone(state.phase)} pulse={state.phase === 'running'} />
           <span className="text-xs font-medium text-ink">{phaseLabel(state.phase)}</span>
@@ -321,7 +321,7 @@ function AutoStartRow({ pane }: { readonly pane: ServerPane }): ReactElement {
 
   if (pane.state.autoStart) {
     return (
-      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line bg-panel px-3 py-2">
+      <label className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5">
         <Switch
           checked
           onCheckedChange={() => pane.configure({ autoStart: false })}
@@ -333,7 +333,7 @@ function AutoStartRow({ pane }: { readonly pane: ServerPane }): ReactElement {
   }
 
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-line bg-panel px-3 py-2">
+    <div className="flex items-start gap-2.5 px-3 py-2.5">
       <ConfirmStart
         what="autostart"
         onConfirm={() => pane.configure({ autoStart: true })}
@@ -375,7 +375,7 @@ function PortRow({ pane }: { readonly pane: ServerPane }): ReactElement {
   };
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-line bg-panel px-3 py-2">
+    <div className="flex items-center gap-3 px-3 py-2.5">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-xs leading-snug font-medium text-ink">Port</span>
         <span className="text-2xs leading-relaxed text-ink-faint">
@@ -419,7 +419,7 @@ function ConnectionsGroup({ pane }: { readonly pane: ServerPane }): ReactElement
 
   return (
     <SettingsGroup label="Connections">
-      <p className="text-2xs leading-relaxed text-ink-muted">
+      <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-muted">
         Each connection is one token, bound when you create it to the place its turns run. Send it
         as <span className="font-mono">Authorization: Bearer …</span>, or as{' '}
         <span className="font-mono">x-api-key</span> where a client expects that. A connection
@@ -428,7 +428,7 @@ function ConnectionsGroup({ pane }: { readonly pane: ServerPane }): ReactElement
       </p>
 
       {connections.length === 0 ? (
-        <p className="text-2xs leading-relaxed text-ink-faint">
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           No connections, so nothing can reach this server even while it is running. Create one to
           let a program in.
         </p>
@@ -469,7 +469,7 @@ function ConnectionRow({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-2 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
         {draft === null ? (
           <button
@@ -601,7 +601,7 @@ function AllowList({
           : 'Nothing ticked, so this connection may use every account and model. Tick to narrow it.'}
       </p>
 
-      <div className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-lg border border-line bg-panel px-2.5 py-2">
+      <div className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-lg border border-hairline bg-panel px-2.5 py-2">
         {catalogue.map((profile) => {
           const models = allowed.get(profile.id);
           const whole = models !== undefined && profile.models.every((m) => models.has(m.id));
@@ -838,83 +838,91 @@ function NewConnection({ pane }: { readonly pane: ServerPane }): ReactElement {
 
   if (!open) {
     return (
-      <Button size="sm" variant="outline" className="self-start" onClick={() => setOpen(true)}>
-        New connection
-      </Button>
+      <div className="flex px-3 py-2.5">
+        <Button size="sm" variant="outline" className="self-start" onClick={() => setOpen(true)}>
+          New connection
+        </Button>
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-lg border border-beam/30 bg-beam/5 px-3 py-2.5">
-      <Input
-        value={label}
-        autoFocus
-        placeholder="What is this for? e.g. Kronos, summariser"
-        aria-label="Connection name"
-        className="text-xs"
-        onChange={(event) => setLabel(event.target.value)}
-      />
+    // The card body is unpadded, and this box's beam tint is the "you are
+    // creating something" tone rather than a neutral hairline — so it keeps
+    // its own border and radius as a well, inset from the card's edges by
+    // the wrapper rather than by restyling the well itself.
+    <div className="px-3 py-2.5">
+      <div className="flex flex-col gap-2.5 rounded-lg border border-beam/30 bg-beam/5 px-3 py-2.5">
+        <Input
+          value={label}
+          autoFocus
+          placeholder="What is this for? e.g. Kronos, summariser"
+          aria-label="Connection name"
+          className="text-xs"
+          onChange={(event) => setLabel(event.target.value)}
+        />
 
-      <ChoiceList
-        label="Where this connection's turns run"
-        value={kind}
-        onChange={(next) => setKind(next)}
-        choices={[
-          {
-            id: 'ephemeral',
-            label: 'Scratch space',
-            note: 'A temporary directory, deleted afterwards. The agent can still write files and run commands — nothing it leaves behind is kept, and none of it lands in your projects.',
-          },
-          {
-            id: 'directory',
-            label: path ?? 'A folder you choose…',
-            note: 'Turns run here, and the agent can read and write in it. Pick the folder before creating the connection — it cannot be changed afterwards.',
-          },
-          {
-            id: 'none',
-            label: 'Catalogue only',
-            note: 'Can list your accounts and models but cannot run a turn at all. The right grant for a picker or a dashboard.',
-          },
-        ]}
-      />
+        <ChoiceList
+          label="Where this connection's turns run"
+          value={kind}
+          onChange={(next) => setKind(next)}
+          choices={[
+            {
+              id: 'ephemeral',
+              label: 'Scratch space',
+              note: 'A temporary directory, deleted afterwards. The agent can still write files and run commands — nothing it leaves behind is kept, and none of it lands in your projects.',
+            },
+            {
+              id: 'directory',
+              label: path ?? 'A folder you choose…',
+              note: 'Turns run here, and the agent can read and write in it. Pick the folder before creating the connection — it cannot be changed afterwards.',
+            },
+            {
+              id: 'none',
+              label: 'Catalogue only',
+              note: 'Can list your accounts and models but cannot run a turn at all. The right grant for a picker or a dashboard.',
+            },
+          ]}
+        />
 
-      {kind === 'directory' ? (
-        <Button size="sm" variant="outline" className="self-start" onClick={() => void pickFolder()}>
-          {path === null ? 'Choose folder…' : 'Choose a different folder…'}
-        </Button>
-      ) : null}
+        {kind === 'directory' ? (
+          <Button size="sm" variant="outline" className="self-start" onClick={() => void pickFolder()}>
+            {path === null ? 'Choose folder…' : 'Choose a different folder…'}
+          </Button>
+        ) : null}
 
-      <AllowList
-        catalogue={pane.catalogue}
-        allowed={allowed}
-        onToggleProfile={toggleProfile}
-        onToggleModel={toggleModel}
-      />
+        <AllowList
+          catalogue={pane.catalogue}
+          allowed={allowed}
+          onToggleProfile={toggleProfile}
+          onToggleModel={toggleModel}
+        />
 
-      <ChoiceList
-        label="How long it lasts"
-        value={expiry}
-        onChange={(next) => setExpiry(next)}
-        choices={EXPIRY_CHOICES.map((choice) => ({
-          id: choice.id,
-          label: choice.label,
-          note: choice.note,
-        }))}
-      />
+        <ChoiceList
+          label="How long it lasts"
+          value={expiry}
+          onChange={(next) => setExpiry(next)}
+          choices={EXPIRY_CHOICES.map((choice) => ({
+            id: choice.id,
+            label: choice.label,
+            note: choice.note,
+          }))}
+        />
 
-      <p className="text-2xs leading-relaxed text-ink-faint">
-        This choice is fixed when the token is created. To move a connection somewhere else, make a
-        new one and revoke this — a token whose reach can widen later is one nobody can reason
-        about.
-      </p>
+        <p className="text-2xs leading-relaxed text-ink-faint">
+          This choice is fixed when the token is created. To move a connection somewhere else, make a
+          new one and revoke this — a token whose reach can widen later is one nobody can reason
+          about.
+        </p>
 
-      <div className="flex items-center gap-2">
-        <Button size="sm" disabled={pane.busy || !ready} onClick={create}>
-          Create connection
-        </Button>
-        <Button size="sm" variant="ghost" onClick={reset}>
-          Cancel
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" disabled={pane.busy || !ready} onClick={create}>
+            Create connection
+          </Button>
+          <Button size="sm" variant="ghost" onClick={reset}>
+            Cancel
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -947,20 +955,26 @@ function EndpointsGroup({ state }: { readonly state: ServerState }): ReactElemen
 
   return (
     <SettingsGroup label="Endpoints">
-      <div className="flex flex-col gap-1 rounded-lg border border-line bg-panel px-3 py-2.5">
-        <EndpointRow path="/v1/models" note="Every route, in the shape OpenAI clients expect." />
-        <EndpointRow
-          path="/api/v0/profiles"
-          note="Accounts, their capabilities, and the models on each."
-        />
-        <EndpointRow
-          path="/api/v0/models"
-          note="Every route with its thinking levels, fast mode and ultracode."
-        />
-        <EndpointRow path="/health" note="Liveness. The only path that needs no token." />
+      {/* A token table rather than a row: it stays a bordered well, inset from
+          the card's edges by the wrapper, with the hairline it draws now
+          matching the card's own rather than the old panel outline. */}
+      <div className="px-3 py-2.5">
+        <div className="flex flex-col gap-1 rounded-lg border border-hairline bg-panel px-3 py-2.5">
+          <EndpointRow path="/v1/models" note="Every route, in the shape OpenAI clients expect." />
+          <EndpointRow
+            path="/api/v0/profiles"
+            note="Accounts, their capabilities, and the models on each."
+          />
+          <EndpointRow
+            path="/api/v0/models"
+            note="Every route with its thinking levels, fast mode and ultracode."
+          />
+          <EndpointRow path="/health" note="Liveness. The only path that needs no token." />
+        </div>
       </div>
 
       <Fold
+        className="px-3 py-2.5"
         summary={<span className="text-2xs text-ink-muted">Try it from a terminal</span>}
         rememberAs="server-curl"
       >
@@ -990,12 +1004,14 @@ function EndpointRow({
 /* -------------------------------------------------------------------------- */
 
 /**
- * What is published: one card per account, one row per route.
+ * What is published: one row per account, one line per route.
  *
  * The account is the unit rather than the model, because the account is what a
  * route actually spends — two profiles offering the same model are two
  * different bills, on two different plans, and a flat list of model names would
- * hide exactly that.
+ * hide exactly that. The card is the group now, not the account, so each
+ * profile reads as a row in that card, hairline-separated from its neighbours
+ * rather than boxed on its own.
  */
 function CatalogueGroup({ pane }: { readonly pane: ServerPane }): ReactElement {
   const profiles = pane.catalogue;
@@ -1003,7 +1019,7 @@ function CatalogueGroup({ pane }: { readonly pane: ServerPane }): ReactElement {
 
   return (
     <SettingsGroup label="What this publishes">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <p className="min-w-0 flex-1 text-2xs leading-relaxed text-ink-muted">
           {profiles === null
             ? 'Reading the catalogue…'
@@ -1025,7 +1041,7 @@ function CatalogueGroup({ pane }: { readonly pane: ServerPane }): ReactElement {
       </div>
 
       {pane.catalogueError !== null ? (
-        <p className="text-2xs leading-relaxed text-signal">{pane.catalogueError}</p>
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-signal">{pane.catalogueError}</p>
       ) : null}
 
       {(profiles ?? []).map((profile) => (
@@ -1037,7 +1053,7 @@ function CatalogueGroup({ pane }: { readonly pane: ServerPane }): ReactElement {
 
 function ProfileCard({ profile }: { readonly profile: ServerProfile }): ReactElement {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel px-3 py-2.5">
+    <div className="flex flex-col gap-2 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-ink">{profile.label}</span>
         <code className="font-mono text-2xs text-ink-faint">{profile.slug}/…</code>
@@ -1070,7 +1086,7 @@ function ProfileCard({ profile }: { readonly profile: ServerProfile }): ReactEle
           This account offers no model choice, so it publishes no routes.
         </p>
       ) : (
-        <div className="flex flex-col divide-y divide-line/60">
+        <div className="flex flex-col divide-y divide-hairline">
           {profile.models.map((model) => (
             <div key={model.route} className="flex flex-col gap-1 py-1.5 first:pt-0 last:pb-0">
               <div className="group/copy flex items-baseline gap-2">
@@ -1096,7 +1112,7 @@ function ProfileCard({ profile }: { readonly profile: ServerProfile }): ReactEle
                     <code
                       key={level.id}
                       title={level.note}
-                      className="rounded-sm border border-line bg-raised px-1.5 py-[1px] font-mono text-[10px] text-ink-muted"
+                      className="rounded-sm border border-hairline bg-wash px-1.5 py-[1px] font-mono text-[10px] text-ink-muted"
                     >
                       {level.id}
                     </code>

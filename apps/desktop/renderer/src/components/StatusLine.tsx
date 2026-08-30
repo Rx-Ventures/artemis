@@ -66,9 +66,13 @@
  * ## It sits under the composer, not across the window
  *
  * These controls describe what the *prompt you are typing* will do, so they
- * line up with the input's edges (`max-w-4xl`) rather than running the full
- * width of a pane the input does not fill. The composer draws the border above
- * them; a second one here would box the input in.
+ * line up with the input's edges rather than running the full width of a pane
+ * the input does not fill. The measure is the transcript's own `COLUMN_MAX` —
+ * messages, input and these chips share one column, so the three edges cannot
+ * drift apart (they used to: this bar pinned itself to `max-w-4xl` while the
+ * transcript read `max-w-5xl`, and the chips sat visibly inside the
+ * conversation's margin). The composer draws the border above them; a second
+ * one here would box the input in.
  *
  * The sidebar toggle used to ride along at the far left. The header carries it
  * now — it is always present, so this bar no longer needs a second copy.
@@ -101,6 +105,7 @@ import {
 } from '../state/store';
 import { usePermissionModes } from '../hooks/useCapability';
 import { usePane, usePaneRef } from '../state/paneContext';
+import { COLUMN_MAX } from './Transcript';
 import { WithReason } from './disabled-reason';
 import { PlanUsageMeter } from './PlanUsageMeter';
 import { MODE_LABELS, MODE_NOTES, RunNavigatorContent } from './RunNavigator';
@@ -124,9 +129,9 @@ import { cn } from '@/lib/utils';
  *
  *  - **No top border.** The composer already draws one above itself; a second
  *    one here would box the input in a way nothing else in the app is.
- *  - **Same `max-w-4xl` as the composer.** These controls belong to the input,
- *    so they line up with its edges instead of running the full width of a
- *    pane the input does not fill.
+ *  - **The transcript's own measure.** These controls belong to the column,
+ *    so they take `COLUMN_MAX` at the same setting the transcript reads,
+ *    instead of a private cap that only agreed with it at one width.
  *
  * There is no sidebar toggle here, and this header used to say there was. The
  * control moved to `AppHeader` — window chrome belongs on the window's bar —
@@ -135,14 +140,22 @@ import { cn } from '@/lib/utils';
  * needed at all.
  */
 export function StatusLine(): ReactElement {
-  // No fill. These controls belong to the input directly above them, and the
-  // composer no longer sits in a bar of its own — filling this strip would
-  // re-draw the same bottom panel one row lower.
+  const width = useApp((s) => s.conversationWidth);
+  // No fill on the strip itself. These controls belong to the input directly
+  // above them, and the composer no longer sits in a bar of its own — filling
+  // this row would re-draw the same bottom panel one row lower. The fill went
+  // to the segments instead: 7D `.sc` gives each one a soft chip of its own,
+  // which is what let the dividers between them go. Two ways of saying "these
+  // are separate things" is one too many, and the rules were the noisier.
   return (
     <footer className="shrink-0 pb-1">
-      <div className="mx-auto flex h-7 w-full max-w-4xl items-center gap-0.5 px-3 text-2xs">
+      <div
+        className={cn(
+          'mx-auto flex h-7 w-full items-center gap-1.5 px-3 text-2xs',
+          COLUMN_MAX[width],
+        )}
+      >
         <ProfileSegment />
-        <Divider />
         {/*
           The same navigator as the profile chip, anchored at the model chip.
           Model, thinking and fast mode used to be four segments on this bar,
@@ -152,11 +165,10 @@ export function StatusLine(): ReactElement {
           short enough to read.
         */}
         <ModelSegment />
-        <Divider />
         <ModeSegment />
         <SandboxSegment />
 
-        <div className="ml-auto flex min-w-0 items-center gap-0.5">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           <RunSegment />
           {/*
             The context readout used to sit here. It moved into the usage
@@ -177,9 +189,12 @@ export function StatusLine(): ReactElement {
   );
 }
 
-function Divider(): ReactElement {
-  return <span aria-hidden="true" className="h-3 w-px shrink-0 bg-line" />;
-}
+/*
+ * REMOVED: `Divider`. A 12px rule between each pair of segments, from the
+ * treatment where the segments were bare text on the window and needed one.
+ * They carry their own ground now (see `CHIP` below), so a rule between two of
+ * them drew a boundary that the fills had already drawn.
+ */
 
 /*
  * The sidebar toggle used to live here, because `Sidebar` renders nothing when
@@ -187,6 +202,23 @@ function Divider(): ReactElement {
  * and is always present, so a second copy on this bar was simply the same
  * button drawn twice.
  */
+
+/**
+ * One segment's chip.
+ *
+ * 7D `.sc`: a 22px pill on a 3.5% wash, which is the fill the transcript's
+ * cards take — the status line reads as the same material as the column above
+ * it rather than as window furniture. The hover and open states go a step up
+ * the same wash instead of shadcn's `muted`, which is a *solid* grey and would
+ * make an alpha chip jump to an opaque one under the cursor.
+ *
+ * `dark:hover:` is spelled out because the ghost variant's own
+ * `dark:hover:bg-muted/50` is `.dark`-scoped and outranks an unscoped
+ * override; `cn`'s tailwind-merge drops the conflicting pair only when the
+ * modifiers match exactly.
+ */
+const CHIP =
+  'h-[22px] rounded-md bg-wash px-2 hover:bg-wash-strong aria-expanded:bg-wash-strong dark:hover:bg-wash-strong';
 
 /**
  * Shared chrome for a picker's trigger.
@@ -237,7 +269,15 @@ function SegmentTrigger({
       aria-label={label}
       {...rest}
       className={cn(
-        'h-5 max-w-[15rem] min-w-0 gap-1 px-1.5 font-mono text-2xs font-normal text-ink-muted',
+        /*
+          Sans, not mono. The chrome voice dropped the monospace with the rest
+          of the instrument-panel treatment — what these chips carry is a
+          profile's name, a model's marketing label and a mode, all of them
+          words the app chose rather than machine output. The one mono survivor
+          on this row is the meter's ring labels, which are readings.
+        */
+        CHIP,
+        'max-w-[15rem] min-w-0 gap-1.5 text-2xs font-normal text-ink-muted',
         className,
       )}
     >
@@ -266,7 +306,7 @@ function DeadSegment({
       <span
         aria-label={label}
         aria-disabled="true"
-        className="flex h-5 max-w-[15rem] cursor-not-allowed items-center gap-1 px-1.5 font-mono text-2xs text-ink-faint opacity-70"
+        className="flex h-[22px] max-w-[15rem] cursor-not-allowed items-center gap-1.5 rounded-md bg-wash px-2 text-2xs text-ink-faint opacity-70"
       >
         {icon}
         <span className="truncate">{text}</span>
@@ -316,7 +356,10 @@ function ProfileSegment(): ReactElement {
               <KeyRoundIcon className="size-3 shrink-0" aria-hidden="true" />
             )
           }
-          className={cn(signedOut && 'text-amber', profile && 'text-ink')}
+          // The one value 7D bolds on this row (`.sc b`). Which account is
+          // about to be charged is the question this segment exists for, so it
+          // gets the weight rather than the model beside it.
+          className={cn(signedOut && 'text-amber', profile && 'font-medium text-ink')}
         >
           {profile?.label ?? 'no profile'}
         </SegmentTrigger>
@@ -486,7 +529,14 @@ function ModeSegment(): ReactElement {
 /* Run state                                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** Live status and the count of prompts waiting on the user. Read-only. */
+/**
+ * Live status and the count of prompts waiting on the user. Read-only.
+ *
+ * No chip, unlike the segments to its left, and that is the split this bar is
+ * built on: a chip is a control's ground, so wearing one on a readout would
+ * offer a click there is nothing behind. 7D leaves the run state as bare text
+ * between the chips and the rings for the same reason.
+ */
 function RunSegment(): ReactElement | null {
   const live = usePane(isLive);
   const status = usePane((s) => s.run?.status ?? null);
@@ -502,7 +552,7 @@ function RunSegment(): ReactElement | null {
     return (
       <span
         className={cn(
-          'flex shrink-0 items-center gap-1 px-1.5 font-mono text-2xs',
+          'flex shrink-0 items-center gap-1 px-1 text-2xs',
           asking ? 'text-cyan' : 'text-amber',
         )}
       >
@@ -514,7 +564,7 @@ function RunSegment(): ReactElement | null {
   if (!status) return null;
 
   return (
-    <span className="flex shrink-0 items-center gap-1.5 px-1.5 font-mono text-2xs text-ink-faint">
+    <span className="flex shrink-0 items-center gap-1.5 px-1 text-2xs text-ink-faint">
       <StatusDot tone={live ? 'cyan' : 'neutral'} pulse={live} />
       {status.replace(/_/g, ' ')}
     </span>
@@ -581,25 +631,26 @@ function SandboxSegment(): ReactElement | null {
   const refused = sandbox.confinement === 'none';
   const label = refused ? 'unconfined' : (sandbox.backend ?? 'sandboxed').toLowerCase();
 
+  // A chip like the settings beside it, even though nothing opens: this states
+  // the confinement the *next* prompt's commands will run under, which is the
+  // same kind of fact its neighbours carry, and the divider that used to hold
+  // it apart from them went with the rest of the rules.
   return (
-    <>
-      <Divider />
-      <span
-        title={sandbox.detail}
-        className={cn(
-          'shrink-0 px-1 font-mono text-2xs',
-          refused ? 'text-amber' : 'text-ink-faint',
-        )}
-      >
-        {label}
-        {/* An unverified backend is a claim we have not tested on a real
-            machine of that platform. The capability bar's rule applies to this
-            as much as to a flag: say what is unproven rather than let a green
-            word imply otherwise. */}
-        {!refused && sandbox.verification === 'unverified' ? (
-          <span className="text-amber"> ?</span>
-        ) : null}
-      </span>
-    </>
+    <span
+      title={sandbox.detail}
+      className={cn(
+        'flex h-[22px] shrink-0 items-center rounded-md bg-wash px-2 text-2xs',
+        refused ? 'text-amber' : 'text-ink-faint',
+      )}
+    >
+      {label}
+      {/* An unverified backend is a claim we have not tested on a real
+          machine of that platform. The capability bar's rule applies to this
+          as much as to a flag: say what is unproven rather than let a green
+          word imply otherwise. */}
+      {!refused && sandbox.verification === 'unverified' ? (
+        <span className="text-amber"> ?</span>
+      ) : null}
+    </span>
   );
 }

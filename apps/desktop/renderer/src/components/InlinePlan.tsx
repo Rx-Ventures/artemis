@@ -207,12 +207,19 @@ function PendingPlan({
           approve();
         }
       }}
-      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
+      /*
+       * The third card that parks a run, in 7D's `.ask` shape and its own hue.
+       * Beam rather than amber: approving a plan is not a risk judgement, and
+       * the shield's colour is the app's one alarm. The 6% wash is nowhere near
+       * the 24% the user's bubble takes, so a proposal never reads as something
+       * the user said.
+       */
+      className="rounded-lg border border-beam/45 bg-beam/6 outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
     >
-      <div className="flex items-start gap-2 border-b border-line px-2.5 py-2">
+      <div className="flex items-start gap-2 border-b border-hairline px-2.5 py-2">
         <ClipboardListIcon className="mt-0.5 size-3.5 shrink-0 text-beam-text" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-ink">{request.title ?? 'The agent has a plan'}</p>
+          <p className="text-sm font-semibold text-ink">{request.title ?? 'The agent has a plan'}</p>
           <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
             Nothing has been changed yet. Approving starts the work; sending it back keeps the run
             in planning.
@@ -247,9 +254,14 @@ function PendingPlan({
           )}
         </div>
         {clipped ? (
+          /* The fade has to end in the card's own colour or it draws a band
+             across the plan instead of hiding the cut. The card is no longer a
+             flat surface — it is a 6% wash of the beam over the window ground —
+             so this is that composite spelled out, which is the one place in
+             here a `color-mix` earns its keep. */
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-raised"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-[color-mix(in_oklch,var(--color-beam)_6%,var(--color-abyss))]"
           />
         ) : null}
       </div>
@@ -261,7 +273,7 @@ function PendingPlan({
       ) : null}
 
       {proposal.planPath ? (
-        <p className="border-t border-line px-2.5 py-1.5 font-mono text-2xs break-all text-ink-faint">
+        <p className="border-t border-hairline px-2.5 py-1.5 font-mono text-2xs break-all text-ink-faint">
           saved to {proposal.planPath}
         </p>
       ) : null}
@@ -280,7 +292,7 @@ function PendingPlan({
           spellCheck={false}
           placeholder="Handed back to the agent so it can revise the plan."
           onChange={(event) => setNote(event.target.value)}
-          className="min-h-12 bg-inset font-mono text-2xs md:text-2xs"
+          className="min-h-12 bg-wash font-mono text-2xs md:text-2xs"
         />
       </div>
 
@@ -299,7 +311,9 @@ function PendingPlan({
         </Alert>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-line bg-inset/50 px-2.5 py-2">
+      {/* One surface, as `.ask` has: the controls sit on the card, with the rule
+          above them doing the separating a second fill used to. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-2.5 py-2">
         <Button size="sm" variant="outline" disabled={busy} onClick={() => keepPlanning(false)}>
           <PencilLineIcon />
           Keep planning
@@ -341,7 +355,7 @@ function PendingPlan({
 function DecidedRecord({ item }: { readonly item: PermissionItem }): ReactElement {
   const approved = item.state === 'allowed';
   return (
-    <div className="rounded-md border border-line px-2.5 py-1.5">
+    <div className="rounded-lg border border-hairline bg-wash px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <ClipboardListIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-muted">

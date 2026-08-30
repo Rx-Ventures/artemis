@@ -117,7 +117,9 @@ describe('a session run in a worktree', () => {
     // no longer held the session that had just been worked on.
     expect(screen.queryByText('adapter-seam')).toBeNull();
     const heading = screen.getByRole('button', { name: /artemis/ });
-    expect(within(heading).getByText('·2')).not.toBeNull();
+    // The bare number — the count is right-aligned on the heading now, so it
+    // no longer carries the `·` that used to tie it to the name beside it.
+    expect(within(heading).getByText('2')).not.toBeNull();
   });
 
   it('is folded away with the rest of the project', () => {

@@ -595,7 +595,10 @@ export function PlanUsageMeter(): ReactElement | null {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label={`Plan usage — ${slots.map(describeSlot).join(', ')}`}
-        className="flex items-center gap-2 rounded px-1 hover:bg-line/40"
+        // Chrome only. `gap-2` between slots and `gap-1` inside one is 7D
+        // `.meter`/`.meter .slot` verbatim, and the hover goes to the wash the
+        // chips beside it wear rather than a tint of the hairline colour.
+        className="flex items-center gap-2 rounded-md px-1 hover:bg-wash"
       >
         {slots.map((slot) => (
           <span key={slot.key} className="flex shrink-0 items-center gap-1">

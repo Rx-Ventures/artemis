@@ -278,6 +278,95 @@ describe('a conversation with no preference of its own', () => {
   });
 });
 
+/**
+ * The inheritance above stops at the provider boundary.
+ * ============================================================================
+ *
+ * "No preference leaves the column on what it was using" is right within one
+ * provider and wrong across two, because a model id is only meaningful in the
+ * catalogue that named it. Clicking an OpenCode conversation and then a Claude
+ * one used to leave `luna` selected under Claude, and nothing downstream
+ * repaired it: `carryModelId` returns an id present in neither catalogue
+ * unchanged so that another provider's *pins* survive a switch, and
+ * `activeModel` passes an unlisted id through as itself because the catalogue
+ * is what the UI offers rather than an allow-list. So the stale id reached
+ * `RunInput.model` and the run started against a model the CLI cannot resolve.
+ */
+describe('crossing from one provider to another', () => {
+  const OPENCODE: ProviderDescriptor = {
+    ...CLAUDE,
+    id: 'opencode',
+    label: 'OpenCode',
+    models: [{ id: 'luna', label: 'Luna', resolvedModel: 'luna', note: '' }],
+  };
+
+  function seedBothProviders(): void {
+    seedApp({
+      providers: [CLAUDE, OPENCODE],
+      profiles: [
+        { id: 'p1', label: 'Personal', providerId: 'claude', configDir: '/u/.personal' },
+        { id: 'p2', label: 'Work', providerId: 'opencode', configDir: '/u/.work' },
+      ],
+      activeProviderId: 'opencode',
+      activeProfileId: 'p2',
+      cwd: '/a',
+      run: null,
+      resumeSessionId: null,
+      permissionQueue: [],
+      banners: [],
+      model: 'luna',
+      effort: null,
+      fastMode: false,
+      ultracode: false,
+      draft: '',
+      parkedDrafts: {},
+    });
+    useApp.setState({ background: [], sessions: [], modelBySession: {} });
+  }
+
+  it('drops a model the arriving provider has never heard of', () => {
+    seedBothProviders();
+    expect(modelOf()).toBe('luna');
+
+    resumeSession(summary('sess-claude', { providerId: 'claude', profileId: 'p1' }));
+
+    // `null` is "the provider's default", which is the only honest state to be
+    // in: this conversation has never said what it wants, and the column's last
+    // answer belongs to a catalogue that is no longer loaded.
+    expect(modelOf()).toBeNull();
+  });
+
+  it('drops the rest of the choice with it', () => {
+    seedBothProviders();
+    setThinkingLevel('max');
+    setFastMode(true);
+
+    resumeSession(summary('sess-claude', { providerId: 'claude', profileId: 'p1' }));
+
+    // Spread as a whole or not at all — half a choice is a combination nobody
+    // picked, and an effort rung is as provider-specific as a model id.
+    const after = paneState(pane());
+    expect(after.effort).toBeNull();
+    expect(after.fastMode).toBe(false);
+  });
+
+  it('still hands back what the conversation itself remembers', () => {
+    seedBothProviders();
+
+    // Establish a real preference on the Claude side, then leave and return.
+    const claudeSession = summary('sess-claude', { providerId: 'claude', profileId: 'p1' });
+    resumeSession(claudeSession);
+    setModel('opus');
+
+    resumeSession(summary('sess-oc', { providerId: 'opencode', profileId: 'p2' }));
+    resumeSession(claudeSession);
+
+    // A recorded choice was made *for this conversation under this provider*,
+    // so it outranks the reset — the reset only covers "no preference".
+    expect(modelOf()).toBe('opus');
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Reading the record back off disk                                           */
 /* -------------------------------------------------------------------------- */

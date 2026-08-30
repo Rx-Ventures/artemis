@@ -328,7 +328,7 @@ function DockSheet(): ReactElement {
         type="button"
         onClick={() => setDockSheetOpen(true)}
         title={`Show the dock — ${String(tabCount)} ${tabCount === 1 ? 'tab' : 'tabs'}`}
-        className="absolute inset-y-0 right-0 z-30 flex w-4 items-center justify-center border-l border-line bg-panel/80 text-ink-faint hover:text-ink"
+        className="absolute inset-y-0 right-0 z-30 flex w-4 items-center justify-center border-l border-hairline bg-panel/80 text-ink-faint hover:text-ink"
       >
         <PanelRightOpenIcon className="size-3" aria-hidden="true" />
         <span className="sr-only">Show the dock</span>
@@ -337,8 +337,8 @@ function DockSheet(): ReactElement {
   }
 
   return (
-    <div className="absolute inset-y-0 right-0 z-30 flex w-[min(480px,85%)] flex-col border-l border-line bg-panel shadow-2xl">
-      <div className="flex h-6 shrink-0 items-center justify-end border-b border-line px-1">
+    <div className="absolute inset-y-0 right-0 z-30 flex w-[min(480px,85%)] flex-col border-l border-hairline bg-panel shadow-2xl">
+      <div className="flex h-6 shrink-0 items-center justify-end border-b border-hairline px-1">
         <IconButton
           label="Put the dock away"
           size="icon-xs"
@@ -664,6 +664,21 @@ function PaneColumn({
  * header can only name one of them — it names the focused pane — so each gets
  * its own line. The focused one is the brighter, which is what ties the
  * header's title to the pane it is describing.
+ *
+ * ## Which pane has focus is said on its edge
+ *
+ * Console's `.main.foc` colours the focused pane's *border* with the accent at
+ * 55% and lifts its caption text to full ink; every other pane keeps the
+ * hairline. This caption's bottom rule is the only edge a pane draws — the
+ * grid separates columns with the wrapper's own border — so that is where the
+ * accent lands.
+ *
+ * `border-beam/55`, up from the `/40` it was, because the rest of the caption
+ * got quieter around it: `border-line` became a 7% alpha hairline and
+ * `bg-raised` became a 3.5% wash, so an accent held at the old value would now
+ * be the loudest thing in a bar that is otherwise barely there. The two moved
+ * together on purpose — the mark has to stay legible against a fainter ground,
+ * not merely keep its old number.
  */
 function PaneCaption({
   pane,
@@ -685,7 +700,7 @@ function PaneCaption({
     <div
       className={cn(
         'flex h-7 shrink-0 items-center gap-1.5 border-b px-2.5',
-        focused ? 'border-beam/40 bg-raised/60' : 'border-line',
+        focused ? 'border-beam/55 bg-wash' : 'border-hairline',
       )}
     >
       <span

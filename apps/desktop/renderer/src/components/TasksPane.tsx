@@ -232,16 +232,24 @@ function useAllPaneTasks(): readonly { readonly task: BackgroundTask; readonly p
  */
 function ScopeChip({ scope }: { readonly scope: 'pane' | 'all' }): ReactElement {
   return (
-    <div className="flex h-6 shrink-0 items-center gap-1 border-b border-line px-1.5">
+    <div className="flex h-6 shrink-0 items-center gap-1 border-b border-hairline px-1.5">
       {(['pane', 'all'] as const).map((option) => (
         <button
           key={option}
           type="button"
           aria-pressed={scope === option}
           onClick={() => setDockScope(option)}
+          // The mockup's `.scope` pill (docs/design/7d-full.html): a hairline
+          // ring, fully round, filled when it is the reading in force.
+          // `.chrome-label` already carries the sans in sentence case — the
+          // uppercase mono this used before 7D is now the voice reserved for
+          // things the machine produced, and a scope is a choice the reader
+          // made.
           className={cn(
-            'chrome-label rounded-xs px-1.5 py-0.5 transition-colors',
-            scope === option ? 'bg-raised text-ink' : 'text-ink-faint hover:text-ink-muted',
+            'chrome-label rounded-full border border-hairline px-2 py-0.5 transition-colors',
+            scope === option
+              ? 'bg-wash-strong text-ink'
+              : 'text-ink-faint hover:bg-wash hover:text-ink-muted',
           )}
         >
           {option === 'pane' ? 'this pane' : 'all'}
@@ -302,14 +310,19 @@ const TaskRow = memo(function TaskRow({
   return (
     <li
       className={cn(
-        // Square: this is a record of work the machine did, in the same family
-        // as a diff or a block of tool output, and Sheet's shape rule is that
-        // square is the tell for something the app did not write.
-        'flex flex-col overflow-hidden rounded-none border',
-        live ? 'border-line-strong bg-raised/40' : 'border-line bg-inset/40',
+        // Rounded, and it used to be square. The square was argued from Sheet's
+        // shape rule — "the tell for something the app did not write" — but a
+        // card is not what that rule is about. Machine-square belongs to raw
+        // output: a diff hunk, a block of stdout, the quoted command in a
+        // permission card. This is a *readout the renderer composed*, and it is
+        // operated: the label opens a tab, the ⏹ stops the work, the fold
+        // opens. `--radius` is drawn along exactly that line, so the card takes
+        // the 8 like every other thing a person clicks.
+        'flex flex-col overflow-hidden rounded-md border',
+        live ? 'border-hairline-strong bg-wash-strong' : 'border-hairline bg-wash',
       )}
     >
-      <div className="group flex items-start gap-2 px-2 py-1.5 hover:bg-raised/40">
+      <div className="group flex items-start gap-2 px-2 py-1.5 hover:bg-wash">
         <StatusIcon task={task} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -357,7 +370,10 @@ const TaskRow = memo(function TaskRow({
             // Shown on hover of the row, like the dock tab's ✕: a control that only
             // appears once the pointer is on the thing it acts on, and that stays
             // reachable from the keyboard throughout.
-            className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            // `bg-wash-strong` on hover, a step above the row's own `bg-wash`:
+            // the button has to be legible against the fill the row takes when
+            // the pointer that reveals it arrives.
+            className="shrink-0 rounded-md opacity-0 group-hover:opacity-100 hover:bg-wash-strong focus-visible:opacity-100"
             onClick={() => void stopTask(task.id, pane)}
           >
             <CircleStopIcon />
@@ -373,7 +389,7 @@ const TaskRow = memo(function TaskRow({
           // the next progress message — of which there is one every few seconds.
           defaultOpen={live}
           rememberAs={`workflow:${task.id}`}
-          className="border-t border-line/60 px-2 py-1"
+          className="border-t border-hairline px-2 py-1"
           triggerClassName="pl-3 text-3xs"
           contentClassName="mt-0.5"
           summary={<span className="text-3xs">{summarizePhases(phases)}</span>}
@@ -502,7 +518,7 @@ function PhaseHeader({ phase }: { readonly phase: WorkflowPhaseGroup }): ReactEl
   const settled = phase.agents.filter(isSettled).length;
 
   return (
-    <div className="flex items-center gap-2 rounded-sm bg-raised/40 px-1.5 py-0.5">
+    <div className="flex items-center gap-2 rounded-md bg-wash px-1.5 py-0.5">
       <span className="min-w-0 flex-1 truncate text-3xs text-ink-muted">{phase.title}</span>
       <span className="flex shrink-0 items-center gap-0.5" aria-hidden="true">
         {phase.agents.map((agent) => (

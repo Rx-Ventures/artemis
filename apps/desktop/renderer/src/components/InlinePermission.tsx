@@ -175,23 +175,25 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
         }
       }}
       /*
-       * Neutral card, amber shield. This is the loudest thing in the app by
-       * position — a parked run, inline, with the transcript stopped behind it
-       * — and it does not need to be the loudest by colour as well. What made
-       * it findable was never the tint; it was the border, the icon and the row
-       * of buttons. `--line-strong` is the token for an emphasised edge, which
-       * is exactly the job the amber border was doing.
+       * The gate, in the gate's colour. 7D draws this card as `.ask`: the
+       * warning hue at 45% for the edge, the gate wash behind it, and nothing
+       * else in the pane wearing either. The neutral card this replaced was a
+       * reaction to an earlier, louder amber — a solid tint with a heavy border
+       * — and it over-corrected: a parked run is the one thing in the app that
+       * is *allowed* to be findable by colour, because the run is stopped until
+       * it is answered. At 8% behind and 45% on the edge it is unmistakable
+       * without being an alarm.
        *
-       * The focus ring goes beam, because beam *is* the focus ring in this
-       * palette (see `index.css`) and a ring in the warning colour on a card
-       * that is no longer warning-coloured reads as an error state.
+       * The focus ring stays beam, because beam *is* the focus ring in this
+       * palette (see `index.css`), and a ring drawn in the card's own hue would
+       * be a focus state you cannot see against the card.
        */
-      className="rounded-md border border-line-strong bg-raised outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
+      className="rounded-lg border border-amber/45 bg-amber/8 outline-none focus-visible:ring-2 focus-visible:ring-beam/50"
     >
-      <div className="flex items-start gap-2 border-b border-line px-2.5 py-2">
+      <div className="flex items-start gap-2 border-b border-hairline px-2.5 py-2">
         <ShieldAlertIcon className="mt-0.5 size-3.5 shrink-0 text-amber" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-ink">
+          <p className="text-sm font-semibold text-ink">
             {request.title ?? `${request.toolName} needs your approval`}
           </p>
           <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
@@ -207,7 +209,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
 
       <div className="px-2.5 py-2">
         {request.reason ? (
-          <p className="mb-2 rounded-none border border-line bg-inset px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
+          <p className="mb-2 rounded-none border border-hairline bg-wash px-2.5 py-1.5 font-mono text-2xs text-ink-muted">
             {request.reason}
           </p>
         ) : null}
@@ -243,7 +245,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
             spellCheck={false}
             placeholder="Handed back to the model so it can try something else."
             onChange={(event) => setReason(event.target.value)}
-            className="min-h-12 bg-inset font-mono text-2xs md:text-2xs"
+            className="min-h-12 bg-wash font-mono text-2xs md:text-2xs"
           />
         </div>
       </div>
@@ -266,7 +268,11 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
         </Alert>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 border-t border-line bg-inset/50 px-2.5 py-2">
+      {/* The buttons sit on the card, not on a strip of their own: 7D's `.ask`
+          has one surface, and a second fill under the row of controls only made
+          the card look like two cards. The rule above them stays — it is what
+          separates reading from answering. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-2.5 py-2">
         <Button size="sm" variant="destructive" disabled={busy} onClick={() => deny(false)}>
           <XIcon />
           Deny
@@ -306,7 +312,12 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
 function ResolvedRecord({ item }: { readonly item: PermissionItem }): ReactElement {
   const allowed = item.state === 'allowed';
   return (
-    <div className={cn('rounded-md border px-2.5 py-1.5', allowed ? 'border-line' : 'border-signal/30')}>
+    <div
+      className={cn(
+        'rounded-lg border bg-wash px-2.5 py-1.5',
+        allowed ? 'border-hairline' : 'border-signal/30',
+      )}
+    >
       <div className="flex items-center gap-2">
         <ShieldAlertIcon className="size-3 shrink-0 text-ink-faint" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-muted">

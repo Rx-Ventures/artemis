@@ -204,12 +204,12 @@ export function MarkdownEditor({
     },
   });
 
-  if (editor === null) return <div className={cn('rounded-lg border border-line', className)} />;
+  if (editor === null) return <div className={cn('rounded-lg border border-hairline', className)} />;
 
   return (
     <div
       className={cn(
-        'flex flex-col overflow-hidden rounded-lg border border-line bg-panel',
+        'flex flex-col overflow-hidden rounded-lg border border-hairline bg-panel',
         // The ring lands on the frame rather than the text, which is why the
         // ProseMirror surface above sets `outline-none`. `has-focus-within`
         // rather than `focus-within` so it also lights when focus is in the
@@ -274,7 +274,7 @@ function Toolbar({ editor }: { readonly editor: Editor }): ReactElement {
       role="toolbar"
       aria-label="Formatting"
       aria-orientation="horizontal"
-      className="flex shrink-0 flex-wrap items-center gap-0.5 border-b border-line bg-raised/40 px-1.5 py-1"
+      className="flex shrink-0 flex-wrap items-center gap-0.5 border-b border-hairline bg-wash px-1.5 py-1"
     >
       <Mark
         pressed={state.h2}
