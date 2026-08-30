@@ -349,7 +349,7 @@ export function App(): ReactElement {
         only the ground, the inset and the gutters, so a region cannot decide
         its own gap and drift off the grid.
       */}
-      <div className="flex min-h-0 flex-1 gap-[7px] bg-void p-[7px]">
+      <div className="flex min-h-0 flex-1 gap-[7px] bg-abyss p-[7px]">
         <Sidebar />
         {/*
           The banner surface spans the working area rather than sitting inside a

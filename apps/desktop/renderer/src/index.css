@@ -370,12 +370,6 @@
      The validator ignores `color-mix` declarations by construction (its
      regex matches only literal oklch), and that is a feature: these tokens
      are derived from tokens it already checks. */
-  /* The ground the cards sit on — one step below the canvas, the same
-     derivation every design-round page frame used (dark abyss − 1.5, light
-     abyss − 3, in `_seed_build.tokens_css`). Without it the shell's cards
-     float on the same value they are made of and the whole geometry reads
-     as borders on a slab. */
-  --void: oklch(14% 0 0);
   --hairline: color-mix(in srgb, var(--ink) 7%, transparent);
   --hairline-strong: color-mix(in srgb, var(--ink) 12%, transparent);
   --wash: color-mix(in srgb, var(--ink) 3.5%, transparent);
@@ -483,7 +477,6 @@
      −4.5 inset, −6 raised, −11 line. `--panel` and `--float` are both pure
      white, which works for the reason the note at the foot of this block
      explains; `--abyss` is the one that has to be visibly *not* white, so
-  --void: oklch(93.5% 0 0);
      the gaps between panes still read as gaps rather than as a seam. Chroma
      zero throughout — the canvas seed's policy, both themes. */
   --abyss: oklch(96.5% 0 0); /* window ground, gaps between panes */
@@ -608,7 +601,6 @@
   --color-inset: var(--inset);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  --color-void: var(--void);
   --color-hairline: var(--hairline);
   --color-hairline-strong: var(--hairline-strong);
   --color-wash: var(--wash);

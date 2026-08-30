@@ -1148,7 +1148,7 @@ const PREFS_KEY = 'artemis.prefs.v1';
 /** Sidebar width bounds. Narrower than the minimum stops being a list. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 460;
-export const SIDEBAR_DEFAULT_WIDTH = 272;
+export const SIDEBAR_DEFAULT_WIDTH = 224;
 
 /** Keep a width inside the bounds, and reject anything that is not a number. */
 export function clampSidebarWidth(width: number): number {
