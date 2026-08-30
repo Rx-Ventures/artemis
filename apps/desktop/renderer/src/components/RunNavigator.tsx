@@ -305,10 +305,22 @@ function ProfileColumn(): ReactElement {
                * appears the moment a second one exists, which is also the
                * moment picking a profile starts changing which CLI runs.
                */}
+              {index === 0 ? (
+                <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">
+                  Profile
+                </DropdownMenuLabel>
+              ) : null}
+              {/*
+                Provider sub-headers only when there is more than one — the
+                mockup's own profile column does exactly this ("OpenAI" under
+                the rows). The column's name above is 7D's; the sub-header
+                still marks where picking a profile starts changing which CLI
+                runs.
+              */}
               {sections.length > 1 ? (
                 <>
                   {index > 0 ? <DropdownMenuSeparator /> : null}
-                  <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">
+                  <DropdownMenuLabel className="text-2xs text-ink-faint">
                     {section.label}
                   </DropdownMenuLabel>
                 </>
@@ -799,7 +811,7 @@ function EffortColumn(): ReactElement | null {
 
   return (
     <Column className="w-64">
-      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Thinking</DropdownMenuLabel>
+      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Effort</DropdownMenuLabel>
       <DropdownMenuRadioGroup
         value={current ?? ''}
         onValueChange={(value) => setThinkingLevel(value, pane)}

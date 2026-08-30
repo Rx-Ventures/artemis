@@ -424,7 +424,12 @@ function DockSplit({ children }: { readonly children: ReactNode }): ReactElement
         // companion panel is allowed to be cramped when the user drags it
         // cramped, and 360px made "a narrow tail of logs" impossible to have.
         minSize={DOCK_MIN_WIDTH}
-        className="flex min-w-0 border-l border-line"
+        // No border on the seam: the 7px handle between this panel and the
+        // conversations IS the gutter, and a rule drawn here was the wall
+        // that kept the dock from reading as a floating card (found by
+        // measuring the live DOM, 2026-08-30 — this wrapper sat outside
+        // every conversion scope).
+        className="flex min-w-0"
       >
         <DockPane />
       </ResizablePanel>
