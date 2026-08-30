@@ -445,7 +445,7 @@ function ModelSegment(): ReactElement {
               {' · '}
               {thinkingLabel.toLowerCase()}
             </span>
-          ) : null}
+      ) : null}
         </SegmentTrigger>
       </DropdownMenuTrigger>
       <RunNavigatorContent />

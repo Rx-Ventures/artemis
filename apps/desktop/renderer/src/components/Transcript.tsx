@@ -254,7 +254,11 @@ const STREAMING_TEXT = 'text-sm leading-relaxed break-words whitespace-pre-wrap 
  * 7D pass).
  */
 export const COLUMN_MAX: Record<ConversationWidth, string> = {
-  comfortable: 'max-w-5xl',
+  // 920px is 7D's `--w-col`, measured off the judged mockup rather than the
+  // nearest Tailwind stop — `max-w-5xl` (1024) was the nearest stop, and a
+  // hundred pixels of extra measure is exactly the kind of drift a judged
+  // design exists to forbid.
+  comfortable: 'max-w-[920px]',
   wide: 'max-w-7xl',
   full: 'max-w-none',
 };
@@ -391,16 +395,16 @@ export function Transcript(): ReactElement {
         {/* Horizontal padding lives here rather than on each row so every row —
             bubble or machinery — shares one left edge for its gutter.
 
-            `gap-0.5` is the whole thread's baseline rhythm, and it is this
-            tight on purpose: a burst of machinery rows is a log, and a log
-            reads as one block or as scattered lines with nothing in between.
-            The air that separates *turns* is bought back where it means
-            something — a margin above a user prompt and above an answer — so
-            the spacing says where the conversation is rather than being spread
-            evenly over rows that are all equally uninteresting. */}
+            `gap-3` is 7D's `--gap-msg`, and the change of heart is worth
+            recording: the log-tight `gap-0.5` treated machinery rows as lines
+            in a block, and the judged mockup treats every row as a card that
+            breathes. Twelve pixels between cards is what makes wash-filled
+            surfaces read as surfaces instead of as stripes — the fine-tuned
+            7d-full.html shows exactly this rhythm on a burst of tool rows,
+            and it was chosen looking at one. */}
         <div
           ref={contentRef}
-          className={cn('mx-auto flex w-full flex-col gap-0.5 px-4 py-4', COLUMN_MAX[width])}
+          className={cn('mx-auto flex w-full flex-col gap-3 px-4 py-3.5', COLUMN_MAX[width])}
         >
           {rows.length === 0 ? (
             blank === 'loading' ? (

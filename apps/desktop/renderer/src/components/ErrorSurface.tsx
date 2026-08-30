@@ -36,7 +36,7 @@ export function ErrorSurface(): ReactElement | null {
     // The padding is the working area's own: a banner is inset to the same
     // vertical rule as the pane it sits above, so the column below does not
     // look like it starts further in than the thing reporting about it.
-    <div className="flex shrink-0 flex-col gap-1.5 px-1.5 pt-1.5">
+    <div className="mb-[7px] flex shrink-0 flex-col gap-1.5">
       {banners.map((banner) => (
         <BannerRow key={banner.id} banner={banner} />
       ))}

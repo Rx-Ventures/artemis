@@ -77,6 +77,14 @@ import {
 } from '../lib/attachments';
 import { registerComposer } from '../lib/composerFocus';
 import { COLUMN_MAX } from './Transcript';
+import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
+import { ActivityRule } from './Activity';
+import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
+import { ReasonButton, WithReason } from './disabled-reason';
+import { WorkingDirectoryChip } from './WorkingDirectory';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 /**
  * The column the composer sits on — the transcript's, exactly.
@@ -90,14 +98,6 @@ import { COLUMN_MAX } from './Transcript';
 function useColumnMax(): string {
   return COLUMN_MAX[useApp((s) => s.conversationWidth)];
 }
-import { applySlashCommand, matchSlashCommands } from '../lib/slashCommands';
-import { ActivityRule } from './Activity';
-import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashCommandMenu';
-import { ReasonButton, WithReason } from './disabled-reason';
-import { WorkingDirectoryChip } from './WorkingDirectory';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
 
 /**
  * Chromium sizes a textarea to its content natively with `field-sizing`, which
@@ -585,7 +585,7 @@ export function Composer(): ReactElement {
               borderless; this element carries the edge for the whole card,
               attachments and buttons included.
             */
-            'relative min-w-0 flex-1 rounded-xl border border-hairline-strong bg-wash',
+            'relative min-w-0 flex-1 rounded-[10px] border border-hairline-strong bg-wash',
             /*
               Focus is drawn out here for the same reason: a ring on the
               textarea would trace a second, smaller rectangle inside the one
@@ -857,17 +857,16 @@ export function Composer(): ReactElement {
                 }
               }}
               className={cn(
-                // `pr-18` reserves the buttons' lane — two 28px buttons, 4px of
-                // inset each side, 2px between them, and 8px of gap before the
-                // text. Without it a long single-line prompt runs under the
-                // glyphs and its last word is unreadable.
+                // No easement on the right any more: the buttons live in the
+                // card's own bar below (7D `.cbar`) rather than floating over
+                // this corner, so the text keeps the card's whole width.
                 //
                 // No `font-mono`. What gets typed here is a sentence, and it is
                 // the one surface where the app is being spoken to rather than
                 // read, so it takes the same face as the bubble it becomes and
                 // as the answer that comes back. The two have to move together:
                 // see the note on the user bubble in `Transcript.tsx`.
-                'max-h-[35vh] min-h-9 w-full resize-none py-2 pr-18 pl-3 text-sm leading-relaxed md:text-sm',
+                'max-h-[35vh] min-h-11 w-full resize-none px-3 py-2.5 text-sm leading-relaxed md:text-sm',
                 /*
                   Every edge and fill the primitive draws is surrendered to the
                   card wrapper above — border, background and focus ring alike.
@@ -905,7 +904,14 @@ export function Composer(): ReactElement {
             in the empty state do not; `aria-label` and the titles keep them
             named for anyone not reading the glyph.
           */}
-          <div className="absolute right-1 bottom-1 flex items-center gap-0.5">
+          {/*
+            The card's own bottom bar — 7D `.cbar`. The buttons used to float
+            over the textarea's corner, which kept the card one row tall and
+            cost a `pr-18` easement inside the field. A bar under the text is
+            the mockup's silhouette: accessory on the left, the hint and the
+            action on the right, and the textarea keeps its whole width.
+          */}
+          <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
             {/*
               Attach sits to Send's left, in the same lane and at the same size.
 
@@ -971,6 +977,13 @@ export function Composer(): ReactElement {
               does that where a fill-versus-ghost swap would read as the button
               having gone away.
             */}
+            <div className="flex-1" />
+            <span
+              aria-hidden="true"
+              className="mr-1.5 text-2xs text-ink-faint select-none max-sm:hidden"
+            >
+              ⏎ send · ⇧⏎ newline
+            </span>
             {stops ? (
               /*
                 Acknowledged the moment it is pressed. The glyph becomes the

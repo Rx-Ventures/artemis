@@ -200,7 +200,13 @@ function useStoredLayout(
  * caption border. It lights up on hover and while dragging, which is the only
  * time a divider is worth seeing.
  */
-const HANDLE = 'bg-transparent transition-colors hover:bg-beam/30 data-[state=drag]:bg-beam/50';
+/*
+ * The gutter between cards is the handle. 7px of bare canvas — the same gap
+ * `App.tsx` puts around the shell — so resizing happens where the eye already
+ * reads a seam, and the glow answers on hover without adding an edge at rest.
+ */
+const HANDLE =
+  'w-[7px] bg-transparent transition-colors hover:bg-beam/30 data-[state=drag]:bg-beam/50 data-[panel-group-direction=vertical]:h-[7px] data-[panel-group-direction=vertical]:w-full';
 
 /* -------------------------------------------------------------------------- */
 /* The grid                                                                   */
@@ -337,7 +343,7 @@ function DockSheet(): ReactElement {
   }
 
   return (
-    <div className="absolute inset-y-0 right-0 z-30 flex w-[min(480px,85%)] flex-col border-l border-hairline bg-panel shadow-2xl">
+    <div className="absolute inset-y-1.5 right-1.5 z-30 flex w-[min(480px,85%)] flex-col overflow-hidden rounded-lg border border-hairline bg-panel shadow-2xl">
       <div className="flex h-6 shrink-0 items-center justify-end border-b border-hairline px-1">
         <IconButton
           label="Put the dock away"
@@ -418,7 +424,12 @@ function DockSplit({ children }: { readonly children: ReactNode }): ReactElement
         // companion panel is allowed to be cramped when the user drags it
         // cramped, and 360px made "a narrow tail of logs" impossible to have.
         minSize={DOCK_MIN_WIDTH}
-        className="flex min-w-0 border-l border-line"
+        // No border on the seam: the 7px handle between this panel and the
+        // conversations IS the gutter, and a rule drawn here was the wall
+        // that kept the dock from reading as a floating card (found by
+        // measuring the live DOM, 2026-08-30 — this wrapper sat outside
+        // every conversion scope).
+        className="flex min-w-0"
       >
         <DockPane />
       </ResizablePanel>
@@ -640,7 +651,18 @@ function PaneColumn({
         onFocusCapture={take}
         onPointerDownCapture={take}
         aria-label={alone ? undefined : 'Conversation'}
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        /*
+          A card, not a region: the 7D shell (`.main` in 7d-full.html). The
+          focused pane's accent lives on the caption while a caption exists;
+          alone, the card itself is the only pane and needs no marking.
+        */
+        className={cn(
+          'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-panel',
+          // `.main.foc`: with several cards on the canvas, the one the keyboard
+          // acts on carries the accent on its own edge — the caption repeats it
+          // closer to the name, but the card is what the eye finds first.
+          focused && !alone ? 'border-beam/55' : 'border-hairline',
+        )}
       >
         {alone ? null : <PaneCaption pane={pane} focused={focused} />}
         <Transcript />
@@ -699,7 +721,7 @@ function PaneCaption({
   return (
     <div
       className={cn(
-        'flex h-7 shrink-0 items-center gap-1.5 border-b px-2.5',
+        'flex h-8 shrink-0 items-center gap-1.5 border-b px-2.5',
         focused ? 'border-beam/55 bg-wash' : 'border-hairline',
       )}
     >

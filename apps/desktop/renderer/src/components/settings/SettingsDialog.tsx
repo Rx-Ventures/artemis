@@ -280,7 +280,7 @@ export function SettingsDialog(): ReactElement {
         // `sm:max-w-*` has to be restated: the base content class pins itself to
         // `sm:max-w-sm` at every breakpoint above mobile, which would quietly
         // shrink this to a tooltip-sized box on any real window.
-        className="flex h-[min(46rem,calc(100dvh-3rem))] w-[calc(100vw-3rem)] max-w-[68rem] flex-col gap-0 overflow-hidden p-0 sm:max-w-[68rem]"
+        className="flex h-[min(660px,calc(100dvh-3rem))] w-[calc(100vw-3rem)] max-w-[1000px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1000px]"
       >
         <DialogHeader className="shrink-0 gap-1 border-b border-hairline px-4 py-3">
           <DialogTitle className="text-sm font-semibold tracking-tight text-ink">

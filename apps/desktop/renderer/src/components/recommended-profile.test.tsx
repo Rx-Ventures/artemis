@@ -1,7 +1,10 @@
 /**
  * @vitest-environment jsdom
  *
- * The profile menu's "Recommended" section, and the two claims it can make.
+ * The profile menu's recommendation, and the two claims it can make. It used
+ * to be a "Recommended" label row over a bare profile row; 7D's shape is the
+ * row wearing a small "rec" pill instead (2026-08-30), so these assertions
+ * look for the pill.
  *
  * The section exists because nothing in the app had ever read an account other
  * than the active one, so "my five-hour window is nearly gone, where should I
@@ -110,7 +113,7 @@ function openProfileMenu(): void {
   );
 }
 
-describe('the Recommended section', () => {
+describe('the recommended row', () => {
   beforeEach(() => {
     seed({});
   });
@@ -119,7 +122,7 @@ describe('the Recommended section', () => {
     seed({ p1: reading(80, 'max'), p2: reading(20, 'max') });
     openProfileMenu();
 
-    expect(screen.getByText('Recommended')).not.toBeNull();
+    expect(screen.getByText('rec')).not.toBeNull();
     // 80% used on the active account, 20% on the other: the other wins by 60,
     // and appears twice — once as the recommendation, once in the list proper.
     expect(screen.getAllByText('Work').length).toBe(2);
@@ -136,7 +139,7 @@ describe('the Recommended section', () => {
     seed({ p1: reading(60, 'max'), p2: reading(40, 'team') });
     openProfileMenu();
 
-    expect(screen.getByText('Recommended')).not.toBeNull();
+    expect(screen.getByText('rec')).not.toBeNull();
     expect(screen.getAllByText('Work').length).toBe(2);
   });
 
@@ -146,7 +149,7 @@ describe('the Recommended section', () => {
     seed({ p1: reading(20, 'max'), p2: reading(60, 'team') });
     openProfileMenu();
 
-    expect(screen.getByText('Recommended')).not.toBeNull();
+    expect(screen.getByText('rec')).not.toBeNull();
     // Three, not two: the winner is the *active* account here, so it is also
     // the trigger's own label — trigger, recommendation, list row.
     expect(screen.getAllByText('Personal').length).toBe(3);
@@ -161,7 +164,7 @@ describe('the Recommended section', () => {
     });
     openProfileMenu();
 
-    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByText('rec')).toBeNull();
   });
 
   it('says nothing when the readings are too old to advise on', () => {
@@ -169,18 +172,18 @@ describe('the Recommended section', () => {
     seed({ p1: { ...reading(80, 'max'), fetchedAt: Date.now() - 60 * 60_000 }, p2: old });
     openProfileMenu();
 
-    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByText('rec')).toBeNull();
   });
 
   it('says nothing before any reading has arrived', () => {
     openProfileMenu();
-    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByText('rec')).toBeNull();
   });
 
   it('says nothing once the only other account has opted out of the pool', () => {
     // The reading is fine and the account is one click away in the list below.
     // It is simply not one Artemis may reach for, which leaves one candidate —
-    // and a "Recommended" heading over the account you are already in repeats
+    // and a "rec" pill on the account you are already in repeats
     // the trigger above it.
     seed({ p1: reading(80, 'max'), p2: reading(20, 'max') }, [
       PROFILES[0]!,
@@ -188,7 +191,7 @@ describe('the Recommended section', () => {
     ]);
     openProfileMenu();
 
-    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByText('rec')).toBeNull();
     // Still listed, though: opting out of the pool is not being hidden.
     expect(screen.getAllByText('Work').length).toBe(1);
   });
@@ -204,7 +207,7 @@ describe('the Recommended section', () => {
     ]);
     openProfileMenu();
 
-    expect(screen.getByText('Recommended')).not.toBeNull();
+    expect(screen.getByText('rec')).not.toBeNull();
     expect(screen.getAllByText('Spare').length).toBe(2);
     // Two candidates were compared, not three: an account that could never win
     // is not one the winner beat.
@@ -221,7 +224,7 @@ describe('the Recommended section', () => {
 
     // Recommending an account that has been hidden from the menu doing the
     // recommending is the one combination the two flags must not produce.
-    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByText('rec')).toBeNull();
   });
 
   it('switches the account when the row is chosen', () => {

@@ -168,7 +168,7 @@ export function CommandPalette(): ReactElement {
       onOpenChange={setPalette}
       title="Command palette"
       description="Search sessions, switch profile or model, and run commands."
-      className="max-w-xl"
+      className="max-w-[620px]"
       showCloseButton={false}
     >
       {/*

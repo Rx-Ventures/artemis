@@ -282,7 +282,8 @@ describe('status line / model and effort', () => {
   });
 
   it('offers no thinking control at all when the provider exposes no levels', async () => {
-    // Thinking is a row inside the model popover now, not a segment on the bar.
+    // The effort ladder is a column of the navigator now, not a segment on
+    // the bar — and 7D names the column Effort (2026-08-30).
     // A provider with no effort scale has no ladder to show, so the row is
     // absent rather than present-and-dead — there is nothing on this surface
     // for a reason to attach to.
@@ -291,7 +292,7 @@ describe('status line / model and effort', () => {
     const trigger = screen.getByLabelText('Model');
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
     await screen.findByRole('menu');
-    expect(screen.queryByText('Thinking')).toBeNull();
+    expect(screen.queryByText('Effort')).toBeNull();
   });
 
   it('puts thinking inside the model popover when the provider does offer levels', async () => {
@@ -300,7 +301,7 @@ describe('status line / model and effort', () => {
     const trigger = screen.getByLabelText('Model');
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
     await screen.findByRole('menu');
-    expect(screen.getByText('Thinking')).toBeTruthy();
+    expect(screen.getByText('Effort')).toBeTruthy();
   });
 
   /*
@@ -324,7 +325,7 @@ describe('status line / model and effort', () => {
 
     const menu = await screen.findByRole('menu');
     // Not behind a sub-trigger: the rungs are on the surface itself…
-    expect(screen.getByText('Thinking').closest('[data-slot="dropdown-menu-sub-trigger"]')).toBeNull();
+    expect(screen.getByText('Effort').closest('[data-slot="dropdown-menu-sub-trigger"]')).toBeNull();
     // …every one of them, notes and all, inside the menu that owns them.
     expect(menu.contains(screen.getByText('Low'))).toBe(true);
     expect(menu.contains(screen.getByText('High'))).toBe(true);

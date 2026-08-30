@@ -19,8 +19,9 @@
  *
  * ## It is a card sitting on the window, not a column bolted to its edge
  *
- * The pane used to be a full-height bordered column flush against the left and
- * bottom of the window, which made it read as part of the frame — furniture.
+ * Literally, since the 7D shell landed: rounded, bordered, floating on the
+ * window ground inside `App.tsx`'s 7px inset. The column era read as part of
+ * the frame — furniture.
  * As a detached card with its own border and shadow it reads as a thing about
  * your work rather than a wall of the room it happens in.
  *
@@ -140,7 +141,7 @@ export function Sidebar(): ReactElement | null {
           ref={asideRef}
           style={{ width }}
           aria-label="Sessions"
-          className="relative flex shrink-0 flex-col border-r border-hairline bg-panel"
+          className="relative flex shrink-0 flex-col overflow-hidden rounded-lg border border-hairline bg-panel"
         >
           {/*
             A caption over the list, and the chevron that shuts it.

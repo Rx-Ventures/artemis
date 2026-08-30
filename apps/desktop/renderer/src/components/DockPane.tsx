@@ -102,6 +102,10 @@ import {
   MAX_SPLIT_TERMINALS,
   openTerminal,
   pinFile,
+  toggleBrowser,
+  toggleFiles,
+  toggleTasks,
+  toggleTerminal,
   setDockScope,
   taskCount,
   terminalSplitFor,
@@ -119,6 +123,8 @@ import { FilesPane } from './FilesPane';
 import { TasksPane } from './TasksPane';
 import { TerminalView } from './TerminalView';
 import { BrowserPane } from './BrowserPane';
+import { DockHeader } from './DockHeader';
+import { lastSegment } from '../lib/paths';
 import { IconButton } from './disabled-reason';
 import { cn } from '@/lib/utils';
 
@@ -137,7 +143,16 @@ export function DockPane(): ReactElement | null {
      * sideways in the narrowest surface in the window. A 34px icon column costs
      * the same 34px whether the dock holds two tabs or nine.
      */
-    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 bg-panel/40">
+    <section
+      aria-label="Dock"
+      /*
+        No border, by request (2026-08-30): beside a bordered conversation
+        card and across a gutter, the dock's own outline read as a box in a
+        box. The card is told by its fill and its corners; the gutter does
+        the separating.
+      */
+      className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-panel"
+    >
       <DockStrip tabs={tabs} active={active} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DockBody tabs={tabs} active={active} />
@@ -187,31 +202,27 @@ function DockStrip({
    * Focus moves with selection, because a roving tabindex that selects without
    * focusing strands the keyboard on the tab that has gone quiet.
    */
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
-      if (!keys.includes(event.key)) return;
-      event.preventDefault();
-
-      const back = event.key === 'ArrowUp' || event.key === 'ArrowLeft';
-      const at = tabs.findIndex((tab) => sameTab(tab, active));
-      const last = tabs.length - 1;
-      const to =
-        event.key === 'Home'
-          ? 0
-          : event.key === 'End'
-            ? last
-            : back
-              ? Math.max(0, at - 1)
-              : Math.min(last, at + 1);
-
-      const next = tabs[to];
-      if (next === undefined) return;
-      focusDockTab(next);
-      strip.current?.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
-    },
-    [tabs, active],
-  );
+  const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    // Roving focus over the strip's rendered tabs — openers included. It used
+    // to walk the `tabs` array and *select* as it went, which was coherent
+    // when every button was an instance; an opener cannot be selected, only
+    // pressed, so the arrows now move focus and Enter is the press.
+    const nodes = [...(strip.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+    if (nodes.length === 0) return;
+    const at = nodes.findIndex((node) => node === document.activeElement);
+    const to =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? nodes.length - 1
+          : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+            ? (at + 1 + nodes.length) % nodes.length
+            : (at - 1 + nodes.length) % nodes.length;
+    nodes[to]?.focus();
+  }, []);
 
   return (
     // The rail is two boxes now: a tab list that scrolls, and a footer that
@@ -220,7 +231,7 @@ function DockStrip({
     // one control for "another of these" was the thing that scrolled away.
     // A footer costs the strip nothing when it fits and keeps the button
     // reachable when it does not.
-    <div className="flex w-[34px] shrink-0 flex-col border-r border-hairline">
+    <div className="flex w-10 shrink-0 flex-col">
       {/*
         The scope chip, generalised from the delegated list to the whole rail.
 
@@ -233,13 +244,16 @@ function DockStrip({
         Rendered only when a second conversation exists to widen into; a
         one-pane window's dock is already both readings at once.
       */}
-      {severalPanes ? (
-        <IconButton
+      <IconButton
           label={
-            scope === 'all'
-              ? 'Show only this conversation’s tabs'
-              : 'Show every conversation’s tabs'
+            severalPanes
+              ? scope === 'all'
+                ? 'Show only this conversation’s tabs'
+                : 'Show every conversation’s tabs'
+              : 'This conversation’s tabs — scope widens when a second conversation opens'
           }
+          disabled={!severalPanes}
+          disabledReason="One conversation is open, so its tabs and every tab are the same reading."
           size="icon-xs"
           aria-pressed={scope === 'all'}
           onClick={() => setDockScope(scope === 'all' ? 'pane' : 'all')}
@@ -255,7 +269,6 @@ function DockStrip({
         >
           <LayoutGridIcon />
         </IconButton>
-      ) : null}
       <div
         ref={strip}
         role="tablist"
@@ -275,17 +288,27 @@ function DockStrip({
         // supplies it here and the gap between tabs goes to the mockup's 4px.
         className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto py-1.5"
       >
-        {tabs.map((tab) => (
-          <DockTabButton
-            key={tabKey(tab)}
-            tab={tab}
-            active={sameTab(tab, active)}
-            // The badge is the pane's ordinal in the grid, which is also the
-            // order the scoped strip walks conversations in — so tab groups
-            // and numbers count the same way.
-            ownerBadge={badged ? ownerBadgeFor(tab, panes) : null}
-          />
-        ))}
+        {STANDING_KINDS.map((slot) => {
+          const instances = tabs.filter((tab) => tab.kind === slot.kind);
+          // File viewers ride with the folder they came from: the `file`
+          // kind has no standing slot of its own, so its tabs follow `files`.
+          const viewers =
+            slot.kind === 'files' ? tabs.filter((tab) => tab.kind === 'file') : [];
+          if (instances.length === 0 && viewers.length === 0) {
+            return <KindOpener key={slot.kind} slot={slot} pane={actionPane} />;
+          }
+          return [...instances, ...viewers].map((tab) => (
+            <DockTabButton
+              key={tabKey(tab)}
+              tab={tab}
+              active={sameTab(tab, active)}
+              // The badge is the pane's ordinal in the grid, which is also the
+              // order the scoped strip walks conversations in — so tab groups
+              // and numbers count the same way.
+              ownerBadge={badged ? ownerBadgeFor(tab, panes) : null}
+            />
+          ));
+        })}
       </div>
       {/*
         The split: this conversation's shells side by side. In the footer with
@@ -347,6 +370,66 @@ function ownerBadgeFor(
   const index = panes.findIndex((pane) => pane.id === home);
   if (index < 0) return null;
   return { text: String(index + 1), label: `pane ${String(index + 1)}` };
+}
+
+
+/**
+ * The six standing surfaces, in the mockup's order.
+ *
+ * 7D's strip is not a list of what exists — it is the dock saying what it
+ * *can* show (docs/design/7d-full.html, `.dstrip`): six kinds, always drawn,
+ * the ones with something behind them lit. The app's strip used to render
+ * only live tabs, which on a fresh conversation was two icons and a lot of
+ * rail — the sparseness read as a different product. A kind with no instance
+ * is an opener: terminal, browser, folder and delegated work can be opened
+ * by pressing them; a subagent's output and a preview cannot be conjured, so
+ * those two follow the disabled-with-reason rule instead of hiding.
+ */
+const STANDING_KINDS = [
+  { kind: 'terminal', label: 'Open a terminal', open: toggleTerminal },
+  { kind: 'browser', label: 'Open the browser', open: toggleBrowser },
+  { kind: 'files', label: 'Open the working folder', open: toggleFiles },
+  { kind: 'tasks', label: 'Open delegated work', open: toggleTasks },
+  {
+    kind: 'agent',
+    label: 'Subagent output',
+    reason: 'A subagent\u2019s output opens here once one runs.',
+  },
+  {
+    kind: 'preview',
+    label: 'Preview',
+    reason: 'A preview opens here when the agent writes one.',
+  },
+] as const;
+
+const KIND_GLYPHS: Record<(typeof STANDING_KINDS)[number]['kind'], ReactElement> = {
+  terminal: <TerminalIcon className="size-3 shrink-0" aria-hidden="true" />,
+  browser: <GlobeIcon className="size-3 shrink-0" aria-hidden="true" />,
+  files: <FolderIcon className="size-3.5 shrink-0" aria-hidden="true" />,
+  tasks: <UsersIcon className="size-3 shrink-0" aria-hidden="true" />,
+  agent: <BotIcon className="size-3 shrink-0" aria-hidden="true" />,
+  preview: <SquareArrowOutUpRightIcon className="size-3 shrink-0" aria-hidden="true" />,
+};
+
+/** A kind with nothing behind it yet: the same 28px shape, offered. */
+function KindOpener({
+  slot,
+  pane,
+}: {
+  readonly slot: (typeof STANDING_KINDS)[number];
+  readonly pane: Parameters<typeof toggleTerminal>[0];
+}): ReactElement {
+  return (
+    <IconButton
+      label={slot.label}
+      disabled={!('open' in slot)}
+      disabledReason={'reason' in slot ? slot.reason : undefined}
+      onClick={() => ('open' in slot ? slot.open(pane) : undefined)}
+      className="size-7 shrink-0 rounded-md text-ink-faint/80 hover:bg-wash"
+    >
+      {KIND_GLYPHS[slot.kind]}
+    </IconButton>
+  );
 }
 
 function DockTabButton({
@@ -854,6 +937,38 @@ function DockBody({
 
   return (
     <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/*
+        The mockup's `.dh` over a shell: what this is, and whether it is
+        alive — "zsh · artemis · live" (docs/design/7d-full.html). The strip's
+        tab already knows both, but the tab is an icon now, and the panel is
+        where a reader looks for "what am I looking at". No ✕ here: only the
+        tab's ✕ ends a shell, and that rule predates this bar.
+      */}
+      {active?.kind === 'terminal'
+        ? (() => {
+            const mine = terminals.find((one) => one.info.id === active.id);
+            if (mine === undefined) return null;
+            return (
+              <DockHeader className="gap-2">
+                <span className="min-w-0 truncate text-2xs text-ink-muted">
+                  {lastSegment(mine.info.shell)} · {lastSegment(mine.info.cwd)}
+                </span>
+                <span
+                  className={cn(
+                    'ml-auto shrink-0 font-mono text-2xs',
+                    mine.exited ? 'text-ink-faint' : 'text-mint',
+                  )}
+                >
+                  {splitting
+                    ? `${String(splitIds.length)} live`
+                    : mine.exited
+                      ? 'ended'
+                      : 'live'}
+                </span>
+              </DockHeader>
+            );
+          })()
+        : null}
       {showPreview && active?.kind === 'preview' ? <PreviewPane id={active.id} /> : null}
       {/*
        * Keyed by the tab's id, so switching between two open files scrolls each
