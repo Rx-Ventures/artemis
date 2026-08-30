@@ -1,6 +1,40 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.1.1
+
+2.1.0 changed the tokens; 2.1.1 finishes the overhaul the tokens started —
+every surface, judged against the fine-tuned design and against the running
+app itself, iterated live until the two matched.
+
+- **The shell is cards on a canvas.** The sidebar, every conversation and
+  the dock are detached rounded panels on the darker window ground, with the
+  resize seams living in the gutters between them. The dock floats with no
+  border and no inner wall; the focused conversation carries the accent on
+  its own edge in a split.
+
+- **The dock offers its six kinds.** The strip stops being a list of what
+  happens to exist: terminal, browser, working folder, delegated work,
+  subagent output and preview are always drawn, live instances light their
+  slots, and the four that can be opened open on press. The other two are
+  shown disabled with their reasons. The terminal panel wears a proper
+  header — what it is, and whether it is alive.
+
+- **The picker matches its design.** Profile / Model / Effort as titled
+  columns, the recommendation worn as a small pill on the row itself rather
+  than a label row above it, and the surface anchored where the hand is —
+  above the chips that open it.
+
+- **Exact measures, everywhere.** The transcript on the design's 920px
+  column at its 12px rhythm; composer, status line and messages on one
+  shared measure; session rows carrying their age again; palette, settings
+  and hand-off dialogs at their drawn sizes; the chrome voice in sentence
+  case throughout.
+
+- **Small honest fixes along the way.** A failed tool card no longer loses
+  its red edge when expanded, the slash menu's highlight is visible again,
+  and the long-dead update card left with its tests.
+
 ## What's new in 2.1.0
 
 The console treatment. 2.0 settled what Artemis's colours are; 2.1 settles
