@@ -137,7 +137,7 @@ export function DockPane(): ReactElement | null {
      * sideways in the narrowest surface in the window. A 34px icon column costs
      * the same 34px whether the dock holds two tabs or nine.
      */
-    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 bg-panel/40">
+    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-hairline bg-panel">
       <DockStrip tabs={tabs} active={active} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DockBody tabs={tabs} active={active} />

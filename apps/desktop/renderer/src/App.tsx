@@ -336,7 +336,20 @@ export function App(): ReactElement {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-abyss">
       <AppHeader />
-      <div className="flex min-h-0 flex-1">
+      {/*
+        Cards on a canvas — the 7D shell (docs/design/7d-full.html, `.body`).
+
+        The sidebar, every conversation pane and the dock are detached rounded
+        panels sitting on the darker window ground, with a 7px gutter between
+        them and the same inset around them. The first conversion moved the
+        tokens and left the regions welded edge-to-edge, and the app kept
+        reading as a slab whatever its corners did — the geometry *is* the
+        design language, not a nicety on top of it. Each card owns its border
+        and radius (`Sidebar`, `PaneColumn`, `DockPane`); this container owns
+        only the ground, the inset and the gutters, so a region cannot decide
+        its own gap and drift off the grid.
+      */}
+      <div className="flex min-h-0 flex-1 gap-[7px] p-[7px]">
         <Sidebar />
         {/*
           The banner surface spans the working area rather than sitting inside a
