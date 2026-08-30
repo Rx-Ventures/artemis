@@ -817,6 +817,26 @@
    content the app does not author (rendered markdown) or that need keyframes.
    Everything else is a utility or a component in `components/ui/`. */
 
+
+/*
+ * The run navigator's posture.
+ * ============================================================================
+ *
+ * Radix positions a dropdown against its trigger by writing an inline
+ * transform onto the popper wrapper, and 7D wants this one surface to ignore
+ * its trigger entirely: the navigator is a command surface, centred near the
+ * top of the window like the palette, whichever status-line chip opened it.
+ * Overriding the wrapper is the one way to move a Radix popper without
+ * forking it; `:has` scopes the override to exactly this content, and the
+ * 12% matches the palette's resting height so the two command surfaces land
+ * in the same place.
+ */
+[data-radix-popper-content-wrapper]:has(> [data-run-navigator]) {
+  top: 12% !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+}
+
 @layer components {
   /*
    * Markdown inside a finished assistant block.

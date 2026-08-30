@@ -42,6 +42,7 @@
  */
 
 import { Fragment, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ListTreeIcon, SearchIcon } from 'lucide-react';
 import { bindingWindow, isProfileEnabled } from '@rx-artemis/protocol';
 import type {
@@ -173,6 +174,20 @@ export function RunNavigatorContent(): ReactElement {
         '[&_[data-slot=dropdown-menu-radio-item][data-state=checked]]:bg-wash',
       )}
     >
+      {/*
+        7D presents the navigator as a command surface: centred near the top
+        of the window over a dim, the palette's posture, whichever chip opened
+        it (docs/design/7d-full.html, the navigator screen). The dim is
+        portalled to <body> because the popper wrapper carries a transform,
+        which would make a fixed child position against the wrapper instead
+        of the viewport. Pointer events pass through it so Radix's own
+        outside-press is what closes the menu. The centring itself is a rule
+        in index.css on the popper wrapper, keyed to data-run-navigator.
+      */}
+      {createPortal(
+        <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-40 bg-black/40" />,
+        document.body,
+      )}
       <div className="flex items-stretch divide-x divide-hairline">
         <ProfileColumn />
         {modelRevealed ? <ModelColumn /> : null}
