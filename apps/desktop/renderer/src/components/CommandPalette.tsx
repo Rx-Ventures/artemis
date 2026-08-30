@@ -94,6 +94,7 @@ import { shortenPath } from '../lib/paths';
 import {
   activeModels,
   fastModeAvailable,
+  isLive,
   newSession,
   openSettings,
   openTerminal,
@@ -249,6 +250,17 @@ function RootPage({
   const rewinding = useCapability('rewind');
   const pane = usePaneRef();
   const resumeId = usePane((s) => s.resumeSessionId);
+  /*
+   * What the wind-back commands below have to ask, rather than `resumeId`.
+   *
+   * `resumeSessionId` is only promoted when a run ends, so a conversation on
+   * its *first* run knows its id only as `run.sessionId` — and these commands
+   * are now offered mid-run. `rewindConversationTo` has always read the pair,
+   * so gating on half of it was the palette disagreeing with the action behind
+   * it about whether there was anything to act on.
+   */
+  const windBackId = usePane((s) => s.resumeSessionId ?? s.run?.sessionId ?? null);
+  const live = usePane(isLive);
   const forkOnResume = usePane((s) => s.forkOnResume);
   const sidebarCollapsed = useApp((s) => s.sidebarCollapsed);
   const models = usePane(activeModels);
@@ -331,13 +343,21 @@ function RootPage({
          * a mis-click silently branch the session with no way back — and the
          * palette closes, so the mistake would not even be visible. The composer
          * shows the same state and can also change it.
+         *
+         * Closed mid-run, and this is the one fork command that is. A live
+         * pane's next prompt is a *steer* into the running turn, and `run.end`
+         * clears the flag on its way past — so the promise on this row was one
+         * the app could not keep from here. The two commands that can are named
+         * in the reason: both branch at a message rather than arming the field.
          */}
         <GatedItem
-          supported={forking.supported && resumeId !== null}
+          supported={forking.supported && resumeId !== null && !live}
           reason={
             !forking.supported
               ? forking.reason
-              : 'There is no session to fork yet — start or resume one first.'
+              : resumeId === null
+                ? 'There is no session to fork yet — start or resume one first.'
+                : 'This conversation is working — fork from a message instead, or wait for the turn to finish.'
           }
           onSelect={() => {
             setForkOnResume(!forkOnResume);
@@ -359,11 +379,13 @@ function RootPage({
          * rest.
          */}
         <GatedItem
-          supported={rewinding.supported && resumeId !== null}
+          supported={rewinding.supported && windBackId !== null && !live}
           reason={
             !rewinding.supported
               ? rewinding.reason
-              : 'There is no session to rewind yet — start or resume one first.'
+              : windBackId === null
+                ? 'There is no session to rewind yet — start or resume one first.'
+                : 'This conversation is working — a turn still being written cannot be wound back.'
           }
           onSelect={() => {
             const target = lastSettledUserItemId(pane);
@@ -376,7 +398,7 @@ function RootPage({
         </GatedItem>
 
         <GatedItem
-          supported={forking.supported && rewinding.supported && resumeId !== null}
+          supported={forking.supported && rewinding.supported && windBackId !== null}
           reason={
             !forking.supported
               ? forking.reason

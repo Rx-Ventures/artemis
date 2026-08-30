@@ -603,14 +603,22 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
    * A settled message is a rewind point; the provider's id for it is resolved
    * when the control is used, not required before it appears — see
    * `resolveRewindAnchor` for why a live-typed row cannot have learned it.
-   * Live runs and pending sends still hide the controls entirely: winding
-   * back a conversation that is mid-thought is refused in the store anyway,
-   * and a button that is present-but-inert under every message of a running
-   * turn is noise exactly where the eye is. An unsupported *capability*, by
-   * contrast, renders disabled-with-reason below — the app's standing rule —
-   * so a Codex pane says why the control does nothing rather than lacking it.
+   *
+   * A live run no longer hides the pair, because it only ever had an argument
+   * against one of them. Forking does not touch the conversation it branches
+   * from — the provider reads the stored transcript and writes elsewhere — so
+   * a working agent is no reason to withhold it, and making someone sit
+   * through a long turn before they may ask the same question a different way
+   * was the whole complaint. See `branchLiveConversation` for where the branch
+   * goes when the column is busy. Rewind is the opposite move and stays
+   * refused mid-run, disabled-with-reason rather than absent — the app's
+   * standing rule, and the same treatment an unsupported *capability* gets, so
+   * a Codex pane says why the control does nothing rather than lacking it.
+   *
+   * A pending send still hides both: there is no stored message for either to
+   * anchor to yet.
    */
-  const showControls = !live && !item.pending;
+  const showControls = !item.pending;
 
   return (
     <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2 group/turn">
@@ -730,8 +738,12 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
           </ReasonButton>
           <ReasonButton
             variant="ghost"
-            disabled={!rewind.supported}
-            disabledReason={rewind.reason}
+            disabled={!rewind.supported || live}
+            disabledReason={
+              rewind.supported
+                ? 'This conversation is still being written — wait for the turn to finish, or fork instead.'
+                : rewind.reason
+            }
             tooltip="Rewind to here — wind the conversation back to before this message"
             aria-label="Rewind the conversation to before this message"
             onClick={() => void rewindConversationTo(item.id, { fork: false }, pane)}

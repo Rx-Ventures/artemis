@@ -9,6 +9,12 @@
  * request exactly once, and every state that cannot be wound back refuses
  * without side effects.
  *
+ * The flag is also where the two moves stop being the same move. A rewind
+ * edits the conversation the provider is writing to and is refused while a run
+ * is live; a fork does not touch it at all, so it is allowed — and takes the
+ * column, handing the working conversation to the background rather than
+ * cutting it. Those two are the pair below.
+ *
  * Same caveat as the neighbouring files: `renderer/tsconfig.json` excludes
  * test files, so the assertions are behavioural.
  */
@@ -16,11 +22,33 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, Capabilities, SessionId } from '@rx-artemis/protocol';
 
-import { focusedPane, rewindConversationTo, submitPrompt } from './store';
+import { focusedPane, rewindConversationTo, submitPrompt, useApp } from './store';
 import { paneState, setPaneState, type Pane } from './pane';
 import { seedApp, ALL_CAPABILITIES } from './testkit';
 
 const pane = (): Pane => focusedPane();
+
+/** What a column is showing, top to bottom. */
+const texts = (p: Pane): (string | undefined)[] =>
+  p.transcript
+    .getListSnapshot()
+    .map((id) => (p.transcript.getItem(id) as { text?: string } | undefined)?.text);
+
+/** Put a run on the pane, the way a turn in flight leaves it. */
+function goLive(): void {
+  setPaneState(pane(), {
+    run: {
+      runId: 'run_live',
+      status: 'running',
+      providerId: 'claude',
+      profileId: 'p1',
+      cwd: '/w',
+      capabilities: ALL_CAPABILITIES,
+      startedAt: 1,
+      permissionMode: 'default',
+    },
+  } as never);
+}
 
 let started: Array<Record<string, unknown>> = [];
 /** What the stored session holds, for the lazy anchor resolution. */
@@ -106,10 +134,7 @@ describe('rewindConversationTo', () => {
     expect(paneState(pane()).rewindToMessageId).toBe('uuid-2');
     expect(paneState(pane()).forkOnResume).toBe(false);
     expect(paneState(pane()).draft).toBe('second ask');
-    const texts = pane().transcript
-      .getListSnapshot()
-      .map((id) => (pane().transcript.getItem(id) as { text?: string } | undefined)?.text);
-    expect(texts).toEqual(['first ask', 'first answer']);
+    expect(texts(pane())).toEqual(['first ask', 'first answer']);
   });
 
   it('forks with the same cut when asked to', async () => {
@@ -147,23 +172,59 @@ describe('rewindConversationTo', () => {
     expect(pane().transcript.getListSnapshot()).toBe(before);
   });
 
-  it('refuses while a run is live', async () => {
+  it('refuses to rewind while a run is live', async () => {
+    // Rewind cuts the conversation the provider is still writing to. Fork does
+    // not, which is why only this half is refused — see the pair below.
     const cut = twoTurns();
-    setPaneState(pane(), {
-      run: {
-        runId: 'run_live',
-        status: 'running',
-        providerId: 'claude',
-        profileId: 'p1',
-        cwd: '/w',
-        capabilities: ALL_CAPABILITIES,
-        startedAt: 1,
-        permissionMode: 'default',
-      },
-    } as never);
+    goLive();
 
     await rewindConversationTo(cut, { fork: false }, pane());
     expect(paneState(pane()).rewindToMessageId).toBeNull();
+  });
+
+  it('forks a working conversation into a column of its own, and lets it carry on', async () => {
+    const cut = twoTurns();
+    storedEvents = [
+      { type: 'text.complete', runId: 'r', seq: 0, ts: 1, messageId: 'uuid-1', role: 'user', text: 'first ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 1, ts: 2, messageId: 'm1', role: 'assistant', text: 'first answer' },
+      { type: 'text.complete', runId: 'r', seq: 2, ts: 3, messageId: 'uuid-2', role: 'user', text: 'second ask', replay: true },
+      { type: 'text.complete', runId: 'r', seq: 3, ts: 4, messageId: 'm2', role: 'assistant', text: 'second answer' },
+    ];
+    goLive();
+    const working = pane();
+
+    await rewindConversationTo(cut, { fork: true }, working);
+
+    // The column now holds the branch: history up to the cut, the cut message
+    // back in the composer, armed to fork on the next prompt.
+    const branch = focusedPane();
+    expect(branch.id).not.toBe(working.id);
+    expect(paneState(branch).forkOnResume).toBe(true);
+    expect(paneState(branch).rewindToMessageId).toBe('uuid-2');
+    expect(paneState(branch).resumeSessionId).toBe('sess-1');
+    expect(paneState(branch).draft).toBe('second ask');
+    expect(texts(branch)).toEqual(['first ask', 'first answer']);
+
+    // And the conversation it branched from is untouched — still running, still
+    // whole, waiting in the background for its row to be clicked.
+    expect(paneState(working).run?.status).toBe('running');
+    expect(paneState(working).forkOnResume).toBe(false);
+    expect(texts(working)).toEqual(['first ask', 'first answer', 'second ask', 'second answer']);
+    expect(useApp.getState().background.some((p) => p.id === working.id)).toBe(true);
+  });
+
+  it('leaves the screen alone when the branch point is not stored yet', async () => {
+    const cut = twoTurns();
+    storedEvents = [];
+    goLive();
+    const working = pane();
+
+    await rewindConversationTo(cut, { fork: true }, working);
+
+    expect(focusedPane().id).toBe(working.id);
+    expect(paneState(working).forkOnResume).toBe(false);
+    expect(paneState(working).rewindToMessageId).toBeNull();
+    expect(texts(working)).toEqual(['first ask', 'first answer', 'second ask', 'second answer']);
   });
 
   it('refuses a message still pending, before any lookup', async () => {

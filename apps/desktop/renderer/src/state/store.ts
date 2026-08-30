@@ -8272,8 +8272,13 @@ export function setForkOnResume(fork: boolean, pane: Pane = focusedPane()): void
  * its text lands in the composer, ready to be retyped or resent.
  *
  * Refusals are silent no-ops rather than banners because every one of them is
- * a state the controls are already hidden in: a live run, a message still
- * pending, a conversation with no session on disk to wind back.
+ * a state the controls are already hidden in: a message still pending, a
+ * conversation with no session on disk to wind back.
+ *
+ * A live run refuses a *rewind* and not a fork, and the asymmetry is the whole
+ * difference between the two moves. Rewinding cuts the conversation the
+ * provider is still writing to; forking does not touch it at all — see
+ * {@link branchLiveConversation}.
  */
 /**
  * The most recent settled user message in a pane's transcript — the palette's
@@ -8298,7 +8303,7 @@ export async function rewindConversationTo(
   pane: Pane = focusedPane(),
 ): Promise<void> {
   const state = paneState(pane);
-  if (isLive(state)) return;
+  if (isLive(state) && !fork) return;
   if (!activeCapabilities(state).rewind) return;
   if (fork && !activeCapabilities(state).forkSession) return;
 
@@ -8319,9 +8324,33 @@ export async function rewindConversationTo(
   if (anchor === null) return;
 
   const after = paneState(pane);
-  if (isLive(after)) return;
+  if (isLive(after) && !fork) return;
   if ((after.resumeSessionId ?? after.run?.sessionId ?? null) !== sessionId) return;
   if (pane.transcript.getItem(itemId)?.kind !== 'user') return;
+
+  /*
+   * A branch off something that is still working goes in a column of its own,
+   * because the column it came from is busy. Anything but `not-live` is
+   * finished with — either the branch is on screen or it was refused with a
+   * banner. `not-live` means the run ended while the history was being read,
+   * which puts this back on the ordinary in-place path below with nothing
+   * moved and nothing cut.
+   */
+  if (isLive(after)) {
+    if ((await branchLiveConversation(pane, sessionId, anchor, item.text)) !== 'not-live') return;
+    /*
+     * The run ended under it, so the three questions asked above have to be
+     * asked again — that await invalidated all of them. The identity check
+     * earns its keep here rather than merely repeating itself: `run.end`
+     * promotes the *ended* session's id into `resumeSessionId`, and when the
+     * run that just ended was itself a fork that id is the branch's, not the
+     * one this cut was resolved against.
+     */
+    const settled = paneState(pane);
+    if (isLive(settled)) return;
+    if ((settled.resumeSessionId ?? settled.run?.sessionId ?? null) !== sessionId) return;
+    if (pane.transcript.getItem(itemId)?.kind !== 'user') return;
+  }
 
   pane.transcript.truncateFrom(itemId);
   pane.transcript.flush();
@@ -8334,6 +8363,111 @@ export async function rewindConversationTo(
     // memory is the cost this control exists to remove.
     draft: item.text,
   });
+}
+
+/**
+ * Branch a conversation that is still working, without stopping it.
+ *
+ * Forking is the one wind-back move that does not touch what it starts from.
+ * The provider reads the stored transcript and writes the branch to a session
+ * of its own — `ClaudeProcess.canServe` refuses to serve a fork on the process
+ * that owns the original for exactly that reason, and sends it down the
+ * fresh-spawn `--resume` path instead, which the CLI serialises on its own
+ * transcript. So there is nothing about an agent being mid-turn that makes
+ * branching from something it said earlier unsafe, and the wait it used to
+ * impose — sit through a twenty-minute turn before you may ask the same
+ * question a different way — was the cost of an assumption the renderer was
+ * making on its own.
+ *
+ * What has to move is the *column*, not the run. The working conversation goes
+ * to the background intact — the same handoff {@link newSession} and
+ * {@link resumeSession} perform, for the same reason: it carries on running,
+ * the sidebar goes on marking it, and clicking its row brings the column back.
+ * What takes its place is the branch: the stored history up to the cut, with
+ * the cut message back in the composer, armed to fork on the next prompt.
+ *
+ * The history is read *before* anything moves, so a read that fails or that
+ * cannot find the anchor leaves the screen exactly as it was.
+ *
+ * Two panes then name one `resumeSessionId`, which is a state the window
+ * already expects from forking — see {@link paneForSession}, which resolves it
+ * to the live copy. It stops being true the moment the branch is sent: the
+ * fork mints a session id of its own.
+ */
+async function branchLiveConversation(
+  source: Pane,
+  sessionId: SessionId,
+  anchor: string,
+  draft: string,
+): Promise<'branched' | 'not-live' | 'refused'> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return 'refused';
+  const state = paneState(source);
+  const profileId = state.activeProfileId;
+  if (profileId === null) return 'refused';
+
+  const res = await call(() =>
+    bridge.sessions.messages({
+      profileId,
+      sessionId,
+      // The borrowed id history is always replayed under — see
+      // `loadSessionHistory`. These events are read and drawn, never routed.
+      runId: `history:${sessionId}` as RunId,
+      cwd: state.cwd,
+    }),
+  );
+  if (!res.ok) {
+    pushBanner('warn', 'Could not read the conversation to branch from', res.error.message);
+    return 'refused';
+  }
+
+  /*
+   * Everything before the cut, and not one event more.
+   *
+   * Applying the whole history and truncating afterwards would land in the
+   * same place, but this way the turns past the branch point are never in the
+   * model at all — there is no frame in which the new column could show a
+   * conversation the branch does not have, and no cut for a late flush to
+   * race.
+   */
+  const cut = res.value.events.findIndex(
+    (event) =>
+      event.type === 'text.complete' && event.role === 'user' && event.messageId === anchor,
+  );
+  if (cut < 0) {
+    pushBanner(
+      'warn',
+      'That message is not in the stored conversation yet',
+      'The provider may still be writing the turn it belongs to. Try again in a moment.',
+    );
+    return 'refused';
+  }
+
+  // Re-read across the round-trip, as every path here does: the run can end and
+  // the column can be pointed somewhere else while the history is in flight.
+  const now = paneState(source);
+  if (!isLive(now)) return 'not-live';
+  if ((now.resumeSessionId ?? now.run?.sessionId ?? null) !== sessionId) return 'refused';
+
+  // Past here nothing can fail, which is what lets the column move at all.
+  const target = handOffToBlank(source);
+  for (const event of res.value.events.slice(0, cut)) target.transcript.apply(event);
+  target.transcript.flush();
+  // Parks whatever the handoff carried across before the branch's own text
+  // takes the field — the same ordering `resumeSession` needs. See `swapDraft`.
+  swapDraft(target, sessionId);
+  setPaneState(target, {
+    resumeSessionId: sessionId,
+    rewindToMessageId: anchor,
+    forkOnResume: true,
+    draft,
+  });
+  // Branching is a deliberate act on one column, so that column takes the
+  // focus — the same rule `resumeSession` follows, and what keeps ⌘K and the
+  // run inspector pointed at the branch the user just made rather than at the
+  // conversation it came from.
+  useApp.setState({ focusedPaneId: target.id });
+  return 'branched';
 }
 
 /**
