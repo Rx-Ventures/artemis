@@ -258,7 +258,9 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     // Chromium fills during a fast resize, where being one palette out for a
     // frame is a cosmetic near-miss rather than the launch flash the boot script
     // in `index.html` exists to prevent.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c0c0c' : '#f3f3f3',
+    // `--void`, the ground the shell's cards sit on — not `--abyss` any
+    // more. 14% and 93.5% through lib/oklch's transfer function.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#090909' : '#e9e9e9',
     autoHideMenuBar: process.platform !== 'darwin',
     // No native title bar: the app's own header is the title bar. What that
     // costs, and what has to be drawn in its place, is in `window.ts`.
