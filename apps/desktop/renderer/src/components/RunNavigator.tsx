@@ -600,6 +600,9 @@ function ModelColumn(): ReactElement {
 
   return (
     <Column className="w-64">
+      {/* The column's own name, like its two siblings — the label below this
+          point had only ever rendered in the no-model-choice branch. */}
+      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Model</DropdownMenuLabel>
       {recommendation !== null ? (
         <>
           <DropdownMenuItem
