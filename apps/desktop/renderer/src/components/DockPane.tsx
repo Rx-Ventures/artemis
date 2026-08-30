@@ -137,7 +137,16 @@ export function DockPane(): ReactElement | null {
      * sideways in the narrowest surface in the window. A 34px icon column costs
      * the same 34px whether the dock holds two tabs or nine.
      */
-    <section aria-label="Dock" className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-hairline bg-panel">
+    <section
+      aria-label="Dock"
+      /*
+        No border, by request (2026-08-30): beside a bordered conversation
+        card and across a gutter, the dock's own outline read as a box in a
+        box. The card is told by its fill and its corners; the gutter does
+        the separating.
+      */
+      className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-panel"
+    >
       <DockStrip tabs={tabs} active={active} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DockBody tabs={tabs} active={active} />
@@ -220,7 +229,7 @@ function DockStrip({
     // one control for "another of these" was the thing that scrolled away.
     // A footer costs the strip nothing when it fits and keeps the button
     // reachable when it does not.
-    <div className="flex w-[34px] shrink-0 flex-col border-r border-hairline">
+    <div className="flex w-[34px] shrink-0 flex-col">
       {/*
         The scope chip, generalised from the delegated list to the whole rail.
 
