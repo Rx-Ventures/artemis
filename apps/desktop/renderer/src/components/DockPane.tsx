@@ -229,7 +229,7 @@ function DockStrip({
     // one control for "another of these" was the thing that scrolled away.
     // A footer costs the strip nothing when it fits and keeps the button
     // reachable when it does not.
-    <div className="flex w-[34px] shrink-0 flex-col">
+    <div className="flex w-10 shrink-0 flex-col">
       {/*
         The scope chip, generalised from the delegated list to the whole rail.
 

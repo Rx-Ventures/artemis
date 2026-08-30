@@ -24,7 +24,9 @@ import { DockHeader } from '@/components/DockHeader';
 afterEach(cleanup);
 
 /** The dock's tab strip is `h-7`; the bar under it matches, less its border. */
-const HEIGHT = 'h-[26px]';
+// 30px is 7D's `.dh` — the dock header grew with the round-eight
+// dock/navigator pass (2026-08-30).
+const HEIGHT = 'h-[30px]';
 
 describe('DockHeader', () => {
   it('is one fixed height whatever it contains', () => {

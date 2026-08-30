@@ -168,7 +168,7 @@ import {
 import type { ProfileId, SessionSummary } from '@rx-artemis/protocol';
 
 import { useCapability, useProviderCapability } from '../hooks/useCapability';
-import { condenseTitle } from '../lib/format';
+import { condenseTitle, formatRelative } from '../lib/format';
 import { lastSegment } from '../lib/paths';
 import {
   flattenGroups,
@@ -1065,6 +1065,16 @@ const Row = memo(function Row({
             <StatusDot tone="cyan" pulse />
           ) : null}
           <span className="truncate">{condenseTitle(session.title)}</span>
+          {/*
+            7D's `.ago`, back on the row: `formatRelative` documents itself
+            "for session lists" and had fallen out of this one. Compacted to
+            the mockup's register — "4m", not "4m ago" — because at this size
+            the suffix is the row's widest word saying nothing. The tooltip
+            still speaks in full sentences.
+          */}
+          <span className="ml-auto shrink-0 pl-1 font-mono text-2xs font-normal text-ink-faint">
+            {formatRelative(session.updatedAt).replace('just now', 'now').replace(' ago', '')}
+          </span>
         </span>
         <span className="flex w-full shrink-0 items-center gap-1 font-mono text-2xs text-ink-faint">
           {/*

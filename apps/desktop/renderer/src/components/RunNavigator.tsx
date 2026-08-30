@@ -164,7 +164,7 @@ export function RunNavigatorContent(): ReactElement {
        * from it.
        */
       className={cn(
-        'w-fit rounded-xl p-0',
+        'w-fit rounded-[10px] p-0',
         '[&_[data-slot=dropdown-menu-item]]:rounded-md [&_[data-slot=dropdown-menu-radio-item]]:rounded-md',
         '[&_[data-slot=dropdown-menu-item]:focus]:bg-wash-strong',
         '[&_[data-slot=dropdown-menu-radio-item]:focus]:bg-wash-strong',
@@ -192,7 +192,7 @@ function Column({
   readonly className?: string;
 }): ReactElement {
   return (
-    <div className={cn('flex max-h-80 w-56 flex-col overflow-y-auto p-1', className)}>
+    <div className={cn('flex max-h-80 w-56 flex-col overflow-y-auto p-1.5', className)}>
       {children}
     </div>
   );
@@ -369,6 +369,25 @@ function explainRecommendation(recommendation: PlanRecommendation): string {
  * when there is no comparison to make — one account, stale readings, metered
  * billing; `recommendProfile` holds those rules and explains each.
  */
+
+/**
+ * 7D's `.rc` pill — the word "rec" worn by the row itself, in the accent's
+ * reading colour. It replaces a `DropdownMenuLabel` that said "Recommended"
+ * above the row: the label spent a whole row on a fact about the next row,
+ * and the mockup's inline pill says the same thing in the row's own gutter.
+ * The explanatory sentence stays on the row's `title`.
+ */
+function RecPill(): ReactElement {
+  return (
+    <span
+      aria-hidden="true"
+      className="shrink-0 rounded-full border border-beam-text px-[5px] py-px font-mono text-[9px] leading-none text-beam-text"
+    >
+      rec
+    </span>
+  );
+}
+
 function RecommendedProfile(): ReactElement | null {
   const pane = usePaneRef();
   const profiles = useApp((s) => s.profiles);
@@ -393,14 +412,14 @@ function RecommendedProfile(): ReactElement | null {
 
   return (
     <>
-      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
       <DropdownMenuItem
-        className="gap-1.5 text-2xs"
+        className="gap-1.5 py-[7px] text-2xs"
         onSelect={() => setProfile(profile.id, pane)}
         title={why}
       >
         <ProfileSwatch color={profile.color} />
         <span className="min-w-0 flex-1 truncate text-ink">{profile.label}</span>
+        <RecPill />
       </DropdownMenuItem>
       <DropdownMenuSeparator />
     </>
@@ -571,13 +590,13 @@ function ModelColumn(): ReactElement {
     <Column className="w-64">
       {recommendation !== null ? (
         <>
-          <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">Recommended</DropdownMenuLabel>
           <DropdownMenuItem
-            className="gap-1.5 text-2xs"
+            className="gap-1.5 py-[7px] text-2xs"
             onSelect={() => setModel(recommendation.model.id, pane)}
             title={`${String(Math.round(recommendation.headroom))}% of its ${recommendation.binding.label} window is unused, against ${String(Math.round(recommendation.selectedHeadroom))}% for ${selected?.label ?? 'the selected model'} — ranked across ${String(recommendation.candidates)} pinned models.`}
           >
             <span className="min-w-0 flex-1 truncate text-ink">{recommendation.model.label}</span>
+            <RecPill />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
         </>

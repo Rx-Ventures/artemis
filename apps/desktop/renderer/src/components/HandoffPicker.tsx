@@ -130,7 +130,7 @@ function OpenPicker(): ReactElement | null {
         if (!open && !busy) dismissHandoffOffer(pane);
       }}
     >
-      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+      <DialogContent className="sm:max-w-[560px]" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ArrowRightLeftIcon className="size-4 text-amber" aria-hidden="true" />
