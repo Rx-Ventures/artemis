@@ -57,6 +57,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { chmod, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, join } from 'node:path';
@@ -331,10 +332,33 @@ const STRIPPED_ENV = [
   'CODEX_HOME',
 ];
 
-/** What to spawn, and how, on this platform. Pure — see `shellPath.ts`'s split. */
+/**
+ * The shells to fall back to, in order, when `$SHELL` names one this file does
+ * not know — and the reason the list is existence-checked rather than a single
+ * string.
+ *
+ * `/bin/zsh` is part of macOS; `/bin/bash` is on every mainstream Linux
+ * desktop. Neither is guaranteed: a Fedora container, an Alpine image or a
+ * NixOS machine can have exactly one of these, and the old single-value
+ * fallback turned "your shell is unusual" into "the terminal cannot open".
+ * `/bin/sh` anchors both chains because POSIX requires it.
+ */
+function fallbackShells(platform: NodeJS.Platform): readonly string[] {
+  return platform === 'darwin'
+    ? ['/bin/zsh', '/bin/bash', '/bin/sh']
+    : ['/bin/bash', '/usr/bin/bash', '/bin/zsh', '/bin/sh'];
+}
+
+/**
+ * What to spawn, and how, on this platform. Pure — see `shellPath.ts`'s split.
+ *
+ * `exists` is injected for the same reason it is there: it is what lets a Mac
+ * exercise the Linux fallback chain, and the chain is the part that was wrong.
+ */
 export function resolveShell(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
+  exists: (path: string) => boolean = existsSync,
 ): { readonly file: string; readonly args: readonly string[] } {
   if (platform === 'win32') {
     // Present on every supported Windows, unlike `pwsh`, and driven through
@@ -342,12 +366,15 @@ export function resolveShell(
     return { file: 'powershell.exe', args: [] };
   }
 
+  const chain = fallbackShells(platform);
   const preferred = env['SHELL'];
-  const fallback = platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
   const file =
     preferred !== undefined && preferred !== '' && KNOWN_SHELLS.has(basename(preferred))
       ? preferred
-      : fallback;
+      : // The last entry is the answer when nothing exists: `/bin/sh` is a
+        // better thing to fail on than a path chosen for another OS, and
+        // node-pty's error then names a file the user can check for.
+        (chain.find(exists) ?? chain[chain.length - 1] as string);
 
   // A login shell, which is what a terminal emulator starts and therefore what
   // the user's profile is written expecting. It is also how the shell's own PATH

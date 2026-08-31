@@ -99,11 +99,40 @@ describe('resolveShell', () => {
    * The allowlist is the point rather than an optimisation. `SHELL` is an
    * environment variable, and this file's first rule is that main chooses the
    * program — so an unrecognised value falls back rather than being spawned.
+   *
+   * `exists` is injected in all of these. Left to the real filesystem they
+   * would assert the *host's* shells rather than the fallback logic, and pass
+   * or fail depending on which runner ran them — the macOS expectations below
+   * would break on a Linux box with no zsh installed.
    */
   it('falls back rather than spawning whatever $SHELL names', () => {
-    expect(resolveShell('darwin', { SHELL: '/usr/local/bin/evil' }).file).toBe('/bin/zsh');
-    expect(resolveShell('linux', { SHELL: '' }).file).toBe('/bin/bash');
-    expect(resolveShell('darwin', {}).file).toBe('/bin/zsh');
+    const all = (): boolean => true;
+    expect(resolveShell('darwin', { SHELL: '/usr/local/bin/evil' }, all).file).toBe('/bin/zsh');
+    expect(resolveShell('linux', { SHELL: '' }, all).file).toBe('/bin/bash');
+    expect(resolveShell('darwin', {}, all).file).toBe('/bin/zsh');
+  });
+
+  /*
+   * The fallback used to be one string per platform, so a machine without it
+   * had no terminal at all. A Fedora container with neither bash nor zsh, or a
+   * NixOS box where `/bin/sh` is the only FHS path that survives, is the case.
+   */
+  it('walks past fallbacks the machine does not have', () => {
+    const only =
+      (...paths: readonly string[]) =>
+      (path: string): boolean =>
+        paths.includes(path);
+    expect(resolveShell('linux', {}, only('/bin/sh')).file).toBe('/bin/sh');
+    expect(resolveShell('linux', {}, only('/usr/bin/bash', '/bin/sh')).file).toBe('/usr/bin/bash');
+    expect(resolveShell('darwin', {}, only('/bin/bash')).file).toBe('/bin/bash');
+  });
+
+  /*
+   * Nothing to spawn is still an argv: `/bin/sh` is the one path worth failing
+   * on, because node-pty's error then names a file the user can go and check.
+   */
+  it('lands on /bin/sh when nothing in the chain exists', () => {
+    expect(resolveShell('linux', {}, () => false).file).toBe('/bin/sh');
   });
 
   it('uses PowerShell on Windows, with no login flag', () => {
