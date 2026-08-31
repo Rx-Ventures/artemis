@@ -4951,6 +4951,57 @@ function isDisposable(state: SessionState): boolean {
   return state.run === null && state.resumeSessionId === null;
 }
 
+/**
+ * What to call the conversation in a column.
+ *
+ * The one answer behind both surfaces that name a pane — the caption under a
+ * split pane's top edge and the window header's title — so the two cannot
+ * disagree about which conversation a column is holding.
+ *
+ * ## Both ids, not `resumeSessionId` alone
+ *
+ * This read `resumeSessionId` and nothing else, and that field is not the
+ * answer to "which session is this column showing". It is written when a
+ * session is *resumed*, and otherwise promoted out of the run only when the run
+ * *ends* — so a conversation started in this window carries its id on
+ * `run.sessionId` for the whole of its first turn, and the column spent that
+ * turn calling itself "New session" while the sidebar row for the very same
+ * conversation showed the name the provider had already given it.
+ *
+ * A split is where that became impossible to miss rather than merely wrong: a
+ * pane opened beside a working one goes through {@link resumeSession}, which
+ * sets `resumeSessionId` synchronously, so the new column was named correctly
+ * and the column that had been working for twenty minutes beside it was not.
+ *
+ * So it asks {@link sessionIdsOf}, the pair every other question about a
+ * column's identity is matched against — {@link paneForSession},
+ * {@link syncRunningSessions}, {@link syncOpenSessions} — in its order: the
+ * run's own id first, because after a fork that is the conversation on screen,
+ * and the pane's second. The first of them the listing can name wins, which is
+ * what carries a fork through the moment between `session.started` and the
+ * listing catching up: the branch has an id nothing knows yet, and the parent's
+ * title is a better answer than a placeholder.
+ *
+ * ## When nothing can name it
+ *
+ * Two different sentences, because they are two different facts. A column with
+ * a session it is set to resume that the listing does not hold — another
+ * provider's history, an archived row, a deleted one — has a conversation, and
+ * says so. A column whose only id was minted by a run the listing has not
+ * caught up with has nothing named yet, which is exactly what a new session is.
+ *
+ * A string, so it is compared by value: a token arriving in the transcript
+ * cannot re-render a caption, and neither can a poll that returns the same
+ * listing.
+ */
+export function conversationName(state: SessionState): string {
+  for (const id of sessionIdsOf(state)) {
+    const named = state.sessions.find((session) => session.id === id);
+    if (named) return named.title;
+  }
+  return state.resumeSessionId === null ? 'New session' : 'Resumed session';
+}
+
 export function activeProfile(state: SessionState): ProfileMetadata | undefined {
   return state.profiles.find((p) => p.id === state.activeProfileId);
 }
