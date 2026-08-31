@@ -23,6 +23,16 @@
 # pull request that must not merge on one person's say-so — the switch is
 # `require_code_owner_reviews` on the branch protection, not a change here.
 #
+# ## On this repository, the asking is done by a workflow
+#
+# GitHub requests these reviews itself on a repository owned by an
+# organisation. It does not here — this one is owned by a person, the
+# `codeowners/errors` API answers 404 for this file, and a pull request opened
+# with it in place drew no request at all (checked 2026-08-31). So the ask is
+# performed by `.github/workflows/request-review.yml`, and this file stays as
+# the declaration of who the owners are — correct today, and load-bearing the
+# day this repository moves into an org.
+#
 # ## Everyone named here needs write access
 #
 # GitHub silently ignores a code owner who cannot push to the repository: no
