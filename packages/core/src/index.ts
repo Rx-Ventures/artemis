@@ -49,6 +49,7 @@
  */
 
 export * from './adapters/index.js';
+export * from './memorybanks/index.js';
 export * from './profiles/index.js';
 export * from './sessions/index.js';
 export * from './server/index.js';

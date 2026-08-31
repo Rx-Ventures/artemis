@@ -46,7 +46,12 @@
 
 import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-import type { MemoryBankInfo, MemoryBankMemory, MemoryBankRole } from '@rx-artemis/protocol';
+import type {
+  MemoryBankInfo,
+  MemoryBankMemory,
+  MemoryBankRole,
+  MemoryBankVerifyRemoteResponse,
+} from '@rx-artemis/protocol';
 
 import type { MemoryBanksPane } from '../../hooks/useMemoryBanks';
 import { CodeBlock, Fold, Row, StatusDot, ToneBadge } from '../primitives';
@@ -179,6 +184,8 @@ function BankCard({
   // Controlled, because `Fold` routes `onOpenChange` only in controlled mode —
   // and opening is when the bank's memories are actually worth a CLI spawn.
   const [memoriesOpen, setMemoriesOpen] = useState(false);
+  const profiles = pane.status?.profiles ?? [];
+  const wired = profiles.filter((profile) => profile.banks[bank.slug] === true).length;
 
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2.5">
@@ -215,8 +222,32 @@ function BankCard({
       <Row label="Repo">{bank.path}</Row>
       <Row label="Remote">{bank.remote ?? 'none — changes commit locally'}</Row>
       <Row label="Bank">
-        {`${bank.memories} memories · ${bank.validationErrors} validation errors · installed in ${bank.projects} projects`}
+        {`${bank.memories} memories${bank.mirrored > 0 ? ` (${bank.mirrored} mirrored, read-only)` : ''} · ${bank.validationErrors} validation errors · installed in ${bank.projects} projects`}
       </Row>
+      {/*
+        The registry flag and the on-disk wiring are two different facts, and
+        they have disagreed in the wild: a bank can be "on" while no profile
+        carries its block (the setup flow records the flag; `enable` does the
+        wiring, and an enable that failed leaves exactly this state). Saying so
+        — with the repair right there — is what turns a silent nothing into a
+        one-click fix.
+      */}
+      {bank.enabled && bank.exists && profiles.length > 0 && wired === 0 ? (
+        <div className="flex items-center gap-2">
+          <p className="text-2xs leading-relaxed text-amber">
+            On, but no profile carries its block — the wiring step never completed on this machine.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-2xs"
+            disabled={pane.busy !== null}
+            onClick={() => pane.setEnabled(bank.slug, true)}
+          >
+            {working ? 'Wiring…' : 'Wire profiles'}
+          </Button>
+        </div>
+      ) : null}
       <Fold
         summary={<span className="text-2xs">memories</span>}
         open={memoriesOpen}
@@ -249,9 +280,38 @@ function BankMemories({
       (memory) =>
         memory.name.toLowerCase().includes(needle) ||
         memory.description.toLowerCase().includes(needle) ||
+        (memory.org ?? '').toLowerCase().includes(needle) ||
+        (memory.project ?? '').toLowerCase().includes(needle) ||
         memory.body.toLowerCase().includes(needle),
     );
   }, [loaded, query]);
+
+  /**
+   * Org → project buckets, in the CLI's own order (it sorts by org, project,
+   * name, so insertion order is already the display order). A flat classic
+   * bank renders without headers at all — one bucket named nothing would be a
+   * header saying nothing.
+   */
+  const groups = useMemo(() => {
+    const buckets = new Map<
+      string,
+      { readonly org: string | null; readonly project: string | null; readonly items: MemoryBankMemory[] }
+    >();
+    for (const memory of visible) {
+      // A separator no path segment can contain, written as an escape rather
+      // than as the byte itself so this file stays text to grep and to diff.
+      const key = `${memory.org ?? ''}\x00${memory.project ?? ''}`;
+      const bucket = buckets.get(key);
+      if (bucket === undefined) {
+        buckets.set(key, { org: memory.org, project: memory.project, items: [memory] });
+      } else {
+        bucket.items.push(memory);
+      }
+    }
+    return [...buckets.values()];
+  }, [visible]);
+  const flat =
+    groups.length <= 1 && (groups[0]?.org ?? null) === null && (groups[0]?.project ?? null) === null;
 
   if (loaded === undefined) {
     return <p className="text-2xs leading-relaxed text-ink-faint">Reading the bank…</p>;
@@ -262,7 +322,7 @@ function BankMemories({
       <Input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Filter by name, description, or body…"
+        placeholder="Filter by name, org, project, description, or body…"
         spellCheck={false}
         className="max-w-sm text-xs md:text-xs"
         aria-label={`Filter ${bank.slug} memories`}
@@ -271,9 +331,21 @@ function BankMemories({
         <p className="text-2xs leading-relaxed text-ink-faint">
           {loaded.length === 0 ? 'The bank is empty.' : 'No memory matches the filter.'}
         </p>
-      ) : (
+      ) : flat ? (
         visible.map((memory) => (
-          <MemoryCard key={memory.name} bank={bank} memory={memory} pane={pane} />
+          <MemoryCard key={memory.file ?? memory.name} bank={bank} memory={memory} pane={pane} />
+        ))
+      ) : (
+        groups.map((group) => (
+          <div key={`${group.org ?? '·'}/${group.project ?? '·'}`} className="flex flex-col gap-1.5">
+            <p className="pt-1 font-mono text-2xs font-medium text-ink-muted">
+              {[group.org, group.project].filter((part) => part !== null).join(' / ') || 'unfiled'}
+              {` · ${group.items.length}`}
+            </p>
+            {group.items.map((memory) => (
+              <MemoryCard key={memory.file ?? memory.name} bank={bank} memory={memory} pane={pane} />
+            ))}
+          </div>
         ))
       )}
     </div>
@@ -296,9 +368,13 @@ function MemoryCard({
       <div className="flex items-center gap-2">
         <span className="font-mono text-xs font-medium text-ink">{memory.name}</span>
         <ToneBadge tone="neutral">{memory.type}</ToneBadge>
+        {memory.readonly ? <ToneBadge tone="neutral">mirror · read-only</ToneBadge> : null}
         <span className="ml-auto">
-          {/* Retirement is a write, and a read-only bank takes none. */}
-          {bank.role === 'readwrite' ? <RetireButton bank={bank} memory={memory} pane={pane} /> : null}
+          {/* Retirement is a write; a read-only bank takes none, and a mirror
+              memory is not the bank's to retire on any machine. */}
+          {bank.role === 'readwrite' && !memory.readonly ? (
+            <RetireButton bank={bank} memory={memory} pane={pane} />
+          ) : null}
         </span>
       </div>
       <p className="text-2xs leading-relaxed text-ink-muted">{memory.description}</p>
@@ -395,6 +471,69 @@ function ForgetButton({
 
 type AddMode = 'join' | 'create' | 'adopt';
 
+/** The bank slug grammar, shared by the field, its message and the CLI. */
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The slug a remote URL suggests: its repository name, lowercased.
+ *
+ * Deliberately forgiving about the URL — this runs on every keystroke of a
+ * half-typed address, and a suggestion that appears only once the URL is
+ * perfect is a suggestion that appears too late to help. Anything that does
+ * not reduce to a legal slug yields nothing rather than something wrong.
+ */
+export function slugFromRemote(remote: string): string {
+  const tail = remote
+    .trim()
+    .replace(/[/\\]+$/, '')
+    .split(/[/\\:]/)
+    .filter((part) => part.length > 0)
+    .at(-1);
+  if (tail === undefined) return '';
+  const slug = tail
+    .replace(/\.git$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return SLUG_PATTERN.test(slug) ? slug : '';
+}
+
+/**
+ * Which failed checks actually stop each mode.
+ *
+ * This list replaced a single machine-wide gate (`preflight.ready`, which is
+ * false if *any* check failed), and the replacement is the point of the
+ * change. The doctor answers for the whole machine: it probes a destination
+ * directory, a `PATH` shim for the bare `cerebro` verb, a git identity for
+ * commits, and — before any bank is registered — reachability of the upstream
+ * repository the CLI defaults to, which is a private repo an outside user can
+ * only ever fail. Joining a bank from your own git URL needs none of those. It
+ * needs the CLI to be runnable and git to exist, and the remote's own
+ * readability is what the Verify button is for.
+ *
+ * The ids are the CLI's own (`gather_checks` in `resources/cerebro`), plus
+ * `cli` — main's synthesised row for "there is no CLI on this machine at all".
+ *
+ * Creating and adopting are gated harder, and on different things: both write
+ * a commit the moment they run, so an unset git identity really does stop
+ * them, and both are aimed at a directory, so the destination check is about
+ * the thing the user typed rather than about a default.
+ *
+ * Everything left off this list still renders — a warning about `gh` is worth
+ * reading before the first pull request — it simply does not disable a button.
+ */
+const BLOCKING_CHECKS: Readonly<Record<AddMode, readonly string[]>> = {
+  join: ['cli', 'python', 'git'],
+  create: ['cli', 'python', 'git', 'git-identity', 'repo'],
+  adopt: ['cli', 'python', 'git', 'git-identity', 'repo'],
+};
+
+/** What a verify came to, from the click until the answer lands. */
+type Verification =
+  | { readonly state: 'checking' }
+  | { readonly state: 'done'; readonly result: MemoryBankVerifyRemoteResponse }
+  | { readonly state: 'failed'; readonly message: string };
+
 function AddGroup({
   pane,
   first,
@@ -403,31 +542,130 @@ function AddGroup({
   readonly first: boolean;
 }): ReactElement {
   const [mode, setMode] = useState<AddMode>('join');
-  const [slug, setSlug] = useState('');
+  /**
+   * Empty means "whatever the remote suggests"; a value means the user typed
+   * one and owns it from then on.
+   *
+   * Kept as an override rather than as the field's only source because the
+   * alternative — filling the box on every keystroke of the URL — fights
+   * anyone who names their bank something other than the repository, and
+   * silently reverts an edit made before the URL was finished.
+   */
+  const [slugOverride, setSlugOverride] = useState('');
   const [remote, setRemote] = useState('');
   const [path, setPath] = useState('');
   const [readonly, setReadonly] = useState(false);
-  const blocked = pane.preflight !== null && !pane.preflight.ready;
+  /**
+   * The access token, held here and nowhere else.
+   *
+   * Component state for its whole life: it goes into one `add` request and is
+   * cleared the moment that succeeds. It is never put in the pane hook (which
+   * outlives the form), never in the app store, and never read back from main
+   * — main stores it encrypted against the bank's slug and no response shape
+   * has a field it could return in.
+   */
+  const [token, setToken] = useState('');
+  const [username, setUsername] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [verification, setVerification] = useState<Verification | null>(null);
 
-  const slugOk = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
+  const failed = new Set(
+    (pane.preflight?.checks ?? []).filter((check) => check.state === 'fail').map((check) => check.id),
+  );
+  const blocked = BLOCKING_CHECKS[mode].some((id) => failed.has(id));
+
+  const trimmedRemote = remote.trim();
+  /*
+   * A bank joined from `…/Cortex.git` is called `cortex` unless the user says
+   * otherwise. Deriving it is not a convenience: the slug grammar is
+   * lowercase-and-hyphens, so the name staring at the user from their own URL
+   * is one the field rejects, and the only feedback was a button that would
+   * not press.
+   */
+  const suggestedSlug = mode === 'join' ? slugFromRemote(trimmedRemote) : '';
+  const slug = slugOverride.length > 0 ? slugOverride : suggestedSlug;
+  const slugOk = SLUG_PATTERN.test(slug);
+  const slugProblem =
+    slug.length === 0
+      ? mode === 'join'
+        ? 'Give the bank a short name — or paste the remote URL and one will be suggested.'
+        : 'Give the bank a short name.'
+      : slugOk
+        ? null
+        : 'Lowercase letters, digits and hyphens only — no capitals, spaces or dots.';
+
   const ready =
-    slugOk &&
-    (mode !== 'join' || remote.trim().length > 0) &&
-    (mode !== 'adopt' || path.trim().length > 0);
+    slugOk && (mode !== 'join' || trimmedRemote.length > 0) && (mode !== 'adopt' || path.trim().length > 0);
+  /**
+   * Why the button will not press, or `null` when it will.
+   *
+   * The button was disabled by three separate conditions and explained by
+   * none of them unless a requirement had failed, so the commonest case — a
+   * name the grammar refuses — looked like the pane was broken.
+   */
+  const submitProblem = blocked
+    ? 'Fix the requirements marked required above — it would fail partway through.'
+    : (slugProblem ??
+      (mode === 'join' && trimmedRemote.length === 0
+        ? 'Paste the bank’s git remote URL.'
+        : mode === 'adopt' && path.trim().length === 0
+          ? 'Choose the directory that already holds the bank.'
+          : null));
+
+  /**
+   * Enabled on a URL that parses, and on nothing else.
+   *
+   * Not on the slug, not on the preflight, not on `busy`: this is a question
+   * about a remote, and the whole reason it exists is to be asked *while* the
+   * rest of the form is still empty or wrong.
+   */
+  const canVerify = /^[a-z][a-z0-9+.-]*:\/\/[^/\s]+/i.test(trimmedRemote) || /^[^\s:]+@[^\s:]+:.+/.test(trimmedRemote);
+
+  /**
+   * The credential as the protocol wants it, or nothing at all.
+   *
+   * `undefined` rather than `{ token: '' }` when the field is empty: an absent
+   * key is how both the validator and main say "this bank has no token", and
+   * an empty one would be a credential that authenticates as nobody.
+   */
+  const credential = ((): { token: string; username?: string } | undefined => {
+    if (token.length === 0) return undefined;
+    const chosen = username.trim();
+    return chosen.length > 0 ? { token, username: chosen } : { token };
+  })();
+
+  const verify = async (): Promise<void> => {
+    setVerification({ state: 'checking' });
+    const result = await pane.verifyRemote({
+      remote: trimmedRemote,
+      ...(credential === undefined ? {} : { auth: credential }),
+    });
+    setVerification(
+      result.ok ? { state: 'done', result: result.value } : { state: 'failed', message: result.error.message },
+    );
+  };
 
   const submit = async (): Promise<void> => {
     const ok = await pane.add({
       mode,
       slug,
       role: readonly ? 'readonly' : 'readwrite',
-      ...(remote.trim().length > 0 ? { remote: remote.trim() } : {}),
+      ...(trimmedRemote.length > 0 ? { remote: trimmedRemote } : {}),
       ...(path.trim().length > 0 ? { path: path.trim() } : {}),
+      // Only a join has a remote to authenticate to, so the token cannot ride
+      // along with a mode that would have nowhere to use it.
+      ...(mode === 'join' && credential !== undefined ? { auth: credential } : {}),
     });
     if (ok) {
-      setSlug('');
+      setSlugOverride('');
       setRemote('');
       setPath('');
       setReadonly(false);
+      // The token has done its one job and main has stored it; a copy left in
+      // a mounted form is a copy nothing needs.
+      setToken('');
+      setUsername('');
+      setVerification(null);
     }
   };
 
@@ -442,12 +680,14 @@ function AddGroup({
         </p>
       ) : null}
 
-      {pane.preflight === null ? (
+      {pane.preflightError !== null ? (
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-signal">{pane.preflightError}</p>
+      ) : pane.preflight === null ? (
         <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           Checking what this machine needs…
         </p>
       ) : (
-        <RequirementList pane={pane} />
+        <RequirementList pane={pane} mode={mode} />
       )}
 
       <div className="flex flex-col gap-2 px-3 py-2.5">
@@ -474,21 +714,38 @@ function AddGroup({
         <div className="flex flex-wrap items-center gap-2">
           <Input
             value={slug}
-            onChange={(event) => setSlug(event.target.value)}
+            onChange={(event) => setSlugOverride(event.target.value)}
             placeholder="short-name (e.g. team, client-docs)"
             spellCheck={false}
             className="w-56 text-xs md:text-xs"
             aria-label="Bank slug"
           />
           {mode === 'join' ? (
-            <Input
-              value={remote}
-              onChange={(event) => setRemote(event.target.value)}
-              placeholder="git remote URL (https or ssh)"
-              spellCheck={false}
-              className="w-80 text-xs md:text-xs"
-              aria-label="Bank remote URL"
-            />
+            <>
+              <Input
+                value={remote}
+                onChange={(event) => {
+                  setRemote(event.target.value);
+                  // A result is about the URL that produced it. Leaving it up
+                  // while the field changes underneath is how a user reads a
+                  // green tick for a repository they have stopped typing.
+                  setVerification(null);
+                }}
+                placeholder="git remote URL (https or ssh)"
+                spellCheck={false}
+                className="w-80 text-xs md:text-xs"
+                aria-label="Bank remote URL"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-2xs"
+                disabled={!canVerify || verification?.state === 'checking'}
+                onClick={() => void verify()}
+              >
+                {verification?.state === 'checking' ? 'Checking…' : 'Verify'}
+              </Button>
+            </>
           ) : null}
           {mode !== 'join' ? (
             <Input
@@ -501,6 +758,63 @@ function AddGroup({
             />
           ) : null}
         </div>
+
+        {mode === 'join' && verification !== null ? <VerifyResult verification={verification} /> : null}
+
+        {mode === 'join' ? (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="password"
+                value={token}
+                onChange={(event) => {
+                  setToken(event.target.value);
+                  setVerification(null);
+                }}
+                placeholder="access token (optional — for private repos)"
+                autoComplete="off"
+                spellCheck={false}
+                className="w-80 text-xs md:text-xs"
+                aria-label="Access token (optional — for private repos)"
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-2xs text-ink-faint"
+                onClick={() => setShowAdvanced((open) => !open)}
+              >
+                {showAdvanced ? 'Hide username' : 'Username…'}
+              </Button>
+            </div>
+            <p className="text-2xs leading-relaxed text-ink-faint">
+              Stored encrypted on this machine and used only for this bank&apos;s remote — background
+              syncs need it too, so it outlives this form. An ssh remote needs no token: it
+              authenticates with your key.
+            </p>
+            {showAdvanced ? (
+              <div className="flex flex-col gap-1">
+                <Input
+                  value={username}
+                  onChange={(event) => {
+                    setUsername(event.target.value);
+                    setVerification(null);
+                  }}
+                  placeholder="x-access-token"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-56 text-xs md:text-xs"
+                  aria-label="Username"
+                />
+                <p className="text-2xs leading-relaxed text-ink-faint">
+                  Leave this alone for GitHub, Forgejo or Gitea — they authenticate on the token and
+                  ignore the name. A GitLab deploy token needs the token&apos;s own username, and a
+                  Bitbucket app password needs your account name. Never put the token here: git
+                  quotes the username back in its error messages.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <label className="flex items-center gap-2 text-2xs text-ink-muted">
           <input
             type="checkbox"
@@ -526,10 +840,8 @@ function AddGroup({
           <Button size="sm" variant="ghost" disabled={pane.busy !== null} onClick={pane.refresh}>
             Re-check
           </Button>
-          {blocked ? (
-            <span className="text-2xs text-amber">
-              Fix the requirements above first — it would fail partway through.
-            </span>
+          {submitProblem !== null ? (
+            <span className="text-2xs text-amber">{submitProblem}</span>
           ) : null}
         </div>
       </div>
@@ -538,35 +850,110 @@ function AddGroup({
 }
 
 /**
- * The requirements, each with its fix.
+ * What the remote said, in the four ways it can say it.
+ *
+ * Drawn differently per outcome because the *remedies* differ and only some of
+ * them are the user's. Amber for "needs a token" — nothing is wrong, there is
+ * one more thing to supply — and red for a URL that names nothing or a host
+ * that would not answer. Collapsing all three into red text with git's own
+ * wording is how someone with a typo spends an afternoon generating access
+ * tokens.
+ *
+ * The detail is git's own sentence, already scrubbed in main. Shown rather
+ * than paraphrased: `Repository not found` and `could not read Username` are
+ * the two most useful strings in this whole flow.
+ */
+function VerifyResult({ verification }: { readonly verification: Verification }): ReactElement {
+  if (verification.state === 'checking') {
+    return <p className="text-2xs leading-relaxed text-ink-faint">Asking the remote…</p>;
+  }
+  if (verification.state === 'failed') {
+    return <p className="text-2xs leading-relaxed text-signal">{verification.message}</p>;
+  }
+
+  const { outcome, headPresent, detail } = verification.result;
+  const tone = outcome === 'ok' ? 'mint' : outcome === 'auth-required' ? 'amber' : 'signal';
+  const headline =
+    outcome === 'ok'
+      ? headPresent
+        ? 'Reachable — this machine can read it'
+        : 'Reachable, and empty — joining it starts the bank'
+      : outcome === 'auth-required'
+        ? 'The remote wants credentials — add an access token below and verify again'
+        : outcome === 'not-found'
+          ? 'No repository there — check the URL, or ask for access if it is private'
+          : outcome === 'invalid-url'
+            ? 'That URL cannot be used'
+            : 'Could not reach the remote';
+
+  return (
+    <div className="flex items-start gap-2 text-2xs leading-relaxed">
+      <StatusDot tone={tone} className="mt-1" />
+      <span className="min-w-0 flex-1">
+        <span className={tone === 'mint' ? 'text-mint' : tone === 'amber' ? 'text-amber' : 'text-signal'}>
+          {headline}
+        </span>
+        {detail.length > 0 ? <span className="ml-1.5 break-words text-ink-faint">{detail}</span> : null}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The requirements, each with its fix, and each marked with whether it stops
+ * the button.
  *
  * Shown before onboarding rather than after a failure: every one of these has
  * a one-line remedy, and a user who learns about a missing git identity from a
  * half-finished clone has been told the least useful version of the truth.
  * `warn` rows stay visible — "works, but you will open pull requests by hand"
  * is worth knowing before the first one appears.
+ *
+ * A failed row that does not block the chosen mode keeps its red dot and loses
+ * its authority: it says `not needed to join`. Hiding it instead was the other
+ * option and it is worse — these rows are the machine's honest condition, and
+ * a user who fixes a real problem later should be able to see it here now.
+ * What must not happen is the reverse of what used to: a failing probe of a
+ * repository the user has never heard of disabling the button that joins the
+ * one they have.
  */
-function RequirementList({ pane }: { readonly pane: MemoryBanksPane }): ReactElement {
+function RequirementList({
+  pane,
+  mode,
+}: {
+  readonly pane: MemoryBanksPane;
+  readonly mode: AddMode;
+}): ReactElement {
   const checks = pane.preflight?.checks ?? [];
+  const blocking = BLOCKING_CHECKS[mode];
+  const verb = mode === 'join' ? 'join' : mode === 'create' ? 'create' : 'adopt';
 
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2.5">
-      {checks.map((entry) => (
-        <div key={entry.id} className="flex flex-col gap-0.5">
-          <div className="flex items-center gap-2 text-2xs">
-            <StatusDot
-              tone={entry.state === 'ok' ? 'mint' : entry.state === 'warn' ? 'amber' : 'signal'}
-            />
-            <span className="font-medium text-ink">{entry.label}</span>
-            <span className="min-w-0 flex-1 truncate text-ink-faint" title={entry.detail}>
-              {entry.detail}
-            </span>
+      {checks.map((entry) => {
+        const required = blocking.includes(entry.id);
+        return (
+          <div key={entry.id} className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2 text-2xs">
+              <StatusDot
+                tone={entry.state === 'ok' ? 'mint' : entry.state === 'warn' ? 'amber' : 'signal'}
+              />
+              <span className="font-medium text-ink">{entry.label}</span>
+              {entry.state === 'fail' ? (
+                <ToneBadge tone={required ? 'signal' : 'neutral'}>
+                  {required ? 'required' : `not needed to ${verb}`}
+                </ToneBadge>
+              ) : null}
+              <span className="min-w-0 flex-1 truncate text-ink-faint" title={entry.detail}>
+                {entry.detail}
+              </span>
+            </div>
+            {entry.state !== 'ok' && entry.remedy !== null ? (
+              <p className="pl-4 font-mono text-2xs leading-relaxed text-ink-muted">{entry.remedy}</p>
+            ) : null}
           </div>
-          {entry.state !== 'ok' && entry.remedy !== null ? (
-            <p className="pl-4 font-mono text-2xs leading-relaxed text-ink-muted">{entry.remedy}</p>
-          ) : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

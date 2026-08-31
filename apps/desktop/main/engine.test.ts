@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { RunInput } from '@rx-artemis/protocol';
 
-import { withSystemPromptAppended } from './engine.js';
+import { mergeAdditionalDirectories, withSystemPromptAppended } from './engine.js';
 
 const RUN: RunInput = {
   providerId: 'claude',
@@ -69,5 +69,55 @@ describe('withSystemPromptAppended', () => {
     const asked: RunInput = { ...RUN };
     withSystemPromptAppended(asked, 'Library.');
     expect(asked.systemPrompt).toBeUndefined();
+  });
+});
+
+/**
+ * The other per-run transform: folding the enabled memory banks into the
+ * directories a run may reach. The engine's gating and the `banksForRun` read
+ * are I/O; what is pure and worth pinning is the merge itself — that it never
+ * drops the user's own folders, never doubles a bank, and leaves a machine with
+ * the switch off exactly as it was.
+ */
+describe('mergeAdditionalDirectories', () => {
+  const BANKS = ['/home/me/Documents/cortex', '/home/me/Documents/team'];
+
+  it('does nothing when the master switch is off — reference returned untouched', () => {
+    // A machine that has not opted in starts exactly the run it always did,
+    // undefined included.
+    expect(mergeAdditionalDirectories(undefined, BANKS, false)).toBeUndefined();
+    const own = ['/work/extra'];
+    expect(mergeAdditionalDirectories(own, BANKS, false)).toBe(own);
+  });
+
+  it('does nothing when there are no banks to add', () => {
+    const own = ['/work/extra'];
+    expect(mergeAdditionalDirectories(own, [], true)).toBe(own);
+    expect(mergeAdditionalDirectories(undefined, [], true)).toBeUndefined();
+  });
+
+  it('attaches the banks when the switch is on and the run brought none', () => {
+    expect(mergeAdditionalDirectories(undefined, BANKS, true)).toEqual(BANKS);
+  });
+
+  it("keeps the user's own directories first, then the banks", () => {
+    expect(mergeAdditionalDirectories(['/work/extra'], BANKS, true)).toEqual([
+      '/work/extra',
+      ...BANKS,
+    ]);
+  });
+
+  it('is idempotent: a resumed run already carrying its banks is handed back unchanged', () => {
+    const already = ['/work/extra', ...BANKS];
+    expect(mergeAdditionalDirectories(already, BANKS, true)).toBe(already);
+  });
+
+  it('dedupes a path present on both sides without disturbing order', () => {
+    const own = ['/home/me/Documents/cortex', '/work/extra'];
+    expect(mergeAdditionalDirectories(own, BANKS, true)).toEqual([
+      '/home/me/Documents/cortex',
+      '/work/extra',
+      '/home/me/Documents/team',
+    ]);
   });
 });

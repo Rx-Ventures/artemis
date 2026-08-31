@@ -404,15 +404,16 @@ function advanceMockSignIn(current: ServerSignInStatus | null): ServerSignInStat
 let mockMasterEnabled = true;
 let mockBanks: MemoryBankInfo[] = [
   {
-    slug: 'cerebro',
-    path: '/Users/demo/Documents/cerebro',
-    remote: 'https://github.com/Rx-Ventures/cerebro.git',
+    slug: 'team-memory',
+    path: '/Users/demo/Documents/team-memory',
+    remote: 'https://github.com/demo-team/team-memory.git',
     role: 'readwrite',
     enabled: true,
     isDefault: true,
     exists: true,
     source: 'cerebro@52a0a32',
     memories: 3,
+    mirrored: 0,
     validationErrors: 0,
     projects: 27,
   },
@@ -426,27 +427,38 @@ let mockBanks: MemoryBankInfo[] = [
     exists: true,
     source: 'cerebro@1a2b3c4',
     memories: 1,
+    mirrored: 0,
     validationErrors: 0,
     projects: 4,
   },
 ];
 let mockBankMemories: MemoryBankMemory[] = [
   {
-    name: 'cerebro-memory-bank',
+    name: 'team-memory-bank',
     type: 'reference',
-    description: "What Cerebro is — the team's agent-maintained memory bank — and how agents keep it current",
-    body: 'Cerebro is the shared memory bank for all developers on the Artemis harness — and agents, not developers, maintain it.',
+    description: "What the team memory bank is, and how agents keep it current",
+    body: "The team memory bank is shared by every developer on the Artemis harness — and agents, not developers, maintain it.",
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: null,
+    project: null,
+    readonly: false,
+    file: 'memories/team-memory-bank.md',
   },
   {
     name: 'writing-team-memories',
     type: 'feedback',
-    description: 'House style for Cerebro memories: atomic, durable, absolute dates, team-relevant, no secrets',
-    body: 'A Cerebro memory is one fact per file, written so a teammate (or their agent) who lacks your context can act on it.',
+    description: 'House style for team memories: atomic, durable, absolute dates, team-relevant, no secrets',
+    body: 'A team memory is one fact per file, written so a teammate (or their agent) who lacks your context can act on it.',
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: 'demo-org',
+    project: 'harness',
+    readonly: false,
+    file: 'memories/demo-org/harness/writing-team-memories.md',
   },
+  // A mirror-tree memory, so dev meets the grouped, read-only rendering —
+  // badge on, retire hidden — without arranging a real mirror.
   {
     name: 'artemis-agent-harness',
     type: 'reference',
@@ -454,6 +466,10 @@ let mockBankMemories: MemoryBankMemory[] = [
     body: 'Artemis is the team’s in-house agent harness, an Electron app wrapping the Claude Agent SDK.',
     added: '2026-08-14',
     author: 'demo@example.com',
+    org: 'demo-org',
+    project: 'sessions',
+    readonly: true,
+    file: 'memory/sessions/artemis-agent-harness.md',
   },
 ];
 
@@ -1526,7 +1542,7 @@ export function createMockBridge(): ArtemisBridge {
           ],
         }),
       memories: async (request) =>
-        ok({ memories: request.slug === 'cerebro' ? [...mockBankMemories] : [] }),
+        ok({ memories: request.slug === mockBanks[0]?.slug ? [...mockBankMemories] : [] }),
       preflight: async () =>
         ok({
           // One of each state, so the requirement list's three rows are all
@@ -1550,6 +1566,38 @@ export function createMockBridge(): ArtemisBridge {
             },
           ],
         }),
+      /*
+       * Every outcome the pane draws differently is reachable from the URL
+       * itself, so the four inline results can be seen without a network: a
+       * remote whose path says `private` asks for a token (and accepts any),
+       * one that says `missing` is not found, one that says `down` is
+       * unreachable, and anything else is fine.
+       */
+      verifyRemote: async (request) => {
+        const said = request.remote.toLowerCase();
+        if (said.includes('private') && request.auth === undefined) {
+          return ok({
+            outcome: 'auth-required' as const,
+            headPresent: false,
+            detail: "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled",
+          });
+        }
+        if (said.includes('missing')) {
+          return ok({
+            outcome: 'not-found' as const,
+            headPresent: false,
+            detail: 'remote: Repository not found.',
+          });
+        }
+        if (said.includes('down')) {
+          return ok({
+            outcome: 'unreachable' as const,
+            headPresent: false,
+            detail: "fatal: unable to access 'https://git.example.com/': Could not resolve host",
+          });
+        }
+        return ok({ outcome: 'ok' as const, headPresent: true, detail: 'HEAD is 52a0a327' });
+      },
       add: async (request) => {
         mockBanks = [
           ...mockBanks,
@@ -1563,6 +1611,7 @@ export function createMockBridge(): ArtemisBridge {
             exists: true,
             source: 'cerebro@0000000',
             memories: 0,
+            mirrored: 0,
             validationErrors: 0,
             projects: 0,
           },
@@ -1611,7 +1660,18 @@ export function createMockBridge(): ArtemisBridge {
      * echoed the request would let a bug in that handling reach a real build.
      */
     agentPrompts: {
-      list: async () => ok({ document: mockAgentPrompts }),
+      // The dev mock's own bank, so the built-in previews under a real name
+      // here too rather than showing the placeholder the empty case renders.
+      list: async () =>
+        ok({
+          document: mockAgentPrompts,
+          memoryBanks: mockBanks.map((bank) => ({
+            slug: bank.slug,
+            isDefault: bank.isDefault,
+            readonly: bank.role === 'readonly',
+            cli: `${bank.path}/bin/cerebro`,
+          })),
+        }),
       save: async (request) => {
         mockAgentPrompts = parseAgentPromptsDocument(request.document);
         return ok({ document: mockAgentPrompts });

@@ -55,12 +55,12 @@ export function InstructionsSection(): ReactElement {
       */}
       <div data-settings-row="memory-banks" className="flex flex-col gap-5">
         <div className="flex flex-col gap-1 border-t border-hairline pt-4">
-          <h3 className="chrome-label text-ink-faint">Memory banks</h3>
+          <h3 className="chrome-label text-ink-faint">Team memory banks</h3>
           <p className="text-2xs leading-relaxed text-ink-faint">
             The prompts above are instructions you state; the banks are the instance agents keep
-            for themselves — shared git repositories of durable facts, reviewed like code and
-            installed into every session&rsquo;s memory. The built-in prompt above is what tells
-            the agent they exist.
+            for themselves — your team&rsquo;s shared git repositories of durable facts, reviewed
+            like code and installed into every session&rsquo;s memory. The built-in prompt above is
+            what tells the agent they exist.
           </p>
         </div>
         <MemoryBankGroups pane={banks} />

@@ -29,7 +29,8 @@ import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { confine, SandboxViolation } from './sandbox.js';
+import { confineToRoots, SandboxViolation } from './sandbox.js';
+import type { SandboxRoot } from './sandbox.js';
 
 const run = promisify(execFile);
 
@@ -58,8 +59,19 @@ export interface ToolSpec {
 
 /** Everything a tool needs to do its job. */
 export interface ToolContext {
-  /** The run's working directory, already resolved. */
+  /**
+   * The run's working directory, already resolved. Writable, the base a
+   * relative path is resolved against, and the directory `search` runs in.
+   */
   readonly root: string;
+  /**
+   * Directories beyond {@link root} this run was granted — a team memory bank
+   * kept in `~/Documents`, say. Read-only: the file-reading tools may reach
+   * into them, a write still has to land in {@link root}, and the shell is not
+   * widened to them at all. Absent on the ordinary run, which is what keeps the
+   * single-root behaviour of every tool below byte-for-byte unchanged.
+   */
+  readonly additionalRoots?: readonly SandboxRoot[];
   readonly env: Readonly<Record<string, string>>;
   readonly signal: AbortSignal;
   /**
@@ -100,6 +112,19 @@ function requireString(args: Record<string, unknown>, key: string): string {
     throw new Error(`The "${key}" argument is required and must be a non-empty string.`);
   }
   return value;
+}
+
+/**
+ * Every directory a file tool may reach, working directory first.
+ *
+ * The working directory is the one writable root; the additional directories
+ * follow, read-only, in the order they were granted. Built here rather than
+ * stored on the context so the writable/read-only shape lives in exactly one
+ * place — the sandbox's vocabulary — and an empty `additionalRoots` yields the
+ * single-root array the confinement started life with.
+ */
+function rootsOf(ctx: ToolContext): readonly SandboxRoot[] {
+  return [{ path: ctx.root, writable: true }, ...(ctx.additionalRoots ?? [])];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -251,7 +276,7 @@ export async function executeTool(
 }
 
 async function doRead(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-  const at = await confine(requireString(args, 'path'), ctx.root);
+  const at = await confineToRoots(requireString(args, 'path'), rootsOf(ctx), 'read');
   const text = await readFile(at.real, 'utf8');
   // Numbered because the model's next move is usually to describe an edit by
   // line, and unnumbered text makes that a guess.
@@ -263,7 +288,9 @@ async function doRead(args: Record<string, unknown>, ctx: ToolContext): Promise<
 }
 
 async function doWrite(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-  const at = await confine(requireString(args, 'path'), ctx.root);
+  // A write must land in a writable root, so a path resolving into a read-only
+  // additional directory is refused here rather than silently written.
+  const at = await confineToRoots(requireString(args, 'path'), rootsOf(ctx), 'write');
   const content = args['content'];
   if (typeof content !== 'string') {
     return { output: 'The "content" argument is required and must be a string.', failed: true };
@@ -275,7 +302,7 @@ async function doWrite(args: Record<string, unknown>, ctx: ToolContext): Promise
 
 async function doList(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const requested = typeof args['path'] === 'string' && args['path'].trim() !== '' ? args['path'] : '.';
-  const at = await confine(requested, ctx.root);
+  const at = await confineToRoots(requested, rootsOf(ctx), 'read');
   const entries = await readdir(at.real, { withFileTypes: true });
   if (entries.length === 0) return { output: `${at.relative} is empty.` };
   const listing = entries
@@ -296,10 +323,15 @@ async function doList(args: Record<string, unknown>, ctx: ToolContext): Promise<
  */
 async function doSearch(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const pattern = requireString(args, 'pattern');
+  // The working directory as `.`, then any additional directories by absolute
+  // path. `grep -r` reads and does not follow a symlink out while recursing, so
+  // this widens `search` to exactly the roots the run was granted and no
+  // further. With no additional directories the argv is what it always was.
+  const targets = ['.', ...(ctx.additionalRoots ?? []).map((root) => root.path)];
   try {
     const { stdout } = await run(
       'grep',
-      ['-rnI', '-F', '--exclude-dir=.git', '--exclude-dir=node_modules', '--', pattern, '.'],
+      ['-rnI', '-F', '--exclude-dir=.git', '--exclude-dir=node_modules', '--', pattern, ...targets],
       { cwd: ctx.root, signal: ctx.signal, maxBuffer: MAX_OUTPUT * 4 },
     );
     return { output: truncate(stdout.trim() === '' ? `No matches for "${pattern}".` : stdout) };

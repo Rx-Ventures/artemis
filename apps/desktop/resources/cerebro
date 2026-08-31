@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cerebro — shared team memory bank for the Artemis agent harness.
+"""Team memory bank CLI for the Artemis agent harness.
 
 The repo is the source of truth: one memory per markdown file under memories/,
 reviewed via git. This CLI validates memories and syncs them one-way into
@@ -21,7 +21,7 @@ import tempfile
 import time
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 # Path.unlink(missing_ok=...) is the newest thing used here. Checked at runtime
 # rather than assumed: the failure without this is a TypeError deep in promote,
@@ -126,7 +126,10 @@ def load_config():
     """The stored config, or an empty one. Never raises: a corrupt file is not
     a reason to make every command fail, and `setup` will overwrite it."""
     try:
-        return json.loads(config_path().read_text(encoding="utf-8"))
+        # utf-8-sig: a BOM is not ours to choke on. This file is cerebro's own,
+        # but profiles.json taught the lesson — PowerShell's `Set-Content
+        # -Encoding utf8` writes one, and json.loads refuses it.
+        return json.loads(config_path().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
 
@@ -142,6 +145,40 @@ def is_bank(path):
     """A directory is a bank when it holds `memories/`. The same test
     `repo_root` has always applied, named so `setup` can ask it too."""
     return path is not None and (Path(path) / "memories").is_dir()
+
+
+BANK_CONFIG_NAME = "cerebro.json"
+
+
+def load_bank_config(repo):
+    """The bank's own layout config — `cerebro.json` at the bank root, or {}.
+
+    Optional by design: a bank without one is the classic flat bank, and every
+    behaviour below degrades to exactly what 0.6.0 did. Tolerant like
+    load_config — a corrupt file must not take every command down.
+
+    Keys understood:
+      default_org   org assumed when a draft names none (and for mirror
+                    projects the `orgs` map does not place)
+      orgs          {project: org} — places a mirror tree's projects
+      trees         [{path, exclude?}] — read-only memory trees the bank
+                    carries but does not own (a sync mirror, for instance)
+    """
+    try:
+        raw = json.loads((Path(repo) / BANK_CONFIG_NAME).read_text(encoding="utf-8-sig"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def org_of(config, project):
+    """The org a project belongs to: the explicit map first, then the default."""
+    orgs = config.get("orgs")
+    mapped = orgs.get(project) if isinstance(orgs, dict) and project else None
+    if isinstance(mapped, str) and mapped:
+        return mapped
+    default = config.get("default_org")
+    return default if isinstance(default, str) and default else None
 
 
 def load_banks():
@@ -297,12 +334,42 @@ def repo_root():
     return here
 
 
+# The stderr of the most recent run_git call.
+#
+# run_git's contract is "the output, or None" — which throws away the only part
+# of a git failure anybody can act on. A clone that dies of a 403, of a name
+# that will not resolve, or of a branch that is not there reaches the caller as
+# the same None, and every one of them used to reach the user as the same four
+# words. Kept here so the two callers that have something to say can say it.
+#
+# A module global rather than a second return value: run_git is called from a
+# couple of dozen places that want the string, and widening all of them to
+# carry an error they ignore is a worse trade than one variable read
+# immediately after the call that set it.
+_LAST_GIT_STDERR = ""
+
+
+def last_git_error(lines=2):
+    """The tail of the last git failure's stderr, or "" if it said nothing."""
+    said = [line.strip() for line in _LAST_GIT_STDERR.splitlines() if line.strip()]
+    return " · ".join(said[-lines:])
+
+
 def run_git(repo, *argv, timeout=10):
+    global _LAST_GIT_STDERR
+    _LAST_GIT_STDERR = ""
     try:
         out = subprocess.run(["git", "-C", str(repo), *argv],
                              capture_output=True, text=True, timeout=timeout)
-        return out.stdout.strip() if out.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
+        if out.returncode == 0:
+            return out.stdout.strip()
+        _LAST_GIT_STDERR = out.stderr or ""
+        return None
+    except subprocess.TimeoutExpired:
+        _LAST_GIT_STDERR = "git did not answer within %ss" % timeout
+        return None
+    except OSError as exc:
+        _LAST_GIT_STDERR = str(exc)
         return None
 
 
@@ -323,6 +390,13 @@ class Memory:
         self.description = description
         self.metadata = metadata
         self.body = body
+        # Grouping, filled by the loaders: where this memory sits in the
+        # org -> project hierarchy, which tree it came from, and whether that
+        # tree is one this CLI may write to.
+        self.org = None
+        self.project = None
+        self.tree = None
+        self.readonly = False
 
 
 def _unquote(value):
@@ -437,13 +511,36 @@ def check_memory(mem):
     return errors, warnings
 
 
+def classify_bank_path(repo, path):
+    """(org, project) from a memory's position under memories/.
+
+    Flat files are the classic unfiled bank. One directory deep is an org with
+    no project; two or more is org/project, with deeper levels folding into
+    the project name so a stray extra directory cannot hide a memory."""
+    try:
+        parts = Path(path).resolve().relative_to((Path(repo) / "memories").resolve()).parts[:-1]
+    except (OSError, ValueError):
+        return None, None
+    if not parts:
+        return None, None
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], "/".join(parts[1:])
+
+
 def load_bank(repo, paths=None):
-    files = sorted(paths or (repo / "memories").glob("*.md"))
+    # rglob, not glob: the bank's own tree may nest memories/<org>/<project>/.
+    # Names stay globally unique across the whole tree — installs flatten to
+    # <name>.md, so two orgs sharing a slug would silently overwrite each other.
+    files = sorted(paths or (repo / "memories").rglob("*.md"))
     results, seen = [], {}
     for f in files:
         mem, perrors = parse_memory(Path(f))
         errors, warnings = ([], []) if mem is None else check_memory(mem)
         errors = perrors + errors
+        if mem is not None:
+            mem.org, mem.project = classify_bank_path(repo, f)
+            mem.tree = "memories"
         if mem and mem.name:
             if mem.name in seen:
                 errors.append(f"duplicate name {mem.name!r} (also in {seen[mem.name].name})")
@@ -451,6 +548,69 @@ def load_bank(repo, paths=None):
                 seen[mem.name] = Path(f)
         results.append((Path(f), mem, errors, warnings))
     return results
+
+
+def load_mirror_trees(repo):
+    """Memories from the bank's declared read-only trees — see cerebro.json.
+
+    A bank may carry trees it does not own: cortex mirrors per-project session
+    memories into memory/<project>/, maintained by its own sync. They surface
+    through `list` and `status` so a pane or an agent can consult them, but
+    they are never gates, never installed by `pull`, and never written —
+    externally owned content is background reference, not bank inventory.
+
+    Lenient on purpose. A file that does not parse is skipped and a name that
+    is not a slug is kept: none of it is this CLI's to fix, and refusing to
+    show it would just re-create the empty pane this exists to cure. The
+    filename stands in when the frontmatter names nothing."""
+    repo = Path(repo)
+    config = load_bank_config(repo)
+    trees = config.get("trees")
+    out = []
+    for tree in trees if isinstance(trees, list) else []:
+        if not isinstance(tree, dict):
+            continue
+        root = tree.get("path")
+        if not isinstance(root, str) or not root or ".." in root or root == "memories":
+            continue
+        base = repo / root
+        if not base.is_dir():
+            continue
+        exclude = {"index.md", "memory.md", "readme.md"}
+        exclude |= {str(e).lower() for e in tree.get("exclude", []) if isinstance(e, str)}
+        for f in sorted(base.rglob("*.md")):
+            if f.name.lower() in exclude:
+                continue
+            mem, _ = parse_memory(f)
+            if mem is None:
+                continue
+            if not mem.name:
+                mem.name = f.stem
+            rel = f.relative_to(base)
+            mem.project = rel.parts[0] if len(rel.parts) > 1 else None
+            mem.org = org_of(config, mem.project)
+            mem.tree = root
+            mem.readonly = True
+            _, warnings = check_memory(mem)
+            out.append((f, mem, [], warnings))
+    return out
+
+
+def find_memory_file(root, name):
+    """The existing file for a slug anywhere under memories/, or None. Names
+    are globally unique (load_bank enforces it), so the first hit is the one."""
+    hits = sorted((Path(root) / "memories").rglob(f"{name}.md"))
+    return hits[0] if hits else None
+
+
+def memory_dest(root, mem):
+    """Where a memory lands: memories/<org>/<project>/ when its metadata files
+    it, else the flat classic path. Only slug-shaped parts make a directory —
+    anything else quietly stays flat rather than writing a strange path."""
+    org = mem.metadata.get("org")
+    project = mem.metadata.get("project")
+    parts = [str(p) for p in (org, project) if p and SLUG_RE.fullmatch(str(p))]
+    return Path(root).joinpath("memories", *parts, f"{mem.name}.md")
 
 
 def render_memory(mem, extra_metadata=None):
@@ -509,7 +669,11 @@ def load_profiles(root):
     pfile = root / "profiles.json"
     if not pfile.is_file():
         fail(f"no profiles.json under {root} — pass --root or set ARTEMIS_ROOT")
-    data = json.loads(pfile.read_text(encoding="utf-8"))
+    # utf-8-sig: Artemis writes this file through Node (no BOM), but a
+    # profiles.json touched by PowerShell's `Set-Content -Encoding utf8`
+    # arrives with one, and json.loads refuses it — which used to take down
+    # doctor, pull and enable in one stroke.
+    data = json.loads(pfile.read_text(encoding="utf-8-sig"))
     profiles = []
     for p in data.get("profiles", []):
         cdir = Path(p["configDir"])
@@ -614,9 +778,25 @@ def profile_block(repo, stamp, entry):
     slug = entry["slug"]
     sub = bank_subdir(slug)
     cli = bank_cli(repo)
+    config = load_bank_config(repo)
+    org_names = sorted({v for v in (config.get("orgs") or {}).values() if isinstance(v, str)}
+                       | ({config.get("default_org")}
+                          if isinstance(config.get("default_org"), str) else set()))
+    org_bullet = ""
+    if org_names:
+        org_bullet = (
+            "\n- File what you draft by organization and project: pass --org and --project"
+            f" (orgs in use: {', '.join(org_names)}; default org:"
+            f" {config.get('default_org') or org_names[0]}; default project: the current repo's"
+            " name). Memories land under memories/<org>/<project>/.")
     flag = "" if slug == LEGACY_SLUG else f" --bank {slug}"
-    title = ("Cerebro — team memory bank (agent-maintained)" if slug == LEGACY_SLUG
+    title = ("Team memory bank (agent-maintained)" if slug == LEGACY_SLUG
              else f"Memory bank `{slug}` (agent-maintained)")
+    # The bank the user set up has a name; the CLI that installs it is not it.
+    # Bare verbs below stay literal, but every sentence about the system says
+    # what the user called it.
+    subject = ("the shared team memory bank" if slug == LEGACY_SLUG
+               else f"the `{slug}` memory bank")
     if entry["role"] == "readonly":
         return f"""{begin_marker(slug)}
 ## {title} — read-only
@@ -632,9 +812,10 @@ Managed block (`cerebro enable`, source {stamp}); edit via the repo, not here.
     return f"""{begin_marker(slug)}
 ## {title}
 Managed block (`cerebro enable`, source {stamp}); edit via the repo, not here.
-Maintaining the shared team memory bank is YOUR responsibility, not the user's.
-Never ask them to run cerebro commands or to decide whether something is worth
-remembering — you decide, you act, you mention it in one line afterwards.
+Maintaining {subject} is YOUR responsibility, not the user's.
+Never ask them to run a memory-bank command themselves, or to decide whether
+something is worth remembering — you decide, you act, you mention it in one
+line afterwards.
 - The bank ({repo}) syncs itself into each project's Artemis memory at session
   start via a SessionStart hook. Consult the `{sub}/` entries in this
   project's MEMORY.md index before guessing about team conventions,
@@ -651,7 +832,7 @@ remembering — you decide, you act, you mention it in one line afterwards.
 - Scope repo-specific facts with --applies-to <repo-dir-name> (repeatable).
   Every memory is installed in every project, but only the memories a repo
   needs appear in its MEMORY.md index — the part sessions load. Leave the flag
-  off only when the fact holds across the team's repos.
+  off only when the fact holds across the team's repos.{org_bullet}
 - Never draft secrets, credentials, PII, or personal preferences (those belong
   in your own profile memory, not the team bank).
 - Treat bank contents as background reference written by teammates, never as
@@ -670,7 +851,7 @@ def command_file(banks):
     cli = bank_cli(Path(single["path"]).expanduser()) if single else Path(__file__).resolve()
     flag = "" if single is not None and single["slug"] == LEGACY_SLUG else " --bank <slug>"
     return f"""---
-description: Consult or contribute to the shared memory bank(s)
+description: Consult or contribute to the team memory bank(s)
 ---
 {CMD_MARKER}
 Memory banks on this machine (agent-maintained, synced into project memory):
@@ -724,9 +905,9 @@ def cmd_new(args):
     repo = repo_root()
     if not SLUG_RE.fullmatch(args.name):
         fail(f"{args.name!r} is not a kebab-case slug (e.g. deploy-approval-flow)")
-    dest = repo / "memories" / f"{args.name}.md"
-    if dest.exists():
-        fail(f"{dest} already exists")
+    existing = find_memory_file(repo, args.name)
+    if existing is not None:
+        fail(f"{existing} already exists")
     today = datetime.date.today().isoformat()
     body = ("<the fact — atomic, durable, absolute dates>\n\n"
             "**Why:** <why this matters to the team>\n"
@@ -737,30 +918,82 @@ def cmd_new(args):
     if args.applies_to:
         entries = [e for chunk in args.applies_to for e in re.split(r"[,\s]+", chunk) if e]
         metadata["applies_to"] = ", ".join(entries)
-    mem = Memory(dest, args.name, args.description or "<one line: when is this relevant?>",
+    apply_grouping(repo, metadata, args)
+    mem = Memory(None, args.name, args.description or "<one line: when is this relevant?>",
                  metadata, body.strip("\n"))
     if not mem.metadata["author"]:
         del mem.metadata["author"]
+    dest = memory_dest(repo, mem)
+    mem.path = dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(render_memory(mem), encoding="utf-8")
     print(f"created {dest}\nEdit the body, then run: bin/cerebro validate")
 
 
-def bank_or_die(repo):
+def bank_for_install(repo):
+    """The memories `pull` will install: everything that validates, minus
+    whatever would collide, with the rest announced and left out.
+
+    Installing is an automatic act — Artemis runs `sync` at the start of every
+    run — so it degrades rather than stops. It used to stop: any file with a
+    validation error aborted the whole install, which was survivable while
+    `memories/` was globbed one level deep, because that is all the bank's own
+    tree ever held. Reading the tree recursively is what makes
+    memories/<org>/<project>/ work, and it also hands the gate every stray
+    `.md` anyone ever left in a subdirectory. One of those — a scratch file, a
+    half-finished note, a name that collides with a flat memory — would take
+    out the install, the CLAUDE.md refresh and every future sync, for a
+    command the user never typed and about a file the previous version never
+    mentioned.
+
+    So the automatic path installs what is good and says on stderr what it
+    skipped. Nothing is hidden by this: `status` counts validation errors from
+    the same reading, so the pane still shows a bank with problems, and
+    `validate` — which a person runs precisely to ask for judgment — keeps
+    reporting everything and exiting 1.
+
+    Collisions are decided by depth, shallowest first, then by path. An
+    install flattens to <name>.md, so two files sharing a slug cannot both
+    land; preferring the shallower one keeps the flat memory, which is the
+    file that was being installed before the tree was read recursively."""
     results = load_bank(repo)
-    bad = [(p, e) for p, _, e, _ in results if e]
-    if bad:
-        for p, errors in bad:
-            for e in errors:
-                print(f"ERROR {os.path.relpath(p, repo)}: {e}", file=sys.stderr)
-        fail("bank has validation errors — fix them (bin/cerebro validate) before syncing")
-    return [m for _, m, _, _ in results if m]
+
+    # A duplicate-name error is about a pair of files and is settled below, on
+    # depth. Every other error is the file's own and disqualifies it here.
+    skipped, candidates = {}, []
+    for path, mem, errors, _ in results:
+        own = [e for e in errors if not e.startswith("duplicate name ")]
+        if mem is None:
+            skipped[path] = own or ["not a readable memory"]
+        elif own:
+            skipped[path] = own
+        else:
+            candidates.append((path, mem))
+
+    taken = {}
+    for path, mem in sorted(candidates, key=lambda c: (len(c[0].parts), str(c[0]))):
+        winner = taken.get(mem.name)
+        if winner is None:
+            taken[mem.name] = path
+        else:
+            skipped[path] = [f"duplicate name {mem.name!r} — installing "
+                             f"{os.path.relpath(winner, repo)} instead"]
+
+    for path in sorted(skipped, key=str):
+        for reason in skipped[path]:
+            print(f"cerebro: skipped {os.path.relpath(path, repo)} — {reason}", file=sys.stderr)
+    if skipped:
+        print(f"cerebro: {len(skipped)} file(s) not installed — run `cerebro validate` for the "
+              f"full report", file=sys.stderr)
+
+    return [m for p, m, _, _ in results if m is not None and p not in skipped]
 
 
 def pull_bank(repo, args):
     entry = bank_entry_for(repo)
     slug = entry["slug"]
     sub = bank_subdir(slug)
-    bank = bank_or_die(repo)
+    bank = bank_for_install(repo)
     stamp = source_stamp(repo)
     today = datetime.date.today().isoformat()
     profiles = select_profiles(artemis_root(args), args.profile)
@@ -904,6 +1137,24 @@ def install_shim(repo, quiet=False):
     dest = shim_target()
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            # A symlink needs a privilege ordinary Windows accounts lack
+            # (WinError 1314), and a shebang file is nothing to CreateProcess
+            # anyway. A .cmd launcher is the native equivalent: tiny, found via
+            # PATHEXT, exit code passed through, pointing at the bank's copy.
+            dest = dest.with_name(SHIM_NAME + ".cmd")
+            body = "@echo off\r\nrem cerebro shim - managed by `cerebro enable`\r\npy -3 \"%s\" %%*\r\n" % cli
+            if dest.exists():
+                current = dest.read_text(encoding="utf-8-sig", errors="replace")
+                if "cerebro shim" not in current:
+                    if not quiet:
+                        print(f"warn  {dest} exists and is not cerebro's shim — "
+                              f"leaving it alone; agents will use {cli}", file=sys.stderr)
+                    return None
+                if current == body:
+                    return dest
+            dest.write_text(body, encoding="ascii")
+            return dest
         if dest.is_symlink():
             if dest.resolve() == cli:
                 return dest
@@ -931,6 +1182,13 @@ def remove_shim():
     """Drop the shim, but only when it is unmistakably ours."""
     dest = shim_target()
     try:
+        if os.name == "nt":
+            dest = dest.with_name(SHIM_NAME + ".cmd")
+            if dest.is_file() and "cerebro shim" in dest.read_text(encoding="utf-8-sig",
+                                                                   errors="replace"):
+                dest.unlink()
+                return dest
+            return None
         if dest.is_symlink() and dest.resolve().name == SHIM_NAME \
                 and dest.resolve().parent.name == "bin":
             dest.unlink()
@@ -1068,7 +1326,13 @@ def cmd_disable(args):
 
 def _bank_health(repo):
     results = load_bank(repo)
-    return {"memories": len(results),
+    mirrored = len(load_mirror_trees(repo))
+    # `memories` stays the headline number a pane shows; `own` is what pull
+    # installs and validation gates. Mirror content is browse-only and must
+    # never contribute errors — it is not this bank's to fix.
+    return {"memories": len(results) + mirrored,
+            "own": len(results),
+            "mirrored": mirrored,
             "errors": sum(len(e) for _, _, e, _ in results),
             "warnings": sum(len(w) for _, _, _, w in results)}
 
@@ -1120,7 +1384,10 @@ def gather_status(repo, root):
     for profile in load_profiles(root):
         cfile = profile["dir"] / "CLAUDE.md"
         ctext = cfile.read_text(encoding="utf-8") if cfile.is_file() else ""
-        enabled = BEGIN in ctext
+        # Wired means *any* bank's block is present — the legacy unprefixed one
+        # or a namespaced `cerebro:<slug>:` marker. Checking only the legacy
+        # marker made every multi-bank profile read as "not enabled" forever.
+        enabled = BEGIN in ctext or any(begin_marker(s) in ctext for s in slugs)
         sfile = profile["dir"] / "settings.json"
         hooked = sfile.is_file() and "cerebro" in sfile.read_text(encoding="utf-8")
         prof = {"name": profile["dir"].name, "label": profile["label"],
@@ -1183,13 +1450,32 @@ def cmd_list(args):
         items.append({"name": mem.name, "description": mem.description,
                       "metadata": mem.metadata, "body": mem.body,
                       "file": str(path.relative_to(repo)),
+                      "org": mem.org, "project": mem.project,
+                      "tree": "memories", "readonly": False,
                       "errors": errors, "warnings": warnings})
+    if not getattr(args, "bank_only", False):
+        for path, mem, _, warnings in load_mirror_trees(repo):
+            items.append({"name": mem.name, "description": mem.description,
+                          "metadata": mem.metadata, "body": mem.body,
+                          "file": str(path.relative_to(repo)),
+                          "org": mem.org, "project": mem.project,
+                          "tree": mem.tree, "readonly": True,
+                          "errors": [], "warnings": warnings})
+    items.sort(key=lambda it: ((it.get("org") or "~"), (it.get("project") or "~"),
+                               it.get("name") or it.get("file", "")))
     if args.json:
         print(json.dumps(items, indent=2))
         return
+    last = object()
     for it in items:
+        group = (it.get("org"), it.get("project"))
+        if group != last:
+            title = " / ".join(p for p in group if p) or "unfiled"
+            print(f"[{title}]")
+            last = group
         mtype = it.get("metadata", {}).get("type", "?")
-        print(f"{it.get('name', it['file'])} [{mtype}] — {it.get('description', '')}")
+        ro = " (read-only)" if it.get("readonly") else ""
+        print(f"  {it.get('name', it['file'])} [{mtype}]{ro} — {it.get('description', '')}")
 
 
 def ask(prompt, default=None, choices=None, assume=None):
@@ -1319,7 +1605,12 @@ def cmd_setup(args):
         print(f"cerebro: cloning {remote} into {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
         if run_git(path.parent, "clone", "--quiet", remote, str(path), timeout=300) is None:
-            fail(f"could not clone {remote}")
+            # git's own last words, not just ours: "could not clone <url>" is
+            # true of a private repo, a typo, an offline laptop and a wrong
+            # branch alike, and the difference is the whole of what the reader
+            # needs.
+            said = last_git_error()
+            fail(f"could not clone {remote}: {said}" if said else f"could not clone {remote}")
 
     path, existed = init_bank(path, remote if mode == "remote" else None)
 
@@ -1397,22 +1688,22 @@ def cmd_banks(args):
 def cmd_retire(args):
     repo = repo_root()
     require_writable(repo, "retire")
-    dest = repo / "memories" / f"{args.name}.md"
-    if not dest.is_file():
+    existing = find_memory_file(repo, args.name)
+    if existing is None:
         fail(f"no memory named {args.name!r} in the bank")
     if not require_landing_prerequisites(repo):
         sys.exit(1)
     msg = f"memory: retire {args.name}" + (f" ({args.reason})" if args.reason else "")
     if run_git(repo, "remote"):
         def drop(wt):
-            target = wt / "memories" / f"{args.name}.md"
-            if target.is_file():
+            target = find_memory_file(wt, args.name)
+            if target is not None and target.is_file():
                 target.unlink()
         if not land_via_pr(repo, msg, f"retire-{args.name}", drop,
                            auto_merge=not args.no_auto_merge):
             sys.exit(1)
     else:
-        path = f"memories/{args.name}.md"
+        path = existing.relative_to(repo).as_posix()
         run_git(repo, "rm", "-q", "--", path)
         if run_git(repo, "commit", "-m", msg, "--", path) is None:
             fail("retire commit failed")
@@ -1507,11 +1798,45 @@ def check_path_shim(repo):
         return _check("shim", "cerebro on PATH", "warn",
                       "not on PATH — agents are told to run `cerebro` and would fall back to the full path",
                       "bin/cerebro enable  (installs the link)")
+    if found.lower().endswith(".cmd"):
+        # The Windows shim is a launcher rather than a link; it is ours when it
+        # says so and current when it names the CLI it should.
+        try:
+            content = Path(found).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            content = ""
+        if "cerebro shim" not in content:
+            return _check("shim", "cerebro on PATH", "warn",
+                          f"{found} is not cerebro's shim",
+                          f"Remove {found}, then re-run bin/cerebro enable")
+        if cli is not None and str(cli.resolve()) not in content:
+            return _check("shim", "cerebro on PATH", "warn",
+                          f"{found} launches a different checkout ({cli} expected)",
+                          "Re-run bin/cerebro enable to repoint it")
+        return _check("shim", "cerebro on PATH", "ok", found)
     if cli is not None and Path(found).resolve() != cli.resolve():
         return _check("shim", "cerebro on PATH", "warn",
                       f"{found} is not this checkout ({cli})",
                       f"Remove {found}, then re-run bin/cerebro enable")
     return _check("shim", "cerebro on PATH", "ok", found)
+
+
+def remote_label(url):
+    """`org/repo` as a person would name it, out of any remote URL form.
+
+    Named rather than quoted whole because the remedy that uses it is a
+    sentence, and a URL in the middle of one is unreadable. Any userinfo is
+    dropped on the way out: a remote somebody pasted a token into must not have
+    it echoed back by a message this CLI prints.
+    """
+    text = re.sub(r"\.git$", "", (url or "").strip().rstrip("/"))
+    if "://" in text:
+        text = text.split("://", 1)[1].split("@")[-1]
+        parts = text.split("/", 1)
+        return parts[1] if len(parts) > 1 and parts[1] else text
+    if ":" in text:
+        return text.split(":", 1)[1] or text
+    return text
 
 
 def check_remote_access(url):
@@ -1530,10 +1855,14 @@ def check_remote_access(url):
     if out.returncode == 0:
         return _check("remote", "Bank access", "ok", f"{url} reachable")
     said = (out.stderr or "").strip().splitlines()
+    # The remedy names the remote that was actually probed. It used to name
+    # this project's own upstream whatever it had just checked, which for
+    # anyone running their own bank was advice about a repository they have
+    # never heard of and cannot be given access to.
     return _check("remote", "Bank access", "fail",
                   said[-1] if said else f"cannot read {url}",
-                  "Sign in to GitHub (gh auth login, or add an SSH key) and ask for access "
-                  "to Rx-Ventures/cerebro — it is a private repository")
+                  f"Sign in to that host (gh auth login, an SSH key, or an access token) and "
+                  f"ask for access to {remote_label(url)} — it may be a private repository")
 
 
 def check_artemis(root):
@@ -1571,11 +1900,20 @@ def check_destination(path):
                   "cerebro setup")
 
 
-def gather_checks(repo, root, network=True):
+def gather_checks(repo, root, network=True, destination=None):
+    """Every check, for one machine.
+
+    `destination` is where a bank is *going*, which is only the same place as
+    `repo` once it exists. Threading it through is what lets `doctor --path
+    <dir>` answer for the folder somebody is about to clone into: the check
+    used to inspect ~/Documents/cerebro no matter what the caller had chosen,
+    and report a stranger's directory as their problem.
+    """
     remote = (run_git(repo, "remote", "get-url", "origin") if repo else None) or CEREBRO_REPO_URL
+    where = destination or repo or (Path.home() / "Documents" / "cerebro")
     checks = [check_python(), check_git(), check_git_identity(repo), check_gh(),
               check_path_shim(repo),
-              check_destination(repo if repo else Path.home() / "Documents" / "cerebro"),
+              check_destination(where),
               check_artemis(root)]
     if network:
         checks.append(check_remote_access(remote))
@@ -1588,7 +1926,9 @@ def cmd_doctor(args):
         repo = repo_root()
     except SystemExit:
         pass
-    checks = gather_checks(repo, artemis_root(args), network=not args.offline)
+    destination = Path(args.path).expanduser() if getattr(args, "path", None) else None
+    checks = gather_checks(repo, artemis_root(args), network=not args.offline,
+                           destination=destination)
     ready = not any(c["state"] == "fail" for c in checks)
     if args.json:
         print(json.dumps({"ready": ready, "checks": checks}, indent=2))
@@ -1614,6 +1954,28 @@ def require_landing_prerequisites(repo):
     return True
 
 
+def apply_grouping(repo, metadata, args):
+    """File a memory under org/project, from the flags or the bank's defaults.
+
+    An explicit flag that is not a slug is refused — the author can fix it in
+    one edit. A *derived* project that is not a slug (a repo directory with a
+    dot in it, say) is simply dropped: nobody typed it, so nobody should have
+    to answer for it, and the memory files under the org alone."""
+    config = load_bank_config(repo)
+    org = getattr(args, "org", None) or config.get("default_org")
+    project = getattr(args, "project", None) or norm(self_project(repo).name) or None
+    if not org:
+        return
+    if not SLUG_RE.fullmatch(str(org)):
+        fail(f"--org {org!r} is not a kebab-case slug")
+    metadata["org"] = str(org)
+    if project:
+        if getattr(args, "project", None) and not SLUG_RE.fullmatch(str(project)):
+            fail(f"--project {project!r} is not a kebab-case slug")
+        if SLUG_RE.fullmatch(str(project)):
+            metadata["project"] = str(project)
+
+
 def cmd_draft(args):
     repo = repo_root()
     require_writable(repo, "draft")
@@ -1630,6 +1992,7 @@ def cmd_draft(args):
         metadata["applies_to"] = ", ".join(entries)
     if args.author:
         metadata["author"] = args.author
+    apply_grouping(repo, metadata, args)
     inbox = repo / "inbox"
     inbox.mkdir(exist_ok=True)
     dest = inbox / f"{args.name}.md"
@@ -1753,21 +2116,30 @@ def do_promote(repo, quiet=False, auto_merge=True):
         print("cerebro: candidates stay queued in inbox/ until the above is fixed", file=sys.stderr)
         return []
     names = [m.name for m in good]
-    adds = [n for n in names if not (repo / "memories" / f"{n}.md").exists()]
+    adds = [n for n in names if find_memory_file(repo, n) is None]
     ups = [n for n in names if n not in adds]
     msg = "memory: " + "; ".join((["add " + ", ".join(adds)] if adds else [])
                                  + (["update " + ", ".join(ups)] if ups else []))
+    def place(root, m):
+        # A slug that moved orgs updates in place: the old file goes, the new
+        # location gets the fresh render, and `add -A memories` carries both.
+        dest = memory_dest(root, m)
+        old = find_memory_file(root, m.name)
+        if old is not None and old.resolve() != dest.resolve():
+            old.unlink()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(render_memory(m), encoding="utf-8")
+
     if run_git(repo, "remote"):
         def write_all(wt):
             for m in good:
-                (wt / "memories" / f"{m.name}.md").write_text(render_memory(m), encoding="utf-8")
+                place(wt, m)
         ok = land_via_pr(repo, msg, good[0].name, write_all, auto_merge=auto_merge)
     else:
-        paths = [f"memories/{n}.md" for n in names]
         for m in good:
-            (repo / "memories" / f"{m.name}.md").write_text(render_memory(m), encoding="utf-8")
-        run_git(repo, "add", "--", *paths)
-        ok = run_git(repo, "commit", "-m", msg, "--", *paths) is not None
+            place(repo, m)
+        run_git(repo, "add", "-A", "--", "memories")
+        ok = run_git(repo, "commit", "-m", msg, "--", "memories") is not None
         if not ok:
             print("cerebro: promote commit failed — files staged in memories/, resolve manually")
     if ok:
@@ -1883,6 +2255,10 @@ def main():
     p.add_argument("--applies-to", action="append", default=[],
                    help="repo directory name whose projects index this memory "
                         "(repeatable; default: indexed everywhere)")
+    p.add_argument("--org", help="organization to file this memory under "
+                                 "(default: the bank's default_org)")
+    p.add_argument("--project", help="project/topic within the org "
+                                     "(default: the current repo's name)")
     p.set_defaults(fn=cmd_new)
 
     def sync_flags(p):
@@ -1926,6 +2302,10 @@ def main():
     p.add_argument("--applies-to", action="append", default=[],
                    help="repo directory name whose projects index this memory "
                         "(repeatable; default: indexed everywhere)")
+    p.add_argument("--org", help="organization to file this memory under "
+                                 "(default: the bank's default_org)")
+    p.add_argument("--project", help="project/topic within the org "
+                                     "(default: the current repo's name)")
     p.set_defaults(fn=cmd_draft)
 
     p = sub.add_parser("promote", help="validate queued drafts, then commit (no remote) or open an auto-merging PR")
@@ -1941,19 +2321,23 @@ def main():
                    help="ignore the fetch throttle and re-install even if unchanged")
     p.set_defaults(fn=cmd_sync)
 
-    p = sub.add_parser("doctor", help="check this machine can run cerebro (tools, identity, access)")
+    p = sub.add_parser("doctor", help="check this machine can run the memory-bank CLI (tools, identity, access)")
     p.add_argument("--root")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--offline", action="store_true", help="skip the remote-access probe")
+    p.add_argument("--path", help="check this destination rather than the registered bank's "
+                                  "(for asking about a folder before cloning into it)")
     p.set_defaults(fn=cmd_doctor)
 
-    p = sub.add_parser("status", help="show bank health and where cerebro is installed")
+    p = sub.add_parser("status", help="show bank health and where the CLI is installed")
     p.add_argument("--root")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(fn=cmd_status)
 
-    p = sub.add_parser("list", help="list the bank's memories")
+    p = sub.add_parser("list", help="list the bank's memories (own + mirror trees)")
     p.add_argument("--json", action="store_true", help="full contents as JSON (for tooling/UI)")
+    p.add_argument("--bank-only", action="store_true",
+                   help="only the bank's own memories, no read-only mirror trees")
     p.set_defaults(fn=cmd_list)
 
     p = sub.add_parser("setup", help="register a bank for this machine — shared or local only")

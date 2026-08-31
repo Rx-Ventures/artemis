@@ -766,6 +766,11 @@ export function createRemoteBridge(
           ],
         }),
       add: async () => absent(LOCAL_SETTINGS_REASON),
+      // Verification is a `git ls-remote` run from the machine that would do
+      // the cloning, and that machine is the serving one. Answering from here
+      // would test this computer's credentials against a remote it will never
+      // fetch.
+      verifyRemote: async () => absent(LOCAL_SETTINGS_REASON),
       sync: async () => absent(LOCAL_SETTINGS_REASON),
       retire: async () => absent(LOCAL_SETTINGS_REASON),
       setEnabled: async () => absent(LOCAL_SETTINGS_REASON),

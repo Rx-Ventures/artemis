@@ -5,6 +5,14 @@
  * cases the numbers hide: profiles that symlink one shared projects store,
  * project entries stamped with a `bank` versus legacy unstamped ones, and the
  * pre-multi-bank `{"bank": path}` registry.
+ *
+ * The same convention covers the spawn's pure halves, added when the module
+ * learned to run on Windows and to reach a private remote: which interpreter
+ * to drive the CLI with, what every spawn is told, and what one
+ * `git ls-remote` means. Those are decisions rather than I/O, and the fixtures
+ * for the last one are stderr the hosts in reach actually produce — the whole
+ * value of the feature is that four indistinguishable-looking failures are
+ * told apart.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,12 +22,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  acceptsAsPython3,
+  baseCliEnv,
+  categorizeLsRemote,
   configureMemoryBanks,
   isMasterEnabled,
+  needsPythonInterpreter,
   parseBanksStatus,
   parseDoctor,
+  parseGitOrigin,
   parseMemories,
   parseRegistry,
+  PYTHON_CANDIDATES,
+  selectPython,
+  withoutSecrets,
+  type LsRemoteResult,
+  type PythonProbe,
 } from './memoryBanks';
 
 const STATUS_FIXTURE = JSON.stringify({
@@ -49,7 +67,7 @@ const STATUS_FIXTURE = JSON.stringify({
       exists: true,
       source: 'cerebro@1a2b3c4',
       remote: null,
-      bank: { memories: 5, errors: 1, warnings: 0 },
+      bank: { memories: 5, own: 2, mirrored: 3, errors: 1, warnings: 0 },
     },
   ],
   profiles: [
@@ -98,6 +116,9 @@ describe('parseBanksStatus', () => {
       exists: true,
       source: 'cerebro@52a0a32',
       memories: 3,
+      // A health block that predates mirror trees reads as zero mirrored —
+      // the classic bank's truthful answer, not a parse failure.
+      mirrored: 0,
       validationErrors: 0,
       projects: 2,
     });
@@ -108,6 +129,7 @@ describe('parseBanksStatus', () => {
       isDefault: false,
       remote: null,
       memories: 5,
+      mirrored: 3,
       validationErrors: 1,
       projects: 1,
     });
@@ -191,6 +213,24 @@ const LIST_FIXTURE = JSON.stringify([
     metadata: { type: 'project', added: '2026-08-14', author: 'demo@example.com' },
     body: 'Deploys need approval in #deploys first.',
     file: 'memories/deploy-approval-flow.md',
+    org: null,
+    project: null,
+    tree: 'memories',
+    readonly: false,
+    errors: [],
+    warnings: [],
+  },
+  // A mirror-tree memory: grouped under org/project and read-only.
+  {
+    name: 'unraid-server',
+    description: 'The Unraid box and how to reach it',
+    metadata: { type: 'reference' },
+    body: 'Tailscale IP, GraphQL API, key in the vault.',
+    file: 'memory/claude/unraid-server.md',
+    org: 'personal',
+    project: 'claude',
+    tree: 'memory',
+    readonly: true,
     errors: [],
     warnings: [],
   },
@@ -201,7 +241,7 @@ const LIST_FIXTURE = JSON.stringify([
 describe('parseMemories', () => {
   it('maps parseable entries and drops the name-less', () => {
     const memories = parseMemories(LIST_FIXTURE);
-    expect(memories).toHaveLength(1);
+    expect(memories).toHaveLength(2);
     expect(memories[0]).toEqual({
       name: 'deploy-approval-flow',
       type: 'project',
@@ -209,6 +249,19 @@ describe('parseMemories', () => {
       body: 'Deploys need approval in #deploys first.',
       added: '2026-08-14',
       author: 'demo@example.com',
+      org: null,
+      project: null,
+      readonly: false,
+      file: 'memories/deploy-approval-flow.md',
+    });
+    expect(memories[1]).toMatchObject({
+      name: 'unraid-server',
+      org: 'personal',
+      project: 'claude',
+      readonly: true,
+      file: 'memory/claude/unraid-server.md',
+      added: null,
+      author: null,
     });
   });
 
@@ -259,5 +312,273 @@ describe('the master switch', () => {
     writeFileSync(join(dir, 'cerebro.json'), JSON.stringify({ version: 1, enabled: 'yes' }));
     configureMemoryBanks(dir);
     expect(isMasterEnabled()).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Getting the CLI to run at all                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The Windows spawn, as the pure decision behind it.
+ *
+ * Before this, every bank operation threw on Windows before the CLI's first
+ * line ran: the file is an extension-less Python script with a shebang, which
+ * `execFile` cannot start on a platform that has no shebang support and
+ * matches executables by `PATHEXT`. What is testable without a machine is the
+ * decision — does this path need an interpreter, and is this thing calling
+ * itself Python actually one.
+ */
+describe('needsPythonInterpreter', () => {
+  it('is true for the shipped CLI on Windows and false everywhere else', () => {
+    expect(needsPythonInterpreter('C:/App/resources/cerebro', 'win32')).toBe(true);
+    expect(needsPythonInterpreter('/Applications/Artemis.app/resources/cerebro', 'darwin')).toBe(false);
+    expect(needsPythonInterpreter('/usr/share/artemis/cerebro', 'linux')).toBe(false);
+  });
+
+  it('leaves a real executable alone, so a bank may embed one', () => {
+    // Resolution also finds a bank's *own* copy of the CLI, and a bank is free
+    // to ship something Windows can start by itself.
+    expect(needsPythonInterpreter('C:/banks/team/bin/cerebro.exe', 'win32')).toBe(false);
+    expect(needsPythonInterpreter('C:/banks/team/bin/cerebro.cmd', 'win32')).toBe(false);
+    expect(needsPythonInterpreter('C:/banks/team/bin/cerebro.BAT', 'win32')).toBe(false);
+  });
+});
+
+describe('acceptsAsPython3', () => {
+  const probe = (over: Partial<PythonProbe>): PythonProbe => ({
+    ok: true,
+    stdout: '',
+    stderr: '',
+    ...over,
+  });
+
+  it('accepts a real Python 3, from either stream', () => {
+    expect(acceptsAsPython3(probe({ stdout: 'Python 3.13.1\n' }))).toBe(true);
+    // `--version` went to stderr on 3.3 and earlier.
+    expect(acceptsAsPython3(probe({ stderr: 'Python 3.8.10\n' }))).toBe(true);
+  });
+
+  it('rejects the Windows Store stub, which exits fine and says nothing', () => {
+    // The rejection that matters. `WindowsApps\python3.exe` is an
+    // app-execution alias whose whole job is to open the Store; accepting it
+    // means every later spawn either opens a shop or fails in a way that names
+    // no Python at all.
+    expect(acceptsAsPython3(probe({ ok: true, stdout: '', stderr: '' }))).toBe(false);
+    expect(acceptsAsPython3(probe({ ok: true, stdout: '   \n' }))).toBe(false);
+  });
+
+  it('rejects a failed probe and a Python 2', () => {
+    expect(acceptsAsPython3(probe({ ok: false, stderr: 'python3 is not recognized' }))).toBe(false);
+    expect(acceptsAsPython3(probe({ stdout: 'Python 2.7.18' }))).toBe(false);
+    expect(acceptsAsPython3(probe({ stdout: 'Perl 5.38.0' }))).toBe(false);
+  });
+});
+
+describe('selectPython', () => {
+  const said = (text: string): PythonProbe => ({ ok: true, stdout: text, stderr: '' });
+  const failed: PythonProbe = { ok: false, stdout: '', stderr: 'not found' };
+
+  it('tries the launcher first, so a machine with Python 2 still gets 3', () => {
+    expect(PYTHON_CANDIDATES.map((candidate) => [candidate.command, ...candidate.args].join(' '))).toEqual([
+      'py -3',
+      'python3',
+      'python',
+    ]);
+  });
+
+  it('takes the first candidate that answers as Python 3', () => {
+    const chosen = selectPython([
+      { candidate: { command: 'py', args: ['-3'] }, probe: failed },
+      { candidate: { command: 'python3', args: [] }, probe: said('Python 3.12.4') },
+    ]);
+    expect(chosen).toEqual({ command: 'python3', args: [] });
+  });
+
+  it('skips a stub that exited zero in favour of the next candidate', () => {
+    const chosen = selectPython([
+      { candidate: { command: 'python3', args: [] }, probe: said('') },
+      { candidate: { command: 'python', args: [] }, probe: said('Python 3.11.9') },
+    ]);
+    expect(chosen).toEqual({ command: 'python', args: [] });
+  });
+
+  it('is null when nothing on the machine is a Python 3', () => {
+    expect(
+      selectPython([
+        { candidate: { command: 'py', args: ['-3'] }, probe: failed },
+        { candidate: { command: 'python3', args: [] }, probe: said('') },
+        { candidate: { command: 'python', args: [] }, probe: said('Python 2.7.18') },
+      ]),
+    ).toBeNull();
+  });
+});
+
+/**
+ * The environment every spawn is told, which is the fix for the *other* thing
+ * that was broken off macOS: without `ARTEMIS_ROOT` the CLI looks for
+ * `profiles.json` under `~/Library/Application Support/Artemis`, finds none on
+ * any other platform, and `doctor` reports the machine unready forever.
+ */
+describe('baseCliEnv', () => {
+  it('names the Artemis root and forbids a terminal prompt', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'artemis-banks-'));
+    configureMemoryBanks(dir);
+    expect(baseCliEnv()).toEqual({ ARTEMIS_ROOT: dir, GIT_TERMINAL_PROMPT: '0' });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Verifying a remote                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The categorisation, against stderr the hosts in reach actually produce.
+ *
+ * These strings are the point of the feature. "Could not clone" is true of a
+ * private repository, a typo, a laptop on a plane and a repository that does
+ * not exist, and the four remedies are entirely different — so what is
+ * asserted here is that each one lands in the category whose remedy is the
+ * right one.
+ */
+describe('categorizeLsRemote', () => {
+  const ran = (over: Partial<LsRemoteResult>): LsRemoteResult => ({
+    code: 128,
+    timedOut: false,
+    stdout: '',
+    stderr: '',
+    ...over,
+  });
+
+  it('reads a HEAD line as a reachable repository', () => {
+    const result = categorizeLsRemote(
+      ran({ code: 0, stdout: '52a0a3271f9c4b0e8d3a6f2c1b7e9d40a5c8e136\tHEAD\n' }),
+    );
+    expect(result.outcome).toBe('ok');
+    expect(result.headPresent).toBe(true);
+    expect(result.detail).toContain('52a0a327');
+  });
+
+  it('reads exit 2 with nothing fatal as a readable, empty repository', () => {
+    // `--exit-code` exits 2 when no ref matched, which for HEAD means an empty
+    // repo — a perfectly good bank to join, and what a team's second machine
+    // sees on the day the bank is created.
+    const result = categorizeLsRemote(ran({ code: 2 }));
+    expect(result.outcome).toBe('ok');
+    expect(result.headPresent).toBe(false);
+  });
+
+  it('reads a prompt that could not be answered as needing credentials', () => {
+    // The everyday private-repo case, with GIT_TERMINAL_PROMPT=0 in force.
+    expect(
+      categorizeLsRemote(
+        ran({
+          stderr:
+            "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled\n",
+        }),
+      ).outcome,
+    ).toBe('auth-required');
+  });
+
+  it('reads a rejected token as needing credentials, not as an outage', () => {
+    // Both hosts answer through "unable to access", which also matches a
+    // connectivity shape — the auth patterns are asked first for this reason.
+    expect(
+      categorizeLsRemote(
+        ran({
+          stderr:
+            "fatal: unable to access 'https://git.example.com/team/bank.git/': The requested URL returned error: 403\n",
+        }),
+      ).outcome,
+    ).toBe('auth-required');
+    expect(
+      categorizeLsRemote(ran({ stderr: "fatal: Authentication failed for 'https://git.example.com/'\n" }))
+        .outcome,
+    ).toBe('auth-required');
+  });
+
+  it('reads a missing repository as missing', () => {
+    expect(
+      categorizeLsRemote(ran({ stderr: 'remote: Repository not found.\nfatal: repository not found\n' }))
+        .outcome,
+    ).toBe('not-found');
+  });
+
+  it('reads a name that will not resolve, or a host that will not answer, as unreachable', () => {
+    expect(
+      categorizeLsRemote(
+        ran({
+          stderr: "fatal: unable to access 'https://nope.invalid/': Could not resolve host: nope.invalid\n",
+        }),
+      ).outcome,
+    ).toBe('unreachable');
+    expect(
+      categorizeLsRemote(ran({ stderr: 'fatal: unable to access: Failed to connect to 10.0.0.9 port 443\n' }))
+        .outcome,
+    ).toBe('unreachable');
+  });
+
+  it('reports a timeout as unreachable, in its own words', () => {
+    const result = categorizeLsRemote(ran({ code: null, timedOut: true }));
+    expect(result.outcome).toBe('unreachable');
+    expect(result.detail).toMatch(/did not answer/);
+  });
+
+  it('carries the last line git wrote, which is the useful one', () => {
+    const result = categorizeLsRemote(
+      ran({ stderr: 'Cloning into bare repository...\nremote: Repository not found.\n' }),
+    );
+    expect(result.detail).toBe('remote: Repository not found.');
+  });
+});
+
+/**
+ * The scrub that stands between a token and the pane.
+ *
+ * Nothing observed says git echoes a password it was handed. This is what
+ * makes that a claim the boundary does not have to rely on.
+ */
+describe('withoutSecrets', () => {
+  it('removes the exact token, wherever it appears', () => {
+    const token = 'forgejo-9f3c1a77b2e04d6a8c5f0e1b7d4a9268';
+    const said = `fatal: authentication failed with ${token} for https://git.example.com`;
+    const scrubbed = withoutSecrets(said, [token]);
+    expect(scrubbed).not.toContain(token);
+    expect(scrubbed).toContain('[redacted]');
+  });
+
+  it('still applies the shape rules to everything else', () => {
+    expect(withoutSecrets('remote said sk-ant-abcdefghijklmnop', [])).toContain('[redacted]');
+  });
+
+  it('leaves an ordinary message alone', () => {
+    expect(withoutSecrets('remote: Repository not found.', [])).toBe('remote: Repository not found.');
+  });
+});
+
+/**
+ * Finding a bank's origin without spawning anything, because this is read on
+ * the background sync's path — which fires at the start of every run.
+ */
+describe('parseGitOrigin', () => {
+  it('reads origin’s url out of a real .git/config', () => {
+    expect(
+      parseGitOrigin(
+        [
+          '[core]',
+          '\trepositoryformatversion = 0',
+          '[remote "upstream"]',
+          '\turl = https://git.example.com/other/thing.git',
+          '[remote "origin"]',
+          '\turl = https://git.example.com/team/bank.git',
+          '\tfetch = +refs/heads/*:refs/remotes/origin/*',
+        ].join('\n'),
+      ),
+    ).toBe('https://git.example.com/team/bank.git');
+  });
+
+  it('is null for a repository with no origin, and for anything unreadable', () => {
+    expect(parseGitOrigin('[core]\n\tbare = false\n')).toBeNull();
+    expect(parseGitOrigin('')).toBeNull();
   });
 });

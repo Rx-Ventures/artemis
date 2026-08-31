@@ -706,6 +706,21 @@ class LocalRun implements Run {
         complete: (request) => this.#complete(request.messages, request.tools),
         context: {
           root: this.#input.cwd,
+          // The extra directories a run was given ride along read-only: the
+          // file-reading tools may reach a team memory bank kept outside cwd
+          // (see the engine's bank merge), a write still has to land in cwd,
+          // and the shell stays confined to cwd whatever this list holds — the
+          // safe reading of "let the model read Cortex". Omitted entirely when
+          // empty, so the ordinary single-root run is untouched.
+          ...(this.#input.additionalDirectories === undefined ||
+          this.#input.additionalDirectories.length === 0
+            ? {}
+            : {
+                additionalRoots: this.#input.additionalDirectories.map((dir) => ({
+                  path: dir,
+                  writable: false as const,
+                })),
+              }),
           env: sandboxEnv(this.#input.env, []),
           signal: this.#abort.signal,
           shell: (command, signal) => this.#shell(command, signal),

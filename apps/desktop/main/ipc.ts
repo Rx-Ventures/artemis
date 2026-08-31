@@ -71,6 +71,8 @@ import {
   setMasterEnabled,
   setMemoryBankEnabled,
   syncMemoryBank,
+  verifyMemoryBankRemote,
+  promptBanks,
 } from './memoryBanks.js';
 import type { EngineHost } from './engine.js';
 import {
@@ -173,6 +175,7 @@ import {
   validateMemoryBanksPreflight,
   validateMemoryBanksSetMasterEnabled,
   validateMemoryBanksStatus,
+  validateMemoryBanksVerifyRemote,
   validateUsagePlan,
   validateUpdatesCheck,
   validateUpdatesDismiss,
@@ -586,6 +589,17 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
       handle: async () => readMemoryBanksPreflight(),
     },
 
+    /*
+     * The only bank channel that names a remote without joining it, and the
+     * only one that may be handed a token the user has not committed to
+     * storing. Nothing here writes: no clone, no registry entry, no secret on
+     * disk — see `verifyMemoryBankRemote`.
+     */
+    [IPC.memoryBanksVerifyRemote]: {
+      validate: validateMemoryBanksVerifyRemote,
+      handle: async (request) => verifyMemoryBankRemote(request),
+    },
+
     [IPC.memoryBankAdd]: {
       validate: validateMemoryBankAdd,
       handle: async (request) => addMemoryBank(request),
@@ -629,7 +643,12 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      */
     [IPC.agentPromptsList]: {
       validate: validateAgentPromptsList,
-      handle: async () => ({ document: await engine.require().readAgentPrompts() }),
+      // The banks ride along because only main can see them, and the pane's
+      // preview of a built-in is wrong without them — see the response type.
+      handle: async () => ({
+        document: await engine.require().readAgentPrompts(),
+        memoryBanks: promptBanks(),
+      }),
     },
 
     [IPC.agentPromptsSave]: {

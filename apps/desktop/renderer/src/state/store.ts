@@ -2180,6 +2180,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     activeProfileId: (prefs.activeProfileId ?? null) as ProfileId | null,
     cwd: prefs.cwd ?? '',
     workspace: null,
+    additionalDirectories: [],
     permissionMode: prefs.permissionMode ?? 'default',
     model: prefs.model ?? null,
     effort: prefs.effort ?? null,
@@ -7941,6 +7942,33 @@ export async function chooseWorkingDirectory(pane: Pane = focusedPane()): Promis
   return choice;
 }
 
+/**
+ * Add a folder the next run may read, beyond the working directory.
+ *
+ * Opens the same host chooser {@link chooseWorkingDirectory} does but adopts
+ * nothing: the path joins {@link SessionState.additionalDirectories} and rides
+ * the next run as {@link RunInput.additionalDirectories}, rather than moving the
+ * session. A path already in the list is dropped so the set stays a set, and the
+ * outcome is returned so the control can show a refusal on itself — the same
+ * contract the cwd chooser follows.
+ */
+export async function addSessionDirectory(pane: Pane = focusedPane()): Promise<DirectoryChoice> {
+  const choice = await pickDirectory(paneState(pane).cwd);
+  if (choice.status !== 'chosen') return choice;
+  const current = paneState(pane).additionalDirectories;
+  if (!current.includes(choice.path)) {
+    setPaneState(pane, { additionalDirectories: [...current, choice.path] });
+  }
+  return choice;
+}
+
+/** Drop one folder from {@link SessionState.additionalDirectories}. A no-op if absent. */
+export function removeSessionDirectory(path: string, pane: Pane = focusedPane()): void {
+  const current = paneState(pane).additionalDirectories;
+  if (!current.includes(path)) return;
+  setPaneState(pane, { additionalDirectories: current.filter((dir) => dir !== path) });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Recent folders                                                             */
 /* -------------------------------------------------------------------------- */
@@ -10639,6 +10667,14 @@ export async function submitPrompt(
     cwd: state.cwd,
     prompt,
     runId,
+    // Extra folders the user attached to this column, if any. The engine adds
+    // the enabled memory banks to this same field in the main process, so a run
+    // reaches the union of what the user chose here and what the banks provide.
+    // See `WorkingDirectory` for the control, and `main/engine.ts` for the bank
+    // merge.
+    ...(continuation.additionalDirectories.length > 0
+      ? { additionalDirectories: continuation.additionalDirectories }
+      : {}),
     includePartialMessages: capabilities.partialMessages,
     ...(sending === undefined ? {} : { attachments: sending }),
     ...(model ? { model: model.id } : {}),

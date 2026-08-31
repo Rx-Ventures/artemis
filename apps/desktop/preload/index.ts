@@ -92,6 +92,7 @@ import {
   type MemoryBankRetireRequest,
   type MemoryBankSetEnabledRequest,
   type MemoryBankSyncRequest,
+  type MemoryBankVerifyRemoteRequest,
   type MemoryBanksPreflightRequest,
   type MemoryBanksSetMasterEnabledRequest,
   type MemoryBanksStatusRequest,
@@ -695,6 +696,8 @@ const bridge: ArtemisBridge = Object.freeze({
     status: (request: MemoryBanksStatusRequest) => invoke(IPC.memoryBanksStatus, request),
     memories: (request: MemoryBankMemoriesRequest) => invoke(IPC.memoryBankMemories, request),
     preflight: (request: MemoryBanksPreflightRequest) => invoke(IPC.memoryBanksPreflight, request),
+    verifyRemote: (request: MemoryBankVerifyRemoteRequest) =>
+      invoke(IPC.memoryBanksVerifyRemote, request),
     add: (request: MemoryBankAddRequest) => invoke(IPC.memoryBankAdd, request),
     sync: (request: MemoryBankSyncRequest) => invoke(IPC.memoryBankSync, request),
     retire: (request: MemoryBankRetireRequest) => invoke(IPC.memoryBankRetire, request),
