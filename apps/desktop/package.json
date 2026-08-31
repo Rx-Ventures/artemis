@@ -11,6 +11,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
+  "desktopName": "artemis.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",

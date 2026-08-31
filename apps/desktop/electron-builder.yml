@@ -68,10 +68,70 @@ linux:
   # Linux. Keep the installed command and the unpacked binary predictable.
   executableName: artemis
   artifactName: ${productName}-${version}-${arch}.${ext}
+  synopsis: A desktop UI for agentic coding CLIs
+  description: >-
+    Artemis drives Claude Code, Codex and other agentic coding CLIs from one
+    window: sessions per project, a terminal, a file tree and a browser beside
+    the transcript, and one set of accounts shared across them.
+  # The window's identity to the desktop, and the reason it is spelled here and
+  # in `desktopName` in package.json rather than left to default.
+  #
+  # GNOME and KDE match a running window to its launcher by app id — WM_CLASS on
+  # X11, the xdg-shell app_id on Wayland — and Electron takes that id from
+  # `desktopName` in package.json. electron-builder takes `StartupWMClass` from
+  # the same field. Left unset, Electron uses the app name and the builder uses
+  # `productName`, which agree today only by luck: both happen to be "Artemis",
+  # and a flavoured build (`productName: Artemis (Beta)`, `app.setName` giving
+  # `Artemis Beta`) is one rename away from a window that shows as a generic
+  # cog beside the launcher it came from. `syncDesktopName` is what makes the
+  # installed `.desktop` file agree with both.
+  #
+  # The name itself lives in `desktopName` in package.json and *only* there:
+  # it is not an electron-builder option, and electron-builder validates this
+  # file against its schema, so spelling it here fails the build rather than
+  # being ignored. Both tools read the package.json field.
+  syncDesktopName: true
+  desktop:
+    entry:
+      Keywords: agent;ai;claude;codex;coding;llm;terminal;
   target:
     - AppImage
     - deb
     - pacman
+
+# What an Arch package must ask for, spelled out because the default is wrong.
+# ============================================================================
+#
+# electron-builder's built-in pacman dependency list is inherited from a much
+# older Electron and names two packages that Arch's official repositories do
+# not carry: `libappindicator-gtk3`, dropped to the AUR, and `http-parser`,
+# dropped outright. `pacman -U` resolves dependencies against the configured
+# repositories and refuses the install when one cannot be found — so the
+# artifact this workflow has been publishing could not be installed on a stock
+# Arch or CachyOS machine at all. Verified against archlinux.org's package API
+# on 2026-08-31: both return no result in core, extra or multilib.
+#
+# The rest of that default list is `c-ares`, `ffmpeg`, `libevent`, `libvpx`,
+# `libxslt`, `minizip`, `re2` and `snappy` — libraries a *system-linked*
+# Electron needs, of the kind Arch's own `electron` package unbundles against.
+# electron-builder ships a self-contained Electron that carries its own copies,
+# so those are not this package's dependencies; they are a longer install for
+# no behaviour.
+#
+# What is left is what Chromium actually dlopens plus the two libraries Artemis
+# specifically needs: `libsecret` because `main/profileSecrets.ts` stores the
+# local server key through it, and `libnotify` because the routines host posts
+# desktop notifications. `xdg-utils` is what `shell.openExternal` shells out
+# to. All seven are in core or extra today.
+pacman:
+  depends:
+    - gtk3
+    - nss
+    - alsa-lib
+    - libxss
+    - libnotify
+    - libsecret
+    - xdg-utils
 
 # Declaring the provider makes electron-builder emit an update feed beside the
 # artifacts — latest-mac.yml from a mac build, latest.yml from a Windows one,
