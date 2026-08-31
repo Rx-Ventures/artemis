@@ -19,7 +19,7 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Rx-Ventures/artemis.git",
+    "url": "git+https://github.com/seth-torrence/artemis.git",
     "directory": "packages/sdk"
   },
   "publishConfig": {

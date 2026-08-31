@@ -69,8 +69,15 @@ const log = createLogger('updater');
  * The repository releases are published to. Kept in lockstep with the
  * `publish` block in `apps/desktop/electron-builder.yml` by hand — there is no
  * runtime accessor for the builder's config, the same situation as `appId`.
+ *
+ * The by-hand part is not theoretical: this constant and that block drifted
+ * apart when the repository moved from the Rx-Ventures org to seth-torrence
+ * on 2026-08-30, and the drift was survivable only because GitHub redirects
+ * the old path. Three separate places name this fact — here, the builder's
+ * publish block, and `renderer/src/lib/bugReport.ts` — and all three move
+ * together or none of them do.
  */
-const REPO = 'Rx-Ventures/artemis';
+const REPO = 'seth-torrence/artemis';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 /**

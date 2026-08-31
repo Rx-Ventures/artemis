@@ -7,7 +7,7 @@ Claims like that are worth testing, and a report that breaks one is welcome.
 
 **Do not open a public issue.** Use GitHub's private vulnerability reporting:
 
-**[Report a vulnerability →](https://github.com/Rx-Ventures/artemis/security/advisories/new)**
+**[Report a vulnerability →](https://github.com/seth-torrence/artemis/security/advisories/new)**
 
 If that is unavailable to you, email **seth@storrence.dev**.
 

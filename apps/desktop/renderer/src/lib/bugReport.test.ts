@@ -83,7 +83,7 @@ describe('buildIssueUrl', () => {
   it('points at the org repository, prefilled and labelled', () => {
     const { url, trimmed } = buildIssueUrl(draft(), DIAGNOSTICS);
     const parsed = new URL(url);
-    expect(parsed.origin + parsed.pathname).toBe('https://github.com/Rx-Ventures/artemis/issues/new');
+    expect(parsed.origin + parsed.pathname).toBe('https://github.com/seth-torrence/artemis/issues/new');
     expect(parsed.searchParams.get('title')).toBe('Dock tab loses focus');
     expect(parsed.searchParams.get('labels')).toBe('bug');
     expect(bodyOf(url)).toContain('Resizing the dock moves focus');

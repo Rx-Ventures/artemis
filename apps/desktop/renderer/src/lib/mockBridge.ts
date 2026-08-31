@@ -2355,7 +2355,7 @@ export function createMockBridge(): ArtemisBridge {
       phase,
       version: '0.4.0',
       message: phase === 'error' ? 'The download could not be verified.' : null,
-      releaseUrl: phase === 'error' ? 'https://github.com/Rx-Ventures/artemis/releases' : null,
+      releaseUrl: phase === 'error' ? 'https://github.com/seth-torrence/artemis/releases' : null,
       // Mid-download, with a total: the browser preview is where the bar's
       // determinate state is looked at, and an indeterminate one is the case
       // that needs no preview to reason about.

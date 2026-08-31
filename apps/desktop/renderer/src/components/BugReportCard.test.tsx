@@ -126,7 +126,7 @@ describe('BugReportCard', () => {
     const href = screen.getByRole('link', { name: /Continue on GitHub/ }).getAttribute('href') ?? '';
     const parsed = new URL(href);
     expect(parsed.origin + parsed.pathname).toBe(
-      'https://github.com/Rx-Ventures/artemis/issues/new',
+      'https://github.com/seth-torrence/artemis/issues/new',
     );
     expect(parsed.searchParams.get('title')).toBe('Dock tab loses focus');
     expect(parsed.searchParams.get('labels')).toBe('bug');

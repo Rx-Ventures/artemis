@@ -10,7 +10,7 @@ body:
         most useful thing you can send.
 
         **Not here:** security vulnerabilities. Use
-        [private reporting](https://github.com/Rx-Ventures/artemis/security/advisories/new)
+        [private reporting](https://github.com/seth-torrence/artemis/security/advisories/new)
         instead.
 
   - type: textarea
