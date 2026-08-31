@@ -1,6 +1,60 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.3.0
+
+The reunification release: everything the david-systemtech fork learned comes
+home, plus a day of fixes found in the porting.
+
+**Windows is a platform now, not a port.** The sign-in command shown is one
+PowerShell can actually run, npm-installed `.cmd` tools launch, the profile
+farm links with junctions instead of privileged symlinks, shared Claude config
+works (junctions and a hard link, re-runnable, nothing deleted), the whole test
+suite runs green there — and CI defends all of it on every PR. Windows also
+updates itself now: the NSIS installer is parked and run silently on restart,
+from the same feed macOS reads.
+
+**Linux releases what the config declares.** AppImage and deb ship beside
+pacman, and the AppImage boots in CI before it ships.
+
+**Settings → About.** The running version with a copy button, the platform and
+channel, and a Check-for-updates that answers with one of five honest outcomes
+instead of a spinner.
+
+**Memory banks catch up.** Join a team bank from your own git URL — Verify
+answers ok / auth-required / not-found / unreachable before anything is
+written, and a private repo's token lives in the child's environment for
+exactly as long as git needs it. The built-in prompt is editable, names your
+actual bank, and previews exactly what a run will carry. Banks can mirror
+read-only trees, grouped by organization and project. Every run reads the
+enabled banks automatically — the sandbox learned read-only roots beyond the
+working directory — and a stray file the old CLI never saw warns instead of
+silently breaking background sync forever.
+
+**A key manager can hold the secrets.** OpenBao and Doppler, side by side, as
+many connections as you need. Private-CA servers are trusted by explicit
+click on a fingerprint, pinning the issuer so certificate renewal doesn't break
+the connection. The one stored secret is the manager's own token; passwords are
+spent on login and never written.
+
+**The server earns its keep.** The Docker image builds again (it could not),
+survives deployment (its imports resolved into a stage that no longer existed),
+and refuses to ship without its agent binary. A server's provider accounts can
+be signed in from the desktop — the container never needs a shell — gated by a
+grant absent by default, invisible without it. Served runs stop auto-denying
+permission prompts: the ordinary permission card draws for a run happening on
+another machine, and a dropped connection parks the run for six hours instead
+of killing it. Tokens with an expiry now expire on the headless server too.
+
+**And a day of fixes.** A message sent mid-run survives a reload, and the
+interrupt it raced. The usage meter counts down between readings, and a stale
+reading can no longer drag it backwards. A conversation forks without waiting
+for the agent to stop. The queued-message banner clears the moment the agent
+actually reads the message — and the message itself says "Queued" beneath it,
+with an interrupt button to have it read now. The first pane in a split keeps
+its conversation's name instead of claiming "New session". And thinking renders
+for Claude and Codex, not just local models.
+
 ## What's new in 2.2.0
 
 **Hand off.** A conversation can now be handed on deliberately, from a button
