@@ -184,6 +184,7 @@ const RECORDED_KEYS = [
   'providerId',
   'cwd',
   'resumeSessionId',
+  'resolveMs',
   'reason',
   'synthesized',
   'mode',
