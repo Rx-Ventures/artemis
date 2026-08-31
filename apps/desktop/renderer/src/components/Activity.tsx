@@ -40,6 +40,7 @@
  * for.
  */
 
+import { isTaskLive } from '@rx-artemis/protocol';
 import { useEffect, useState, type ReactElement } from 'react';
 
 import { cn } from '../lib/utils';
@@ -149,10 +150,28 @@ export function ActivityIndicator(): ReactElement | null {
   const busyElsewhere = useApp(
     (s) => sessionId !== null && sessionId !== undefined && s.sessionsWorking.includes(sessionId),
   );
+  /*
+   * What, specifically, is holding it. The working set is a boolean per
+   * session, but this pane's own delegated rows can often name the holder: a
+   * conversation whose background tasks are still going reads as "working"
+   * for exactly as long as they run, and telling the user a *turn* is being
+   * finished while nothing visible is running reads as a lie. When live rows
+   * exist, say so; the turn wording stays for the case the rows cannot see —
+   * a scheduled wakeup's turn, another window's steer, the settle beat.
+   */
+  const liveTasks = usePane((s) => s.tasks.reduce((n, task) => n + (isTaskLive(task) ? 1 : 0), 0));
   const raw = activityOf(run, queued);
   const state =
     raw.kind === 'starting' && busyElsewhere
-      ? { ...raw, because: "finishing this conversation's current turn first" }
+      ? {
+          ...raw,
+          because:
+            liveTasks === 1
+              ? "waiting for this conversation's background task to finish"
+              : liveTasks > 1
+                ? `waiting for ${liveTasks} background tasks in this conversation to finish`
+                : "finishing this conversation's current turn first",
+        }
       : raw;
   const elapsed = useElapsed(state.since);
 

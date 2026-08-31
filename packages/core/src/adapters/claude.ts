@@ -43,7 +43,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import {
@@ -2394,6 +2395,37 @@ const SUGGESTION_GRACE_MS = 10_000;
 const QUEUED_TURN_GRACE_MS = 5_000;
 
 /**
+ * How often an outstanding queued message checks the transcript for its fold.
+ *
+ * The CLI reads a queued message without saying so on its stream: the fold
+ * arrives to the model inside the next tool result, and the only record is the
+ * `queue-operation` row it appends to the session's own `.jsonl`. So while a
+ * named message is unread, the process tails that file. The poll only exists
+ * in that state — no queued message, no timer — and each pass reads just the
+ * bytes appended since the last, so the steady cost is one `stat` per tick on
+ * a file the CLI has open anyway.
+ */
+const DELIVERY_POLL_MS = 800;
+
+/**
+ * How much of the transcript's tail the first delivery poll is willing to read.
+ *
+ * The watch starts at send time and the fold strictly follows it, so anything
+ * relevant is at the end of the file. A resumed conversation can be megabytes;
+ * scanning all of it to find a row that cannot be there yet is pure waste.
+ */
+const DELIVERY_FIRST_READ_BYTES = 256 * 1024;
+
+/**
+ * Clock slack when matching a transcript row to the message it delivers.
+ *
+ * Both timestamps come from this machine — the entry's from Artemis at send,
+ * the row's from the CLI at fold — but they are stamped by different processes
+ * and a row must never lose its match to scheduling jitter.
+ */
+const DELIVERY_TIMESTAMP_SLACK_MS = 2_000;
+
+/**
  * Does this message open a turn?
  *
  * `init` does, once per turn — the CLI emits one at the head of every turn in
@@ -2650,7 +2682,38 @@ class ClaudeProcess {
     readonly uuid: string;
     readonly messageId: MessageId;
     readonly text: string;
+    readonly sentAt: number;
   }[] = [];
+
+  /**
+   * The transcript tail, read because the stream says nothing.
+   *
+   * A fold used to be observable: the CLI echoed every user turn back on its
+   * own stream, and {@link #observeDelivery} watched for the echo. It no longer
+   * does — a queued message is consumed as a `queued_command` attachment, the
+   * model sees it inside the next tool result, and the stream carries no user
+   * message at all. What the CLI *does* write is a `queue-operation` row with
+   * `operation: "remove"` and the message's exact text, into the session's own
+   * `.jsonl`, at the moment the message leaves its queue. That file is the one
+   * place the fold is visible, so while a named message is unread this process
+   * tails it. {@link #observeDelivery} stays: an echo, should any version emit
+   * one again, still wins the race and costs nothing.
+   */
+  #deliveryTimer: ReturnType<typeof setInterval> | undefined;
+  /** How far into the transcript the delivery poll has read. */
+  #deliveryOffset = -1;
+  /** A partial trailing line carried between delivery reads. */
+  #deliveryRemainder = '';
+  /** The transcript path once found, so the candidate walk runs once. */
+  #deliveryFile: string | undefined;
+  /**
+   * Deliveries noticed while no turn could carry them.
+   *
+   * The same contract as {@link #observeDelivery}: nothing may be emitted onto
+   * a finished turn. A fold read from the file after its turn ended parks the
+   * id here, and the poll flushes it the moment a live turn exists.
+   */
+  readonly #deliveredPendingEmit: MessageId[] = [];
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -3541,7 +3604,10 @@ class ClaudeProcess {
      * `message.delivered` is emitted, and the behaviour is exactly what it was
      * before this existed.
      */
-    if (messageId !== undefined) this.#unread.push({ uuid, messageId, text });
+    if (messageId !== undefined) {
+      this.#unread.push({ uuid, messageId, text, sentAt: Date.now() });
+      this.#watchDeliveries();
+    }
     // Counted *after* the push it describes: this is what keeps the pump alive
     // past the next `result` if no tool boundary folds the message in first.
     this.#pendingSteers += 1;
@@ -3619,6 +3685,182 @@ class ClaudeProcess {
         messageId: entry.messageId,
       },
     ];
+  }
+
+  /**
+   * Start tailing the transcript for folds, if nothing is tailing it already.
+   *
+   * `unref` so an outstanding message never holds the process open on its own:
+   * the poll is an observer of work, not work.
+   */
+  #watchDeliveries(): void {
+    if (this.#deliveryTimer !== undefined || this.#closed) return;
+    const timer = setInterval(() => {
+      void this.#pollDeliveries();
+    }, DELIVERY_POLL_MS);
+    timer.unref?.();
+    this.#deliveryTimer = timer;
+  }
+
+  #stopDeliveryWatch(): void {
+    if (this.#deliveryTimer !== undefined) clearInterval(this.#deliveryTimer);
+    this.#deliveryTimer = undefined;
+  }
+
+  /**
+   * Where the CLI writes this conversation.
+   *
+   * `$CLAUDE_CONFIG_DIR/projects/<cwd with every non-alphanumeric turned into
+   * a dash>/<sessionId>.jsonl`. The CLI munges its *resolved* working
+   * directory, which on macOS differs from the one Artemis passed whenever a
+   * symlink is involved (`/tmp` is really `/private/tmp`) — so both spellings
+   * are candidates and whichever exists wins. Cached on first hit; until the
+   * CLI's first write there is nothing to find and the next poll retries.
+   */
+  async #deliveryPath(): Promise<string | undefined> {
+    if (this.#deliveryFile !== undefined) return this.#deliveryFile;
+    const sessionId = this.#sessionId;
+    if (sessionId === undefined) return undefined;
+
+    const configDir = readEnv(this.#input.env, CLAUDE_CONFIG_DIR_ENV) ?? join(homedir(), '.claude');
+    const cwd = this.#input.cwd;
+    const candidates = [cwd, await realpath(cwd).catch(() => cwd)];
+    for (const dir of new Set(candidates)) {
+      const file = join(configDir, 'projects', dir.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+      const found = await stat(file)
+        .then((info) => info.isFile())
+        .catch(() => false);
+      if (found) {
+        this.#deliveryFile = file;
+        return file;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * One tail read: the bytes appended since last time, scanned for removes.
+   *
+   * Every failure path declines quietly and leaves the entry in place — a
+   * transcript that cannot be read costs the fold's timeliness, not the
+   * message, because {@link #ensureTurn} still clears the queue when the next
+   * turn consumes it.
+   */
+  async #pollDeliveries(): Promise<void> {
+    if (this.#closed) {
+      this.#stopDeliveryWatch();
+      return;
+    }
+    // A live turn can carry what an ended one could not.
+    if (this.#deliveredPendingEmit.length > 0 && !this.#state.ended) {
+      for (const messageId of this.#deliveredPendingEmit.splice(0)) {
+        this.#emit({ type: 'message.delivered', ...nextEventEnvelope(this.#state), messageId });
+      }
+    }
+    if (this.#unread.length === 0 && this.#deliveredPendingEmit.length === 0) {
+      this.#stopDeliveryWatch();
+      return;
+    }
+    if (this.#unread.length === 0) return;
+
+    const file = await this.#deliveryPath();
+    if (file === undefined) return;
+
+    let handle;
+    try {
+      handle = await open(file, 'r');
+    } catch {
+      return;
+    }
+    try {
+      const size = (await handle.stat()).size;
+      if (this.#deliveryOffset < 0) {
+        // First read: start near the tail — the watch began at send time and
+        // the fold strictly follows it. From a line boundary's perspective the
+        // window may open mid-row; the remainder logic below discards that
+        // fragment as unparseable, which is correct: a row it cannot read in
+        // full is a row from before the watch existed.
+        this.#deliveryOffset = Math.max(0, size - DELIVERY_FIRST_READ_BYTES);
+      }
+      if (size < this.#deliveryOffset) {
+        // Truncated or replaced under the watch. Start over at the beginning:
+        // stale matches are fenced by each entry's own send time.
+        this.#deliveryOffset = 0;
+        this.#deliveryRemainder = '';
+      }
+      if (size === this.#deliveryOffset) return;
+
+      const length = Math.min(size - this.#deliveryOffset, DELIVERY_FIRST_READ_BYTES);
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, this.#deliveryOffset);
+      if (bytesRead <= 0) return;
+      this.#deliveryOffset += bytesRead;
+
+      const chunk = this.#deliveryRemainder + buffer.toString('utf8', 0, bytesRead);
+      const lines = chunk.split('\n');
+      this.#deliveryRemainder = lines.pop() ?? '';
+      for (const line of lines) this.#noticeDeliveryRow(line);
+    } catch {
+      // Next tick retries from the same offset.
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Read one transcript row for the fact that a queued message was consumed.
+   *
+   * Two row shapes say so — `queue-operation`/`remove` carries the exact text,
+   * and the `queued_command` attachment carries the same text as `prompt` —
+   * and either is accepted, first match wins. The `enqueue` operation carries
+   * identical text and means the opposite, so the operation is checked, not
+   * just the shape. A row older than the entry is someone else's: the same
+   * words sent twice must not let the first send's row deliver the second.
+   */
+  #noticeDeliveryRow(line: string): void {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return;
+    let row: Record<string, unknown>;
+    try {
+      row = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    let text: string | undefined;
+    if (row['type'] === 'queue-operation' && row['operation'] === 'remove') {
+      if (typeof row['content'] === 'string') text = row['content'];
+    } else if (row['type'] === 'attachment') {
+      const attachment = row['attachment'] as Record<string, unknown> | undefined;
+      if (
+        attachment !== undefined &&
+        attachment['type'] === 'queued_command' &&
+        typeof attachment['prompt'] === 'string'
+      ) {
+        text = attachment['prompt'];
+      }
+    }
+    if (text === undefined) return;
+
+    const rowAt = typeof row['timestamp'] === 'string' ? Date.parse(row['timestamp']) : Number.NaN;
+    const matched = this.#unread.findIndex(
+      (entry) =>
+        entry.text === text &&
+        (Number.isNaN(rowAt) || rowAt >= entry.sentAt - DELIVERY_TIMESTAMP_SLACK_MS),
+    );
+    if (matched < 0) return;
+
+    const [entry] = this.#unread.splice(matched, 1);
+    if (entry === undefined) return;
+    if (this.#state.ended) {
+      this.#deliveredPendingEmit.push(entry.messageId);
+      return;
+    }
+    this.#emit({
+      type: 'message.delivered',
+      ...nextEventEnvelope(this.#state),
+      messageId: entry.messageId,
+    });
   }
 
   /**
@@ -3961,6 +4203,7 @@ class ClaudeProcess {
       clearTimeout(this.#suggestionTimer);
       this.#awaitingQueuedTurn = false;
       clearTimeout(this.#queuedTurnTimer);
+      this.#stopDeliveryWatch();
       this.#deps.onClosed?.(this);
 
       try {
