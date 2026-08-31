@@ -37,7 +37,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -92,7 +100,12 @@ interface Sandbox {
  * `~/Library/Application Support`.
  */
 function sandbox(): Sandbox {
-  const base = mkdtempSync(path.join(tmpdir(), 'artemis-probe-'));
+  // `.native` expands Windows 8.3 short names (a GitHub-hosted runner's TMP is
+  // `C:\Users\RUNNER~1\...`), which otherwise poison every comparison in here:
+  // a junction's `.Target` always reads back long-form, so a sandbox built on a
+  // short-form root reads as `foreign` beside a junction the script just made.
+  // Real roots never hit this — Electron and `homedir()` hand back long paths.
+  const base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'artemis-probe-')));
   sandboxes.push(base);
 
   const home = path.join(base, 'home');

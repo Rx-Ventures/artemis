@@ -34,6 +34,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -188,7 +189,12 @@ interface Sandbox {
 }
 
 function sandbox(): Sandbox {
-  const base = mkdtempSync(path.join(tmpdir(), 'artemis-shared-'));
+  // `.native` expands Windows 8.3 short names (a GitHub-hosted runner's TMP is
+  // `C:\Users\RUNNER~1\...`), which otherwise poison every comparison in here:
+  // a junction's `.Target` always reads back long-form, so a sandbox built on a
+  // short-form root reads as `foreign` beside a junction the script just made.
+  // Real roots never hit this — Electron and `homedir()` hand back long paths.
+  const base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'artemis-shared-')));
   sandboxes.push(base);
 
   const home = path.join(base, 'home');
@@ -500,7 +506,12 @@ interface WindowsSandbox {
 }
 
 function windowsSandbox(): WindowsSandbox {
-  const base = mkdtempSync(path.join(tmpdir(), 'artemis-win-'));
+  // `.native` expands Windows 8.3 short names (a GitHub-hosted runner's TMP is
+  // `C:\Users\RUNNER~1\...`), which otherwise poison every comparison in here:
+  // a junction's `.Target` always reads back long-form, so a sandbox built on a
+  // short-form root reads as `foreign` beside a junction the script just made.
+  // Real roots never hit this — Electron and `homedir()` hand back long paths.
+  const base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'artemis-win-')));
   sandboxes.push(base);
 
   const home = path.join(base, 'home');
