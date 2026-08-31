@@ -1072,7 +1072,17 @@ async function openAppServer(options: OpenAppServerOptions): Promise<AppServerSe
 
   const child = spawnJsonRpcSubprocess({
     executable: options.deps.executable,
-    args: ['app-server'],
+    /*
+     * Reasoning summaries are requested explicitly, because the CLI's model
+     * catalog defaults `model_reasoning_summary` to `none` for every current
+     * model. Without the override a reasoning item opens and closes with no
+     * `item/reasoning/summaryTextDelta` between — observed against the real
+     * app server, and the reason Codex turns showed no thinking at all. `-c`
+     * rather than the profile's config.toml so a user's own config cannot
+     * silently blank the thinking pane, and `auto` rather than a fixed
+     * verbosity so the choice stays with the model catalog.
+     */
+    args: ['app-server', '-c', 'model_reasoning_summary=auto'],
     cwd: options.cwd,
     env,
     ...(options.onNotification === undefined ? {} : { onNotification: options.onNotification }),

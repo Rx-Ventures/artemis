@@ -2187,18 +2187,36 @@ export function buildClaudeOptions(
     // the layer has the highest priority among user-controlled settings.
     settings: buildFlagSettings(input),
     /*
-     * The Chrome bridge has no SDK option — it is a CLI flag — so it rides
-     * `extraArgs`, which exists for exactly this. Passed only when asked for:
-     * the flag loads the whole `claude-in-chrome` tool set into context on
-     * every turn, which is a real cost a run that never browses should not pay,
-     * and the CLI treats an absent flag as off, so there is nothing to negate.
+     * Two CLI flags with no SDK options of their own, riding `extraArgs`,
+     * which exists for exactly this.
      *
-     * A request, not a guarantee — the CLI keeps the integration off for
-     * API-key credentials and when the extension is not connected. Deliberately
-     * not pre-checked here: the CLI owns that decision and its rules move with
+     * `thinking-display` is always sent, because the CLI's own default is the
+     * one thing it must not be here. The CLI infers whether anyone will read
+     * the reasoning from how it is being driven: interactive sessions default
+     * the display to `summarized`, SDK-driven ones to `omitted` — and
+     * `omitted` still returns every thinking block, as a signature beside
+     * empty text. The mapper rightly refuses to put an empty fold in the
+     * transcript, so without this flag a Claude run shows no reasoning at
+     * all, for every model and every credential. Artemis *is* somebody
+     * watching, and this is where it says so. Verified against the bundled
+     * CLI rather than assumed: the same turn yields zero thinking characters
+     * without the flag and the real text with it.
+     *
+     * `chrome` is passed only when asked for: the flag loads the whole
+     * `claude-in-chrome` tool set into context on every turn, which is a real
+     * cost a run that never browses should not pay, and the CLI treats an
+     * absent flag as off, so there is nothing to negate.
+     *
+     * Requests, not guarantees — the CLI keeps the Chrome integration off for
+     * API-key credentials and when the extension is not connected, and a
+     * model that returns no reasoning still returns none. Deliberately not
+     * pre-checked here: the CLI owns those decisions and its rules move with
      * its releases, so second-guessing them would only age badly.
      */
-    ...(input.chromeBrowser === true ? { extraArgs: { chrome: null } } : {}),
+    extraArgs: {
+      'thinking-display': 'summarized',
+      ...(input.chromeBrowser === true ? { chrome: null } : {}),
+    },
     permissionMode,
     // The SDK gates `bypassPermissions` behind an explicit opt-in. Passing it
     // only when the user picked that mode keeps the dangerous flag tied to a

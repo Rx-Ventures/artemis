@@ -138,6 +138,16 @@ export interface CodexMapperState {
   readonly closedToolCalls: Set<ToolCallId>;
   /** Item ids that have streamed at least one text delta. */
   readonly streamedItems: Set<MessageId>;
+  /**
+   * Reasoning item ids that have streamed at least one thinking delta.
+   *
+   * Kept apart from `streamedItems` because the two answer different
+   * questions at completion time: a completed agent message uses its set to
+   * pick a block index, a completed reasoning item uses this one to decide
+   * whether the item's text has already gone out — see the salvage note in
+   * {@link mapItemCompleted}.
+   */
+  readonly streamedThinking: Set<MessageId>;
 
   /**
    * Running total of every `last` breakdown seen this run.
@@ -192,6 +202,7 @@ export function createCodexMapperState(
     openToolCalls: new Map(),
     closedToolCalls: new Set(),
     streamedItems: new Set(),
+    streamedThinking: new Set(),
     usageTotal: {
       inputTokens: 0,
       outputTokens: 0,
@@ -454,10 +465,36 @@ function mapItemCompleted(
     ];
   }
 
-  // Reasoning has no completion event by design — see the note on
-  // `ThinkingDeltaEvent`. The item's final `content` was already delivered as
-  // deltas, so re-emitting it here would duplicate the whole block.
-  if (type === 'reasoning' || type === 'userMessage') return [];
+  if (type === 'reasoning') {
+    /*
+     * Reasoning has no completion event by design — see the note on
+     * `ThinkingDeltaEvent`. When the deltas streamed, the block is already in
+     * the transcript and re-emitting the item's text would duplicate it
+     * whole.
+     *
+     * But the deltas are an opt-in the server does not always honour —
+     * summaries off means a reasoning item opens and closes with nothing
+     * between — and then this completion is the only copy the text will ever
+     * have. Dropping it unconditionally was the second half of why Codex
+     * turns showed no thinking: the first half (the opt-in) is the spawn's
+     * `-c model_reasoning_summary=auto`, and this salvage is what keeps the
+     * thinking pane honest if that lever ever stops being enough.
+     */
+    if (state.streamedThinking.has(id as MessageId)) return [];
+    const text = reasoningText(item);
+    if (text === '') return [];
+    return [
+      {
+        type: 'thinking.delta',
+        ...stamp(state),
+        messageId: id as MessageId,
+        blockIndex: 0,
+        text,
+      },
+    ];
+  }
+
+  if (type === 'userMessage') return [];
 
   const tool = toolDescriptor(type, item);
   if (tool === undefined) return [];
@@ -518,6 +555,8 @@ function mapThinkingDelta(
   const delta = payload['delta'];
   if (itemId === undefined || typeof delta !== 'string' || delta === '') return [];
 
+  state.streamedThinking.add(itemId as MessageId);
+
   return [
     {
       type: 'thinking.delta',
@@ -527,6 +566,25 @@ function mapThinkingDelta(
       text: delta,
     },
   ];
+}
+
+/**
+ * The displayable text of a stored or completed reasoning item.
+ *
+ * The summary when there is one, the raw content otherwise — the same
+ * preference the delta channels express, where a summary stream exists
+ * precisely so the raw chain of thought does not have to be shown. Each array
+ * entry is its own section, so they join as paragraphs rather than run-on
+ * prose.
+ */
+function reasoningText(item: Record<string, unknown>): string {
+  const sections = (key: string): string[] =>
+    Array.isArray(item[key])
+      ? (item[key] as unknown[]).filter((part): part is string => typeof part === 'string')
+      : [];
+  const summary = sections('summary');
+  const chosen = summary.length > 0 ? summary : sections('content');
+  return chosen.join('\n\n').trim();
 }
 
 /**
@@ -912,6 +970,24 @@ export function replayCodexItem(
         role: 'assistant',
         text: readString(record, 'text') ?? '',
         replay: true,
+      },
+    ];
+  }
+
+  // A stored reasoning item never streamed anything into this state, so the
+  // one copy of its text is here. One delta carries the whole block, and no
+  // `replay` mark — the field belongs to `text.complete`, and the Claude
+  // history path replays an unstreamed thinking block the same bare way.
+  if (type === 'reasoning') {
+    const text = reasoningText(record);
+    if (text === '') return [];
+    return [
+      {
+        type: 'thinking.delta',
+        ...stamp(state),
+        messageId: id as MessageId,
+        blockIndex: 0,
+        text,
       },
     ];
   }

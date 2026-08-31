@@ -234,14 +234,53 @@ describe('thinking', () => {
     expect(summary[0]).toMatchObject({ type: 'thinking.delta', text: 'plan' });
   });
 
-  it('emits nothing when a reasoning item completes', () => {
+  it('emits nothing when a reasoning item completes after its deltas streamed', () => {
     const state = startedState();
+    feed(state, 'item/reasoning/summaryTextDelta', { itemId: 'r-1', delta: 'considering' });
+
     // Re-emitting the item's content here would duplicate the whole block,
     // which already arrived as deltas.
     expect(
       feed(state, 'item/completed', {
         item: { type: 'reasoning', id: 'r-1', content: ['considering'] },
       }),
+    ).toEqual([]);
+  });
+
+  it('salvages a reasoning item whose deltas never came', () => {
+    const state = startedState();
+    // Summaries are an opt-in the server may not honour: the item opens and
+    // closes with nothing between, and its completion is the only copy of the
+    // text. Each section is its own paragraph.
+    const events = feed(state, 'item/completed', {
+      item: { type: 'reasoning', id: 'r-1', summary: ['first thought', 'second thought'] },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'thinking.delta',
+      messageId: 'r-1',
+      text: 'first thought\n\nsecond thought',
+    });
+  });
+
+  it('prefers the summary and falls back to the raw content', () => {
+    const state = startedState();
+    const [fromSummary] = feed(state, 'item/completed', {
+      item: { type: 'reasoning', id: 'r-1', summary: ['the summary'], content: ['the raw chain'] },
+    });
+    const [fromContent] = feed(state, 'item/completed', {
+      item: { type: 'reasoning', id: 'r-2', content: ['the raw chain'] },
+    });
+
+    expect(fromSummary).toMatchObject({ type: 'thinking.delta', text: 'the summary' });
+    expect(fromContent).toMatchObject({ type: 'thinking.delta', text: 'the raw chain' });
+  });
+
+  it('still drops a reasoning item that carries no text at all', () => {
+    const state = startedState();
+    expect(
+      feed(state, 'item/completed', { item: { type: 'reasoning', id: 'r-1', summary: [] } }),
     ).toEqual([]);
   });
 });
@@ -666,6 +705,20 @@ describe('replayCodexItem', () => {
     const [event] = replayCodexItem({ type: 'agentMessage', id: 'a-1', text: 'hi' } as never, state);
 
     expect(event).toMatchObject({ type: 'text.complete', role: 'assistant', text: 'hi', replay: true });
+  });
+
+  it('replays a reasoning item as one whole thinking block', () => {
+    const state = makeState();
+    const [event] = replayCodexItem(
+      { type: 'reasoning', id: 'r-1', summary: ['what I was thinking'] } as never,
+      state,
+    );
+
+    expect(event).toMatchObject({
+      type: 'thinking.delta',
+      messageId: 'r-1',
+      text: 'what I was thinking',
+    });
   });
 
   it('replays a tool call as a start/end pair so it renders like a live one', () => {
