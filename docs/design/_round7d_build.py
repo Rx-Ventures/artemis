@@ -432,10 +432,15 @@ EXTRA = """
 .thread.jump .col { padding-bottom: 32px; }
 
 /* ── dock ───────────────────────────────────────────────────────────────── */
+/* No border, and no rule between the strip and the body. Judged in the app
+   rather than here: beside a bordered conversation card and across a gutter,
+   the dock's own outline read as a box in a box, and the strip's rule drew a
+   second wall inside the first. The card is told by its fill and its corners.
+   The record follows the decision (2026-08-31). */
 .dock { width: var(--w-dock); flex: none; display: flex; background: var(--chrome-sb);
-  border: var(--hair-sb); border-radius: var(--r-panel); overflow: hidden; }
+  border-radius: var(--r-panel); overflow: hidden; }
 .dstrip { width: 40px; flex: none; display: flex; flex-direction: column; align-items: center;
-  gap: 4px; padding: 6px 0; border-right: var(--hair-mh); }
+  gap: 4px; padding: 6px 0; }
 .dstrip .dt { width: 28px; height: 28px; border-radius: var(--r-ctl); display: grid;
   place-items: center; font-size: 12px; color: var(--ink-3); }
 .dstrip .dt.on { background: var(--fill-on); color: var(--ink); }
