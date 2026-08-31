@@ -551,7 +551,20 @@ const runSuggestions = createPushChannel<RunSuggestion>({
 // A renderer reload destroys the JavaScript context without unwinding this
 // script's state. Drop the subscribers so a reloaded page starts from zero
 // rather than fanning events out to callbacks in a dead world.
-window.addEventListener('beforeunload', () => {
+//
+// `pagehide`, emphatically not `beforeunload`. The two differ on exactly one
+// case and it is the case that matters: `beforeunload` fires for navigations
+// that are then *cancelled* — a link click main intercepts and reroutes to the
+// system browser, a refused close — and the page carries on running. Wiping
+// there left a live window with every push subscription silently gone: the
+// store never resubscribes (it does that once, at boot), so runs still ran,
+// invokes still answered, and not one live event reached a pane again. Every
+// conversation in the window then survived on the stall watchdog's 15-second
+// replays — short turns sat on "starting the provider" for 20–35 seconds while
+// their answers were already in the window (diagnosed live, 2026-08-31).
+// `pagehide` fires only when the document is genuinely being torn down, which
+// is the one moment this cleanup is for.
+window.addEventListener('pagehide', () => {
   agentEvents.reset();
   terminalEvents.reset();
   // `browserEvents` was missed here, which left it the one channel whose

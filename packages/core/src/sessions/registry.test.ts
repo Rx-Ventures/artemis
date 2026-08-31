@@ -1621,7 +1621,7 @@ describe('RunRegistry — lifecycle notifications', () => {
     };
   }
 
-  it('notes a started run with its ids and nothing else', async () => {
+  it('notes the request, then the start, with their ids and nothing else', async () => {
     const { events, onLifecycle } = collector();
     const { registry } = harness({ onLifecycle });
 
@@ -1629,11 +1629,21 @@ describe('RunRegistry — lifecycle notifications', () => {
 
     expect(events).toEqual([
       {
+        kind: 'run.requested',
+        runId: 'run-1',
+        profileId: 'profile-1',
+        providerId: 'claude',
+        cwd: '/repo',
+      },
+      {
         kind: 'run.started',
         runId: 'run-1',
         profileId: 'profile-1',
         providerId: 'claude',
         cwd: '/repo',
+        // The requested-to-started stretch, measured where it happened. The
+        // fake clock does not advance inside start(), so it is exactly zero.
+        resolveMs: 0,
       },
     ]);
   });
@@ -1644,7 +1654,8 @@ describe('RunRegistry — lifecycle notifications', () => {
 
     await registry.start(input({ resumeSessionId: 'session-prior' }));
 
-    expect(events[0]).toMatchObject({ kind: 'run.started', resumeSessionId: 'session-prior' });
+    expect(events[0]).toMatchObject({ kind: 'run.requested', resumeSessionId: 'session-prior' });
+    expect(events[1]).toMatchObject({ kind: 'run.started', resumeSessionId: 'session-prior' });
   });
 
   it('notes the session id the moment the provider announces it, exactly once', async () => {
@@ -1678,12 +1689,13 @@ describe('RunRegistry — lifecycle notifications', () => {
     await flush();
 
     expect(events.map((event) => event.kind)).toEqual([
+      'run.requested',
       'run.started',
       'run.session',
       'run.ended',
       'run.released',
     ]);
-    expect(events[2]).toEqual({
+    expect(events[3]).toEqual({
       kind: 'run.ended',
       runId: 'run-1',
       profileId: 'profile-1',
@@ -1694,7 +1706,7 @@ describe('RunRegistry — lifecycle notifications', () => {
       synthesized: false,
     });
     // The turn was released, not torn down: the adapter kept its process.
-    expect(events[3]).toMatchObject({ kind: 'run.released', mode: 'released' });
+    expect(events[4]).toMatchObject({ kind: 'run.released', mode: 'released' });
   });
 
   it('marks a run.end the registry had to invent as synthesized', async () => {
@@ -1708,10 +1720,15 @@ describe('RunRegistry — lifecycle notifications', () => {
     firstRun(h.runs).close();
     await flush();
 
-    expect(events.map((event) => event.kind)).toEqual(['run.started', 'run.ended', 'run.released']);
-    expect(events[1]).toMatchObject({ kind: 'run.ended', reason: 'completed', synthesized: true });
+    expect(events.map((event) => event.kind)).toEqual([
+      'run.requested',
+      'run.started',
+      'run.ended',
+      'run.released',
+    ]);
+    expect(events[2]).toMatchObject({ kind: 'run.ended', reason: 'completed', synthesized: true });
     // No release() on a plain FakeRun: letting go and tearing down are one act.
-    expect(events[2]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
+    expect(events[3]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
   });
 
   it('records a disposed run as ended by disposal and released by teardown', async () => {
@@ -1724,14 +1741,15 @@ describe('RunRegistry — lifecycle notifications', () => {
     await h.registry.dispose(handle.runId);
 
     expect(events.map((event) => event.kind)).toEqual([
+      'run.requested',
       'run.started',
       'run.session',
       'run.ended',
       'run.released',
     ]);
-    expect(events[2]).toMatchObject({ kind: 'run.ended', reason: 'disposed', synthesized: true });
+    expect(events[3]).toMatchObject({ kind: 'run.ended', reason: 'disposed', synthesized: true });
     // An explicit dispose overrules retention even for a releasable turn.
-    expect(events[3]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
+    expect(events[4]).toMatchObject({ kind: 'run.released', mode: 'disposed' });
   });
 
   it('notes an adopted run under the continuation context it arrived with', () => {

@@ -143,6 +143,49 @@ describe('ActivityIndicator', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('says a turn is being finished when a busy conversation has no visible tasks', () => {
+    seedApp({
+      run: { status: 'starting', startedAt: AT, sessionId: 'sess-busy' } as never,
+      permissionQueue: [],
+      tasks: [],
+      sessionsWorking: ['sess-busy'] as never,
+    });
+    mount();
+    expect(screen.getByRole('status').textContent).toContain(
+      "finishing this conversation's current turn first",
+    );
+  });
+
+  it('names the background task holding a busy conversation', () => {
+    seedApp({
+      run: { status: 'starting', startedAt: AT, sessionId: 'sess-busy' } as never,
+      permissionQueue: [],
+      tasks: [{ id: 't1', status: 'running' }] as never,
+      sessionsWorking: ['sess-busy'] as never,
+    });
+    mount();
+    expect(screen.getByRole('status').textContent).toContain(
+      "waiting for this conversation's background task to finish",
+    );
+  });
+
+  it('counts the tasks when more than one is holding it, and ignores settled rows', () => {
+    seedApp({
+      run: { status: 'starting', startedAt: AT, sessionId: 'sess-busy' } as never,
+      permissionQueue: [],
+      tasks: [
+        { id: 't1', status: 'running' },
+        { id: 't2', status: 'pending' },
+        { id: 't3', status: 'completed' },
+      ] as never,
+      sessionsWorking: ['sess-busy'] as never,
+    });
+    mount();
+    expect(screen.getByRole('status').textContent).toContain(
+      'waiting for 2 background tasks in this conversation to finish',
+    );
+  });
+
   it('climbs while a run is in flight', async () => {
     vi.setSystemTime(AT);
     seedApp({
