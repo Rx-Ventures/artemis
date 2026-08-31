@@ -1102,6 +1102,15 @@ describe('buildClaudeOptions', () => {
     ).toBe(false);
   });
 
+  // The CLI defaults an SDK-driven session's thinking display to `omitted`,
+  // which returns every thinking block as a signature beside empty text —
+  // nothing a transcript can show. Every run overrides it; see the note on
+  // `extraArgs` in `buildClaudeOptions`.
+  it('always asks for reasoning the transcript can display', () => {
+    const args = buildClaudeOptions(BASE_INPUT, context).extraArgs ?? {};
+    expect(args['thinking-display']).toBe('summarized');
+  });
+
   it('maps resume and fork', () => {
     const plain = buildClaudeOptions(BASE_INPUT, context);
     expect(plain.resume).toBeUndefined();
@@ -1180,17 +1189,20 @@ describe('buildClaudeOptions', () => {
     // spelling of a valueless flag. Anything else — `true`, `'true'` — would
     // reach the CLI as `--chrome true` and be read as a positional argument.
     const options = buildClaudeOptions({ ...BASE_INPUT, chromeBrowser: true }, context);
-    expect(options.extraArgs).toEqual({ chrome: null });
+    expect(options.extraArgs).toEqual({ 'thinking-display': 'summarized', chrome: null });
   });
 
-  it('sends no extraArgs at all when the bridge was not asked for', () => {
+  it('keeps the Chrome flag out when the bridge was not asked for', () => {
     // The flag loads the whole `claude-in-chrome` tool set into context every
     // turn, and the CLI reads an absent flag as off — so a run that never
-    // asked must be byte-identical to one from before the option existed.
-    expect(buildClaudeOptions(BASE_INPUT, context).extraArgs).toBeUndefined();
+    // asked must not carry it. The thinking display is the one flag every run
+    // carries.
+    expect(buildClaudeOptions(BASE_INPUT, context).extraArgs).toEqual({
+      'thinking-display': 'summarized',
+    });
     expect(
       buildClaudeOptions({ ...BASE_INPUT, chromeBrowser: false }, context).extraArgs,
-    ).toBeUndefined();
+    ).toEqual({ 'thinking-display': 'summarized' });
   });
 });
 
