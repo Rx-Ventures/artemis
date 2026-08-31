@@ -100,6 +100,7 @@ import {
   SPLIT_MIN_WIDTH,
   canSplit,
   closePane,
+  conversationName,
   focusPane,
   openSessionBeside,
   paneCount,
@@ -710,12 +711,12 @@ function PaneCaption({
   readonly focused: boolean;
 }): ReactElement {
   const cwd = usePane((s) => s.cwd);
-  const resumeId = usePane((s) => s.resumeSessionId);
-  const title = useApp((s) =>
-    resumeId === null
-      ? 'New session'
-      : (s.sessions.find((session) => session.id === resumeId)?.title ?? 'Resumed session'),
-  );
+  // One read of this column, not a join across two stores. The session list is
+  // mirrored into every pane for exactly this — see the header of `pane.ts` —
+  // so a rename repaints the caption without the selector having to close over
+  // half its own inputs. See `conversationName` for why the id it resolves is
+  // not `resumeSessionId`.
+  const title = usePane(conversationName);
   const project = cwd.trim().length > 0 ? lastSegment(cwd) : 'No project';
 
   return (
