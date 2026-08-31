@@ -18,8 +18,13 @@
  * Every suite that runs the script runs it once per shell on the machine — see
  * {@link SHELLS}, which is the other half of a bug this file used to pass.
  *
- * Skipped on Windows, where there is no `/bin/sh` and the feature is not
- * offered either.
+ * There are two scripts now, and they are tested the same way for the same
+ * reason. The `/bin/sh` suites run wherever there is a shell to run them in; the
+ * PowerShell suites run on Windows, where the arrangement is made out of
+ * junctions and a hard link instead of symlinks and the claims that need
+ * checking are correspondingly different — see {@link POWERSHELL}. Each half is
+ * skipped where its interpreter is not, which is how one file covers a feature
+ * whose implementation is genuinely two.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -29,6 +34,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -50,6 +56,8 @@ import {
   buildSharedConfigScript,
   dirsNeedingWork,
   entryGap,
+  powerShellQuote,
+  scriptShell,
   sharedConfigDirs,
   shellQuote,
   statusDisagrees,
@@ -181,7 +189,12 @@ interface Sandbox {
 }
 
 function sandbox(): Sandbox {
-  const base = mkdtempSync(path.join(tmpdir(), 'artemis-shared-'));
+  // `.native` expands Windows 8.3 short names (a GitHub-hosted runner's TMP is
+  // `C:\Users\RUNNER~1\...`), which otherwise poison every comparison in here:
+  // a junction's `.Target` always reads back long-form, so a sandbox built on a
+  // short-form root reads as `foreign` beside a junction the script just made.
+  // Real roots never hit this — Electron and `homedir()` hand back long paths.
+  const base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'artemis-shared-')));
   sandboxes.push(base);
 
   const home = path.join(base, 'home');
@@ -220,7 +233,7 @@ function runIn(
   mode: 'share' | 'restore',
 ): string {
   const script = path.join(box.home, `${mode}.sh`);
-  writeFileSync(script, buildSharedConfigScript(dirs, mode));
+  writeFileSync(script, buildSharedConfigScript(dirs, mode, 'darwin'));
   // The shell is named explicitly rather than left to the shebang, because the
   // shebang is exactly what a pasted script does not get.
   return execFileSync(shell, [script], {
@@ -415,12 +428,12 @@ describe.each(SHELLS)('the restore script (%s)', (shell) => {
 
 describe('the generated text', () => {
   it('says so when there is nothing to cover', () => {
-    const script = buildSharedConfigScript([], 'share');
+    const script = buildSharedConfigScript([], 'share', 'darwin');
     expect(script).toContain('No Claude profiles to cover.');
   });
 
   it('quotes every directory it names', () => {
-    const script = buildSharedConfigScript(['/Users/x/Application Support/p'], 'share');
+    const script = buildSharedConfigScript(['/Users/x/Application Support/p'], 'share', 'darwin');
     expect(script).toContain("profile '/Users/x/Application Support/p'");
   });
 
@@ -431,12 +444,460 @@ describe('the generated text', () => {
    */
   it('never iterates a list by expanding a variable', () => {
     for (const mode of ['share', 'restore'] as const) {
-      const script = buildSharedConfigScript(['/tmp/p'], mode);
+      const script = buildSharedConfigScript(['/tmp/p'], mode, 'darwin');
       // Word splitting is what sh does and zsh does not; the names have to be
       // literal words in the script text or the loop runs once on all of them.
       expect(script).not.toMatch(/for\s+\w+\s+in\s+\$/);
       for (const name of SHARED_ENTRIES) expect(script).toContain(`'${name}'`);
     }
+  });
+
+  /*
+   * The platform decides which script, and it is the only thing that does.
+   * Asserted on the shebang and the prelude rather than on any particular line,
+   * because what would actually go wrong is not a subtly wrong script — it is a
+   * `#!/bin/sh` handed to somebody running Windows.
+   */
+  it('writes sh for macOS and Linux and PowerShell for Windows', () => {
+    for (const mode of ['share', 'restore'] as const) {
+      for (const platform of ['darwin', 'linux'] as const) {
+        expect(buildSharedConfigScript(['/tmp/p'], mode, platform)).toMatch(/^#!\/bin\/sh\n/);
+      }
+      const windows = buildSharedConfigScript(['C:\\p'], mode, 'win32');
+      expect(windows).not.toContain('#!/bin/sh');
+      expect(windows).toContain("$Root = Join-Path $env:USERPROFILE '.claude'");
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The Windows script                                                         */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Run for real, for the same reason the sh suites are: this one moves the same
+ * directories with a different pair of verbs, and `toContain` on a string that
+ * says `New-Item -ItemType Junction` proves only that the words are in the right
+ * order. Two of the claims here are Windows-only and cannot be checked any other
+ * way — that a junction and a hard link are made without an administrator, and
+ * that removing a junction takes away the reparse point rather than the folder
+ * on the far side of it, which is the user's own `~/.claude`.
+ *
+ * `$env:USERPROFILE` is what the script expands, so that is what the sandbox
+ * overrides — the Windows counterpart of pointing `HOME` at a temporary tree.
+ */
+const POWERSHELL = ((): string | null => {
+  if (process.platform !== 'win32') return null;
+  try {
+    execFileSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], { stdio: 'ignore' });
+    return 'powershell.exe';
+  } catch {
+    return null;
+  }
+})();
+
+interface WindowsSandbox {
+  readonly home: string;
+  readonly root: string;
+  /** Config dir with a space and a single quote in its path. */
+  readonly work: string;
+  /** Empty config dir — the fresh-profile case. */
+  readonly max: string;
+}
+
+function windowsSandbox(): WindowsSandbox {
+  // `.native` expands Windows 8.3 short names (a GitHub-hosted runner's TMP is
+  // `C:\Users\RUNNER~1\...`), which otherwise poison every comparison in here:
+  // a junction's `.Target` always reads back long-form, so a sandbox built on a
+  // short-form root reads as `foreign` beside a junction the script just made.
+  // Real roots never hit this — Electron and `homedir()` hand back long paths.
+  const base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'artemis-win-')));
+  sandboxes.push(base);
+
+  const home = path.join(base, 'home');
+  const root = path.join(home, '.claude');
+  mkdirSync(path.join(root, 'skills'), { recursive: true });
+  mkdirSync(path.join(root, 'session-env'), { recursive: true });
+  writeFileSync(path.join(root, 'CLAUDE.md'), 'root instructions\n');
+  writeFileSync(path.join(root, 'skills', 'root.md'), 'root skill\n');
+
+  /*
+   * The apostrophe is the point, and it is the one character the POSIX sandbox
+   * could not put in a directory name without also testing `'\''`. PowerShell
+   * escapes it by doubling instead, so a path a Windows user genuinely has —
+   * `C:\Users\O'Brien\AppData\Roaming\…` — is the case that decides whether the
+   * generated `Update-Profile '…'` line parses at all.
+   */
+  const work = path.join(base, "O'Brien App Data", 'profiles', 'work');
+  mkdirSync(path.join(work, 'session-env'), { recursive: true });
+  mkdirSync(path.join(work, 'projects'), { recursive: true });
+  mkdirSync(path.join(work, 'sessions'), { recursive: true });
+  writeFileSync(path.join(work, 'session-env', 'env.json'), 'work env\n');
+  writeFileSync(path.join(work, 'projects', 'history.jsonl'), 'work history\n');
+  writeFileSync(path.join(work, 'sessions', 'live.json'), 'work session\n');
+  writeFileSync(path.join(work, '.claude.json'), 'work account\n');
+  writeFileSync(path.join(work, 'CLAUDE.md'), 'work instructions\n');
+
+  const max = path.join(base, "O'Brien App Data", 'profiles', 'max');
+  mkdirSync(max, { recursive: true });
+
+  return { home, root, work, max };
+}
+
+function runPowerShell(
+  box: WindowsSandbox,
+  dirs: readonly string[],
+  mode: 'share' | 'restore',
+): string {
+  const script = path.join(box.home, `${mode}.ps1`);
+  writeFileSync(script, buildSharedConfigScript(dirs, mode, 'win32'));
+  return execFileSync(
+    POWERSHELL as string,
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    { encoding: 'utf8', env: { ...process.env, USERPROFILE: box.home } },
+  );
+}
+
+/** Whether this path is a reparse point, and where it points. */
+function junctionTarget(p: string): string | null {
+  try {
+    return lstatSync(p).isSymbolicLink() ? readlinkSync(p) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Do these two names reach one file — the hard-link question. */
+function sameFile(a: string, b: string): boolean {
+  try {
+    const one = statSync(a, { bigint: true });
+    const two = statSync(b, { bigint: true });
+    return one.dev === two.dev && one.ino === two.ino;
+  } catch {
+    return false;
+  }
+}
+
+describe.skipIf(POWERSHELL === null)('the Windows share script', () => {
+  it('junctions every shared directory and creates the ones the root lacks', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work, box.max], 'share');
+
+    for (const name of SHARED_DIRECTORIES) {
+      // `readlink` on a junction is what the main process's prober reads, so
+      // asserting on it here is asserting on the thing that actually decides
+      // whether the pane says `linked`.
+      expect(junctionTarget(path.join(box.work, name))).toBe(path.join(box.root, name));
+      expect(junctionTarget(path.join(box.max, name))).toBe(path.join(box.root, name));
+      expect(statSync(path.join(box.root, name)).isDirectory()).toBe(true);
+    }
+    // Reached *through* the junction, which is the only proof that the reparse
+    // point points somewhere real rather than merely existing.
+    expect(readFileSync(path.join(box.max, 'skills', 'root.md'), 'utf8')).toBe('root skill\n');
+  });
+
+  it('hard-links CLAUDE.md to the root file', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+
+    const at = path.join(box.work, 'CLAUDE.md');
+    // Not a symlink and not a copy: one file with two names, which is the whole
+    // reason the prober had to learn a second question.
+    expect(lstatSync(at).isSymbolicLink()).toBe(false);
+    expect(sameFile(at, path.join(box.root, 'CLAUDE.md'))).toBe(true);
+    expect(readFileSync(at, 'utf8')).toBe('root instructions\n');
+    // The profile's own instructions were moved aside, not written over.
+    expect(readFileSync(path.join(box.work, `CLAUDE.md${BACKUP_SUFFIX}`), 'utf8')).toBe(
+      'work instructions\n',
+    );
+  });
+
+  it('does not invent a CLAUDE.md the user does not have', () => {
+    const box = windowsSandbox();
+    rmSync(path.join(box.root, 'CLAUDE.md'));
+    const out = runPowerShell(box, [box.max], 'share');
+
+    expect(exists(path.join(box.max, 'CLAUDE.md'))).toBe(false);
+    expect(out).toContain('skip  CLAUDE.md');
+  });
+
+  it('moves displaced data aside instead of deleting it', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+
+    expect(
+      readFileSync(path.join(box.work, `session-env${BACKUP_SUFFIX}`, 'env.json'), 'utf8'),
+    ).toBe('work env\n');
+    expect(
+      readFileSync(path.join(box.work, `projects${BACKUP_SUFFIX}`, 'history.jsonl'), 'utf8'),
+    ).toBe('work history\n');
+  });
+
+  it('leaves auth alone', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+
+    expect(readFileSync(path.join(box.work, '.claude.json'), 'utf8')).toBe('work account\n');
+    expect(junctionTarget(path.join(box.work, 'sessions'))).toBeNull();
+    expect(readFileSync(path.join(box.work, 'sessions', 'live.json'), 'utf8')).toBe(
+      'work session\n',
+    );
+  });
+
+  it('is idempotent — a second run makes no second backup', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+    const out = runPowerShell(box, [box.work], 'share');
+
+    expect(out).toContain('keep');
+    expect(exists(path.join(box.work, `session-env${BACKUP_SUFFIX}.2`))).toBe(false);
+    expect(exists(path.join(box.work, `CLAUDE.md${BACKUP_SUFFIX}.2`))).toBe(false);
+    expect(junctionTarget(path.join(box.work, 'session-env'))).toBe(
+      path.join(box.root, 'session-env'),
+    );
+  });
+
+  it('numbers the second backup rather than writing over the first', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+
+    // The name filled up again after sharing was already on: the user removed
+    // the junction and put a folder of their own back at `session-env`.
+    rmSync(path.join(box.work, 'session-env'), { recursive: true });
+    mkdirSync(path.join(box.work, 'session-env'));
+    writeFileSync(path.join(box.work, 'session-env', 'second.json'), 'second env\n');
+
+    runPowerShell(box, [box.work], 'share');
+
+    // Both survive under distinct names. Nothing this script does is allowed to
+    // be the reason a folder full of somebody's data stopped existing.
+    expect(readFileSync(path.join(box.work, `session-env${BACKUP_SUFFIX}`, 'env.json'), 'utf8')).toBe(
+      'work env\n',
+    );
+    expect(
+      readFileSync(path.join(box.work, `session-env${BACKUP_SUFFIX}.2`, 'second.json'), 'utf8'),
+    ).toBe('second env\n');
+  });
+
+  it('refuses to link the root config into itself, trailing separator and all', () => {
+    const box = windowsSandbox();
+    const out = runPowerShell(box, [box.root, `${box.root}\\`], 'share');
+
+    expect(out).toContain('this is your own .claude');
+    // A self-link would have replaced this folder with a junction to the backup
+    // it had just been renamed into. Windows paths get typed with a trailing
+    // backslash, so the second spelling has to be skipped too or the safest
+    // check in the script misses the case it exists for.
+    expect(junctionTarget(path.join(box.root, 'skills'))).toBeNull();
+    expect(readFileSync(path.join(box.root, 'skills', 'root.md'), 'utf8')).toBe('root skill\n');
+    expect(exists(path.join(box.root, `skills${BACKUP_SUFFIX}`))).toBe(false);
+  });
+
+  it('skips a directory that is not there', () => {
+    const box = windowsSandbox();
+    const gone = path.join(box.home, 'nope');
+    const out = runPowerShell(box, [gone], 'share');
+
+    expect(out).toContain('no such directory');
+    expect(exists(gone)).toBe(false);
+  });
+});
+
+describe.skipIf(POWERSHELL === null)('the Windows restore script', () => {
+  it('puts the original layout back', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+    runPowerShell(box, [box.work], 'restore');
+
+    expect(junctionTarget(path.join(box.work, 'session-env'))).toBeNull();
+    expect(readFileSync(path.join(box.work, 'session-env', 'env.json'), 'utf8')).toBe('work env\n');
+    expect(exists(path.join(box.work, `session-env${BACKUP_SUFFIX}`))).toBe(false);
+    expect(readFileSync(path.join(box.work, 'projects', 'history.jsonl'), 'utf8')).toBe(
+      'work history\n',
+    );
+    // The hard link goes and the profile's own instructions come back.
+    expect(readFileSync(path.join(box.work, 'CLAUDE.md'), 'utf8')).toBe('work instructions\n');
+    expect(sameFile(path.join(box.work, 'CLAUDE.md'), path.join(box.root, 'CLAUDE.md'))).toBe(
+      false,
+    );
+    // Nothing was displaced here, so the junction simply goes.
+    expect(exists(path.join(box.work, 'commands'))).toBe(false);
+  });
+
+  /*
+   * The test this whole file is worth writing for.
+   *
+   * `Remove-Item -Recurse` on a junction has a long history of deleting what is
+   * on the far side of it, and the far side of these is the user's own
+   * `~/.claude` — every skill, every transcript. The restore script uses
+   * `[System.IO.Directory]::Delete($Path, $false)` precisely because it cannot
+   * recurse. If somebody ever "simplifies" that line, this fails and nothing
+   * else in the suite does.
+   */
+  it('takes away the junction and not the folder it points at', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+    runPowerShell(box, [box.work], 'restore');
+
+    expect(readFileSync(path.join(box.root, 'skills', 'root.md'), 'utf8')).toBe('root skill\n');
+    expect(readFileSync(path.join(box.root, 'CLAUDE.md'), 'utf8')).toBe('root instructions\n');
+    for (const name of SHARED_DIRECTORIES) {
+      expect(statSync(path.join(box.root, name)).isDirectory()).toBe(true);
+    }
+  });
+
+  it('does not touch something the user put back by hand', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+
+    rmSync(path.join(box.work, 'skills'), { recursive: true });
+    mkdirSync(path.join(box.work, 'skills'));
+    writeFileSync(path.join(box.work, 'skills', 'mine.md'), 'mine\n');
+
+    const out = runPowerShell(box, [box.work], 'restore');
+
+    expect(out).toContain('not the link this script made');
+    expect(readFileSync(path.join(box.work, 'skills', 'mine.md'), 'utf8')).toBe('mine\n');
+  });
+
+  it('leaves a CLAUDE.md alone once the root has no copy left to compare it with', () => {
+    const box = windowsSandbox();
+    runPowerShell(box, [box.work], 'share');
+    // The blind spot, asserted rather than only commented: Windows records no
+    // direction on a hard link, so with the root's name gone the profile's is
+    // simply the last name the data has. Removing it would be deleting a file,
+    // not undoing a link.
+    rmSync(path.join(box.root, 'CLAUDE.md'));
+
+    const out = runPowerShell(box, [box.work], 'restore');
+
+    expect(out).toContain('not the link this script made');
+    expect(readFileSync(path.join(box.work, 'CLAUDE.md'), 'utf8')).toBe('root instructions\n');
+  });
+
+  it('is safe to run when nothing was ever shared', () => {
+    const box = windowsSandbox();
+    const out = runPowerShell(box, [box.work], 'restore');
+
+    expect(out).toContain('Done.');
+    expect(readFileSync(path.join(box.work, 'session-env', 'env.json'), 'utf8')).toBe('work env\n');
+  });
+});
+
+describe('powerShellQuote', () => {
+  it('wraps a plain path in single quotes', () => {
+    expect(powerShellQuote('C:\\Users\\x\\App Data\\p')).toBe("'C:\\Users\\x\\App Data\\p'");
+  });
+
+  it('doubles a single quote rather than escaping it', () => {
+    // PowerShell has no backslash escape inside a literal string; the quote is
+    // its own escape. A backslash here would end the string early and leave the
+    // rest of the path being parsed as commands.
+    expect(powerShellQuote("C:\\Users\\O'Brien\\.claude")).toBe("'C:\\Users\\O''Brien\\.claude'");
+  });
+
+  /*
+   * Round-tripped through PowerShell itself rather than asserted against an
+   * expected string, for the reason the sh version gives: the expected string is
+   * the part that is easy to get wrong, and what actually has to hold is that
+   * the shell hands the value back unchanged.
+   */
+  it.skipIf(POWERSHELL === null)('round-trips anything a Windows path can hold', () => {
+    const nasty = [
+      "C:\\Users\\O'Brien\\.claude",
+      'C:\\Users\\x\\App Data\\p',
+      'C:\\a b\\$env:USERPROFILE\\`tick\\[bracket]\\;rm\\&amp',
+      "C:\\it's a $(Get-Date) test",
+      '\\\\server\\share\\profiles\\one',
+    ];
+    for (const value of nasty) {
+      const out = execFileSync(
+        POWERSHELL as string,
+        ['-NoProfile', '-Command', `Write-Output ${powerShellQuote(value)}`],
+        { encoding: 'utf8' },
+      );
+      expect(out.replace(/\r?\n$/, '')).toBe(value);
+    }
+  });
+});
+
+describe('the generated PowerShell', () => {
+  it('says so when there is nothing to cover', () => {
+    expect(buildSharedConfigScript([], 'share', 'win32')).toContain('No Claude profiles to cover.');
+  });
+
+  it('quotes every directory it names', () => {
+    const script = buildSharedConfigScript(
+      ["C:\\Users\\O'Brien\\App Data\\p"],
+      'share',
+      'win32',
+    );
+    expect(script).toContain("Update-Profile 'C:\\Users\\O''Brien\\App Data\\p'");
+  });
+
+  /*
+   * PowerShell has no word splitting, so this is not the bug it was in sh — but
+   * a `foreach` over a variable is still a list the reader has to go and look
+   * up, and the sh generator's suite states the same rule as itself. Kept in
+   * step so that neither generator can quietly grow a `$SharedDirectories`.
+   */
+  it('never iterates a list by expanding a variable', () => {
+    for (const mode of ['share', 'restore'] as const) {
+      const script = buildSharedConfigScript(['C:\\p'], mode, 'win32');
+      expect(script).not.toMatch(/foreach\s*\(\s*\$\w+\s+in\s+\$/);
+      for (const name of SHARED_ENTRIES) expect(script).toContain(`'${name}'`);
+    }
+  });
+
+  it('makes junctions and hard links, and never a symbolic link', () => {
+    const script = buildSharedConfigScript(['C:\\p'], 'share', 'win32');
+    expect(script).toContain('New-Item -ItemType Junction');
+    expect(script).toContain('New-Item -ItemType HardLink');
+    // A symbolic link is the obvious translation of `ln -s` and the one that
+    // needs an administrator, which is a thing the user finds out halfway
+    // through, after their `projects/` has already been renamed.
+    expect(script).not.toContain('SymbolicLink');
+  });
+
+  it('never removes a directory recursively', () => {
+    const script = buildSharedConfigScript(['C:\\p'], 'restore', 'win32');
+    // Comments dropped first, because the script explains at length why it does
+    // not do this and the explanation names the thing it is not doing.
+    const code = script
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+
+    // `Remove-Item -Recurse` on a junction has historically deleted the folder
+    // on the far side of it, which here is the user's own ~/.claude.
+    expect(code).not.toMatch(/Remove-Item[^\n]*-Recurse/);
+    expect(code).toContain('[System.IO.Directory]::Delete($Path, $false)');
+  });
+
+  /*
+   * The script is copied out of a pane and pasted into a console whose code page
+   * is whatever it is, or saved as a `.ps1` that Windows PowerShell reads as
+   * ANSI unless something put a BOM on it. An em dash in a comment is not worth
+   * finding out which.
+   */
+  it('is ASCII, comments included', () => {
+    for (const mode of ['share', 'restore'] as const) {
+      const script = buildSharedConfigScript(['C:\\p'], mode, 'win32');
+      // Named rather than counted, so a failure says which em dash crept in.
+      const outside = [...script].filter((ch) => (ch.codePointAt(0) ?? 0) > 127);
+      expect(outside).toEqual([]);
+    }
+  });
+});
+
+describe('scriptShell', () => {
+  it('names PowerShell on Windows and a terminal everywhere else', () => {
+    // What the pane puts in "Quit Artemis, run this in …". Wrong here is a
+    // sentence that sends a Windows user looking for a terminal to paste
+    // PowerShell into, which is most of an afternoon.
+    expect(scriptShell('win32')).toBe('PowerShell');
+    expect(scriptShell('darwin')).toBe('a terminal');
+    expect(scriptShell('linux')).toBe('a terminal');
   });
 });
 

@@ -571,11 +571,32 @@ export interface JsonRpcSubprocess {
  */
 export function spawnJsonRpcSubprocess(options: SpawnJsonRpcOptions): JsonRpcSubprocess {
   let child: ChildProcessWithoutNullStreams;
+  /*
+   * Windows resolves `foo.cmd` through the shell, not through `CreateProcess`.
+   * The same trap `signIn.ts` documents, on the path that starts every
+   * app-server: an npm-installed `codex` is a `codex.cmd`, Node's `spawn` does
+   * not consult `PATHEXT`, and the launch fails with `ENOENT` — reported to the
+   * user as a missing CLI when the install is fine. A packaged Artemis hands us
+   * a bundled `.exe` and never takes this branch; a developer running from
+   * source against an npm install does.
+   *
+   * Confined to that case because `shell: true` re-introduces shell parsing.
+   * Safe here for the same reason it is safe there: `args` are the adapter's
+   * own literals (`app-server`), and every user-chosen string — the cwd, the
+   * config directory — travels as an option or in the environment, neither of
+   * which the shell re-parses.
+   */
+  const viaShell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(options.executable);
+  const file =
+    viaShell && /[\s&()[\]{}^=;!'+,`~]/.test(options.executable)
+      ? `"${options.executable}"`
+      : options.executable;
   try {
-    child = spawn(options.executable, [...options.args], {
+    child = spawn(file, [...options.args], {
       cwd: options.cwd,
       env: options.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...(viaShell ? { shell: true } : {}),
     });
   } catch (error) {
     // `spawn` throws synchronously for a malformed invocation (a cwd that is

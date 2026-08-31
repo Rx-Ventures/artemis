@@ -652,7 +652,7 @@ type FakeScenario = 'approval' | 'turn' | 'missing-rollout' | 'steer-reject';
  * decision under test.
  *
  * The shebang pins the exact Node running this test, so the fake needs no
- * PATH lookup to start.
+ * PATH lookup to start. Windows ignores it — see {@link writeFakeExecutable}.
  */
 function fakeAppServerScript(scenario: FakeScenario, framesPath: string): string {
   return `#!${process.execPath}
@@ -749,7 +749,34 @@ process.stdin.on('data', (chunk) => {
     index = buffer.indexOf('\\n');
   }
 });
+// A closed pipe is the end of the run. On Windows the process that gets killed
+// on dispose is the shim, not this, and a survivor holds the run directory open
+// against the cleanup that follows.
+process.stdin.on('end', () => process.exit(0));
 `;
+}
+
+/**
+ * Write the fake where the adapter can actually launch it, and say how.
+ *
+ * A shebang is how a POSIX kernel is told which interpreter to use, and Windows
+ * has no equivalent: `CreateProcess` reads the file as an image, finds text, and
+ * refuses. What Windows does have is the `.cmd` shim every npm-installed CLI
+ * ships as — which is exactly what a Codex install puts on `PATH` there, and
+ * exactly what `spawnJsonRpcSubprocess` learned to launch.
+ */
+async function writeFakeExecutable(
+  dir: string,
+  scenario: FakeScenario,
+  framesPath: string,
+): Promise<string> {
+  const script = path.join(dir, 'fake-codex.cjs');
+  await writeFile(script, fakeAppServerScript(scenario, framesPath), { mode: 0o755 });
+  if (process.platform !== 'win32') return script;
+
+  const shim = path.join(dir, 'fake-codex.cmd');
+  await writeFile(shim, `@"${process.execPath}" "%~dp0fake-codex.cjs" %*\r\n`);
+  return shim;
 }
 
 interface FakeRunHarness {
@@ -770,15 +797,12 @@ interface StartFakeRunOptions {
 /** Start a real CodexRun against the scripted server, with its stream pumped. */
 async function startFakeRun(options?: StartFakeRunOptions): Promise<FakeRunHarness> {
   const dir = await mkdtemp(path.join(tmpdir(), 'artemis-codex-fake-'));
-  const script = path.join(dir, 'fake-codex.cjs');
   const framesPath = path.join(dir, 'frames.jsonl');
-  await writeFile(script, fakeAppServerScript(options?.scenario ?? 'approval', framesPath), {
-    mode: 0o755,
-  });
+  const executable = await writeFakeExecutable(dir, options?.scenario ?? 'approval', framesPath);
   const codexHome = path.join(dir, 'home');
   await mkdir(codexHome);
 
-  const adapter = createCodexAdapter({ executable: script });
+  const adapter = createCodexAdapter({ executable });
   const run = await adapter.createRun({
     providerId: 'codex',
     profileId: PROFILE,

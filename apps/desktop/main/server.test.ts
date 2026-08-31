@@ -145,14 +145,20 @@ describe('createServerHost', () => {
     expect(state.connections[0]?.workspace).toEqual({ kind: 'ephemeral', perSession: true });
   });
 
-  it('writes the config owner-only, because it holds every token', async () => {
-    const created = host();
-    await created.start();
-    await created.createConnection({ label: 'A', workspace: { kind: 'ephemeral' } });
+  // Not on Windows, which has no mode to narrow: `stat` reports 0o666 for
+  // anything writable however it was created, and who may read a file is an ACL
+  // question this host does not answer.
+  it.skipIf(process.platform === 'win32')(
+    'writes the config owner-only, because it holds every token',
+    async () => {
+      const created = host();
+      await created.start();
+      await created.createConnection({ label: 'A', workspace: { kind: 'ephemeral' } });
 
-    const mode = (await stat(join(dir, SERVER_CONFIG_FILE))).mode & 0o777;
-    expect(mode).toBe(0o600);
-  });
+      const mode = (await stat(join(dir, SERVER_CONFIG_FILE))).mode & 0o777;
+      expect(mode).toBe(0o600);
+    },
+  );
 
   it('drops a stored connection whose token is too short to be one', async () => {
     // Dropped rather than repaired: a connection is a credential plus a grant,

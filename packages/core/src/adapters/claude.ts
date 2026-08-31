@@ -919,6 +919,34 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
       ? {}
       : { pathToClaudeCodeExecutable: options.sdkExecutablePath };
 
+  /*
+   * Sign-in reaches the same binary the runs do.
+   *
+   * `CLAUDE_CREDENTIALS` names the executable `claude`, which is right for a
+   * developer running from source and wrong for every packaged install: runs
+   * go through the SDK's bundled CLI, so Artemis works perfectly well on a
+   * machine that has no `claude` on `PATH` — right up until the profile screen
+   * hands the user a command naming one, and polls for a binary that is not
+   * there. The login is then unrunnable *and* undetectable, and the sign-in
+   * step waits forever on a login the user may already have completed.
+   *
+   * Injecting the resolved path into the spec fixes both halves at once, since
+   * `signInCommand` and `checkAuthStatus` read the executable from here. It is
+   * also the stronger guarantee: the credential is written by the very binary
+   * that will later be asked to use it, so the two can never disagree about
+   * the format they are writing and reading.
+   *
+   * Unset in dev, where the SDK resolves itself and `claude` on `PATH` is both
+   * correct and what a developer expects to see in the generated line.
+   */
+  const credentials =
+    options?.sdkExecutablePath === undefined
+      ? CLAUDE_CREDENTIALS
+      : {
+          ...CLAUDE_CREDENTIALS,
+          signIn: { ...CLAUDE_CREDENTIALS.signIn, executable: options.sdkExecutablePath },
+        };
+
   /**
    * Processes that outlived the turn that spawned them, by the conversation they
    * are writing to.
@@ -979,7 +1007,7 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
     id: CLAUDE_PROVIDER_ID,
     label: 'Claude',
     capabilities: CLAUDE_CAPABILITIES,
-    credentials: CLAUDE_CREDENTIALS,
+    credentials,
     models: CLAUDE_MODELS,
     effortLevels: CLAUDE_EFFORT_LEVELS,
 

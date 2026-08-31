@@ -31,10 +31,15 @@ describe('isTemporaryPath', () => {
     expect(isTemporaryPath(join(TEMP, 'agent-run-1', 'checkout', 'src'))).toBe(true);
   });
 
-  it('recognises `/tmp`, which tools hard-code whatever TMPDIR says', () => {
-    expect(isTemporaryPath('/tmp')).toBe(true);
-    expect(isTemporaryPath('/tmp/scratch/project')).toBe(true);
-  });
+  // Not on Windows, where `/tmp` is not a temporary root but an ordinary
+  // relative-to-the-drive path somebody may really keep a project in.
+  it.skipIf(process.platform === 'win32')(
+    'recognises `/tmp`, which tools hard-code whatever TMPDIR says',
+    () => {
+      expect(isTemporaryPath('/tmp')).toBe(true);
+      expect(isTemporaryPath('/tmp/scratch/project')).toBe(true);
+    },
+  );
 
   it('leaves an ordinary project alone', () => {
     expect(isTemporaryPath('/Users/me/code/artemis')).toBe(false);

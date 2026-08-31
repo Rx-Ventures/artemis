@@ -47,7 +47,7 @@
 
 import { constants } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 
 /**
  * Why a path cannot be used as a working directory.
@@ -145,6 +145,19 @@ export async function checkWorkingDirectory(cwd: unknown): Promise<WorkingDirect
     const errno = errnoOf(error);
     switch (errno) {
       case 'ENOENT':
+        // Windows raises `ENOENT` for `…\notes.txt\sub` where POSIX raises
+        // `ENOTDIR`, so the distinction the two problems draw has to be made
+        // here rather than read off the errno. Only ever reached when nothing
+        // is at `cwd`, so the extra walk costs a failing path alone.
+        if (await hasFileForAncestor(cwd)) {
+          return {
+            ok: false,
+            path: cwd,
+            problem: 'not_a_directory',
+            message: `That path is not a directory: ${cwd} — part of it is a file.`,
+            errno: 'ENOTDIR',
+          };
+        }
         return {
           ok: false,
           path: cwd,
@@ -206,6 +219,23 @@ export async function checkWorkingDirectory(cwd: unknown): Promise<WorkingDirect
   }
 
   return { ok: true, path: cwd };
+}
+
+/**
+ * Is some component of `path` a file, making the whole path unresolvable?
+ *
+ * Walks up to the first ancestor that exists: everything below it is missing,
+ * and what that ancestor turns out to be is the difference between "the folder
+ * is not there" and "you named a file and kept going". Stops at the root, where
+ * `dirname` becomes its own answer.
+ */
+async function hasFileForAncestor(path: string): Promise<boolean> {
+  let at = dirname(path);
+  for (let parent = dirname(at); ; at = parent, parent = dirname(at)) {
+    const stats = await stat(at).catch(() => undefined);
+    if (stats !== undefined) return !stats.isDirectory();
+    if (parent === at) return false;
+  }
 }
 
 /** The `code` off a Node system error, when it has one. */

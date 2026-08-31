@@ -1510,8 +1510,14 @@ describe('listAllSessions', () => {
         const dir = join(base, `profile-${String(n)}`);
         mkdirSync(dir, { recursive: true });
         // Exactly what the shared-config script does: link `projects`, and
-        // nothing else, so the credential stays per profile.
-        symlinkSync(join(root, 'projects'), join(dir, 'projects'));
+        // nothing else, so the credential stays per profile. A junction on
+        // Windows, where a directory symlink is refused unprivileged; what the
+        // grouping reads is the resolved target, which both spellings give.
+        symlinkSync(
+          join(root, 'projects'),
+          join(dir, 'projects'),
+          process.platform === 'win32' ? 'junction' : undefined,
+        );
         profiles.push(dir);
       }
       return { root, profiles };

@@ -158,3 +158,90 @@ describe('signInCommand', () => {
     expect(line).toBe('OTHER_CONFIG_DIR=/tmp/other other login --browser');
   });
 });
+
+/**
+ * The Windows spelling.
+ *
+ * These are regression tests for a bug that made the app unusable on Windows
+ * rather than merely awkward: the POSIX line was emitted verbatim, PowerShell
+ * read `CLAUDE_CONFIG_DIR='C:\…' claude auth login` as a command *named*
+ * `CLAUDE_CONFIG_DIR=C:\…`, and the only instruction the user was given could
+ * not be run at all.
+ */
+describe('signInCommand for PowerShell', () => {
+  const WIN_DIR = String.raw`C:\Users\me\AppData\Roaming\Artemis\profiles\work`;
+
+  const command = (configDir: string): string =>
+    signInCommand({ credentials: CLAUDE_CREDENTIALS, configDir, shell: 'powershell' });
+
+  it('assigns through $env: rather than inline, which PowerShell has no form for', () => {
+    const line = command(WIN_DIR);
+    expect(line).toContain(`$env:CLAUDE_CONFIG_DIR = '${WIN_DIR}'`);
+    // The POSIX inline form is the actual bug. It must not survive anywhere in
+    // the line, including as a prefix.
+    expect(line).not.toMatch(/(^|\s)CLAUDE_CONFIG_DIR=/);
+  });
+
+  it('restores the previous value instead of leaking or deleting it', () => {
+    // The POSIX line scopes the variable to one command. PowerShell cannot, so
+    // the scoping is written out — and it has to be a *restore*: a user who
+    // already had CLAUDE_CONFIG_DIR set must not lose it to a sign-in command.
+    const line = command(WIN_DIR);
+    expect(line).toContain('$ArtemisPrior = $env:CLAUDE_CONFIG_DIR;');
+    expect(line).toContain('finally { $env:CLAUDE_CONFIG_DIR = $ArtemisPrior }');
+    // `finally`, so an abandoned login (Ctrl-C at the browser prompt) still
+    // puts the environment back.
+    expect(line).toMatch(/try \{ .* \} finally \{/);
+  });
+
+  it('reaches the executable through & so a full path works', () => {
+    // Packaged Artemis names its bundled binary here, and that path contains
+    // both separators and an `@`. Bare-word invocation would not survive it.
+    const bundled = String.raw`C:\Program Files\Artemis\resources\@anthropic-ai\claude.exe`;
+    const line = signInCommand({
+      credentials: {
+        ...CLAUDE_CREDENTIALS,
+        signIn: { ...CLAUDE_CREDENTIALS.signIn, executable: bundled },
+      },
+      configDir: WIN_DIR,
+      shell: 'powershell',
+    });
+    expect(line).toContain(`& '${bundled}' auth login`);
+  });
+
+  it('doubles an embedded single quote rather than ending the string early', () => {
+    // PowerShell's escape is `''`, not the POSIX `'\''` dance. Getting this
+    // wrong terminates the string mid-path and hands the rest to the parser.
+    const line = command(String.raw`C:\Users\o'brien\.claude`);
+    expect(line).toContain(String.raw`'C:\Users\o''brien\.claude'`);
+  });
+
+  it('leaves backslashes alone, because a single-quoted string is literal', () => {
+    // The one thing that must not happen to a Windows path: no escaping, no
+    // doubling, no forward-slash conversion.
+    expect(command(WIN_DIR)).toContain(WIN_DIR);
+  });
+
+  it('quotes the directory even when every character looks safe', () => {
+    /*
+     * The trap this exists to catch. It is tempting to quote only paths that
+     * "need" it, as the POSIX branch does — but PowerShell's right-hand side
+     * is an *expression* position, where a bare word is a command rather than
+     * a string. `$env:X = C:/Users/me/.claude` fails with the same "is not
+     * recognized" error as the bug this whole change is fixing, so a path made
+     * entirely of safe-looking characters is exactly the case that must not be
+     * left bare.
+     */
+    for (const dir of ['C:/Users/me/.claude', 'profiles', '/tmp/work']) {
+      expect(command(dir)).toContain(`$env:CLAUDE_CONFIG_DIR = '${dir}'`);
+    }
+  });
+
+  it('still emits the POSIX form when no shell is named', () => {
+    // Every existing caller omits `shell`, and every non-Windows host wants
+    // the old line unchanged.
+    expect(signInCommand({ credentials: CLAUDE_CREDENTIALS, configDir: '/Users/me/.claude' })).toBe(
+      'CLAUDE_CONFIG_DIR=/Users/me/.claude claude auth login',
+    );
+  });
+});
