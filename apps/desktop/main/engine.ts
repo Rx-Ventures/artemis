@@ -1645,7 +1645,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       await adapter.setSessionTitle({
         sessionId: query.sessionId,
         title,
-        env: await storeEnvFor(query.profileId, profile.providerId),
+        // `historyEnvFor`, not `storeEnvFor`: a provider whose sessions live on
+        // the other end of an authenticated request (`sessionStore: 'remote'`)
+        // renames with the same credential a listing already carries. Local
+        // stores still get the no-decrypt bundle.
+        env: await historyEnvFor(query.profileId, profile.providerId),
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       });
       return { title };
@@ -1665,7 +1669,8 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
       const deleted = await adapter.deleteSession({
         sessionId: query.sessionId,
-        env: await storeEnvFor(query.profileId, profile.providerId),
+        // See `renameSession` for why this is the history bundle.
+        env: await historyEnvFor(query.profileId, profile.providerId),
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       });
       return { deleted };
@@ -1685,7 +1690,8 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
       const tagged = await adapter.tagSession({
         sessionId: query.sessionId,
-        env: await storeEnvFor(query.profileId, profile.providerId),
+        // See `renameSession` for why this is the history bundle.
+        env: await historyEnvFor(query.profileId, profile.providerId),
         tag: query.tag,
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       });

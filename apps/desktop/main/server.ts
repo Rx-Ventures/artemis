@@ -263,6 +263,47 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         runId: query.runId as never,
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       }),
+    // The three writes, delegated to the same engine handlers the sidebar
+    // uses, so a rename over the wire and a rename from the window are one
+    // code path — same trim, same cap, same store.
+    rename: async (query: {
+      readonly profileId: string;
+      readonly sessionId: string;
+      readonly title: string;
+      readonly cwd?: string;
+    }) =>
+      options.engine.require().renameSession({
+        profileId: query.profileId as never,
+        sessionId: query.sessionId as never,
+        title: query.title,
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      }),
+    delete: async (query: {
+      readonly profileId: string;
+      readonly sessionId: string;
+      readonly cwd?: string;
+    }) =>
+      (
+        await options.engine.require().deleteSession({
+          profileId: query.profileId as never,
+          sessionId: query.sessionId as never,
+          ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+        })
+      ).deleted,
+    tag: async (query: {
+      readonly profileId: string;
+      readonly sessionId: string;
+      readonly tag: string | null;
+      readonly cwd?: string;
+    }) =>
+      (
+        await options.engine.require().tagSession({
+          profileId: query.profileId as never,
+          sessionId: query.sessionId as never,
+          tag: query.tag,
+          ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+        })
+      ).tagged,
   };
 
   const runs: RunSource = {

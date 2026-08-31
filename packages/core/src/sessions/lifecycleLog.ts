@@ -146,6 +146,15 @@ export interface RemoteAccessEvent {
     | 'remote.signin.completed'
     /** …abandoned one, killing the subprocess. */
     | 'remote.signin.cancelled'
+    /**
+     * …destroyed a stored transcript.
+     *
+     * The one session mutation that earns a line: renames and tags are
+     * cosmetic and reversible, a deletion is neither, and "which token
+     * removed that conversation" is precisely the question this record
+     * exists to answer.
+     */
+    | 'remote.session.deleted'
     /** A token was presented after its expiry and refused. */
     | 'remote.token.expired';
   /** Which connection. The whole point of the record. */

@@ -645,6 +645,35 @@ export interface ServerSessionMessagesBody {
   readonly hasMore: boolean;
 }
 
+/**
+ * Body of `POST /api/v0/sessions/{id}/rename`.
+ *
+ * Carries the title as *stored* — trimmed and length-capped by the serving
+ * side — because the client shows the caller what the store now says, and
+ * that answer has to come from whoever did the storing.
+ */
+export interface ServerSessionRenamedBody {
+  readonly object: 'artemis.session.renamed';
+  readonly title: string;
+}
+
+/**
+ * Body of `DELETE /api/v0/sessions/{id}`.
+ *
+ * `deleted` is false when there was nothing left to remove — "already gone
+ * is not an error", the same rule the adapter surface states.
+ */
+export interface ServerSessionDeletedBody {
+  readonly object: 'artemis.session.deleted';
+  readonly deleted: boolean;
+}
+
+/** Body of `POST /api/v0/sessions/{id}/tag`. False when nothing was there to tag. */
+export interface ServerSessionTaggedBody {
+  readonly object: 'artemis.session.tagged';
+  readonly tagged: boolean;
+}
+
 /** One row of `GET /v1/models`, in OpenAI's shape. */
 export interface OpenAiModel {
   /** The route. What a caller puts in `model`. */
