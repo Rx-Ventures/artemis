@@ -1,6 +1,42 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.2.0
+
+**Hand off.** A conversation can now be handed on deliberately, from a button
+beside the working directory rather than only when a plan limit forces it.
+
+- **Hand off to another account.** The conversation moves intact — transcript,
+  directory, history — to any account that can read it. The same picker the
+  automatic hand-off opens, with live meters on every row and blocked accounts
+  shown struck through with the reason rather than hidden.
+
+- **Or to an account that cannot read it.** This is the boundary the feature
+  used to stop at: a session only resolves under the profile whose config
+  directory holds its transcript, so accounts on the other side — a different
+  provider, usually — were left out of the picker entirely. They are now
+  offered the other act. The agent writes a briefing, and when it finishes, a
+  fresh conversation opens on that account in the same folder with the briefing
+  as its inheritance. It does not send itself: starting a paid run on an
+  account you were only pointing at is not a decision the app should make for
+  you.
+
+- **Or just the document.** A hand-off briefing written and nothing moved, for
+  when the next session is a person or a tomorrow.
+
+  It lands in the **project**, never in a linked worktree. A worktree is made
+  for one branch and deleted when that branch lands, so a briefing written into
+  one disappears along with the work it was describing.
+
+Every path stops a running agent first. Handing a conversation over — or
+writing a summary of it — while a run is still appending to its transcript is
+how two runs end up writing the same file.
+
+**And a hover that was never there.** The colour used for "the thing under your
+pointer" was the same colour as the menu it sat on, so menu items simply did
+not respond — everywhere except the two surfaces that happened to define their
+own. Every menu in the app answers the pointer now.
+
 ## What's new in 2.1.2
 
 **Install this one.** It is the release that moves your copy onto the
