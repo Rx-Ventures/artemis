@@ -113,6 +113,8 @@ import {
   type AuthStatusRequest,
   type ServerAccountsRequest,
   type ServerAccountsCreateRequest,
+  type ServerAccountsDeleteRequest,
+  type ServerAccountsUpdateRequest,
   type ServerAccountSignInRequest,
   type ServerAccountSubmitCodeRequest,
   type PlanUsagePush,
