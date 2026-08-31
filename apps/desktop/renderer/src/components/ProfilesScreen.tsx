@@ -77,6 +77,7 @@ import {
   createProfile,
   createServerAccount,
   deleteProfile,
+  deleteServerAccount,
   readAuthStatus,
   readServerAccounts,
   readServerSignIn,
@@ -86,6 +87,7 @@ import {
   submitServerSignInCode,
   suggestConfigDir,
   updateProfile,
+  updateServerAccount,
   useApp,
 } from '../state/store';
 import { usePane } from '../state/paneContext';
@@ -725,9 +727,19 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState('');
+  const [provider, setProvider] = useState<ProviderId>('claude');
   const [busy, setBusy] = useState(false);
   /** The account a sign-in is open for, and what the server last said about it. */
   const [signingIn, setSigningIn] = useState<string | null>(null);
+  /** The account whose name is being edited, and the draft. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  /** The endpoint account whose address and key are being edited. */
+  const [configuring, setConfiguring] = useState<string | null>(null);
+  const [addressDraft, setAddressDraft] = useState('');
+  const [keyDraft, setKeyDraft] = useState('');
+  /** The account whose removal is awaiting the second click. */
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const refresh = async (): Promise<void> => {
     const answer = await readServerAccounts(profileId as ProfileId);
@@ -757,15 +769,64 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
     event.preventDefault();
     if (label.trim().length === 0) return;
     setBusy(true);
-    const created = await createServerAccount(profileId as ProfileId, label.trim());
+    const created = await createServerAccount(profileId as ProfileId, label.trim(), provider);
     setBusy(false);
     if (created === null) return;
     setLabel('');
     setAdding(false);
     await refresh();
-    // Straight into the login. Adding an account and not signing it in is a
-    // half-finished job, and the server has just told us which id to drive.
-    await begin(created.id);
+    if (provider === 'claude' || provider === 'codex') {
+      // Straight into the login. Adding an account and not signing it in is a
+      // half-finished job, and the server has just told us which id to drive.
+      await begin(created.id);
+    } else {
+      // An endpoint account has no login to run — it authenticates with an
+      // address and maybe a key, so the next step is the form for those.
+      setAddressDraft('');
+      setKeyDraft('');
+      setConfiguring(created.id);
+    }
+  };
+
+  const saveRename = async (accountId: string): Promise<void> => {
+    if (renameDraft.trim().length === 0) return;
+    setBusy(true);
+    const updated = await updateServerAccount(profileId as ProfileId, accountId, {
+      label: renameDraft.trim(),
+    });
+    setBusy(false);
+    if (updated === null) return;
+    setRenaming(null);
+    await refresh();
+    // A rename moves the account's route slug, and the model picker addresses
+    // models as slug/model — re-read so it agrees with the server again.
+    await refreshModels();
+  };
+
+  const saveEndpoint = async (accountId: string): Promise<void> => {
+    setBusy(true);
+    const updated = await updateServerAccount(profileId as ProfileId, accountId, {
+      baseUrl: addressDraft.trim(),
+      // Only sent when the user typed one: an untouched field must not clear
+      // the stored key, which is exactly what the empty string would do.
+      ...(keyDraft.length > 0 ? { apiKey: keyDraft } : {}),
+    });
+    setKeyDraft('');
+    setBusy(false);
+    if (updated === null) return;
+    setConfiguring(null);
+    await refresh();
+    await refreshModels();
+  };
+
+  const remove = async (accountId: string): Promise<void> => {
+    setBusy(true);
+    const removed = await deleteServerAccount(profileId as ProfileId, accountId);
+    setBusy(false);
+    setRemoving(null);
+    if (!removed) return;
+    await refresh();
+    await refreshModels();
   };
 
   return (
@@ -804,30 +865,166 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
-          {listing.accounts.map((account) => (
-            <li key={account.id} className="flex items-center gap-2 text-2xs">
-              <span className="text-ink">{account.label}</span>
-              {/*
-                `live` is the server's own word for "the account confirmed this
-                catalogue", which is the closest thing it publishes to "this one
-                is signed in" — a signed-out directory cannot enumerate.
-              */}
-              <span className="font-mono text-ink-faint">
-                {account.live ? `${String(account.models.length)} models` : 'no models confirmed'}
-              </span>
-              {listing.manageProfiles && signingIn === null ? (
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  className="ml-auto"
-                  disabled={busy}
-                  onClick={() => void begin(account.id)}
-                >
-                  {account.live ? 'Sign in again' : 'Sign in'}
-                </Button>
-              ) : null}
-            </li>
-          ))}
+          {listing.accounts.map((account) => {
+            /*
+              What the row offers is the provider's own vocabulary: a hosted
+              account signs in, an endpoint account has an address and maybe a
+              key. `kind` is the server's word for which one this is.
+            */
+            const endpoint = account.provider.kind !== 'hosted';
+            const managed = listing.manageProfiles && signingIn === null;
+            return (
+              <li key={account.id} className="flex flex-col gap-1 text-2xs">
+                <div className="flex items-center gap-2">
+                  {renaming === account.id ? (
+                    <form
+                      className="flex flex-1 items-center gap-2"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveRename(account.id);
+                      }}
+                    >
+                      <Input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(event) => setRenameDraft(event.target.value)}
+                        className="h-6 text-xs md:text-xs"
+                        aria-label="New account name"
+                      />
+                      <Button size="xs" type="submit" disabled={busy || renameDraft.trim().length === 0}>
+                        Rename
+                      </Button>
+                      <Button size="xs" variant="ghost" type="button" onClick={() => setRenaming(null)}>
+                        Cancel
+                      </Button>
+                    </form>
+                  ) : (
+                    <>
+                      <span className="text-ink">{account.label}</span>
+                      <span className="font-mono text-ink-faint">{account.provider.label}</span>
+                      {/*
+                        `live` is the server's own word for "the account confirmed
+                        this catalogue", the closest thing it publishes to "this
+                        one is signed in" — a signed-out directory cannot
+                        enumerate.
+                      */}
+                      <span className="font-mono text-ink-faint">
+                        {account.live
+                          ? `${String(account.models.length)} models`
+                          : 'no models confirmed'}
+                      </span>
+                      {managed ? (
+                        <span className="ml-auto flex items-center gap-1">
+                          {endpoint ? (
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => {
+                                setAddressDraft(account.baseUrl ?? '');
+                                setKeyDraft('');
+                                setConfiguring(configuring === account.id ? null : account.id);
+                              }}
+                            >
+                              Configure
+                            </Button>
+                          ) : (
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => void begin(account.id)}
+                            >
+                              {account.live ? 'Sign in again' : 'Sign in'}
+                            </Button>
+                          )}
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => {
+                              setRenameDraft(account.label);
+                              setRenaming(account.id);
+                            }}
+                          >
+                            Rename
+                          </Button>
+                          {removing === account.id ? (
+                            <>
+                              <Button
+                                size="xs"
+                                variant="destructive"
+                                disabled={busy}
+                                onClick={() => void remove(account.id)}
+                              >
+                                Really remove
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => setRemoving(null)}
+                              >
+                                Keep
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => setRemoving(account.id)}
+                            >
+                              Remove
+                            </Button>
+                          )}
+                        </span>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+                {removing === account.id ? (
+                  <p className="text-2xs leading-relaxed text-ink-muted">
+                    Removes the account, its routes, and its stored key. Conversations it served and
+                    its directory stay on the server.
+                  </p>
+                ) : null}
+                {configuring === account.id ? (
+                  <form
+                    className="flex flex-col gap-1"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveEndpoint(account.id);
+                    }}
+                  >
+                    <Input
+                      autoFocus
+                      value={addressDraft}
+                      placeholder="Endpoint address, e.g. http://127.0.0.1:8080/v1"
+                      onChange={(event) => setAddressDraft(event.target.value)}
+                      className="h-6 text-xs md:text-xs"
+                      aria-label="Endpoint address"
+                    />
+                    <Input
+                      type="password"
+                      value={keyDraft}
+                      placeholder="API key — leave blank to keep the stored one"
+                      onChange={(event) => setKeyDraft(event.target.value)}
+                      className="h-6 text-xs md:text-xs"
+                      aria-label="Endpoint API key"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button size="xs" type="submit" disabled={busy}>
+                        Save
+                      </Button>
+                      <Button size="xs" variant="ghost" type="button" onClick={() => setConfiguring(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -841,8 +1038,27 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
             className="h-7 text-xs md:text-xs"
             aria-label="Account name"
           />
+          {/*
+            The provider decides the next step: a CLI provider goes straight
+            into its login, an endpoint provider into the address form. The
+            native element rather than the styled select, deliberately — this
+            is a five-option picker in a settings card, and the browser's own
+            is the accessible baseline the styled one has to be taught.
+          */}
+          <select
+            value={provider}
+            onChange={(event) => setProvider(event.target.value as ProviderId)}
+            className="h-7 rounded border border-line bg-transparent px-1 text-xs text-ink"
+            aria-label="Provider"
+          >
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="llamacpp">llama.cpp</option>
+            <option value="lmstudio">LM Studio</option>
+            <option value="ollama">Ollama</option>
+          </select>
           <Button size="xs" type="submit" disabled={busy || label.trim().length === 0}>
-            Add &amp; sign in
+            {provider === 'claude' || provider === 'codex' ? 'Add & sign in' : 'Add & configure'}
           </Button>
           <Button size="xs" variant="ghost" type="button" onClick={() => setAdding(false)}>
             Cancel

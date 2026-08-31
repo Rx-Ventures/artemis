@@ -173,6 +173,7 @@ export function createCatalogue(options: CatalogueOptions): Catalogue {
           disabled: profile.disabled === true,
           live,
           capabilities: descriptor?.capabilities ?? EMPTY_CAPABILITIES,
+          ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
           models: models.map((model) =>
             toServerModel({ model, profile, slug, descriptor }),
           ),

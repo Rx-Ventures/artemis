@@ -1390,7 +1390,7 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
    * parse exception with no route context.
    */
   async function readJsonBody(request: IncomingMessage): Promise<{ body?: unknown }> {
-    if (request.method !== 'POST') return {};
+    if (request.method !== 'POST' && request.method !== 'PATCH') return {};
 
     const chunks: Buffer[] = [];
     let size = 0;
@@ -1872,15 +1872,86 @@ async function handleProfileAdminRoute(
   const separator = rest.indexOf('/');
   const action = separator < 0 ? '' : rest.slice(separator + 1);
   // Enumerated, so an unknown sub-path 404s before an id is even decoded.
-  if (action !== 'signin' && action !== 'signin/code') return missing();
+  if (action !== '' && action !== 'signin' && action !== 'signin/code') return missing();
 
   let profileId: string;
   try {
-    profileId = decodeURIComponent(rest.slice(0, separator));
+    profileId = decodeURIComponent(separator < 0 ? rest : rest.slice(0, separator));
   } catch {
     return fail(400, 'invalid_request_error', 'invalid_url', 'The account id could not be parsed.');
   }
   if (profileId.length === 0) return missing();
+
+  /*
+   * The account itself: PATCH changes it, DELETE removes it.
+   *
+   * Everything a local profile's editor writes that makes sense over the
+   * wire — label, endpoint address, key — with the local editor's own
+   * semantics: omitted leaves a field alone, the empty string clears. The
+   * key is write-only in both directions; no reply carries it back.
+   */
+  if (action === '') {
+    if (method === 'PATCH') {
+      const body = request.body;
+      if (typeof body !== 'object' || body === null) {
+        return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+      }
+      const patch: { label?: string; baseUrl?: string; apiKey?: string } = {};
+      for (const field of ['label', 'baseUrl', 'apiKey'] as const) {
+        const value = (body as Record<string, unknown>)[field];
+        if (value === undefined) continue;
+        if (typeof value !== 'string') {
+          return fail(400, 'invalid_request_error', 'invalid_body', `\`${field}\` must be a string.`);
+        }
+        patch[field] = value;
+      }
+      if (patch.label !== undefined && patch.label.trim().length === 0) {
+        return fail(400, 'invalid_request_error', 'invalid_body', 'A label cannot be empty.');
+      }
+      if (Object.keys(patch).length === 0) {
+        return fail(400, 'invalid_request_error', 'invalid_body', 'The patch names no field to change.');
+      }
+      try {
+        const updated = await admin.update(profileId, patch);
+        context.onRemoteAccess?.({
+          kind: 'remote.profile.updated',
+          connectionId: connection.id,
+          profileId,
+        });
+        const reply: ServerProfileCreatedBody = {
+          object: 'artemis.profile',
+          id: updated.id,
+          label: updated.label,
+          providerId: updated.providerId as ProviderId,
+          configDir: updated.configDir,
+        };
+        return ok(reply);
+      } catch (error) {
+        if (error instanceof DuplicateProfileLabelError) {
+          return fail(409, 'invalid_request_error', 'duplicate_label', error.message);
+        }
+        return fail(
+          400,
+          'invalid_request_error',
+          'invalid_body',
+          error instanceof Error ? error.message : 'The account could not be changed.',
+        );
+      }
+    }
+    if (method === 'DELETE') {
+      const existing = await admin.find(profileId);
+      if (existing === undefined) return missing();
+      await admin.delete(profileId);
+      context.onRemoteAccess?.({
+        kind: 'remote.profile.deleted',
+        connectionId: connection.id,
+        profileId,
+        providerId: existing.providerId,
+      });
+      return ok({ object: 'artemis.profile.deleted', removed: true });
+    }
+    return missing();
+  }
 
   /**
    * Does the director hold a flow for this id?

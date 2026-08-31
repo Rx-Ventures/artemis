@@ -2396,6 +2396,28 @@ export function createMockBridge(): ArtemisBridge {
         mockRemoteAccounts = [...mockRemoteAccounts, mockServerProfile(account.id, label)];
         return ok({ account });
       },
+      update: async ({ accountId, label }) => {
+        mockRemoteAccounts = mockRemoteAccounts.map((account) =>
+          account.id === accountId && label !== undefined ? { ...account, label } : account,
+        );
+        const changed = mockRemoteAccounts.find((account) => account.id === accountId);
+        return changed === undefined
+          ? ({ ok: false, error: { code: 'invalid_request', message: 'No such account.' } } as never)
+          : ok({
+              account: {
+                object: 'artemis.profile' as const,
+                id: changed.id,
+                label: changed.label,
+                providerId: changed.provider.id,
+                configDir: `/data/profiles/${changed.label}`,
+              },
+            });
+      },
+      delete: async ({ accountId }) => {
+        const had = mockRemoteAccounts.some((account) => account.id === accountId);
+        mockRemoteAccounts = mockRemoteAccounts.filter((account) => account.id !== accountId);
+        return ok({ removed: had });
+      },
       signIn: async ({ accountId }) => {
         mockSignIn = {
           object: 'artemis.signin',

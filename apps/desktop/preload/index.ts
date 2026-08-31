@@ -830,6 +830,8 @@ const bridge: ArtemisBridge = Object.freeze({
   serverAccounts: Object.freeze({
     list: (request: ServerAccountsRequest) => invoke(IPC.serverAccountsList, request),
     create: (request: ServerAccountsCreateRequest) => invoke(IPC.serverAccountsCreate, request),
+    update: (request: ServerAccountsUpdateRequest) => invoke(IPC.serverAccountsUpdate, request),
+    delete: (request: ServerAccountsDeleteRequest) => invoke(IPC.serverAccountsDelete, request),
     signIn: (request: ServerAccountSignInRequest) => invoke(IPC.serverAccountsSignIn, request),
     signInStatus: (request: ServerAccountSignInRequest) =>
       invoke(IPC.serverAccountsSignInStatus, request),

@@ -145,6 +145,8 @@ import {
   type AuthStatusRequest,
   type ServerAccountsRequest,
   type ServerAccountsCreateRequest,
+  type ServerAccountsDeleteRequest,
+  type ServerAccountsUpdateRequest,
   type ServerAccountSignInRequest,
   type ServerAccountSubmitCodeRequest,
   type UsagePlanRequest,
@@ -207,6 +209,8 @@ const LIMITS = {
   envEntries: 64,
   envKey: 128,
   envValue: 8_192,
+  /** An endpoint key on its way to a server's store. Same bound as an env value. */
+  secret: 8_192,
   ruleUpdates: 64,
   rulesPerUpdate: 256,
   /** Bound on one `owner` or `repo` segment. GitHub's own cap is 39/100. */
@@ -1884,6 +1888,46 @@ export function validateServerAccountsCreate(raw: unknown): ServerAccountsCreate
     profileId: requireId(request['profileId'], 'profileId'),
     label: requireString(request['label'], 'label', LIMITS.label),
     ...(provider === undefined || provider === null ? {} : { provider }),
+  };
+}
+
+export function validateServerAccountsUpdate(raw: unknown): ServerAccountsUpdateRequest {
+  const request = requireRequest(raw);
+  const patch: { label?: string; baseUrl?: string; apiKey?: string } = {};
+  if (request['label'] !== undefined) {
+    patch.label = requireString(request['label'], 'label', LIMITS.label);
+  }
+  // Both accept the empty string: that is `ProfilePatch`'s own way to say
+  // "back to absent", and refusing it here would leave no way to clear a key.
+  if (request['baseUrl'] !== undefined) {
+    const baseUrl = request['baseUrl'];
+    if (typeof baseUrl !== 'string' || baseUrl.length > LIMITS.url) {
+      throw new ValidationError('baseUrl', 'must be a string');
+    }
+    patch.baseUrl = baseUrl;
+  }
+  if (request['apiKey'] !== undefined) {
+    const apiKey = request['apiKey'];
+    if (typeof apiKey !== 'string' || apiKey.length > LIMITS.secret) {
+      throw new ValidationError('apiKey', 'must be a string');
+    }
+    patch.apiKey = apiKey;
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new ValidationError('patch', 'names no field to change');
+  }
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    accountId: requireString(request['accountId'], 'accountId', LIMITS.id),
+    ...patch,
+  };
+}
+
+export function validateServerAccountsDelete(raw: unknown): ServerAccountsDeleteRequest {
+  const request = requireRequest(raw);
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    accountId: requireString(request['accountId'], 'accountId', LIMITS.id),
   };
 }
 

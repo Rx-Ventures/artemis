@@ -133,6 +133,17 @@ export interface RemoteAccessEvent {
      * to travel in even if a caller tried.
      */
     | 'remote.profile.created'
+    /**
+     * …changed one: a rename, a repointed address, a replaced key.
+     *
+     * One kind for all three on purpose — the line carries ids and never
+     * values, so distinguishing "renamed" from "rekeyed" would name the only
+     * fact this record must not hold. That a token *touched* the account is
+     * the auditable event.
+     */
+    | 'remote.profile.updated'
+    /** …removed one, routes and key included. The directory stays. */
+    | 'remote.profile.deleted'
     /** …started the provider's login for one. */
     | 'remote.signin.started'
     /**

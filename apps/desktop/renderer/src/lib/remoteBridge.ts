@@ -933,6 +933,8 @@ export function createRemoteBridge(
     serverAccounts: {
       list: async () => absent(SERVER_ACCOUNTS_REASON),
       create: async () => absent(SERVER_ACCOUNTS_REASON),
+      update: async () => absent(SERVER_ACCOUNTS_REASON),
+      delete: async () => absent(SERVER_ACCOUNTS_REASON),
       signIn: async () => absent(SERVER_ACCOUNTS_REASON),
       signInStatus: async () => absent(SERVER_ACCOUNTS_REASON),
       submitCode: async () => absent(SERVER_ACCOUNTS_REASON),

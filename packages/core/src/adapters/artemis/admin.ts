@@ -104,6 +104,35 @@ export async function createRemoteAccount(
   });
 }
 
+/** Change one account: label, endpoint address, key — any subset. */
+export async function updateRemoteAccount(
+  env: ArtemisProfileEnv,
+  accountId: string,
+  patch: { readonly label?: string; readonly baseUrl?: string; readonly apiKey?: string },
+  options?: { readonly signal?: AbortSignal },
+): Promise<ServerProfileCreatedBody> {
+  return call<ServerProfileCreatedBody>(
+    env,
+    `${API_PREFIX}/profiles/${encodeURIComponent(accountId)}`,
+    options,
+    { method: 'PATCH', body: patch },
+  );
+}
+
+/** Remove one account. The server keeps the directory; see the route's contract. */
+export async function deleteRemoteAccount(
+  env: ArtemisProfileEnv,
+  accountId: string,
+  options?: { readonly signal?: AbortSignal },
+): Promise<{ readonly removed: boolean }> {
+  return call<{ readonly removed: boolean }>(
+    env,
+    `${API_PREFIX}/profiles/${encodeURIComponent(accountId)}`,
+    options,
+    { method: 'DELETE' },
+  );
+}
+
 /** Spawn the provider's login for one account on the server. */
 export async function startRemoteSignIn(
   env: ArtemisProfileEnv,

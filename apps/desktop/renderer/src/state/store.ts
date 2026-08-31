@@ -11570,15 +11570,49 @@ export async function readServerAccounts(
 export async function createServerAccount(
   profileId: ProfileId,
   label: string,
+  provider?: ProviderId,
 ): Promise<ServerProfileCreatedBody | null> {
   const { bridge } = resolveBridge();
   if (!bridge) return null;
-  const result = await call(() => bridge.serverAccounts.create({ profileId, label }));
+  const result = await call(() =>
+    bridge.serverAccounts.create({ profileId, label, ...(provider === undefined ? {} : { provider }) }),
+  );
   if (!result.ok) {
     reportFailure('Could not add the account', result.error);
     return null;
   }
   return result.value.account;
+}
+
+/** Change one account on the server: label, endpoint address, key. */
+export async function updateServerAccount(
+  profileId: ProfileId,
+  accountId: string,
+  patch: { readonly label?: string; readonly baseUrl?: string; readonly apiKey?: string },
+): Promise<ServerProfileCreatedBody | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.serverAccounts.update({ profileId, accountId, ...patch }));
+  if (!result.ok) {
+    reportFailure('Could not change the account', result.error);
+    return null;
+  }
+  return result.value.account;
+}
+
+/** Remove one account from the server. Its directory stays on that machine. */
+export async function deleteServerAccount(
+  profileId: ProfileId,
+  accountId: string,
+): Promise<boolean> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return false;
+  const result = await call(() => bridge.serverAccounts.delete({ profileId, accountId }));
+  if (!result.ok) {
+    reportFailure('Could not remove the account', result.error);
+    return false;
+  }
+  return result.value.removed;
 }
 
 /** Start the provider's login for one account, on the server. */

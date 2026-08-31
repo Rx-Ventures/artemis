@@ -213,6 +213,46 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
         profiles.configDirFor(profile),
       );
     },
+
+    async update(profileId, patch) {
+      if (patch.label !== undefined) {
+        const label = patch.label.trim();
+        const existing = await profiles.list();
+        // The create route's duplicate rule, applied to the rename that can
+        // recreate the collision it exists to prevent: slugs are derived from
+        // labels, and two accounts called "work" are two addresses that move.
+        if (
+          existing.some(
+            (profile) =>
+              profile.id !== (profileId as ProfileId) &&
+              profile.label.trim().toLowerCase() === label.toLowerCase(),
+          )
+        ) {
+          throw new DuplicateProfileLabelError(label);
+        }
+      }
+      const updated = await profiles.update(profileId as ProfileId, {
+        ...(patch.label === undefined ? {} : { label: patch.label.trim() }),
+        ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
+        ...(patch.apiKey === undefined ? {} : { apiKey: patch.apiKey }),
+      });
+      // A rename moves the account's route slug; a new address changes what
+      // its models are. Either way the published catalogue is stale.
+      catalogue.invalidate();
+      return describeProfile(
+        updated.id,
+        updated.providerId,
+        updated.label,
+        profiles.configDirFor(updated),
+      );
+    },
+
+    async delete(profileId) {
+      // The record, its key, its routes. The config directory stays - see the
+      // interface's contract for why the wire never removes files.
+      await profiles.delete(profileId as ProfileId, { deleteConfigDir: false });
+      catalogue.invalidate();
+    },
   };
 
   function describeProfile(
