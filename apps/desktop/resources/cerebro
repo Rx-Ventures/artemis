@@ -930,22 +930,70 @@ def cmd_new(args):
     print(f"created {dest}\nEdit the body, then run: bin/cerebro validate")
 
 
-def bank_or_die(repo):
+def bank_for_install(repo):
+    """The memories `pull` will install: everything that validates, minus
+    whatever would collide, with the rest announced and left out.
+
+    Installing is an automatic act — Artemis runs `sync` at the start of every
+    run — so it degrades rather than stops. It used to stop: any file with a
+    validation error aborted the whole install, which was survivable while
+    `memories/` was globbed one level deep, because that is all the bank's own
+    tree ever held. Reading the tree recursively is what makes
+    memories/<org>/<project>/ work, and it also hands the gate every stray
+    `.md` anyone ever left in a subdirectory. One of those — a scratch file, a
+    half-finished note, a name that collides with a flat memory — would take
+    out the install, the CLAUDE.md refresh and every future sync, for a
+    command the user never typed and about a file the previous version never
+    mentioned.
+
+    So the automatic path installs what is good and says on stderr what it
+    skipped. Nothing is hidden by this: `status` counts validation errors from
+    the same reading, so the pane still shows a bank with problems, and
+    `validate` — which a person runs precisely to ask for judgment — keeps
+    reporting everything and exiting 1.
+
+    Collisions are decided by depth, shallowest first, then by path. An
+    install flattens to <name>.md, so two files sharing a slug cannot both
+    land; preferring the shallower one keeps the flat memory, which is the
+    file that was being installed before the tree was read recursively."""
     results = load_bank(repo)
-    bad = [(p, e) for p, _, e, _ in results if e]
-    if bad:
-        for p, errors in bad:
-            for e in errors:
-                print(f"ERROR {os.path.relpath(p, repo)}: {e}", file=sys.stderr)
-        fail("bank has validation errors — fix them (bin/cerebro validate) before syncing")
-    return [m for _, m, _, _ in results if m]
+
+    # A duplicate-name error is about a pair of files and is settled below, on
+    # depth. Every other error is the file's own and disqualifies it here.
+    skipped, candidates = {}, []
+    for path, mem, errors, _ in results:
+        own = [e for e in errors if not e.startswith("duplicate name ")]
+        if mem is None:
+            skipped[path] = own or ["not a readable memory"]
+        elif own:
+            skipped[path] = own
+        else:
+            candidates.append((path, mem))
+
+    taken = {}
+    for path, mem in sorted(candidates, key=lambda c: (len(c[0].parts), str(c[0]))):
+        winner = taken.get(mem.name)
+        if winner is None:
+            taken[mem.name] = path
+        else:
+            skipped[path] = [f"duplicate name {mem.name!r} — installing "
+                             f"{os.path.relpath(winner, repo)} instead"]
+
+    for path in sorted(skipped, key=str):
+        for reason in skipped[path]:
+            print(f"cerebro: skipped {os.path.relpath(path, repo)} — {reason}", file=sys.stderr)
+    if skipped:
+        print(f"cerebro: {len(skipped)} file(s) not installed — run `cerebro validate` for the "
+              f"full report", file=sys.stderr)
+
+    return [m for p, m, _, _ in results if m is not None and p not in skipped]
 
 
 def pull_bank(repo, args):
     entry = bank_entry_for(repo)
     slug = entry["slug"]
     sub = bank_subdir(slug)
-    bank = bank_or_die(repo)
+    bank = bank_for_install(repo)
     stamp = source_stamp(repo)
     today = datetime.date.today().isoformat()
     profiles = select_profiles(artemis_root(args), args.profile)
