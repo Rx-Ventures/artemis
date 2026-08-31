@@ -8,7 +8,7 @@
 #   docker compose -f docker/docker-compose.yml exec artemis \
 #     node /app/dist/main.js profile add --label work
 #   docker compose -f docker/docker-compose.yml exec -it \
-#     -e CLAUDE_CONFIG_DIR=/data/profiles/work artemis claude login
+#     -e CLAUDE_CONFIG_DIR=/data/profiles/work artemis claude auth login
 #
 #   # 2. Mint a connection token pinned to a mounted repository:
 #   docker compose -f docker/docker-compose.yml exec artemis \
@@ -16,6 +16,19 @@
 #
 #   # 3. On each laptop: add an "Artemis Server" profile, address
 #   #    http://<server-tailscale-ip>:6472, and paste the token as its API key.
+#
+# Step 1 assumes a shell in here, which is the assumption that does not hold
+# under an orchestrator — `exec` reaches an arbitrary replica, and a web
+# terminal served over plain HTTP cannot even paste. So the login can also be
+# driven from the desktop app: mint the laptop's token with
+#
+#   node /app/dist/main.js connection create --label me --directory /work/my-repo \
+#     --manage-profiles
+#
+# and its profile's card gains an "Accounts on this server" section that adds
+# an account and runs the provider's login here, showing you the verification
+# URL and taking the code you paste. Give that flag to your own token and to no
+# other: it is the one grant not bounded by a directory or an allowance.
 #
 # Reachability is this file's `ports` plus whatever network sits in front
 # (Tailscale, a firewall). Every request still authenticates per connection
@@ -39,9 +52,34 @@ services:
     environment:
       ARTEMIS_DATA_DIR: /data
       ARTEMIS_BIND_HOST: 0.0.0.0
+      # Connections to make sure exist at startup, for a deploy that cannot run
+      # step 2 above interactively — an orchestrator (Swarm, Nomad, a PaaS)
+      # where `exec` reaches an arbitrary replica and the first token is the one
+      # thing that cannot be minted from outside. Merged into server.json and
+      # idempotent: nothing is ever removed, a connection this variable does not
+      # name is untouched, and `connection revoke` still works. Editing an entry
+      # here and redeploying *updates* that grant — matched by token, so the id
+      # and creation time survive and the clients keep the token they have.
+      # Supply the tokens from wherever the deployment already keeps secrets —
+      # they are the same strings the clients get — and use at least 32
+      # characters. The CLI stays the interactive path; this is for the machines.
+      #
+      # `"manageProfiles": true` lets that one token add accounts to this server
+      # and drive their logins from a desktop Artemis — the way in when there is
+      # no usable shell in here. Give it to your own connection and to no other.
+      # ARTEMIS_BOOTSTRAP_CONNECTIONS: >-
+      #   [{"label":"laptop","token":"${ARTEMIS_LAPTOP_TOKEN}",
+      #     "manageProfiles":true,
+      #     "workspace":{"kind":"directory","path":"/work/my-repo"}}]
       # Uncomment to name the hosts this server answers to instead of `any`
       # (the default for a non-loopback bind):
       # ARTEMIS_ALLOWED_HOSTS: 'artemis.tailnet.example,100.101.102.103'
+      # How long a run whose client detached is kept before it is reaped, and
+      # how long a permission prompt waits for an answer. Both are ceilings on
+      # behaviour a completions client has to opt into per request; the defaults
+      # (6h, 15m) suit a laptop that sleeps and a person who answers prompts.
+      # ARTEMIS_DETACHED_RUN_TTL_MS: '21600000'
+      # ARTEMIS_PERMISSION_PARK_MS: '900000'
 
 volumes:
   artemis-data:

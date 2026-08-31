@@ -61,11 +61,17 @@ import type {
   AgentEvent,
   OpenAiChatRequest,
   OpenAiModelList,
+  ProviderId,
+  RunId,
+  RunsInterruptResponse,
+  RunsRespondPermissionResponse,
+  RunsSendResponse,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
   ServerConnection,
   ServerProfile,
+  ServerProfileCreatedBody,
   ServerProfilesBody,
   ServerSessionMessagesBody,
   ServerSessionsBody,
@@ -94,12 +100,23 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import { RunError } from '../sessions/errors.js';
 import type { RemoteAccessEvent } from '../sessions/lifecycleLog.js';
 import type { PushFeed } from './feed.js';
 import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
 import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
+import { createRunDirectory, reviewPermissionDecision, type RunDirectory } from './runs.js';
+import {
+  createSignInDirector,
+  DuplicateProfileLabelError,
+  SignInBusyError,
+  SignInNotWaitingError,
+  SignInUnavailableError,
+  type ProfileAdmin,
+  type SignInDirector,
+} from './signin.js';
 import type { RemoteTerminals } from './terminals.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
@@ -178,6 +195,19 @@ export interface ServerContext {
    * running turns gets.
    */
   readonly runs?: RunSource;
+  /**
+   * Which connection owns which *completions-started* run, and the deadlines on
+   * the ones nobody is watching.
+   *
+   * Absent means a turn is over when its request is: the detach opt-in is inert
+   * (there would be nothing to hand the run to) and the three completions-run
+   * actions answer `404`, indistinguishably from a build that never had them.
+   *
+   * Deliberately not the remote bridge's registry. Bridge-started runs are
+   * governed by {@link guard}, on a different clock, and no run is ever in
+   * both — see `runs.ts`.
+   */
+  readonly runDirectory?: RunDirectory;
   /** Where a connection's turns run. Required alongside {@link runs}. */
   readonly workspaces?: WorkspaceResolver;
   /**
@@ -248,6 +278,17 @@ export interface ServerContext {
    * that is enforced rather than promised.
    */
   readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
+  /**
+   * How to add a serving account, when this build can.
+   *
+   * Absent means the account-administration surface answers `501` — a
+   * catalogue-only server, or a desktop-hosted one whose accounts are managed
+   * in a window instead. Required alongside {@link signIns}: an account nobody
+   * can sign in is half a feature.
+   */
+  readonly profileAdmin?: ProfileAdmin;
+  /** The one sign-in this server will drive at a time. See `signin.ts`. */
+  readonly signIns?: SignInDirector;
 }
 
 /**
@@ -464,6 +505,58 @@ export async function handleServerRequest(
   }
 
   /*
+   * The three verbs a *completions* client may address its own run with.
+   * ==========================================================================
+   *
+   * `POST /api/v0/runs/{id}/{messages,permission,interrupt}`, and this block
+   * sits above the remote bridge's dispatch deliberately. Read the precedence
+   * rule before moving it.
+   *
+   * Two different clients address runs on this port, and they are not the same
+   * kind of thing:
+   *
+   *  - The **bridge** (`remote.ts`) serves a window. It owns `/api/v0/runs`
+   *    whole — the list, the `?after=` replay, and the five verbs `send`,
+   *    `interrupt`, `respond-permission`, `stop-task`, `dispose` — and it
+   *    authorises by what the connection's allowance can *see*.
+   *  - The **completions surface** serves a provider adapter that holds a run
+   *    id it was handed on its own stream. It gets three verbs and authorises
+   *    by *ownership*: the run was started by this connection, through
+   *    `/v1/chat/completions`, and is recorded in `runDirectory`.
+   *
+   * So the rule is ownership-gated precedence, one action at a time:
+   *
+   *  1. `messages` and `permission` are names the bridge does not have. They
+   *     are answered here when this connection owns the run, and with a bare
+   *     404 when it does not — the same sentence an id that never existed
+   *     gets. They are never passed down, because the bridge would answer
+   *     "no such run action" and a caller would have to tell two 404s apart.
+   *  2. `interrupt` is a name **both** surfaces have. Ownership is asked
+   *     *first*: an owned completions run is interrupted here, and everything
+   *     else — every bridge-started run, every id this connection did not
+   *     start — falls through untouched to `isRemotePath` below and is served
+   *     exactly as it was before this block existed.
+   *  3. Everything else under `/runs` is the bridge's and is not looked at
+   *     here. In particular `GET /api/v0/runs` and
+   *     `GET /api/v0/runs/{id}/events?after=N` have one owner, which is the
+   *     bridge. A completions client is handed its run id on its own stream
+   *     and does not enumerate; a second listing route, or a second replay
+   *     route on a different query parameter, would be two answers to one
+   *     question.
+   *
+   * The thing this shape exists to prevent is a prefix dispatcher. Claiming
+   * `path.startsWith('/api/v0/runs')` here would swallow the bridge's entire
+   * surface — the list, the stream replay, `send`, `respond-permission`,
+   * `stop-task`, `dispose` — silently, with no conflict and no failing type,
+   * because every one of those paths starts with those characters.
+   */
+  const owned = ownedCompletionsRunAction(context, connection, method, path);
+  if (owned !== undefined) {
+    const reply = await handleOwnedRunAction(context, connection, request, owned);
+    return { ...reply, connectionId: connection.id };
+  }
+
+  /*
    * The remote bridge surface (ADR 0004): the run list, per-run replay and
    * control verbs, the terminals, and the event stream. Dispatched before the
    * read-only method gate below because several of its routes are POSTs, and
@@ -473,6 +566,31 @@ export async function handleServerRequest(
    */
   if (isRemotePath(path)) {
     return handleRemoteRequest({ request, context, connection, method, path, url });
+  }
+
+  /*
+   * The account-administration surface, dispatched here for the same reason the
+   * bridge above is: it writes, and one of its routes is a `DELETE` the
+   * read-only gate below would refuse before the route was ever resolved.
+   *
+   * It sits *after* `isRemotePath` and is disjoint from it by construction. The
+   * bridge owns `/runs`, `/events` and `/terminals`; this owns `/profiles/…`
+   * and nothing else, so neither can shadow the other however this block is
+   * reordered. That is a property worth stating out loud, because a dispatcher
+   * that claimed a prefix the bridge already owned would swallow those routes
+   * with nothing to show for it in a diff.
+   *
+   * `GET ${apiPrefix}/profiles` is deliberately *not* caught — that is the
+   * catalogue read every client makes, it is authorised by the ordinary
+   * allowance rather than by the administrative grant, and routing it through
+   * here would hide the whole catalogue from every connection that is not an
+   * administrator.
+   */
+  if (
+    path === `${apiPrefix}/profiles` ? method === 'POST' : path.startsWith(`${apiPrefix}/profiles/`)
+  ) {
+    const reply = await handleProfileAdminRoute(request, context, connection, path, method);
+    return { ...reply, connectionId: connection.id };
   }
 
   if (method !== 'GET' && method !== 'HEAD') {
@@ -489,7 +607,7 @@ export async function handleServerRequest(
       : fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
   }
 
-  if (path === '/') return answer(indexBody(context));
+  if (path === '/') return answer(indexBody(context, connection));
 
   /**
    * Who am I, and where do my turns run?
@@ -630,9 +748,18 @@ export async function handleServerRequest(
  * Present because the first thing anyone does with a new local server is open
  * its root in a browser, and a 404 there teaches them nothing. Every path it
  * names is one this build actually serves.
+ *
+ * It takes the *connection* as well as the context because one surface on it is
+ * per-token rather than per-build. The account-administration routes answer
+ * `404` to a connection without the grant, indistinguishably from a build that
+ * has never had them — and an index that advertised them to every token would
+ * hand back the one fact that posture exists to withhold: that this deployment
+ * has an administrative surface, and therefore that some other token can add
+ * accounts to it.
  */
-function indexBody(context: ServerContext): Record<string, unknown> {
+function indexBody(context: ServerContext, connection: ServerConnection): Record<string, unknown> {
   const apiPrefix = `/api/${SERVER_API_VERSION}`;
+  const managesProfiles = connection.manageProfiles === true && context.profileAdmin !== undefined;
   return {
     object: 'artemis.server',
     version: context.version,
@@ -683,6 +810,26 @@ function indexBody(context: ServerContext): Record<string, unknown> {
                 'The event stream (SSE). Resume with Last-Event-ID; gaps are reported, not hidden.',
             },
           ]),
+      ...(managesProfiles
+        ? [
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles`,
+              description: 'Add an account. Needs a connection granted account administration.',
+            },
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles/{id}/signin`,
+              description:
+                'Start the provider login for an account, and read back its verification URL.',
+            },
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles/{id}/signin/code`,
+              description: 'Hand the code the user pasted to the login that is waiting for it.',
+            },
+          ]
+        : []),
     ],
     // Said out loud rather than left to a 401: a catalogue that changes when an
     // account is added is worth re-reading, and a client that does not know the
@@ -692,6 +839,11 @@ function indexBody(context: ServerContext): Record<string, unknown> {
       'A model is addressed as `<profile>/<model>` — the account is part of the address.',
       'Where a turn runs is fixed to your connection, not chosen per request. See /api/v0/connection.',
       'Catalogues are cached for a few minutes. Append ?refresh=1 to force a re-read.',
+      ...(managesProfiles
+        ? [
+            'This connection may add accounts and sign them in; a token without that grant gets a 404 for those routes.',
+          ]
+        : []),
     ],
   };
 }
@@ -763,6 +915,15 @@ function modelNotFound(route: string): ServerReply {
  * Only used to tell a `405` from a `404` — the GET routing below is still the
  * one place a route is resolved, so this cannot drift into being a second
  * router. Kept in step with it by being the same four paths and two prefixes.
+ *
+ * The remote bridge and the account-administration surface are deliberately
+ * *absent* from it, and for that second one the absence is a security property
+ * rather than an oversight. Both dispatch above this gate and do their own
+ * method checks, so neither can reach here; and if one ever did, a `405` on
+ * `/api/v0/profiles/{id}/signin` would tell a token with no administrative
+ * grant that the route exists — which is exactly the fact
+ * `handleProfileAdminRoute`'s 404 is there to withhold. "Unlisted" is the safe
+ * failure mode here and "listed" is not.
  */
 function isServedPath(path: string): boolean {
   const apiPrefix = `/api/${SERVER_API_VERSION}`;
@@ -897,6 +1058,32 @@ export interface ArtemisServerOptions {
   /** See {@link ServerContext.onRemoteAccess}. */
   readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
   /**
+   * Ownership and the deadlines on detached completions runs.
+   *
+   * Built here from {@link runs} when it is not supplied, because the only
+   * thing it needs is the engine and every deployment that can run a turn
+   * wants one. Injected by a test that needs to control its clock, and by
+   * nothing else. {@link ArtemisServer.close} closes whichever it ended up
+   * with, so the subscription and the sweep do not outlive the port.
+   */
+  readonly runDirectory?: RunDirectory;
+  /**
+   * How to add a serving account. Omit for a deployment whose accounts are
+   * managed some other way — the surface then answers `501` to an
+   * administrator and `404` to everyone else.
+   */
+  readonly profileAdmin?: ProfileAdmin;
+  /**
+   * The sign-in director, built here from {@link signInTimeoutMs} when
+   * {@link profileAdmin} is present and it is not supplied: every deployment
+   * that can add an account wants one, and only a test needs to control its
+   * clock or its subprocesses. {@link ArtemisServer.close} closes whichever it
+   * ended up with, so a login subprocess cannot outlive the port.
+   */
+  readonly signIns?: SignInDirector;
+  /** How long an unfinished sign-in lives. See `signin.ts`. */
+  readonly signInTimeoutMs?: number;
+  /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
    * stamped. `connectionId` is absent when nothing authenticated.
@@ -927,6 +1114,25 @@ export interface ArtemisServer {
 export function createArtemisServer(options: ArtemisServerOptions): ArtemisServer {
   const host = options.host ?? SERVER_HOST;
   let startedAt = Date.now();
+
+  const runs = options.runs;
+  const runDirectory =
+    runs === undefined
+      ? undefined
+      : (options.runDirectory ??
+        createRunDirectory({
+          runs,
+          ...(options.onError === undefined ? {} : { onError: options.onError }),
+        }));
+
+  const profileAdmin = options.profileAdmin;
+  const signIns =
+    profileAdmin === undefined
+      ? options.signIns
+      : (options.signIns ??
+        createSignInDirector(
+          options.signInTimeoutMs === undefined ? {} : { timeoutMs: options.signInTimeoutMs },
+        ));
 
   const server: Server = createServer((request, response) => {
     void answer(request, response);
@@ -964,7 +1170,8 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           version: options.version,
           catalogue: options.catalogue,
           startedAt,
-          ...(options.runs === undefined ? {} : { runs: options.runs }),
+          ...(runs === undefined ? {} : { runs }),
+          ...(runDirectory === undefined ? {} : { runDirectory }),
           ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
           ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
           ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
@@ -977,6 +1184,8 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.onRemoteAccess === undefined
             ? {}
             : { onRemoteAccess: options.onRemoteAccess }),
+          ...(profileAdmin === undefined ? {} : { profileAdmin }),
+          ...(signIns === undefined ? {} : { signIns }),
         },
       );
     } catch (error) {
@@ -1092,6 +1301,15 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
     },
 
     close() {
+      // The directory holds an engine subscription and a timer. Neither is the
+      // socket's business and both would outlive it — a server that had been
+      // stopped would keep sweeping, and would eventually reap a run in an
+      // engine the user has since gone back to using directly.
+      runDirectory?.close();
+      // A sign-in in flight is a *subprocess* parked on a person who can no
+      // longer reach it, holding a config directory open. Stopping the server
+      // is the last moment anything knows it exists.
+      signIns?.close();
       return new Promise<void>((resolve) => {
         // `close` waits for open connections, and a client holding a keep-alive
         // socket would otherwise keep the port bound indefinitely — which the
@@ -1135,6 +1353,592 @@ function unknownSession(): ServerReply {
     'unknown_session',
     'No such conversation for this connection.',
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The completions surface's own run verbs                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three verbs, and only these three.
+ *
+ * `messages` and `permission` are this surface's alone. `interrupt` is shared
+ * with the bridge by name and separated by ownership — see the dispatch
+ * comment. Nothing here is a prefix: an action not on this list is not this
+ * module's, whatever it is called.
+ */
+const OWNED_RUN_ACTIONS = new Set(['messages', 'permission', 'interrupt']);
+
+/** One completions run, and what its own client asked of it. */
+interface OwnedRunAction {
+  readonly runId: RunId;
+  readonly action: 'messages' | 'permission' | 'interrupt';
+  /**
+   * The connection owns this run. False only for `messages` and `permission`,
+   * which are refused rather than passed on; an unowned `interrupt` never
+   * reaches here at all, because it belongs to the bridge.
+   */
+  readonly owned: boolean;
+}
+
+/**
+ * Is this request one of the three verbs, aimed at a run this connection owns?
+ *
+ * Returns `undefined` for everything else, which is the signal to leave the
+ * path alone and let the bridge's dispatch have it. The asymmetry between the
+ * two outcomes is the whole point:
+ *
+ *  - An **unowned `interrupt`** returns `undefined`, so the bridge answers it
+ *    exactly as it did before this surface existed. A bridge-started run must
+ *    not become uninterruptible because a second registry does not know it.
+ *  - An **unowned `messages` or `permission`** returns a record with
+ *    `owned: false`, so the caller gets one flat 404 here rather than the
+ *    bridge's "no such run action". Those two names mean something on this
+ *    server, and which of them a token may use is an ownership fact — not one
+ *    a refusal should spell differently depending on whether the run exists.
+ */
+function ownedCompletionsRunAction(
+  context: ServerContext,
+  connection: ServerConnection,
+  method: string,
+  path: string,
+): OwnedRunAction | undefined {
+  if (method !== 'POST') return undefined;
+  const prefix = `/api/${SERVER_API_VERSION}/runs/`;
+  if (!path.startsWith(prefix)) return undefined;
+
+  const rest = path.slice(prefix.length);
+  const separator = rest.indexOf('/');
+  if (separator <= 0) return undefined;
+  const action = rest.slice(separator + 1);
+  if (!OWNED_RUN_ACTIONS.has(action)) return undefined;
+
+  let runId: string;
+  try {
+    runId = decodeURIComponent(rest.slice(0, separator));
+  } catch {
+    // The id it literally was, matching `parseRemoteResourcePath`: the caller
+    // asked about something that is not there either way, and a 400 about URL
+    // syntax is a worse answer than "no such run".
+    runId = rest.slice(0, separator);
+  }
+  if (runId.length === 0) return undefined;
+
+  const owned = context.runDirectory?.owns(connection.id, runId) === true;
+  if (!owned && action === 'interrupt') return undefined;
+  return { runId, action: action as OwnedRunAction['action'], owned };
+}
+
+/**
+ * Steer, approve, or stop a run this connection started over completions.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ONE RULE
+ * ---------------------------------------------------------------------------
+ *
+ * **A run belongs to the connection that started it.** Not to the token that
+ * knows its id — ids travel, in logs and screenshots and error reports — and
+ * not to any token pinned to the same directory. Ownership is resolved before
+ * anything else happens, and a failure is the same 404 as an id that never
+ * existed. That check is the whole authorisation model of this surface, so it
+ * lives in one place (`ownedCompletionsRunAction`) and no route here is
+ * permitted its own version of it.
+ */
+async function handleOwnedRunAction(
+  context: ServerContext,
+  connection: ServerConnection,
+  request: ServerRequestInfo,
+  route: OwnedRunAction,
+): Promise<ServerReply> {
+  if (!route.owned) return unknownRun();
+
+  const runs = context.runs;
+  const directory = context.runDirectory;
+  if (runs === undefined || directory === undefined) {
+    // Unreachable while `owned` is true — nothing can own a run without a
+    // directory — but written as a refusal rather than an assertion, because a
+    // router that threw here would take out the socket.
+    return unknownRun();
+  }
+
+  // Somebody is here. Whatever they came for, the run is not abandoned — see
+  // `noteSeen`, and the detached-run deadline it holds off.
+  directory.noteSeen(route.runId);
+
+  /*
+   * Attributed exactly as the bridge attributes its own verbs, and written
+   * before the verb runs for the same reason: the acts most worth a name
+   * against them — an interrupt, an `allow` on a prompt — are the ones that can
+   * be followed by a crash. Ids only; the record has nowhere for a message or a
+   * decision's arguments to go.
+   */
+  const record = (): void => {
+    context.onRemoteAccess?.({
+      kind: route.action === 'permission' ? 'remote.permission.answered' : 'remote.run.acted',
+      connectionId: connection.id,
+      action: route.action,
+      runId: route.runId,
+    });
+  };
+
+  if (route.action === 'interrupt') {
+    record();
+    return interruptOwnedRun(runs, route.runId);
+  }
+  if (route.action === 'messages') {
+    return sendToOwnedRun(runs, route.runId, request.body, record);
+  }
+  return answerOwnedPermission(runs, directory, route.runId, request.body, record);
+}
+
+/**
+ * The same refusal, for runs.
+ *
+ * A run id is a uuid the server minted, so guessing one is not the threat —
+ * *confirming* one is. A reply that distinguished "no such run" from "not your
+ * run" would let a token with any run id in hand learn that it names something
+ * real on this server, and from there which of a set of ids belong to the
+ * connection next door. One sentence for both, exactly as the session routes
+ * do it.
+ */
+function unknownRun(): ServerReply {
+  return fail(404, 'invalid_request_error', 'unknown_run', 'No such run for this connection.');
+}
+
+/**
+ * A run that would not do what it was asked.
+ *
+ * `RunError`'s message is passed through and nothing else's is. The caller has
+ * already been proven to own this run, so "already ended" or "this provider
+ * cannot steer mid-turn" is a fact about their own conversation and is the
+ * whole of what they need to recover. An error from anywhere else is an
+ * unbounded string from an adapter — it can name a path, a command line or an
+ * account — and none of that belongs in a reply to a bearer token.
+ */
+function runFailure(error: unknown): ServerReply {
+  return error instanceof RunError
+    ? fail(409, 'invalid_request_error', 'run_unavailable', error.message)
+    : fail(502, 'server_error', 'run_failed', 'The run could not be reached.');
+}
+
+/**
+ * Another message into a run that is already going.
+ *
+ * Attachments are deliberately not read from the wire. `RunSource.send` carries
+ * them because the desktop's own IPC path needs them, but nothing on this
+ * boundary validates a base64 blob, and an unchecked one would travel from a
+ * bearer token straight into an adapter's argument encoder. Text is the whole
+ * of what a remote steer needs today; images can be added when there is a
+ * validator to put in front of them.
+ */
+async function sendToOwnedRun(
+  runs: RunSource,
+  runId: RunId,
+  body: unknown,
+  record: () => void,
+): Promise<ServerReply> {
+  // The host may serve completions and decline steering. Answered before the
+  // body is read, so a build without it says so rather than validating input it
+  // has no use for.
+  if (runs.send === undefined) return notSteerable();
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const text = (body as { text?: unknown }).text;
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`text` must be a non-empty string.');
+  }
+
+  try {
+    record();
+    const outcome = await runs.send(runId, text);
+    const reply: RunsSendResponse = {
+      runId,
+      deliveredImmediately: outcome.deliveredImmediately,
+    };
+    return ok(reply);
+  } catch (error) {
+    return runFailure(error);
+  }
+}
+
+/** The answer on a host that runs turns but exposes no way to steer one. */
+function notSteerable(): ServerReply {
+  return fail(
+    501,
+    'invalid_request_error',
+    'not_implemented',
+    'This Artemis build runs turns but cannot take another message into one that is already going.',
+  );
+}
+
+/**
+ * Stop a run.
+ *
+ * The counterweight to detaching, and the reason detaching is safe to offer: a
+ * disconnect stops meaning "stop", so there has to be something that still
+ * does.
+ */
+async function interruptOwnedRun(runs: RunSource, runId: RunId): Promise<ServerReply> {
+  try {
+    await runs.interrupt(runId);
+    const body: RunsInterruptResponse = { runId };
+    return ok(body);
+  } catch (error) {
+    return runFailure(error);
+  }
+}
+
+/**
+ * Answer a prompt the run is parked on.
+ *
+ * A separate request from the stream that asked, because by the time the answer
+ * comes the asking stream is routinely gone — that is the entire scenario this
+ * exists for. The decision is re-read from scratch rather than trusted: see
+ * `reviewPermissionDecision` for the escalations a `PermissionDecision` can
+ * express and why none of them is reachable from *this* surface.
+ *
+ * The narrowing is this surface's alone. The bridge's `respond-permission`
+ * keeps the full `PermissionDecision`, and the difference is not an
+ * inconsistency: the bridge's caller is the user, in their own window, and a
+ * mode change or a durable "always allow" is theirs to make. A completions
+ * caller is a *program borrowing an account* — the same principal that may not
+ * choose a permission mode when it starts a run — so it may approve the call in
+ * front of it and nothing wider.
+ */
+async function answerOwnedPermission(
+  runs: RunSource,
+  directory: RunDirectory,
+  runId: RunId,
+  body: unknown,
+  record: () => void,
+): Promise<ServerReply> {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const requestId = (body as { requestId?: unknown }).requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) {
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_body',
+      '`requestId` must name the prompt being answered.',
+    );
+  }
+
+  const review = reviewPermissionDecision((body as { decision?: unknown }).decision);
+  if ('error' in review) {
+    return fail(400, 'invalid_request_error', review.code, review.error);
+  }
+
+  try {
+    record();
+    await runs.respondToPermission(runId, requestId, review.decision);
+  } catch (error) {
+    return runFailure(error);
+  }
+  directory.noteAnswered(runId, requestId);
+
+  const reply: RunsRespondPermissionResponse = { requestId };
+  return ok(reply);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Accounts: adding one, and signing it in                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything under `/api/v0/profiles` that is not the catalogue read.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A CONNECTION WITHOUT THE GRANT GETS A 404 AND NOT A 403
+ * ---------------------------------------------------------------------------
+ *
+ * The same rule the run and session surfaces keep, for the same reason: a
+ * refusal that distinguished "you may not" from "there is nothing here" tells a
+ * token something about the server it was not given. Here what it would tell it
+ * is the most useful thing an attacker could learn — that this deployment has
+ * an administrative surface at all, and therefore that some *other* token can
+ * add accounts to it. So a connection without {@link ServerConnection.manageProfiles}
+ * gets the answer it would get from a build that has never heard of these
+ * routes, and it gets it before anything else is read.
+ *
+ * The order matters and is not decorative. The grant is checked first, then the
+ * seam, then the body: a build with no `profileAdmin` answers `501` to an
+ * administrator and `404` to everyone else, so the 501 itself is not a fact an
+ * unprivileged token can collect.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS ATTRIBUTED, AND WHAT IS NOT
+ * ---------------------------------------------------------------------------
+ *
+ * Every act here goes through {@link ServerContext.onRemoteAccess}, the same
+ * record the bridge's run and terminal verbs write to — these are the acts on
+ * this server that most deserve a name against them, because they create a
+ * credential on the serving machine that every later run may spend. Reads are
+ * not recorded, exactly as they are not on the bridge: polling a sign-in is how
+ * a client draws a frame, and a line per poll would bury the four lines a year
+ * that matter.
+ *
+ * Nothing on those lines is a secret and nothing can become one. The record's
+ * allowlist (`RECORDED_KEYS` in `sessions/lifecycleLog.ts`) has no field the
+ * verification URL or the pasted code could travel in, and the ids that *are*
+ * written are checked against the server's own state first — see `knownFlow`
+ * below — so a caller cannot write an arbitrary string into the log by naming
+ * an account that does not exist.
+ */
+async function handleProfileAdminRoute(
+  request: ServerRequestInfo,
+  context: ServerContext,
+  connection: ServerConnection,
+  path: string,
+  method: string,
+): Promise<ServerReply> {
+  const missing = (): ServerReply =>
+    fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
+
+  if (connection.manageProfiles !== true) return missing();
+
+  const admin = context.profileAdmin;
+  const signIns = context.signIns;
+  if (admin === undefined || signIns === undefined) {
+    return fail(
+      501,
+      'invalid_request_error',
+      'not_implemented',
+      'This Artemis build serves accounts but cannot add or sign them in. Use the server CLI: `artemis-server profile add`.',
+    );
+  }
+
+  const apiPrefix = `/api/${SERVER_API_VERSION}`;
+  if (path === `${apiPrefix}/profiles`) {
+    return createProfileRoute(admin, request.body, (created) => {
+      /*
+       * Recorded *after* the account exists, which is the one place on this
+       * surface that departs from the bridge's "write the line before the verb
+       * runs" rule — and it departs because the id the line is about does not
+       * exist until the store has minted it. A line naming the label instead
+       * would be a line naming user text, which this record does not carry.
+       */
+      context.onRemoteAccess?.({
+        kind: 'remote.profile.created',
+        connectionId: connection.id,
+        profileId: String(created.id),
+        providerId: created.providerId,
+      });
+    });
+  }
+
+  const rest = path.slice(`${apiPrefix}/profiles/`.length);
+  const separator = rest.indexOf('/');
+  const action = separator < 0 ? '' : rest.slice(separator + 1);
+  // Enumerated, so an unknown sub-path 404s before an id is even decoded.
+  if (action !== 'signin' && action !== 'signin/code') return missing();
+
+  let profileId: string;
+  try {
+    profileId = decodeURIComponent(rest.slice(0, separator));
+  } catch {
+    return fail(400, 'invalid_request_error', 'invalid_url', 'The account id could not be parsed.');
+  }
+  if (profileId.length === 0) return missing();
+
+  /**
+   * Does the director hold a flow for this id?
+   *
+   * The guard on every line written about an id that came off the *path*. The
+   * two verbs below — submitting a code, cancelling — are the ones a caller can
+   * aim at an account that does not exist, and writing the line first (which is
+   * what the bridge does, so that a verb followed by a crash still leaves a
+   * trace) would otherwise let a caller put an arbitrary string in the log by
+   * asking about an account that was never there. Asking the director first
+   * costs a map lookup and makes the id a real one.
+   */
+  const knownFlow = (): boolean => signIns.status(profileId) !== undefined;
+
+  if (action === 'signin/code') {
+    if (method !== 'POST') {
+      return fail(405, 'invalid_request_error', 'method_not_allowed', 'Submitting a code is a POST.');
+    }
+    return submitSignInCode(signIns, profileId, request.body, () => {
+      if (!knownFlow()) return;
+      context.onRemoteAccess?.({
+        kind: 'remote.signin.completed',
+        connectionId: connection.id,
+        profileId,
+      });
+    });
+  }
+
+  if (method === 'GET' || method === 'HEAD') {
+    // A read. Not recorded — see the section comment.
+    const status = signIns.status(profileId);
+    return status === undefined ? noSignIn() : ok(status);
+  }
+  if (method === 'DELETE') {
+    if (knownFlow()) {
+      context.onRemoteAccess?.({
+        kind: 'remote.signin.cancelled',
+        connectionId: connection.id,
+        profileId,
+      });
+    }
+    const cancelled = signIns.cancel(profileId);
+    return cancelled === undefined ? noSignIn() : ok(cancelled);
+  }
+  if (method !== 'POST') {
+    return fail(
+      405,
+      'invalid_request_error',
+      'method_not_allowed',
+      'A sign-in is started with POST, read with GET and abandoned with DELETE.',
+    );
+  }
+
+  const profile = await admin.find(profileId);
+  if (profile === undefined) return unknownProfile();
+  // Written before the subprocess is spawned, the way the bridge writes its run
+  // verbs: the account is known to exist by now, and a spawn that takes the
+  // process down with it should still leave a line saying who asked.
+  context.onRemoteAccess?.({
+    kind: 'remote.signin.started',
+    connectionId: connection.id,
+    profileId: String(profile.id),
+    providerId: profile.providerId,
+  });
+  try {
+    return ok(signIns.start(profile));
+  } catch (error) {
+    if (error instanceof SignInBusyError) {
+      return fail(409, 'invalid_request_error', 'signin_in_progress', error.message);
+    }
+    if (error instanceof SignInUnavailableError) {
+      return fail(409, 'invalid_request_error', 'signin_unavailable', error.message);
+    }
+    return fail(
+      500,
+      'server_error',
+      'signin_failed',
+      'The sign-in could not be started on this server.',
+    );
+  }
+}
+
+/** No flow for this account. Not an error state — nobody has started one. */
+function noSignIn(): ServerReply {
+  return fail(
+    404,
+    'invalid_request_error',
+    'no_signin',
+    'No sign-in is in progress for this account.',
+  );
+}
+
+/**
+ * "There is no such account" — and only ever said to a caller holding the
+ * administrative grant, who is entitled to know which accounts exist.
+ */
+function unknownProfile(): ServerReply {
+  return fail(404, 'invalid_request_error', 'unknown_profile', 'No such account on this server.');
+}
+
+/**
+ * Register a serving account. The API twin of `artemis-server profile add`.
+ *
+ * The provider defaults to `claude` rather than being required, because that is
+ * the one whose login this surface can actually drive and a caller that has to
+ * name it learns nothing by naming it. A provider this build has no adapter for
+ * is refused by the store, whose message says so.
+ */
+async function createProfileRoute(
+  admin: ProfileAdmin,
+  body: unknown,
+  record: (created: { readonly id: unknown; readonly providerId: string }) => void,
+): Promise<ServerReply> {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const label = (body as { label?: unknown }).label;
+  if (typeof label !== 'string' || label.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`label` must be a non-empty string.');
+  }
+  const declared = (body as { provider?: unknown }).provider;
+  if (declared !== undefined && (typeof declared !== 'string' || declared.length === 0)) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`provider` must be a provider id, e.g. "claude".');
+  }
+
+  try {
+    const created = await admin.create({
+      label: label.trim(),
+      providerId: declared ?? 'claude',
+    });
+    record(created);
+    const reply: ServerProfileCreatedBody = {
+      object: 'artemis.profile',
+      id: created.id,
+      label: created.label,
+      providerId: created.providerId as ProviderId,
+      configDir: created.configDir,
+    };
+    return ok(reply);
+  } catch (error) {
+    if (error instanceof DuplicateProfileLabelError) {
+      return fail(409, 'invalid_request_error', 'duplicate_label', error.message);
+    }
+    /*
+     * The store's own message, and this is the one place on this surface where
+     * that is right. The caller holds the administrative grant, they are
+     * creating a thing on this machine, and the refusals that reach here are
+     * about *their input* — an unknown provider, a label that is only
+     * whitespace. A caller told "the request failed" has nothing to correct.
+     */
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_profile',
+      error instanceof Error ? error.message : 'The account could not be created.',
+    );
+  }
+}
+
+/**
+ * The code the user pasted, on its way to the subprocess's stdin.
+ *
+ * Nothing here logs it, echoes it, or puts it in an error — see the refusals
+ * below, which describe the *state* and never the input, and the attribution
+ * line, which carries a connection id and an account id and has nowhere to put
+ * a third string. It is the one value on this whole surface that is a secret in
+ * flight.
+ */
+function submitSignInCode(
+  signIns: SignInDirector,
+  profileId: string,
+  body: unknown,
+  record: () => void,
+): ServerReply {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const code = (body as { code?: unknown }).code;
+  if (typeof code !== 'string' || code.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`code` must be a non-empty string.');
+  }
+  // A newline in the middle would be read by the CLI as the end of the answer
+  // and the start of another, so it is refused rather than trimmed: a pasted
+  // value carrying one is not the code the provider showed.
+  if (/[\r\n]/.test(code)) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'A code cannot contain a line break.');
+  }
+
+  record();
+  try {
+    return ok(signIns.submitCode(profileId, code.trim()));
+  } catch (error) {
+    if (error instanceof SignInNotWaitingError) {
+      return fail(409, 'invalid_request_error', 'signin_not_waiting', error.message);
+    }
+    return fail(500, 'server_error', 'signin_failed', 'The code could not be delivered.');
+  }
 }
 
 /**
@@ -1323,6 +2127,27 @@ async function handleChatCompletions(
 
   const id = `chatcmpl-${Math.random().toString(36).slice(2, 12)}`;
   const created = Math.floor(Date.now() / 1000);
+  const directory = context.runDirectory;
+  /*
+   * Ownership is recorded the moment the run has an id, and for every run —
+   * not only the ones that opted into surviving a disconnect. The three run
+   * actions authorise against this record, so a run that was never claimed is
+   * a run its own caller cannot interrupt; and a claim is the cheapest
+   * possible way to make "not yours" and "never existed" the same answer for
+   * everyone else.
+   *
+   * Note what is *not* here: `guard.trackRun`. A completions run is governed by
+   * this directory's deadline and never by the bridge's grace period — the two
+   * registries are separated at the point of creation, which is here and in the
+   * bridge's own start route. See `runs.ts`.
+   */
+  const claim = (runId: string): void => {
+    directory?.claim({
+      runId,
+      connectionId: connection.id,
+      permissions: extensions.remote?.permissions === true,
+    });
+  };
   const turn = {
     model,
     cwd: workspace.path,
@@ -1330,6 +2155,12 @@ async function handleChatCompletions(
     extensions,
     ignored: review.ignored,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
+    // Absent when this build has no directory: with nothing to hold the
+    // deadline, a detach would be an abandonment, so the turn keeps its old
+    // teardown and the opt-in is inert rather than dangerous.
+    ...(directory === undefined
+      ? {}
+      : { onDetach: (runId: RunId) => directory.noteDetached(runId) }),
   };
 
   /*
@@ -1364,12 +2195,13 @@ async function handleChatCompletions(
         connection: 'keep-alive',
       },
       connectionId: connection.id,
-      stream: streamTurn({ id, created, turn, runs: context.runs, model, record }),
+      stream: streamTurn({ id, created, turn, runs: context.runs, model, record, claim }),
     };
   }
 
   let result: TurnResult | undefined;
   for await (const event of runTurn(context.runs, turn)) {
+    if (event.kind === 'run') claim(event.runId);
     if (event.kind === 'session') record(event.sessionId);
     if (event.kind === 'done') {
       result = event.result;
@@ -1419,6 +2251,8 @@ async function* streamTurn(input: {
   readonly model: ServerModel;
   /** Called with every session id the run announces. See the ledger. */
   readonly record?: (sessionId: string) => void;
+  /** Called once with the run's id, before anything else is written. */
+  readonly claim?: (runId: string) => void;
 }): AsyncIterable<string> {
   const { id, created, model } = input;
 
@@ -1430,6 +2264,44 @@ async function* streamTurn(input: {
     for await (const event of runTurn(input.runs, input.turn)) {
       if (event.kind === 'text') {
         yield sseEvent(chatChunk({ id, model: model.route, created, delta: { content: event.text } }));
+        continue;
+      }
+
+      // The run id, first of everything the turn has to say, and on the same
+      // empty-delta chunk the session id rides — an OpenAI client appends
+      // nothing and moves on. This is the only place a completions caller can
+      // learn the id, and the three run actions take it, so a client that means
+      // to steer or reattach after the stream breaks has to be holding it
+      // before it does.
+      if (event.kind === 'run') {
+        input.claim?.(event.runId);
+        yield sseEvent(
+          chatChunk({
+            id,
+            model: model.route,
+            created,
+            delta: {},
+            artemis: { runId: event.runId },
+          }),
+        );
+        continue;
+      }
+
+      // A prompt the run is parked on, or the news that it is settled. Only for
+      // a caller that asked for these; see `ArtemisRemoteOptions`. Its answer
+      // comes back on POST /api/v0/runs/{runId}/permission rather than on this
+      // stream, because a stream is one-way and this one is often already dead
+      // by the time anyone looks at the question.
+      if (event.kind === 'permission') {
+        yield sseEvent(
+          chatChunk({
+            id,
+            model: model.route,
+            created,
+            delta: {},
+            artemis: { permission: event.notice },
+          }),
+        );
         continue;
       }
 

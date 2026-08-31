@@ -44,6 +44,13 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
     // The serving profile, named so two accounts offering the same model can
     // be told apart in the picker. The route encodes it too, but as a slug.
     const profileLabel = asString(model['profileLabel']);
+    // The thinking levels this route accepts, as bare ids. The picker draws the
+    // labels from the descriptor's own list and shows only these enabled — see
+    // `ARTEMIS_EFFORT_LEVELS`. Absent thinking levels leave the field off, which
+    // reads as "every level the descriptor offers"; a present-but-empty list is
+    // carried through as `[]`, which the picker reads as "no effort setting on
+    // this model" — the same distinction the server's own `thinkingLevels` draws.
+    const effortLevels = readThinkingLevelIds(model['thinkingLevels']);
 
     options.push({
       id: route,
@@ -61,7 +68,28 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
       ...(typeof model['adaptiveThinking'] === 'boolean'
         ? { adaptiveThinking: model['adaptiveThinking'] }
         : {}),
+      ...(effortLevels === undefined ? {} : { effortLevels }),
     });
   }
   return options;
+}
+
+/**
+ * Read a route's `thinkingLevels` down to the ids the picker gates on.
+ *
+ * `undefined` for anything that is not an array — an older server that never
+ * sent the field — so the option omits `effortLevels` and the picker offers the
+ * descriptor's whole list. An array, even an empty one, is carried through: the
+ * empty case is a real answer ("this model takes no thinking setting"), not a
+ * missing one.
+ */
+function readThinkingLevelIds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids: string[] = [];
+  for (const raw of value) {
+    const level = asRecord(raw);
+    const id = level === undefined ? undefined : asString(level['id']);
+    if (id !== undefined && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }

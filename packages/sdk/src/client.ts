@@ -56,12 +56,15 @@ import type {
   OpenAiModel,
   OpenAiModelList,
   ServerConnectionInfo,
+  ServerCreateProfileRequest,
   ServerErrorBody,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
   ServerProfile,
+  ServerProfileCreatedBody,
   ServerProfilesBody,
+  ServerSignInStatus,
 } from '@rx-artemis/protocol';
 import { DEFAULT_SERVER_PORT, SERVER_API_VERSION, SERVER_HOST } from '@rx-artemis/protocol';
 
@@ -105,7 +108,11 @@ export interface AbortSignalLike {
 export type FetchLike = (
   url: string,
   init: {
+    /** Absent for the reads, which is every call this client made until it grew writes. */
+    readonly method?: string;
     readonly headers: Record<string, string>;
+    /** A JSON document, already serialised. Absent unless there is one. */
+    readonly body?: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above
     readonly signal?: any;
   },
@@ -288,6 +295,58 @@ export interface ArtemisClient {
    * it comes with everything else that surface will grow.
    */
   openaiModels(options?: RequestOptions): Promise<readonly OpenAiModel[]>;
+
+  /**
+   * Add an account to the server, and sign it in from here.
+   * -------------------------------------------------------------------------
+   *
+   * Every call below needs a connection the operator granted account
+   * administration — `ServerConnection.manageProfiles`, reported to you on
+   * {@link connection}. Without it the server answers `404`, the same as a
+   * build that has never had these routes, so branch on
+   * `(await client.connection()).manageProfiles` rather than on an error.
+   *
+   * The flow is: {@link createProfile}, then {@link startSignIn}, then show the
+   * user {@link ServerSignInStatus.verificationUrl}, then hand back what they
+   * paste with {@link submitSignInCode}, polling {@link signInStatus}
+   * throughout. `isSignInSettled` says when to stop.
+   *
+   * No credential travels here in either direction. The provider's own CLI
+   * writes its token into its own config directory on the *server*; what
+   * crosses this wire is a URL and a code.
+   */
+  createProfile(
+    request: ServerCreateProfileRequest,
+    options?: RequestOptions,
+  ): Promise<ServerProfileCreatedBody>;
+
+  /**
+   * Spawn the provider's login for an account and start watching its output.
+   *
+   * A server drives one of these at a time and answers `409` while another is
+   * live — see {@link ArtemisServerError.code}, which is `signin_in_progress`.
+   */
+  startSignIn(profileId: string, options?: RequestOptions): Promise<ServerSignInStatus>;
+
+  /**
+   * Where the sign-in has got to, or `undefined` if there is none for this
+   * account.
+   *
+   * Absent rather than thrown, for the reason {@link model} is: "has anything
+   * been started here?" is a question, and a poller asking it every second
+   * should not have to catch to hear "no".
+   */
+  signInStatus(profileId: string, options?: RequestOptions): Promise<ServerSignInStatus | undefined>;
+
+  /** Hand the CLI the code the user pasted. Sent once; do not retry blindly. */
+  submitSignInCode(
+    profileId: string,
+    code: string,
+    options?: RequestOptions,
+  ): Promise<ServerSignInStatus>;
+
+  /** Give up: kill the login subprocess. `undefined` if there was nothing to kill. */
+  cancelSignIn(profileId: string, options?: RequestOptions): Promise<ServerSignInStatus | undefined>;
 }
 
 export function createArtemisClient(options: ArtemisClientOptions = {}): ArtemisClient {
@@ -314,7 +373,17 @@ export function createArtemisClient(options: ArtemisClientOptions = {}): Artemis
   // Re-bound after the guard so the narrowing survives into the closure below.
   const doFetch: FetchLike = resolved;
 
-  async function request<T>(path: string, requestOptions?: RequestOptions): Promise<T> {
+  async function request<T>(
+    path: string,
+    requestOptions?: RequestOptions,
+    /**
+     * The verb and its body, for the routes that write.
+     *
+     * Optional and last, because every call this client made for its first two
+     * versions was a GET and every one of those call sites still reads as one.
+     */
+    write?: { readonly method: string; readonly body?: unknown },
+  ): Promise<T> {
     /*
      * The caller's signal and the timeout are composed, not chosen between.
      *
@@ -338,6 +407,7 @@ export function createArtemisClient(options: ArtemisClientOptions = {}): Artemis
     let response: FetchLikeResponse;
     try {
       response = await doFetch(`${baseUrl}${path}`, {
+        ...(write === undefined ? {} : { method: write.method }),
         headers: {
           accept: 'application/json',
           // Only when there is one. An `Authorization: Bearer undefined` header
@@ -346,7 +416,9 @@ export function createArtemisClient(options: ArtemisClientOptions = {}): Artemis
           ...(options.token === undefined || options.token.length === 0
             ? {}
             : { authorization: `Bearer ${options.token}` }),
+          ...(write?.body === undefined ? {} : { 'content-type': 'application/json' }),
         },
+        ...(write?.body === undefined ? {} : { body: JSON.stringify(write.body) }),
         signal,
       });
     } catch (cause) {
@@ -401,7 +473,47 @@ export function createArtemisClient(options: ArtemisClientOptions = {}): Artemis
 
     openaiModels: async (requestOptions) =>
       (await request<OpenAiModelList>('/v1/models', requestOptions)).data,
+
+    createProfile: (body, requestOptions) =>
+      request<ServerProfileCreatedBody>(`/api/${SERVER_API_VERSION}/profiles`, requestOptions, {
+        method: 'POST',
+        body,
+      }),
+
+    startSignIn: (profileId, requestOptions) =>
+      request<ServerSignInStatus>(signInPath(profileId), requestOptions, { method: 'POST' }),
+
+    signInStatus: async (profileId, requestOptions) => {
+      try {
+        return await request<ServerSignInStatus>(signInPath(profileId), requestOptions);
+      } catch (error) {
+        if (error instanceof ArtemisServerError && error.status === 404) return undefined;
+        throw error;
+      }
+    },
+
+    submitSignInCode: (profileId, code, requestOptions) =>
+      request<ServerSignInStatus>(`${signInPath(profileId)}/code`, requestOptions, {
+        method: 'POST',
+        body: { code },
+      }),
+
+    cancelSignIn: async (profileId, requestOptions) => {
+      try {
+        return await request<ServerSignInStatus>(signInPath(profileId), requestOptions, {
+          method: 'DELETE',
+        });
+      } catch (error) {
+        if (error instanceof ArtemisServerError && error.status === 404) return undefined;
+        throw error;
+      }
+    },
   };
+}
+
+/** An account id is opaque and may be anything the server minted. Encode it. */
+function signInPath(profileId: string): string {
+  return `/api/${SERVER_API_VERSION}/profiles/${encodeURIComponent(profileId)}/signin`;
 }
 
 /**

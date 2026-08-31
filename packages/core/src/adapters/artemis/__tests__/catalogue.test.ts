@@ -46,6 +46,32 @@ describe('parseServerModels', () => {
     ]);
   });
 
+  it('maps thinkingLevels to the effort ids each route accepts', () => {
+    const [withLevels, noLevels] = parseServerModels({
+      models: [
+        {
+          route: 'work/opus',
+          label: 'Opus',
+          note: '',
+          thinkingLevels: [
+            { id: 'low', label: 'Low', note: '' },
+            { id: 'high', label: 'High', note: '' },
+          ],
+        },
+        { route: 'work/haiku', label: 'Haiku', note: '', thinkingLevels: [] },
+      ],
+    });
+    expect(withLevels?.effortLevels).toEqual(['low', 'high']);
+    // An empty list is a real answer — "this model takes no thinking setting" —
+    // and is carried through as `[]` rather than dropped.
+    expect(noLevels?.effortLevels).toEqual([]);
+  });
+
+  it('omits effortLevels for a row that never sent thinkingLevels', () => {
+    const [option] = parseServerModels({ models: [{ route: 'a/x', note: '' }] });
+    expect(option !== undefined && 'effortLevels' in option).toBe(false);
+  });
+
   it('drops a row with no route — it cannot be asked for', () => {
     const options = parseServerModels({
       models: [{ id: 'opus', label: 'Opus 5', note: '' }, { route: 'ok/opus', note: '' }],

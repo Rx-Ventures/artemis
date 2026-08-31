@@ -16,7 +16,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { CLAUDE_CREDENTIALS } from '../claude.js';
-import { parseAuthStatus, signInCommand } from '../signIn.js';
+import { checkAuthStatus, parseAuthStatus, signInCommand } from '../signIn.js';
+import type { ProviderCredentialSpec } from '../types.js';
 
 /** The real shape, captured from `claude auth status --json` on a signed-in dir. */
 const SIGNED_IN = JSON.stringify({
@@ -243,5 +244,58 @@ describe('signInCommand for PowerShell', () => {
     expect(signInCommand({ credentials: CLAUDE_CREDENTIALS, configDir: '/Users/me/.claude' })).toBe(
       'CLAUDE_CONFIG_DIR=/Users/me/.claude claude auth login',
     );
+  });
+});
+
+/**
+ * A provider with no account to probe answers a constant.
+ *
+ * The Artemis-server and local-endpoint profiles authenticate with a token or
+ * an address, not a login, so there is nothing for `checkAuthStatus` to run.
+ * These pin that it does not run anything: the profile screen polls this every
+ * two seconds while a sign-in step is open, and the old shape — a throwaway
+ * `true` spawned each time — was a process per poll for an answer that never
+ * changes.
+ */
+describe('checkAuthStatus with a staticStatus', () => {
+  /** A spec whose executable does not exist, so any spawn would fail loudly. */
+  function specWith(signIn: ProviderCredentialSpec['signIn']): ProviderCredentialSpec {
+    return { configDirVar: 'X_CONFIG_DIR', credentialEnvKeys: [], signIn };
+  }
+
+  const UNSPAWNABLE = 'definitely-not-a-real-binary-9f3c';
+
+  it('returns the constant without spawning the executable', async () => {
+    const credentials = specWith({
+      executable: UNSPAWNABLE,
+      loginArgs: [],
+      statusArgs: [],
+      logoutArgs: [],
+      howTo: 'none',
+      staticStatus: { loggedIn: true },
+    });
+
+    // If the probe had run, the missing binary would come back as a spawn
+    // failure carrying an `error`. The clean constant proves it was never run.
+    const status = await checkAuthStatus({ credentials, configDir: '/tmp/x' });
+    expect(status).toEqual({ loggedIn: true });
+    expect(status.error).toBeUndefined();
+  });
+
+  it('still runs the probe when there is no staticStatus', async () => {
+    const credentials = specWith({
+      executable: UNSPAWNABLE,
+      loginArgs: [],
+      statusArgs: [],
+      logoutArgs: [],
+      howTo: 'none',
+    });
+
+    // Without the constant the probe runs, the missing binary fails to spawn,
+    // and the honest answer is signed-out-with-a-reason — the conditional the
+    // short-circuit rides on, so the Claude and Codex paths stay unchanged.
+    const status = await checkAuthStatus({ credentials, configDir: '/tmp/x' });
+    expect(status.loggedIn).toBe(false);
+    expect(status.error).toBeTruthy();
   });
 });

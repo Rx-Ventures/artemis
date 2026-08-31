@@ -28,6 +28,7 @@ import { LOCAL_API_KEY_ENV, LOCAL_BASE_URL_ENV } from '@rx-artemis/protocol';
 
 import type { ResolvedRunInput } from '../../types.js';
 import { createArtemisAdapter } from '../adapter.js';
+import { guardRemoteDecision } from '../permissions.js';
 
 const servers: Server[] = [];
 
@@ -182,12 +183,13 @@ describe('a fresh turn', () => {
     });
 
     // The request body is the wire contract: the route as `model`, one user
-    // message, streaming on, and no `artemis` extensions on a fresh turn.
+    // message, streaming on, and the remote opt-in every turn now carries — so a
+    // disconnect detaches the run and a prompt comes back here to be answered.
     const body = seen[0]?.body as Record<string, unknown>;
     expect(body['model']).toBe('work/opus');
     expect(body['messages']).toEqual([{ role: 'user', content: 'hello over the wire' }]);
     expect(body['stream']).toBe(true);
-    expect(body['artemis']).toBeUndefined();
+    expect(body['artemis']).toEqual({ remote: { detach: true, permissions: true } });
     expect(seen[0]?.authorization).toBe('Bearer tok_123');
   });
 
@@ -283,13 +285,19 @@ describe('a resumed turn', () => {
     expect(body.artemis?.sessionId).toBe('sess-abc');
   });
 
-  it('carries fast mode and ultracode through as extensions', async () => {
+  it('carries thinking, fast mode and ultracode through as extensions', async () => {
     const { origin, seen } = await serve((_request, response) => happyStream(response));
 
-    await drive(origin, { fastMode: true, ultracode: false });
+    await drive(origin, { fastMode: true, ultracode: false, effort: 'high' });
 
+    // `effort` rides as `artemis.thinking`; the remote opt-in rides alongside it.
     const body = seen[0]?.body as { artemis?: Record<string, unknown> };
-    expect(body.artemis).toEqual({ fastMode: true, ultracode: false });
+    expect(body.artemis).toEqual({
+      thinking: 'high',
+      fastMode: true,
+      ultracode: false,
+      remote: { detach: true, permissions: true },
+    });
   });
 });
 
@@ -389,16 +397,221 @@ describe('what a run refuses up front', () => {
     ).rejects.toMatchObject({ agentError: { code: 'invalid_request' } });
   });
 
-  it('a message mid-turn, plainly rather than by queueing it', async () => {
-    const { origin } = await serve((_request, response) => happyStream(response));
+});
+
+describe('a live run: steering, interrupting and answering', () => {
+  const base = {
+    runId: 'run-live' as RunId,
+    providerId: 'artemis' as const,
+    profileId: 'profile-1',
+    cwd: process.cwd(),
+    prompt: 'do the thing',
+    model: 'work/opus',
+  };
+
+  it('steers a message onto the run route and reports delivery honestly', async () => {
+    const { origin, seen } = await serve((request, response) => {
+      if (request.url === '/v1/chat/completions') {
+        response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+        response.write(sse(chunk({ role: 'assistant' })));
+        // The server's own run id, announced early, is what the steer addresses.
+        response.write(sse(chunk({}, { artemis: { runId: 'srv-1' } })));
+        response.write(sse(chunk({ content: 'working…' })));
+        return; // holds; the test steers, then interrupts to end it
+      }
+      if (request.url === '/api/v0/runs/srv-1/messages') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ runId: 'srv-1', deliveredImmediately: true }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+
+    const adapter = createArtemisAdapter();
     const run = await adapter.createRun({
       ...base,
+      env: { [LOCAL_BASE_URL_ENV]: origin, [LOCAL_API_KEY_ENV]: 'tok' },
+    } as ResolvedRunInput);
+
+    let delivered: boolean | undefined;
+    for await (const event of run.events) {
+      if (event.type === 'text.delta' && delivered === undefined) {
+        delivered = (await run.send('also do this')).deliveredImmediately;
+        void run.interrupt();
+      }
+      if (event.type === 'run.end') break;
+    }
+
+    expect(delivered).toBe(true);
+    const steer = seen.find((row) => row.url === '/api/v0/runs/srv-1/messages');
+    expect(steer?.body).toEqual({ text: 'also do this' });
+    expect(steer?.authorization).toBe('Bearer tok');
+  });
+
+  it('interrupts on the run route and still ends interrupted', async () => {
+    const { origin, seen } = await serve((request, response) => {
+      if (request.url === '/v1/chat/completions') {
+        response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+        response.write(sse(chunk({ role: 'assistant' })));
+        response.write(sse(chunk({}, { artemis: { runId: 'srv-2' } })));
+        response.write(sse(chunk({ content: 'thinking…' })));
+        return; // holds forever; the interrupt is the only exit
+      }
+      if (request.url === '/api/v0/runs/srv-2/interrupt') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ runId: 'srv-2' }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+
+    const adapter = createArtemisAdapter();
+    const run = await adapter.createRun({
+      ...base,
+      runId: 'run-int' as RunId,
       env: { [LOCAL_BASE_URL_ENV]: origin },
     } as ResolvedRunInput);
-    await expect(run.send('more')).rejects.toMatchObject({
-      agentError: { code: 'invalid_request' },
+
+    const events: AgentEvent[] = [];
+    for await (const event of run.events) {
+      events.push(event);
+      if (event.type === 'text.delta') void run.interrupt();
+    }
+
+    // The explicit interrupt reached the server — a detached run needs it, since
+    // the abort that ends the local stream now reads as "detach", not "stop".
+    expect(seen.some((row) => row.url === '/api/v0/runs/srv-2/interrupt')).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'interrupted' });
+  });
+
+  it('draws a card from a permission chunk and answers it on the run route', async () => {
+    let completion: ServerResponse | undefined;
+    const { origin, seen } = await serve((request, response) => {
+      if (request.url === '/v1/chat/completions') {
+        completion = response;
+        response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+        response.write(sse(chunk({ role: 'assistant' })));
+        response.write(sse(chunk({}, { artemis: { runId: 'srv-3' } })));
+        response.write(
+          sse(
+            chunk(
+              {},
+              {
+                artemis: {
+                  permission: {
+                    status: 'requested',
+                    request: {
+                      id: 'perm-1',
+                      runId: 'srv-3',
+                      toolName: 'Bash',
+                      input: { command: 'rm -rf build' },
+                      requestedAt: 1,
+                    },
+                  },
+                },
+              },
+            ),
+          ),
+        );
+        return; // parks; the answer arrives on a different request, below
+      }
+      if (request.url === '/api/v0/runs/srv-3/permission') {
+        // The answer landed. Clear the card and finish the turn on the open stream.
+        completion?.write(
+          sse(
+            chunk(
+              {},
+              { artemis: { permission: { status: 'resolved', requestId: 'perm-1', outcome: 'allowed' } } },
+            ),
+          ),
+        );
+        completion?.write(sse(chunk({ content: 'Removed it.' })));
+        completion?.write(
+          sse(chunk({}, { finish_reason: 'stop', artemis: { sessionId: 'sess-p', endReason: 'completed' } })),
+        );
+        completion?.write(sse('[DONE]'));
+        completion?.end();
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ requestId: 'perm-1' }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
     });
-    for await (const event of run.events) void event; // drain to completion
+
+    const adapter = createArtemisAdapter();
+    const run = await adapter.createRun({
+      ...base,
+      runId: 'run-perm' as RunId,
+      env: { [LOCAL_BASE_URL_ENV]: origin, [LOCAL_API_KEY_ENV]: 'tok' },
+    } as ResolvedRunInput);
+
+    const events: AgentEvent[] = [];
+    for await (const event of run.events) {
+      events.push(event);
+      if (event.type === 'permission.request') {
+        void run.respondToPermission(event.requestId, { behavior: 'allow', scope: 'once' });
+      }
+    }
+
+    const request = events.find((event) => event.type === 'permission.request');
+    // The request rides through verbatim, but its run id is re-stamped to the
+    // local run so the transcript agrees on one; the server's `request.id` stays
+    // the answer key.
+    expect(request).toMatchObject({
+      type: 'permission.request',
+      requestId: 'perm-1',
+      request: { toolName: 'Bash', runId: 'run-perm', input: { command: 'rm -rf build' } },
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'permission.resolved' &&
+          event.requestId === 'perm-1' &&
+          event.outcome === 'allowed',
+      ),
+    ).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'run.end', reason: 'completed' });
+
+    // The decision went back to the run route, with the token and the id.
+    const answer = seen.find((row) => row.url === '/api/v0/runs/srv-3/permission');
+    expect(answer?.authorization).toBe('Bearer tok');
+    expect(answer?.body).toEqual({ requestId: 'perm-1', decision: { behavior: 'allow', scope: 'once' } });
+  });
+});
+
+describe('the remote decision guard', () => {
+  it('refuses what the server would refuse with a 400', () => {
+    // A durable scope writes to the serving machine's own settings.
+    expect(() => guardRemoteDecision({ behavior: 'allow', scope: 'project' })).toThrow(/durable scope/i);
+    // A mode switch — bypassPermissions above all — is not a client's to make.
+    expect(() =>
+      guardRemoteDecision({
+        behavior: 'allow',
+        updatedPermissions: [{ type: 'setMode', mode: 'bypassPermissions', scope: 'session' }],
+      }),
+    ).toThrow(/permission mode/i);
+    // A directory grant widens the connection's pinned workspace.
+    expect(() =>
+      guardRemoteDecision({
+        behavior: 'allow',
+        updatedPermissions: [{ type: 'addDirectories', directories: ['/etc'], scope: 'session' }],
+      }),
+    ).toThrow(/directories/i);
+  });
+
+  it('lets a once/session decision through', () => {
+    expect(() => guardRemoteDecision({ behavior: 'allow', scope: 'once' })).not.toThrow();
+    expect(() =>
+      guardRemoteDecision({
+        behavior: 'allow',
+        scope: 'session',
+        updatedPermissions: [{ type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Bash' }], scope: 'session' }],
+      }),
+    ).not.toThrow();
+    expect(() => guardRemoteDecision({ behavior: 'deny', message: 'no' })).not.toThrow();
   });
 });
 

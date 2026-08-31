@@ -54,6 +54,8 @@
  * that is the permanent answer rather than a to-do.
  */
 
+import type { PermissionRequest } from './permissions.js';
+
 /* -------------------------------------------------------------------------- */
 /* Messages                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -280,16 +282,53 @@ export interface ArtemisActivity {
   readonly ok?: boolean;
 }
 
+/**
+ * A permission prompt, or its settlement, as it travels to a remote client.
+ *
+ * Two states rather than two fields, because a consumer's job is different in
+ * each and a card that is drawn on one and cleared on the other should not have
+ * to guess which it is holding. `requested` is a question the client owes an
+ * answer to; `resolved` says the question is closed — by this client, by
+ * another one attached to the same run, by the park deadline, or by the
+ * provider withdrawing it.
+ *
+ * Only ever emitted for a run whose caller set `artemis.remote.permissions`.
+ * Everything else still gets the standing denial and never sees either state,
+ * which is what keeps a client that cannot render a prompt from being sent one.
+ */
+export type ArtemisPermissionNotice =
+  | { readonly status: 'requested'; readonly request: PermissionRequest }
+  | {
+      readonly status: 'resolved';
+      readonly requestId: string;
+      /** `allowed`, `denied`, or `withdrawn` — the run's own vocabulary. */
+      readonly outcome: string;
+      /** One sentence for the record: the denial's reason, or why it lapsed. */
+      readonly note?: string;
+    };
+
 /** Artemis's additions to a response, namespaced for the reason requests are. */
 export interface ArtemisResponseExtensions {
   /** The session this turn ran in. Pass it back to continue the conversation. */
   readonly sessionId?: string;
+  /**
+   * The run this turn is, announced once and early.
+   *
+   * The address every route under `/api/v0/runs` takes, and the only place a
+   * completions caller can learn it: a run id is minted when the turn starts
+   * and no other response carries one. A client that means to steer, approve,
+   * interrupt or reattach has to hold this from the first chunk, because the
+   * moment it needs it is usually the moment the stream has already broken.
+   */
+  readonly runId?: string;
   /** The concrete model that ran, when the route named an alias. */
   readonly resolvedModel?: string;
   /** Parameters that were accepted and not applied. See {@link PARAMETER_POLICY}. */
   readonly ignored?: readonly string[];
   /** What the agent did. See {@link ArtemisActivity}. */
   readonly activity?: readonly ArtemisActivity[];
+  /** A prompt the run is parked on, or the news that it no longer is. */
+  readonly permission?: ArtemisPermissionNotice;
   /** The true reason the run ended, when `finish_reason` had to flatten it. */
   readonly endReason?: string;
 }

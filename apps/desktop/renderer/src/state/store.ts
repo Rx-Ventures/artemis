@@ -77,6 +77,9 @@ import type {
   RunId,
   RunInput,
   RunStatus,
+  ServerAccountsListResponse,
+  ServerProfileCreatedBody,
+  ServerSignInStatus,
   SessionDelegatedWork,
   SessionId,
   SessionSummary,
@@ -11429,6 +11432,113 @@ export async function signOutProfile(profileId: ProfileId): Promise<boolean> {
     authByProfile: { ...s.authByProfile, [profileId]: result.value.status },
   }));
   return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Accounts on a remote Artemis                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The accounts on the server an Artemis-Server profile points at.
+ *
+ * Nothing here is cached in the store, unlike `authByProfile` above, and the
+ * reason is who owns the answer: a local login state is a fact about this
+ * machine that several panes read, while this is a page of another machine's
+ * state that exactly one pane renders while it is open. Caching it would mean
+ * inventing an invalidation rule for a thing nobody else looks at.
+ *
+ * Silent on failure. The pane renders what came back — including nothing, with
+ * the reason — and a banner per mount would fire every time a settings dialog
+ * was opened against a server that happens to be asleep.
+ */
+export async function readServerAccounts(
+  profileId: ProfileId,
+): Promise<ServerAccountsListResponse | { readonly error: string }> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return { error: 'This build cannot reach the main process.' };
+  const result = await call(() => bridge.serverAccounts.list({ profileId }));
+  return result.ok ? result.value : { error: result.error.message };
+}
+
+/**
+ * Add an account to that server.
+ *
+ * Loud on failure, unlike the read: this is a button someone pressed, and a
+ * duplicate label or an unreachable server is the answer to what they asked.
+ */
+export async function createServerAccount(
+  profileId: ProfileId,
+  label: string,
+): Promise<ServerProfileCreatedBody | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.serverAccounts.create({ profileId, label }));
+  if (!result.ok) {
+    reportFailure('Could not add the account', result.error);
+    return null;
+  }
+  return result.value.account;
+}
+
+/** Start the provider's login for one account, on the server. */
+export async function startServerSignIn(
+  profileId: ProfileId,
+  accountId: string,
+): Promise<ServerSignInStatus | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.serverAccounts.signIn({ profileId, accountId }));
+  if (!result.ok) {
+    reportFailure('Could not start the sign-in', result.error);
+    return null;
+  }
+  return result.value.signIn;
+}
+
+/**
+ * Poll one. Silent, for the reason `readAuthStatus` is: this runs every couple
+ * of seconds while a person reads their email, and a banner per poll would
+ * bury the screen it is on.
+ */
+export async function readServerSignIn(
+  profileId: ProfileId,
+  accountId: string,
+): Promise<ServerSignInStatus | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.serverAccounts.signInStatus({ profileId, accountId }));
+  return result.ok ? result.value.signIn : null;
+}
+
+/**
+ * Hand over the code the user pasted.
+ *
+ * The one secret this path carries, and it travels in one direction. Nothing
+ * here keeps it, logs it, or puts it in the banner a failure raises — the
+ * message comes from the server and describes the *state*, never the input.
+ */
+export async function submitServerSignInCode(
+  profileId: ProfileId,
+  accountId: string,
+  code: string,
+): Promise<ServerSignInStatus | null> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return null;
+  const result = await call(() => bridge.serverAccounts.submitCode({ profileId, accountId, code }));
+  if (!result.ok) {
+    reportFailure('The server would not take that code', result.error);
+    return null;
+  }
+  return result.value.signIn;
+}
+
+/** Abandon a sign-in. The server kills the login subprocess. */
+export async function cancelServerSignIn(profileId: ProfileId, accountId: string): Promise<void> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return;
+  // Silent: the user has already moved on, and a failure to kill something
+  // they stopped caring about is the server's timeout to resolve, not theirs.
+  await call(() => bridge.serverAccounts.cancelSignIn({ profileId, accountId }));
 }
 
 /* -------------------------------------------------------------------------- */

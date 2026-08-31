@@ -131,6 +131,10 @@ import {
   type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
+  type ServerAccountsRequest,
+  type ServerAccountsCreateRequest,
+  type ServerAccountSignInRequest,
+  type ServerAccountSubmitCodeRequest,
   type UsagePlanRequest,
   type UpdatesCheckRequest,
   type UpdatesDismissRequest,
@@ -1841,6 +1845,55 @@ export function validateAuthStatus(raw: unknown): AuthStatusRequest {
 export function validateAuthSignOut(raw: unknown): AuthSignOutRequest {
   const request = requireRequest(raw);
   return { profileId: requireId(request['profileId'], 'profileId') };
+}
+
+/**
+ * Accounts on a remote Artemis.
+ *
+ * `profileId` names the local Artemis-Server profile — which server — and
+ * nothing here takes an address: the renderer has never been able to aim a
+ * request at an arbitrary host, and this is not the surface that changes it.
+ * `accountId` is the *serving* Artemis's own id for an account and is checked
+ * as a string rather than as an id, because its shape is that server's business
+ * and a stricter pattern here would refuse ids a future one mints.
+ */
+export function validateServerAccounts(raw: unknown): ServerAccountsRequest {
+  const request = requireRequest(raw);
+  return { profileId: requireId(request['profileId'], 'profileId') };
+}
+
+export function validateServerAccountsCreate(raw: unknown): ServerAccountsCreateRequest {
+  const request = requireRequest(raw);
+  const provider = request['provider'];
+  if (provider !== undefined && provider !== null && !isProviderId(provider)) {
+    throw new ValidationError('provider', 'is not a known provider');
+  }
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    label: requireString(request['label'], 'label', LIMITS.label),
+    ...(provider === undefined || provider === null ? {} : { provider }),
+  };
+}
+
+export function validateServerAccountSignIn(raw: unknown): ServerAccountSignInRequest {
+  const request = requireRequest(raw);
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    accountId: requireString(request['accountId'], 'accountId', LIMITS.id),
+  };
+}
+
+export function validateServerAccountSubmitCode(raw: unknown): ServerAccountSubmitCodeRequest {
+  const request = requireRequest(raw);
+  return {
+    profileId: requireId(request['profileId'], 'profileId'),
+    accountId: requireString(request['accountId'], 'accountId', LIMITS.id),
+    // Capped like a label rather than like free text. This is a code a person
+    // pasted from a browser; anything the size of a document is a paste that
+    // went wrong, and the cap keeps a mistake from reaching a subprocess's
+    // stdin.
+    code: requireString(request['code'], 'code', LIMITS.label),
+  };
 }
 
 export function validateUsagePlan(raw: unknown): UsagePlanRequest {

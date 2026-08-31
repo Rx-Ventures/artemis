@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProfileId } from './ids.js';
+import { reviewParameters } from './openai.js';
 import {
   assignProfileSlugs,
   isValidServerPort,
   modelRoute,
   parseModelRoute,
   profileSlug,
+  readChatExtensions,
   serverUrl,
 } from './server.js';
 
@@ -91,6 +93,47 @@ describe('serverUrl', () => {
   it('brackets an IPv6 literal so the port is still readable', () => {
     expect(serverUrl('127.0.0.1', 6472)).toBe('http://127.0.0.1:6472');
     expect(serverUrl('::1', 6472)).toBe('http://[::1]:6472');
+  });
+});
+
+describe('readChatExtensions', () => {
+  it('reads the two things only a remote client asks for', () => {
+    expect(
+      readChatExtensions({ artemis: { remote: { detach: true, permissions: true } } }),
+    ).toEqual({ remote: { detach: true, permissions: true } });
+  });
+
+  it('leaves the block absent for a caller that asked for nothing', () => {
+    // Load-bearing rather than tidy: everything downstream reads
+    // `remote?.detach === true`, and a request that never mentioned it must
+    // arrive as the old behaviour by construction.
+    expect(readChatExtensions({ artemis: { sessionId: 'sess-1' } })).toEqual({
+      sessionId: 'sess-1',
+    });
+    expect(readChatExtensions({})).toEqual({});
+  });
+
+  it('drops a remote block that says nothing it can act on', () => {
+    // Same rule as every other field: unknown keys drop, wrong types drop, and
+    // a client that meant it sends a boolean. Half-honouring `detach: 1` would
+    // be worse than ignoring it.
+    expect(readChatExtensions({ artemis: { remote: 'yes' } })).toEqual({});
+    expect(readChatExtensions({ artemis: { remote: { detach: 1, later: true } } })).toEqual({});
+    expect(readChatExtensions({ artemis: { remote: { detach: 'true', permissions: true } } })).toEqual(
+      { remote: { permissions: true } },
+    );
+  });
+
+  it('keeps the namespace out of the rejected parameter set', () => {
+    // The extension travels inside `artemis`, which the policy honours — so a
+    // request that opts in is not turned away as unsupported before it runs.
+    const review = reviewParameters({
+      model: 'work-max/opus',
+      messages: [],
+      artemis: { remote: { detach: true } },
+    });
+    expect(review.rejected).toEqual([]);
+    expect(review.ignored).toEqual([]);
   });
 });
 

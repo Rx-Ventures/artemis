@@ -47,7 +47,18 @@ Reporting these will get a polite pointer back here:
   paths. It is readable by design because there is nothing in it worth stealing.
 - **Artemis does not encrypt credentials.** It holds none to encrypt. The
   provider CLI's own login writes its token into the profile's config directory,
-  where that CLI keeps it, and Artemis reads a boolean back.
+  where that CLI keeps it, and Artemis reads a boolean back. This stays true on
+  the one path where a *server* runs that login on a client's behalf: the URL
+  the CLI prints and the code the user types are the whole of what crosses the
+  wire, and neither end reads the file the CLI writes.
+- **A connection token can be granted the power to add accounts to a server.**
+  Off by default, per connection, and named on the command that mints it
+  (`connection create --manage-profiles`). A token with it can register an
+  account on the serving machine and drive the provider's login for it; a token
+  without it gets a 404 from those routes, indistinguishable from a build that
+  does not have them. Granting it to a token you then paste into an editor
+  extension is a configuration mistake, not a vulnerability — but a way to
+  reach those routes *without* the grant is a finding.
 - **Model output is exempt from the redaction value patterns.** If a user pastes
   their own key into a prompt, the transcript legitimately contains it. Refusing
   to render the conversation would help nobody.

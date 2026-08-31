@@ -19,6 +19,15 @@
  * its session id the host can be told — which is how bridge-started
  * conversations get recorded into the session ledger with the connection that
  * started them, the id-level attribution remote control wants.
+ *
+ * This guards *bridge-started* runs and no others. Runs the completions surface
+ * mints have their own registry with its own, far longer deadline — see
+ * `runs.ts` — because their client is a provider adapter holding a run id
+ * rather than a window holding an event stream, and "the stream went quiet"
+ * says nothing about whether such a client has left. Nothing registers a run in
+ * both: the only caller of {@link RemoteRunGuard.trackRun} is the bridge's
+ * start route, and the only caller of `RunDirectory.claim` is the completions
+ * route.
  */
 
 import type { FeedEvent, PushFeed } from './feed.js';

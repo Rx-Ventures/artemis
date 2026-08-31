@@ -72,6 +72,9 @@ function fakeRuns(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    send: async (runId) => ({ runId, deliveredImmediately: true }),
+    eventsSince: async () => ({ events: [], truncated: false }),
+    listRuns: async () => [],
     interrupt: async (runId) => {
       interrupted.push(String(runId));
     },
@@ -205,8 +208,8 @@ describe('a turn', () => {
 
     const events = await drain(source);
     const kinds = events.map((event) => event.kind);
-    expect(kinds).toEqual(['session', 'text', 'done']);
-    expect(events[0]).toEqual({ kind: 'session', sessionId: 'sess-9' });
+    expect(kinds).toEqual(['run', 'session', 'text', 'done']);
+    expect(events[1]).toEqual({ kind: 'session', sessionId: 'sess-9' });
   });
 
   it('does not re-announce a session its caller already named', async () => {
@@ -217,7 +220,7 @@ describe('a turn', () => {
     ] as Partial<AgentEvent>[]);
 
     const events = await drain(source, turn({ extensions: { sessionId: 'sess-9' } }));
-    expect(events.map((event) => event.kind)).toEqual(['done']);
+    expect(events.map((event) => event.kind)).toEqual(['run', 'done']);
   });
 
   it('announces the new id when a resumed run lands in a different session', async () => {
@@ -229,7 +232,7 @@ describe('a turn', () => {
     ] as Partial<AgentEvent>[]);
 
     const events = await drain(source, turn({ extensions: { sessionId: 'sess-9' } }));
-    expect(events[0]).toEqual({ kind: 'session', sessionId: 'sess-fork' });
+    expect(events[1]).toEqual({ kind: 'session', sessionId: 'sess-fork' });
   });
 
   it('maps usage into OpenAI’s three numbers', async () => {
@@ -269,8 +272,8 @@ describe('a turn', () => {
 
 describe('permission requests, with nobody to answer them', () => {
   it('denies automatically instead of parking forever', async () => {
-    // Over HTTP there is no human. A request that waited would hang until the
-    // client timed out, with no explanation on either side.
+    // Over HTTP there is usually no human. A request that waited would hang
+    // until the client timed out, with no explanation on either side.
     const source = fakeRuns([
       { type: 'permission.request', requestId: 'perm-1', request: {} },
       { type: 'run.end', reason: 'completed' },
@@ -289,7 +292,7 @@ describe('permission requests, with nobody to answer them', () => {
       ] as Partial<AgentEvent>[],
       {
         respondToPermission: async (_runId, _requestId, decision) => {
-          message = decision.message ?? '';
+          message = decision.behavior === 'deny' ? (decision.message ?? '') : '';
         },
       },
     );
@@ -297,6 +300,99 @@ describe('permission requests, with nobody to answer them', () => {
     const done = (await drain(source)).at(-1) as { result: { error?: string } };
     expect(message).toMatch(/no one is present to approve/i);
     expect(done.result.error).toMatch(/permission/i);
+  });
+
+  it('says nothing about permissions to a caller that did not ask to hear', async () => {
+    // The whole backward-compatibility claim, checked on the wire rather than
+    // asserted: a request with no `remote` block sees the same events it
+    // always did, denial included and unannounced.
+    const source = fakeRuns([
+      { type: 'permission.request', requestId: 'perm-1', request: {} },
+      { type: 'permission.resolved', requestId: 'perm-1', outcome: 'denied' },
+      { type: 'run.end', reason: 'completed' },
+    ] as Partial<AgentEvent>[]);
+
+    const kinds = (await drain(source)).map((event) => event.kind);
+    expect(kinds).toEqual(['run', 'done']);
+  });
+});
+
+describe('permission requests, with somebody who can answer them', () => {
+  const REMOTE = { remote: { permissions: true } };
+
+  it('puts the request on the wire instead of denying it', async () => {
+    const source = fakeRuns([
+      {
+        type: 'permission.request',
+        requestId: 'perm-1',
+        request: { id: 'perm-1', toolName: 'Bash', input: { command: 'ls' } },
+      },
+      { type: 'run.end', reason: 'completed' },
+    ] as Partial<AgentEvent>[]);
+
+    const events = await drain(source, turn({ extensions: REMOTE }));
+    // Nothing was answered here: the decision arrives on its own request,
+    // routinely after this stream is gone.
+    expect(source.denied).toEqual([]);
+    expect(events.find((event) => event.kind === 'permission')).toEqual({
+      kind: 'permission',
+      notice: {
+        status: 'requested',
+        request: { id: 'perm-1', toolName: 'Bash', input: { command: 'ls' } },
+      },
+    });
+  });
+
+  it('reports the settlement too, so a card raised elsewhere can be cleared', async () => {
+    // The answer can come from another client, or from the park deadline. A
+    // watcher that only ever saw the question would hold an open prompt over a
+    // decision that was made minutes ago.
+    const source = fakeRuns([
+      { type: 'permission.request', requestId: 'perm-1', request: { id: 'perm-1' } },
+      {
+        type: 'permission.resolved',
+        requestId: 'perm-1',
+        outcome: 'allowed',
+        note: 'approved from the phone',
+      },
+      { type: 'run.end', reason: 'completed' },
+    ] as Partial<AgentEvent>[]);
+
+    const events = await drain(source, turn({ extensions: REMOTE }));
+    expect(events.filter((event) => event.kind === 'permission').at(-1)).toEqual({
+      kind: 'permission',
+      notice: {
+        status: 'resolved',
+        requestId: 'perm-1',
+        outcome: 'allowed',
+        note: 'approved from the phone',
+      },
+    });
+  });
+
+  it('carries an allow, with everything an allow can say', async () => {
+    // The seam takes the whole decision union now. It used to take denials
+    // only, and every caller that had an approval to deliver had to cast past
+    // the type to do it.
+    const answered: unknown[] = [];
+    const source = fakeRuns([{ type: 'run.end', reason: 'completed' }], {
+      respondToPermission: async (_runId, requestId, decision) => {
+        answered.push({ requestId, decision });
+      },
+    });
+
+    await source.respondToPermission('run-1', 'perm-1', {
+      behavior: 'allow',
+      updatedInput: { command: 'ls -la' },
+      scope: 'session',
+    });
+
+    expect(answered).toEqual([
+      {
+        requestId: 'perm-1',
+        decision: { behavior: 'allow', updatedInput: { command: 'ls -la' }, scope: 'session' },
+      },
+    ]);
   });
 });
 
@@ -307,8 +403,8 @@ describe('a client that goes away', () => {
     const source = fakeRuns([{ type: 'text.delta', text: 'working…' }]);
 
     const events = runTurn(source, turn({ signal: aborted }));
-    const first = await events.next();
-    expect(first.value).toMatchObject({ kind: 'text' });
+    expect((await events.next()).value).toMatchObject({ kind: 'run' });
+    expect((await events.next()).value).toMatchObject({ kind: 'text' });
 
     // Let the loop notice the abort, then close the generator as the socket
     // layer does when the response ends.
@@ -316,6 +412,95 @@ describe('a client that goes away', () => {
     await events.return(undefined as never);
 
     expect(source.interrupted).toEqual(['run-1']);
+    expect(source.disposed).toEqual(['run-1']);
+  });
+
+  it('leaves a detachable run alone, and hands it on instead', async () => {
+    // The other half of the same teardown, and the headline of the feature: a
+    // laptop that sleeps mid-run must not take the agent down with it. The run
+    // is neither interrupted nor disposed — disposing would release the
+    // provider process the whole thing exists to keep.
+    const aborted = { aborted: true };
+    const detached: string[] = [];
+    const source = fakeRuns([{ type: 'text.delta', text: 'working…' }]);
+
+    const events = runTurn(
+      source,
+      turn({
+        signal: aborted,
+        extensions: { remote: { detach: true } },
+        onDetach: (runId: string) => detached.push(runId),
+      }),
+    );
+    expect((await events.next()).value).toMatchObject({ kind: 'run', runId: 'run-1' });
+    expect((await events.next()).value).toMatchObject({ kind: 'text' });
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await events.return(undefined as never);
+
+    expect(source.interrupted).toEqual([]);
+    expect(source.disposed).toEqual([]);
+    expect(detached).toEqual(['run-1']);
+  });
+
+  it('still disposes a detachable run that finished on its own', async () => {
+    // Detaching says what a *silence* means. A turn that ended has no work left
+    // to survive, so it is released exactly as it always was.
+    const detached: string[] = [];
+    const source = fakeRuns([{ type: 'run.end', reason: 'completed' }]);
+
+    await drain(
+      source,
+      turn({
+        extensions: { remote: { detach: true } },
+        onDetach: (runId: string) => detached.push(runId),
+      }),
+    );
+
+    expect(source.disposed).toEqual(['run-1']);
+    expect(detached).toEqual([]);
+  });
+
+  it('stops pulling the moment a detachable client is gone', async () => {
+    // Draining on would hold the request handler open, writing into a dead
+    // socket, for as long as the agent keeps working — which for the case this
+    // exists for is hours.
+    const aborted = { aborted: false };
+    const source = fakeRuns([{ type: 'text.delta', text: 'working…' }]);
+
+    const events = runTurn(
+      source,
+      turn({
+        signal: aborted,
+        extensions: { remote: { detach: true } },
+        onDetach: () => undefined,
+      }),
+    );
+    await events.next();
+    await events.next();
+
+    aborted.aborted = true;
+    // No `run.end` is ever scripted: only the abort path can end this loop.
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+    expect(source.interrupted).toEqual([]);
+  });
+
+  it('ignores the request when there is nowhere to hand the run to', async () => {
+    // Skipping the interrupt with no owner and no deadline would not be a
+    // weaker promise, it would be a leak: a provider process nothing can reach
+    // and nothing will ever stop. A build with nowhere to put the run ends it
+    // exactly as it always did.
+    const aborted = { aborted: true };
+    const source = fakeRuns([{ type: 'text.delta', text: 'working…' }]);
+
+    const events = runTurn(source, turn({ signal: aborted, extensions: { remote: { detach: true } } }));
+    await events.next();
+    await events.next();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await events.return(undefined as never);
+
+    expect(source.interrupted).toEqual(['run-1']);
+    expect(source.disposed).toEqual(['run-1']);
   });
 });
 
@@ -585,6 +770,97 @@ describe('POST /v1/chat/completions', () => {
     } finally {
       await server.close();
     }
+  });
+
+  it('announces the run id before anything else, on every stream', async () => {
+    // The only place a run id is ever published, and every route under
+    // /api/v0/runs takes one. A client that means to reattach after the stream
+    // breaks has to be holding it before it does — so it goes first, and it
+    // goes to callers that asked for nothing in particular.
+    const source = fakeRuns([
+      { type: 'text.delta', text: 'hi' },
+      { type: 'run.end', reason: 'completed' },
+    ] as Partial<AgentEvent>[]);
+
+    const { server, url } = await serve(source);
+    try {
+      const response = await post(url, {
+        model: 'work-max/opus',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      });
+      const chunks = (await response.text())
+        .split('\n\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice(6))
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk) as Record<string, any>);
+
+      const runAt = chunks.findIndex((chunk) => chunk.artemis?.runId === 'run-1');
+      const textAt = chunks.findIndex(
+        (chunk) => chunk.choices?.[0]?.delta?.content !== undefined,
+      );
+      expect(runAt).toBeGreaterThan(-1);
+      expect(runAt).toBeLessThan(textAt);
+      // Harmless to a strict OpenAI client, on the same terms as the session
+      // chunk: well-formed, empty delta, no finish reason.
+      expect(chunks[runAt]!.choices[0].delta).toEqual({});
+      expect(chunks[runAt]!.choices[0].finish_reason).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('puts a permission prompt on the stream only for a caller that asked', async () => {
+    const script = [
+      {
+        type: 'permission.request',
+        requestId: 'perm-1',
+        request: { id: 'perm-1', toolName: 'Bash', input: { command: 'rm -rf build' } },
+      },
+      { type: 'run.end', reason: 'completed' },
+    ] as Partial<AgentEvent>[];
+
+    const chunksOf = async (body: Record<string, unknown>) => {
+      const source = fakeRuns(script);
+      const { server, url } = await serve(source);
+      try {
+        const response = await post(url, { ...body, stream: true });
+        return {
+          denied: source.denied,
+          chunks: (await response.text())
+            .split('\n\n')
+            .filter((line) => line.startsWith('data: '))
+            .map((line) => line.slice(6))
+            .filter((chunk) => chunk !== '[DONE]')
+            .map((chunk) => JSON.parse(chunk) as Record<string, any>),
+        };
+      } finally {
+        await server.close();
+      }
+    };
+
+    const plain = await chunksOf({
+      model: 'work-max/opus',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(plain.chunks.some((chunk) => chunk.artemis?.permission !== undefined)).toBe(false);
+    expect(plain.denied).toEqual(['perm-1']);
+
+    const remote = await chunksOf({
+      model: 'work-max/opus',
+      messages: [{ role: 'user', content: 'hi' }],
+      artemis: { remote: { permissions: true } },
+    });
+    // Nothing was denied on its behalf: the decision arrives on its own
+    // request, and the run parks until it does.
+    expect(remote.denied).toEqual([]);
+    expect(
+      remote.chunks.find((chunk) => chunk.artemis?.permission !== undefined)!.artemis.permission,
+    ).toEqual({
+      status: 'requested',
+      request: { id: 'perm-1', toolName: 'Bash', input: { command: 'rm -rf build' } },
+    });
   });
 
   it('rejects a parameter it would otherwise have to ignore', async () => {
