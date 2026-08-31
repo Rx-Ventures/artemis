@@ -1,0 +1,63 @@
+# Ask the other one of us to look.
+# ============================================================================
+#
+# `.github/CODEOWNERS` names both maintainers, and on a repository owned by an
+# organisation that would be the whole story: GitHub reads the file and
+# requests the review itself. It does not do that here. This repository is
+# owned by a person rather than an org, and the evidence is plain — the
+# `codeowners/errors` API answers 404 for a file that is present and valid on
+# the default branch, and a pull request opened with that file in place drew no
+# review request at all (2026-08-31).
+#
+# So the file stays, because it is the right declaration and it starts working
+# the day this repository moves into an org, and this workflow does the asking
+# in the meantime.
+#
+# ## Why `pull_request_target`
+#
+# `pull_request` hands a read-only token to anything opened from a fork, and a
+# fork is exactly where an outside contribution comes from — the request would
+# fail silently on the pull requests that most need a reviewer. The
+# `_target` variant runs with a writable token.
+#
+# That variant is dangerous when a workflow checks out and runs the pull
+# request's code, because it would be running a stranger's code with a
+# privileged token. This one checks out nothing and runs no project code. It
+# reads a number and calls an API.
+name: Request review
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+# The narrowest token that can do the job.
+permissions:
+  pull-requests: write
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the maintainer who is not the author
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          # GitHub refuses a review request naming the author, and refuses the
+          # whole call rather than the one name — so an unfiltered list would
+          # mean nobody is asked on every pull request either of us opens,
+          # which is most of them.
+          for who in seth-torrence david-systemtech; do
+            if [ "$who" = "$AUTHOR" ]; then continue; fi
+            # `|| true`: a maintainer who has lost access, or is already
+            # requested, must not fail the run — the point is to ask, and a red
+            # X on a pull request that is otherwise fine teaches people to
+            # ignore red Xs.
+            gh api -X POST "repos/$REPO/pulls/$NUMBER/requested_reviewers" \
+              -f "reviewers[]=$who" >/dev/null 2>&1 \
+              && echo "requested $who" \
+              || echo "could not request $who — skipping"
+          done
