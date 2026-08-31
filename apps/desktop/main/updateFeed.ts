@@ -1,10 +1,11 @@
 /**
  * The update feed, as data.
  *
- * electron-builder publishes a `latest-mac.yml` beside every release's
- * artifacts — see the `publish` block in `electron-builder.yml` — and this
- * module turns that file into a decision: *is there something newer than what
- * is running, that the user has not already declined?*
+ * electron-builder publishes a feed file beside every release's artifacts —
+ * `latest-mac.yml` from a mac build, `latest.yml` from a Windows one; see the
+ * `publish` block in `electron-builder.yml` — and this module turns that file
+ * into a decision: *is there something newer than what is running, that the
+ * user has not already declined?*
  *
  * Everything here is pure and Electron-free so it can be unit-tested the way
  * `appNames.ts` is; fetching the feed, downloading the artifact and swapping
@@ -28,9 +29,14 @@ import { compareVersions } from './updateChannel.js';
 export interface UpdateFeed {
   /** The version the feed offers, e.g. `0.2.0`. */
   readonly version: string;
-  /** File name of the zip artifact in the same release, e.g. `Artemis-0.2.0-arm64-mac.zip`. */
-  readonly zipPath: string;
-  /** Base64 sha512 of that zip, verified against the download before any swap. */
+  /**
+   * File name of the installable artifact in the same release: the mac zip
+   * (`Artemis-0.2.0-arm64-mac.zip`) or the Windows setup exe
+   * (`Artemis-0.2.0-x64-setup.exe`). One feed file per platform, each naming
+   * its own.
+   */
+  readonly artifactPath: string;
+  /** Base64 sha512 of that artifact, verified against the download before any install. */
   readonly sha512: string;
 }
 
@@ -51,19 +57,27 @@ function topLevelValue(feed: string, key: string): string | null {
 }
 
 /**
- * Parse a `latest-mac.yml`, or return null for anything that does not carry
- * all three fields. Null rather than throwing: a malformed feed means "no
- * update today", never a dialog.
+ * Parse one feed file (`latest-mac-*.yml` on macOS, `latest.yml` on Windows),
+ * or return null for anything that does not carry all three fields. Null
+ * rather than throwing: a malformed feed means "no update today", never a
+ * dialog.
+ *
+ * `extension` is what this platform's installer can actually consume — the mac
+ * swap eats a zip, Windows runs a setup exe — and a feed whose top-level `path`
+ * names anything else is a feed for someone else's platform, which is the same
+ * answer as no feed at all. It defaults to `.zip` because that is the check
+ * this function has always made, back when the mac bundle was the only thing
+ * that could be installed.
  */
-export function parseUpdateFeed(feed: string): UpdateFeed | null {
+export function parseUpdateFeed(feed: string, extension = '.zip'): UpdateFeed | null {
   const version = topLevelValue(feed, 'version');
-  const zipPath = topLevelValue(feed, 'path');
+  const artifactPath = topLevelValue(feed, 'path');
   const sha512 = topLevelValue(feed, 'sha512');
-  if (version === null || zipPath === null || sha512 === null) return null;
-  // The top-level path has always been the zip, but nothing guarantees it
-  // forever — and the swap can only consume a zip.
-  if (!zipPath.endsWith('.zip')) return null;
-  return { version, zipPath, sha512 };
+  if (version === null || artifactPath === null || sha512 === null) return null;
+  // Case-insensitively: the extension is a fact about the file type, and a
+  // release that ever publishes `Setup.EXE` is still publishing an installer.
+  if (!artifactPath.toLowerCase().endsWith(extension.toLowerCase())) return null;
+  return { version, artifactPath, sha512 };
 }
 
 /**

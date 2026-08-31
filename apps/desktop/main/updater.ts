@@ -1,6 +1,6 @@
 /**
- * The updater: finds a newer release, fetches it, verifies it, swaps the app
- * bundle in place, and relaunches.
+ * The updater: finds a newer release, fetches it, verifies it, installs it, and
+ * relaunches.
  *
  * ## Why not electron-updater
  *
@@ -8,11 +8,31 @@
  * notes — and electron-updater's macOS path hard-requires a signed app: its
  * embedded Squirrel.Mac validates the code signature of the downloaded update
  * against the running app and refuses ad-hoc builds. So the mechanism here is
- * the plain one: download the zip electron-builder already publishes, check
- * its sha512 against the feed, `ditto`-extract, rename the old bundle aside,
- * rename the new one in, relaunch. Every step before the swap leaves the
- * installed app untouched, and the swap itself is two renames on one volume
- * with a rollback.
+ * the plain one: download the artifact electron-builder already publishes,
+ * check its sha512 against the feed, and install it the way this platform
+ * installs things. Every step before that last one leaves the installed app
+ * untouched.
+ *
+ * ## One updater, two installs
+ *
+ * The download, the verification, the feed and the state machine are shared;
+ * only the last step differs, and it differs because the platforms do:
+ *
+ *   - **macOS** — `ditto`-extract the zip, rename the old bundle aside, rename
+ *     the new one in. Two renames on one volume with a rollback, and the
+ *     running process keeps executing fine from its renamed bundle because open
+ *     files follow the inode rather than the path.
+ *   - **Windows** — download the NSIS setup exe, verify it, park it, and hand
+ *     over to it on the restart click (`/S --force-run`). A running `.exe`
+ *     cannot be renamed over itself, and replacing files that were just in use
+ *     is precisely what an installer is for, so the swap is the installer's job
+ *     rather than this module's.
+ *
+ * Linux is deliberately absent. Artemis ships pacman, deb and AppImage there,
+ * and only the AppImage is a single file that could be swapped — so there is no
+ * one mechanism to write, and a package manager's install is the package
+ * manager's business. {@link installTarget} answers `null`, a check answers
+ * `unsupported`, and no network request is made at all.
  *
  * ## Where the releases live, and how they are reached
  *
@@ -42,12 +62,23 @@
  * "there is a version", "install it", "not this one".
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
-// No `rm`: removing a tree that can hold an app bundle goes through
-// `removeTree` below, for a reason documented there.
-import { mkdtemp, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+// `rm` is used only on the pending-update directory, which holds a single
+// downloaded installer. Removing a tree that can hold an *app bundle* still
+// goes through `removeTree` below, for a reason documented there.
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -81,12 +112,31 @@ const REPO = 'seth-torrence/artemis';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 /**
- * The feed for *this* machine. Releases carry one feed per mac architecture
- * (CI renames electron-builder's `latest-mac.yml` per build — see
+ * The feed for *this* machine: one file per platform, and one per mac
+ * architecture (CI renames electron-builder's `latest-mac.yml` per build — see
  * `.github/workflows/release.yml`), because a feed's top-level `path` is the
- * artifact to install and an Intel Mac must never be handed the arm64 zip.
+ * artifact to install and an Intel Mac must never be handed the arm64 zip, nor
+ * Windows the mac bundle.
+ *
+ * A function rather than a constant because it is now two questions rather than
+ * one, and the Linux answer is a placeholder: `installTarget` returns null there
+ * long before anything asks for a feed, so the name is never fetched.
  */
-const FEED_NAME = `latest-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.yml`;
+export function feedName(): string {
+  if (process.platform === 'darwin') {
+    return `latest-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.yml`;
+  }
+  return 'latest.yml';
+}
+
+/**
+ * What this platform's installer can actually consume — see
+ * {@link parseUpdateFeed}, which refuses a feed naming anything else. The mac
+ * swap eats a zip; Windows runs a setup exe.
+ */
+export function artifactExtension(): string {
+  return process.platform === 'darwin' ? '.zip' : '.exe';
+}
 
 /**
  * The releases API, used only by the beta channel.
@@ -108,6 +158,17 @@ const RELEASES_FETCH_TIMEOUT_MS = 15_000;
  * an update is never urgent enough to compete with startup. */
 const FIRST_CHECK_MS = 15_000;
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Where a pending Windows installer waits between `ready` and the restart click.
+ *
+ * Under `userData` rather than in the staging temp directory, because `ready` is
+ * a state a machine can sit in for days: the download is finished, the app is
+ * still the old one, and the install happens whenever the user gets round to
+ * restarting. A temp directory swept by the OS in the meantime would turn that
+ * wait into a `ready` state with nothing behind it.
+ */
+const PENDING_DIR_NAME = 'pending-update';
 
 /**
  * Deadlines on the anonymous downloads.
@@ -477,9 +538,25 @@ async function sizeOf(file: string): Promise<number | null> {
   }
 }
 
+/**
+ * What an in-place install would replace on this platform.
+ *
+ * A union rather than a nullable path because the two installs do not have the
+ * same shape: the mac one names a bundle it is going to rename, and the Windows
+ * one names nothing at all — the installer finds its own install. Discriminating
+ * on `kind` is what stops `runInstall` from reaching for a `bundle` that a
+ * Windows target was never going to carry.
+ */
+type InstallTarget =
+  | { readonly kind: 'mac-bundle'; readonly bundle: string }
+  | { readonly kind: 'windows-installer' };
+
 export function createUpdater(options: UpdaterOptions): Updater {
   const { userDataDir, broadcast } = options;
   const settingsPath = join(userDataDir, 'update-settings.json');
+  const pendingDir = join(userDataDir, PENDING_DIR_NAME);
+  /** The parked Windows installer behind a `ready` state, if any. */
+  let pendingInstaller: string | null = null;
 
   let current: UpdateState = IDLE;
   /** The feed behind an `available` offer; cleared whenever the offer is. */
@@ -546,13 +623,24 @@ export function createUpdater(options: UpdaterOptions): Updater {
   /**
    * Is there anything a check could lead to?
    *
-   * The same two conditions `start()` refuses to run under, named once so the
+   * The same conditions `start()` refuses to run under, named once so the
    * menu's answer and the timer's silence cannot drift apart. A check that
    * cannot end in an install is not worth performing: it would read the feed,
-   * find a newer version, offer it, and fail at the swap.
+   * find a newer version, offer it, and fail at the install.
+   *
+   * Deliberately coarser than {@link installTarget}: this asks whether the
+   * *platform* has an install mechanism, not whether this particular copy can
+   * use it. A translocated or read-only mac bundle still checks, still gets
+   * offered a version, and is told at the install — with the releases page
+   * attached — that it cannot swap itself. That is a better answer than never
+   * checking and never saying why.
+   *
+   * Linux is the case where the two agree: there is no mechanism at all, so
+   * there is nothing to check for and no network request is made.
    */
   function supported(): boolean {
-    return process.platform === 'darwin' && app.isPackaged;
+    if (!app.isPackaged) return false;
+    return process.platform === 'darwin' || process.platform === 'win32';
   }
 
   /**
@@ -596,8 +684,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
   async function readFeed(): Promise<UpdateFeed | null> {
     const dir = await mkdtemp(join(tmpdir(), 'artemis-update-check-'));
     try {
-      const file = await fetchAsset(FEED_NAME, await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS);
-      return parseUpdateFeed(await readFile(file, 'utf8'));
+      const file = await fetchAsset(feedName(), await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS);
+      return parseUpdateFeed(await readFile(file, 'utf8'), artifactExtension());
     } finally {
       await removeTree(dir);
     }
@@ -709,13 +797,24 @@ export function createUpdater(options: UpdaterOptions): Updater {
   /* ----------------------------------------------------------------------- */
 
   /**
-   * The bundle this process is running out of, or null when there is nothing
-   * a rename can update: not packaged, not laid out as an .app, or running
-   * from a Gatekeeper app-translocation mount (read-only, and not the copy
-   * the user keeps).
+   * What an install would actually replace on this machine, or null when
+   * nothing here can be updated in place.
+   *
+   * The null cases are the ones worth naming: a dev build (the "installed app"
+   * is the repository checkout, and a check could only ever offer a downgrade),
+   * a mac bundle in a read-only or Gatekeeper-translocated location, and Linux
+   * — where Artemis ships as pacman, deb and AppImage, and a package manager's
+   * install is the package manager's business.
    */
-  function swappableBundle(): string | null {
+  function installTarget(): InstallTarget | null {
     if (!app.isPackaged) return null;
+    if (process.platform === 'win32') {
+      // The NSIS installer replaces the install wherever it is — including
+      // files that were just in use — so a packaged build is all it takes.
+      // Nothing to probe for writability: the installer elevates if it must.
+      return { kind: 'windows-installer' };
+    }
+    if (process.platform !== 'darwin') return null;
     // …/Artemis.app/Contents/MacOS/Artemis → …/Artemis.app
     const bundle = resolve(process.execPath, '..', '..', '..');
     if (!bundle.endsWith('.app')) return null;
@@ -725,7 +824,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
     } catch {
       return null;
     }
-    return bundle;
+    return { kind: 'mac-bundle', bundle };
   }
 
   /**
@@ -762,7 +861,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
     return feedToInstall(offer, latest);
   }
 
-  async function runInstall(offer: UpdateFeed, bundle: string): Promise<void> {
+  async function runInstall(offer: UpdateFeed, target: InstallTarget): Promise<void> {
     const staging = await mkdtemp(join(tmpdir(), 'artemis-update-'));
     /*
      * Every step announces itself before it starts and counts while it runs.
@@ -798,8 +897,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
       }
 
       step('downloading');
-      const zip = await fetchAsset(
-        feed.zipPath,
+      const artifact = await fetchAsset(
+        feed.artifactPath,
         `v${feed.version}`,
         staging,
         ZIP_FETCH_TIMEOUT_MS,
@@ -807,40 +906,64 @@ export function createUpdater(options: UpdaterOptions): Updater {
       );
 
       step('verifying');
-      const digest = await sha512Of(zip, counted('verifying'));
+      const digest = await sha512Of(artifact, counted('verifying'));
       if (digest !== feed.sha512) {
-        throw new Error('the downloaded archive did not match the published checksum');
+        throw new Error('the downloaded artifact did not match the published checksum');
       }
 
-      step('unpacking');
-      const extracted = join(staging, 'extracted');
-      await execFileAsync('/usr/bin/ditto', ['-x', '-k', zip, extracted], {
-        timeout: 5 * 60 * 1000,
-      });
-      const entries = await readdir(extracted);
-      const appName = entries.find((entry) => entry.endsWith('.app'));
-      if (appName === undefined) throw new Error('the archive did not contain an app bundle');
-      const newBundle = join(extracted, appName);
+      if (target.kind === 'windows-installer') {
+        step('installing');
+        /*
+         * "Installing" here means parking, and the word is still honest: from
+         * the user's side the install is done and waiting on a restart, which
+         * is exactly what `ready` means on macOS too. What differs is who does
+         * the replacing — a running `.exe` cannot be renamed over itself, so
+         * the setup program does it, and it cannot run until Artemis quits.
+         *
+         * The exe has to outlive this staging directory, which the `finally`
+         * below removes: `ready` can stand for days before the restart click
+         * hands the file over. Copied rather than renamed because the temp
+         * directory is very often another filesystem.
+         */
+        await rm(pendingDir, { recursive: true, force: true });
+        await mkdir(pendingDir, { recursive: true });
+        const parked = join(pendingDir, basename(artifact));
+        await copyFile(artifact, parked);
+        pendingInstaller = parked;
+      } else {
+        step('unpacking');
+        const extracted = join(staging, 'extracted');
+        await execFileAsync('/usr/bin/ditto', ['-x', '-k', artifact, extracted], {
+          timeout: 5 * 60 * 1000,
+        });
+        const entries = await readdir(extracted);
+        const appName = entries.find((entry) => entry.endsWith('.app'));
+        if (appName === undefined) throw new Error('the archive did not contain an app bundle');
+        const newBundle = join(extracted, appName);
 
-      step('installing');
+        step('installing');
 
-      // The swap. Two renames on one volume; the first is undone if the
-      // second cannot happen. From here on the failure modes are narrow and
-      // the running process keeps executing fine from its renamed bundle —
-      // open files follow the inode, not the path.
-      const parked = `${bundle}.old-${process.pid}`;
-      await rename(bundle, parked);
-      try {
-        await rename(newBundle, bundle);
-      } catch (error) {
-        await rename(parked, bundle);
-        throw error;
+        // The swap. Two renames on one volume; the first is undone if the
+        // second cannot happen. From here on the failure modes are narrow and
+        // the running process keeps executing fine from its renamed bundle —
+        // open files follow the inode, not the path.
+        const parked = `${target.bundle}.old-${process.pid}`;
+        await rename(target.bundle, parked);
+        try {
+          await rename(newBundle, target.bundle);
+        } catch (error) {
+          await rename(parked, target.bundle);
+          throw error;
+        }
       }
 
       // Park. The new version is on disk and the old one is what is running —
-      // a state that is entirely fine to stay in: quitting normally from here
-      // launches into the update anyway. The relaunch belongs to the user's
-      // click on the banner (updates.restart), never to this code path.
+      // a state that is entirely fine to stay in. On macOS quitting normally
+      // from here launches into the update anyway, because the bundle has
+      // already been swapped; on Windows the parked installer simply waits, and
+      // the next check finds the same release still newer and offers it again.
+      // Either way the relaunch belongs to the user's click on the banner
+      // (updates.restart), never to this code path.
       setState({
         phase: 'ready',
         version: feed.version,
@@ -859,11 +982,23 @@ export function createUpdater(options: UpdaterOptions): Updater {
     }
   }
 
-  /** Remove bundles a previous update parked beside the app. */
-  async function sweepParkedBundles(): Promise<void> {
-    const bundle = swappableBundle();
-    if (bundle === null) return;
-    const parent = dirname(bundle);
+  /** Remove whatever a previous update parked: bundles on macOS, installers on Windows. */
+  async function sweepLeftovers(): Promise<void> {
+    const target = installTarget();
+    if (target === null) return;
+
+    if (target.kind === 'windows-installer') {
+      // Reached on the launch *after* an install, whether the installer ran or
+      // the user never restarted — either way this exe describes a release that
+      // is now either installed or superseded, and the next check downloads
+      // whatever it actually needs. Nothing here is a rollback path.
+      await rm(pendingDir, { recursive: true, force: true }).catch((error: unknown) => {
+        log.warn('Could not clear the pending-update directory.', error);
+      });
+      return;
+    }
+
+    const parent = dirname(target.bundle);
     try {
       for (const entry of await readdir(parent)) {
         if (/\.app\.old-\d+$/.test(entry)) {
@@ -899,10 +1034,11 @@ export function createUpdater(options: UpdaterOptions): Updater {
     install(): UpdateState {
       if (current.phase !== 'available' || offered === null || installing) return current;
       const feed = offered;
-      const bundle = swappableBundle();
-      if (bundle === null) {
-        // Nothing in-place to swap (translocated, or an unwritable location).
-        // Say so once and hand over the manual path.
+      const target = installTarget();
+      if (target === null) {
+        // Nothing here can be installed in place (translocated, an unwritable
+        // location, or a platform with no single-file swap). Say so once and
+        // hand over the manual path.
         return setState({
           phase: 'error',
           version: feed.version,
@@ -922,7 +1058,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
         releaseUrl: null,
         progress: { step: 'checking', transferred: null, total: null },
       });
-      void runInstall(feed, bundle)
+      void runInstall(feed, target)
         .catch((error: unknown) => {
           log.error('Update failed; the installed app is untouched.', error);
           setState({
@@ -951,6 +1087,26 @@ export function createUpdater(options: UpdaterOptions): Updater {
         releaseUrl: null,
         progress: null,
       });
+      if (process.platform === 'win32') {
+        const installer = pendingInstaller;
+        if (installer === null) {
+          // `ready` with nothing parked should be unreachable — the state is
+          // only ever set after the copy succeeds — but quitting into nothing
+          // would leave the user with no app and no installer. Idle is the
+          // honest answer: the next check offers the release again.
+          log.warn('Ready to restart, but no installer was parked; standing down.');
+          return setState(IDLE);
+        }
+        log.info('Handing over to the installer; it relaunches Artemis when it is done.');
+        // Detached and unref'd, so quitting Artemis does not take the installer
+        // down with it — the whole point is that it runs *after* this process
+        // is gone and its files are no longer in use. `/S` installs silently;
+        // `--force-run` is NSIS's flag for relaunching the app when it is done,
+        // which is what makes this a restart rather than a quit.
+        spawn(installer, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
+        app.quit();
+        return current;
+      }
       log.info('Restarting into the installed update at the user\'s request.');
       // The parked old bundle is swept by the next launch's start(), not here:
       // this process is still running out of it.
@@ -982,21 +1138,21 @@ export function createUpdater(options: UpdaterOptions): Updater {
       if (timer !== null) return;
       // Both refusals are `supported()`; they are spelled out separately here
       // only because the log line is the one place the two are worth telling
-      // apart. Windows builds exist, but the swap is written in macOS terms —
-      // an .app bundle, two renames, `ditto` — and a running .exe cannot be
-      // renamed over, so Windows updates are manual and no card ever appears.
-      // In dev the "installed app" is the repo checkout: nothing to update,
-      // and a check could only ever offer a downgrade to a release.
-      if (process.platform !== 'darwin') {
-        log.debug('Updater disabled: macOS only for now.');
-        return;
-      }
+      // apart. In dev the "installed app" is the repo checkout: nothing to
+      // update, and a check could only ever offer a downgrade to a release.
+      // On Linux there is no single-file install to replace — pacman, deb and
+      // AppImage all install differently and two of them belong to a package
+      // manager — so no card ever appears and the About pane says why.
       if (!app.isPackaged) {
         log.debug('Updater disabled: not a packaged build.');
         return;
       }
+      if (!supported()) {
+        log.debug(`Updater disabled: nothing on ${process.platform} for it to install.`);
+        return;
+      }
       stopped = false;
-      void sweepParkedBundles();
+      void sweepLeftovers();
       const schedule = (delay: number): void => {
         if (stopped) return;
         timer = setTimeout(() => {

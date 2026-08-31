@@ -55,6 +55,11 @@ win:
     - nsis
 
 nsis:
+  # The name the in-app updater downloads. `latest.yml` carries it as the feed's
+  # top-level `path`, and `main/updateFeed.ts` refuses a feed whose path is not
+  # an `.exe` — so this pattern and that check move together. The arch is in the
+  # name for the same reason it is in the mac one: two builds on one release
+  # page must not be a guessing game.
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
 linux:
@@ -68,10 +73,11 @@ linux:
     - deb
     - pacman
 
-# Declaring the provider makes electron-builder emit latest-mac.yml (the
-# update feed) beside the artifacts. Actual publishing is done by
-# scripts/release.ts via `gh` after every gate has passed — the dist build
-# always runs with `--publish never`.
+# Declaring the provider makes electron-builder emit an update feed beside the
+# artifacts — latest-mac.yml from a mac build, latest.yml from a Windows one,
+# each naming the artifact that build's updater installs. Actual publishing is
+# done by scripts/release.ts via `gh` after every gate has passed — the dist
+# build always runs with `--publish never`.
 publish:
   provider: github
   # The repository moved from the Rx-Ventures org to seth-torrence on

@@ -17,10 +17,10 @@ releaseDate: '2026-08-11T09:24:38.108Z'
 `;
 
 describe('parseUpdateFeed', () => {
-  it('reads version, zip path and sha512 from a real feed', () => {
+  it('reads version, artifact path and sha512 from a real feed', () => {
     expect(parseUpdateFeed(REAL_FEED)).toEqual({
       version: '0.1.0',
-      zipPath: 'Artemis-0.1.0-arm64-mac.zip',
+      artifactPath: 'Artemis-0.1.0-arm64-mac.zip',
       sha512:
         'Sj+Lvs7AJgDuOyY3zOPtZwXwcixRcMrocnGzqyTUzVncfmhp7SrvOKHH68XDYgdd0TMWNiTuTFrhNW/CRYk6sQ==',
     });
@@ -43,8 +43,31 @@ describe('parseUpdateFeed', () => {
     expect(parseUpdateFeed('')).toBeNull();
   });
 
-  it('returns null when the top-level path is not a zip', () => {
+  it('returns null when the top-level path is not the extension asked for', () => {
     expect(parseUpdateFeed('version: 0.2.0\npath: a.dmg\nsha512: abc\n')).toBeNull();
+  });
+
+  /*
+   * The Windows feed is `latest.yml` and names a setup exe. Reading it with the
+   * default `.zip` must refuse it, and reading it with `.exe` must accept it —
+   * the two halves of "a feed for someone else's platform is the same answer as
+   * no feed at all".
+   */
+  it('reads a Windows feed when asked for an exe, and refuses it otherwise', () => {
+    const windows = 'version: 2.2.0\npath: Artemis-2.2.0-x64-setup.exe\nsha512: abc\n';
+    expect(parseUpdateFeed(windows)).toBeNull();
+    expect(parseUpdateFeed(windows, '.exe')).toEqual({
+      version: '2.2.0',
+      artifactPath: 'Artemis-2.2.0-x64-setup.exe',
+      sha512: 'abc',
+    });
+    // And the mac feed is refused by a Windows build, for the same reason.
+    expect(parseUpdateFeed(REAL_FEED, '.exe')).toBeNull();
+  });
+
+  it('matches the extension case-insensitively', () => {
+    const shouted = 'version: 2.2.0\npath: Artemis-2.2.0-x64-Setup.EXE\nsha512: abc\n';
+    expect(parseUpdateFeed(shouted, '.exe')?.artifactPath).toBe('Artemis-2.2.0-x64-Setup.EXE');
   });
 });
 
