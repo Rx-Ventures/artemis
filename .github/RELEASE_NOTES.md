@@ -1,6 +1,41 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.0
+
+**Your window hears its runs again.** The one-line bug behind a day of
+"something is super slow": a cancelled navigation — clicking a link the app
+reroutes to your browser — wiped every live-event subscription, and the whole
+window fell back to the stall watchdog's 15-second replays. A 2-second turn
+sat on "starting the provider" for half a minute with its answer already in
+the window. The cleanup now runs only when the page is genuinely going away.
+
+**A conversation on the server is yours to tidy.** Rename, archive and delete
+work on an Artemis Server profile now, one route each, scoped by the server's
+ledger to the sessions your token can already see. A deletion is a real one,
+and it leaves an attribution line naming the token that asked.
+
+**A serving account is managed from the server card.** Rename it (routes move
+with it, and the card re-reads the catalogue), remove it (a second click,
+with a sentence naming what goes and what stays), and for endpoint providers
+set the address and key from here — the key travels one way and is never
+echoed back. The add form gains a provider picker: Claude and Codex go
+straight into their login, llama.cpp, LM Studio and Ollama into the address
+form, because they have no login to run.
+
+**The queued badge clears when the message is read.** Current CLIs fold a
+queued message in without a word on their stream; the adapter now reads the
+fold from the session transcript — the one place it is recorded — and the
+badge clears at the moment of reading instead of the end of the turn.
+
+**The busy banner names the holder.** A conversation held by background work
+says "waiting for this conversation's background task to finish" instead of
+claiming a turn is being finished that nobody can see.
+
+**And the log grew eyes where it was blind.** `run.requested` lands before
+credential resolution, and `run.started` carries `resolveMs` — so the next
+slow start is attributable from one line instead of a day of forensics.
+
 ## What's new in 2.3.0
 
 The reunification release: everything the david-systemtech fork learned comes
