@@ -25,6 +25,29 @@
  * not, which is the failure mode a boundary must never have — so the write
  * fails loudly instead, and the editor reports that the key could not be
  * saved. A user who cannot store a key can still run a server without one.
+ *
+ * ## Why that check is not enough on Linux
+ *
+ * Because on Linux `isEncryptionAvailable()` answers a different question from
+ * the one asked. Chromium picks its backend from the desktop environment, and
+ * when it does not recognise one it selects `basic_text` — which "encrypts"
+ * with a hardcoded password compiled into Chromium. It is obfuscation, and
+ * anyone holding the file can undo it. `isEncryptionAvailable()` returns
+ * **true** for it, because a cipher does run.
+ *
+ * That is not an exotic case. Chromium recognises GNOME, KDE, XFCE, Cinnamon,
+ * Deepin, Pantheon, UKUI and Unity — and nothing else. Every tiling
+ * compositor, which is to say a large share of the Arch and CachyOS machines
+ * this app is meant to run on, lands on `basic_text` with a perfectly healthy
+ * gnome-keyring running beside it. Taking `isEncryptionAvailable()` at its
+ * word there means writing a key we have told the user is encrypted and have
+ * only obscured: exactly the silent downgrade the paragraph above forbids,
+ * arrived at from the other side.
+ *
+ * So on Linux the backend is checked too, and `basic_text` is treated as no
+ * encryption at all. The fix is one flag and the error message names it —
+ * `--password-store=gnome-libsecret` makes Chromium use the keyring it could
+ * not infer.
  */
 
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
@@ -46,6 +69,38 @@ const SECRETS_FILE = 'profile-keys.json';
 type SecretsDocument = Record<string, string>;
 
 /**
+ * The advice that turns a refusal into something a user can act on.
+ *
+ * A sentence rather than a link because it is the whole fix, and because the
+ * two halves cover the two ways to arrive here: no keyring at all (install
+ * one), or a keyring Chromium did not find (tell it where to look).
+ */
+const LINUX_BACKEND_REMEDY =
+  'Chromium chose its basic_text store, which uses a hardcoded password and is not ' +
+  'encryption. It picks that whenever it does not recognise the desktop environment, ' +
+  'which includes every tiling compositor. Start Artemis with ' +
+  '--password-store=gnome-libsecret (or --password-store=kwallet6 on KDE) if a keyring ' +
+  'is running, or install and start one — gnome-keyring or kwallet.';
+
+/**
+ * Does this storage backend actually encrypt?
+ *
+ * Pure, and the platform is a parameter, so the Linux answer is testable from
+ * anywhere. Off Linux there is no backend to ask about: macOS is the login
+ * Keychain and Windows is DPAPI, both of which `isEncryptionAvailable()`
+ * reports on correctly and neither of which has a `basic_text` equivalent.
+ *
+ * `unknown` is what the API returns before `app.ready`, and it is treated as
+ * encrypting because `isEncryptionAvailable()` is independently false at that
+ * point — the two checks are `&&`-ed, so the honest answer to "is this backend
+ * weak?" for a backend nobody has selected yet is "no evidence that it is".
+ */
+export function backendEncrypts(platform: NodeJS.Platform, backend: string): boolean {
+  if (platform !== 'linux') return true;
+  return backend !== 'basic_text';
+}
+
+/**
  * A `safeStorage`-backed {@link ProfileSecrets}.
  *
  * Reads the whole document per call rather than caching it. The file holds one
@@ -55,6 +110,18 @@ type SecretsDocument = Record<string, string>;
  */
 export function createProfileSecrets(userDataDir: string): ProfileSecrets {
   const file = join(userDataDir, SECRETS_FILE);
+
+  /**
+   * Can this session store a key that is genuinely encrypted?
+   *
+   * `getSelectedStorageBackend` is Linux-only, so the platform check guards the
+   * call as well as the verdict.
+   */
+  function canEncrypt(): boolean {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    if (process.platform !== 'linux') return true;
+    return backendEncrypts('linux', safeStorage.getSelectedStorageBackend());
+  }
 
   async function read(): Promise<SecretsDocument> {
     try {
@@ -92,6 +159,14 @@ export function createProfileSecrets(userDataDir: string): ProfileSecrets {
         log.warn('A key is stored but this session cannot decrypt it.');
         return null;
       }
+      // Deliberately still readable under a weak backend, unlike `write`. The
+      // key is already on disk in whatever form it was written; refusing to
+      // read it would lock the user out of a server they can still reach while
+      // making the stored bytes not one degree safer. What is owed here is the
+      // news, which the write path turns into a refusal.
+      if (!canEncrypt()) {
+        log.warn(`A stored key is not encrypted at rest on this machine. ${LINUX_BACKEND_REMEDY}`);
+      }
       try {
         return safeStorage.decryptString(Buffer.from(stored, 'base64'));
       } catch (error) {
@@ -108,6 +183,13 @@ export function createProfileSecrets(userDataDir: string): ProfileSecrets {
         throw new Error(
           'This system has no secure storage available, so the key cannot be saved.',
         );
+      }
+      // Separately from the check above, and with its own message: the failure
+      // here is not "nothing can encrypt" but "what would encrypt this is not
+      // encryption", and a user told the first would go looking for a keyring
+      // they already have running.
+      if (!canEncrypt()) {
+        throw new Error(`The key cannot be saved securely. ${LINUX_BACKEND_REMEDY}`);
       }
       const document = await read();
       document[id] = safeStorage.encryptString(secret).toString('base64');
