@@ -212,7 +212,8 @@ export type SettingsSection =
   | 'server'
   | 'remote'
   | 'routines'
-  | 'advanced';
+  | 'advanced'
+  | 'about';
 
 /**
  * Where every settings address lands today.
@@ -242,6 +243,7 @@ const SETTINGS_SECTION_HOMES: Readonly<Record<SettingsSection, SettingsSection>>
   remote: 'remote',
   routines: 'routines',
   advanced: 'advanced',
+  about: 'about',
 };
 
 /** Resolve an address — possibly historical — to the pane that answers for it. */
@@ -398,6 +400,13 @@ export interface AppState {
   readonly bridgeMode: BridgeMode;
   readonly version: string;
   readonly platform: 'darwin' | 'win32' | 'linux';
+  /**
+   * Which architecture this build was made for. Mirrored beside `platform`
+   * because it is half of the same answer — releases carry one update feed per
+   * architecture, so About has to name both or it has told the user nothing
+   * they could act on.
+   */
+  readonly arch: 'arm64' | 'x64' | 'other';
   readonly booted: boolean;
 
   /**
@@ -1430,6 +1439,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'remote',
   'routines',
   'advanced',
+  'about',
 ];
 
 const CONVERSATION_WIDTHS: readonly ConversationWidth[] = ['comfortable', 'wide', 'full'];
@@ -2245,6 +2255,7 @@ export const useApp = create<AppState>(() => ({
   bridgeMode: 'unavailable',
   version: '',
   platform: 'darwin',
+  arch: 'other',
   booted: false,
 
   grid: [createRow([firstPane])],
@@ -5804,6 +5815,43 @@ async function adoptTerminals(pane: Pane): Promise<void> {
 }
 
 /**
+ * Take a reading, unless it describes an older moment than the one already held.
+ *
+ * Two writers land in this map — the poll's push, and the read taken a few
+ * seconds after a run ends — and neither can see the other's timing. Both spawn
+ * a provider CLI that takes a second or two, so their *replies* can arrive in
+ * the opposite order to the readings they describe: the settle read starts
+ * later, answers first, and then the poll's older cycle overwrites it. On screen
+ * that is a percentage that climbs and then falls back with nothing having
+ * reset — 77% to 67% on a five-hour window that is only ever filling — which
+ * reads as the gauge being wrong rather than merely late.
+ *
+ * `fetchedAt` is stamped when the provider was asked, so it orders the readings
+ * themselves rather than the order their replies happened to land in. Equal
+ * stamps take the newcomer: the two describe the same moment, so preferring
+ * either is arbitrary.
+ *
+ * This is the same rule `newerReading` applies in the meter when it weighs its
+ * own read against this map. That guard could not save the display on its own,
+ * because both racing writers are on *this* side of it: once the older reading
+ * is in the map, it is simply what the map says.
+ *
+ * Returns whether the map moved, so a caller does not act on a discarded read.
+ */
+function acceptPlanUsage(profileId: ProfileId, usage: PlanUsage): boolean {
+  let accepted = false;
+  useApp.setState((s) => {
+    const held = s.planUsageByProfile[profileId];
+    // Returning nothing leaves the map's identity alone as well as its contents,
+    // so a rejected reading costs no re-render anywhere downstream.
+    if (held !== undefined && usage.fetchedAt < held.fetchedAt) return {};
+    accepted = true;
+    return { planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage } };
+  });
+  return accepted;
+}
+
+/**
  * Subscribe to the main process's plan-usage poll. Returns an unsubscribe.
  *
  * There is no timer here, and that is the point: the poll runs once in main
@@ -5818,10 +5866,10 @@ export function installPlanUsageFeed(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
   return bridge.usagePlan.onChange(({ profileId, usage }) => {
-    useApp.setState((s) => ({
-      planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
-    }));
-    considerHandoff();
+    // Only when the reading actually landed: a cycle discarded for being older
+    // than what is already held has told the ranking nothing new, and a handoff
+    // decided on a superseded number is the thing this ordering protects.
+    if (acceptPlanUsage(profileId, usage)) considerHandoff();
   });
 }
 
@@ -5885,14 +5933,13 @@ function refreshPlanUsageSoon(profileId: ProfileId): void {
       // drop the account out of the ranking entirely. Leave what is there and
       // let the poll try again.
       if (!result.ok || result.value.usage === null) return;
-      const usage = result.value.usage;
       // Written straight in rather than waited for on the push channel: the
       // push is what the *poll* broadcasts, and this read was asked for by this
-      // window. Both land in the same map, and the later write wins — which is
-      // this one, since it is the newer reading.
-      useApp.setState((s) => ({
-        planUsageByProfile: { ...s.planUsageByProfile, [profileId]: usage },
-      }));
+      // window. Both land in the same map, and the newer *reading* wins — by
+      // `fetchedAt`, not by which reply arrived last, because a poll cycle that
+      // started before this read can easily answer after it. See
+      // `acceptPlanUsage`.
+      if (!acceptPlanUsage(profileId, result.value.usage)) return;
       // The moment this matters most. A run just ended, so this reading is the
       // freshest one this account will have for minutes — and an idle pane is
       // exactly where a handoff can be asked for without cutting anything off.
@@ -6407,7 +6454,15 @@ async function seedPlanUsage(profiles: readonly ProfileMetadata[]): Promise<void
 export async function bootstrap(): Promise<void> {
   const { mode, bridge } = resolveBridge();
   const platform = bridge?.platform ?? 'darwin';
-  useApp.setState({ bridgeMode: mode, version: bridge?.version ?? '', platform });
+  useApp.setState({
+    bridgeMode: mode,
+    version: bridge?.version ?? '',
+    platform,
+    // `other` for a bridgeless window rather than a guess: About prints this
+    // beside a link to per-architecture downloads, and a default of `x64` would
+    // be a wrong answer where an absent one is a correct one.
+    arch: bridge?.arch ?? 'other',
+  });
   // Before anything can arrive in a transcript, so the first artifact is judged
   // against the real platform rather than the default. See `pane.ts`.
   setHostPlatform(platform);
@@ -8236,8 +8291,13 @@ export function setForkOnResume(fork: boolean, pane: Pane = focusedPane()): void
  * its text lands in the composer, ready to be retyped or resent.
  *
  * Refusals are silent no-ops rather than banners because every one of them is
- * a state the controls are already hidden in: a live run, a message still
- * pending, a conversation with no session on disk to wind back.
+ * a state the controls are already hidden in: a message still pending, a
+ * conversation with no session on disk to wind back.
+ *
+ * A live run refuses a *rewind* and not a fork, and the asymmetry is the whole
+ * difference between the two moves. Rewinding cuts the conversation the
+ * provider is still writing to; forking does not touch it at all — see
+ * {@link branchLiveConversation}.
  */
 /**
  * The most recent settled user message in a pane's transcript — the palette's
@@ -8262,7 +8322,7 @@ export async function rewindConversationTo(
   pane: Pane = focusedPane(),
 ): Promise<void> {
   const state = paneState(pane);
-  if (isLive(state)) return;
+  if (isLive(state) && !fork) return;
   if (!activeCapabilities(state).rewind) return;
   if (fork && !activeCapabilities(state).forkSession) return;
 
@@ -8283,9 +8343,33 @@ export async function rewindConversationTo(
   if (anchor === null) return;
 
   const after = paneState(pane);
-  if (isLive(after)) return;
+  if (isLive(after) && !fork) return;
   if ((after.resumeSessionId ?? after.run?.sessionId ?? null) !== sessionId) return;
   if (pane.transcript.getItem(itemId)?.kind !== 'user') return;
+
+  /*
+   * A branch off something that is still working goes in a column of its own,
+   * because the column it came from is busy. Anything but `not-live` is
+   * finished with — either the branch is on screen or it was refused with a
+   * banner. `not-live` means the run ended while the history was being read,
+   * which puts this back on the ordinary in-place path below with nothing
+   * moved and nothing cut.
+   */
+  if (isLive(after)) {
+    if ((await branchLiveConversation(pane, sessionId, anchor, item.text)) !== 'not-live') return;
+    /*
+     * The run ended under it, so the three questions asked above have to be
+     * asked again — that await invalidated all of them. The identity check
+     * earns its keep here rather than merely repeating itself: `run.end`
+     * promotes the *ended* session's id into `resumeSessionId`, and when the
+     * run that just ended was itself a fork that id is the branch's, not the
+     * one this cut was resolved against.
+     */
+    const settled = paneState(pane);
+    if (isLive(settled)) return;
+    if ((settled.resumeSessionId ?? settled.run?.sessionId ?? null) !== sessionId) return;
+    if (pane.transcript.getItem(itemId)?.kind !== 'user') return;
+  }
 
   pane.transcript.truncateFrom(itemId);
   pane.transcript.flush();
@@ -8298,6 +8382,111 @@ export async function rewindConversationTo(
     // memory is the cost this control exists to remove.
     draft: item.text,
   });
+}
+
+/**
+ * Branch a conversation that is still working, without stopping it.
+ *
+ * Forking is the one wind-back move that does not touch what it starts from.
+ * The provider reads the stored transcript and writes the branch to a session
+ * of its own — `ClaudeProcess.canServe` refuses to serve a fork on the process
+ * that owns the original for exactly that reason, and sends it down the
+ * fresh-spawn `--resume` path instead, which the CLI serialises on its own
+ * transcript. So there is nothing about an agent being mid-turn that makes
+ * branching from something it said earlier unsafe, and the wait it used to
+ * impose — sit through a twenty-minute turn before you may ask the same
+ * question a different way — was the cost of an assumption the renderer was
+ * making on its own.
+ *
+ * What has to move is the *column*, not the run. The working conversation goes
+ * to the background intact — the same handoff {@link newSession} and
+ * {@link resumeSession} perform, for the same reason: it carries on running,
+ * the sidebar goes on marking it, and clicking its row brings the column back.
+ * What takes its place is the branch: the stored history up to the cut, with
+ * the cut message back in the composer, armed to fork on the next prompt.
+ *
+ * The history is read *before* anything moves, so a read that fails or that
+ * cannot find the anchor leaves the screen exactly as it was.
+ *
+ * Two panes then name one `resumeSessionId`, which is a state the window
+ * already expects from forking — see {@link paneForSession}, which resolves it
+ * to the live copy. It stops being true the moment the branch is sent: the
+ * fork mints a session id of its own.
+ */
+async function branchLiveConversation(
+  source: Pane,
+  sessionId: SessionId,
+  anchor: string,
+  draft: string,
+): Promise<'branched' | 'not-live' | 'refused'> {
+  const { bridge } = resolveBridge();
+  if (!bridge) return 'refused';
+  const state = paneState(source);
+  const profileId = state.activeProfileId;
+  if (profileId === null) return 'refused';
+
+  const res = await call(() =>
+    bridge.sessions.messages({
+      profileId,
+      sessionId,
+      // The borrowed id history is always replayed under — see
+      // `loadSessionHistory`. These events are read and drawn, never routed.
+      runId: `history:${sessionId}` as RunId,
+      cwd: state.cwd,
+    }),
+  );
+  if (!res.ok) {
+    pushBanner('warn', 'Could not read the conversation to branch from', res.error.message);
+    return 'refused';
+  }
+
+  /*
+   * Everything before the cut, and not one event more.
+   *
+   * Applying the whole history and truncating afterwards would land in the
+   * same place, but this way the turns past the branch point are never in the
+   * model at all — there is no frame in which the new column could show a
+   * conversation the branch does not have, and no cut for a late flush to
+   * race.
+   */
+  const cut = res.value.events.findIndex(
+    (event) =>
+      event.type === 'text.complete' && event.role === 'user' && event.messageId === anchor,
+  );
+  if (cut < 0) {
+    pushBanner(
+      'warn',
+      'That message is not in the stored conversation yet',
+      'The provider may still be writing the turn it belongs to. Try again in a moment.',
+    );
+    return 'refused';
+  }
+
+  // Re-read across the round-trip, as every path here does: the run can end and
+  // the column can be pointed somewhere else while the history is in flight.
+  const now = paneState(source);
+  if (!isLive(now)) return 'not-live';
+  if ((now.resumeSessionId ?? now.run?.sessionId ?? null) !== sessionId) return 'refused';
+
+  // Past here nothing can fail, which is what lets the column move at all.
+  const target = handOffToBlank(source);
+  for (const event of res.value.events.slice(0, cut)) target.transcript.apply(event);
+  target.transcript.flush();
+  // Parks whatever the handoff carried across before the branch's own text
+  // takes the field — the same ordering `resumeSession` needs. See `swapDraft`.
+  swapDraft(target, sessionId);
+  setPaneState(target, {
+    resumeSessionId: sessionId,
+    rewindToMessageId: anchor,
+    forkOnResume: true,
+    draft,
+  });
+  // Branching is a deliberate act on one column, so that column takes the
+  // focus — the same rule `resumeSession` follows, and what keeps ⌘K and the
+  // run inspector pointed at the branch the user just made rather than at the
+  // conversation it came from.
+  useApp.setState({ focusedPaneId: target.id });
+  return 'branched';
 }
 
 /**
@@ -11472,23 +11661,36 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
 }
 
 function applyAgentEvent(event: AgentEvent): void {
-  // The gate. See `appliedSeqs`: at or below the recorded seq means this event
-  // has already been drawn, whichever door it came through this time.
-  const tracked = appliedSeqs.get(event.runId);
-  if (tracked !== undefined && event.seq <= tracked.seq) return;
   /*
    * The registry's retained prompt is the one event whose `seq` is borrowed,
    * not owned: `#recordPrompt` deliberately reuses the run's current position
-   * rather than consuming a slot from the adapter's dense numbering. Recording
-   * that borrowed value here would spend the slot on the prompt's behalf — on
-   * a fresh replay the prompt sits at seq 0 *ahead of* `session.started` at
-   * seq 0, and a gate that remembered the prompt swallowed the run's own
-   * opening: the healed pane lost its sessionId, model, and tool list.
-   * The prompt itself needs no gate entry; its idempotence is identity-based —
-   * see `TranscriptModel.completeUserText`.
+   * rather than consuming a slot from the adapter's dense numbering. That makes
+   * it the one event the gate below cannot reason about, in *both* directions.
+   *
+   * It must not *spend* a slot: on a fresh replay the opening prompt sits at
+   * seq 0 ahead of `session.started` at seq 0, and a gate that remembered the
+   * prompt swallowed the run's own opening — the healed pane lost its
+   * sessionId, model, and tool list.
+   *
+   * And it must not be *stopped* by one, which is the half that was missing.
+   * A steer borrows the position the run had already reached, so its seq is by
+   * construction one the window has drawn: `40 <= 40` read as "already seen"
+   * and every mid-run message the user typed vanished on ⌘R, while the opening
+   * prompt survived only because it borrows 0 against a gate `attachRun` has
+   * just cleared ("messages sent during runs keep disappearing on refresh",
+   * 2026-08-27).
+   *
+   * Exempting it is safe because the prompt never needed the gate: its
+   * idempotence is identity-based, on the `messageId` the renderer claimed
+   * when it drew the row optimistically — see `TranscriptModel.completeUserText`.
    */
   const borrowedSeq =
     event.type === 'text.complete' && event.role === 'user' && event.replay === true;
+
+  // The gate. See `appliedSeqs`: at or below the recorded seq means this event
+  // has already been drawn, whichever door it came through this time.
+  const tracked = appliedSeqs.get(event.runId);
+  if (!borrowedSeq && tracked !== undefined && event.seq <= tracked.seq) return;
 
   const pane = paneForRun(event.runId) ?? claimContinuation(event);
   if (!pane) return;

@@ -95,13 +95,23 @@ jobs:
             build-args: --win --x64
             feed-rename: ''
             app-binary: apps/desktop/release/win-unpacked/Artemis.exe
-          - name: arch-linux-x64
-            # The package format is Arch-specific, while the bundled native
-            # dependencies are Linux x64 binaries. Building on a Linux x64
-            # runner therefore gives both the pacman package and the native
-            # Agent SDK binary the architecture they will run on.
+          - name: linux-x64
+            # Every Linux target `electron-builder.yml` declares, which for a
+            # long time was not what this job built: the config asked for
+            # AppImage, deb and pacman and the argument here said `pacman`, so
+            # two of the three were declared, never built, and never published.
+            # Anyone not on Arch was told to build from source for no reason.
+            #
+            # No target list here on purpose. `--linux` builds what the config
+            # declares, so the two cannot drift apart again — adding a format is
+            # an edit to the config alone.
+            #
+            # x64 on a Linux x64 runner because the bundled native dependencies
+            # are the architecture they are built on: the Agent SDK ships
+            # per-platform binaries as optional dependencies and pnpm installs
+            # only the host's.
             runs-on: ubuntu-latest
-            build-args: --linux pacman --x64
+            build-args: --linux --x64
             feed-rename: ''
             app-binary: apps/desktop/release/linux-unpacked/artemis
     name: build (${{ matrix.name }})
@@ -118,6 +128,12 @@ jobs:
       # ubuntu-latest does not ship it; libarchive-tools is the Ubuntu package
       # that provides it. Install it only for the Linux matrix entry, before
       # packaging has spent time assembling an artifact it cannot finish.
+      #
+      # The other two Linux formats need nothing installed here: electron-builder
+      # fetches fpm for the deb itself, and reads the maintainer and homepage it
+      # requires from `apps/desktop/package.json`'s `author` and `homepage`
+      # (fpm fails the build outright without a maintainer). The AppImage
+      # runtime is likewise downloaded rather than packaged.
       - if: runner.os == 'Linux'
         name: Install Arch package tools
         run: |
@@ -142,22 +158,57 @@ jobs:
           else
             pnpm exec tsx scripts/verify-package.ts "${{ matrix.app-binary }}"
           fi
+      # The check above boots `linux-unpacked`, the directory electron-builder
+      # assembled — which proves the app and says nothing about what the
+      # packages made of it. This boots what actually ships.
+      #
+      # The AppImage is the format worth spending a minute on: it is the only
+      # one of the three that is its own executable, and its payload has been
+      # through a squashfs round trip that the deb and the pacman package have
+      # not. That round trip is where a file mode goes missing, which is the
+      # exact class of defect `verify-package.ts` exists for — Artemis 0.6.1
+      # booted perfectly and could not open a terminal.
+      #
+      # `--appimage-extract` rather than running the AppImage in place: the
+      # runner has no FUSE for one to mount itself with, and the extracted tree
+      # is laid out exactly as `verify-package.ts` expects (a binary with
+      # `resources/` beside it), so the same script and the same flags do the
+      # job with nothing special-cased.
+      - if: runner.os == 'Linux'
+        name: The AppImage ships a working app
+        shell: bash
+        working-directory: apps/desktop/release
+        run: |
+          appimage="$(ls ./*.AppImage)"
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract >/dev/null
+          cd "$GITHUB_WORKSPACE"
+          xvfb-run -a pnpm exec tsx scripts/verify-package.ts \
+            apps/desktop/release/squashfs-root/artemis --no-sandbox
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           if-no-files-found: error
-          # Only what someone or something consumes: dmg, setup.exe and the
-          # Arch pacman package for people, zip for the mac updater's swap,
-          # latest-mac-*.yml as its feed. Blockmaps are electron-updater's
-          # differential-download index — our updater downloads whole archives
-          # and never reads them — and the Windows/Linux feeds have no updater
-          # consuming them yet.
+          # Only what someone or something consumes: dmg for people on macOS,
+          # AppImage, deb and pacman for people on Linux, zip for the mac
+          # updater's swap and setup.exe for the Windows one, and the feed each
+          # updater reads — latest-mac-*.yml renamed above, latest.yml straight
+          # from the Windows build.
+          #
+          # Blockmaps are electron-updater's differential-download index, which
+          # our updater never reads. `latest-linux.yml` is left behind for the
+          # same reason it always was: Artemis installs on Linux through a
+          # package manager, so there is no in-place update to feed and
+          # publishing a feed nothing reads would only invite one.
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
             apps/desktop/release/*.pacman
             apps/desktop/release/latest-mac-*.yml
+            apps/desktop/release/latest.yml
 
   publish:
     needs: build

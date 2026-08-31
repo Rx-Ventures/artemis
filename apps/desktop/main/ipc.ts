@@ -170,6 +170,7 @@ import {
   validateMemoryBanksSetMasterEnabled,
   validateMemoryBanksStatus,
   validateUsagePlan,
+  validateUpdatesCheck,
   validateUpdatesDismiss,
   validateUpdatesSetChannel,
   validateUpdatesInstall,
@@ -1168,15 +1169,36 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     /* ---------------------------------------------------------------- */
 
     /**
-     * Three channels, one shape of answer: the updater's state now, so the
-     * banner never assumes a command landed — the same contract as the window
-     * channels. Note what the requests *cannot* say: no URL, no path, no
-     * version to install. The renderer can consent to what main found, and
+     * One shape of answer for all but one of these: the updater's state now, so
+     * the banner never assumes a command landed — the same contract as the
+     * window channels. Note what the requests *cannot* say: no URL, no path, no
+     * version to install. The renderer can ask, consent to what main found, and
      * silence one version, and that is all.
      */
     [IPC.updatesState]: {
       validate: validateUpdatesState,
       handle: async () => ({ state: updater.state() }),
+    },
+
+    /**
+     * The one update channel that answers with more than a state.
+     *
+     * `checkNow` swallows every failure into an outcome rather than throwing —
+     * see `CheckOutcome` in `updater.ts` — so there is nothing to catch here and
+     * no error for the dispatcher to scrub. The outcome is flattened to its
+     * `kind`: the only payload the union carries is the offered version, and
+     * that is already on the state this replies with, so sending both would be
+     * two copies of one fact with no rule for which wins.
+     *
+     * The state is read *after* the check rather than taken from the outcome,
+     * because a check that offers something has already written it.
+     */
+    [IPC.updatesCheck]: {
+      validate: validateUpdatesCheck,
+      handle: async () => {
+        const outcome = await updater.checkNow();
+        return { outcome: outcome.kind, state: updater.state() };
+      },
     },
 
     [IPC.updatesInstall]: {

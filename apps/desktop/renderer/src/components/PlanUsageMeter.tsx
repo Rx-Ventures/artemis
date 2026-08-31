@@ -514,7 +514,21 @@ function usePlanUsage(
 
       if (follow && follow() !== profileId) return false;
       if (res.ok && res.value.usage !== null) {
-        setHeld({ of: profileId, usage: res.value.usage });
+        const fresh = res.value.usage;
+        /*
+          Never backwards, for the same reason `newerReading` exists a few lines
+          up. The two modes race: opening the popover fires `cached` and then
+          `refresh`, and a card that misses the cache escalates to a refresh
+          while the cached reply may still be in flight. A `refresh` spawns a
+          CLI and takes a second or two, so the *older* cached reading can be
+          the one that lands last — and unguarded it would overwrite the fresh
+          figure it was only ever meant to precede.
+        */
+        setHeld((prev) =>
+          prev !== null && prev.of === profileId && fresh.fetchedAt < prev.usage.fetchedAt
+            ? prev
+            : { of: profileId, usage: fresh },
+        );
         return true;
       }
       return false;
@@ -529,6 +543,52 @@ function usePlanUsage(
   return { usage, refreshing, load };
 }
 
+/**
+ * How often a visible reading re-reads the wall clock.
+ *
+ * The labels it feeds are minute-granular — "in 2h 45m", "5m ago" — with one
+ * 45-second boundary in {@link ageHint}, so a quarter of a minute is fine enough
+ * that neither is ever visibly wrong and coarse enough that a popover left open
+ * is not re-rendering every second to produce identical text.
+ */
+const CLOCK_TICK_MS = 15_000;
+
+/**
+ * A clock that stays honest for as long as it is being read.
+ *
+ * `Date.now()` taken during render is only current if something else happens to
+ * re-render, and nothing here reliably does: a reading arrives every couple of
+ * minutes at most, the poll skips cycles when no window is looking, and a cycle
+ * that pushes an unchanged payload does not even change the identity of the
+ * entry this subscribes to. So `now` froze at whatever the clock said when the
+ * component last rendered and drifted further from the truth the longer it went
+ * untouched — "resets 3:10 PM · in 4h 18m" at twenty-five past twelve, where the
+ * two halves are computed from the same `resetsAt` and cannot both be right.
+ *
+ * The exact time is the trustworthy half of that pairing: `resetsAt` is an
+ * absolute instant, so it survives any amount of staleness. It is only the
+ * countdown — and the "5m ago" beside it — that need a live clock underneath.
+ *
+ * `active` stops the timer when nothing is reading it, which for the status bar
+ * is whenever its popover is shut. That is the same bargain `useTicker` strikes
+ * in `TasksPane`, and it matters more here: this component sits in a row that is
+ * on screen for the whole session.
+ */
+function useClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    // Immediately, not on the first interval: reopening the popover must not
+    // show a quarter-minute-old countdown while it waits for the next tick.
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  return now;
+}
+
 export function PlanUsageMeter(): ReactElement | null {
   const pane = usePaneRef();
   const profileId = usePane((s) => s.activeProfileId);
@@ -537,6 +597,9 @@ export function PlanUsageMeter(): ReactElement | null {
 
   const [open, setOpen] = useState(false);
   const { usage, refreshing, load } = usePlanUsage(profileId, () => paneState(pane).activeProfileId);
+  // Only the popover's body reads this — the rings show percentages, which have
+  // no clock in them — so the timer runs only while the popover is open.
+  const now = useClock(open);
 
   // Paint from cache as soon as the trigger exists, so the rings can already
   // carry a colour before they are ever clicked.
@@ -568,7 +631,6 @@ export function PlanUsageMeter(): ReactElement | null {
   }
 
   const slots = meterSlots(usage);
-  const now = Date.now();
 
   /*
     Three rings, not one bar.
@@ -667,7 +729,15 @@ export function ProfilePlanUsage({
   readonly providerLabel: string;
 }): ReactElement | null {
   const { usage, refreshing, load } = usePlanUsage(profileId);
-  const [now, setNow] = useState(() => Date.now());
+  /*
+    Always ticking, unlike the status bar's: this card has no open/shut state to
+    gate on — its countdown is on screen for as long as the profiles page is —
+    and it was the worse of the two offenders. `now` was captured once at mount
+    and advanced only when the refresh button was pressed, so a settings pane
+    left open drifted by exactly however long it had been open, with no upper
+    bound and nothing on screen to suggest the number had stopped moving.
+  */
+  const now = useClock(true);
 
   /*
    * Cached first, then a real fetch if that came back with nothing.
@@ -709,13 +779,9 @@ export function ProfilePlanUsage({
       usage={usage}
       refreshing={refreshing}
       now={now}
-      onRefresh={() => {
-        // Stamp the clock at the moment of the request, so "just now" is
-        // measured against a fresh read rather than against whenever this card
-        // first mounted.
-        setNow(Date.now());
-        void load('refresh');
-      }}
+      // No clock to stamp here any more: `useClock` keeps `now` current on its
+      // own, which is what the stamp on this button was standing in for.
+      onRefresh={() => void load('refresh')}
     />
   );
 }

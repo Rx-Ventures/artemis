@@ -1355,7 +1355,23 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         cwd: userDataDir,
       });
 
-      planUsageCache.set(query.profileId, usage);
+      /*
+        Never let the cache go backwards.
+
+        Two reads of one account overlap routinely — the poll's sweep and the
+        targeted read a run's end asks for — and each takes as long as a CLI
+        spawn, so the one that started first can finish last. Storing whichever
+        answered most recently would leave `cachedPlanUsage` describing an
+        earlier moment than the reading it replaced, which is then what every
+        newly-opened window seeds itself from.
+
+        The caller still gets what *this* read learned; it is only the shared
+        cache that insists on moving forward.
+      */
+      const previous = planUsageCache.get(query.profileId);
+      if (previous === undefined || usage.fetchedAt >= previous.fetchedAt) {
+        planUsageCache.set(query.profileId, usage);
+      }
       return usage;
     },
 

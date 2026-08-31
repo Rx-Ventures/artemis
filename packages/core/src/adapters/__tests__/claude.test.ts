@@ -2958,3 +2958,176 @@ describe('a steer the turn never folded in', () => {
     await disposing;
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* A steer that was still being staged when the turn ended                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The window between `send`'s guard and `send`'s push.
+ *
+ * `send` refuses a run that is already down, then stages the message's files —
+ * real filesystem work — and only *then* pushes and counts the steer. Every
+ * fact the pump uses to decide whether to keep the process is written on the
+ * far side of that await, so a turn that ends while a message is being staged
+ * finds nothing holding it: the pump leaves, the `finally` closes the prompt
+ * queue, and the push that lands a moment later is a documented no-op on a
+ * closed queue. The message reported success, rendered as sent, and reached
+ * nobody — and the transport it was addressed to is gone, so the conversation
+ * ends instead of continuing on it.
+ *
+ * That is "the interrupt completely stops the session instead of continuing on
+ * reading the message" (2026-08-27): interrupting is exactly when a user types
+ * the correction, so it is the ending most likely to land inside this window.
+ *
+ * What these pin is both halves. The process is held open across an in-flight
+ * send, so the ordinary case delivers and the queued turn runs. And when the
+ * hold has expired anyway, the send is *refused* with the reason the renderer
+ * recovers on, rather than reporting a success it did not achieve.
+ */
+describe('a steer still being staged when the turn ended', () => {
+  /** A file, so `#stage` does real I/O and the window is a real one. */
+  const NOTE = { kind: 'file', id: 'file-1', name: 'note.md', data: 'aGVsbG8=' } as const;
+
+  const INTERRUPTED_RESULT = {
+    ...(RESULT_MESSAGE as unknown as Record<string, unknown>),
+    subtype: 'error_during_execution',
+  } as unknown as SDKMessage;
+
+  it('holds the process while the send is in flight, and delivers it', async () => {
+    const adopted: { run: Run }[] = [];
+    let n = 0;
+    const adapter = createClaudeAdapter({
+      onContinuation: (run) => adopted.push({ run }),
+      newRunId: () => `run-s${String(++n)}` as RunId,
+    });
+    const { harness } = installQuery();
+    const run = await adapter.createRun({ ...BASE_INPUT, cwd: REAL_CWD });
+    const { fake, prompt } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.interrupt();
+
+    // The user types the correction as the interrupt lands: `send` is suspended
+    // in `#stage` when the interrupted turn's `result` reaches the pump.
+    const sending = run.send('do the tests instead', [NOTE]);
+    fake.messages.push(INTERRUPTED_RESULT);
+    await drain(run.events);
+
+    await expect(sending).resolves.toMatchObject({ deliveredImmediately: false });
+    // The transport is the thing the message needs; it must still be there.
+    expect(fake.closed).toBe(false);
+
+    // And the message really reached the CLI's queue rather than a closed one.
+    // A text-only turn's content is a plain string — see `#userMessage`.
+    const messages: string[] = [];
+    const iterator = prompt[Symbol.asyncIterator]();
+    for (let i = 0; i < 2; i += 1) {
+      const next = await iterator.next();
+      const content = (next.value as { message: { content: unknown } } | undefined)?.message.content;
+      messages.push(typeof content === 'string' ? content : JSON.stringify(content));
+    }
+    expect(messages[0]).toBe('refactor the parser');
+    expect(messages[1]).toContain('do the tests instead');
+
+    // The CLI runs it as the queued turn, and it opens as a continuation.
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+  });
+
+  it('refuses rather than reporting a success it did not achieve', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun({ ...BASE_INPUT, cwd: REAL_CWD });
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await drain(run.events);
+    // The grace let go; the transport is down and the queue with it.
+    await vi.waitFor(() => expect(fake.closed).toBe(true));
+
+    // `details.reason` is what `isEndedRunError` branches on — it is the
+    // difference between the words being carried into a fresh run and being
+    // stranded under a red banner.
+    await expect(run.send('too late', [NOTE])).rejects.toMatchObject({
+      agentError: {
+        code: 'invalid_request',
+        details: { reason: 'run_ended', runId: 'run-1' },
+      },
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The interrupt receipt                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the provider itself says survives an interrupt.
+ *
+ * `interrupt()` comes back with `still_queued` — the uuids of messages the CLI
+ * will run anyway, taken as a snapshot at the instant of the abort. It is a
+ * stronger fact than the adapter's own steer count, which is a local guess: it
+ * is zeroed whenever a turn opens, it cannot see a message the CLI enqueued for
+ * itself (a cron trigger, an auto-resume continuation), and a fold leaves it
+ * counting a steer that has already been read.
+ *
+ * So the receipt is what the hold is armed from when the two disagree. The
+ * alternative is the transport closing over a turn the provider has promised
+ * to run — the session ending on the one action whose entire purpose is to
+ * make it read something.
+ */
+describe('an interrupt that reports queued messages', () => {
+  it('keeps the process for a turn the count did not know about', async () => {
+    const adopted: { run: Run }[] = [];
+    let n = 0;
+    const adapter = createClaudeAdapter({
+      onContinuation: (run) => adopted.push({ run }),
+      newRunId: () => `run-r${String(++n)}` as RunId,
+    });
+    const { harness } = installQuery();
+    const run = await adapter.createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    // Nothing this adapter sent — the CLI is holding a message of its own.
+    fake.interruptImpl = () => Promise.resolve({ still_queued: ['q-1'] });
+    await expect(run.interrupt()).resolves.toMatchObject({ stillQueued: ['q-1'] });
+
+    fake.messages.push({
+      ...(RESULT_MESSAGE as unknown as Record<string, unknown>),
+      subtype: 'error_during_execution',
+    } as unknown as SDKMessage);
+    await drain(run.events);
+
+    // The old exit: the transport closed over the promised turn.
+    expect(fake.closed).toBe(false);
+
+    fake.messages.push(INIT_MESSAGE);
+    fake.messages.push(RESULT_MESSAGE);
+    await vi.waitFor(() => expect(adopted).toHaveLength(1));
+  });
+
+  it('lets go on the grace when an empty receipt means nothing is coming', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { harness } = installQuery();
+      const run = await createClaudeAdapter().createRun(BASE_INPUT);
+      const { fake } = harness();
+
+      fake.messages.push(INIT_MESSAGE);
+      await run.interrupt();
+      fake.messages.push({
+        ...(RESULT_MESSAGE as unknown as Record<string, unknown>),
+        subtype: 'error_during_execution',
+      } as unknown as SDKMessage);
+      await drain(run.events);
+
+      // An interrupt with nothing queued is a plain stop: no hold to expire.
+      expect(fake.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

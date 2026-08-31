@@ -22,6 +22,7 @@ import {
   validateTerminalResize,
   validateTerminalStart,
   validateTerminalWrite,
+  validateUpdatesCheck,
   validateWindowRequest,
 } from './validate.js';
 
@@ -771,6 +772,39 @@ describe('validateWindowRequest', () => {
 
   it('treats a missing payload as empty, like every other channel', () => {
     expect(validateWindowRequest(undefined)).toEqual({});
+  });
+});
+
+/**
+ * The update check is the one update channel that reaches the network, so what
+ * it must never accept is a way to say *where*.
+ *
+ * There is no such field today, and these tests are what keeps that true: a
+ * later `feedUrl` or `tag` added to the request type would have to be added
+ * here too, which is exactly the moment somebody should have to argue for
+ * letting a renderer point the privileged process at a URL of its choosing.
+ */
+describe('validateUpdatesCheck', () => {
+  it('accepts an empty request', () => {
+    expect(validateUpdatesCheck({})).toEqual({});
+  });
+
+  it('drops every field, including one that would aim the check somewhere', () => {
+    const smuggled = validateUpdatesCheck({
+      feedUrl: 'https://example.invalid/latest-mac.yml',
+      tag: 'v9.9.9',
+      channel: 'beta',
+      manual: true,
+    });
+    expect(smuggled).toEqual({});
+  });
+
+  it('rejects a payload that is not an object', () => {
+    expect(() => validateUpdatesCheck('check')).toThrow(ValidationError);
+  });
+
+  it('treats a missing payload as empty, like every other channel', () => {
+    expect(validateUpdatesCheck(undefined)).toEqual({});
   });
 });
 

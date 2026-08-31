@@ -132,6 +132,7 @@ import {
   type AuthSignOutRequest,
   type AuthStatusRequest,
   type UsagePlanRequest,
+  type UpdatesCheckRequest,
   type UpdatesDismissRequest,
   type SessionsTagRequest,
   type UpdatesSetChannelRequest,
@@ -1886,6 +1887,21 @@ export function validateUpdatesInstall(raw: unknown): UpdatesInstallRequest {
 
 /** @see validateUpdatesState */
 export function validateUpdatesRestart(raw: unknown): UpdatesRestartRequest {
+  requireRequest(raw);
+  return {};
+}
+
+/**
+ * Checking is parameterless for the same reason the rest are, and the emptiness
+ * is doing more work here than elsewhere: a check is the one update command that
+ * reaches the network, and the only thing it could plausibly be asked to carry
+ * is a feed to read. It carries nothing, so a renderer cannot aim one anywhere —
+ * the channel and the URLs are settled in `updater.ts` and nothing in this
+ * payload can move them.
+ *
+ * @see validateUpdatesState
+ */
+export function validateUpdatesCheck(raw: unknown): UpdatesCheckRequest {
   requireRequest(raw);
   return {};
 }

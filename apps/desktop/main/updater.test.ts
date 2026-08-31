@@ -47,8 +47,16 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { createUpdater, feedToInstall, fetchAnonymously, fetchAsset, sha512Of, throttleProgress } =
-  await import('./updater');
+const {
+  artifactExtension,
+  createUpdater,
+  feedName,
+  feedToInstall,
+  fetchAnonymously,
+  fetchAsset,
+  sha512Of,
+  throttleProgress,
+} = await import('./updater');
 
 const servers: Server[] = [];
 
@@ -175,10 +183,47 @@ describe('dismiss', () => {
  * card had been holding since it appeared.
  */
 
+/*
+ * Which file this machine asks a release for.
+ *
+ * Pinned because the answer is a contract with CI rather than with anything in
+ * this repository: `release.yml` renames electron-builder's `latest-mac.yml`
+ * per architecture and uploads the Windows build's `latest.yml` untouched, and
+ * a rename on either side that these names do not follow is an updater that
+ * 404s on every check with nothing in the app to show for it.
+ */
+describe('the feed this platform reads', () => {
+  const onPlatform = <T,>(platform: string, arch: string, read: () => T): T => {
+    const platformWas = Object.getOwnPropertyDescriptor(process, 'platform');
+    const archWas = Object.getOwnPropertyDescriptor(process, 'arch');
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    Object.defineProperty(process, 'arch', { value: arch, configurable: true });
+    try {
+      return read();
+    } finally {
+      if (platformWas) Object.defineProperty(process, 'platform', platformWas);
+      if (archWas) Object.defineProperty(process, 'arch', archWas);
+    }
+  };
+
+  it('asks for one feed per mac architecture, and the zip they name', () => {
+    expect(onPlatform('darwin', 'arm64', feedName)).toBe('latest-mac-arm64.yml');
+    expect(onPlatform('darwin', 'x64', feedName)).toBe('latest-mac-x64.yml');
+    expect(onPlatform('darwin', 'arm64', artifactExtension)).toBe('.zip');
+  });
+
+  it("asks Windows for electron-builder's own latest.yml, and the setup exe it names", () => {
+    // Not renamed per architecture the way the mac feeds are: only one Windows
+    // build is published, so `latest.yml` arrives from the builder untouched.
+    expect(onPlatform('win32', 'x64', feedName)).toBe('latest.yml');
+    expect(onPlatform('win32', 'x64', artifactExtension)).toBe('.exe');
+  });
+});
+
 describe('feedToInstall', () => {
   const feed = (version: string): UpdateFeed => ({
     version,
-    zipPath: `Artemis-${version}-arm64-mac.zip`,
+    artifactPath: `Artemis-${version}-arm64-mac.zip`,
     sha512: `sha-${version}`,
   });
 

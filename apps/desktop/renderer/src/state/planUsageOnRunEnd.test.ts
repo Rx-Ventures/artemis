@@ -28,6 +28,7 @@ import { NO_CAPABILITIES } from '@rx-artemis/protocol';
 import {
   focusedPane,
   handleAgentEvent,
+  installPlanUsageFeed,
   resetPlanUsageSoon,
   resetRunStreamState,
   useApp,
@@ -36,6 +37,8 @@ import { paneState, setPaneState } from './pane';
 
 /** Every profile the app asked to have re-read, in order. */
 let refreshed: string[] = [];
+/** The poll's push handler, once `installPlanUsageFeed` has subscribed. */
+let pushToFeed: ((push: { profileId: string; usage: unknown }) => void) | null = null;
 /** What the stub answers with. `null` models a read that learned nothing. */
 let refreshAnswer: unknown = {
   available: true,
@@ -59,7 +62,12 @@ let refreshAnswer: unknown = {
       return { ok: true, value: { usage: refreshAnswer } };
     },
     cached: async () => ({ ok: true, value: { usage: null } }),
-    onChange: () => () => undefined,
+    onChange: (fn: (push: { profileId: string; usage: unknown }) => void) => {
+      pushToFeed = fn;
+      return () => {
+        pushToFeed = null;
+      };
+    },
   },
 };
 
@@ -223,6 +231,111 @@ describe('when a run ends', () => {
         refreshed.push(profileId);
         return { ok: true, value: { usage: refreshAnswer } };
       };
+  });
+});
+
+describe('when two readings race', () => {
+  /*
+    The poll's sweep and this settle read both spawn a CLI, and neither knows
+    the other is in flight. A sweep that started first can therefore answer
+    last, and until this was ordered the map simply took whichever reply landed
+    latest — so a five-hour window that only ever fills would climb to 77% and
+    then drop back to 67% with nothing having reset.
+
+    `fetchedAt` is stamped when the provider was asked, so it orders the
+    readings rather than their replies. These drive the two writers directly:
+    the settle read through `run.end`, the poll's through the same `setState`
+    path `installPlanUsageFeed` uses.
+  */
+
+  /** A reading of the 5-hour window, stamped so the two can be ordered. */
+  const reading = (utilization: number, fetchedAt: number) =>
+    ({
+      available: true,
+      subscriptionType: 'max',
+      fetchedAt,
+      windows: [{ id: 'five_hour', label: '5 hours', utilization, resetsAt: null }],
+    }) as never;
+
+  /** The poll's cycle landing, through the real subscription. */
+  const poll = (profileId: string, utilization: number, fetchedAt: number): void => {
+    if (pushToFeed === null) throw new Error('the plan usage feed is not installed');
+    pushToFeed({ profileId, usage: reading(utilization, fetchedAt) });
+  };
+
+  const shown = (profileId = 'p1') =>
+    useApp.getState().planUsageByProfile[profileId]?.windows[0]?.utilization;
+
+  let uninstall: () => void = () => undefined;
+
+  beforeEach(() => {
+    uninstall = installPlanUsageFeed();
+  });
+
+  afterEach(() => {
+    uninstall();
+  });
+
+  it('keeps the newer one when the older reply lands last', async () => {
+    // The reported symptom. The settle read describes 12:02 and answers first;
+    // the sweep describes 12:00 and answers after it. 67% is an earlier account
+    // of an account that has only filled since, and showing it is the flicker.
+    refreshAnswer = reading(77, 2_000);
+    setPaneState(pane(), { run: live('r1', 'p1') });
+    handleAgentEvent(ended('r1'));
+    await settle();
+    expect(shown()).toBe(77);
+
+    poll('p1', 67, 1_000);
+
+    expect(shown()).toBe(77);
+  });
+
+  it('takes the newer one when it is the poll that is ahead', async () => {
+    // The same rule in the other direction — an ordering, not a preference for
+    // whichever writer happens to be the settle read.
+    refreshAnswer = reading(50, 1_000);
+    setPaneState(pane(), { run: live('r1', 'p1') });
+    handleAgentEvent(ended('r1'));
+    await settle();
+    expect(shown()).toBe(50);
+
+    poll('p1', 58, 3_000);
+
+    expect(shown()).toBe(58);
+  });
+
+  it('discards a settle read that the poll has already overtaken', async () => {
+    // And the mirror of the first case: the guard belongs to the map, not to
+    // one of the two writers, so the settle read is held to it too.
+    poll('p1', 64, 5_000);
+    refreshAnswer = reading(33, 2_000);
+
+    setPaneState(pane(), { run: live('r1', 'p1') });
+    handleAgentEvent(ended('r1'));
+    await settle();
+
+    expect(refreshed).toEqual(['p1']);
+    expect(shown()).toBe(64);
+  });
+
+  it('takes a reading for an account it has never read', () => {
+    // Absence must not read as "newer than this", or the first cycle for an
+    // account would be the one discarded.
+    poll('p9', 31, 1_000);
+
+    expect(shown('p9')).toBe(31);
+  });
+
+  it('leaves the map untouched when it discards one', () => {
+    // Not merely equal — the same object. A rejected reading that rebuilt the
+    // map would re-render every ring in the app to show identical numbers.
+    poll('p1', 80, 5_000);
+    const before = useApp.getState().planUsageByProfile;
+
+    poll('p1', 12, 4_000);
+
+    expect(useApp.getState().planUsageByProfile).toBe(before);
   });
 });
 

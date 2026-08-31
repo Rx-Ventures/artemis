@@ -40,6 +40,32 @@
 export type UpdateStep = 'checking' | 'downloading' | 'verifying' | 'unpacking' | 'installing';
 
 /**
+ * The repository releases are published to, and the page a person goes to for a
+ * build they must fetch by hand.
+ *
+ * Shared rather than repeated because both processes need it now and they have
+ * already drifted once. The updater builds its download URLs from the slug and
+ * puts the page on an `error` state as the way out; the About pane offers the
+ * page standing — to a Linux user it is not a fallback but the only route there
+ * is — and the bug reporter files against the same repository. Three literals,
+ * one fact.
+ *
+ * The drift is not theoretical: the repository moved from the Rx-Ventures org
+ * to seth-torrence on 2026-08-30, the copies moved at different times, and the
+ * dev mock never moved at all — it was still handing the browser preview the
+ * pre-move URL when this constant replaced it.
+ *
+ * One copy stays out of reach and has to be kept in step by hand: the `publish`
+ * block in `apps/desktop/electron-builder.yml`, which has no runtime accessor,
+ * the same situation as `appId`. That block is what gets baked into each build,
+ * so it is the authority; this constant is what the app says about it.
+ */
+export const ARTEMIS_REPO = 'seth-torrence/artemis';
+
+/** @see ARTEMIS_REPO */
+export const ARTEMIS_RELEASES_URL = `https://github.com/${ARTEMIS_REPO}/releases`;
+
+/**
  * One reading of an install in flight.
  *
  * A snapshot, not a delta: it rides {@link UpdateState}, which is pushed whole

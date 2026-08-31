@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react';
 
-import type { ArtemisBridge, UpdateState } from '@rx-artemis/protocol';
+import type { ArtemisBridge, UpdateCheckOutcome, UpdateState } from '@rx-artemis/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
 
@@ -59,6 +59,27 @@ export function useUpdateState(): UpdateState {
   }, []);
 
   return state;
+}
+
+/**
+ * Ask for a check and report what it found.
+ *
+ * The one updater call that returns something, and the only one written as a
+ * promise, because its answer is the surface rather than a side effect of it:
+ * three of the outcomes leave the pushed state exactly as it was, so a caller
+ * that ignored this would be unable to tell "up to date" from "the feed could
+ * not be reached" from "nothing has happened yet".
+ *
+ * `null` for a window with no bridge, which is the same "there was no answer"
+ * the other helpers express by doing nothing, and for a call that failed in
+ * transport — an outcome invented here would be a claim about the network that
+ * nothing checked.
+ */
+export async function checkForUpdates(): Promise<UpdateCheckOutcome | null> {
+  const updates = updaterChannels();
+  if (updates === null) return null;
+  const result = await call(() => updates.check({}));
+  return result.ok ? result.value.outcome : null;
 }
 
 /** Download and install the offered version. */

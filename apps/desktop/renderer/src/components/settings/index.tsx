@@ -23,4 +23,5 @@ export { ServerSection } from './ServerSection';
 export { RemoteSection } from './RemoteSection';
 export { RoutinesSection } from './RoutinesSection';
 export { AdvancedSection } from './AdvancedSection';
+export { AboutSection } from './AboutSection';
 export { ProfilesSection } from '../ProfilesScreen';

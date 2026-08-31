@@ -108,6 +108,7 @@ import {
   type MenuOpenSettings,
   type UpdateState,
   type UpdatesSetChannelRequest,
+  type UpdatesCheckRequest,
   type UpdatesDismissRequest,
   type UpdatesInstallRequest,
   type UpdatesRestartRequest,
@@ -588,6 +589,20 @@ function resolvePlatform(): ArtemisBridge['platform'] {
   return 'linux';
 }
 
+/**
+ * Narrowed to the two architectures releases are published for.
+ *
+ * `other` rather than the raw string, because the one surface that shows this
+ * shows it beside a link to those releases — and printing `ia32` next to a page
+ * offering arm64 and x64 answers "which one do I download?" with a name that is
+ * on neither. Saying nothing is the honest answer there.
+ */
+function resolveArch(): ArtemisBridge['arch'] {
+  const reported = readArgument('artemis-arch', String(process.arch));
+  if (reported === 'arm64' || reported === 'x64') return reported;
+  return 'other';
+}
+
 /* -------------------------------------------------------------------------- */
 /* The bridge                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -600,6 +615,7 @@ function resolvePlatform(): ArtemisBridge['platform'] {
 const bridge: ArtemisBridge = Object.freeze({
   version: readArgument('artemis-version', '0.0.0'),
   platform: resolvePlatform(),
+  arch: resolveArch(),
 
   profiles: Object.freeze({
     list: (request: ProfilesListRequest) => invoke(IPC.profilesList, request),
@@ -781,6 +797,7 @@ const bridge: ArtemisBridge = Object.freeze({
 
   updates: Object.freeze({
     state: (request: UpdatesStateRequest) => invoke(IPC.updatesState, request),
+    check: (request: UpdatesCheckRequest) => invoke(IPC.updatesCheck, request),
     install: (request: UpdatesInstallRequest) => invoke(IPC.updatesInstall, request),
     restart: (request: UpdatesRestartRequest) => invoke(IPC.updatesRestart, request),
     dismiss: (request: UpdatesDismissRequest) => invoke(IPC.updatesDismiss, request),

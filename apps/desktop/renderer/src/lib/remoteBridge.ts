@@ -449,6 +449,12 @@ export function createRemoteBridge(
     // never masquerades as a plain local one.
     version: `${local?.version ?? '0.0.0'}+remote`,
     platform: local?.platform ?? 'darwin',
+    // The architecture of the machine the *window* is on, like `platform`
+    // beside it: About reports the build the user is looking at, and the
+    // updater that would replace it is the local one. `other` when there is no
+    // local bridge to ask, which is the same "no answer" the fallbacks above
+    // give rather than a guess.
+    arch: local?.arch ?? 'other',
 
     profiles: {
       list: async (request) => {
@@ -893,6 +899,12 @@ export function createRemoteBridge(
 
     updates: local?.updates ?? {
       state: async () => ok({ state: idleUpdateState() }),
+      // `unsupported` rather than `unreachable`: with no local bridge there is
+      // no updater to ask and no request is made, which is exactly the
+      // distinction the outcome exists to draw. A remote window reporting a
+      // network failure would send someone to debug a connection that was
+      // never used.
+      check: async () => ok({ outcome: 'unsupported', state: idleUpdateState() }),
       install: async () => ok({ state: idleUpdateState() }),
       restart: async () => ok({ state: idleUpdateState() }),
       dismiss: async () => ok({ state: idleUpdateState() }),

@@ -44,6 +44,7 @@ const ALL_SECTIONS: readonly SettingsSection[] = [
   'remote',
   'routines',
   'advanced',
+  'about',
 ];
 
 const navIds = (): readonly SettingsSection[] =>
@@ -58,8 +59,10 @@ describe('the two-band nav', () => {
     expect(SETTINGS_NAV.map((band) => band.sections.map((s) => s.id))).toEqual([
       ['profiles', 'models', 'runs', 'agents', 'permissions', 'appearance'],
       // Remote directly under Server: the same grant model, mirrored — one
-      // pane lends this machine out, the next borrows another one.
-      ['server', 'remote', 'routines', 'advanced'],
+      // pane lends this machine out, the next borrows another one. About is
+      // last of everything: it is the only pane that decides nothing, and the
+      // bottom of the list is where people look for it unprompted.
+      ['server', 'remote', 'routines', 'advanced', 'about'],
     ]);
   });
 
