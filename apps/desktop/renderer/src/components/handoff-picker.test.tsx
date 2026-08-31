@@ -120,7 +120,7 @@ function seedOffer(): void {
     models: [],
     resumeSessionId: 'sess-1',
     handoff: 'offered',
-    handoffOffer: { trigger: TRIGGER, at: NOW },
+    handoffOffer: { kind: 'limit', trigger: TRIGGER, at: NOW },
   } as never);
 }
 

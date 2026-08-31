@@ -349,8 +349,18 @@
   --muted-foreground: var(--ink-muted);
 
   /* `accent` is shadcn's hover/selected surface — menu item under the
-     cursor, active tab, highlighted command row. Not an accent *colour*. */
-  --accent: var(--float);
+     cursor, active tab, highlighted command row. Not an accent *colour*.
+
+     A *wash*, not a surface, and that is the fix for a bug this token caused
+     for as long as it was `--float`: `--popover` is also `--float`, so every
+     menu item's hover resolved to the exact colour of the menu it sat on and
+     nothing happened under the cursor. Two surfaces patched around it
+     locally — the run navigator and the command palette both scope their own
+     highlight — and every menu that did not was simply dead to the pointer.
+     A wash is a fraction of the ink over whatever is beneath, so it reads on
+     the popover, on the panel, and in both themes, which is what this token
+     always claimed to be. */
+  --accent: var(--wash-strong);
   --accent-foreground: var(--ink);
 
   --destructive: var(--signal);
@@ -543,7 +553,7 @@
    * Pointed at `--raised` instead — the token whose whole job is being a fill
    * you can see against the surface it is on.
    */
-  --accent: var(--raised);
+  --accent: var(--wash-strong);
 }
 
 /* ==========================================================================

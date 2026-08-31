@@ -34,6 +34,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactElement } from 'react';
 import {
   CircleStopIcon,
+  HandIcon,
   FileTextIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -57,6 +58,8 @@ import {
   dismissSuggestion,
   interruptRun,
   isLive,
+  offerManualHandoff,
+  writeHandoffDoc,
   offeredSuggestion,
   pushBanner,
   refreshCommands,
@@ -83,6 +86,12 @@ import { SlashCommandMenu, SLASH_LISTBOX_ID, slashOptionId } from './SlashComman
 import { ReasonButton, WithReason } from './disabled-reason';
 import { WorkingDirectoryChip } from './WorkingDirectory';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -514,6 +523,13 @@ export function Composer(): ReactElement {
       */}
       <div className={cn('mx-auto flex w-full items-center px-3 pt-1.5', columnMax)}>
         <WorkingDirectoryChip />
+        {/*
+          Opposite the directory, at the other end of the same row: the two
+          facts about where this conversation lives and where it could go
+          next. Ghosted, because it is a door rather than an action — nothing
+          moves until the menu is answered.
+        */}
+        <HandoffButton />
       </div>
 
       {/*
@@ -1145,6 +1161,68 @@ function AttachmentStrip({
  * writing the document the composer works normally, and a strip saying so would
  * be an announcement rather than a control.
  */
+/**
+ * Hand off — the deliberate version of what a plan limit does automatically.
+ *
+ * Two answers, and both begin by stopping the run: handing a live conversation
+ * to another account, or writing a briefing while the agent is still typing
+ * into it, is how two runs end up appending to one transcript.
+ *
+ * **To another session** opens the same picker the automatic path opens
+ * (`HandoffPicker`), with every profile that can reach this conversation's
+ * transcript. Reachability is the floor rather than a preference: a session
+ * lives inside one profile's config directory, so an account that cannot read
+ * it cannot continue it, and offering it anyway would be offering a failure.
+ *
+ * **A hand-off document** asks the agent for a briefing and leaves the
+ * conversation where it is. It lands in the *project* — never in a linked
+ * worktree, which is made for one branch and deleted when that branch lands.
+ * See `handoffProjectRoot`.
+ */
+function HandoffButton(): ReactElement {
+  const pane = usePaneRef();
+  const started = usePane((s) => s.resumeSessionId !== null);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          title="Hand this conversation to another account, or write a hand-off document"
+          className="ml-auto h-[22px] shrink-0 gap-1.5 rounded-md px-2 text-2xs font-normal text-ink-faint hover:bg-wash hover:text-ink-muted"
+        >
+          <HandIcon className="size-3 shrink-0" aria-hidden="true" />
+          Hand off
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {/*
+          Shown disabled with the reason rather than hidden, the rule
+          `disabled-reason.tsx` sets out: a conversation that has not started
+          has no transcript for another account to continue, and the sentence
+          is what teaches that. The document has no such floor — there is
+          always something to write down.
+        */}
+        <DropdownMenuItem
+          disabled={!started}
+          title={
+            started
+              ? undefined
+              : 'This conversation has not started, so there is nothing for another account to continue.'
+          }
+          onSelect={() => void offerManualHandoff(pane)}
+        >
+          Hand off to another session
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void writeHandoffDoc(pane)}>
+          Write hand-off doc
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function HandoffStrip(): ReactElement | null {
   const pane = usePaneRef();
   const state = usePane((s) => s.handoff);
