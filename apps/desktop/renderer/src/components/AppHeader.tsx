@@ -119,6 +119,7 @@ import { lastSegment } from '../lib/paths';
 import { cn } from '../lib/utils';
 import { ArrowDownIcon, SearchIcon } from 'lucide-react';
 import {
+  conversationName,
   focusWaitingPane,
   newSession,
   openSettings,
@@ -254,17 +255,16 @@ function WindowControls({ maximized, focused }: {
 /**
  * What this window is pointed at, in words.
  *
- * A resumed session is named by its title; anything else is a session that has
- * not been given a name yet, which is the honest thing to say about it. The
- * selector returns a string, so it is compared by value and a transcript delta
- * cannot re-render the header.
+ * The focused column's conversation, named by the one selector the pane
+ * captions use as well — see `conversationName`, which is where the rule about
+ * *which* session a column is showing lives. The header and a caption naming
+ * the same column differently is the disagreement having one answer prevents.
+ *
+ * The selector returns a string, so it is compared by value and a transcript
+ * delta cannot re-render the header.
  */
 function useSessionTitle(): string {
-  const id = usePane((s) => s.resumeSessionId);
-  return useApp((s) => {
-    if (id === null) return 'New session';
-    return s.sessions.find((session) => session.id === id)?.title ?? 'Resumed session';
-  });
+  return usePane(conversationName);
 }
 
 /**
