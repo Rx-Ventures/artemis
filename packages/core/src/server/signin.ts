@@ -100,13 +100,15 @@ export interface ServerProfileRecord {
 }
 
 /**
- * Creating and finding serving accounts, as the admin routes need them.
+ * Creating, finding, and now managing serving accounts, as the admin routes
+ * need them.
  *
- * Deliberately two methods and no delete. Removing an account is destructive in
- * a way adding one is not — it can orphan a credential, and it can take a route
- * out from under a client mid-run — and there is no version of that which is
- * safe to reach with a bearer token before there is a UI that makes the
- * consequence plain. The CLI still has the whole of it.
+ * `delete` was deliberately withheld until a UI existed that makes the
+ * consequence plain; the server card has one now — the confirmation names
+ * what goes (the account and its routes) and what stays (the directory on the
+ * serving machine). `update` is what account parity is built from: the same
+ * label / address / key trio a local profile's editor writes, minus the
+ * fields that only make sense on the machine the store lives on.
  */
 export interface ProfileAdmin {
   /**
@@ -130,6 +132,34 @@ export interface ProfileAdmin {
   }): Promise<ServerProfileRecord>;
   /** One account, or `undefined`. */
   find(profileId: string): Promise<ServerProfileRecord | undefined>;
+  /**
+   * Change an account: label, endpoint address, key — any subset.
+   *
+   * The same semantics the local profile editor gets from `ProfilePatch`:
+   * omitted leaves a field alone, the empty string clears `baseUrl` and
+   * `apiKey`. A rename re-derives the account's route slug, so the reply
+   * carries the whole record — the caller's address for this account may
+   * just have moved. Rejects a duplicate label with
+   * {@link DuplicateProfileLabelError} exactly as `create` does, and for the
+   * same reason.
+   */
+  update(
+    profileId: string,
+    patch: {
+      readonly label?: string;
+      readonly baseUrl?: string;
+      readonly apiKey?: string;
+    },
+  ): Promise<ServerProfileRecord>;
+  /**
+   * Remove an account: the record, its key, its routes.
+   *
+   * The config directory stays on disk — a wire caller cannot judge what a
+   * path on the serving machine holds, and a credential left in a directory
+   * is recoverable where a deleted one is not. The server CLI keeps the
+   * full-removal verb.
+   */
+  delete(profileId: string): Promise<void>;
 }
 
 /** Thrown by {@link ProfileAdmin.create} when the label is taken. */

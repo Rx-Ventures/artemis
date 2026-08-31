@@ -83,6 +83,8 @@ import {
   checkAuthStatus,
   createDefaultProviderRegistry,
   createRemoteAccount,
+  deleteRemoteAccount,
+  updateRemoteAccount,
   managedEnvKeys,
   ProfileStore,
   profileConfigDir,
@@ -459,6 +461,12 @@ export interface ArtemisEngine {
     profileId: ProfileId,
     request: { readonly label: string; readonly provider?: string },
   ): Promise<ServerProfileCreatedBody>;
+  updateRemoteAccount(
+    profileId: ProfileId,
+    accountId: string,
+    patch: { readonly label?: string; readonly baseUrl?: string; readonly apiKey?: string },
+  ): Promise<ServerProfileCreatedBody>;
+  deleteRemoteAccount(profileId: ProfileId, accountId: string): Promise<{ readonly removed: boolean }>;
   startRemoteSignIn(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus>;
   remoteSignInStatus(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus | null>;
   submitRemoteSignInCode(
@@ -1542,6 +1550,10 @@ function createEngine(options: EngineOptions): ArtemisEngine {
 
     createRemoteAccount: async (profileId, request) =>
       createRemoteAccount(await remoteEnvFor(profileId), request),
+    updateRemoteAccount: async (profileId, accountId, patch) =>
+      updateRemoteAccount(await remoteEnvFor(profileId), accountId, patch),
+    deleteRemoteAccount: async (profileId, accountId) =>
+      deleteRemoteAccount(await remoteEnvFor(profileId), accountId),
 
     startRemoteSignIn: async (profileId, accountId) =>
       startRemoteSignIn(await remoteEnvFor(profileId), accountId),

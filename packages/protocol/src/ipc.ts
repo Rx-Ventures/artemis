@@ -358,6 +358,8 @@ export const IPC = {
   serverAccountsList: 'artemis:server-accounts:list',
   /** Register an account on the server. Its config directory is made there. */
   serverAccountsCreate: 'artemis:server-accounts:create',
+  serverAccountsUpdate: 'artemis:server-accounts:update',
+  serverAccountsDelete: 'artemis:server-accounts:delete',
   /** Spawn the provider's login on the server and start watching its output. */
   serverAccountsSignIn: 'artemis:server-accounts:sign-in',
   /** Poll the sign-in. `null` when there is none for that account. */
@@ -1912,12 +1914,44 @@ export interface ServerAccountsListResponse {
 
 export interface ServerAccountsCreateRequest extends ServerAccountsRequest {
   readonly label: string;
-  /** Defaults to `claude` on the server, the only login it can drive today. */
+  /**
+   * Defaults to `claude` on the server. Any provider the server knows is
+   * accepted: CLI providers get the sign-in flow, endpoint providers get an
+   * address and a key through the update channel instead.
+   */
   readonly provider?: ProviderId;
 }
 
 export interface ServerAccountsCreateResponse {
   readonly account: ServerProfileCreatedBody;
+}
+
+/**
+ * Change one account on the server: label, endpoint address, key — any subset.
+ *
+ * `ProfilePatch`'s own semantics, deliberately: omitted leaves a field alone,
+ * the empty string clears it. `apiKey` travels one way and no response
+ * carries it back.
+ */
+export interface ServerAccountsUpdateRequest extends ServerAccountsRequest {
+  readonly accountId: string;
+  readonly label?: string;
+  readonly baseUrl?: string;
+  readonly apiKey?: string;
+}
+
+export interface ServerAccountsUpdateResponse {
+  /** The whole record: a rename moves the account's route slug. */
+  readonly account: ServerProfileCreatedBody;
+}
+
+/** Remove one account from the server. Its directory stays on that machine. */
+export interface ServerAccountsDeleteRequest extends ServerAccountsRequest {
+  readonly accountId: string;
+}
+
+export interface ServerAccountsDeleteResponse {
+  readonly removed: boolean;
 }
 
 /** One account *on the server*, named by the id that server minted. */
@@ -2943,6 +2977,8 @@ export type IpcRequestMap = {
   [IPC.authSignOut]: AuthSignOutRequest;
   [IPC.serverAccountsList]: ServerAccountsRequest;
   [IPC.serverAccountsCreate]: ServerAccountsCreateRequest;
+  [IPC.serverAccountsUpdate]: ServerAccountsUpdateRequest;
+  [IPC.serverAccountsDelete]: ServerAccountsDeleteRequest;
   [IPC.serverAccountsSignIn]: ServerAccountSignInRequest;
   [IPC.serverAccountsSignInStatus]: ServerAccountSignInRequest;
   [IPC.serverAccountsSubmitCode]: ServerAccountSubmitCodeRequest;
@@ -3044,6 +3080,8 @@ export type IpcResponseMap = {
   [IPC.authSignOut]: AuthStatusResponse;
   [IPC.serverAccountsList]: ServerAccountsListResponse;
   [IPC.serverAccountsCreate]: ServerAccountsCreateResponse;
+  [IPC.serverAccountsUpdate]: ServerAccountsUpdateResponse;
+  [IPC.serverAccountsDelete]: ServerAccountsDeleteResponse;
   [IPC.serverAccountsSignIn]: ServerAccountSignInResponse;
   [IPC.serverAccountsSignInStatus]: ServerAccountSignInResponse;
   [IPC.serverAccountsSubmitCode]: ServerAccountSignInResponse;
@@ -3616,6 +3654,10 @@ export interface ArtemisBridge {
     list(request: ServerAccountsRequest): Promise<IpcResult<ServerAccountsListResponse>>;
     /** Register an account there. Its config directory is created on the server. */
     create(request: ServerAccountsCreateRequest): Promise<IpcResult<ServerAccountsCreateResponse>>;
+    /** Change one: label, endpoint address, key. A rename moves its routes. */
+    update(request: ServerAccountsUpdateRequest): Promise<IpcResult<ServerAccountsUpdateResponse>>;
+    /** Remove one, routes and key included. Its directory stays on the server. */
+    delete(request: ServerAccountsDeleteRequest): Promise<IpcResult<ServerAccountsDeleteResponse>>;
     /** Start the provider login for one account. One at a time, per server. */
     signIn(request: ServerAccountSignInRequest): Promise<IpcResult<ServerAccountSignInResponse>>;
     /** Poll it. `signIn: null` means the server has no flow for that account. */

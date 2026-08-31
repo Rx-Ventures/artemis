@@ -336,6 +336,14 @@ export interface ServerProfile {
   readonly live: boolean;
   /** What the provider behind this account can do. See {@link Capabilities}. */
   readonly capabilities: Capabilities;
+  /**
+   * The endpoint address this account talks to, for the ones that have one.
+   *
+   * Published so the administrative card can show what it would be editing —
+   * an address is configuration, not a credential. The key it may pair with
+   * never appears on any read.
+   */
+  readonly baseUrl?: string;
   readonly models: readonly ServerModel[];
 }
 

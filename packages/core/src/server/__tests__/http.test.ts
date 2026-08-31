@@ -576,6 +576,14 @@ describe('the account surface', () => {
               credentials: {} as never,
             }
           : undefined,
+      update: async (id, patch) => ({
+        id: id as ServerProfile['id'],
+        label: patch.label ?? 'Work Max',
+        providerId: 'claude',
+        configDir: '/data/profiles/work',
+        credentials: {} as never,
+      }),
+      delete: async () => undefined,
       ...overrides,
     };
   }
@@ -690,6 +698,84 @@ describe('the account surface', () => {
     });
     expect(reply.status).toBe(409);
     expect(JSON.stringify((reply as { body: unknown }).body)).toContain('work');
+  });
+
+  it('renames an account and leaves the one updated line', async () => {
+    const access: RemoteAccessEvent[] = [];
+    const reply = await admin('/api/v0/profiles/prof-a', 'PATCH', { label: 'Tidier' }, {
+      onRemoteAccess: (event) => access.push(event),
+    });
+    expect(reply.status).toBe(200);
+    expect(reply.body).toMatchObject({ object: 'artemis.profile', label: 'Tidier' });
+    expect(access).toMatchObject([{ kind: 'remote.profile.updated', profileId: 'prof-a' }]);
+  });
+
+  it('passes an address and a key through, and echoes neither back', async () => {
+    const patches: unknown[] = [];
+    const reply = await admin(
+      '/api/v0/profiles/prof-a',
+      'PATCH',
+      { baseUrl: 'http://10.0.0.5:8080/v1', apiKey: 'sk-secret' },
+      {
+        profileAdmin: fakeAdmin({
+          update: async (_id, patch) => {
+            patches.push(patch);
+            return {
+              id: 'prof-a' as ServerProfile['id'],
+              label: 'Work Max',
+              providerId: 'llamacpp',
+              configDir: '/data/profiles/work',
+              credentials: {} as never,
+            };
+          },
+        }),
+      },
+    );
+    expect(reply.status).toBe(200);
+    expect(patches).toEqual([{ baseUrl: 'http://10.0.0.5:8080/v1', apiKey: 'sk-secret' }]);
+    expect(JSON.stringify((reply as { body: unknown }).body)).not.toContain('sk-secret');
+  });
+
+  it('refuses a rename to a taken label with the 409 create gets', async () => {
+    const reply = await admin('/api/v0/profiles/prof-a', 'PATCH', { label: 'work' }, {
+      profileAdmin: fakeAdmin({
+        update: async () => {
+          throw new DuplicateProfileLabelError('work');
+        },
+      }),
+    });
+    expect(reply.status).toBe(409);
+  });
+
+  it('refuses a patch that names nothing, and one with a non-string field', async () => {
+    expect((await admin('/api/v0/profiles/prof-a', 'PATCH', {})).status).toBe(400);
+    expect((await admin('/api/v0/profiles/prof-a', 'PATCH', { label: 7 })).status).toBe(400);
+    expect((await admin('/api/v0/profiles/prof-a', 'PATCH', { label: '  ' })).status).toBe(400);
+  });
+
+  it('removes an account and attributes the removal', async () => {
+    const access: RemoteAccessEvent[] = [];
+    const reply = await admin('/api/v0/profiles/prof-a', 'DELETE', undefined, {
+      onRemoteAccess: (event) => access.push(event),
+    });
+    expect(reply.status).toBe(200);
+    expect(reply.body).toEqual({ object: 'artemis.profile.deleted', removed: true });
+    expect(access).toMatchObject([
+      { kind: 'remote.profile.deleted', profileId: 'prof-a', providerId: 'claude' },
+    ]);
+  });
+
+  it('answers a delete of a missing account with the enumeration-proof 404', async () => {
+    expect((await admin('/api/v0/profiles/prof-nope', 'DELETE')).status).toBe(404);
+  });
+
+  it('hides the whole mutation surface from a token without the grant', async () => {
+    expect(
+      (await admin('/api/v0/profiles/prof-a', 'PATCH', { label: 'x' }, {}, authorized)).status,
+    ).toBe(404);
+    expect((await admin('/api/v0/profiles/prof-a', 'DELETE', undefined, {}, authorized)).status).toBe(
+      404,
+    );
   });
 
   it('refuses a body with nothing usable in it', async () => {

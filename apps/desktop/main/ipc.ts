@@ -170,6 +170,8 @@ import {
   validateAuthStatus,
   validateServerAccounts,
   validateServerAccountsCreate,
+  validateServerAccountsDelete,
+  validateServerAccountsUpdate,
   validateServerAccountSignIn,
   validateServerAccountSubmitCode,
   validateAgentPromptsList,
@@ -1215,6 +1217,25 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
           label: request.label,
           ...(request.provider === undefined ? {} : { provider: request.provider }),
         }),
+      }),
+    },
+
+    [IPC.serverAccountsUpdate]: {
+      validate: validateServerAccountsUpdate,
+      handle: async (request) => ({
+        account: await engine.require().updateRemoteAccount(request.profileId, request.accountId, {
+          ...(request.label === undefined ? {} : { label: request.label }),
+          ...(request.baseUrl === undefined ? {} : { baseUrl: request.baseUrl }),
+          ...(request.apiKey === undefined ? {} : { apiKey: request.apiKey }),
+        }),
+      }),
+    },
+
+    [IPC.serverAccountsDelete]: {
+      validate: validateServerAccountsDelete,
+      handle: async (request) => ({
+        removed: (await engine.require().deleteRemoteAccount(request.profileId, request.accountId))
+          .removed,
       }),
     },
 
