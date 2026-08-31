@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -331,7 +332,7 @@ describe('the control routes', () => {
       prompt: 'do the thing',
       permissionMode: 'default',
       effort: 'high',
-      cwd: '/w/sub',
+      cwd: resolve('/w/sub'),
     });
   });
 

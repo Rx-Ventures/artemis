@@ -6,6 +6,7 @@
  * while it lasted.
  */
 
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RunHandle, ServerConnection } from '@rx-artemis/protocol';
@@ -182,7 +183,7 @@ describe('the attribution record', () => {
       connectionId: 'conn-live',
       runId: 'run-new',
       profileId: 'prof-a',
-      cwd: '/w',
+      cwd: resolve('/w'),
     });
   });
 

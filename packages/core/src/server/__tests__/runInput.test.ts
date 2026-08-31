@@ -8,6 +8,7 @@
  * writable in one line of JSON.
  */
 
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { ServerConnection, RunHandle, RunInput } from '@rx-artemis/protocol';
@@ -142,7 +143,7 @@ describe('POST /api/v0/runs, against the pin', () => {
     started.length = 0;
     const reply = await post(base);
     expect(reply.status).toBe(200);
-    expect(started[0]?.cwd).toBe('/w');
+    expect(started[0]?.cwd).toBe(resolve('/w'));
   });
 
   /*
@@ -167,7 +168,7 @@ describe('POST /api/v0/runs, against the pin', () => {
     started.length = 0;
     const reply = await post({ ...base, cwd: '/w/packages/../packages/core' });
     expect(reply.status).toBe(200);
-    expect(started[0]?.cwd).toBe('/w/packages/core');
+    expect(started[0]?.cwd).toBe(resolve('/w/packages/core'));
   });
 
   /*
@@ -190,7 +191,7 @@ describe('POST /api/v0/runs, against the pin', () => {
       additionalDirectories: ['/w/vendor', '/w/packages/../docs'],
     });
     expect(reply.status).toBe(200);
-    expect(started[0]?.additionalDirectories).toEqual(['/w/vendor', '/w/docs']);
+    expect(started[0]?.additionalDirectories).toEqual([resolve('/w/vendor'), resolve('/w/docs')]);
   });
 
   it('refuses extra roots on a connection with no directory to widen', async () => {

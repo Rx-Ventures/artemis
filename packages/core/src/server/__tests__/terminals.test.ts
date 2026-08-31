@@ -8,6 +8,7 @@
  * take every slot from the person sitting at the machine.
  */
 
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ServerConnection, TerminalEvent, TerminalInfo } from '@rx-artemis/protocol';
@@ -143,7 +144,7 @@ describe('the terminal routes', () => {
     expect(started.status).toBe(200);
     const body = await json<ServerTerminalBody>(started);
     // No cwd was sent, so the pin itself is the honest answer.
-    expect(body.terminal.cwd).toBe('/w');
+    expect(body.terminal.cwd).toBe(resolve('/w'));
 
     const listed = await json<ServerTerminalsBody>(await ask(REMOTE_TERMINALS_PATH, { terminals }));
     expect(listed.terminals.map((t) => String(t.id))).toEqual([String(body.terminal.id)]);
@@ -155,7 +156,7 @@ describe('the terminal routes', () => {
       method: 'POST',
       body: { cwd: '/w/packages/core', cols: 80, rows: 24 },
     });
-    expect((await json<ServerTerminalBody>(inside)).terminal.cwd).toBe('/w/packages/core');
+    expect((await json<ServerTerminalBody>(inside)).terminal.cwd).toBe(resolve('/w/packages/core'));
 
     const outside = await ask(REMOTE_TERMINALS_PATH, { terminals }, {
       method: 'POST',
@@ -198,7 +199,7 @@ describe('the terminal routes', () => {
       method: 'POST',
       body: { cwd: '/w/packages/../packages/core', cols: 80, rows: 24 },
     });
-    expect((await json<ServerTerminalBody>(started)).terminal.cwd).toBe('/w/packages/core');
+    expect((await json<ServerTerminalBody>(started)).terminal.cwd).toBe(resolve('/w/packages/core'));
   });
 
   it('refuses a size that is not a positive integer', async () => {
@@ -381,7 +382,7 @@ describe('the terminal routes', () => {
         kind: 'remote.terminal.started',
         connectionId: 'conn-1',
         terminalId: String(started.terminal.id),
-        cwd: '/w',
+        cwd: resolve('/w'),
       },
       {
         kind: 'remote.terminal.closed',
