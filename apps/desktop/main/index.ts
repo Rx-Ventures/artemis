@@ -266,6 +266,10 @@ function createWindow(policy: SecurityPolicy): BrowserWindow {
     webPreferences: windowSecurityPreferences(preloadPath, [
       `--artemis-version=${app.getVersion()}`,
       `--artemis-platform=${process.platform}`,
+      // Releases carry one update feed per architecture, so this is not
+      // decoration: it is the difference between the build a user is running and
+      // the one they would download by hand. The About pane prints it.
+      `--artemis-arch=${process.arch}`,
     ]),
   });
 

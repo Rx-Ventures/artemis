@@ -56,6 +56,7 @@ import {
   CalendarClockIcon,
   CastIcon,
   GaugeIcon,
+  InfoIcon,
   KeyRoundIcon,
   LaptopIcon,
   PaletteIcon,
@@ -64,6 +65,7 @@ import {
 } from 'lucide-react';
 
 import { ProfilesSection } from '../ProfilesScreen';
+import { AboutSection } from './AboutSection';
 import { AdvancedSection } from './AdvancedSection';
 import { AppearanceSection } from './AppearanceSection';
 import { InstructionsSection } from './InstructionsSection';
@@ -221,17 +223,33 @@ export const SETTINGS_NAV: readonly NavBand[] = [
         hint: 'Runs on a schedule',
         icon: <CalendarClockIcon aria-hidden="true" />,
       },
-      // Last, and last on purpose: nothing above it depends on anything in
-      // it. The id keeps its historical name — the pane was called Advanced
-      // when its contract was "scripts you run yourself", and the address
-      // outlives the contract. What it holds now is whatever is scoped to
-      // this installation: the shared-config scripts, the folder record, the
-      // update channel.
+      // Last of the panes that decide anything, and last of them on purpose:
+      // nothing above it depends on anything in it. The id keeps its
+      // historical name — the pane was called Advanced when its contract was
+      // "scripts you run yourself", and the address outlives the contract.
+      // What it holds now is whatever is scoped to this installation: the
+      // shared-config scripts, the folder record, the update channel.
       {
         id: 'advanced',
         label: 'This machine',
         hint: 'Scripts, folders, updates',
         icon: <LaptopIcon aria-hidden="true" />,
+      },
+      // Below even that, because it is the only pane in the dialog that
+      // configures nothing at all: it reports what this copy of Artemis *is*
+      // and offers the one action that is about the app rather than about the
+      // work. Bottom of the list is where people look for "About" without
+      // being told, which matters more here than for any other row — until
+      // this pane existed the version was on no screen and a check could only
+      // be asked for from the macOS menu bar, so everyone else had nowhere to
+      // go. It sits in this band rather than the one above for the reason the
+      // band exists: a version and an updater are facts about the app on this
+      // computer, not about how the agent works.
+      {
+        id: 'about',
+        label: 'About',
+        hint: 'Version and updates',
+        icon: <InfoIcon aria-hidden="true" />,
       },
     ],
   },
@@ -406,6 +424,8 @@ function SectionBody({ section }: { readonly section: SettingsSection }): ReactE
       return <RoutinesSection />;
     case 'advanced':
       return <AdvancedSection />;
+    case 'about':
+      return <AboutSection />;
     case 'profiles':
       return <ProfilesSection />;
   }

@@ -212,7 +212,8 @@ export type SettingsSection =
   | 'server'
   | 'remote'
   | 'routines'
-  | 'advanced';
+  | 'advanced'
+  | 'about';
 
 /**
  * Where every settings address lands today.
@@ -242,6 +243,7 @@ const SETTINGS_SECTION_HOMES: Readonly<Record<SettingsSection, SettingsSection>>
   remote: 'remote',
   routines: 'routines',
   advanced: 'advanced',
+  about: 'about',
 };
 
 /** Resolve an address — possibly historical — to the pane that answers for it. */
@@ -398,6 +400,13 @@ export interface AppState {
   readonly bridgeMode: BridgeMode;
   readonly version: string;
   readonly platform: 'darwin' | 'win32' | 'linux';
+  /**
+   * Which architecture this build was made for. Mirrored beside `platform`
+   * because it is half of the same answer — releases carry one update feed per
+   * architecture, so About has to name both or it has told the user nothing
+   * they could act on.
+   */
+  readonly arch: 'arm64' | 'x64' | 'other';
   readonly booted: boolean;
 
   /**
@@ -1430,6 +1439,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'remote',
   'routines',
   'advanced',
+  'about',
 ];
 
 const CONVERSATION_WIDTHS: readonly ConversationWidth[] = ['comfortable', 'wide', 'full'];
@@ -2245,6 +2255,7 @@ export const useApp = create<AppState>(() => ({
   bridgeMode: 'unavailable',
   version: '',
   platform: 'darwin',
+  arch: 'other',
   booted: false,
 
   grid: [createRow([firstPane])],
@@ -6443,7 +6454,15 @@ async function seedPlanUsage(profiles: readonly ProfileMetadata[]): Promise<void
 export async function bootstrap(): Promise<void> {
   const { mode, bridge } = resolveBridge();
   const platform = bridge?.platform ?? 'darwin';
-  useApp.setState({ bridgeMode: mode, version: bridge?.version ?? '', platform });
+  useApp.setState({
+    bridgeMode: mode,
+    version: bridge?.version ?? '',
+    platform,
+    // `other` for a bridgeless window rather than a guess: About prints this
+    // beside a link to per-architecture downloads, and a default of `x64` would
+    // be a wrong answer where an absent one is a correct one.
+    arch: bridge?.arch ?? 'other',
+  });
   // Before anything can arrive in a transcript, so the first artifact is judged
   // against the real platform rather than the default. See `pane.ts`.
   setHostPlatform(platform);

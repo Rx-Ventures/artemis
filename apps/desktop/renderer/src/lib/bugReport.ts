@@ -33,16 +33,18 @@
  * that mattered.
  */
 
+import { ARTEMIS_REPO } from '@rx-artemis/protocol';
+
 /**
- * The repository issues are filed against.
+ * The repository issues are filed against — the one Artemis is published from,
+ * so it reads the shared constant rather than keeping a second copy.
  *
- * Kept in lockstep with the publish block in `electron-builder.yml`, which is
- * where the updater's copy of this fact lives. Moved with the repository from
- * the Rx-Ventures org to seth-torrence on 2026-08-30 — GitHub redirects the
- * old path today, but a report filed through a redirect is a report filed
- * somewhere we do not control if that redirect ever lapses.
+ * A report filed through a redirect is a report filed somewhere we do not
+ * control if that redirect ever lapses, which is why this is worth pinning at
+ * all; {@link ARTEMIS_REPO} is where it is now pinned, alongside the updater's
+ * copy of the same fact.
  */
-export const ISSUES_REPO = 'seth-torrence/artemis';
+export const ISSUES_REPO = ARTEMIS_REPO;
 
 /** The label every submission carries, so in-app reports are filterable. */
 const LABEL = 'bug';

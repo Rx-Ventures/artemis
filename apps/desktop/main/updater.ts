@@ -86,6 +86,7 @@ import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 import { app } from 'electron';
+import { ARTEMIS_RELEASES_URL, ARTEMIS_REPO } from '@rx-artemis/protocol';
 import type { UpdateProgress, UpdateState, UpdateStep } from '@rx-artemis/protocol';
 
 import { createLogger } from './log.js';
@@ -97,19 +98,22 @@ const execFileAsync = promisify(execFile);
 const log = createLogger('updater');
 
 /**
- * The repository releases are published to. Kept in lockstep with the
- * `publish` block in `apps/desktop/electron-builder.yml` by hand — there is no
- * runtime accessor for the builder's config, the same situation as `appId`.
+ * The repository releases are published to, from the protocol rather than from
+ * a literal here.
  *
- * The by-hand part is not theoretical: this constant and that block drifted
- * apart when the repository moved from the Rx-Ventures org to seth-torrence
- * on 2026-08-30, and the drift was survivable only because GitHub redirects
- * the old path. Three separate places name this fact — here, the builder's
- * publish block, and `renderer/src/lib/bugReport.ts` — and all three move
- * together or none of them do.
+ * It moved there when the About pane started showing the releases page
+ * standing: the renderer needs the same page this module downloads from, and a
+ * second copy of the slug would be a third thing to keep in lockstep — the
+ * comment this replaced named three and there were four, the dev mock having
+ * quietly kept the pre-move URL.
+ *
+ * Still by hand against the `publish` block in
+ * `apps/desktop/electron-builder.yml`: there is no runtime accessor for the
+ * builder's config, the same situation as `appId`, and that block is the one
+ * baked into each build. See {@link ARTEMIS_REPO}.
  */
-const REPO = 'seth-torrence/artemis';
-const RELEASES_URL = `https://github.com/${REPO}/releases`;
+const REPO = ARTEMIS_REPO;
+const RELEASES_URL = ARTEMIS_RELEASES_URL;
 
 /**
  * The feed for *this* machine: one file per platform, and one per mac

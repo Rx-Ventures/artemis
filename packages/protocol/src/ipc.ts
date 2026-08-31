@@ -336,14 +336,22 @@ export const IPC = {
   /**
    * App updates.
    *
-   * Four channels and no configuration surface: the renderer can read the
-   * updater's state, ask it to install what it found, restart into what was
-   * installed, and silence one version.
+   * The renderer can read the updater's state, ask for a check, install what
+   * that found, restart into what was installed, and silence one version.
    * Where updates come from, how they are fetched and how the bundle is swapped
    * are the main process's business alone — the renderer never sees a URL, a
    * path or a checksum.
+   *
+   * `updatesCheck` is the one that answers rather than only acting. Until it
+   * existed the only way to ask for a check was the macOS application menu, so
+   * every user on every other platform had no way to pose the question at all —
+   * and the three outcomes that leave the state untouched (up to date, feed
+   * unreachable, this build cannot update itself) were unreportable even where
+   * the menu existed, because a pushed {@link UpdateState} cannot distinguish
+   * them from having never asked.
    */
   updatesState: 'artemis:updates:state',
+  updatesCheck: 'artemis:updates:check',
   updatesInstall: 'artemis:updates:install',
   updatesRestart: 'artemis:updates:restart',
   updatesDismiss: 'artemis:updates:dismiss',
@@ -1851,7 +1859,7 @@ export interface WindowStateResponse {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The two parameterless update requests. Empty for the reason
+ * The parameterless update requests. Empty for the reason
  * {@link WindowRequest} is: there is exactly one updater and nothing about it
  * is addressable, so a field here could only ever be a lie.
  */
@@ -1860,6 +1868,8 @@ export type UpdatesStateRequest = Record<string, never>;
 export type UpdatesInstallRequest = Record<string, never>;
 /** @see UpdatesStateRequest */
 export type UpdatesRestartRequest = Record<string, never>;
+/** @see UpdatesStateRequest */
+export type UpdatesCheckRequest = Record<string, never>;
 
 /**
  * Silence the banner for one version.
@@ -1933,6 +1943,46 @@ export interface UpdateState {
  * state, so the banner never has to assume its command landed.
  */
 export interface UpdatesStateResponse {
+  readonly state: UpdateState;
+}
+
+/**
+ * What one check found — the answer to a question somebody asked out loud.
+ *
+ * A pushed {@link UpdateState} cannot carry this, and that is the whole reason
+ * this type exists. Three of these five outcomes leave the state exactly as
+ * they found it, so a surface watching only the push cannot tell "up to date"
+ * from "the feed was unreachable" from "nothing happened because you never
+ * asked" — and those need three different sentences and two different next
+ * steps.
+ *
+ *  - `offered`     — something newer exists. `state` is now `available`, and the
+ *                    version is on it; no field here repeats it.
+ *  - `current`     — the feed was read and this build is not behind it.
+ *  - `unreachable` — no network, no feed, or a feed too malformed to reason
+ *                    about. Indistinguishable from here, and the same advice:
+ *                    the releases page always works.
+ *  - `busy`        — an install or restart is already under way; `state` says so.
+ *  - `unsupported` — nothing a check could act on, and **not a failure**. No
+ *                    network request is made at all. It is the answer for a
+ *                    development build, for a macOS copy in a place it cannot
+ *                    rename itself out of, and for every Linux build — where
+ *                    Artemis installs through a package manager and there is no
+ *                    single file to swap. A surface must not report it as
+ *                    something that went wrong, and must not offer to retry it.
+ */
+export type UpdateCheckOutcome = 'offered' | 'current' | 'unreachable' | 'busy' | 'unsupported';
+
+/**
+ * The check's answer, and the state it left behind.
+ *
+ * `state` is carried alongside the outcome rather than left to the push, for
+ * the reason every other channel here replies with a state: a caller should
+ * never have to assume its command landed, and the `offered` case needs the
+ * version, which lives on the state.
+ */
+export interface UpdatesCheckResponse {
+  readonly outcome: UpdateCheckOutcome;
   readonly state: UpdateState;
 }
 
@@ -2403,6 +2453,7 @@ export type IpcRequestMap = {
   [IPC.windowClose]: WindowRequest;
   [IPC.windowState]: WindowRequest;
   [IPC.updatesState]: UpdatesStateRequest;
+  [IPC.updatesCheck]: UpdatesCheckRequest;
   [IPC.updatesInstall]: UpdatesInstallRequest;
   [IPC.updatesRestart]: UpdatesRestartRequest;
   [IPC.updatesDismiss]: UpdatesDismissRequest;
@@ -2490,6 +2541,7 @@ export type IpcResponseMap = {
   [IPC.windowClose]: WindowStateResponse;
   [IPC.windowState]: WindowStateResponse;
   [IPC.updatesState]: UpdatesStateResponse;
+  [IPC.updatesCheck]: UpdatesCheckResponse;
   [IPC.updatesInstall]: UpdatesStateResponse;
   [IPC.updatesRestart]: UpdatesStateResponse;
   [IPC.updatesDismiss]: UpdatesStateResponse;
@@ -2593,6 +2645,17 @@ export interface ArtemisBridge {
   readonly version: string;
   /** Host platform, so the UI can render the right modifier keys. */
   readonly platform: 'darwin' | 'win32' | 'linux';
+  /**
+   * Which architecture this build was made for.
+   *
+   * Not cosmetic: releases carry one update feed per architecture, so "which
+   * build am I running" is a question with a wrong answer — an Intel Mac handed
+   * the arm64 zip — and it is the first thing a bug report needs and the last
+   * thing a user can discover on their own. `other` covers the architectures
+   * Artemis does not publish for, so the About pane can say nothing rather than
+   * print a name that matches no download.
+   */
+  readonly arch: 'arm64' | 'x64' | 'other';
 
   readonly profiles: {
     list(request: ProfilesListRequest): Promise<IpcResult<ProfilesListResponse>>;
@@ -3016,6 +3079,17 @@ export interface ArtemisBridge {
   readonly updates: {
     /** The updater's state right now, for the first paint before any push. */
     state(request: UpdatesStateRequest): Promise<IpcResult<UpdatesStateResponse>>;
+    /**
+     * Check now, because someone asked, and say what was found.
+     *
+     * The only channel here that answers with more than a state, because three
+     * of its outcomes leave the state untouched — see {@link UpdateCheckOutcome}
+     * for why that distinction cannot be recovered from the push. Differs from
+     * the periodic check in the ways a deliberate question should: a version the
+     * user dismissed is offered again, and a previous failure is a state worth
+     * checking out of.
+     */
+    check(request: UpdatesCheckRequest): Promise<IpcResult<UpdatesCheckResponse>>;
     /**
      * Download, verify and install the offered version. Resolves as soon as
      * the attempt is underway — progress arrives on {@link onChange}, not in

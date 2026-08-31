@@ -35,6 +35,7 @@ import type {
   RoutinesState,
   ServerState,
   SharedConfigEntryState,
+  UpdateCheckOutcome,
   UpdateState,
   RunsStartRequest,
   SessionSummary,
@@ -44,6 +45,7 @@ import type {
   WindowState,
 } from '@rx-artemis/protocol';
 import {
+  ARTEMIS_RELEASES_URL,
   assignProfileSlugs,
   browserUrlFor,
   DEFAULT_SERVER_PORT,
@@ -99,6 +101,22 @@ const MOCK_UPDATE_PHASES: readonly UpdateState['phase'][] = [
   'ready',
   'restarting',
   'error',
+];
+
+/**
+ * Outcomes `?check=` is allowed to name, for the About pane.
+ *
+ * A separate parameter from `?update=` because the two are separate facts: the
+ * phase is what the *state* says, the outcome is what the last *question*
+ * answered, and three outcomes leave the phase at `idle`. Parking one would
+ * otherwise be unreachable from a URL.
+ */
+const MOCK_CHECK_OUTCOMES: readonly UpdateCheckOutcome[] = [
+  'offered',
+  'current',
+  'unreachable',
+  'busy',
+  'unsupported',
 ];
 
 /** An event minus the envelope fields the transport stamps on. */
@@ -976,6 +994,7 @@ export function createMockBridge(): ArtemisBridge {
   return {
     version: '0.1.0-mock',
     platform: 'darwin',
+    arch: 'arm64',
 
     profiles: {
       list: async () => ok({ profiles }),
@@ -2058,6 +2077,14 @@ export function createMockBridge(): ArtemisBridge {
      */
     updates: {
       state: async () => ok({ state: mockUpdateState() }),
+      /*
+       * The one command here worth answering properly, because the About pane's
+       * whole content is its answer — five outcomes, five different sentences,
+       * and three of them leave the state at `idle` so `?update=` cannot reach
+       * any of them. `?check=current` (or `unreachable`, `busy`, `unsupported`,
+       * `offered`) picks one.
+       */
+      check: async () => ok({ outcome: mockCheckOutcome(), state: mockUpdateState() }),
       install: async () => ok({ state: mockUpdateState() }),
       restart: async () => ok({ state: mockUpdateState() }),
       dismiss: async () => ok({ state: mockUpdateState() }),
@@ -2355,7 +2382,10 @@ export function createMockBridge(): ArtemisBridge {
       phase,
       version: '0.4.0',
       message: phase === 'error' ? 'The download could not be verified.' : null,
-      releaseUrl: phase === 'error' ? 'https://github.com/seth-torrence/artemis/releases' : null,
+      // The shared constant, not a literal: one place decides where the
+      // releases page is, and a mock that drifts from it is a dev surface
+      // rehearsing the wrong answer.
+      releaseUrl: phase === 'error' ? ARTEMIS_RELEASES_URL : null,
       // Mid-download, with a total: the browser preview is where the bar's
       // determinate state is looked at, and an indeterminate one is the case
       // that needs no preview to reason about.
@@ -2364,6 +2394,22 @@ export function createMockBridge(): ArtemisBridge {
           ? { step: 'downloading', transferred: 84_000_000, total: 196_000_000 }
           : null,
     };
+  }
+
+  /**
+   * Which answer a manual check gives, from `?check=`.
+   *
+   * Defaults to `unsupported` rather than `current`, because that is what this
+   * mock's host actually is. A browser tab has no install to replace, so "up to
+   * date" would be the one answer the dev surface could give that is not true
+   * of anything.
+   */
+  function mockCheckOutcome(): UpdateCheckOutcome {
+    const asked =
+      typeof globalThis.location === 'undefined'
+        ? null
+        : new URLSearchParams(globalThis.location.search).get('check');
+    return MOCK_CHECK_OUTCOMES.find((candidate) => candidate === asked) ?? 'unsupported';
   }
 
   /** Shaped like the real one — 32 bytes, base64url — so the pane's layout meets a real length. */
