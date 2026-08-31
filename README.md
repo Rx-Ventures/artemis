@@ -125,6 +125,69 @@ pnpm build       # production bundles into apps/desktop/out
 pnpm smoke       # headless end-to-end run, no Electron (see below)
 ```
 
+### On Linux
+
+Artemis is distro-agnostic by construction — nothing in it looks for a package
+manager, and every path it derives comes from XDG variables or from asking the
+machine. Releases carry three formats:
+
+| Format     | For                                                    |
+| ---------- | ------------------------------------------------------ |
+| `.pacman`  | Arch, CachyOS, EndeavourOS, Manjaro                    |
+| `.deb`     | Debian, Ubuntu, Pop!\_OS, Mint                          |
+| `.AppImage`| everything else, including immutable and atomic systems |
+
+Fedora, openSUSE, SteamOS, Bazzite and Silverblue have no native package yet —
+use the AppImage, or build from source with the commands above. Both work; the
+only thing a native package buys is the install script described below.
+
+**The Chromium sandbox.** Installing the deb or the pacman package is the
+smoothest path because their install script does two things nothing else can:
+it makes `chrome-sandbox` setuid root when the kernel needs it, and on Ubuntu
+24.04 and later it installs an AppArmor profile. Those distros restrict
+unprivileged user namespaces by default and exempt only binaries carrying such
+a profile, which is why an installed package works there and a build from
+source beside it would not.
+
+Artemis detects that case rather than dying in it: it starts with the sandbox
+off and logs a warning naming the restriction it found and the `chown`/`chmod`
+pair that repairs a source build in place. The AppImage handles itself. Launch
+from a terminal to see what a given start decided.
+
+**Wayland.** Artemis asks Electron to pick its own display backend, so a
+Wayland session gets a native Wayland window and fractional scaling stays
+sharp. If your driver and compositor disagree with that — proprietary NVIDIA
+has shipped blank-window bugs under native Wayland — force X11 without
+rebuilding:
+
+```bash
+ELECTRON_OZONE_PLATFORM_HINT=x11 artemis
+```
+
+**Storing the local-server key.** This is the one feature with a runtime
+dependency the packages cannot express. Artemis encrypts that key through
+Chromium's `safeStorage`, which picks its backend from the desktop environment
+and recognises only GNOME, KDE, XFCE, Cinnamon, Deepin, Pantheon, UKUI and
+Unity. On any other session — every tiling compositor, so much of Arch and
+CachyOS — Chromium falls back to a store whose password is compiled into
+Chromium, which is not encryption. Artemis refuses to write a key it cannot
+genuinely encrypt rather than pretending, so if you see that refusal with a
+keyring already running, name it:
+
+```bash
+artemis --password-store=gnome-libsecret   # or kwallet6 on KDE
+```
+
+Nothing else in Artemis needs a keyring; a profile without a stored key works
+normally.
+
+**The agent's shell tool** confines commands with
+[bubblewrap](https://github.com/containers/bubblewrap) — writes limited to the
+working directory, network denied. Artemis will not run a command it cannot
+confine, so install `bwrap` (`pacman -S bubblewrap`, `apt install bubblewrap`,
+`dnf install bubblewrap`) if you want that tool enabled. `pnpm sandbox:check`
+reports what your machine can enforce and proves it.
+
 ### Adding an account
 
 Artemis has no credentials of its own and cannot do anything until you give it
