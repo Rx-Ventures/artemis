@@ -53,12 +53,6 @@ import {
   registerIpcHandlers,
   type IpcLayer,
 } from './ipc.js';
-import {
-  chromiumSandboxVerdict,
-  ozonePlatformHint,
-  readLinuxSandboxFacts,
-  sandboxAlreadyDisabled,
-} from './linuxStartup.js';
 import { createLogger } from './log.js';
 import { installApplicationMenu } from './menu.js';
 import { assertNoSecrets, RESPONSE_SCAN_POLICY } from './redact.js';
@@ -185,52 +179,43 @@ function adoptPreviousUserData(): void {
 adoptPreviousUserData();
 
 /**
- * Linux: talk Wayland where there is a Wayland to talk to.
- *
- * Before `whenReady` because Ozone picks its backend during initialisation,
- * and a no-op on every other platform. See `linuxStartup.ts` for why the hint
- * is `auto`, and for the two ways a user can refuse it.
- */
-const ozoneHint = ozonePlatformHint(process.platform, process.argv, process.env);
-if (ozoneHint !== null) app.commandLine.appendSwitch('ozone-platform-hint', ozoneHint);
-
-/**
- * Linux: check the sandbox can start before demanding that it does.
- *
- * Chromium does not degrade when its Linux sandbox cannot initialise — it
- * aborts in the zygote, before any window exists to explain itself. On a
- * kernel that restricts unprivileged user namespaces and a build whose
- * `chrome-sandbox` is not setuid root, which is every build from source on
- * Ubuntu 24.04, that abort is the entire user experience of installing
- * Artemis.
- *
- * So the restriction is detected first and the switch is passed deliberately,
- * with the reason at warn level and the command that undoes it. `linuxStartup.ts`
- * carries the argument for why this downgrade is allowed to be automatic when
- * `commandSandbox.ts` refuses the analogous one on Windows.
- */
-if (process.platform === 'linux' && !sandboxAlreadyDisabled(process.argv)) {
-  const verdict = chromiumSandboxVerdict(readLinuxSandboxFacts(process.execPath));
-  if (!verdict.usable) {
-    app.commandLine.appendSwitch('no-sandbox');
-    log.warn(
-      `Chromium's sandbox cannot start on this machine, so Artemis is running without it: ` +
-        `${verdict.reason}. Installing the deb or pacman package fixes this properly — its ` +
-        'install script sets the bit and ships an AppArmor profile. To repair a build from ' +
-        `source in place: sudo chown root:root '${join(dirname(process.execPath), 'chrome-sandbox')}' ` +
-        `&& sudo chmod 4755 '${join(dirname(process.execPath), 'chrome-sandbox')}'.`,
-    );
-  }
-}
-
-/**
  * Force the sandbox on for every renderer, including any created later by code
  * that forgets to ask for it. Must run before `app.whenReady()`.
  *
- * Composes with the `--no-sandbox` above rather than fighting it: this governs
- * whether a renderer gets `sandbox: true` in its `webPreferences`, while that
- * governs whether the OS-level zygote sandbox is used at all. A machine that
- * cannot do the second still gets the first.
+ * ## Two Linux switches that deliberately do not live here
+ *
+ * Both were written here first, and both were wrong, in the same way and for
+ * the same reason — recorded because the mistake is inviting and its symptom is
+ * silence.
+ *
+ * Chromium aborts rather than degrades when its Linux sandbox cannot start
+ * (`FATAL:setuid_sandbox_host.cc`, on a kernel restricting unprivileged user
+ * namespaces with a `chrome-sandbox` that is not setuid root), and Ozone picks
+ * X11 unless told to consider Wayland. The obvious fix for each is
+ * `app.commandLine.appendSwitch` right here, before `whenReady`, which is what
+ * Electron's own docs say the deadline is.
+ *
+ * It is not the deadline. Both the sandbox host and the Ozone platform are
+ * decided *before this file is loaded at all* — measured, not inferred: with
+ * the sandbox misconfigured, a `console.log` on the first line of this module
+ * never prints, and an `--ozone-platform=wayland` appended here produces none
+ * of the Wayland Ozone activity the same switch produces on the real command
+ * line. `appendSwitch` returns void and there is no error, so both read as
+ * working.
+ *
+ * So each is handled where a command line still exists:
+ *
+ *  - **Wayland** — `linux.executableArgs` in electron-builder.yml, which puts
+ *    `--ozone-platform-hint=auto` in the `Exec=` line of the installed
+ *    `.desktop` file.
+ *  - **The sandbox** — not by Artemis at all. The deb and pacman install
+ *    scripts set the setuid bit and ship an AppArmor profile; the AppImage's
+ *    AppRun probes `unshare` and adds `--no-sandbox` itself. A build from
+ *    source on a restricted kernel is the one uncovered case, and the README
+ *    documents the two things that fix it — both verified: `chmod 4755` on a
+ *    root-owned `chrome-sandbox`, or `ELECTRON_DISABLE_SANDBOX=1`, which
+ *    Electron reads early enough precisely because it is an environment
+ *    variable rather than a call.
  */
 app.enableSandbox();
 

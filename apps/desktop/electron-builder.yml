@@ -94,6 +94,29 @@ linux:
   desktop:
     entry:
       Keywords: agent;ai;claude;codex;coding;llm;terminal;
+  # Wayland, and the only place this flag can be set.
+  #
+  # Without a hint Ozone talks X11 unconditionally, so on a Wayland session —
+  # the default on Fedora, on SteamOS's desktop mode, and on current GNOME and
+  # KDE — Artemis runs through XWayland. That is not a crash, it is a slow leak
+  # of quality: XWayland cannot do fractional scaling, so the window is rendered
+  # at an integer factor and resampled, and every glyph is soft on the 125% and
+  # 150% displays those desktops ship configured for.
+  #
+  # It lives here, in the `.desktop` file's `Exec=` line, and not in
+  # `main/index.ts`, because Ozone picks its platform before the main script is
+  # loaded — verified, not assumed: an `--ozone-platform=wayland` appended
+  # through `app.commandLine` produces none of the Wayland Ozone activity the
+  # same switch produces on a real command line, and `appendSwitch` reports no
+  # error either way. See the note on `app.enableSandbox()` in `main/index.ts`.
+  #
+  # `auto` rather than `wayland`, because the flag has to be right on an X11
+  # session too and `auto` is Electron's own "Wayland if there is one, X11
+  # otherwise". A user whose driver disagrees — proprietary NVIDIA has shipped
+  # blank-window bugs under native Wayland — overrides it with an explicit
+  # `--ozone-platform=x11`, which beats a hint.
+  executableArgs:
+    - --ozone-platform-hint=auto
   target:
     - AppImage
     - deb

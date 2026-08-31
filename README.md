@@ -141,27 +141,44 @@ Fedora, openSUSE, SteamOS, Bazzite and Silverblue have no native package yet —
 use the AppImage, or build from source with the commands above. Both work; the
 only thing a native package buys is the install script described below.
 
-**The Chromium sandbox.** Installing the deb or the pacman package is the
-smoothest path because their install script does two things nothing else can:
-it makes `chrome-sandbox` setuid root when the kernel needs it, and on Ubuntu
-24.04 and later it installs an AppArmor profile. Those distros restrict
-unprivileged user namespaces by default and exempt only binaries carrying such
-a profile, which is why an installed package works there and a build from
-source beside it would not.
+**The Chromium sandbox, if you build from source.** Install a package and this
+is handled for you: the deb and pacman install scripts make `chrome-sandbox`
+setuid root when the kernel needs it and install an AppArmor profile on Ubuntu
+24.04+, and the AppImage's launcher probes `unshare` and adds `--no-sandbox`
+itself. A build from source has none of that, and on a kernel that restricts
+unprivileged user namespaces — Ubuntu 24.04 and later by default, Debian with
+`unprivileged_userns_clone=0`, most hardened kernels — Chromium does not
+degrade, it aborts:
 
-Artemis detects that case rather than dying in it: it starts with the sandbox
-off and logs a warning naming the restriction it found and the `chown`/`chmod`
-pair that repairs a source build in place. The AppImage handles itself. Launch
-from a terminal to see what a given start decided.
+```
+FATAL:setuid_sandbox_host.cc … The SUID sandbox helper binary was found, but is
+not configured correctly. Rather than run without sandboxing I'm aborting now.
+```
 
-**Wayland.** Artemis asks Electron to pick its own display backend, so a
-Wayland session gets a native Wayland window and fractional scaling stays
-sharp. If your driver and compositor disagree with that — proprietary NVIDIA
-has shipped blank-window bugs under native Wayland — force X11 without
-rebuilding:
+Artemis cannot catch that from inside — it happens before the app's own code is
+loaded. Two things fix it, both verified. Keep the sandbox, by giving the helper
+the bit the message asks for (re-run after any rebuild that replaces it):
 
 ```bash
-ELECTRON_OZONE_PLATFORM_HINT=x11 artemis
+sudo chown root:root node_modules/electron/dist/chrome-sandbox
+sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+```
+
+Or start without it, accepting that renderers are then unconfined:
+
+```bash
+ELECTRON_DISABLE_SANDBOX=1 pnpm dev
+```
+
+**Wayland.** Installed packages carry `--ozone-platform-hint=auto` in their
+`.desktop` entry, so launching from your application menu gets a native Wayland
+window and fractional scaling stays sharp. Running the binary straight from a
+terminal does not — pass it yourself. If your driver and compositor disagree
+with native Wayland — proprietary NVIDIA has shipped blank-window bugs — an
+explicit platform beats the hint:
+
+```bash
+artemis --ozone-platform=x11
 ```
 
 **Storing the local-server key.** This is the one feature with a runtime
