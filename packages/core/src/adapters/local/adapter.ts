@@ -92,7 +92,7 @@ import type { ChatMessage, CompletionResult } from './loop.js';
 import { toolsForRisk, toWireTools } from './tools.js';
 import type { ToolSpec } from './tools.js';
 import { describeConfinement, resolveSandbox, wrapCommand } from './commandSandbox.js';
-import type { ResolvedSandbox } from './commandSandbox.js';
+import type { ResolvedSandbox, SandboxProbeEnv } from './commandSandbox.js';
 import { sandboxEnv } from './sandbox.js';
 import type { StreamUsage, ToolCall } from './stream.js';
 
@@ -481,7 +481,7 @@ class LocalRun implements Run {
    * that commands will be refused before the model tries one, not after.
    */
   async #sandbox(): Promise<ResolvedSandbox> {
-    this.#resolvedSandbox ??= await resolveSandbox(process.platform, hasBinary);
+    this.#resolvedSandbox ??= await resolveSandbox(process.platform, SANDBOX_PROBE_ENV);
     return this.#resolvedSandbox;
   }
 
@@ -847,6 +847,29 @@ async function hasBinary(binary: string): Promise<boolean> {
   }
 }
 
+/**
+ * Run an argv and report whether it exited zero, swallowing everything.
+ *
+ * The other half of {@link SandboxProbeEnv}: a backend that needs to know
+ * whether its mechanism *works* — not merely whether its binary exists — asks
+ * through this. A non-zero exit and a spawn failure are the same answer, "no",
+ * and the timeout is there because a probe that hangs would hang the run it is
+ * deciding for.
+ */
+async function commandSucceeds(argv: readonly string[]): Promise<boolean> {
+  const [file, ...args] = argv;
+  if (file === undefined) return false;
+  try {
+    await execFileAsync(file, args, { timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The probe environment for this machine, shared by both resolve sites. */
+const SANDBOX_PROBE_ENV: SandboxProbeEnv = { has: hasBinary, succeeds: commandSucceeds };
+
 /** Build the adapter for one local server. */
 export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
   return {
@@ -868,7 +891,7 @@ export function createLocalAdapter(flavour: LocalFlavour): ProviderAdapter {
      * `ProviderAdapter.describeSandbox`.
      */
     async describeSandbox() {
-      const resolved = await resolveSandbox(process.platform, hasBinary);
+      const resolved = await resolveSandbox(process.platform, SANDBOX_PROBE_ENV);
       return {
         ...(resolved.backend === undefined ? {} : { backend: resolved.backend.name }),
         confinement: resolved.confinement,

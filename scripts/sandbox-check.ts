@@ -55,9 +55,16 @@ async function main(): Promise<void> {
   await run('mkdir', ['-p', inside]);
   await writeFile(path.join(inside, 'secret.txt'), 'ZX-99\n');
 
-  const sandbox = await resolveSandbox(process.platform, async (binary) => {
-    if (binary.startsWith('/')) return existsSync(binary);
-    return run('which', [binary]).then(() => true, () => false);
+  const sandbox = await resolveSandbox(process.platform, {
+    has: async (binary) => {
+      if (binary.startsWith('/')) return existsSync(binary);
+      return run('which', [binary]).then(() => true, () => false);
+    },
+    succeeds: async (argv) => {
+      const [file, ...args] = argv;
+      if (file === undefined) return false;
+      return run(file, args, { timeout: 5_000 }).then(() => true, () => false);
+    },
   });
 
   console.log(`\n  platform     ${process.platform}`);

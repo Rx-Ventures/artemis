@@ -81,7 +81,18 @@ function host(overrides: Parameters<typeof createTerminalHost>[0] = {}) {
   const { spawn, made } = fakeSpawn();
   return {
     made,
-    host: createTerminalHost({ spawn, platform: 'darwin', env: {}, flushMs: 1, ...overrides }),
+    // `exists` alongside `platform`: naming the platform and then reading the
+    // host's real disk is half a fixture, and it made 'reports what it started'
+    // resolve /bin/zsh on a Mac, /bin/bash on a Linux runner and /bin/sh on a
+    // Windows one. Everything exists here, so the darwin chain lands on zsh.
+    host: createTerminalHost({
+      spawn,
+      platform: 'darwin',
+      env: {},
+      exists: () => true,
+      flushMs: 1,
+      ...overrides,
+    }),
   };
 }
 

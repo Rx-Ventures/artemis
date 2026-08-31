@@ -27,7 +27,7 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { basename, delimiter, join } from 'node:path';
+import { basename, delimiter, posix } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -55,17 +55,21 @@ const log = createLogger('shellPath');
  * uses is a choice its owner made, not something to infer.
  */
 export function wellKnownBinDirs(platform: NodeJS.Platform, home: string): readonly string[] {
+  // `posix.join`, not `join`: these are POSIX paths by definition — the caller
+  // returns early on win32 — and `join` would spell them with backslashes when
+  // the *host* is Windows, which is a thing that happens when this suite runs
+  // on a Windows runner.
   if (platform === 'darwin') {
-    return ['/opt/homebrew/bin', '/usr/local/bin', join(home, '.local', 'bin')];
+    return ['/opt/homebrew/bin', '/usr/local/bin', posix.join(home, '.local', 'bin')];
   }
   return [
-    join(home, '.local', 'bin'),
+    posix.join(home, '.local', 'bin'),
     '/usr/local/bin',
-    join(home, '.cargo', 'bin'),
-    join(home, '.bun', 'bin'),
-    join(home, '.nix-profile', 'bin'),
+    posix.join(home, '.cargo', 'bin'),
+    posix.join(home, '.bun', 'bin'),
+    posix.join(home, '.nix-profile', 'bin'),
     '/var/lib/flatpak/exports/bin',
-    join(home, '.local', 'share', 'flatpak', 'exports', 'bin'),
+    posix.join(home, '.local', 'share', 'flatpak', 'exports', 'bin'),
     '/snap/bin',
     '/home/linuxbrew/.linuxbrew/bin',
   ];

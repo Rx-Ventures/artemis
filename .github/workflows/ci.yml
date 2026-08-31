@@ -70,8 +70,24 @@ jobs:
   #
   # A separate job rather than a step in `checks`, for the reason the Windows
   # suite is one: the `checks` status name is what branch protection knows, and
-  # a runner image that stops permitting unprivileged user namespaces should be
+  # an environment that stops permitting unprivileged user namespaces should be
   # visible without blocking every merge behind it.
+  #
+  # ## Why a container, and a privileged one
+  #
+  # The runner itself cannot do this. `bwrap --unshare-net` on `ubuntu-latest`
+  # fails with `loopback: Failed RTM_NEWADDR: Operation not permitted` — the
+  # namespace is created and configuring loopback inside it is denied, and since
+  # bwrap sets loopback up unconditionally it exits 1 and nothing runs. That is
+  # a true fact about the runner, and `resolveSandbox` reports it correctly
+  # (confinement `none`, commands refused) — but a check that only confirms the
+  # refusal proves nothing about whether the policy confines when it does apply,
+  # which is the entire question this job exists to answer.
+  #
+  # So the check runs inside a privileged container, which is a kernel that
+  # permits the namespaces. `node_modules` is mounted from the runner rather
+  # than reinstalled: same OS and architecture, so `tsx` is already the right
+  # binary, and this stays a check rather than a second install.
   sandbox-linux:
     runs-on: ubuntu-latest
     steps:
@@ -82,8 +98,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Install bubblewrap
+      - name: Drive the sandbox against a real kernel
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
-      - run: pnpm sandbox:check
+          docker run --rm --privileged \
+            --volume "$PWD:/w" --workdir /w \
+            node:22-bookworm bash -c '
+              apt-get update -qq >/dev/null
+              apt-get install -y -qq bubblewrap curl >/dev/null
+              bwrap --version
+              node_modules/.bin/tsx scripts/sandbox-check.ts
+            '

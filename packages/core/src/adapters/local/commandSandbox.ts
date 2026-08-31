@@ -61,6 +61,30 @@ export type Confinement =
 /** How sure we are that a backend does what it says. */
 export type BackendVerification = 'verified' | 'unverified';
 
+/**
+ * What a {@link SandboxBackend.probe} is allowed to ask about this machine.
+ *
+ * Injected rather than imported so the whole resolution stays testable from a
+ * platform that is not the one being probed — the only reason the Linux path
+ * can be exercised from a Mac.
+ */
+export interface SandboxProbeEnv {
+  /** Is this binary on `PATH`, or present at this absolute path? */
+  has: (binary: string) => Promise<boolean>;
+  /**
+   * Run this argv and say whether it exited zero. Never throws.
+   *
+   * The half that was missing, and the omission cost a green CI job and a
+   * wrong claim. "`bwrap` is installed" and "`bwrap` can create the namespaces
+   * this policy needs" are different questions, and on a machine that
+   * restricts unprivileged user namespaces the second is no. The old probe
+   * asked only the first, so `wrapCommand` handed back an argv that could
+   * never run and every shell command failed with bubblewrap's error text
+   * instead of Artemis's refusal.
+   */
+  succeeds: (argv: readonly string[]) => Promise<boolean>;
+}
+
 /** One platform's way of confining a command. */
 export interface SandboxBackend {
   readonly platform: NodeJS.Platform;
@@ -68,9 +92,11 @@ export interface SandboxBackend {
   readonly verification: BackendVerification;
   /**
    * Can this machine actually enforce it? Separate from the platform, because
-   * a Linux box without `bwrap` installed is a Linux box that cannot confine.
+   * a Linux box without `bwrap` installed is a Linux box that cannot confine —
+   * and, as it turns out, so is a Linux box that has `bwrap` and will not let
+   * it work. See {@link SandboxProbeEnv.succeeds}.
    */
-  probe: (has: (binary: string) => Promise<boolean>) => Promise<Confinement>;
+  probe: (env: SandboxProbeEnv) => Promise<Confinement>;
   /**
    * The argv that runs `command` with exactly `writableRoots` writable — all
    * already resolved. Only called when {@link probe} answered `workspace`.
@@ -128,7 +154,7 @@ export const SEATBELT: SandboxBackend = {
   // Driven directly: writes outside refused, network refused, writes inside
   // allowed once the root was resolved through symlinks.
   verification: 'verified',
-  probe: async (has) => ((await has('/usr/bin/sandbox-exec')) ? 'workspace' : 'none'),
+  probe: async ({ has }) => ((await has('/usr/bin/sandbox-exec')) ? 'workspace' : 'none'),
   wrap: (command, roots) => ['/usr/bin/sandbox-exec', '-p', seatbeltProfile(roots), '/bin/sh', '-c', command],
 };
 
@@ -175,15 +201,49 @@ export const SEATBELT: SandboxBackend = {
  *
  * The honest limit: that run was in a container on a Linux VM rather than on
  * bare metal, so what it proves is what the namespaces *do* once created, not
- * every distro's willingness to let an unprivileged process create them. The
- * latter is what {@link SandboxBackend.probe} is for — a machine where `bwrap`
- * cannot start reports `none` and the policy refuses to run commands.
+ * every distro's willingness to let an unprivileged process create them.
+ *
+ * ## Which is a real question, so the probe asks it
+ *
+ * `has('bwrap')` was the whole probe, and "installed" is not "works". A GitHub
+ * `ubuntu-latest` runner has bubblewrap available and refuses to let it unshare
+ * the network:
+ *
+ *     bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+ *
+ * `--unshare-net` is the load-bearing flag and bwrap configures loopback inside
+ * the new namespace unconditionally, so when that is denied bwrap exits 1 and
+ * *nothing* runs. With the old probe the policy still reported `workspace`,
+ * `wrapCommand` still returned an argv, and every shell command failed with
+ * bubblewrap's error text rather than Artemis's honest refusal. Any environment
+ * that restricts what an unprivileged user namespace may do lands here — the
+ * CI runner is simply the one that could be observed.
+ *
+ * So the probe now *runs* bwrap, with the namespace flags that matter and no
+ * mounts, and reports `none` when that fails. A machine that cannot confine
+ * says so before a command is attempted, which is the whole contract.
  */
 export const BUBBLEWRAP: SandboxBackend = {
   platform: 'linux',
   name: 'bubblewrap (bwrap)',
   verification: 'verified',
-  probe: async (has) => ((await has('bwrap')) ? 'workspace' : 'none'),
+  probe: async ({ has, succeeds }) => {
+    if (!(await has('bwrap'))) return 'none';
+    // The cheapest command that still exercises every namespace `wrap` opens.
+    // No binds: this asks whether the kernel and its policies permit the
+    // namespaces at all, not whether any particular path can be mounted.
+    const usable = await succeeds([
+      'bwrap',
+      '--ro-bind', '/', '/',
+      '--unshare-net',
+      '--unshare-ipc',
+      '--unshare-uts',
+      '--die-with-parent',
+      '--new-session',
+      '/bin/true',
+    ]);
+    return usable ? 'workspace' : 'none';
+  },
   wrap: (command, roots) => [
     'bwrap',
     // Everything readable, nothing writable…
@@ -249,17 +309,21 @@ export interface ResolvedSandbox {
 /**
  * Work out what this machine can enforce.
  *
- * `has` is injected so the whole resolution is testable without the binaries
- * being present — which is the only way the Linux path can be exercised at all
- * from a machine that is not Linux.
+ * The probe environment is injected so the whole resolution is testable
+ * without the binaries being present — which is the only way the Linux path
+ * can be exercised at all from a machine that is not Linux.
+ *
+ * Costs a subprocess on Linux now that the bubblewrap probe runs `bwrap`
+ * rather than looking for it. Callers resolve once and reuse; the adapter
+ * memoises for the life of a run, and it cannot change mid-run.
  */
 export async function resolveSandbox(
   platform: NodeJS.Platform,
-  has: (binary: string) => Promise<boolean>,
+  env: SandboxProbeEnv,
 ): Promise<ResolvedSandbox> {
   const backend = backendFor(platform);
   if (backend === undefined) return { backend: undefined, confinement: 'none' };
-  return { backend, confinement: await backend.probe(has) };
+  return { backend, confinement: await backend.probe(env) };
 }
 
 /**
@@ -292,9 +356,19 @@ export function describeConfinement(resolved: ResolvedSandbox): string {
     return 'No sandbox exists for this platform, so commands will not be run.';
   }
   if (resolved.confinement === 'none') {
+    // Deliberately names both causes rather than picking one. `Confinement` is
+    // a two-valued answer, so by the time it reads `none` the reason is gone —
+    // and since the probe started actually running `bwrap`, "not installed" is
+    // no longer the only way to get here. A machine that restricts what an
+    // unprivileged user namespace may do (a container, a hardened kernel) has
+    // bubblewrap present and unusable, and telling that user to install the
+    // thing they already have sends them the wrong way.
     return resolved.backend.platform === 'win32'
       ? 'Windows has no sandbox Artemis can use without native code, so commands will not be run.'
-      : `${resolved.backend.name} is not installed, so commands will not be run. Install it to enable the shell tool.`;
+      : `${resolved.backend.name} cannot confine commands on this machine, so commands will not ` +
+        'be run. Either it is not installed — install it to enable the shell tool — or this ' +
+        'kernel does not permit the namespaces it needs, which containers and hardened kernels ' +
+        'often do not.';
   }
   const caveat =
     resolved.backend.verification === 'unverified'

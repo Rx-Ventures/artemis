@@ -29,10 +29,23 @@ import {
   WINDOWS_UNCONFINED,
   wrapCommand,
   type ResolvedSandbox,
+  type SandboxProbeEnv,
 } from '../commandSandbox.js';
 
-const yes = async (): Promise<boolean> => true;
-const no = async (): Promise<boolean> => false;
+/** Everything is installed, and everything it is asked to run works. */
+const yes: SandboxProbeEnv = { has: async () => true, succeeds: async () => true };
+/** Nothing is installed. `succeeds` is unreachable and says so if reached. */
+const no: SandboxProbeEnv = {
+  has: async () => false,
+  succeeds: async () => {
+    throw new Error('a backend must not try to run a binary it could not find');
+  },
+};
+/**
+ * The case the old probe could not express: bubblewrap is installed and the
+ * kernel will not let it do the thing the policy needs. See BUBBLEWRAP.
+ */
+const installedButBlocked: SandboxProbeEnv = { has: async () => true, succeeds: async () => false };
 
 describe('choosing a backend', () => {
   it.each([
@@ -67,6 +80,41 @@ describe('resolveSandbox', () => {
     // The platform says what is possible; the probe says what is installed.
     expect(await resolveSandbox('linux', no)).toMatchObject({ confinement: 'none' });
     expect(await resolveSandbox('linux', yes)).toMatchObject({ confinement: 'workspace' });
+  });
+
+  /*
+   * The gap the old probe had, found by CI rather than by review. A GitHub
+   * ubuntu runner has bubblewrap installed and refuses to let it unshare the
+   * network — `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` —
+   * and `--unshare-net` is the load-bearing flag, so bwrap exits 1 and nothing
+   * runs. Probing only for the binary reported `workspace`, handed back an argv
+   * that could never work, and turned every shell command into bubblewrap's
+   * error text instead of Artemis's refusal.
+   */
+  it('MACHINE: bwrap installed but unable to unshare is a box that cannot confine', async () => {
+    expect(await resolveSandbox('linux', installedButBlocked)).toMatchObject({
+      confinement: 'none',
+    });
+  });
+
+  it('asks bwrap to prove it, with the namespace flags that matter and no mounts', async () => {
+    const attempted: string[][] = [];
+    await resolveSandbox('linux', {
+      has: async () => true,
+      succeeds: async (argv) => {
+        attempted.push([...argv]);
+        return true;
+      },
+    });
+
+    expect(attempted).toHaveLength(1);
+    const argv = attempted[0] as string[];
+    expect(argv[0]).toBe('bwrap');
+    // The flag whose denial is the whole failure mode.
+    expect(argv).toContain('--unshare-net');
+    // No `--bind`: this asks whether the namespaces are permitted at all, not
+    // whether some particular path can be mounted.
+    expect(argv).not.toContain('--bind');
   });
 
   it('WINDOWS: never claims confinement, because nothing shipped can provide it', async () => {
@@ -252,8 +300,20 @@ describe('describeConfinement', () => {
     expect(text).not.toMatch(/unproven/);
   });
 
-  it('tells a Linux user the fix is to install bwrap', async () => {
-    expect(describeConfinement(await resolveSandbox('linux', no))).toMatch(/Install it/);
+  /*
+   * Both causes, because by the time confinement reads `none` the reason is
+   * gone — and since the probe runs bwrap rather than looking for it, "not
+   * installed" stopped being the only way to get here. Telling someone on a
+   * hardened kernel to install the thing they already have sends them the
+   * wrong way.
+   */
+  it('tells a Linux user both ways bwrap can fail to confine', async () => {
+    for (const env of [no, installedButBlocked]) {
+      const text = describeConfinement(await resolveSandbox('linux', env));
+      expect(text).toMatch(/install it/i);
+      expect(text).toMatch(/namespaces/);
+      expect(text).toMatch(/commands will not be run/);
+    }
   });
 
   it('tells a Windows user why, rather than leaving it mysterious', async () => {

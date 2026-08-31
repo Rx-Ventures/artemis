@@ -499,6 +499,17 @@ export interface TerminalHostOptions {
   readonly loadSpawn?: () => Promise<PtySpawn>;
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Overrides the existence check {@link resolveShell} uses to walk its
+   * fallback chain.
+   *
+   * Injected for the same reason {@link platform} is: without it, a host told
+   * `platform: 'darwin'` still consults the *real* filesystem, so a test
+   * asserting which shell it started passes on a Mac, resolves `/bin/bash` on a
+   * Linux runner and `/bin/sh` on a Windows one. Naming the platform and then
+   * reading the host's disk is half a fixture.
+   */
+  readonly exists?: (path: string) => boolean;
   /** Injected so a test does not have to wait a real frame for a flush. */
   readonly flushMs?: number;
 }
@@ -522,6 +533,7 @@ export class TooManyTerminalsError extends Error {
 export function createTerminalHost(options: TerminalHostOptions = {}): TerminalHost {
   const platform = options.platform ?? process.platform;
   const baseEnv = options.env ?? process.env;
+  const shellExists = options.exists ?? existsSync;
   const flushMs = options.flushMs ?? FLUSH_MS;
 
   const entries = new Map<TerminalId, Entry>();
@@ -581,7 +593,7 @@ export function createTerminalHost(options: TerminalHostOptions = {}): TerminalH
         const spawn =
           options.spawn ??
           (options.loadSpawn !== undefined ? await options.loadSpawn() : (await loadPty()).spawn);
-        const { file, args } = resolveShell(platform, baseEnv);
+        const { file, args } = resolveShell(platform, baseEnv, shellExists);
 
         /*
          * Random, not sequential, for the same reason `preview.ts` mints random

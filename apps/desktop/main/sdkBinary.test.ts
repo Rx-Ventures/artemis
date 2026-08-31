@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
+import { join, sep } from 'node:path';
+
 import { bundledSdkExecutablePath, sdkExecutableNames, sdkPackageNames } from './sdkBinary';
 
 const RESOURCES = '/opt/Artemis/resources';
 
+/*
+ * Built with `join`, like the implementation, rather than with literal slashes.
+ * The paths under test are host paths, and on a Windows runner the
+ * implementation spells them with backslashes — a fixture written in slashes
+ * matches nothing there and the whole file fails for a reason that has nothing
+ * to do with the SDK.
+ */
 const unpacked = (packageName: string): string =>
-  `${RESOURCES}/app.asar.unpacked/node_modules/@anthropic-ai/${packageName}`;
+  join(RESOURCES, 'app.asar.unpacked', 'node_modules', '@anthropic-ai', packageName);
 
 /** A `readdir` over a fixed layout: any directory not listed does not exist. */
 const layout =
@@ -52,7 +61,7 @@ describe('bundledSdkExecutablePath', () => {
   it('finds the glibc package on an ordinary Linux host', () => {
     const readdir = layout({ [unpacked('claude-agent-sdk-linux-x64')]: ['claude', 'README.md'] });
     expect(bundledSdkExecutablePath(RESOURCES, 'linux', 'x64', readdir)).toBe(
-      `${unpacked('claude-agent-sdk-linux-x64')}/claude`,
+      `${unpacked('claude-agent-sdk-linux-x64')}${sep}claude`,
     );
   });
 
@@ -66,7 +75,7 @@ describe('bundledSdkExecutablePath', () => {
   it('finds the musl package when that is the only one installed', () => {
     const readdir = layout({ [unpacked('claude-agent-sdk-linux-x64-musl')]: ['claude'] });
     expect(bundledSdkExecutablePath(RESOURCES, 'linux', 'x64', readdir)).toBe(
-      `${unpacked('claude-agent-sdk-linux-x64-musl')}/claude`,
+      `${unpacked('claude-agent-sdk-linux-x64-musl')}${sep}claude`,
     );
   });
 
@@ -76,14 +85,14 @@ describe('bundledSdkExecutablePath', () => {
       [unpacked('claude-agent-sdk-linux-x64-musl')]: ['claude'],
     });
     expect(bundledSdkExecutablePath(RESOURCES, 'linux', 'x64', readdir)).toBe(
-      `${unpacked('claude-agent-sdk-linux-x64')}/claude`,
+      `${unpacked('claude-agent-sdk-linux-x64')}${sep}claude`,
     );
   });
 
   it('finds claude.exe on Windows', () => {
     const readdir = layout({ [unpacked('claude-agent-sdk-win32-x64')]: ['claude.exe'] });
     expect(bundledSdkExecutablePath(RESOURCES, 'win32', 'x64', readdir)).toBe(
-      `${unpacked('claude-agent-sdk-win32-x64')}/claude.exe`,
+      `${unpacked('claude-agent-sdk-win32-x64')}${sep}claude.exe`,
     );
   });
 
