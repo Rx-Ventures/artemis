@@ -61,8 +61,10 @@ import type {
   RunId,
   RunsSendResponse,
   RunStatus,
+  ServerSessionDeletedBody,
   ServerSessionMessagesBody,
   ServerSessionsBody,
+  ServerSessionTaggedBody,
   SessionId,
   SessionSummary,
   ToolCallId,
@@ -89,7 +91,10 @@ import type {
   SendResult,
   SessionListPage,
   SessionListQuery,
+  SessionDeleteQuery,
   SessionMessagesQuery,
+  SessionTagQuery,
+  SessionTitleUpdate,
   SessionTranscript,
 } from '../types.js';
 import { splitEvents } from '../local/stream.js';
@@ -123,6 +128,13 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // ledger — and replays their stored messages. This is what makes the same
   // conversations reachable from every machine holding the token.
   listSessions: true,
+  // The server's session surface takes writes now, one route each: a title
+  // stored exactly as a local rename stores one, the provider's own tag (which
+  // is what archiving is built on), and a real deletion. All three are scoped
+  // by the server's ledger to the sessions this connection can already see.
+  renameSession: true,
+  deleteSession: true,
+  tagSession: true,
   // A run that opts into remote permissions parks on a prompt instead of denying
   // it: the request rides an empty-delta chunk in the `artemis` namespace, and
   // the answer goes back on `POST /api/v0/runs/{id}/permission`. A person is
@@ -638,6 +650,47 @@ async function runRouteError(
   );
 }
 
+/**
+ * `runRouteError`'s sibling for the session-mutation routes.
+ *
+ * Separate because the 404 story differs: on a run route it means the run
+ * ended, here it means the ledger does not grant this token the session — or
+ * the server predates the mutation routes entirely, which answers with the
+ * same status and deserves a sentence pointing at the upgrade.
+ */
+async function sessionMutationError(
+  response: { readonly status: number; json(): Promise<unknown> },
+  action: string,
+): Promise<AdapterError> {
+  let detail: string | undefined;
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown } };
+    detail = typeof body.error?.message === 'string' ? body.error.message : undefined;
+  } catch {
+    /* a failure with no JSON body still gets a message below */
+  }
+  if (response.status === 401 || response.status === 403) {
+    return adapterError(
+      'auth',
+      `The Artemis server refused the request (${response.status}). Check this profile's connection token.`,
+    );
+  }
+  if (response.status === 404) {
+    return adapterError(
+      'invalid_request',
+      detail ??
+        'The server has no such conversation for this connection — or it predates session management; update the server.',
+    );
+  }
+  if (response.status === 501) {
+    return adapterError('invalid_request', detail ?? `The serving account cannot ${action}.`);
+  }
+  return adapterError(
+    'provider_unavailable',
+    detail ?? `The Artemis server answered ${String(response.status)} trying to ${action}.`,
+  );
+}
+
 /** Read a refusal body — `ServerErrorBody` when the server wrote one. */
 async function refusalError(
   response: { readonly status: number; json(): Promise<unknown> },
@@ -857,6 +910,64 @@ export function createArtemisAdapter(): ProviderAdapter {
         events: events.map((event) => ({ ...event, runId: query.runId })),
         hasMore: body.hasMore === true,
       };
+    },
+
+    /**
+     * The three session writes, each one route on the server.
+     *
+     * `cwd` is deliberately not sent: the conversation lives on the server's
+     * machine and the server locates it through its own ledger entry, exactly
+     * as the messages read does. A directory from *this* machine names
+     * nothing over there.
+     *
+     * A 404 is the ledger's scope rule speaking — "not yours" and "not
+     * there" are indistinguishable on purpose — but it is also what an older
+     * server answers for a route it has never heard of, so the message names
+     * both readings.
+     */
+    async setSessionTitle(update: SessionTitleUpdate): Promise<void> {
+      const root = baseUrl(update.env);
+      const response = await fetch(
+        `${root}${API_PREFIX}/sessions/${encodeURIComponent(String(update.sessionId))}/rename`,
+        {
+          method: 'POST',
+          headers: { ...authHeaders(update.env), 'content-type': 'application/json' },
+          body: JSON.stringify({ title: update.title }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) throw await sessionMutationError(response, 'rename this conversation');
+    },
+
+    async deleteSession(query: SessionDeleteQuery): Promise<boolean> {
+      const root = baseUrl(query.env);
+      const response = await fetch(
+        `${root}${API_PREFIX}/sessions/${encodeURIComponent(String(query.sessionId))}`,
+        {
+          method: 'DELETE',
+          headers: authHeaders(query.env),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) throw await sessionMutationError(response, 'delete this conversation');
+      const body = (await response.json()) as Partial<ServerSessionDeletedBody>;
+      return body.deleted === true;
+    },
+
+    async tagSession(query: SessionTagQuery): Promise<boolean> {
+      const root = baseUrl(query.env);
+      const response = await fetch(
+        `${root}${API_PREFIX}/sessions/${encodeURIComponent(String(query.sessionId))}/tag`,
+        {
+          method: 'POST',
+          headers: { ...authHeaders(query.env), 'content-type': 'application/json' },
+          body: JSON.stringify({ tag: query.tag }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) throw await sessionMutationError(response, 'tag this conversation');
+      const body = (await response.json()) as Partial<ServerSessionTaggedBody>;
+      return body.tagged === true;
     },
 
     createRun(input: ResolvedRunInput): Promise<Run> {

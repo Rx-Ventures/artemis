@@ -137,3 +137,78 @@ describe('listAllSessions', () => {
     expect(page.unreadableProfiles).toEqual(['p1']);
   });
 });
+
+describe('session mutations', () => {
+  it('renames over the wire with the token, and sends no cwd', async () => {
+    const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        calls.push({
+          url: String(url),
+          method: init?.method,
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        });
+        return jsonResponse({ object: 'artemis.session.renamed', title: 'Tidy' });
+      }),
+    );
+
+    const adapter = createArtemisAdapter();
+    await adapter.setSessionTitle?.({
+      sessionId: 'sess-9' as never,
+      title: 'Tidy',
+      env: ENV,
+      cwd: '/a/local/path/that/must/not/travel',
+    });
+
+    expect(calls[0]?.url).toBe('http://server.tail:6472/api/v0/sessions/sess-9/rename');
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.body).toEqual({ title: 'Tidy' });
+  });
+
+  it('deletes with DELETE and reads the verdict', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        expect(String(url)).toBe('http://server.tail:6472/api/v0/sessions/sess-9');
+        expect(init?.method).toBe('DELETE');
+        return jsonResponse({ object: 'artemis.session.deleted', deleted: true });
+      }),
+    );
+    const adapter = createArtemisAdapter();
+    await expect(adapter.deleteSession?.({ sessionId: 'sess-9' as never, env: ENV })).resolves.toBe(
+      true,
+    );
+  });
+
+  it('tags with the value untouched, null included', async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ object: 'artemis.session.tagged', tagged: true });
+      }),
+    );
+    const adapter = createArtemisAdapter();
+    await adapter.tagSession?.({ sessionId: 's' as never, env: ENV, tag: 'archived' });
+    await adapter.tagSession?.({ sessionId: 's' as never, env: ENV, tag: null });
+    expect(bodies).toEqual([{ tag: 'archived' }, { tag: null }]);
+  });
+
+  it('maps the scope 404 to a sentence that also names an old server', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({ error: { type: 'invalid_request_error', message: undefined } }, 404),
+      ),
+    );
+    const adapter = createArtemisAdapter();
+    await expect(
+      adapter.deleteSession?.({ sessionId: 'sess-9' as never, env: ENV }),
+    ).rejects.toMatchObject({
+      agentError: { code: 'invalid_request' },
+      message: expect.stringContaining('update the server'),
+    });
+  });
+});

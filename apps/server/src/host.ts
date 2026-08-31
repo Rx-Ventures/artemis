@@ -29,6 +29,7 @@ import { join } from 'node:path';
 
 import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
+  RunError,
   createCatalogue,
   createDefaultProviderRegistry,
   createPushFeed,
@@ -56,6 +57,13 @@ import {
 } from '@rx-artemis/core';
 
 import { createFileProfileSecrets } from './secrets.js';
+
+/**
+ * The longest title a rename stores, matching the desktop's own cap so a
+ * conversation renamed over the wire and one renamed locally obey the same
+ * rule.
+ */
+const MAX_SESSION_TITLE = 200;
 
 export interface HeadlessHost {
   readonly profiles: ProfileStore;
@@ -348,6 +356,55 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
         sessionId: query.sessionId as never,
         runId: query.runId as never,
         env: await envFor(query.profileId as ProfileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+    },
+    /*
+     * The three writes, each present on the wire only insofar as the serving
+     * adapter really has the method — the route answers 501 for the rest.
+     * Normalisation lives here, not in the route: the reply shows the caller
+     * what the store now says, and that answer has to be produced by whoever
+     * does the storing (the same reasoning the desktop's rename handler
+     * gives, with the same cap).
+     */
+    rename: async (query) => {
+      const profile = await profiles.require(query.profileId as ProfileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter?.setSessionTitle === undefined) {
+        throw new RunError('invalid_request', `${profile.providerId} cannot rename a stored session.`);
+      }
+      const title = query.title.trim().slice(0, MAX_SESSION_TITLE);
+      if (title.length === 0) throw new RunError('invalid_request', 'A session title cannot be empty.');
+      await adapter.setSessionTitle({
+        sessionId: query.sessionId as never,
+        title,
+        env: await envFor(query.profileId as ProfileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+      return { title };
+    },
+    delete: async (query) => {
+      const profile = await profiles.require(query.profileId as ProfileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter?.deleteSession === undefined) {
+        throw new RunError('invalid_request', `${profile.providerId} cannot delete a stored session.`);
+      }
+      return adapter.deleteSession({
+        sessionId: query.sessionId as never,
+        env: await envFor(query.profileId as ProfileId, profile.providerId),
+        ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
+      });
+    },
+    tag: async (query) => {
+      const profile = await profiles.require(query.profileId as ProfileId);
+      const adapter = providers.get(profile.providerId);
+      if (adapter?.tagSession === undefined) {
+        throw new RunError('invalid_request', `${profile.providerId} cannot tag a stored session.`);
+      }
+      return adapter.tagSession({
+        sessionId: query.sessionId as never,
+        env: await envFor(query.profileId as ProfileId, profile.providerId),
+        tag: query.tag,
         ...(query.cwd === undefined ? {} : { cwd: query.cwd }),
       });
     },

@@ -73,8 +73,11 @@ import type {
   ServerProfile,
   ServerProfileCreatedBody,
   ServerProfilesBody,
+  ServerSessionDeletedBody,
   ServerSessionMessagesBody,
+  ServerSessionRenamedBody,
   ServerSessionsBody,
+  ServerSessionTaggedBody,
   ServerSessionSummary,
   SessionSummary,
 } from '@rx-artemis/protocol';
@@ -292,11 +295,13 @@ export interface ServerContext {
 }
 
 /**
- * The host's session store, reduced to the two reads the routes make.
+ * The host's session store, reduced to what the routes make of it.
  *
- * The same narrowing discipline as {@link RunSource}: the server may read
- * exactly what its ledger authorises, so the surface holds no delete, no
- * rename, and no cross-profile listing.
+ * The same narrowing discipline as {@link RunSource}: the server touches
+ * exactly what its ledger authorises, and nothing here lists across profiles.
+ * The three writes are optional — a host wires them only where the serving
+ * adapter really can rename, delete or tag, and a route whose method is
+ * absent answers 501 rather than pretending.
  */
 export interface SessionSource {
   list(query: {
@@ -311,6 +316,31 @@ export interface SessionSource {
     readonly runId: string;
     readonly cwd?: string;
   }): Promise<{ readonly events: readonly AgentEvent[]; readonly hasMore: boolean }>;
+  /**
+   * Store a title against a session, exactly as a local rename would.
+   *
+   * Returns the title as stored — trimmed and capped by the host — because
+   * the route's reply shows the caller what the store now says.
+   */
+  rename?(query: {
+    readonly profileId: string;
+    readonly sessionId: string;
+    readonly title: string;
+    readonly cwd?: string;
+  }): Promise<{ readonly title: string }>;
+  /** Destroy a stored transcript. False when there was nothing to remove. */
+  delete?(query: {
+    readonly profileId: string;
+    readonly sessionId: string;
+    readonly cwd?: string;
+  }): Promise<boolean>;
+  /** Write or clear the provider's own tag. False when nothing was there. */
+  tag?(query: {
+    readonly profileId: string;
+    readonly sessionId: string;
+    readonly tag: string | null;
+    readonly cwd?: string;
+  }): Promise<boolean>;
 }
 
 /** True when this reply is written incrementally rather than as one body. */
@@ -593,6 +623,115 @@ export async function handleServerRequest(
     return { ...reply, connectionId: connection.id };
   }
 
+  /*
+   * The session mutations: rename, tag, delete.
+   *
+   * POST and DELETE, so they sit above the read-only gate below.
+   * Authorisation is the messages route's, verbatim: the ledger scopes every
+   * id to the connection that asks, and "not yours" answers exactly like
+   * "not there" — a token must not be able to sound out which ids exist by
+   * trying to rename them either.
+   */
+  if (path.startsWith(`${apiPrefix}/sessions/`) && (method === 'POST' || method === 'DELETE')) {
+    if (context.ledger === undefined || context.sessions === undefined) {
+      return fail(
+        501,
+        'invalid_request_error',
+        'not_implemented',
+        'This Artemis build serves its catalogue but keeps no session history.',
+      );
+    }
+    const rest = path.slice(`${apiPrefix}/sessions/`.length);
+    const action =
+      method === 'DELETE' && !rest.includes('/')
+        ? ('delete' as const)
+        : method === 'POST' && rest.endsWith('/rename')
+          ? ('rename' as const)
+          : method === 'POST' && rest.endsWith('/tag')
+            ? ('tag' as const)
+            : null;
+    if (action !== null) {
+      const middle = action === 'delete' ? rest : rest.slice(0, -(`/${action}`.length));
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(middle);
+      } catch {
+        return fail(400, 'invalid_request_error', 'invalid_url', 'The session id could not be parsed.');
+      }
+      const profiles = await visibleProfiles();
+      const scope = scopeFor(connection, profiles);
+      if (sessionId.length === 0 || !context.ledger.mayAccess(scope, sessionId)) {
+        return unknownSession();
+      }
+      const entry = context.ledger.get(sessionId);
+      if (entry === undefined) return unknownSession();
+
+      if (action === 'rename') {
+        if (context.sessions.rename === undefined) {
+          return fail(501, 'invalid_request_error', 'not_implemented', 'This server cannot rename stored sessions.');
+        }
+        const title =
+          typeof request.body === 'object' && request.body !== null
+            ? (request.body as { title?: unknown }).title
+            : undefined;
+        if (typeof title !== 'string' || title.trim().length === 0) {
+          return fail(400, 'invalid_request_error', 'invalid_body', 'A rename needs a non-empty string "title".');
+        }
+        const stored = await context.sessions.rename({
+          profileId: entry.profileId,
+          sessionId,
+          title,
+          ...(entry.cwd === undefined ? {} : { cwd: entry.cwd }),
+        });
+        const body: ServerSessionRenamedBody = { object: 'artemis.session.renamed', title: stored.title };
+        return answer(body);
+      }
+
+      if (action === 'tag') {
+        if (context.sessions.tag === undefined) {
+          return fail(501, 'invalid_request_error', 'not_implemented', 'This server cannot tag stored sessions.');
+        }
+        const raw =
+          typeof request.body === 'object' && request.body !== null
+            ? (request.body as { tag?: unknown }).tag
+            : undefined;
+        if (raw !== null && typeof raw !== 'string') {
+          return fail(400, 'invalid_request_error', 'invalid_body', 'A tag is a string, or null to clear it.');
+        }
+        const tagged = await context.sessions.tag({
+          profileId: entry.profileId,
+          sessionId,
+          tag: raw,
+          ...(entry.cwd === undefined ? {} : { cwd: entry.cwd }),
+        });
+        const body: ServerSessionTaggedBody = { object: 'artemis.session.tagged', tagged };
+        return answer(body);
+      }
+
+      if (context.sessions.delete === undefined) {
+        return fail(501, 'invalid_request_error', 'not_implemented', 'This server cannot delete stored sessions.');
+      }
+      const deleted = await context.sessions.delete({
+        profileId: entry.profileId,
+        sessionId,
+        ...(entry.cwd === undefined ? {} : { cwd: entry.cwd }),
+      });
+      // The one session mutation that earns an access-log line: renames and
+      // tags are cosmetic, a deletion is irreversible, and "which token
+      // removed that conversation" is the question the record exists for.
+      if (deleted) {
+        context.onRemoteAccess?.({
+          kind: 'remote.session.deleted',
+          connectionId: connection.id,
+          sessionId,
+          profileId: entry.profileId,
+        });
+      }
+      const body: ServerSessionDeletedBody = { object: 'artemis.session.deleted', deleted };
+      return answer(body);
+    }
+  }
+
   if (method !== 'GET' && method !== 'HEAD') {
     // 405 only for a route that genuinely exists and genuinely refuses the
     // verb. Anything else is a 404, because "wrong method" on a path this
@@ -602,7 +741,7 @@ export async function handleServerRequest(
           405,
           'invalid_request_error',
           'method_not_allowed',
-          `${method} is not supported. This server is read-only.`,
+          `${method} is not supported on ${path}.`,
         )
       : fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
   }
