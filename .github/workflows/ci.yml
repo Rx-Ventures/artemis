@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # A failed run whose cause was environmental — a flaky download, a runner
+  # hiccup — should be retryable without manufacturing an empty commit.
+  workflow_dispatch:
 
 # A run superseded by a newer push to the same ref is checking a commit nobody
 # will merge — cancel it and give the runner to the one somebody will.
@@ -30,3 +33,21 @@ jobs:
       # regressions blind. This is the same `pnpm run build` the release
       # workflow performs before packaging, exercised on every change.
       - run: pnpm build
+
+  # Windows is a product platform, not just a release target: the suite covers
+  # behavior that only exists there — `.cmd` shim spawning, junction links in
+  # the profile farm, drive-letter path semantics — and a regression in any of
+  # it is invisible on Ubuntu. A separate job rather than a matrix so the
+  # `checks` status name existing branch protection knows stays put.
+  checks-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
