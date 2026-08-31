@@ -61,7 +61,7 @@ const CAPABILITIES = {
 };
 
 function setUp({
-  steersQueued = 1,
+  queuedSteers = ['r1:prompt:2'] as readonly string[],
   status = 'running' as 'running' | 'ended',
 } = {}): void {
   seedApp({
@@ -92,7 +92,7 @@ function setUp({
       cwd: '/w',
       capabilities: CAPABILITIES,
       startedAt: 0,
-      steersQueued,
+      queuedSteers,
     },
   });
 }
@@ -113,18 +113,18 @@ afterEach(cleanup);
 
 describe('the queued-message strip', () => {
   it('shows while a steer is outstanding on a live run, and counts them', () => {
-    setUp({ steersQueued: 1 });
+    setUp({ queuedSteers: ['r1:prompt:2'] });
     mount(<Composer />);
     expect(screen.getByText(/1 message queued/)).toBeTruthy();
 
     cleanup();
-    setUp({ steersQueued: 2 });
+    setUp({ queuedSteers: ['r1:prompt:2', 'r1:prompt:3'] });
     mount(<Composer />);
     expect(screen.getByText(/2 messages queued/)).toBeTruthy();
   });
 
   it('offers the interrupt, and the button is exactly that', () => {
-    setUp({ steersQueued: 1 });
+    setUp({ queuedSteers: ['r1:prompt:2'] });
     mount(<Composer />);
 
     const button = readNow();
@@ -138,7 +138,7 @@ describe('the queued-message strip', () => {
   });
 
   it('is absent with nothing queued', () => {
-    setUp({ steersQueued: 0 });
+    setUp({ queuedSteers: [] });
     mount(<Composer />);
     expect(screen.queryByText(/message(s)? queued/)).toBeNull();
     expect(readNow()).toBeNull();
@@ -148,7 +148,7 @@ describe('the queued-message strip', () => {
     // The count is zeroed when the continuation claims the pane; between the
     // run's end and that claim there is nothing live to interrupt, so the
     // strip must already be gone.
-    setUp({ steersQueued: 2, status: 'ended' });
+    setUp({ queuedSteers: ['r1:prompt:2', 'r1:prompt:3'], status: 'ended' });
     mount(<Composer />);
     expect(readNow()).toBeNull();
   });

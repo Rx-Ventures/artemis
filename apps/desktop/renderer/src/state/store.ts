@@ -10528,12 +10528,23 @@ export async function submitPrompt(
     if (result.ok) {
       pane.transcript.confirmUserMessage(steerId);
       if (!result.value.deliveredImmediately) {
-        // What the composer's queued strip renders, and what its "read it
-        // now" interrupt clears the way for. On the run so it dies with it.
+        /*
+         * What the composer's strip counts and what the row's own control asks
+         * about. On the run so it dies with it.
+         *
+         * Filed under the claim where there is one, because that is the name
+         * `message.delivered` will arrive under and the only way this entry can
+         * ever be struck by the provider reading the message. Where the window
+         * could not claim an identity — an adopted run, whose prompt numbering
+         * it does not know — the row's own id stands in: it keeps the count
+         * honest, and it resolves when the turn does, which is what every
+         * queued message used to have to do.
+         */
+        const key = steerClaim ?? steerId;
         setPaneState(pane, (s) => ({
           run:
             s.run && s.run.runId === live.runId
-              ? { ...s.run, steersQueued: (s.run.steersQueued ?? 0) + 1 }
+              ? { ...s.run, queuedSteers: [...(s.run.queuedSteers ?? []), key] }
               : s.run,
         }));
       }
@@ -11803,7 +11814,7 @@ function claimContinuation(event: AgentEvent): Pane | undefined {
        * this turn were consumed by it.
        */
       promptsSent: 0,
-      steersQueued: 0,
+      queuedSteers: [],
     },
   });
   return pane;
@@ -11920,6 +11931,40 @@ function applyAgentEvent(event: AgentEvent): void {
         tasks: event.tasks,
         ...(kept.length === dismissedTasks.length ? {} : { dismissedTasks: kept }),
       });
+      break;
+    }
+
+    /*
+     * The provider read a message that was waiting. Strike it.
+     *
+     * The signal the queued strip never had. A mid-turn message is folded into
+     * the running turn at a tool boundary, and that fold was invisible from
+     * outside the provider process — so the count had nothing to clear it but
+     * the end of the run and went on saying "1 message queued" over a message
+     * the agent was visibly acting on.
+     *
+     * Matched on the id, not the position, because delivery order is not
+     * arrival order in the pane: a steer typed into a turn that ended can be
+     * read by the *next* turn, and the event then arrives naming a run this
+     * pane has already moved off. The id survives that; an index would not.
+     *
+     * Addressed to the pane rather than to `run` for the same reason — the
+     * event is routed by `paneForRun`, but the entry it strikes may be filed
+     * under whatever run the pane holds now. Rewritten only if it actually
+     * names something: an unknown id (the opening prompt, a message another
+     * window sent) must not rebuild the pane.
+     */
+    case 'message.delivered': {
+      const queued = run.queuedSteers ?? [];
+      if (!queued.includes(event.messageId)) break;
+      setPaneState(pane, (s) => ({
+        run: s.run
+          ? {
+              ...s.run,
+              queuedSteers: (s.run.queuedSteers ?? []).filter((id) => id !== event.messageId),
+            }
+          : s.run,
+      }));
       break;
     }
 
