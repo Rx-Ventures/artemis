@@ -74,7 +74,14 @@ linux:
 # always runs with `--publish never`.
 publish:
   provider: github
-  owner: Rx-Ventures
+  # The repository moved from the Rx-Ventures org to seth-torrence on
+  # 2026-08-30. GitHub redirects the old path, which is why builds kept
+  # working — but a redirect is not a guarantee: the moment anything is
+  # created at the old name the redirect stops and every installed client
+  # silently checks a repository we do not own. This value is baked into
+  # `app-update.yml` inside each build, so it is the one that decides where
+  # installed copies look for their updates.
+  owner: seth-torrence
   repo: artemis
 
 npmRebuild: false

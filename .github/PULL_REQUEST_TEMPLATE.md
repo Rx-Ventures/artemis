@@ -13,7 +13,7 @@
   Found a bug? Please open an issue instead. The fix will land, with credit,
   through the normal roadmap.
 
-    https://github.com/Rx-Ventures/artemis/blob/main/CONTRIBUTING.md
+    https://github.com/seth-torrence/artemis/blob/main/CONTRIBUTING.md
 -->
 
 ## What is different now

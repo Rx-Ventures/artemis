@@ -7,7 +7,7 @@
     "name": "Seth Torrence",
     "email": "seth@storrence.dev"
   },
-  "homepage": "https://github.com/Rx-Ventures/artemis",
+  "homepage": "https://github.com/seth-torrence/artemis",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",

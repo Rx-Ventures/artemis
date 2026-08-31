@@ -8,7 +8,7 @@ body:
         Pull requests are paused, but ideas are not. Nothing about the roadmap is
         secret, and an argument against a decision is worth more **before** the
         third adapter lands than after — the interfaces are still allowed to move
-        right now. See [CONTRIBUTING.md](https://github.com/Rx-Ventures/artemis/blob/main/CONTRIBUTING.md).
+        right now. See [CONTRIBUTING.md](https://github.com/seth-torrence/artemis/blob/main/CONTRIBUTING.md).
 
   - type: textarea
     id: proposal

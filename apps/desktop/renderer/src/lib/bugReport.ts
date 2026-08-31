@@ -33,8 +33,16 @@
  * that mattered.
  */
 
-/** The repository issues are filed against. Kept in lockstep with `updater.ts`. */
-export const ISSUES_REPO = 'Rx-Ventures/artemis';
+/**
+ * The repository issues are filed against.
+ *
+ * Kept in lockstep with the publish block in `electron-builder.yml`, which is
+ * where the updater's copy of this fact lives. Moved with the repository from
+ * the Rx-Ventures org to seth-torrence on 2026-08-30 — GitHub redirects the
+ * old path today, but a report filed through a redirect is a report filed
+ * somewhere we do not control if that redirect ever lapses.
+ */
+export const ISSUES_REPO = 'seth-torrence/artemis';
 
 /** The label every submission carries, so in-app reports are filterable. */
 const LABEL = 'bug';
