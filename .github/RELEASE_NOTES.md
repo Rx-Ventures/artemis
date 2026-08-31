@@ -1,6 +1,25 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.1.2
+
+**Install this one.** It is the release that moves your copy onto the
+repository's real home.
+
+Artemis moved from the Rx-Ventures organisation to `seth-torrence`. GitHub
+kept a redirect, so nothing broke and nothing looked wrong — but every copy
+installed before this one is still asking the old address where to find its
+updates, and a redirect is not a promise. If anything is ever created at the
+old path, the redirect stops and those copies go looking somewhere nobody
+controls.
+
+Updating to 2.1.2 settles it permanently: this build carries the real
+address, so from here on your copy asks the right repository directly. There
+is nothing to do beyond installing it, and no further migration after this.
+
+If auto-update is switched off, take this one by hand — it is the last
+release the old address will reliably reach.
+
 ## What's new in 2.1.1
 
 2.1.0 changed the tokens; 2.1.1 finishes the overhaul the tokens started —
