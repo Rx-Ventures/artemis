@@ -175,6 +175,22 @@ export const MIRRORED_KEYS: readonly (keyof MirroredState)[] = [
   'quickModelIdsByProfile',
 ];
 
+/**
+ * Why a hand-off is being offered.
+ *
+ * Two doors reach the same picker and they owe the reader different sentences.
+ * `limit` is the automatic one — a plan threshold tripped, the run was stopped
+ * before the wall, and the dialog names the window and its reset. `manual` is
+ * the user pressing Hand off, where there is no threshold to report and the
+ * only fact worth stating is that the conversation is being moved on purpose.
+ *
+ * Discriminated rather than an optional `trigger`, so a surface that reads the
+ * threshold cannot forget to check whether there is one.
+ */
+export type HandoffOffer =
+  | { readonly kind: 'limit'; readonly trigger: HandoffTrigger; readonly at: number }
+  | { readonly kind: 'manual'; readonly at: number };
+
 /** One column's worth of state. Read through `usePane`, written by `store.ts`. */
 export interface SessionState extends MirroredState {
   /**
@@ -394,7 +410,18 @@ export interface SessionState extends MirroredState {
    * decline to the note, dismiss — and at every conversation boundary, the
    * same rule the rest of the per-conversation fields follow.
    */
-  readonly handoffOffer: { readonly trigger: HandoffTrigger; readonly at: number } | null;
+  readonly handoffOffer: HandoffOffer | null;
+  /**
+   * An account waiting for a seeded conversation, once the briefing is written.
+   *
+   * The ordinary hand-off *moves* a conversation, which only an account that
+   * can reach its transcript can do. This is the other case: a profile in a
+   * different config directory — often a different provider entirely — cannot
+   * continue the session, but it can start a fresh one on the same folder with
+   * the briefing in hand. That takes two runs, so the intent has to survive
+   * between them, and this is where it waits. See `seedHandoffToProfile`.
+   */
+  readonly seedHandoffTo: ProfileId | null;
   /**
    * What is typed into this column's composer and not yet sent.
    *

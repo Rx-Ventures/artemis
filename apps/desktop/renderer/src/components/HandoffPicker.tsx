@@ -48,6 +48,7 @@ import {
   activeModel,
   chooseHandoffTarget,
   canReachSession,
+  seedHandoffToProfile,
   declineHandoffOffer,
   dismissHandoffOffer,
   useApp,
@@ -56,6 +57,7 @@ import {
   describeBlock,
   handoffCandidates,
   handoffTargetBlock,
+  seedCandidates,
 } from '../state/handoffTargets';
 import { describeReset, modelExhaustion, modelPressure } from '../state/modelFacts';
 import { usePane, usePaneRef } from '../state/paneContext';
@@ -105,14 +107,19 @@ function OpenPicker(): ReactElement | null {
   const [busy, setBusy] = useState(false);
 
   if (offer == null) return null;
-  const { trigger } = offer;
+  // The threshold exists only on the automatic path; the manual one has no
+  // reading to report. Every use below is guarded on it rather than on the
+  // kind, so a future third door gets the same treatment for free.
+  const trigger = offer.kind === 'limit' ? offer.trigger : null;
 
   const summary = sessionId === null ? undefined : sessions.find((s) => s.id === sessionId);
-  const candidates = handoffCandidates(profiles, activeId, (id) =>
-    summary === undefined ? false : canReachSession(summary, id),
-  );
+  const reaches = (id: ProfileId): boolean =>
+    summary === undefined ? false : canReachSession(summary, id);
+  const candidates = handoffCandidates(profiles, activeId, reaches);
+  // Accounts that cannot take the conversation, but can take the work.
+  const seedable = seedCandidates(profiles, activeId, reaches);
 
-  const reset = describeReset(trigger.window.resetsAt, now);
+  const reset = trigger ? describeReset(trigger.window.resetsAt, now) : null;
   const source = profiles.find((p) => p.id === activeId);
 
   const choose = (profileId: ProfileId): void => {
@@ -134,13 +141,23 @@ function OpenPicker(): ReactElement | null {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ArrowRightLeftIcon className="size-4 text-amber" aria-hidden="true" />
-            Hand off this conversation?
+            {trigger ? 'Hand off this conversation?' : 'Hand off to another account'}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            {source ? `${source.label}’s` : 'This account’s'} {trigger.threshold.label} limit is at{' '}
-            {trigger.utilization}%{reset === null ? '' : ` · ${reset}`}. The run was stopped before
-            the wall. Another account can pick this conversation up exactly where it stands — or the
-            agent can write a continuity note here instead.
+            {trigger ? (
+              <>
+                {source ? `${source.label}’s` : 'This account’s'} {trigger.threshold.label} limit is
+                at {trigger.utilization}%{reset === null ? '' : ` · ${reset}`}. The run was stopped
+                before the wall. Another account can pick this conversation up exactly where it
+                stands — or the agent can write a continuity note here instead.
+              </>
+            ) : (
+              <>
+                The run has been stopped. Another account can pick this conversation up exactly
+                where it stands, with its transcript and its directory — or the agent can write a
+                hand-off document here instead.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -159,12 +176,45 @@ function OpenPicker(): ReactElement | null {
               onChoose={choose}
             />
           ))}
-          {candidates.length === 0 ? (
+          {seedable.length > 0 ? (
+            <>
+              {/*
+                The second answer, and the reason it is a separate group: these
+                accounts are not worse versions of the ones above, they are a
+                different act. Above, the conversation moves and keeps its
+                transcript. Here it does not — a new conversation starts on the
+                same folder with the briefing as its whole inheritance, which
+                is the only thing an account in another config directory could
+                ever be offered.
+              */}
+              <p className="mt-2 px-1 text-2xs leading-snug text-ink-faint">
+                These accounts cannot read this conversation. They can start a fresh one here,
+                seeded with a hand-off briefing:
+              </p>
+              {seedable.map((candidate) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    void seedHandoffToProfile(candidate.id, pane).finally(() => setBusy(false));
+                  }}
+                  className="flex items-center gap-2.5 rounded-lg border border-hairline px-3 py-2.5 text-left text-xs text-ink-muted hover:border-hairline-strong hover:bg-wash disabled:opacity-60"
+                >
+                  <ProfileSwatch color={candidate.color} />
+                  <span className="min-w-0 flex-1 truncate text-ink">{candidate.label}</span>
+                  <span className="shrink-0 text-2xs text-ink-faint">seed a new conversation</span>
+                </button>
+              ))}
+            </>
+          ) : null}
+          {candidates.length === 0 && seedable.length === 0 ? (
             // Unreachable in practice — the store only opens the picker with a
             // chooseable candidate — but a dialog must never render an empty
             // hole where its answers were promised.
             <p className="px-1 py-2 text-2xs leading-snug text-ink-faint">
-              No other account can reach this conversation’s transcript.
+              There is no other account to hand this to.
             </p>
           ) : null}
         </div>

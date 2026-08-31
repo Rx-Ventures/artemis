@@ -223,6 +223,7 @@ describe('the prompt', () => {
         utilization: 93,
       },
       '2026-08-19T1407',
+      null,
     );
 
     expect(text).toContain('5-hour limit is at 93%');
@@ -237,6 +238,35 @@ describe('the prompt', () => {
     const stamp = handoffStamp(NOW);
     expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{4}$/);
   });
+
+  it('says why without a threshold when the hand-off was asked for', () => {
+    // The manual door has no reading to report, and must not invent one.
+    const text = handoffPrompt(null, '2026-08-30T1200', null);
+
+    expect(text).toContain('handed off deliberately');
+    expect(text).not.toContain('limit is at');
+    expect(text).toContain('.artemis/handoff-2026-08-30T1200.md');
+    // Everything that makes the document worth reading survives the door it
+    // came through.
+    expect(text).toContain('do not start the next piece of work');
+    expect(text).toContain('What you learned');
+  });
+
+  it('sends the document to the project when the session is in a worktree', () => {
+    /*
+     * The failure this exists to prevent: a worktree is made for one branch
+     * and deleted when that branch lands, so a briefing written into one
+     * disappears with the work it was describing. The path must be absolute
+     * and must name the project, not the checkout.
+     */
+    const text = handoffPrompt(null, '2026-08-30T1200', '/Users/ada/code/artemis');
+
+    expect(text).toContain('/Users/ada/code/artemis/.artemis/handoff-2026-08-30T1200.md');
+    expect(text).toContain('linked worktree');
+    // Never the bare relative path, which is what would land in the worktree.
+    expect(text).not.toContain('`.artemis/handoff-2026-08-30T1200.md`');
+  });
+
 });
 
 /* -------------------------------------------------------------------------- */

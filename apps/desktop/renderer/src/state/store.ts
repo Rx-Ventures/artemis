@@ -2190,6 +2190,7 @@ function seedSession(overrides: Partial<SessionState> = {}): SessionState {
     promptHistory: [],
     handoff: 'none',
     handoffOffer: null,
+    seedHandoffTo: null,
     draft: '',
     parkedDrafts: {},
     ...overrides,
@@ -6028,12 +6029,20 @@ async function requestHandoff(pane: Pane, trigger: HandoffTrigger, now: number):
  * trigger found no candidate to offer, or the user looked at the candidates
  * and declined ({@link declineHandoffOffer}).
  */
-async function requestContinuityNote(pane: Pane, trigger: HandoffTrigger, now: number): Promise<void> {
+async function requestContinuityNote(
+  pane: Pane,
+  trigger: HandoffTrigger | null,
+  now: number,
+): Promise<void> {
   // Promoted only once the interrupted run's `run.end` is behind us: from
   // here the next run to end is the one this prompt starts, which is exactly
   // what `asked` means.
   setHandoff(pane, 'asked');
-  const sent = await submitPrompt(handoffPrompt(trigger, handoffStamp(now)), undefined, pane);
+  const sent = await submitPrompt(
+    handoffPrompt(trigger, handoffStamp(now), handoffProjectRoot(pane)),
+    undefined,
+    pane,
+  );
   // Same rule one step later. `submitPrompt` refuses for reasons of its own — a
   // provider that cannot take a prompt, a directory that has gone away — and a
   // refusal means no document exists. `done` would block the conversation over
@@ -6092,10 +6101,206 @@ function offerHandoff(pane: Pane, trigger: HandoffTrigger): boolean {
     if (app.authByProfile[profile.id] === undefined) void readAuthStatus(profile.id);
   }
 
-  setPaneState(pane, { handoffOffer: { trigger, at: now } });
+  setPaneState(pane, { handoffOffer: { kind: 'limit', trigger, at: now } });
   setHandoff(pane, 'offered');
   return true;
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Handing off on purpose                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where a hand-off document belongs, when that is not simply "here".
+ *
+ * A linked worktree is a temporary place: made for one branch, deleted when
+ * that branch lands. A briefing written into one is a briefing that disappears
+ * with the thing it was describing, which is the one outcome a hand-off cannot
+ * afford — so the document goes to the *project*, and this returns that path
+ * when it differs from where the session is working.
+ *
+ * `null` for every ordinary checkout, where the relative path the prompt has
+ * always used is already right, and `null` when the workspace is unknown: a
+ * guessed absolute path is worse than the relative one, because it can land
+ * outside the repository altogether.
+ */
+function handoffProjectRoot(pane: Pane): string | null {
+  const state = paneState(pane);
+  const project = state.workspace?.projectRoot;
+  if (project === undefined) return null;
+  // Same place by another name — say nothing rather than restate the cwd as an
+  // absolute, which would only make the prompt longer.
+  if (project === state.cwd) return null;
+  return project;
+}
+
+/**
+ * The user pressed Hand off and chose to move the work.
+ *
+ * The automatic path ({@link offerHandoff}) opens the same picker when a plan
+ * threshold trips; this is the door the user opens themselves, so the gates
+ * are the ones that are actually about *moving a conversation* — there is a
+ * session to continue, and the listing knows it well enough to prove another
+ * account can reach it — and none of the ones about plan readings.
+ *
+ * A live run is interrupted first. Handing a conversation to another account
+ * while this one is still writing to it is how two runs end up appending to
+ * one transcript; the interrupt is the same one the automatic path performs
+ * before it asks.
+ */
+export async function offerManualHandoff(pane: Pane = focusedPane()): Promise<boolean> {
+  const state = paneState(pane);
+  const sessionId = state.resumeSessionId;
+  if (sessionId === null) {
+    pushBanner(
+      'warn',
+      'Nothing to hand off yet',
+      'This conversation has not started, so there is no work for another account to continue.',
+    );
+    return false;
+  }
+  if (isLive(state)) await interruptRun(pane);
+
+  const summary = paneState(pane).sessions.find((one) => one.id === sessionId);
+  if (summary === undefined) {
+    pushBanner(
+      'warn',
+      'This conversation cannot be handed over yet',
+      'Artemis has not listed it, so it cannot prove another account can reach its transcript. Try again in a moment.',
+    );
+    return false;
+  }
+
+  // Warm the sign-in facts the rows draw, exactly as the automatic path does.
+  const app = useApp.getState();
+  for (const profile of handoffCandidates(state.profiles, state.activeProfileId, (id) =>
+    canReachSession(summary, id),
+  )) {
+    if (app.authByProfile[profile.id] === undefined) void readAuthStatus(profile.id);
+  }
+
+  setPaneState(pane, { handoffOffer: { kind: 'manual', at: Date.now() } });
+  return true;
+}
+
+/**
+ * The user pressed Hand off and chose the document.
+ *
+ * No picker and no latch: this writes a briefing and leaves the conversation
+ * exactly where it is. The automatic path's `handoff` latch exists to stop a
+ * spent account from being asked for more work — nothing here is spent, so
+ * blocking the next turn would be punishing the user for writing a note.
+ */
+export async function writeHandoffDoc(pane: Pane = focusedPane()): Promise<void> {
+  if (isLive(paneState(pane))) await interruptRun(pane);
+  const sent = await submitPrompt(
+    handoffPrompt(null, handoffStamp(Date.now()), handoffProjectRoot(pane)),
+    undefined,
+    pane,
+  );
+  if (!sent) {
+    pushBanner(
+      'warn',
+      'The hand-off document could not be started',
+      'The prompt was refused, so nothing has been written.',
+    );
+  }
+}
+
+
+/**
+ * Hand the *work* to an account that cannot have the conversation.
+ *
+ * The ordinary hand-off moves a session, and only an account whose config
+ * directory holds that session's transcript can take it. This is the door for
+ * every other account — a different provider, a separate config directory,
+ * anything `canReachSession` refuses — and it moves the work rather than the
+ * conversation: the agent writes the briefing, and a *new* session opens on
+ * the target account, in the same folder, with the briefing prompt waiting.
+ *
+ * It takes two runs, which is why the intent is parked in `seedHandoffTo`
+ * rather than held in a closure: the second half happens when the first run
+ * ends, in `run.end`, and a closure would not survive a reload between them.
+ *
+ * The seeded conversation does not send itself. The prompt is put in the
+ * composer for the user to read and press — starting a run on a fresh account
+ * without being asked is how a hand-off quietly spends money on an account the
+ * user was only pointing at.
+ */
+export async function seedHandoffToProfile(
+  profileId: ProfileId,
+  pane: Pane = focusedPane(),
+): Promise<boolean> {
+  const profile = paneState(pane).profiles.find((p) => p.id === profileId);
+  if (profile === undefined) return false;
+  if (isLive(paneState(pane))) await interruptRun(pane);
+
+  setPaneState(pane, { seedHandoffTo: profileId, handoffOffer: null });
+  setHandoff(pane, 'asked');
+  const sent = await submitPrompt(
+    handoffPrompt(null, handoffStamp(Date.now()), handoffProjectRoot(pane)),
+    undefined,
+    pane,
+  );
+  if (!sent) {
+    setPaneState(pane, { seedHandoffTo: null });
+    abandonHandoff(pane, 'the prompt could not be sent');
+    return false;
+  }
+  pane.transcript.note(
+    'info',
+    `Handing this work to ${profile.label}`,
+    'The briefing is being written. When it is done, a new conversation opens on that account in this folder with the briefing ready to send.',
+  );
+  return true;
+}
+
+/**
+ * The second half: the briefing is written, so open the conversation it was
+ * written for.
+ *
+ * Same column, for the reason `handOffToProfile` uses it: the work moved, and
+ * the column is where the user is looking. The old conversation is not lost —
+ * it is in the session list, on the account that had it.
+ */
+function openSeededHandoff(pane: Pane, profileId: ProfileId): void {
+  const state = paneState(pane);
+  const profile = state.profiles.find((p) => p.id === profileId);
+  setPaneState(pane, { seedHandoffTo: null });
+  if (profile === undefined) return;
+
+  const cwd = state.cwd;
+  // `adoptRecommendedProfile: false` — the account was chosen by hand a moment
+  // ago, and letting the recommender overrule that would answer a question
+  // nobody asked.
+  const target = newSession(pane, { adoptRecommendedProfile: false });
+  applyProfile(target, profile);
+  // `newSession` does not move the directory, and the whole point of a seeded
+  // hand-off is that the work stays where it is. Stated rather than assumed.
+  setPaneState(target, { cwd, draft: SEEDED_HANDOFF_PROMPT });
+  savePrefs();
+  void refreshModels(target);
+  void refreshCommands(target);
+  refreshAuth(target);
+  target.transcript.note(
+    'info',
+    `Seeded from the previous conversation`,
+    'The briefing in `.artemis/` is the whole context this account has. Read it, then send when you are ready.',
+  );
+}
+
+/**
+ * What the seeded conversation opens with.
+ *
+ * Deliberately short and deliberately unsent: it names the folder's own
+ * briefing directory rather than one file, because the agent can list it and
+ * the newest document is the one it wants — and because a stale absolute path
+ * baked in here would be wrong the moment a second hand-off is written.
+ */
+const SEEDED_HANDOFF_PROMPT =
+  'Read the newest hand-off document in `.artemis/` and continue that work. ' +
+  'Start by telling me what you understand the next step to be.';
 
 /**
  * The user chose a target in the picker. The chosen act, performed.
@@ -6131,7 +6336,7 @@ export function declineHandoffOffer(pane: Pane = focusedPane()): void {
   const offer = paneState(pane).handoffOffer;
   if (offer == null) return;
   setPaneState(pane, { handoffOffer: null });
-  void requestContinuityNote(pane, offer.trigger, Date.now());
+  void requestContinuityNote(pane, offer.kind === 'limit' ? offer.trigger : null, Date.now());
 }
 
 /**
@@ -11518,7 +11723,19 @@ function applyAgentEvent(event: AgentEvent): void {
       // and this conversation is finished on this account. `done` is what makes
       // the next prompt ask the user to move rather than silently spend the
       // runway the handoff was bought with.
-      if (paneState(pane).handoff === 'asked') setHandoff(pane, 'done');
+      if (paneState(pane).handoff === 'asked') {
+        // A seeded hand-off asked for this run, so the briefing it was waiting
+        // for now exists: open the conversation it was written for. `done`
+        // would be wrong here — that state blocks the next prompt on an
+        // account that is spent, and this account is merely being left.
+        const seeded = paneState(pane).seedHandoffTo;
+        if (seeded !== null) {
+          setHandoff(pane, 'none');
+          openSeededHandoff(pane, seeded);
+        } else {
+          setHandoff(pane, 'done');
+        }
+      }
       break;
     }
 

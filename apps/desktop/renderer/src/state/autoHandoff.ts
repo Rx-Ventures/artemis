@@ -107,12 +107,40 @@ export function handoffReason(input: {
  * and `artifact.ts` recognises it as generated output — the document arrives as
  * an artifact tile with a preview rather than as a wall of diff.
  */
-export function handoffPrompt(trigger: HandoffTrigger, stamp: string): string {
+export function handoffPrompt(
+  trigger: HandoffTrigger | null,
+  stamp: string,
+  /**
+   * Where `.artemis/` belongs — the project root, which is *not* the working
+   * directory when the session is running in a linked worktree.
+   *
+   * A worktree is made for one branch and deleted when that branch lands, so a
+   * hand-off written into one is a hand-off that disappears with the thing it
+   * was describing. `null` when the two are the same, which is every ordinary
+   * checkout, and the prompt then says nothing about paths beyond the relative
+   * one it always said.
+   */
+  projectRoot: string | null,
+): string {
+  const why = trigger
+    ? [
+        `This account's ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%, so this`,
+        'conversation is stopping here and the work is being handed to another session.',
+      ]
+    : [
+        'This conversation is being handed off deliberately — the work is stopping here and',
+        'moving to another session.',
+      ];
+  const where = projectRoot
+    ? `Write \`${projectRoot}/.artemis/handoff-${stamp}.md\` — an absolute path, because this`
+      + ' session is running in a linked worktree and the hand-off belongs to the project'
+      + ' rather than to a branch checkout that will be deleted. Create the directory if it'
+      + ' is not there. Write it as a'
+    : `Write \`.artemis/handoff-${stamp}.md\` — create the directory if it is not there — as a`;
   return [
-    `This account's ${trigger.threshold.label} limit is at ${String(trigger.utilization)}%, so this`,
-    'conversation is stopping here and the work is being handed to another session.',
+    ...why,
     '',
-    `Write \`.artemis/handoff-${stamp}.md\` — create the directory if it is not there — as a`,
+    where,
     'briefing for an agent that has never seen this conversation. It has the repository and',
     'nothing else: no transcript, no memory of what was tried.',
     '',

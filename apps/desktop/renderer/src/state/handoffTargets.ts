@@ -160,3 +160,22 @@ export function handoffCandidates(
 ): readonly ProfileMetadata[] {
   return profiles.filter((p) => p.id !== activeProfileId && reaches(p.id));
 }
+
+/**
+ * The accounts that cannot continue this conversation, but could start a new
+ * one seeded from it.
+ *
+ * Every profile the ordinary candidate list refuses on reachability — a
+ * different config directory, usually a different provider. They are not
+ * failures to be hidden: an account that cannot read a transcript can still do
+ * the work, given the briefing, and offering that is the difference between a
+ * hand-off that stops at the provider boundary and one that does not. See
+ * `seedHandoffToProfile`.
+ */
+export function seedCandidates(
+  profiles: readonly ProfileMetadata[],
+  activeProfileId: ProfileId | null,
+  reaches: (profileId: ProfileId) => boolean,
+): readonly ProfileMetadata[] {
+  return profiles.filter((p) => p.id !== activeProfileId && !reaches(p.id));
+}
