@@ -210,13 +210,19 @@ export function Composer(): ReactElement {
    */
   const suggestion = usePane(offeredSuggestion);
   /*
-   * Steers accepted into the live run that no turn has consumed yet — what the
-   * queued strip below the field renders. Gated on `live` at the selector so
-   * the strip cannot outlive the run it describes: the count is zeroed when a
-   * continuation turn opens, but between `run.end` and that claim the run is
-   * simply not live and there is nothing to interrupt.
+   * How many steers the provider has not been seen to read — the length of the
+   * pane's queued set, which is also what the control row under each of those
+   * messages reads. A number rather than the array, because a selector that
+   * returned the array would hand zustand a fresh identity whenever the run
+   * object was rebuilt and re-render the composer on every keystroke elsewhere
+   * in the column; the strip only ever needed the count.
+   *
+   * Gated on `live` at the selector so the strip cannot outlive the run it
+   * describes: the set is emptied when a continuation turn opens, but between
+   * `run.end` and that claim the run is simply not live and there is nothing
+   * to interrupt.
    */
-  const queuedSteers = usePane((s) => (isLive(s) ? (s.run?.steersQueued ?? 0) : 0));
+  const queuedSteers = usePane((s) => (isLive(s) ? (s.run?.queuedSteers?.length ?? 0) : 0));
 
   const locked = live && !steering.supported;
 

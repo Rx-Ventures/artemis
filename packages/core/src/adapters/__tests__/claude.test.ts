@@ -703,14 +703,52 @@ describe('permissions', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('interrupt', () => {
-  it('reports what the provider still has queued', async () => {
+  /**
+   * The receipt, answered in the ids the caller uses.
+   *
+   * `still_queued` is a list of the CLI's own uuids, and a caller holding rows
+   * on screen cannot do anything with those. It can only be translated because
+   * the adapter now stamps the uuid itself when it is given a `messageId` —
+   * which is also what puts the message in the CLI's *named* queue at all: the
+   * receipt lists uuid-stamped messages, and until this the app's own steers
+   * carried no uuid and so could never appear on one.
+   *
+   * Ids that cannot be placed are dropped rather than passed through, on the
+   * SDK's own advice: the list may name messages this client never sent — a
+   * cron trigger, an auto-resume continuation — and a caller matching those
+   * against its transcript would find nothing and be unable to tell that from
+   * a bug.
+   */
+  it('names the messages it sent, and drops the ids it cannot place', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake, prompt } = harness();
+    const reader = prompt[Symbol.asyncIterator]();
+    await reader.next(); // the opening prompt
+
+    await run.send('and check the tests', undefined, 'run-1:prompt:2');
+    const sent = (await reader.next()).value as SDKUserMessage;
+    const uuid = sent.uuid;
+    expect(typeof uuid).toBe('string');
+
+    fake.interruptImpl = () =>
+      Promise.resolve({ still_queued: [uuid as string, 'a-cron-trigger'] });
+
+    await expect(run.interrupt()).resolves.toEqual({ stillQueued: ['run-1:prompt:2'] });
+    expect(fake.interruptCalls).toBe(1);
+    await run.dispose();
+  });
+
+  it('has nothing to report for a message the caller never named', async () => {
+    // No `messageId` on the send: the caller did not ask to hear about this
+    // one, so nothing is tracked and the receipt has no id to translate.
     const { harness } = installQuery();
     const run = await createClaudeAdapter().createRun(BASE_INPUT);
     const { fake } = harness();
+    await run.send('and check the tests');
     fake.interruptImpl = () => Promise.resolve({ still_queued: ['msg-2', 'msg-3'] });
 
-    await expect(run.interrupt()).resolves.toEqual({ stillQueued: ['msg-2', 'msg-3'] });
-    expect(fake.interruptCalls).toBe(1);
+    await expect(run.interrupt()).resolves.toEqual({ stillQueued: [] });
     await run.dispose();
   });
 
@@ -3060,6 +3098,155 @@ describe('a steer still being staged when the turn ended', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* The fold, made visible                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * When the CLI reads a message that was waiting, and how anyone finds out.
+ *
+ * A mid-turn message is folded into the running turn at a tool-batch boundary.
+ * That fold used to be invisible from outside the provider process: the only
+ * thing that ever happened was the CLI echoing the message back on its own
+ * stream, and `mapUserMessage` drops that echo on sight — rightly, because the
+ * window drew the row the moment the words were typed and a second one would
+ * show the user their own words twice.
+ *
+ * The cost of dropping it was a UI that could say a message had been sent and
+ * never that it had been read. A queued indicator built on the send alone had
+ * nothing to clear it but the end of the run, so it went on announcing "1
+ * message queued" while the agent was visibly acting on the message.
+ *
+ * So the echo is read here — beside the drop, not instead of it. The transcript
+ * still gets no second row; what it produces is `message.delivered`, naming the
+ * message in the id the *caller* filed it under, which is the only id both ends
+ * can speak.
+ */
+describe('a queued message the provider reads', () => {
+  /** The CLI writing a user turn to its transcript, and echoing it back. */
+  const echo = (text: string, uuid?: string): SDKMessage =>
+    ({
+      type: 'user',
+      parent_tool_use_id: null,
+      session_id: 'sess-abc',
+      ...(uuid === undefined ? {} : { uuid }),
+      message: { role: 'user', content: text },
+    }) as unknown as SDKMessage;
+
+  it('says so, under the name the caller gave it', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake, prompt } = harness();
+    const reader = prompt[Symbol.asyncIterator]();
+    await reader.next(); // the opening prompt
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('actually, do the tests first', undefined, 'run-1:prompt:2');
+    const sent = (await reader.next()).value as SDKUserMessage;
+
+    // The fold: the CLI takes the message and writes it to the transcript.
+    fake.messages.push(echo('actually, do the tests first', sent.uuid));
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    expect(events.filter((event) => event.type === 'message.delivered')).toEqual([
+      expect.objectContaining({ type: 'message.delivered', messageId: 'run-1:prompt:2' }),
+    ]);
+    // And still no second copy of the user's words.
+    expect(
+      events.filter((event) => event.type === 'text.complete' && event.role === 'user'),
+    ).toEqual([]);
+  });
+
+  it('recognises the message by its words inside the CLI framing', async () => {
+    /*
+     * The shape a fold actually arrives in. The CLI takes a queued message as
+     * a `queued_command` attachment minted under an id of its own — the id it
+     * was sent with survives only as `source_uuid` — and frames the text for
+     * the model with a line saying who it came from. So the uuid does not come
+     * back and the words are not alone; the user's own sentence in the middle
+     * is what is left to recognise it by.
+     */
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('actually, do the tests first', undefined, 'run-1:prompt:2');
+    fake.messages.push(
+      echo(
+        'The user sent a new message while you were working:\nactually, do the tests first',
+        'an-id-of-the-clis-own',
+      ),
+    );
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    expect(events.filter((event) => event.type === 'message.delivered')).toEqual([
+      expect.objectContaining({ messageId: 'run-1:prompt:2' }),
+    ]);
+  });
+
+  it('says nothing for an echo of a message nobody is waiting on', async () => {
+    // The turn's opening prompt is echoed too, and it was never queued. A
+    // report for it would take a waiting message's place in the caller's set.
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('actually, do the tests first', undefined, 'run-1:prompt:2');
+    fake.messages.push(echo(BASE_INPUT.prompt, 'uuid-opening'));
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    expect(events.filter((event) => event.type === 'message.delivered')).toEqual([]);
+  });
+
+  it('does not mistake replayed history for a message being read', async () => {
+    // A resumed conversation reads its whole transcript back. An old turn
+    // arriving as history is not this turn's message being taken up.
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('actually, do the tests first', undefined, 'run-1:prompt:2');
+    fake.messages.push({
+      ...(echo('actually, do the tests first', 'uuid-old') as unknown as Record<string, unknown>),
+      isReplay: true,
+    } as unknown as SDKMessage);
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    expect(events.filter((event) => event.type === 'message.delivered')).toEqual([]);
+  });
+
+  it('reports each waiting message once, in the order they were read', async () => {
+    const { harness } = installQuery();
+    const run = await createClaudeAdapter().createRun(BASE_INPUT);
+    const { fake } = harness();
+
+    fake.messages.push(INIT_MESSAGE);
+    await run.send('first', undefined, 'run-1:prompt:2');
+    await run.send('second', undefined, 'run-1:prompt:3');
+
+    fake.messages.push(echo('first', 'uuid-a'));
+    // The same echo again — the CLI writing the turn is one event, but nothing
+    // downstream may be told twice that one message was read.
+    fake.messages.push(echo('first', 'uuid-a'));
+    fake.messages.push(echo('second', 'uuid-b'));
+    fake.messages.push(RESULT_MESSAGE);
+
+    const events = await drain(run.events);
+    expect(
+      events
+        .filter((event) => event.type === 'message.delivered')
+        .map((event) => (event as { messageId: string }).messageId),
+    ).toEqual(['run-1:prompt:2', 'run-1:prompt:3']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* The interrupt receipt                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -3093,7 +3280,13 @@ describe('an interrupt that reports queued messages', () => {
     fake.messages.push(INIT_MESSAGE);
     // Nothing this adapter sent — the CLI is holding a message of its own.
     fake.interruptImpl = () => Promise.resolve({ still_queued: ['q-1'] });
-    await expect(run.interrupt()).resolves.toMatchObject({ stillQueued: ['q-1'] });
+    /*
+     * So the caller is told nothing: `q-1` is in the CLI's id space and names
+     * no row this app could show. The receipt is still *read* — that is what
+     * the rest of this test is about. The hold does not need the caller to
+     * understand the id, only the adapter to have seen one.
+     */
+    await expect(run.interrupt()).resolves.toMatchObject({ stillQueued: [] });
 
     fake.messages.push({
       ...(RESULT_MESSAGE as unknown as Record<string, unknown>),

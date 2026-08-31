@@ -106,16 +106,28 @@ export interface RunState {
    */
   readonly promptsSent?: number;
   /**
-   * Steers accepted into this run that no later turn has consumed yet.
+   * Steers accepted into this run that the provider has not been seen to read.
    *
-   * What the composer's queued-message strip renders, and the reason it can
-   * offer "read it now": the CLI folds a mid-turn message in only at a tool
-   * boundary, so until one arrives — or the turn ends and the queued turn
-   * opens — the message is waiting, and an interrupt is the lever that makes
-   * the provider take it immediately. Zeroed when a continuation turn opens
-   * (the queue was consumed into it) and absent on runs nothing has steered.
+   * The one source of truth for "is this message still waiting", read by both
+   * surfaces that answer the question: the composer's strip counts it, and the
+   * control row under a user message asks whether that message is in it. Two
+   * places rendering one array rather than each keeping its own tally, because
+   * the two disagreeing is exactly the bug — a strip saying "1 message queued"
+   * over a message the agent was already acting on.
+   *
+   * Identities, not a count, and that is what makes the clearing possible. The
+   * CLI folds a mid-turn message in at a tool boundary and reports the fold as
+   * `message.delivered` naming the id the message was filed under, so an entry
+   * can be struck the moment its own message is read rather than the whole
+   * tally waiting for the run to end. Entries are `${runId}:prompt:${n}` where
+   * the window could claim one — see {@link promptsSent} — and the transcript
+   * row's local id where it could not, which is unique, never matches a
+   * delivery, and so simply lives until the turn resolves it. That is the old
+   * behaviour, kept for the one case that cannot do better.
+   *
+   * Emptied when a continuation turn opens: the queue *became* that turn.
    */
-  readonly steersQueued?: number;
+  readonly queuedSteers?: readonly string[];
   /**
    * The user has asked this run to stop and the provider has not let go yet.
    *

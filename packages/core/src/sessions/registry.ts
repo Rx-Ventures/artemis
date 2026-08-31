@@ -45,6 +45,7 @@ import type {
   AgentEvent,
   Attachment,
   Capabilities,
+  MessageId,
   PermissionDecision,
   PermissionRequestId,
   ProfileId,
@@ -72,6 +73,21 @@ import { normalizeAgentError } from '../profiles/errors.js';
 import { checkWorkingDirectory } from '../workspace/workdir.js';
 import type { WorkingDirectoryCheck } from '../workspace/workdir.js';
 import { RunError } from './errors.js';
+
+/**
+ * What a prompt is filed under: the run that carried it, and its place in that
+ * run's send order.
+ *
+ * One function because three places have to agree on the spelling and cannot
+ * see each other. The registry retains prompts under it, the adapter is handed
+ * it so a delivered message can be named again, and a window claims it
+ * optimistically the moment the user hits Enter — see
+ * `TranscriptModel.pushUserMessage`. The scheme is the contract, not an
+ * implementation detail of any one of them.
+ */
+export function promptMessageId(runId: RunId, ordinal: number): MessageId {
+  return `${runId}:prompt:${String(ordinal)}`;
+}
 
 /**
  * How the registry finds the adapter for a provider.
@@ -763,11 +779,30 @@ export class RunRegistry {
       runId: entry.handle.runId,
       seq: Math.max(entry.maxSeq, 0),
       ts: this.#now(),
-      messageId: `${entry.handle.runId}:prompt:${String(entry.prompts)}`,
+      messageId: promptMessageId(entry.handle.runId, entry.prompts),
       role: 'user',
       text,
       replay: true,
     });
+  }
+
+  /**
+   * The id the *next* prompt on this run will be filed under.
+   *
+   * Read before the send rather than after it, because the adapter has to be
+   * told the name while it still has the message in its hands — it is what a
+   * `message.delivered` will be reported under once the provider reads it, and
+   * the only id both ends can speak. Deliberately does not advance the counter:
+   * `#recordPrompt` still does that, and still only after the adapter has
+   * accepted the text, so a refused message neither claims a number nor sits in
+   * the replay buffer as though it had been asked.
+   *
+   * The prediction is safe because nothing else numbers prompts on this entry
+   * and `send` is not re-entered between the two calls — the same reasoning a
+   * window uses to claim the id optimistically the moment the user hits Enter.
+   */
+  #nextPromptId(entry: RunEntry): MessageId {
+    return promptMessageId(entry.handle.runId, entry.prompts + 1);
   }
 
   /**
@@ -794,7 +829,17 @@ export class RunRegistry {
         `Provider "${entry.handle.providerId}" cannot accept ${unsupported} in a prompt`,
       );
     }
-    const result = await entry.run.send(text, attachments);
+    /*
+     * Handed down so the adapter can say later that this exact message was
+     * read. A steer is queued far more often than it is taken immediately, and
+     * until an adapter could name the one it had just consumed, the only thing
+     * that ever cleared a "queued" indicator was the end of the run.
+     *
+     * Empty text is not numbered — `#recordPrompt` skips it — so nothing is
+     * claimed for a message that will never be retained.
+     */
+    const messageId = text.length === 0 ? undefined : this.#nextPromptId(entry);
+    const result = await entry.run.send(text, attachments, messageId);
     // After the adapter took it, so a message that was refused does not sit in
     // the replay as though it had been asked. See `#recordPrompt`: without this
     // a reload loses every mid-run steer the same way it lost the opening

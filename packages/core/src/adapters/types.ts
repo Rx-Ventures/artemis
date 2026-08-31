@@ -46,6 +46,7 @@ import type {
   AgentEvent,
   Attachment,
   Capabilities,
+  MessageId,
   PermissionDecision,
   PermissionRequestId,
   PlanUsage,
@@ -222,6 +223,18 @@ export interface InterruptResult {
    * Messages the provider has accepted but not yet executed, and which will
    * still run unless separately cancelled. Empty for providers that stop
    * cleanly.
+   *
+   * Named in the *caller's* id space — the `messageId` handed to {@link Run.send}
+   * — so a consumer can match an entry against the row it drew. An adapter whose
+   * provider answers in ids of its own translates them and drops the ones it
+   * cannot place: the surviving set is the useful half, and an untranslatable id
+   * names a message this caller never sent (the Claude CLI enqueues its own for
+   * cron triggers and auto-resume continuations).
+   *
+   * Empty does **not** prove nothing survived. The Claude CLI only lists
+   * messages that carried an id, so a message sent before this argument existed
+   * — or by another client — survives unlisted. Treat a non-empty list as fact
+   * and an empty one as no news.
    */
   readonly stillQueued: readonly string[];
 }
@@ -293,8 +306,19 @@ export interface Run {
    * The registry refuses them for an adapter that does not declare
    * {@link Capabilities.imageInput}, so an implementation only has to handle
    * them if it advertises them.
+   *
+   * `messageId` is the identity the caller will file this message under, handed
+   * down so a queued message can be named again later. An adapter that can tell
+   * when the provider finally read a queued message emits `message.delivered`
+   * carrying this id; one that cannot ignores the argument. Nothing about
+   * delivery depends on the adapter minting an id of its own — the caller's is
+   * the only one both ends can speak.
    */
-  send(text: string, attachments?: readonly Attachment[]): Promise<SendResult>;
+  send(
+    text: string,
+    attachments?: readonly Attachment[],
+    messageId?: MessageId,
+  ): Promise<SendResult>;
 
   /**
    * Ask the provider to stop what it is doing.

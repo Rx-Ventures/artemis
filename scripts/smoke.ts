@@ -134,6 +134,8 @@ function describeEvent(event: AgentEvent): string {
       return `/${event.command.name}${
         event.command.args === undefined ? '' : ` ${event.command.args}`
       }${event.command.output === undefined ? '' : ` → ${event.command.output}`}`;
+    case 'message.delivered':
+      return `read ${event.messageId}`;
     case 'run.end':
       return `${event.reason}${event.error ? ` — ${event.error.code}: ${event.error.message}` : ''}${
         event.sessionId ? ` (resume with ${event.sessionId})` : ''

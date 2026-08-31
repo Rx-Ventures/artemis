@@ -48,6 +48,8 @@ const FULL_CAPABILITIES: Capabilities = {
  */
 class FakeRun {
   readonly sent: string[] = [];
+  /** The identity each send was handed, in order. See `RunRegistry.send`. */
+  readonly sentIds: (string | undefined)[] = [];
   readonly sentAttachments: (readonly Attachment[])[] = [];
   readonly answered: Array<{ requestId: string; decision: PermissionDecision }> = [];
   readonly events: AsyncIterable<AgentEvent>;
@@ -83,8 +85,13 @@ class FakeRun {
     this.#pulse();
   }
 
-  send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
+  send(
+    text: string,
+    attachments?: readonly Attachment[],
+    messageId?: string,
+  ): Promise<SendResult> {
     this.sent.push(text);
+    this.sentIds.push(messageId);
     if (attachments !== undefined) this.sentAttachments.push(attachments);
     return Promise.resolve(this.sendResult);
   }
@@ -942,6 +949,42 @@ describe('RunRegistry — steering', () => {
 
     const listed = registry.list();
     expect(listed.find((h) => h.runId === handle.runId)?.promptCount).toBe(3);
+  });
+
+  it('tells the adapter what each message will be filed under', async () => {
+    /*
+     * The name has to travel *with* the message, because it is what a delivery
+     * report comes back under. An adapter that can tell when the provider
+     * finally read a queued message has no other way to say which one: its own
+     * ids are the provider's, and mean nothing to a window holding rows.
+     *
+     * The numbering is the retained prompt's, continued — the opening prompt
+     * took `:prompt:1`, so the first steer is `:prompt:2`. That is the same
+     * arithmetic a window does when it claims the row optimistically, which is
+     * what makes the two ends agree without ever exchanging the id.
+     */
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+
+    await registry.send(handle.runId, 'first steer');
+    await registry.send(handle.runId, 'second steer');
+
+    expect(firstRun(runs).sentIds).toEqual([
+      `${handle.runId}:prompt:2`,
+      `${handle.runId}:prompt:3`,
+    ]);
+  });
+
+  it('claims no identity for a message it will not retain', async () => {
+    // Empty text is not recorded, so it must not consume a number either —
+    // the next real prompt would then be filed under a name nothing predicts.
+    const { registry, runs } = harness();
+    const handle = await registry.start(input());
+
+    await registry.send(handle.runId, '');
+    await registry.send(handle.runId, 'a real steer');
+
+    expect(firstRun(runs).sentIds).toEqual([undefined, `${handle.runId}:prompt:2`]);
   });
 
   it('forwards interrupt and passes through still-queued ids', async () => {

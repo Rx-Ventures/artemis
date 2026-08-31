@@ -1064,6 +1064,17 @@ export class TranscriptModel {
         break;
       }
 
+      case 'message.delivered':
+        /*
+         * Not a transcript entry: the row it names has been on screen since the
+         * words were typed, and this changes nothing about what they were. What
+         * it changes is what the *pane* may say about the message — see the
+         * store, which is where the queued set lives. A transcript that grew a
+         * row here would be a record of a message being read, under a record of
+         * it being sent, saying the same sentence twice.
+         */
+        break;
+
       case 'background.tasks':
         /*
          * Not a transcript entry, and not for the usual reason.

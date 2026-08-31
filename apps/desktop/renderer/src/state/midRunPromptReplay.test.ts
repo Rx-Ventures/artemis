@@ -184,6 +184,35 @@ describe('replaying a run into a window that lost its transcript', () => {
     expect(rows()).toEqual(['user:mid-run words', 'assistant:working']);
   });
 
+  it('draws no second row when the provider reports reading the steer', () => {
+    /*
+     * The delivery report and the retained prompt name the same message, and
+     * only one of them is a thing that was said. `message.delivered` is news
+     * about *timing* — it is what takes the message out of the pane's queued
+     * set — and a transcript that grew a row for it would be a record of a
+     * message being read, sitting under the record of it being sent, saying
+     * the same sentence twice.
+     *
+     * Worth pinning here rather than only in the store: this file is about the
+     * one door every event comes through, and the prompt is the event that
+     * door has always been most likely to duplicate.
+     */
+    const id = pane().transcript.pushUserMessage('mid-run words', undefined, 'run-live:prompt:2');
+    pane().transcript.confirmUserMessage(id);
+    handleAgentEvent(assistantText(4, 'working') as never);
+    handleAgentEvent({
+      type: 'message.delivered',
+      runId: 'run-live',
+      seq: 5,
+      ts: 500,
+      messageId: 'run-live:prompt:2',
+    } as never);
+    // And the reload's replay of the same prompt, after it: still one row.
+    handleAgentEvent(retainedPrompt(5, 2, 'mid-run words') as never);
+
+    expect(rows()).toEqual(['user:mid-run words', 'assistant:working']);
+  });
+
   it('still stops an ordinary event the window has already drawn', () => {
     // The gate's own job, unchanged: only the borrowed-seq prompt is exempt.
     handleAgentEvent(assistantText(1, 'first') as never);

@@ -148,6 +148,8 @@ import {
   TerminalIcon,
   GitForkIcon,
   Undo2Icon,
+  CircleStopIcon,
+  HourglassIcon,
   PaperclipIcon,
   TriangleAlertIcon,
   WrenchIcon,
@@ -167,6 +169,7 @@ import { previewablePath } from '../lib/preview';
 import {
   activeCapabilities,
   blankTranscript,
+  interruptRun,
   isLive,
   openFile,
   openPreview,
@@ -620,6 +623,27 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
    */
   const showControls = !item.pending;
 
+  /*
+   * Whether the provider has read *this* message yet.
+   *
+   * The pane's queued set is the one source of truth — the same array the
+   * composer's strip counts — so the row and the strip can never disagree
+   * about a message, which is precisely what went wrong before: the strip
+   * counted sends and had no way to hear a delivery, so it went on announcing
+   * a queued message while the agent was already acting on it.
+   *
+   * Keyed on the message's own identity where it has one, and on the row's
+   * local id where it does not. Both are what `submitPrompt` filed the steer
+   * under, in the same order of preference, so the lookup and the write agree
+   * without either needing to know why the id might be missing.
+   *
+   * A boolean out of the selector rather than the array, for zustand's sake:
+   * an array identity is rebuilt whenever the run object is, and every settled
+   * user row in a long conversation subscribes to this.
+   */
+  const key = item.messageId ?? item.id;
+  const queued = usePane((s) => (isLive(s) ? (s.run?.queuedSteers?.includes(key) ?? false) : false));
+
   return (
     <Line label="you" tone="beam" ts={item.ts} align="end" className="turn-in mt-2 group/turn">
       <Bubble
@@ -722,9 +746,66 @@ function UserRow({ item }: { readonly item: UserItem }): ReactElement {
         what happens to everything after it. Fork leaves this conversation
         whole and branches a new one; rewind winds this one back. See
         `rewindConversationTo`.
+
+        And, while the provider has not read this message yet, two more: what
+        state it is in, and the lever that changes it. They belong here rather
+        than beside the bubble because they are about *this* message, and the
+        composer's strip — which asks the coarser question, is anything
+        waiting — is too far from it to answer "did it hear what I just
+        typed". Both surfaces read the pane's one queued set, which is what
+        stops them from ever disagreeing about a message.
       */}
       {showControls ? (
-        <span className="mt-0.5 flex items-center gap-0.5 self-end opacity-0 transition-opacity group-hover/turn:opacity-100 focus-within:opacity-100">
+        <span
+          className={cn(
+            'mt-0.5 flex items-center gap-0.5 self-end transition-opacity',
+            /*
+              Held open while the message is waiting. The rest of this row is
+              hover-revealed because a rewind is wanted at most once a
+              conversation, but a delivery state is not an action — it is the
+              answer to "did it hear me", which is the question being asked at
+              exactly the moment nobody is pointing at anything. It goes back
+              to hiding the instant the message is read, which is the whole
+              behaviour: the indicator resolves by leaving.
+            */
+            queued
+              ? 'opacity-100'
+              : 'opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100',
+          )}
+        >
+          {queued ? (
+            <>
+              {/* The strip's wording, in the space a row has for it. The
+                  composer says where the message sits in the provider's
+                  schedule; under the message itself that is already implied,
+                  so this says only which of the two states it is in. */}
+              <span
+                title="Sent into a turn that was already running — the agent reads it at its next pause, or after this turn"
+                className="mr-1 flex items-center gap-1 rounded-md border border-hairline bg-wash px-1.5 py-0.5 text-2xs text-ink-muted"
+              >
+                <HourglassIcon className="size-3 shrink-0" aria-hidden="true" />
+                Queued
+              </span>
+              {/*
+                The same lever the composer offers, aimed from the message it
+                is about. Interrupting does not discard the queue — the CLI
+                keeps queued messages across an interrupt by design, which is
+                what makes "stop and read this now" a safe thing to offer at
+                all — so this changes when the message is read and nothing
+                else. It is the interrupt, not a re-send: the message is
+                already with the provider.
+              */}
+              <ReasonButton
+                variant="ghost"
+                tooltip="Read it now — interrupt what the agent is doing so it takes this message up"
+                aria-label="Interrupt the turn so this message is read now"
+                onClick={() => void interruptRun(pane)}
+                className="size-auto rounded-sm p-1 text-ink-faint outline-none hover:bg-wash-strong hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                <CircleStopIcon className="size-3" aria-hidden="true" />
+              </ReasonButton>
+            </>
+          ) : null}
           <ReasonButton
             variant="ghost"
             disabled={!fork.supported}
