@@ -250,6 +250,93 @@ describe('listing connections', () => {
   });
 });
 
+/**
+ * Several managers at once, which is the arrangement this pane is for.
+ *
+ * A vault and a Doppler workplace, or production and staging: the list is a
+ * list because more than one is ordinary. With a single row every per-row
+ * action is trivially correct, so the assertions that matter are the ones that
+ * name *which* row was acted on — and the ones that show a Doppler row
+ * offering only what Doppler has.
+ */
+describe('several connections side by side', () => {
+  /** The second provider, saved the only way Doppler can be: a token. */
+  const DOPPLER: SecretConnectionState = {
+    connection: {
+      id: 'sec-2',
+      label: 'Team Doppler',
+      provider: 'doppler',
+      address: 'https://api.doppler.com',
+      authMethod: 'token',
+    },
+    hasCredential: true,
+    lastVerify: {
+      at: 1_800_000_000_000,
+      result: { ok: true, detail: 'Doppler answered for 2 projects.', identity: 'artemis-sa' },
+    },
+  };
+
+  it('lists every connection, with each one named by its own provider', async () => {
+    connections = [WORKING, DOPPLER];
+    await renderPane();
+
+    expect(screen.getByText('Work vault')).toBeTruthy();
+    expect(screen.getByText('Team Doppler')).toBeTruthy();
+    // Both provider badges, so neither row is being described by the other's
+    // provider — the failure a single-row fixture cannot produce.
+    expect(screen.getByText('OpenBao')).toBeTruthy();
+    expect(screen.getByText('Doppler')).toBeTruthy();
+    expect(screen.getByText('userpass-demo')).toBeTruthy();
+    expect(screen.getByText('artemis-sa')).toBeTruthy();
+  });
+
+  it('verifies the row that was clicked, not the first one', async () => {
+    connections = [WORKING, DOPPLER];
+    await renderPane();
+    // Rows render in list order, so the second Verify belongs to the second
+    // connection. Clicking it must name `sec-2`.
+    await act(async () => {
+      screen.getAllByRole('button', { name: 'Verify' })[1]?.click();
+    });
+    expect(verifyCalls).toEqual([{ id: 'sec-2' }]);
+  });
+
+  it('removes the row that was asked for, and says which one it is about', async () => {
+    connections = [WORKING, DOPPLER];
+    await renderPane();
+
+    await act(async () => {
+      screen.getAllByRole('button', { name: 'Remove' })[1]?.click();
+    });
+    // The dialog names the connection, because "remove the connection" over a
+    // list of them is a sentence that could be about any row.
+    expect(screen.getByText(/Remove “Team Doppler”/)).toBeTruthy();
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Remove the connection' }).click();
+    });
+    expect(deleteCalls).toEqual([{ id: 'sec-2' }]);
+  });
+
+  it('offers a Doppler row only what Doppler has', async () => {
+    connections = [WORKING, DOPPLER];
+    await renderPane();
+    await act(async () => {
+      screen.getAllByRole('button', { name: 'Edit' })[1]?.click();
+    });
+
+    // Doppler declares one auth method, so there is no choice to render — and
+    // no username, because nothing signs in with one. The add form's version
+    // of this is pinned separately; an existing row reaches the same fields
+    // through `existing.authMethod`, which is a different code path.
+    expect(screen.getByLabelText('API address')).toBeTruthy();
+    expect(screen.getByLabelText('Token')).toBeTruthy();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+    expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Username and password' })).toBeNull();
+  });
+});
+
 describe('the certificate flow', () => {
   /** A row whose last verify failed on TLS — the state the flow exists for. */
   const untrusted: SecretConnectionState = {

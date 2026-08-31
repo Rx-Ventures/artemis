@@ -176,13 +176,17 @@ describe('resolve', () => {
 });
 
 describe('the seam', () => {
-  it('declares no login and no renewal, because Doppler has neither', () => {
-    // The two optional methods on `SecretManagerProvider` are optional
+  it('declares no login, no renewal and nothing to forget, because Doppler has none of them', () => {
+    // All three optional methods on `SecretManagerProvider` are optional
     // *because of this provider*. A caller must ask whether the method is
     // there rather than which provider it is holding.
     const provider = createDopplerProvider(async () => ({ status: 200, headers: {}, body: '{}' }));
     expect(provider.login).toBeUndefined();
     expect(provider.renew).toBeUndefined();
+    // `forget` evicts what a provider cached about a connection. Doppler
+    // caches nothing — there is no KV version to detect — so there is nothing
+    // to drop when an address moves.
+    expect(provider.forget).toBeUndefined();
     expect(provider.authMethods).toEqual(['token']);
   });
 

@@ -417,6 +417,20 @@ export async function saveSecretConnection(
     throw new WorkspaceError('A key manager connection needs the address of its server.');
   }
 
+  // An auth method the provider does not have is refused here rather than
+  // stored and failed later. `validate.ts` checks the two fields separately —
+  // each is a legal value on its own — and a Doppler connection saved as
+  // `userpass` would be a row the pane cannot repair: the method toggle only
+  // renders for a provider with more than one method, so nothing on screen
+  // could move it back to `token`. Asked of the provider's own list rather
+  // than of its id, so a third provider needs no line here.
+  const chosen = providerFor(request.provider);
+  if (!chosen.authMethods.includes(request.authMethod)) {
+    throw new WorkspaceError(
+      `${chosen.label} does not sign in with a username and password. Paste a token instead.`,
+    );
+  }
+
   const connection: SecretConnection = {
     id,
     label: request.label,

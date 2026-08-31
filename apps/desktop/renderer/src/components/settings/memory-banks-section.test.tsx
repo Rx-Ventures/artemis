@@ -676,6 +676,41 @@ describe('joining a bank with a key-manager reference', () => {
     expect(request.auth).not.toHaveProperty('token');
   });
 
+  it('builds a Doppler reference against the Doppler connection, not the first one', async () => {
+    // The other provider, end to end through the same form: a different
+    // connection id, a different field set, and a differently shaped ref. With
+    // one connection and one provider in the fixture none of that is proven —
+    // and "both providers are first class" is exactly the claim being made.
+    await renderPane();
+    fillJoin();
+    await chooseKeyManager();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Team Doppler' }).click();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Secret'), { target: { value: 'GIT_TOKEN' } });
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: 'Test' }).click();
+    });
+
+    expect(testRefCalls).toEqual([
+      { ref: { provider: 'doppler', connectionId: 'sec-2', name: 'GIT_TOKEN' } },
+    ]);
+
+    await act(async () => {
+      joinButton().click();
+    });
+    const request = addCalls[0] as { auth?: Record<string, unknown> };
+    expect(request.auth).toEqual({
+      ref: { provider: 'doppler', connectionId: 'sec-2', name: 'GIT_TOKEN' },
+    });
+    // No mount and no path: Doppler has neither, and a ref carrying OpenBao's
+    // shape would be the form remembering the provider it was last on.
+    expect(request.auth?.['ref']).not.toHaveProperty('mount');
+    expect(request.auth?.['ref']).not.toHaveProperty('path');
+  });
+
   it('still offers the username, because git echoes it either way', async () => {
     await renderPane();
     await chooseKeyManager();
