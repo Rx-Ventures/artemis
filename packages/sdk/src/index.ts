@@ -75,10 +75,15 @@ export type {
   ServerErrorBody,
   ServerHealthBody,
   ServerConnectionInfo,
+  ServerCreateProfileRequest,
   ServerModel,
   ServerModelsBody,
   ServerProfile,
+  ServerProfileCreatedBody,
   ServerProfilesBody,
+  ServerSignInAccount,
+  ServerSignInState,
+  ServerSignInStatus,
   ServerThinkingLevel,
   ServerWorkspace,
 } from '@rx-artemis/protocol';
@@ -97,6 +102,11 @@ export {
   profileSlug,
   summariseWorkspace,
   workspaceCanRunTurns,
+  // The predicate a sign-in poller stops on, from the module that defines the
+  // states — a consumer writing its own list of "finished" states would
+  // eventually poll a flow the server had already forgotten.
+  isSignInSettled,
+  SERVER_SIGN_IN_STATES,
   SERVER_API_VERSION,
   DEFAULT_SERVER_PORT,
 } from '@rx-artemis/protocol';

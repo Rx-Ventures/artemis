@@ -68,6 +68,8 @@ import type {
   AuthStatusResponse,
   AgentPromptsDocument,
   BuiltInPromptId,
+  ServerProfileCreatedBody,
+  ServerSignInStatus,
 } from '@rx-artemis/protocol';
 
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
@@ -75,12 +77,17 @@ import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
 
 import {
+  ARTEMIS_PROVIDER_ID,
   attributeSession,
+  cancelRemoteSignIn,
   checkAuthStatus,
   createDefaultProviderRegistry,
+  createRemoteAccount,
   managedEnvKeys,
   ProfileStore,
   profileConfigDir,
+  readRemoteAccounts,
+  readRemoteSignIn,
   resolveEnv,
   resolveStoreEnv,
   RunRegistry,
@@ -91,7 +98,10 @@ import {
   setClaudeConfigDirQueueReporter,
   signInCommand,
   signOut as cliSignOut,
+  startRemoteSignIn,
+  submitRemoteSignInCode,
   type EnvBundle,
+  type RemoteAccounts,
   type LocalPlugin,
   type ProviderCredentialSpec,
   type ProviderRegistry,
@@ -381,6 +391,36 @@ export interface ArtemisEngine {
    */
   authStatus(profileId: ProfileId): Promise<AuthStatusResponse>;
   signOut(profileId: ProfileId): Promise<AuthStatusResponse>;
+
+  /**
+   * The accounts on the Artemis *server* an artemis profile points at, and
+   * whether this connection may add to them.
+   *
+   * The paragraph above is about accounts on **this** machine, in a config
+   * directory on this disk. This is the other kind: an account on the serving
+   * machine, entered through the server's own admin routes. The rule is
+   * unchanged and is the reason both can exist — Artemis performs no login and
+   * holds no credential. What travels here is a URL the server's CLI printed
+   * and a code the user typed; the credential is written by that CLI, in that
+   * container, and is never readable from this side.
+   *
+   * Every method takes the local profile id — the Artemis-Server profile whose
+   * address and token say which server — and the ones that name an account take
+   * the *server's* id for it as well.
+   */
+  remoteAccounts(profileId: ProfileId): Promise<RemoteAccounts>;
+  createRemoteAccount(
+    profileId: ProfileId,
+    request: { readonly label: string; readonly provider?: string },
+  ): Promise<ServerProfileCreatedBody>;
+  startRemoteSignIn(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus>;
+  remoteSignInStatus(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus | null>;
+  submitRemoteSignInCode(
+    profileId: ProfileId,
+    accountId: string,
+    code: string,
+  ): Promise<ServerSignInStatus>;
+  cancelRemoteSignIn(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus | null>;
 
   listSessions(options: {
     readonly providerId: ProviderId;
@@ -740,6 +780,30 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       credentials: credentialsFor(providerId),
       ...(apiKey === null ? {} : { apiKey }),
     });
+  };
+
+  /**
+   * The address and connection token of the Artemis server a profile names.
+   *
+   * The same bundle a *run* against that profile is given — `envFor`, key and
+   * all — because a profile that can run a turn on a server is exactly the
+   * profile that may administer it, and resolving the address a second way here
+   * would be a second place for it to be wrong.
+   *
+   * Refused for any other provider rather than answered with an empty bundle: a
+   * Claude profile has no server behind it, and a request that reached here
+   * with one would otherwise be sent to the default loopback address — a
+   * different machine's Artemis, on the strength of a mismatched id.
+   */
+  const remoteEnvFor = async (profileId: ProfileId): Promise<EnvBundle> => {
+    const profile = await profiles.require(profileId);
+    if (profile.providerId !== ARTEMIS_PROVIDER_ID) {
+      throw new ValidationError(
+        'profileId',
+        'must name an Artemis Server profile — only those have a server to administer',
+      );
+    }
+    return envFor(profileId, profile.providerId);
   };
 
   /**
@@ -1395,6 +1459,30 @@ function createEngine(options: EngineOptions): ArtemisEngine {
         signInCommand: signInCommand({ ...options, shell: signInShell }),
       };
     },
+
+    /*
+     * The remote half. Each of these is one authenticated request to the server
+     * the profile names, and the environment they are built from is the same
+     * one a *run* against that profile gets — address and connection token,
+     * resolved through `envFor`. A separate resolution here would be a second
+     * place for the address to be wrong.
+     */
+    remoteAccounts: async (profileId) => readRemoteAccounts(await remoteEnvFor(profileId)),
+
+    createRemoteAccount: async (profileId, request) =>
+      createRemoteAccount(await remoteEnvFor(profileId), request),
+
+    startRemoteSignIn: async (profileId, accountId) =>
+      startRemoteSignIn(await remoteEnvFor(profileId), accountId),
+
+    remoteSignInStatus: async (profileId, accountId) =>
+      readRemoteSignIn(await remoteEnvFor(profileId), accountId),
+
+    submitRemoteSignInCode: async (profileId, accountId, code) =>
+      submitRemoteSignInCode(await remoteEnvFor(profileId), accountId, code),
+
+    cancelRemoteSignIn: async (profileId, accountId) =>
+      cancelRemoteSignIn(await remoteEnvFor(profileId), accountId),
 
     getSessionMessages: async (query) => {
       const profile = await profiles.require(query.profileId);

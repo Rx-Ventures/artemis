@@ -173,6 +173,16 @@ function authHeaders(env: Readonly<Record<string, string | undefined>>): Record<
   return key !== undefined && key.trim() !== '' ? { authorization: `Bearer ${key.trim()}` } : {};
 }
 
+/*
+ * The same two derivations, for `admin.ts`.
+ *
+ * Exported rather than re-derived there, because both are small enough to look
+ * like nothing and are not: the trailing-slash strip is the difference between
+ * `/api/v0/…` and `//api/v0/…`, which is a 404 that reads as a missing route,
+ * and the header name is what the server's `resolveConnection` reads.
+ */
+export { baseUrl as artemisEndpoint, authHeaders as artemisAuthHeaders };
+
 /** Token counts in the shape the seam expects. */
 function toUsage(usage: { promptTokens: number; completionTokens: number }): UsageSnapshot {
   return {

@@ -25,6 +25,7 @@ import type {
   PermissionDecision,
   PermissionRequest,
   PlanUsage,
+  ProfileId,
   ProfileMetadata,
   ProviderDescriptor,
   ProviderModelOption,
@@ -33,6 +34,8 @@ import type {
   RunSuggestion,
   Routine,
   RoutinesState,
+  ServerProfile,
+  ServerSignInStatus,
   ServerState,
   SharedConfigEntryState,
   UpdateCheckOutcome,
@@ -344,6 +347,54 @@ const SIGNED_IN: AuthStatusInfo = {
 const MOCK_POLLS_BEFORE_SIGNED_IN = 4;
 const mockAuthPolls = new Map<string, number>();
 const mockSignedOut = new Set<string>(['demo-personal']);
+
+/**
+ * Accounts on the pretend Artemis server, and the one sign-in it will drive.
+ *
+ * The server's own accounts, not this machine's — so the pane has something to
+ * list before anything is added, and the "already signed in" row is next to the
+ * "signed out" one that the sign-in flow is for.
+ */
+function mockServerProfile(id: string, label: string): ServerProfile {
+  return {
+    id: id as ProfileId,
+    slug: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    label,
+    provider: { id: 'claude', label: 'Claude', kind: 'hosted' },
+    available: true,
+    disabled: false,
+    live: false,
+    capabilities: NO_CAPABILITIES,
+    models: [],
+  };
+}
+
+let mockRemoteAccounts: readonly ServerProfile[] = [
+  { ...mockServerProfile('remote-work', 'work'), live: true },
+];
+let mockSignIn: ServerSignInStatus | null = null;
+
+/**
+ * One poll, one step — the shape the real flow has.
+ *
+ * The URL does not arrive with the first answer and the code prompt does not
+ * arrive with the URL, because each is a line the CLI prints when it gets
+ * round to it. A mock that handed back everything at once would make both
+ * intermediate states unreachable in dev, which is where they are most easily
+ * looked at.
+ */
+function advanceMockSignIn(current: ServerSignInStatus | null): ServerSignInStatus | null {
+  if (current === null) return null;
+  if (current.state === 'starting') {
+    return {
+      ...current,
+      state: 'awaiting_browser',
+      verificationUrl: 'https://claude.ai/oauth/authorize?code=true&mock=1',
+    };
+  }
+  if (current.state === 'awaiting_browser') return { ...current, state: 'awaiting_code' };
+  return current;
+}
 
 /**
  * The banks "on this machine": agents write to the real ones; here, retire
@@ -1967,6 +2018,57 @@ export function createMockBridge(): ArtemisBridge {
         mockSignedOut.add(profileId);
         mockAuthPolls.set(profileId, 0);
         return ok({ status: SIGNED_OUT, signInCommand: mockSignInCommand(profileId) });
+      },
+    },
+
+    /**
+     * Accounts on a remote Artemis, faked as the flow a person actually walks.
+     *
+     * The grant is on, because a mock with it off would render an empty pane
+     * and hide the whole surface in dev. The sign-in advances a state per poll
+     * — URL, then a prompt for the code — and refuses the first code exactly as
+     * the real CLI does, because that rejection is the branch this UI most
+     * needs to have been looked at.
+     */
+    serverAccounts: {
+      list: async () => ok({ manageProfiles: true, accounts: mockRemoteAccounts }),
+      create: async ({ label, provider }) => {
+        const account = {
+          object: 'artemis.profile' as const,
+          id: `remote-${String(mockRemoteAccounts.length + 1)}`,
+          label,
+          providerId: provider ?? ('claude' as const),
+          configDir: `/data/profiles/${label}`,
+        };
+        mockRemoteAccounts = [...mockRemoteAccounts, mockServerProfile(account.id, label)];
+        return ok({ account });
+      },
+      signIn: async ({ accountId }) => {
+        mockSignIn = {
+          object: 'artemis.signin',
+          profileId: accountId as ProfileId,
+          state: 'starting',
+          startedAt: Date.now(),
+          expiresAt: Date.now() + 600_000,
+        };
+        return ok({ signIn: mockSignIn });
+      },
+      signInStatus: async () => ok({ signIn: (mockSignIn = advanceMockSignIn(mockSignIn)) }),
+      submitCode: async ({ code }) => {
+        if (mockSignIn === null) return ok({ signIn: null });
+        mockSignIn =
+          code === 'GOOD'
+            ? { ...mockSignIn, state: 'done', account: { email: 'someone@example.com' } }
+            : {
+                ...mockSignIn,
+                state: 'awaiting_code',
+                codeError: 'Invalid code. Please make sure the full code was copied.',
+              };
+        return ok({ signIn: mockSignIn });
+      },
+      cancelSignIn: async () => {
+        mockSignIn = mockSignIn === null ? null : { ...mockSignIn, state: 'cancelled' };
+        return ok({ signIn: mockSignIn });
       },
     },
 

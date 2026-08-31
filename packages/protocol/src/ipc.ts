@@ -40,6 +40,8 @@ import type { UpdateProgress } from './update.js';
 import type {
   ServerAllowance,
   ServerProfile,
+  ServerProfileCreatedBody,
+  ServerSignInStatus,
   ServerState,
   ServerWorkspace,
 } from './server.js';
@@ -317,6 +319,41 @@ export const IPC = {
   authStatus: 'artemis:auth:status',
   /** Sign a profile out, clearing the credentials in its config directory. */
   authSignOut: 'artemis:auth:sign-out',
+
+  /**
+   * Accounts on a *remote* Artemis, and the logins that fill them.
+   *
+   * The channels above are about a config directory on this disk. These six
+   * are about one on somebody else's: an Artemis-Server profile names a
+   * headless server, that server serves *its* accounts, and until now the only
+   * way to sign one in was a shell inside its container — which orchestrated
+   * deployments do not reliably have, and whose web terminals cannot paste
+   * over plain HTTP.
+   *
+   * The rule the two surfaces share is the one that lets both exist: Artemis
+   * performs no login and holds no credential. The provider's own CLI runs on
+   * the *server* and writes its own token into its own directory; what crosses
+   * this bridge is a verification URL that CLI printed and a code the user
+   * typed into their own browser. Nothing here accepts, returns or stores a
+   * credential, exactly as nothing on `auth:*` does.
+   *
+   * Every one takes `profileId` — the local Artemis-Server profile, which is
+   * what says *which* server — and the sign-in channels take the server's own
+   * id for the account as well. The whole surface is invisible unless the
+   * serving connection was granted account administration; `list` reports that
+   * so the UI can be absent rather than refused.
+   */
+  serverAccountsList: 'artemis:server-accounts:list',
+  /** Register an account on the server. Its config directory is made there. */
+  serverAccountsCreate: 'artemis:server-accounts:create',
+  /** Spawn the provider's login on the server and start watching its output. */
+  serverAccountsSignIn: 'artemis:server-accounts:sign-in',
+  /** Poll the sign-in. `null` when there is none for that account. */
+  serverAccountsSignInStatus: 'artemis:server-accounts:sign-in-status',
+  /** Hand the server the code the user pasted. */
+  serverAccountsSubmitCode: 'artemis:server-accounts:submit-code',
+  /** Give up: the server kills the login subprocess. */
+  serverAccountsCancelSignIn: 'artemis:server-accounts:cancel-sign-in',
 
   /**
    * Window chrome.
@@ -1764,6 +1801,75 @@ export interface AuthStatusResponse {
   readonly signInCommand: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Accounts on a remote Artemis                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which server, in every request on this surface.
+ *
+ * The *local* profile id — an Artemis-Server profile — because that is what
+ * carries the address and the connection token. Deliberately not a URL: the
+ * renderer has never been able to aim a request at an arbitrary host and this
+ * is not the surface that changes it.
+ */
+export interface ServerAccountsRequest {
+  readonly profileId: ProfileId;
+}
+
+export interface ServerAccountsListResponse {
+  /**
+   * The connection token this profile holds was granted account
+   * administration.
+   *
+   * What the UI gates on. False is the ordinary answer for a token pasted from
+   * `connection create` without `--manage-profiles`, and the accounts below are
+   * still listed — a person may look at what a server serves without being able
+   * to change it.
+   */
+  readonly manageProfiles: boolean;
+  /** Every account the server lets this connection see, with its models. */
+  readonly accounts: readonly ServerProfile[];
+}
+
+export interface ServerAccountsCreateRequest extends ServerAccountsRequest {
+  readonly label: string;
+  /** Defaults to `claude` on the server, the only login it can drive today. */
+  readonly provider?: ProviderId;
+}
+
+export interface ServerAccountsCreateResponse {
+  readonly account: ServerProfileCreatedBody;
+}
+
+/** One account *on the server*, named by the id that server minted. */
+export interface ServerAccountSignInRequest extends ServerAccountsRequest {
+  readonly accountId: string;
+}
+
+export interface ServerAccountSubmitCodeRequest extends ServerAccountSignInRequest {
+  /**
+   * What the provider's page gave the user.
+   *
+   * The one secret this bridge carries, and it travels in one direction: to
+   * the server's subprocess stdin. It is never logged, never echoed into a
+   * response, and never stored.
+   */
+  readonly code: string;
+}
+
+/**
+ * The sign-in's state, or `null` when the server has none for that account.
+ *
+ * One response shape for start, poll, submit and cancel alike, so a renderer
+ * has one thing to render and cannot hold two disagreeing pictures of the same
+ * flow. `null` is only ever an answer to the polling and cancelling channels —
+ * starting one either produces a flow or fails.
+ */
+export interface ServerAccountSignInResponse {
+  readonly signIn: ServerSignInStatus | null;
+}
+
 export interface UsagePlanRequest {
   readonly profileId: ProfileId;
 }
@@ -2448,6 +2554,12 @@ export type IpcRequestMap = {
   [IPC.usagePlanRefresh]: UsagePlanRequest;
   [IPC.authStatus]: AuthStatusRequest;
   [IPC.authSignOut]: AuthSignOutRequest;
+  [IPC.serverAccountsList]: ServerAccountsRequest;
+  [IPC.serverAccountsCreate]: ServerAccountsCreateRequest;
+  [IPC.serverAccountsSignIn]: ServerAccountSignInRequest;
+  [IPC.serverAccountsSignInStatus]: ServerAccountSignInRequest;
+  [IPC.serverAccountsSubmitCode]: ServerAccountSubmitCodeRequest;
+  [IPC.serverAccountsCancelSignIn]: ServerAccountSignInRequest;
   [IPC.windowMinimize]: WindowRequest;
   [IPC.windowToggleMaximize]: WindowRequest;
   [IPC.windowClose]: WindowRequest;
@@ -2536,6 +2648,12 @@ export type IpcResponseMap = {
   [IPC.usagePlanRefresh]: UsagePlanResponse;
   [IPC.authStatus]: AuthStatusResponse;
   [IPC.authSignOut]: AuthStatusResponse;
+  [IPC.serverAccountsList]: ServerAccountsListResponse;
+  [IPC.serverAccountsCreate]: ServerAccountsCreateResponse;
+  [IPC.serverAccountsSignIn]: ServerAccountSignInResponse;
+  [IPC.serverAccountsSignInStatus]: ServerAccountSignInResponse;
+  [IPC.serverAccountsSubmitCode]: ServerAccountSignInResponse;
+  [IPC.serverAccountsCancelSignIn]: ServerAccountSignInResponse;
   [IPC.windowMinimize]: WindowStateResponse;
   [IPC.windowToggleMaximize]: WindowStateResponse;
   [IPC.windowClose]: WindowStateResponse;
@@ -3032,6 +3150,43 @@ export interface ArtemisBridge {
     status(request: AuthStatusRequest): Promise<IpcResult<AuthStatusResponse>>;
     /** Clear the credentials in this profile's config directory. */
     signOut(request: AuthSignOutRequest): Promise<IpcResult<AuthStatusResponse>>;
+  };
+
+  /**
+   * Accounts on the Artemis *server* an Artemis-Server profile points at.
+   *
+   * {@link auth} is about a config directory on this disk. This is about one on
+   * the serving machine — and it exists because that machine has no terminal to
+   * run a login in. The provider's CLI runs *there*, prints a verification URL
+   * with no browser to open, and reads a code back; this bridge carries those
+   * two strings and nothing else. There is still no channel in Artemis that
+   * accepts, returns or stores a credential.
+   *
+   * The surface is gated on {@link list}'s `manageProfiles`, which reports
+   * whether this profile's connection token was granted account
+   * administration. A token without it gets a 404 from the server for every
+   * other call here, so a UI that renders the controls anyway would be offering
+   * something it cannot do.
+   */
+  readonly serverAccounts: {
+    /** Who is on the server, and may this token change that? */
+    list(request: ServerAccountsRequest): Promise<IpcResult<ServerAccountsListResponse>>;
+    /** Register an account there. Its config directory is created on the server. */
+    create(request: ServerAccountsCreateRequest): Promise<IpcResult<ServerAccountsCreateResponse>>;
+    /** Start the provider login for one account. One at a time, per server. */
+    signIn(request: ServerAccountSignInRequest): Promise<IpcResult<ServerAccountSignInResponse>>;
+    /** Poll it. `signIn: null` means the server has no flow for that account. */
+    signInStatus(
+      request: ServerAccountSignInRequest,
+    ): Promise<IpcResult<ServerAccountSignInResponse>>;
+    /** Hand over what the user pasted. */
+    submitCode(
+      request: ServerAccountSubmitCodeRequest,
+    ): Promise<IpcResult<ServerAccountSignInResponse>>;
+    /** Abandon it; the server kills the subprocess. */
+    cancelSignIn(
+      request: ServerAccountSignInRequest,
+    ): Promise<IpcResult<ServerAccountSignInResponse>>;
   };
 
   /**

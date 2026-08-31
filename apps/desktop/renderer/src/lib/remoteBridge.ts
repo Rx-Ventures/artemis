@@ -102,6 +102,8 @@ const FILES_REASON =
   'That file lives on the serving machine, and this connection has no channel for reading its disk.';
 const LOCAL_SETTINGS_REASON =
   'That is managed on the serving machine itself, in its own Settings.';
+const SERVER_ACCOUNTS_REASON =
+  'Signing a server’s accounts in is driven from a desktop Artemis holding that server’s connection, not from a window already served by it.';
 const DIALOG_REASON =
   'A native dialog would open on this machine and pick a folder the serving machine cannot see.';
 
@@ -881,6 +883,27 @@ export function createRemoteBridge(
         });
       },
       signOut: async () => absent(LOCAL_SETTINGS_REASON),
+    },
+
+    /**
+     * Rule 3, and the reason is the shape of the request rather than the
+     * network.
+     *
+     * Every channel here names a *local* Artemis-Server profile — the one that
+     * carries the address and the connection token saying which server to
+     * administer. A window in remote mode has no such profile: it is already
+     * bound to one server, and the accounts it can see are that server's own.
+     * There is nothing for `profileId` to mean, so rather than quietly
+     * administering whichever machine this window happens to be pointed at,
+     * the surface is absent with the sentence that says where the job is done.
+     */
+    serverAccounts: {
+      list: async () => absent(SERVER_ACCOUNTS_REASON),
+      create: async () => absent(SERVER_ACCOUNTS_REASON),
+      signIn: async () => absent(SERVER_ACCOUNTS_REASON),
+      signInStatus: async () => absent(SERVER_ACCOUNTS_REASON),
+      submitCode: async () => absent(SERVER_ACCOUNTS_REASON),
+      cancelSignIn: async () => absent(SERVER_ACCOUNTS_REASON),
     },
 
     /*

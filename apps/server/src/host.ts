@@ -24,6 +24,7 @@
  *    attended work no longer has to.
  */
 
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
@@ -35,17 +36,20 @@ import {
   createSessionLedger,
   createWorkspaceResolver,
   managedEnvKeys,
+  DuplicateProfileLabelError,
   ProfileStore,
   resolveEnv,
   RunRegistry,
   SessionLifecycleLog,
   SESSION_LIFECYCLE_LOG_FILE,
   type Catalogue,
+  type ProfileAdmin,
   type ProviderRegistry,
   type PushFeed,
   type RemoteAccessEvent,
   type RemoteRunGuard,
   type RunSource,
+  type ServerProfileRecord,
   type SessionLedger,
   type SessionSource,
   type WorkspaceResolver,
@@ -62,6 +66,8 @@ export interface HeadlessHost {
   readonly ledger: SessionLedger;
   readonly runSource: RunSource;
   readonly sessionSource: SessionSource;
+  /** What the account-administration routes act through. See `signin.ts`. */
+  readonly profileAdmin: ProfileAdmin;
   /** Every push the server can stream to a remote client. See `server/feed.ts`. */
   readonly feed: PushFeed;
   /** Interrupt-on-disconnect for bridge-started runs. See `server/guard.ts`. */
@@ -132,6 +138,83 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
 
   const workspaces = createWorkspaceResolver();
   const ledger = createSessionLedger(dataDir);
+
+  /**
+   * Adding a serving account, and finding one to sign in.
+   *
+   * The one place `profile add` and `POST /api/v0/profiles` agree, which is
+   * what stops the CLI and the API from producing subtly different accounts:
+   * the same suggested directory, the same duplicate-label rule, the same
+   * `mkdir`. A second implementation of any of those would be discovered by
+   * whoever created an account one way and could not sign it in the other.
+   */
+  const profileAdmin: ProfileAdmin = {
+    async create(draft) {
+      const label = draft.label.trim();
+      const existing = await profiles.list();
+      /*
+       * A label is not merely a name here: `assignProfileSlugs` derives a
+       * route's left half from it, and two accounts called "work" become
+       * `work` and `work-2` — an address that moves the day either is
+       * renamed or deleted. The desktop tolerates duplicates because nothing
+       * there is addressed by name; a server cannot.
+       */
+      if (existing.some((profile) => profile.label.trim().toLowerCase() === label.toLowerCase())) {
+        throw new DuplicateProfileLabelError(label);
+      }
+
+      /*
+       * A directory is *always* supplied, and that is a fix rather than a
+       * convenience. `ProfileStore.create` requires one — a profile with no
+       * directory has no account and no history — so `profile add --label work`
+       * without `--config-dir` used to hand it `undefined` and die with
+       * `"undefined" cannot be used as a config directory`, which is precisely
+       * the invocation the deployment docs tell people to run.
+       *
+       * The store's own suggestion is `<dataDir>/profiles/<label>`, which is
+       * the path the container documentation already names, and it is
+       * *adopted* rather than reset when it already exists: a redeploy against
+       * the same volume finds the credential the last one wrote and comes up
+       * signed in.
+       */
+      const profile = await profiles.create({
+        label,
+        providerId: draft.providerId as ProviderId,
+        configDir: draft.configDir ?? (await profiles.suggestConfigDir(label)),
+      });
+
+      const configDir = profiles.configDirFor(profile);
+      // Made now rather than left to the CLI. The login is spawned with this
+      // as its working directory, and a `spawn` into a directory that does not
+      // exist fails with an `ENOENT` that names nothing a user could act on.
+      await mkdir(configDir, { recursive: true });
+      // The catalogue caches for minutes, and a client that has just added an
+      // account will ask for it immediately.
+      catalogue.invalidate();
+
+      return describeProfile(profile.id, profile.providerId, profile.label, configDir);
+    },
+
+    async find(profileId) {
+      const profile = await profiles.get(profileId as ProfileId);
+      if (profile === undefined) return undefined;
+      return describeProfile(
+        profile.id,
+        profile.providerId,
+        profile.label,
+        profiles.configDirFor(profile),
+      );
+    },
+  };
+
+  function describeProfile(
+    id: ProfileId,
+    providerId: ProviderId,
+    label: string,
+    configDir: string,
+  ): ServerProfileRecord {
+    return { id, label, providerId, configDir, credentials: credentialsFor(providerId) };
+  }
 
   /*
    * The push feed: every agent event, stamped with the account its run bills
@@ -279,6 +362,7 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     ledger,
     runSource,
     sessionSource,
+    profileAdmin,
     feed,
     guard,
     recordAccess: (event) => accessLog.record(event),

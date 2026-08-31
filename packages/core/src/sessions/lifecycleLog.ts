@@ -115,6 +115,37 @@ export interface RemoteAccessEvent {
     | 'remote.terminal.started'
     /** …closed one. */
     | 'remote.terminal.closed'
+    /**
+     * …added a serving account.
+     *
+     * The administrative acts below are the only ones on this record that
+     * create something the server did not have rather than steering something
+     * it already had, which is exactly why they are worth a line: an account
+     * signed in from a laptop is a credential in a config directory on the
+     * serving machine that every future run may spend, and the connection that
+     * put it there is not the connection that pays for it. See
+     * `ServerConnection.manageProfiles` for why the grant is separate.
+     *
+     * What is on these lines is a connection id and a profile id. The
+     * verification URL the provider printed is not, and the code the user
+     * pasted back is *emphatically* not — it is a single-use secret in flight,
+     * and the whole point of {@link RECORDED_KEYS} is that neither has a field
+     * to travel in even if a caller tried.
+     */
+    | 'remote.profile.created'
+    /** …started the provider's login for one. */
+    | 'remote.signin.started'
+    /**
+     * …handed over the code that finishes it.
+     *
+     * "Completed" from the caller's side: the code reached the subprocess's
+     * stdin. Whether the provider *accepted* it is the CLI's answer and arrives
+     * later, on the poll — a rejected code leaves the flow open and asks again,
+     * and re-recording that would put a line on this file per typo.
+     */
+    | 'remote.signin.completed'
+    /** …abandoned one, killing the subprocess. */
+    | 'remote.signin.cancelled'
     /** A token was presented after its expiry and refused. */
     | 'remote.token.expired';
   /** Which connection. The whole point of the record. */
@@ -124,6 +155,8 @@ export interface RemoteAccessEvent {
   readonly runId?: string;
   readonly sessionId?: string;
   readonly profileId?: string;
+  /** Which provider an added account belongs to. Set by the account acts only. */
+  readonly providerId?: string;
   readonly terminalId?: string;
   readonly cwd?: string;
 }

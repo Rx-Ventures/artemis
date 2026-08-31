@@ -10,6 +10,12 @@
  * `workspaces.ts` is the third: a connection names where its turns run, and that
  * has to become a real directory on this disk — created and reaped when it is
  * scratch space, checked when it is the user's own folder.
+ *
+ * `signin.ts` is the fourth, and it exists because a server has no terminal. A
+ * profile is worth serving once an account is signed into it, and in a
+ * container there is nobody inside to run the login — so the login runs *here*,
+ * driven by a person on a client somewhere else. It carries a verification URL
+ * out and a pasted code in, and no credential either way.
  */
 
 export {
@@ -51,6 +57,24 @@ export {
   type TurnRequest,
   type TurnResult,
 } from './completions.js';
+
+export {
+  createSignInDirector,
+  findCodeRejection,
+  findUserCode,
+  findVerificationUrl,
+  looksLikeCodePrompt,
+  resolveExecutable,
+  DEFAULT_SIGN_IN_TIMEOUT_MS,
+  DuplicateProfileLabelError,
+  SignInBusyError,
+  SignInNotWaitingError,
+  SignInUnavailableError,
+  type ProfileAdmin,
+  type ServerProfileRecord,
+  type SignInDirector,
+  type SignInDirectorOptions,
+} from './signin.js';
 
 export {
   createArtemisServer,

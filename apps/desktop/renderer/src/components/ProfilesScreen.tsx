@@ -59,6 +59,7 @@ import {
   configDirProblem,
   isProfileAutoSelectable,
   isProfileEnabled,
+  isSignInSettled,
   normalizeProfileColor,
   normalizeProfilePlanId,
   baseUrlProblem,
@@ -66,16 +67,23 @@ import {
   plansForProvider,
   profileColorProblem,
 } from '@rx-artemis/protocol';
-import type { AuthStatusInfo, ProfileMetadata, ProviderId,
-  ProviderKind } from '@rx-artemis/protocol';
+import type { AuthStatusInfo, ProfileId, ProfileMetadata, ProviderId,
+  ProviderKind, ServerAccountsListResponse, ServerSignInStatus } from '@rx-artemis/protocol';
 
 import { hasNativeDirectoryPicker, NO_PICKER_REASON, pickDirectory } from '../lib/extensions';
 import { shortenPath } from '../lib/paths';
 import {
+  cancelServerSignIn,
   createProfile,
+  createServerAccount,
   deleteProfile,
   readAuthStatus,
+  readServerAccounts,
+  readServerSignIn,
+  refreshModels,
   signOutProfile,
+  startServerSignIn,
+  submitServerSignInCode,
   suggestConfigDir,
   updateProfile,
   useApp,
@@ -451,6 +459,23 @@ function ProfileCard({
         ) : null}
 
         {/*
+          The other kind of account, on the card for the profile that names the
+          server it lives on.
+          ------------------------------------------------------------------
+          Deliberately its own section rather than a change to the sign-in step
+          above. That step is about *this* profile's credential — for an Artemis
+          Server profile, the connection token, which is already in hand by the
+          time the card exists and is why it reports "signed in" the instant it
+          is asked. This is about accounts on the far machine, which is a
+          different set of things with a different lifecycle, and folding the
+          two together would have one "Sign in" button meaning two unrelated
+          jobs depending on which row you were looking at.
+        */}
+        {profile.providerId === 'artemis' ? (
+          <ServerAccountsSection profileId={profile.id} />
+        ) : null}
+
+        {/*
           A modal rather than an inline panel. Deleting a profile is
           irreversible, and an inline confirm inside a scrolling list can be
           triggered by a stray click on a row that has since moved.
@@ -646,6 +671,373 @@ function SignInStep({
         <Button size="xs" variant="ghost" className="ml-auto" onClick={onDone}>
           Finish later
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Accounts on the server                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How often the remote sign-in is re-read while it is on screen.
+ *
+ * Faster than {@link POLL_INTERVAL_MS} because this poll is one small HTTP
+ * request rather than a subprocess spawn, and because what it is waiting for —
+ * a URL appearing, a code being accepted — is something the user is watching
+ * for right now. It only runs while a flow is live.
+ */
+const SIGN_IN_POLL_MS = 1_200;
+
+/**
+ * The accounts a *remote* Artemis serves, and adding one.
+ * ============================================================================
+ *
+ * ## Why this exists
+ *
+ * A headless Artemis is worth nothing until an account is signed into it, and
+ * signing one in used to mean a shell inside its container: `profile add`, then
+ * the provider's login, run in a terminal that an orchestrated deployment does
+ * not reliably have — and whose web version, served over plain HTTP, cannot
+ * even paste. The account that makes the server useful was the one thing the
+ * deployment could not install.
+ *
+ * So the login runs on the server and the *person* is here. The server spawns
+ * the provider's CLI, which with no browser to open prints a verification URL
+ * and waits on stdin; this pane shows the URL, takes what the user pastes back,
+ * and hands it over. Two strings cross the wire and neither is a credential —
+ * the CLI writes its own token into its own directory, in that container.
+ *
+ * ## Why the URL is rendered as plain text with an ordinary link
+ *
+ * It arrives from a subprocess on another machine, and it is put in front of a
+ * user with an invitation to sign in at it. That is a phishing surface by
+ * construction, so it is shown exactly as it arrived — no shortening, no
+ * markdown, no following a redirect to show a "friendlier" name. What the user
+ * judges is the address they will actually visit. The anchor carries no
+ * `target`: `main/security.ts` intercepts navigation out of the renderer and
+ * hands it to the system browser, so being a link is the whole of what is
+ * needed.
+ */
+function ServerAccountsSection({ profileId }: { readonly profileId: string }): ReactElement | null {
+  const [listing, setListing] = useState<ServerAccountsListResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  /** The account a sign-in is open for, and what the server last said about it. */
+  const [signingIn, setSigningIn] = useState<string | null>(null);
+
+  const refresh = async (): Promise<void> => {
+    const answer = await readServerAccounts(profileId as ProfileId);
+    if ('error' in answer) {
+      setError(answer.error);
+      return;
+    }
+    setError(null);
+    setListing(answer);
+  };
+
+  useEffect(() => {
+    void refresh();
+    // The profile is the server: repointing one at a different address is a
+    // different set of accounts, not the same set moved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  const begin = async (accountId: string): Promise<void> => {
+    setBusy(true);
+    const started = await startServerSignIn(profileId as ProfileId, accountId);
+    setBusy(false);
+    if (started !== null) setSigningIn(accountId);
+  };
+
+  const add = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (label.trim().length === 0) return;
+    setBusy(true);
+    const created = await createServerAccount(profileId as ProfileId, label.trim());
+    setBusy(false);
+    if (created === null) return;
+    setLabel('');
+    setAdding(false);
+    await refresh();
+    // Straight into the login. Adding an account and not signing it in is a
+    // half-finished job, and the server has just told us which id to drive.
+    await begin(created.id);
+  };
+
+  return (
+    <div className="mt-1 flex flex-col gap-2 border-t border-line pt-2">
+      <div className="flex items-center gap-2">
+        <span className="chrome-label text-ink-faint">Accounts on this server</span>
+        {listing?.manageProfiles === true && signingIn === null && !adding ? (
+          <Button
+            size="xs"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => setAdding(true)}
+            disabled={busy}
+          >
+            <PlusIcon />
+            Add account
+          </Button>
+        ) : null}
+      </div>
+
+      {/*
+        A read that failed is not an empty server, and the two need different
+        reactions: one means "check the address and the token", the other means
+        "add an account". Only the first is worth an alert.
+      */}
+      {error !== null ? (
+        <Alert variant="destructive" className="border-signal/40 bg-signal/5">
+          <TriangleAlertIcon />
+          <AlertDescription className="text-2xs text-signal">{error}</AlertDescription>
+        </Alert>
+      ) : listing === null ? (
+        <p className="text-2xs text-ink-faint">Reading the server…</p>
+      ) : listing.accounts.length === 0 ? (
+        <p className="text-2xs leading-relaxed text-ink-muted">
+          This server serves no accounts yet. Until one is signed in it has no models to route to.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {listing.accounts.map((account) => (
+            <li key={account.id} className="flex items-center gap-2 text-2xs">
+              <span className="text-ink">{account.label}</span>
+              {/*
+                `live` is the server's own word for "the account confirmed this
+                catalogue", which is the closest thing it publishes to "this one
+                is signed in" — a signed-out directory cannot enumerate.
+              */}
+              <span className="font-mono text-ink-faint">
+                {account.live ? `${String(account.models.length)} models` : 'no models confirmed'}
+              </span>
+              {listing.manageProfiles && signingIn === null ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="ml-auto"
+                  disabled={busy}
+                  onClick={() => void begin(account.id)}
+                >
+                  {account.live ? 'Sign in again' : 'Sign in'}
+                </Button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding ? (
+        <form className="flex items-center gap-2" onSubmit={(event) => void add(event)}>
+          <Input
+            autoFocus
+            value={label}
+            placeholder="Account name, e.g. work"
+            onChange={(event) => setLabel(event.target.value)}
+            className="h-7 text-xs md:text-xs"
+            aria-label="Account name"
+          />
+          <Button size="xs" type="submit" disabled={busy || label.trim().length === 0}>
+            Add &amp; sign in
+          </Button>
+          <Button size="xs" variant="ghost" type="button" onClick={() => setAdding(false)}>
+            Cancel
+          </Button>
+        </form>
+      ) : null}
+
+      {signingIn !== null ? (
+        <ServerSignIn
+          profileId={profileId}
+          accountId={signingIn}
+          onDone={() => {
+            setSigningIn(null);
+            void refresh();
+            // The catalogue this pane's profile offers is the server's, and it
+            // just gained an account. Re-read it so the model picker agrees
+            // with what this pane is showing.
+            void refreshModels();
+          }}
+        />
+      ) : null}
+
+      {listing !== null && !listing.manageProfiles ? (
+        <p className="text-2xs leading-relaxed text-ink-faint">
+          This connection token may read the server&rsquo;s accounts but not change them. Mint one
+          with <code className="font-mono">--manage-profiles</code> on the server to add accounts
+          from here.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One sign-in, in progress on the server.
+ *
+ * Polls until the server says it is over. Every state the machine has is a
+ * different sentence and a different affordance, because each asks the user for
+ * something different — wait, open a link, paste a code, or nothing at all.
+ */
+function ServerSignIn({
+  profileId,
+  accountId,
+  onDone,
+}: {
+  readonly profileId: string;
+  readonly accountId: string;
+  readonly onDone: () => void;
+}): ReactElement {
+  const [status, setStatus] = useState<ServerSignInStatus | null>(null);
+  const [code, setCode] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const settled = status !== null && isSignInSettled(status.state);
+
+  useEffect(() => {
+    if (settled) return;
+    let cancelled = false;
+    const read = async (): Promise<void> => {
+      const next = await readServerSignIn(profileId as ProfileId, accountId);
+      if (!cancelled && next !== null) setStatus(next);
+    };
+    void read();
+    const timer = setInterval(() => void read(), SIGN_IN_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [profileId, accountId, settled]);
+
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (code.trim().length === 0) return;
+    setSending(true);
+    const next = await submitServerSignInCode(profileId as ProfileId, accountId, code.trim());
+    setSending(false);
+    // Cleared whether or not it was accepted. A code the server refused is
+    // spent either way, and leaving it in the box invites the same paste again.
+    setCode('');
+    if (next !== null) setStatus(next);
+  };
+
+  if (status?.state === 'done') {
+    return (
+      <Alert className="border-sage/40 bg-sage/5">
+        <CheckIcon />
+        <AlertTitle className="text-2xs text-sage">Signed in on the server</AlertTitle>
+        <AlertDescription className="flex items-center gap-2 font-mono text-2xs text-ink-muted">
+          {[status.account?.email, status.account?.subscriptionType].filter(Boolean).join(' · ') ||
+            'the account is in'}
+          <Button size="xs" className="ml-auto" onClick={onDone}>
+            Done
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (settled) {
+    return (
+      <Alert variant="destructive" className="border-signal/40 bg-signal/5">
+        <TriangleAlertIcon />
+        <AlertDescription className="flex items-center gap-2 text-2xs text-signal">
+          <span className="min-w-0">
+            {status?.error ?? `The sign-in ${status?.state ?? 'ended'}.`}
+          </span>
+          <Button size="xs" variant="ghost" className="ml-auto" onClick={onDone}>
+            Close
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line bg-inset/60 px-3 py-2">
+      <p className="text-2xs leading-relaxed text-ink-muted">
+        The server is running the provider&rsquo;s login. Open the address below in your browser,
+        sign in, and paste the code it gives you.
+      </p>
+
+      {status?.verificationUrl === undefined ? (
+        <div className="flex items-center gap-2 text-2xs text-ink-faint">
+          <Spinner className="size-3" />
+          <span>Waiting for the server to publish the address…</span>
+        </div>
+      ) : (
+        /*
+          Verbatim, and as text. See the section comment: this string came from
+          a subprocess on another machine and is about to be visited by a
+          person, so nothing here shortens it, styles a friendlier name over it,
+          or resolves it first.
+        */
+        <a
+          href={status.verificationUrl}
+          className="font-mono text-2xs break-all text-beam underline underline-offset-2"
+        >
+          {status.verificationUrl}
+        </a>
+      )}
+
+      {status?.userCode === undefined ? null : (
+        <p className="text-2xs text-ink-muted">
+          The page should show this code:{' '}
+          <span className="font-mono text-ink">{status.userCode}</span>
+        </p>
+      )}
+
+      {/*
+        A rejected code is a retry, not a failure — the CLI stays alive and asks
+        again, which is what makes a half-copied code recoverable. Shown beside
+        the box rather than as an alert, because the next action is right here.
+      */}
+      {status?.codeError === undefined ? null : (
+        <p className="text-2xs text-amber">{status.codeError}</p>
+      )}
+
+      <form className="flex items-center gap-2" onSubmit={(event) => void submit(event)}>
+        <Input
+          value={code}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="Paste the code here"
+          onChange={(event) => setCode(event.target.value)}
+          className="h-7 font-mono text-xs md:text-xs"
+          aria-label="Sign-in code"
+          disabled={status?.state === 'completing'}
+        />
+        <Button
+          size="xs"
+          type="submit"
+          disabled={sending || code.trim().length === 0 || status?.state === 'completing'}
+        >
+          Submit
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          type="button"
+          onClick={() => {
+            void cancelServerSignIn(profileId as ProfileId, accountId);
+            onDone();
+          }}
+        >
+          Cancel
+        </Button>
+      </form>
+
+      <div className="flex items-center gap-2 text-2xs text-ink-faint">
+        <Spinner className="size-3" />
+        <span>
+          {status?.state === 'completing'
+            ? 'Checking the code with the provider…'
+            : 'This updates by itself.'}
+        </span>
       </div>
     </div>
   );

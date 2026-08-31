@@ -32,3 +32,6 @@ export * from './codexMapper.js';
 export * from './codex.js';
 export * from './registry.js';
 export * from './signIn.js';
+// The remote-account calls only, not the adapter itself — that is reached
+// through the registry like every other provider.
+export * from './artemis/admin.js';

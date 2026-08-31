@@ -351,6 +351,230 @@ export interface ServerModelsBody {
   readonly models: readonly ServerModel[];
 }
 
+/* -------------------------------------------------------------------------- */
+/* Adding an account to a server, from somewhere else                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Signing an account into a server you are not sitting in front of.
+ * ============================================================================
+ *
+ * A headless Artemis serves profiles, and a profile is only worth serving once
+ * an account has been signed into its config directory. On a desktop that is
+ * one command in the user's own terminal. In a container it is a shell nobody
+ * has — `docker exec` into a replica an orchestrator may replace, or a web
+ * terminal that, served over plain HTTP, cannot even paste. The account that
+ * makes the server useful is the one thing the deployment cannot install.
+ *
+ * These four routes are the way in, and the shape of them follows from one
+ * fact about how OAuth CLIs behave with no browser to open: they print a
+ * verification URL and then *read a code back on stdin*. Two values, one in
+ * each direction, and both are things a person handles. So the server holds
+ * the subprocess and the person holds the browser, wherever they are:
+ *
+ * ```
+ *   POST   /api/v0/profiles                    create the account record
+ *   POST   /api/v0/profiles/{id}/signin        start the CLI, watch its output
+ *   GET    /api/v0/profiles/{id}/signin        what state is it in?
+ *   POST   /api/v0/profiles/{id}/signin/code   the code the user pasted
+ *   DELETE /api/v0/profiles/{id}/signin        give up, kill the subprocess
+ * ```
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS AND IS NOT ON THIS WIRE
+ * ---------------------------------------------------------------------------
+ *
+ * Two strings, and that is the whole of it: a URL the provider's CLI printed,
+ * and a code the user typed. No token is parsed, forwarded, echoed or stored —
+ * the CLI writes its own credential into its own config directory, exactly as
+ * it does when a person runs it in a terminal, and nothing here ever reads that
+ * directory except to ask the CLI whether it is now signed in.
+ *
+ * The code is never logged and never appears in an error. It is a
+ * single-use secret in flight, and an error message that quoted it back would
+ * put it in whatever collects errors on both ends.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE URL IS RENDERED AS TEXT AND NOTHING ELSE
+ * ---------------------------------------------------------------------------
+ *
+ * {@link ServerSignInStatus.verificationUrl} arrives from a subprocess on a
+ * remote machine, and a client is about to put it in front of a user and invite
+ * them to sign in at it. That is a phishing surface by construction. A client
+ * should render it verbatim — no markdown, no HTML, no shortening, no
+ * "helpfully" following a redirect — so that what the user judges is the
+ * address they will actually visit.
+ */
+
+/**
+ * Where one sign-in has got to.
+ *
+ * Four live states and four terminal ones, and the live ones are separate
+ * because they ask different things of the person watching:
+ *
+ *  - **`starting`** — the CLI has been spawned and has said nothing yet. There
+ *    is nothing for the user to do but wait a second.
+ *  - **`awaiting_browser`** — a verification URL is known. The user's move: open
+ *    it, wherever they are.
+ *  - **`awaiting_code`** — the CLI has asked for the code on stdin. The user's
+ *    move: paste what the provider gave them.
+ *  - **`completing`** — a code has been written to the subprocess and it has not
+ *    exited yet. Nothing to do; do not send another.
+ *
+ * `awaiting_browser` and `awaiting_code` are told apart by reading the CLI's
+ * output, which is a heuristic and is documented as one — a server that never
+ * recognises the prompt still accepts the code, because refusing a correct code
+ * over an unrecognised prompt string would strand the flow with no way out.
+ *
+ * **`completing` can go back to `awaiting_code`,** and that is the one edge in
+ * this machine that is not one-way. A CLI that does not like the code it was
+ * given says so and asks again rather than exiting — a code copied without its
+ * last character is the ordinary case — so a rejection returns the flow to
+ * `awaiting_code` with {@link ServerSignInStatus.codeError} set. Only the
+ * subprocess *exiting* settles anything, and what settles it is the config
+ * directory, never the exit code.
+ *
+ * The four terminal states are distinct because each has a different next step:
+ * `done` is finished, `failed` can be retried and says why, `cancelled` is the
+ * user's own doing, and `expired` means the server killed a subprocess nobody
+ * had come back to — a browser tab left open over lunch.
+ */
+export type ServerSignInState =
+  | 'starting'
+  | 'awaiting_browser'
+  | 'awaiting_code'
+  | 'completing'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
+
+/** Every state, for a client that wants to check one it was handed. */
+export const SERVER_SIGN_IN_STATES: readonly ServerSignInState[] = [
+  'starting',
+  'awaiting_browser',
+  'awaiting_code',
+  'completing',
+  'done',
+  'failed',
+  'cancelled',
+  'expired',
+];
+
+/**
+ * Is this sign-in over?
+ *
+ * The predicate a poller stops on and the server refuses a second start
+ * against. One definition, because "which states are finished" written twice is
+ * a client that keeps polling a flow the server has already forgotten.
+ */
+export function isSignInSettled(state: ServerSignInState): boolean {
+  return state === 'done' || state === 'failed' || state === 'cancelled' || state === 'expired';
+}
+
+/**
+ * What the account says about itself once it is in.
+ *
+ * A copy of the fields the provider's status probe reports, not a credential
+ * and not a handle to one. Present so a client can show *which* account landed
+ * — two of them look identical otherwise, and signing the wrong one in is the
+ * mistake this surface makes easiest.
+ */
+export interface ServerSignInAccount {
+  /** `claude.ai` for a subscription, `console` for API billing. */
+  readonly authMethod?: string;
+  readonly email?: string;
+  readonly orgName?: string;
+  readonly subscriptionType?: string;
+}
+
+/**
+ * One sign-in, as `GET /api/v0/profiles/{id}/signin` reports it.
+ *
+ * Every route on this surface answers with this same shape — start, poll,
+ * submit and cancel alike — so a client has one thing to render and can never
+ * hold two disagreeing pictures of the same flow.
+ */
+export interface ServerSignInStatus {
+  readonly object: 'artemis.signin';
+  readonly profileId: ProfileId;
+  readonly state: ServerSignInState;
+  /**
+   * The address the user must open, exactly as the CLI printed it.
+   *
+   * Absent until the CLI has printed one. See the section comment on why a
+   * client renders this as plain text.
+   */
+  readonly verificationUrl?: string;
+  /**
+   * A short code the provider showed, when it shows one.
+   *
+   * Not the code the *user* sends back — that one travels in the other
+   * direction and is never reported here. This is the "check that the browser
+   * shows this" confirmation some device flows print, and it is absent for the
+   * providers that do not.
+   */
+  readonly userCode?: string;
+  /**
+   * The CLI would not take the last code, and is asking for another.
+   *
+   * Distinct from {@link error}, and the distinction is the whole point: this
+   * is a *retry*, not a failure. A mistyped or half-copied code is the most
+   * common thing that goes wrong in this flow, the CLI stays alive and asks
+   * again, and a client that rendered the rejection as a terminal error would
+   * tear down a sign-in that is still perfectly good. Set alongside
+   * `state: 'awaiting_code'`, and cleared the moment another code is sent.
+   *
+   * The provider's own sentence, scrubbed and capped — it is the only source
+   * that knows *why* the code was refused (wrong, truncated, expired).
+   */
+  readonly codeError?: string;
+  /** Why it failed. Set only in `failed`, and never quotes the submitted code. */
+  readonly error?: string;
+  /** Set once `state` is `done`. */
+  readonly account?: ServerSignInAccount;
+  /** Epoch ms the subprocess was spawned. */
+  readonly startedAt: number;
+  /**
+   * Epoch ms at which an unfinished sign-in is killed and reported `expired`.
+   *
+   * Published rather than kept private because the client is the thing with a
+   * person in front of it: a countdown, or at least a sentence, beats a flow
+   * that silently stops working while somebody is still reading their email.
+   */
+  readonly expiresAt: number;
+}
+
+/** The body of `POST /api/v0/profiles` — the account that was just created. */
+export interface ServerProfileCreatedBody {
+  readonly object: 'artemis.profile';
+  readonly id: ProfileId;
+  readonly label: string;
+  readonly providerId: ProviderId;
+  /**
+   * Where the provider's CLI will write this account's credential, on the
+   * *serving* machine.
+   *
+   * Reported because it is the one fact a person needs in order to finish the
+   * job by hand if this surface cannot: it is the value of `CLAUDE_CONFIG_DIR`
+   * in the command they would run inside the container.
+   */
+  readonly configDir: string;
+}
+
+/** The body of `POST /api/v0/profiles/{id}/signin/code`. */
+export interface ServerSignInCodeRequest {
+  /** What the provider's page gave the user. Written to the CLI's stdin, once. */
+  readonly code: string;
+}
+
+/** The body of `POST /api/v0/profiles`. */
+export interface ServerCreateProfileRequest {
+  readonly label: string;
+  /** Defaults to `claude`, the only provider whose login this surface drives today. */
+  readonly provider?: ProviderId;
+}
+
 /**
  * One stored server conversation, as `GET /api/v0/sessions` reports it.
  *
@@ -629,6 +853,36 @@ export interface ServerConnection {
    * See {@link ServerAllowance} for why this stores ids rather than routes.
    */
   readonly allow?: readonly ServerAllowance[];
+  /**
+   * This connection may add accounts to the server and sign them in.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THIS IS A SEPARATE GRANT AND NOT A CONSEQUENCE OF HOLDING A TOKEN
+   * ---------------------------------------------------------------------------
+   *
+   * Every other authority a token carries is bounded by the folder it is pinned
+   * to and the accounts it is allowed to see. This one is bounded by neither.
+   * Signing an account into a server *creates* something the server did not
+   * have — a credential in a config directory on the serving machine, which
+   * every future run may spend — and the connection that created it is not the
+   * connection that pays for it. That is an administrative act, and
+   * administrative acts do not come free with a bearer token pasted into an
+   * editor extension.
+   *
+   * So it is opt-in, absent by default, and granted one connection at a time:
+   * the operator who deploys the server decides which single token belongs to
+   * the person who administers it. A leaked editor token still cannot add an
+   * account, and a server whose operator never granted this has the surface
+   * switched off entirely — see {@link ServerConnectionInfo.manageProfiles}.
+   *
+   * What the grant does **not** widen is what Artemis itself touches. The
+   * sign-in it authorises drives the *provider's* own CLI, which writes its own
+   * credential into its own directory. The only things that cross this wire are
+   * a verification URL the provider printed and a code the user typed into
+   * their own browser. There is no path here by which Artemis reads, stores or
+   * forwards a credential — see `signIn.ts` in `@rx-artemis/core`.
+   */
+  readonly manageProfiles?: boolean;
   /** The bearer token this connection authenticates with. */
   readonly token: string;
   /** Epoch ms. */
@@ -731,6 +985,18 @@ export interface ServerConnectionInfo {
   /** False when the connection has no directory and so cannot run a turn. */
   readonly canRunTurns: boolean;
   /**
+   * This connection may add accounts to the server and sign them in.
+   *
+   * Always present, and a boolean rather than an optional flag — unlike
+   * {@link allow}, which is a *filter* whose absence means "unfiltered". This
+   * is a capability line, in the same class as {@link canRunTurns}: a client
+   * reads it to decide whether to draw a whole surface, and "the field was
+   * missing" and "the answer is no" must not be two things it has to tell
+   * apart. An older server that has never heard of the grant sends neither, and
+   * a client reading `=== true` lands on the safe answer either way.
+   */
+  readonly manageProfiles: boolean;
+  /**
    * Epoch ms this token stops working, when it has one. Absent means never.
    *
    * Told to the client rather than merely enforced, because the difference
@@ -752,6 +1018,7 @@ export function describeConnection(connection: ServerConnection): ServerConnecti
       ? {}
       : { allow: connection.allow }),
     canRunTurns: workspaceCanRunTurns(connection.workspace),
+    manageProfiles: connection.manageProfiles === true,
     ...(connection.expiresAt === undefined ? {} : { expiresAt: connection.expiresAt }),
   };
 }

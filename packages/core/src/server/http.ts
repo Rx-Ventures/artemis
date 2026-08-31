@@ -61,11 +61,13 @@ import type {
   AgentEvent,
   OpenAiChatRequest,
   OpenAiModelList,
+  ProviderId,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
   ServerConnection,
   ServerProfile,
+  ServerProfileCreatedBody,
   ServerProfilesBody,
   ServerSessionMessagesBody,
   ServerSessionsBody,
@@ -100,6 +102,15 @@ import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
 import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
+import {
+  createSignInDirector,
+  DuplicateProfileLabelError,
+  SignInBusyError,
+  SignInNotWaitingError,
+  SignInUnavailableError,
+  type ProfileAdmin,
+  type SignInDirector,
+} from './signin.js';
 import type { RemoteTerminals } from './terminals.js';
 import { WorkspaceUnavailableError, type WorkspaceResolver } from './workspaces.js';
 
@@ -248,6 +259,17 @@ export interface ServerContext {
    * that is enforced rather than promised.
    */
   readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
+  /**
+   * How to add a serving account, when this build can.
+   *
+   * Absent means the account-administration surface answers `501` — a
+   * catalogue-only server, or a desktop-hosted one whose accounts are managed
+   * in a window instead. Required alongside {@link signIns}: an account nobody
+   * can sign in is half a feature.
+   */
+  readonly profileAdmin?: ProfileAdmin;
+  /** The one sign-in this server will drive at a time. See `signin.ts`. */
+  readonly signIns?: SignInDirector;
 }
 
 /**
@@ -475,6 +497,31 @@ export async function handleServerRequest(
     return handleRemoteRequest({ request, context, connection, method, path, url });
   }
 
+  /*
+   * The account-administration surface, dispatched here for the same reason the
+   * bridge above is: it writes, and one of its routes is a `DELETE` the
+   * read-only gate below would refuse before the route was ever resolved.
+   *
+   * It sits *after* `isRemotePath` and is disjoint from it by construction. The
+   * bridge owns `/runs`, `/events` and `/terminals`; this owns `/profiles/…`
+   * and nothing else, so neither can shadow the other however this block is
+   * reordered. That is a property worth stating out loud, because a dispatcher
+   * that claimed a prefix the bridge already owned would swallow those routes
+   * with nothing to show for it in a diff.
+   *
+   * `GET ${apiPrefix}/profiles` is deliberately *not* caught — that is the
+   * catalogue read every client makes, it is authorised by the ordinary
+   * allowance rather than by the administrative grant, and routing it through
+   * here would hide the whole catalogue from every connection that is not an
+   * administrator.
+   */
+  if (
+    path === `${apiPrefix}/profiles` ? method === 'POST' : path.startsWith(`${apiPrefix}/profiles/`)
+  ) {
+    const reply = await handleProfileAdminRoute(request, context, connection, path, method);
+    return { ...reply, connectionId: connection.id };
+  }
+
   if (method !== 'GET' && method !== 'HEAD') {
     // 405 only for a route that genuinely exists and genuinely refuses the
     // verb. Anything else is a 404, because "wrong method" on a path this
@@ -489,7 +536,7 @@ export async function handleServerRequest(
       : fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
   }
 
-  if (path === '/') return answer(indexBody(context));
+  if (path === '/') return answer(indexBody(context, connection));
 
   /**
    * Who am I, and where do my turns run?
@@ -630,9 +677,18 @@ export async function handleServerRequest(
  * Present because the first thing anyone does with a new local server is open
  * its root in a browser, and a 404 there teaches them nothing. Every path it
  * names is one this build actually serves.
+ *
+ * It takes the *connection* as well as the context because one surface on it is
+ * per-token rather than per-build. The account-administration routes answer
+ * `404` to a connection without the grant, indistinguishably from a build that
+ * has never had them — and an index that advertised them to every token would
+ * hand back the one fact that posture exists to withhold: that this deployment
+ * has an administrative surface, and therefore that some other token can add
+ * accounts to it.
  */
-function indexBody(context: ServerContext): Record<string, unknown> {
+function indexBody(context: ServerContext, connection: ServerConnection): Record<string, unknown> {
   const apiPrefix = `/api/${SERVER_API_VERSION}`;
+  const managesProfiles = connection.manageProfiles === true && context.profileAdmin !== undefined;
   return {
     object: 'artemis.server',
     version: context.version,
@@ -683,6 +739,26 @@ function indexBody(context: ServerContext): Record<string, unknown> {
                 'The event stream (SSE). Resume with Last-Event-ID; gaps are reported, not hidden.',
             },
           ]),
+      ...(managesProfiles
+        ? [
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles`,
+              description: 'Add an account. Needs a connection granted account administration.',
+            },
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles/{id}/signin`,
+              description:
+                'Start the provider login for an account, and read back its verification URL.',
+            },
+            {
+              method: 'POST',
+              path: `${apiPrefix}/profiles/{id}/signin/code`,
+              description: 'Hand the code the user pasted to the login that is waiting for it.',
+            },
+          ]
+        : []),
     ],
     // Said out loud rather than left to a 401: a catalogue that changes when an
     // account is added is worth re-reading, and a client that does not know the
@@ -692,6 +768,11 @@ function indexBody(context: ServerContext): Record<string, unknown> {
       'A model is addressed as `<profile>/<model>` — the account is part of the address.',
       'Where a turn runs is fixed to your connection, not chosen per request. See /api/v0/connection.',
       'Catalogues are cached for a few minutes. Append ?refresh=1 to force a re-read.',
+      ...(managesProfiles
+        ? [
+            'This connection may add accounts and sign them in; a token without that grant gets a 404 for those routes.',
+          ]
+        : []),
     ],
   };
 }
@@ -763,6 +844,15 @@ function modelNotFound(route: string): ServerReply {
  * Only used to tell a `405` from a `404` — the GET routing below is still the
  * one place a route is resolved, so this cannot drift into being a second
  * router. Kept in step with it by being the same four paths and two prefixes.
+ *
+ * The remote bridge and the account-administration surface are deliberately
+ * *absent* from it, and for that second one the absence is a security property
+ * rather than an oversight. Both dispatch above this gate and do their own
+ * method checks, so neither can reach here; and if one ever did, a `405` on
+ * `/api/v0/profiles/{id}/signin` would tell a token with no administrative
+ * grant that the route exists — which is exactly the fact
+ * `handleProfileAdminRoute`'s 404 is there to withhold. "Unlisted" is the safe
+ * failure mode here and "listed" is not.
  */
 function isServedPath(path: string): boolean {
   const apiPrefix = `/api/${SERVER_API_VERSION}`;
@@ -897,6 +987,22 @@ export interface ArtemisServerOptions {
   /** See {@link ServerContext.onRemoteAccess}. */
   readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
   /**
+   * How to add a serving account. Omit for a deployment whose accounts are
+   * managed some other way — the surface then answers `501` to an
+   * administrator and `404` to everyone else.
+   */
+  readonly profileAdmin?: ProfileAdmin;
+  /**
+   * The sign-in director, built here from {@link signInTimeoutMs} when
+   * {@link profileAdmin} is present and it is not supplied: every deployment
+   * that can add an account wants one, and only a test needs to control its
+   * clock or its subprocesses. {@link ArtemisServer.close} closes whichever it
+   * ended up with, so a login subprocess cannot outlive the port.
+   */
+  readonly signIns?: SignInDirector;
+  /** How long an unfinished sign-in lives. See `signin.ts`. */
+  readonly signInTimeoutMs?: number;
+  /**
    * Called once per answered request, so the UI can show that something is
    * talking — and so the connection that asked can have its `lastUsedAt`
    * stamped. `connectionId` is absent when nothing authenticated.
@@ -927,6 +1033,15 @@ export interface ArtemisServer {
 export function createArtemisServer(options: ArtemisServerOptions): ArtemisServer {
   const host = options.host ?? SERVER_HOST;
   let startedAt = Date.now();
+
+  const profileAdmin = options.profileAdmin;
+  const signIns =
+    profileAdmin === undefined
+      ? options.signIns
+      : (options.signIns ??
+        createSignInDirector(
+          options.signInTimeoutMs === undefined ? {} : { timeoutMs: options.signInTimeoutMs },
+        ));
 
   const server: Server = createServer((request, response) => {
     void answer(request, response);
@@ -977,6 +1092,8 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.onRemoteAccess === undefined
             ? {}
             : { onRemoteAccess: options.onRemoteAccess }),
+          ...(profileAdmin === undefined ? {} : { profileAdmin }),
+          ...(signIns === undefined ? {} : { signIns }),
         },
       );
     } catch (error) {
@@ -1092,6 +1209,10 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
     },
 
     close() {
+      // A sign-in in flight is a *subprocess* parked on a person who can no
+      // longer reach it, holding a config directory open. Stopping the server
+      // is the last moment anything knows it exists.
+      signIns?.close();
       return new Promise<void>((resolve) => {
         // `close` waits for open connections, and a client holding a keep-alive
         // socket would otherwise keep the port bound indefinitely — which the
@@ -1135,6 +1256,304 @@ function unknownSession(): ServerReply {
     'unknown_session',
     'No such conversation for this connection.',
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Accounts: adding one, and signing it in                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything under `/api/v0/profiles` that is not the catalogue read.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A CONNECTION WITHOUT THE GRANT GETS A 404 AND NOT A 403
+ * ---------------------------------------------------------------------------
+ *
+ * The same rule the run and session surfaces keep, for the same reason: a
+ * refusal that distinguished "you may not" from "there is nothing here" tells a
+ * token something about the server it was not given. Here what it would tell it
+ * is the most useful thing an attacker could learn — that this deployment has
+ * an administrative surface at all, and therefore that some *other* token can
+ * add accounts to it. So a connection without {@link ServerConnection.manageProfiles}
+ * gets the answer it would get from a build that has never heard of these
+ * routes, and it gets it before anything else is read.
+ *
+ * The order matters and is not decorative. The grant is checked first, then the
+ * seam, then the body: a build with no `profileAdmin` answers `501` to an
+ * administrator and `404` to everyone else, so the 501 itself is not a fact an
+ * unprivileged token can collect.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS ATTRIBUTED, AND WHAT IS NOT
+ * ---------------------------------------------------------------------------
+ *
+ * Every act here goes through {@link ServerContext.onRemoteAccess}, the same
+ * record the bridge's run and terminal verbs write to — these are the acts on
+ * this server that most deserve a name against them, because they create a
+ * credential on the serving machine that every later run may spend. Reads are
+ * not recorded, exactly as they are not on the bridge: polling a sign-in is how
+ * a client draws a frame, and a line per poll would bury the four lines a year
+ * that matter.
+ *
+ * Nothing on those lines is a secret and nothing can become one. The record's
+ * allowlist (`RECORDED_KEYS` in `sessions/lifecycleLog.ts`) has no field the
+ * verification URL or the pasted code could travel in, and the ids that *are*
+ * written are checked against the server's own state first — see `knownFlow`
+ * below — so a caller cannot write an arbitrary string into the log by naming
+ * an account that does not exist.
+ */
+async function handleProfileAdminRoute(
+  request: ServerRequestInfo,
+  context: ServerContext,
+  connection: ServerConnection,
+  path: string,
+  method: string,
+): Promise<ServerReply> {
+  const missing = (): ServerReply =>
+    fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
+
+  if (connection.manageProfiles !== true) return missing();
+
+  const admin = context.profileAdmin;
+  const signIns = context.signIns;
+  if (admin === undefined || signIns === undefined) {
+    return fail(
+      501,
+      'invalid_request_error',
+      'not_implemented',
+      'This Artemis build serves accounts but cannot add or sign them in. Use the server CLI: `artemis-server profile add`.',
+    );
+  }
+
+  const apiPrefix = `/api/${SERVER_API_VERSION}`;
+  if (path === `${apiPrefix}/profiles`) {
+    return createProfileRoute(admin, request.body, (created) => {
+      /*
+       * Recorded *after* the account exists, which is the one place on this
+       * surface that departs from the bridge's "write the line before the verb
+       * runs" rule — and it departs because the id the line is about does not
+       * exist until the store has minted it. A line naming the label instead
+       * would be a line naming user text, which this record does not carry.
+       */
+      context.onRemoteAccess?.({
+        kind: 'remote.profile.created',
+        connectionId: connection.id,
+        profileId: String(created.id),
+        providerId: created.providerId,
+      });
+    });
+  }
+
+  const rest = path.slice(`${apiPrefix}/profiles/`.length);
+  const separator = rest.indexOf('/');
+  const action = separator < 0 ? '' : rest.slice(separator + 1);
+  // Enumerated, so an unknown sub-path 404s before an id is even decoded.
+  if (action !== 'signin' && action !== 'signin/code') return missing();
+
+  let profileId: string;
+  try {
+    profileId = decodeURIComponent(rest.slice(0, separator));
+  } catch {
+    return fail(400, 'invalid_request_error', 'invalid_url', 'The account id could not be parsed.');
+  }
+  if (profileId.length === 0) return missing();
+
+  /**
+   * Does the director hold a flow for this id?
+   *
+   * The guard on every line written about an id that came off the *path*. The
+   * two verbs below — submitting a code, cancelling — are the ones a caller can
+   * aim at an account that does not exist, and writing the line first (which is
+   * what the bridge does, so that a verb followed by a crash still leaves a
+   * trace) would otherwise let a caller put an arbitrary string in the log by
+   * asking about an account that was never there. Asking the director first
+   * costs a map lookup and makes the id a real one.
+   */
+  const knownFlow = (): boolean => signIns.status(profileId) !== undefined;
+
+  if (action === 'signin/code') {
+    if (method !== 'POST') {
+      return fail(405, 'invalid_request_error', 'method_not_allowed', 'Submitting a code is a POST.');
+    }
+    return submitSignInCode(signIns, profileId, request.body, () => {
+      if (!knownFlow()) return;
+      context.onRemoteAccess?.({
+        kind: 'remote.signin.completed',
+        connectionId: connection.id,
+        profileId,
+      });
+    });
+  }
+
+  if (method === 'GET' || method === 'HEAD') {
+    // A read. Not recorded — see the section comment.
+    const status = signIns.status(profileId);
+    return status === undefined ? noSignIn() : ok(status);
+  }
+  if (method === 'DELETE') {
+    if (knownFlow()) {
+      context.onRemoteAccess?.({
+        kind: 'remote.signin.cancelled',
+        connectionId: connection.id,
+        profileId,
+      });
+    }
+    const cancelled = signIns.cancel(profileId);
+    return cancelled === undefined ? noSignIn() : ok(cancelled);
+  }
+  if (method !== 'POST') {
+    return fail(
+      405,
+      'invalid_request_error',
+      'method_not_allowed',
+      'A sign-in is started with POST, read with GET and abandoned with DELETE.',
+    );
+  }
+
+  const profile = await admin.find(profileId);
+  if (profile === undefined) return unknownProfile();
+  // Written before the subprocess is spawned, the way the bridge writes its run
+  // verbs: the account is known to exist by now, and a spawn that takes the
+  // process down with it should still leave a line saying who asked.
+  context.onRemoteAccess?.({
+    kind: 'remote.signin.started',
+    connectionId: connection.id,
+    profileId: String(profile.id),
+    providerId: profile.providerId,
+  });
+  try {
+    return ok(signIns.start(profile));
+  } catch (error) {
+    if (error instanceof SignInBusyError) {
+      return fail(409, 'invalid_request_error', 'signin_in_progress', error.message);
+    }
+    if (error instanceof SignInUnavailableError) {
+      return fail(409, 'invalid_request_error', 'signin_unavailable', error.message);
+    }
+    return fail(
+      500,
+      'server_error',
+      'signin_failed',
+      'The sign-in could not be started on this server.',
+    );
+  }
+}
+
+/** No flow for this account. Not an error state — nobody has started one. */
+function noSignIn(): ServerReply {
+  return fail(
+    404,
+    'invalid_request_error',
+    'no_signin',
+    'No sign-in is in progress for this account.',
+  );
+}
+
+/**
+ * "There is no such account" — and only ever said to a caller holding the
+ * administrative grant, who is entitled to know which accounts exist.
+ */
+function unknownProfile(): ServerReply {
+  return fail(404, 'invalid_request_error', 'unknown_profile', 'No such account on this server.');
+}
+
+/**
+ * Register a serving account. The API twin of `artemis-server profile add`.
+ *
+ * The provider defaults to `claude` rather than being required, because that is
+ * the one whose login this surface can actually drive and a caller that has to
+ * name it learns nothing by naming it. A provider this build has no adapter for
+ * is refused by the store, whose message says so.
+ */
+async function createProfileRoute(
+  admin: ProfileAdmin,
+  body: unknown,
+  record: (created: { readonly id: unknown; readonly providerId: string }) => void,
+): Promise<ServerReply> {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const label = (body as { label?: unknown }).label;
+  if (typeof label !== 'string' || label.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`label` must be a non-empty string.');
+  }
+  const declared = (body as { provider?: unknown }).provider;
+  if (declared !== undefined && (typeof declared !== 'string' || declared.length === 0)) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`provider` must be a provider id, e.g. "claude".');
+  }
+
+  try {
+    const created = await admin.create({
+      label: label.trim(),
+      providerId: declared ?? 'claude',
+    });
+    record(created);
+    const reply: ServerProfileCreatedBody = {
+      object: 'artemis.profile',
+      id: created.id,
+      label: created.label,
+      providerId: created.providerId as ProviderId,
+      configDir: created.configDir,
+    };
+    return ok(reply);
+  } catch (error) {
+    if (error instanceof DuplicateProfileLabelError) {
+      return fail(409, 'invalid_request_error', 'duplicate_label', error.message);
+    }
+    /*
+     * The store's own message, and this is the one place on this surface where
+     * that is right. The caller holds the administrative grant, they are
+     * creating a thing on this machine, and the refusals that reach here are
+     * about *their input* — an unknown provider, a label that is only
+     * whitespace. A caller told "the request failed" has nothing to correct.
+     */
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_profile',
+      error instanceof Error ? error.message : 'The account could not be created.',
+    );
+  }
+}
+
+/**
+ * The code the user pasted, on its way to the subprocess's stdin.
+ *
+ * Nothing here logs it, echoes it, or puts it in an error — see the refusals
+ * below, which describe the *state* and never the input, and the attribution
+ * line, which carries a connection id and an account id and has nowhere to put
+ * a third string. It is the one value on this whole surface that is a secret in
+ * flight.
+ */
+function submitSignInCode(
+  signIns: SignInDirector,
+  profileId: string,
+  body: unknown,
+  record: () => void,
+): ServerReply {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const code = (body as { code?: unknown }).code;
+  if (typeof code !== 'string' || code.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`code` must be a non-empty string.');
+  }
+  // A newline in the middle would be read by the CLI as the end of the answer
+  // and the start of another, so it is refused rather than trimmed: a pasted
+  // value carrying one is not the code the provider showed.
+  if (/[\r\n]/.test(code)) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'A code cannot contain a line break.');
+  }
+
+  record();
+  try {
+    return ok(signIns.submitCode(profileId, code.trim()));
+  } catch (error) {
+    if (error instanceof SignInNotWaitingError) {
+      return fail(409, 'invalid_request_error', 'signin_not_waiting', error.message);
+    }
+    return fail(500, 'server_error', 'signin_failed', 'The code could not be delivered.');
+  }
 }
 
 /**

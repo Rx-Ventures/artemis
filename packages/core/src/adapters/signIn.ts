@@ -29,6 +29,35 @@
  * differently, which is the same question the old code asked *after* its
  * subprocess exited — it was always the directory that decided, never the exit
  * code.
+ *
+ * ## Where that reasoning stops: a server, with a person somewhere else
+ *
+ * The three failures above are not properties of spawning a login. They are
+ * properties of spawning one **that nobody is watching**, which is what a
+ * desktop sign-in is: the user has a terminal, a browser and the whole machine,
+ * so handing them a command is strictly better than a spinner in a window.
+ *
+ * A headless Artemis has none of that. There is no terminal inside the
+ * container to hand the command to, the orchestrated deployments this app is
+ * built for offer no reliable shell, and the web terminals that do exist
+ * cannot paste over plain HTTP. "Run this yourself" is not a worse option
+ * there; it is not an option. And the CLI's behaviour in that environment is
+ * exactly what makes the alternative work: with no browser to open it prints a
+ * verification URL and reads the code back on stdin, which is a conversation —
+ * two values, one each way, both handled by a person.
+ *
+ * So `server/signin.ts` drives the subprocess, and does it under conditions
+ * that answer each objection rather than ignoring it: the output is **read
+ * incrementally** and the URL published the moment it appears, so the flow is
+ * observed rather than waited on; stdin is a **pipe** and the interactive
+ * prompt is answered by the human the flow was started for; there is a **hard
+ * timeout**, a **cancel**, and an error string on every terminal state, so
+ * there is something to read and something to retry. What has changed is not
+ * the judgement — it is who is standing next to the process.
+ *
+ * The invariant is untouched on both paths. Artemis performs no login: it spawns
+ * the provider's CLI, points one variable at a directory, and reads a boolean
+ * back. No token is parsed, stored or forwarded, here or there.
  */
 
 import { spawn } from 'node:child_process';
@@ -300,6 +329,11 @@ export function parseAuthStatus(stdout: string): AuthStatus {
  */
 export async function checkAuthStatus(options: SignInOptions): Promise<AuthStatus> {
   const spec = options.credentials.signIn;
+  // A provider with no account to probe answers a constant — there is no CLI to
+  // run and nothing to read back, so nothing is spawned. This matters because
+  // the profile screen polls this every two seconds while a sign-in step is
+  // open. See `ProviderSignInSpec.staticStatus`.
+  if (spec.staticStatus !== undefined) return spec.staticStatus;
   const result = await run(spec.statusArgs, options, options.timeoutMs ?? 15_000);
 
   // An adapter whose CLI does not print JSON supplies its own reader. Claude's

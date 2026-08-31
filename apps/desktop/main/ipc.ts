@@ -158,6 +158,10 @@ import {
   validateTerminalWrite,
   validateAuthSignOut,
   validateAuthStatus,
+  validateServerAccounts,
+  validateServerAccountsCreate,
+  validateServerAccountSignIn,
+  validateServerAccountSubmitCode,
   validateAgentPromptsList,
   validateAgentPromptsSave,
   validateMemoryBankAdd,
@@ -1093,6 +1097,76 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
     [IPC.authSignOut]: {
       validate: validateAuthSignOut,
       handle: async (request) => engine.require().signOut(request.profileId),
+    },
+
+    /* ---------------------------------------------------------------- */
+
+    /**
+     * Accounts on a *remote* Artemis, and the logins that fill them.
+     *
+     * The rule the block above states holds here too, and is worth restating
+     * because the appearance is different: nothing on these six channels
+     * accepts, returns or stores a credential. The provider's own CLI runs on
+     * the serving machine and writes its own token into its own directory
+     * there; what crosses this boundary is a URL that CLI printed and a code
+     * the user typed into their own browser.
+     *
+     * Every one is a single authenticated HTTP request, refused by the server
+     * with a 404 unless that connection token was granted account
+     * administration — which `list` reports, so the UI can be absent rather
+     * than refused.
+     */
+    [IPC.serverAccountsList]: {
+      validate: validateServerAccounts,
+      handle: async (request) => {
+        // `profiles` on the wire, `accounts` here: the server calls them
+        // profiles because that is what they are to it, and this bridge calls
+        // them accounts because "profile" already means a local one in every
+        // other channel — two things of one name in one renderer is the
+        // confusion worth one rename.
+        const remote = await engine.require().remoteAccounts(request.profileId);
+        return { manageProfiles: remote.manageProfiles, accounts: remote.profiles };
+      },
+    },
+
+    [IPC.serverAccountsCreate]: {
+      validate: validateServerAccountsCreate,
+      handle: async (request) => ({
+        account: await engine.require().createRemoteAccount(request.profileId, {
+          label: request.label,
+          ...(request.provider === undefined ? {} : { provider: request.provider }),
+        }),
+      }),
+    },
+
+    [IPC.serverAccountsSignIn]: {
+      validate: validateServerAccountSignIn,
+      handle: async (request) => ({
+        signIn: await engine.require().startRemoteSignIn(request.profileId, request.accountId),
+      }),
+    },
+
+    [IPC.serverAccountsSignInStatus]: {
+      validate: validateServerAccountSignIn,
+      handle: async (request) => ({
+        signIn: await engine.require().remoteSignInStatus(request.profileId, request.accountId),
+      }),
+    },
+
+    [IPC.serverAccountsSubmitCode]: {
+      validate: validateServerAccountSubmitCode,
+      handle: async (request) => ({
+        signIn: await engine
+          .require()
+          .submitRemoteSignInCode(request.profileId, request.accountId, request.code),
+      }),
+    },
+
+    [IPC.serverAccountsCancelSignIn]: {
+      validate: validateServerAccountSignIn,
+      handle: async (request) => ({
+        signIn: await engine.require().cancelRemoteSignIn(request.profileId, request.accountId),
+      }),
     },
 
     /* ---------------------------------------------------------------- */

@@ -51,6 +51,36 @@ directory answers "signed in". The credential belongs to the provider's CLI,
 lives where that CLI keeps it, and never passes through Artemis in either
 direction.
 
+### The one place Artemis runs the login for you, and what that does not change
+
+The paragraph above describes a machine with a person sitting at it. A headless
+Artemis in a container has no terminal to hand that line to — `docker exec`
+reaches an arbitrary replica under an orchestrator, and the web terminals that
+do exist cannot paste over plain HTTP — so the account that makes a server
+useful was the one thing the deployment could not install.
+
+There, a connection token granted account administration may drive the login
+over HTTP from a desktop Artemis. The server spawns the provider's own CLI;
+with no browser to open, that CLI prints a verification URL and waits for a code
+on stdin. The desktop app shows you the URL, you sign in in your own browser,
+and you paste the code back. Two strings cross the wire.
+
+Every sentence at the top of this section still holds, and none of them is
+weakened by the word "spawns":
+
+- **No OAuth flow is Artemis's.** The exchange is the provider CLI's, exactly as
+  it is when you run the command yourself.
+- **No credential is read, parsed, forwarded or stored.** The CLI writes its own
+  token into its own config directory, on the serving machine. Nothing in
+  Artemis reads that file; whether the login worked is answered by asking the
+  CLI's own status probe.
+- **The code is never logged and never appears in an error.** It goes to one
+  subprocess's stdin and nowhere else.
+- **It is off unless an operator turned it on**, per connection
+  (`connection create --manage-profiles`), because adding an account to a server
+  is an administrative act and not something a token pasted into an editor
+  extension should be able to do.
+
 ### Why the account is a property of the directory
 
 The Claude CLI keys both its credential and its session history on

@@ -20,7 +20,10 @@ export const JSON_HEADERS: Readonly<Record<string, string>> = {
 
 export const CORS_HEADERS: Readonly<Record<string, string>> = {
   'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST',
+  // DELETE is here for exactly one route — abandoning a sign-in — and is
+  // enumerated at the router rather than allowed generally: every other path
+  // refuses it with the same 405 it refuses a PUT with.
+  'access-control-allow-methods': 'GET, HEAD, OPTIONS, POST, DELETE',
   // `x-api-key` alongside the standard header because Anthropic-shaped clients
   // send that one, and a client that has to be reconfigured to talk to a
   // compatibility layer is a compatibility layer that did not work.

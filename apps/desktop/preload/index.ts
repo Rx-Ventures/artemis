@@ -104,6 +104,10 @@ import {
   type SessionsRenameRequest,
   type AuthSignOutRequest,
   type AuthStatusRequest,
+  type ServerAccountsRequest,
+  type ServerAccountsCreateRequest,
+  type ServerAccountSignInRequest,
+  type ServerAccountSubmitCodeRequest,
   type PlanUsagePush,
   type MenuOpenSettings,
   type UpdateState,
@@ -771,6 +775,24 @@ const bridge: ArtemisBridge = Object.freeze({
   auth: Object.freeze({
     status: (request: AuthStatusRequest) => invoke(IPC.authStatus, request),
     signOut: (request: AuthSignOutRequest) => invoke(IPC.authSignOut, request),
+  }),
+
+  /**
+   * The same rule as `auth`, one machine further away: nothing here accepts a
+   * credential and nothing here performs a login. The provider's CLI runs on
+   * the *server*, and what crosses is a URL it printed and a code the user
+   * typed.
+   */
+  serverAccounts: Object.freeze({
+    list: (request: ServerAccountsRequest) => invoke(IPC.serverAccountsList, request),
+    create: (request: ServerAccountsCreateRequest) => invoke(IPC.serverAccountsCreate, request),
+    signIn: (request: ServerAccountSignInRequest) => invoke(IPC.serverAccountsSignIn, request),
+    signInStatus: (request: ServerAccountSignInRequest) =>
+      invoke(IPC.serverAccountsSignInStatus, request),
+    submitCode: (request: ServerAccountSubmitCodeRequest) =>
+      invoke(IPC.serverAccountsSubmitCode, request),
+    cancelSignIn: (request: ServerAccountSignInRequest) =>
+      invoke(IPC.serverAccountsCancelSignIn, request),
   }),
 
   usagePlan: Object.freeze({

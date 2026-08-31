@@ -835,6 +835,26 @@ export interface ProviderSignInSpec {
    * `{ loggedIn: false, error }`.
    */
   readonly parseStatus?: (result: ProbeResult) => AuthStatus;
+
+  /**
+   * The answer for a provider that has *no* sign-in to probe.
+   *
+   * The Artemis-server and local-endpoint profiles authenticate with a token or
+   * an address, not an account, so there is no CLI to run and nothing to read
+   * back — their status is a constant. Naming it here says so, and
+   * `checkAuthStatus` returns it without spawning anything.
+   *
+   * The alternative these providers used before — an `executable: 'true'` and a
+   * `parseStatus` that ignored its output — reached the same answer by spawning
+   * a throwaway process on every poll, which the profile screen runs every two
+   * seconds. A constant is both honest and free. When set, {@link parseStatus}
+   * and the status probe are not consulted.
+   *
+   * It is also what tells `server/signin.ts` there is no login to drive, so a
+   * request to sign such an account in is refused with a sentence rather than
+   * by spawning something that does nothing.
+   */
+  readonly staticStatus?: AuthStatus;
 }
 
 /** What a status probe produced. Handed to {@link ProviderSignInSpec.parseStatus}. */
