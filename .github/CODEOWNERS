@@ -1,0 +1,32 @@
+# Who gets asked to look at a change.
+# ============================================================================
+#
+# GitHub reads this file from the default branch and requests a review from
+# everyone it names whose paths a pull request touches. One rule, covering
+# everything, because this repository has two people in it and both of them
+# care about all of it — a path-by-path split would be inventing a division of
+# labour that does not exist.
+#
+# An author is never asked to review their own pull request, so in practice
+# this means each of us is asked to look at the other's work, automatically,
+# without anyone having to remember to add a reviewer.
+#
+# ## Requested, not required
+#
+# `main`'s protection asks for one approving review and does not care whose,
+# so this file schedules the ask rather than gating the merge. That is
+# deliberate: a rule that *required* a code owner would block whichever of us
+# is working while the other is asleep, in a two-person repository across time
+# zones. The owner keeps an admin bypass either way.
+#
+# If that ever stops being the right trade — a third contributor, an outside
+# pull request that must not merge on one person's say-so — the switch is
+# `require_code_owner_reviews` on the branch protection, not a change here.
+#
+# ## Everyone named here needs write access
+#
+# GitHub silently ignores a code owner who cannot push to the repository: no
+# request is made, no error is shown, and the file simply appears not to work.
+# If a reviewer stops being asked, check their collaborator status first.
+
+*  @seth-torrence @david-systemtech
