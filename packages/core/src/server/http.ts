@@ -62,6 +62,10 @@ import type {
   OpenAiChatRequest,
   OpenAiModelList,
   ProviderId,
+  RunId,
+  RunsInterruptResponse,
+  RunsRespondPermissionResponse,
+  RunsSendResponse,
   ServerHealthBody,
   ServerModel,
   ServerModelsBody,
@@ -96,12 +100,14 @@ import {
   type RunSource,
   type TurnResult,
 } from './completions.js';
+import { RunError } from '../sessions/errors.js';
 import type { RemoteAccessEvent } from '../sessions/lifecycleLog.js';
 import type { PushFeed } from './feed.js';
 import type { RemoteRunGuard } from './guard.js';
 import { workspaceKeyFor, type LedgerScope, type SessionLedger } from './ledger.js';
 import { handleRemoteRequest, isRemotePath, type RemoteStreamOptions } from './remote.js';
 import { CORS_HEADERS, JSON_HEADERS, fail, ok } from './replies.js';
+import { createRunDirectory, reviewPermissionDecision, type RunDirectory } from './runs.js';
 import {
   createSignInDirector,
   DuplicateProfileLabelError,
@@ -189,6 +195,19 @@ export interface ServerContext {
    * running turns gets.
    */
   readonly runs?: RunSource;
+  /**
+   * Which connection owns which *completions-started* run, and the deadlines on
+   * the ones nobody is watching.
+   *
+   * Absent means a turn is over when its request is: the detach opt-in is inert
+   * (there would be nothing to hand the run to) and the three completions-run
+   * actions answer `404`, indistinguishably from a build that never had them.
+   *
+   * Deliberately not the remote bridge's registry. Bridge-started runs are
+   * governed by {@link guard}, on a different clock, and no run is ever in
+   * both — see `runs.ts`.
+   */
+  readonly runDirectory?: RunDirectory;
   /** Where a connection's turns run. Required alongside {@link runs}. */
   readonly workspaces?: WorkspaceResolver;
   /**
@@ -483,6 +502,58 @@ export async function handleServerRequest(
       'not_implemented',
       `Artemis's server does not run turns yet — it publishes its catalogue only. ${path} is planned; list what is available at /v1/models.`,
     );
+  }
+
+  /*
+   * The three verbs a *completions* client may address its own run with.
+   * ==========================================================================
+   *
+   * `POST /api/v0/runs/{id}/{messages,permission,interrupt}`, and this block
+   * sits above the remote bridge's dispatch deliberately. Read the precedence
+   * rule before moving it.
+   *
+   * Two different clients address runs on this port, and they are not the same
+   * kind of thing:
+   *
+   *  - The **bridge** (`remote.ts`) serves a window. It owns `/api/v0/runs`
+   *    whole — the list, the `?after=` replay, and the five verbs `send`,
+   *    `interrupt`, `respond-permission`, `stop-task`, `dispose` — and it
+   *    authorises by what the connection's allowance can *see*.
+   *  - The **completions surface** serves a provider adapter that holds a run
+   *    id it was handed on its own stream. It gets three verbs and authorises
+   *    by *ownership*: the run was started by this connection, through
+   *    `/v1/chat/completions`, and is recorded in `runDirectory`.
+   *
+   * So the rule is ownership-gated precedence, one action at a time:
+   *
+   *  1. `messages` and `permission` are names the bridge does not have. They
+   *     are answered here when this connection owns the run, and with a bare
+   *     404 when it does not — the same sentence an id that never existed
+   *     gets. They are never passed down, because the bridge would answer
+   *     "no such run action" and a caller would have to tell two 404s apart.
+   *  2. `interrupt` is a name **both** surfaces have. Ownership is asked
+   *     *first*: an owned completions run is interrupted here, and everything
+   *     else — every bridge-started run, every id this connection did not
+   *     start — falls through untouched to `isRemotePath` below and is served
+   *     exactly as it was before this block existed.
+   *  3. Everything else under `/runs` is the bridge's and is not looked at
+   *     here. In particular `GET /api/v0/runs` and
+   *     `GET /api/v0/runs/{id}/events?after=N` have one owner, which is the
+   *     bridge. A completions client is handed its run id on its own stream
+   *     and does not enumerate; a second listing route, or a second replay
+   *     route on a different query parameter, would be two answers to one
+   *     question.
+   *
+   * The thing this shape exists to prevent is a prefix dispatcher. Claiming
+   * `path.startsWith('/api/v0/runs')` here would swallow the bridge's entire
+   * surface — the list, the stream replay, `send`, `respond-permission`,
+   * `stop-task`, `dispose` — silently, with no conflict and no failing type,
+   * because every one of those paths starts with those characters.
+   */
+  const owned = ownedCompletionsRunAction(context, connection, method, path);
+  if (owned !== undefined) {
+    const reply = await handleOwnedRunAction(context, connection, request, owned);
+    return { ...reply, connectionId: connection.id };
   }
 
   /*
@@ -987,6 +1058,16 @@ export interface ArtemisServerOptions {
   /** See {@link ServerContext.onRemoteAccess}. */
   readonly onRemoteAccess?: (event: RemoteAccessEvent) => void;
   /**
+   * Ownership and the deadlines on detached completions runs.
+   *
+   * Built here from {@link runs} when it is not supplied, because the only
+   * thing it needs is the engine and every deployment that can run a turn
+   * wants one. Injected by a test that needs to control its clock, and by
+   * nothing else. {@link ArtemisServer.close} closes whichever it ended up
+   * with, so the subscription and the sweep do not outlive the port.
+   */
+  readonly runDirectory?: RunDirectory;
+  /**
    * How to add a serving account. Omit for a deployment whose accounts are
    * managed some other way — the surface then answers `501` to an
    * administrator and `404` to everyone else.
@@ -1034,6 +1115,16 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
   const host = options.host ?? SERVER_HOST;
   let startedAt = Date.now();
 
+  const runs = options.runs;
+  const runDirectory =
+    runs === undefined
+      ? undefined
+      : (options.runDirectory ??
+        createRunDirectory({
+          runs,
+          ...(options.onError === undefined ? {} : { onError: options.onError }),
+        }));
+
   const profileAdmin = options.profileAdmin;
   const signIns =
     profileAdmin === undefined
@@ -1079,7 +1170,8 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           version: options.version,
           catalogue: options.catalogue,
           startedAt,
-          ...(options.runs === undefined ? {} : { runs: options.runs }),
+          ...(runs === undefined ? {} : { runs }),
+          ...(runDirectory === undefined ? {} : { runDirectory }),
           ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
           ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
           ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
@@ -1209,6 +1301,11 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
     },
 
     close() {
+      // The directory holds an engine subscription and a timer. Neither is the
+      // socket's business and both would outlive it — a server that had been
+      // stopped would keep sweeping, and would eventually reap a run in an
+      // engine the user has since gone back to using directly.
+      runDirectory?.close();
       // A sign-in in flight is a *subprocess* parked on a person who can no
       // longer reach it, holding a config directory open. Stopping the server
       // is the last moment anything knows it exists.
@@ -1256,6 +1353,294 @@ function unknownSession(): ServerReply {
     'unknown_session',
     'No such conversation for this connection.',
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* The completions surface's own run verbs                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three verbs, and only these three.
+ *
+ * `messages` and `permission` are this surface's alone. `interrupt` is shared
+ * with the bridge by name and separated by ownership — see the dispatch
+ * comment. Nothing here is a prefix: an action not on this list is not this
+ * module's, whatever it is called.
+ */
+const OWNED_RUN_ACTIONS = new Set(['messages', 'permission', 'interrupt']);
+
+/** One completions run, and what its own client asked of it. */
+interface OwnedRunAction {
+  readonly runId: RunId;
+  readonly action: 'messages' | 'permission' | 'interrupt';
+  /**
+   * The connection owns this run. False only for `messages` and `permission`,
+   * which are refused rather than passed on; an unowned `interrupt` never
+   * reaches here at all, because it belongs to the bridge.
+   */
+  readonly owned: boolean;
+}
+
+/**
+ * Is this request one of the three verbs, aimed at a run this connection owns?
+ *
+ * Returns `undefined` for everything else, which is the signal to leave the
+ * path alone and let the bridge's dispatch have it. The asymmetry between the
+ * two outcomes is the whole point:
+ *
+ *  - An **unowned `interrupt`** returns `undefined`, so the bridge answers it
+ *    exactly as it did before this surface existed. A bridge-started run must
+ *    not become uninterruptible because a second registry does not know it.
+ *  - An **unowned `messages` or `permission`** returns a record with
+ *    `owned: false`, so the caller gets one flat 404 here rather than the
+ *    bridge's "no such run action". Those two names mean something on this
+ *    server, and which of them a token may use is an ownership fact — not one
+ *    a refusal should spell differently depending on whether the run exists.
+ */
+function ownedCompletionsRunAction(
+  context: ServerContext,
+  connection: ServerConnection,
+  method: string,
+  path: string,
+): OwnedRunAction | undefined {
+  if (method !== 'POST') return undefined;
+  const prefix = `/api/${SERVER_API_VERSION}/runs/`;
+  if (!path.startsWith(prefix)) return undefined;
+
+  const rest = path.slice(prefix.length);
+  const separator = rest.indexOf('/');
+  if (separator <= 0) return undefined;
+  const action = rest.slice(separator + 1);
+  if (!OWNED_RUN_ACTIONS.has(action)) return undefined;
+
+  let runId: string;
+  try {
+    runId = decodeURIComponent(rest.slice(0, separator));
+  } catch {
+    // The id it literally was, matching `parseRemoteResourcePath`: the caller
+    // asked about something that is not there either way, and a 400 about URL
+    // syntax is a worse answer than "no such run".
+    runId = rest.slice(0, separator);
+  }
+  if (runId.length === 0) return undefined;
+
+  const owned = context.runDirectory?.owns(connection.id, runId) === true;
+  if (!owned && action === 'interrupt') return undefined;
+  return { runId, action: action as OwnedRunAction['action'], owned };
+}
+
+/**
+ * Steer, approve, or stop a run this connection started over completions.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ONE RULE
+ * ---------------------------------------------------------------------------
+ *
+ * **A run belongs to the connection that started it.** Not to the token that
+ * knows its id — ids travel, in logs and screenshots and error reports — and
+ * not to any token pinned to the same directory. Ownership is resolved before
+ * anything else happens, and a failure is the same 404 as an id that never
+ * existed. That check is the whole authorisation model of this surface, so it
+ * lives in one place (`ownedCompletionsRunAction`) and no route here is
+ * permitted its own version of it.
+ */
+async function handleOwnedRunAction(
+  context: ServerContext,
+  connection: ServerConnection,
+  request: ServerRequestInfo,
+  route: OwnedRunAction,
+): Promise<ServerReply> {
+  if (!route.owned) return unknownRun();
+
+  const runs = context.runs;
+  const directory = context.runDirectory;
+  if (runs === undefined || directory === undefined) {
+    // Unreachable while `owned` is true — nothing can own a run without a
+    // directory — but written as a refusal rather than an assertion, because a
+    // router that threw here would take out the socket.
+    return unknownRun();
+  }
+
+  // Somebody is here. Whatever they came for, the run is not abandoned — see
+  // `noteSeen`, and the detached-run deadline it holds off.
+  directory.noteSeen(route.runId);
+
+  /*
+   * Attributed exactly as the bridge attributes its own verbs, and written
+   * before the verb runs for the same reason: the acts most worth a name
+   * against them — an interrupt, an `allow` on a prompt — are the ones that can
+   * be followed by a crash. Ids only; the record has nowhere for a message or a
+   * decision's arguments to go.
+   */
+  const record = (): void => {
+    context.onRemoteAccess?.({
+      kind: route.action === 'permission' ? 'remote.permission.answered' : 'remote.run.acted',
+      connectionId: connection.id,
+      action: route.action,
+      runId: route.runId,
+    });
+  };
+
+  if (route.action === 'interrupt') {
+    record();
+    return interruptOwnedRun(runs, route.runId);
+  }
+  if (route.action === 'messages') {
+    return sendToOwnedRun(runs, route.runId, request.body, record);
+  }
+  return answerOwnedPermission(runs, directory, route.runId, request.body, record);
+}
+
+/**
+ * The same refusal, for runs.
+ *
+ * A run id is a uuid the server minted, so guessing one is not the threat —
+ * *confirming* one is. A reply that distinguished "no such run" from "not your
+ * run" would let a token with any run id in hand learn that it names something
+ * real on this server, and from there which of a set of ids belong to the
+ * connection next door. One sentence for both, exactly as the session routes
+ * do it.
+ */
+function unknownRun(): ServerReply {
+  return fail(404, 'invalid_request_error', 'unknown_run', 'No such run for this connection.');
+}
+
+/**
+ * A run that would not do what it was asked.
+ *
+ * `RunError`'s message is passed through and nothing else's is. The caller has
+ * already been proven to own this run, so "already ended" or "this provider
+ * cannot steer mid-turn" is a fact about their own conversation and is the
+ * whole of what they need to recover. An error from anywhere else is an
+ * unbounded string from an adapter — it can name a path, a command line or an
+ * account — and none of that belongs in a reply to a bearer token.
+ */
+function runFailure(error: unknown): ServerReply {
+  return error instanceof RunError
+    ? fail(409, 'invalid_request_error', 'run_unavailable', error.message)
+    : fail(502, 'server_error', 'run_failed', 'The run could not be reached.');
+}
+
+/**
+ * Another message into a run that is already going.
+ *
+ * Attachments are deliberately not read from the wire. `RunSource.send` carries
+ * them because the desktop's own IPC path needs them, but nothing on this
+ * boundary validates a base64 blob, and an unchecked one would travel from a
+ * bearer token straight into an adapter's argument encoder. Text is the whole
+ * of what a remote steer needs today; images can be added when there is a
+ * validator to put in front of them.
+ */
+async function sendToOwnedRun(
+  runs: RunSource,
+  runId: RunId,
+  body: unknown,
+  record: () => void,
+): Promise<ServerReply> {
+  // The host may serve completions and decline steering. Answered before the
+  // body is read, so a build without it says so rather than validating input it
+  // has no use for.
+  if (runs.send === undefined) return notSteerable();
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const text = (body as { text?: unknown }).text;
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    return fail(400, 'invalid_request_error', 'invalid_body', '`text` must be a non-empty string.');
+  }
+
+  try {
+    record();
+    const outcome = await runs.send(runId, text);
+    const reply: RunsSendResponse = {
+      runId,
+      deliveredImmediately: outcome.deliveredImmediately,
+    };
+    return ok(reply);
+  } catch (error) {
+    return runFailure(error);
+  }
+}
+
+/** The answer on a host that runs turns but exposes no way to steer one. */
+function notSteerable(): ServerReply {
+  return fail(
+    501,
+    'invalid_request_error',
+    'not_implemented',
+    'This Artemis build runs turns but cannot take another message into one that is already going.',
+  );
+}
+
+/**
+ * Stop a run.
+ *
+ * The counterweight to detaching, and the reason detaching is safe to offer: a
+ * disconnect stops meaning "stop", so there has to be something that still
+ * does.
+ */
+async function interruptOwnedRun(runs: RunSource, runId: RunId): Promise<ServerReply> {
+  try {
+    await runs.interrupt(runId);
+    const body: RunsInterruptResponse = { runId };
+    return ok(body);
+  } catch (error) {
+    return runFailure(error);
+  }
+}
+
+/**
+ * Answer a prompt the run is parked on.
+ *
+ * A separate request from the stream that asked, because by the time the answer
+ * comes the asking stream is routinely gone — that is the entire scenario this
+ * exists for. The decision is re-read from scratch rather than trusted: see
+ * `reviewPermissionDecision` for the escalations a `PermissionDecision` can
+ * express and why none of them is reachable from *this* surface.
+ *
+ * The narrowing is this surface's alone. The bridge's `respond-permission`
+ * keeps the full `PermissionDecision`, and the difference is not an
+ * inconsistency: the bridge's caller is the user, in their own window, and a
+ * mode change or a durable "always allow" is theirs to make. A completions
+ * caller is a *program borrowing an account* — the same principal that may not
+ * choose a permission mode when it starts a run — so it may approve the call in
+ * front of it and nothing wider.
+ */
+async function answerOwnedPermission(
+  runs: RunSource,
+  directory: RunDirectory,
+  runId: RunId,
+  body: unknown,
+  record: () => void,
+): Promise<ServerReply> {
+  if (typeof body !== 'object' || body === null) {
+    return fail(400, 'invalid_request_error', 'invalid_body', 'The request body must be a JSON object.');
+  }
+  const requestId = (body as { requestId?: unknown }).requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) {
+    return fail(
+      400,
+      'invalid_request_error',
+      'invalid_body',
+      '`requestId` must name the prompt being answered.',
+    );
+  }
+
+  const review = reviewPermissionDecision((body as { decision?: unknown }).decision);
+  if ('error' in review) {
+    return fail(400, 'invalid_request_error', review.code, review.error);
+  }
+
+  try {
+    record();
+    await runs.respondToPermission(runId, requestId, review.decision);
+  } catch (error) {
+    return runFailure(error);
+  }
+  directory.noteAnswered(runId, requestId);
+
+  const reply: RunsRespondPermissionResponse = { requestId };
+  return ok(reply);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1742,6 +2127,27 @@ async function handleChatCompletions(
 
   const id = `chatcmpl-${Math.random().toString(36).slice(2, 12)}`;
   const created = Math.floor(Date.now() / 1000);
+  const directory = context.runDirectory;
+  /*
+   * Ownership is recorded the moment the run has an id, and for every run —
+   * not only the ones that opted into surviving a disconnect. The three run
+   * actions authorise against this record, so a run that was never claimed is
+   * a run its own caller cannot interrupt; and a claim is the cheapest
+   * possible way to make "not yours" and "never existed" the same answer for
+   * everyone else.
+   *
+   * Note what is *not* here: `guard.trackRun`. A completions run is governed by
+   * this directory's deadline and never by the bridge's grace period — the two
+   * registries are separated at the point of creation, which is here and in the
+   * bridge's own start route. See `runs.ts`.
+   */
+  const claim = (runId: string): void => {
+    directory?.claim({
+      runId,
+      connectionId: connection.id,
+      permissions: extensions.remote?.permissions === true,
+    });
+  };
   const turn = {
     model,
     cwd: workspace.path,
@@ -1749,6 +2155,12 @@ async function handleChatCompletions(
     extensions,
     ignored: review.ignored,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
+    // Absent when this build has no directory: with nothing to hold the
+    // deadline, a detach would be an abandonment, so the turn keeps its old
+    // teardown and the opt-in is inert rather than dangerous.
+    ...(directory === undefined
+      ? {}
+      : { onDetach: (runId: RunId) => directory.noteDetached(runId) }),
   };
 
   /*
@@ -1783,12 +2195,13 @@ async function handleChatCompletions(
         connection: 'keep-alive',
       },
       connectionId: connection.id,
-      stream: streamTurn({ id, created, turn, runs: context.runs, model, record }),
+      stream: streamTurn({ id, created, turn, runs: context.runs, model, record, claim }),
     };
   }
 
   let result: TurnResult | undefined;
   for await (const event of runTurn(context.runs, turn)) {
+    if (event.kind === 'run') claim(event.runId);
     if (event.kind === 'session') record(event.sessionId);
     if (event.kind === 'done') {
       result = event.result;
@@ -1838,6 +2251,8 @@ async function* streamTurn(input: {
   readonly model: ServerModel;
   /** Called with every session id the run announces. See the ledger. */
   readonly record?: (sessionId: string) => void;
+  /** Called once with the run's id, before anything else is written. */
+  readonly claim?: (runId: string) => void;
 }): AsyncIterable<string> {
   const { id, created, model } = input;
 
@@ -1849,6 +2264,44 @@ async function* streamTurn(input: {
     for await (const event of runTurn(input.runs, input.turn)) {
       if (event.kind === 'text') {
         yield sseEvent(chatChunk({ id, model: model.route, created, delta: { content: event.text } }));
+        continue;
+      }
+
+      // The run id, first of everything the turn has to say, and on the same
+      // empty-delta chunk the session id rides — an OpenAI client appends
+      // nothing and moves on. This is the only place a completions caller can
+      // learn the id, and the three run actions take it, so a client that means
+      // to steer or reattach after the stream breaks has to be holding it
+      // before it does.
+      if (event.kind === 'run') {
+        input.claim?.(event.runId);
+        yield sseEvent(
+          chatChunk({
+            id,
+            model: model.route,
+            created,
+            delta: {},
+            artemis: { runId: event.runId },
+          }),
+        );
+        continue;
+      }
+
+      // A prompt the run is parked on, or the news that it is settled. Only for
+      // a caller that asked for these; see `ArtemisRemoteOptions`. Its answer
+      // comes back on POST /api/v0/runs/{runId}/permission rather than on this
+      // stream, because a stream is one-way and this one is often already dead
+      // by the time anyone looks at the question.
+      if (event.kind === 'permission') {
+        yield sseEvent(
+          chatChunk({
+            id,
+            model: model.route,
+            created,
+            delta: {},
+            artemis: { permission: event.notice },
+          }),
+        );
         continue;
       }
 

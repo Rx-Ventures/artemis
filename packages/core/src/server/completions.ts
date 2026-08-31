@@ -17,8 +17,8 @@
  *
  * **1. Nobody is watching, so nobody can answer a permission prompt.** An
  * agentic run can stop and ask. In the app a person answers; over HTTP there is
- * no person, and a request that parked on a prompt would hang until the client
- * timed out with no explanation. So every permission request is **denied
+ * usually no person, and a request that parked on a prompt would hang until the
+ * client timed out with no explanation. So every permission request is **denied
  * automatically**, with a message the model can act on, and the denial is
  * reported on the response. Denying is the only safe default: the alternative
  * is a program the user has not looked at approving file writes on their behalf.
@@ -32,12 +32,42 @@
  * run keeps going — it is a real process doing real work on the user's disk —
  * unless someone stops it, so a disconnect interrupts it. Anything else spends
  * the user's plan on output nobody will ever read.
+ *
+ * ---------------------------------------------------------------------------
+ * …UNLESS THE CALLER SAYS IT IS A PERSON
+ * ---------------------------------------------------------------------------
+ *
+ * Points 1 and 3 are both statements about *the client*, and both are wrong for
+ * exactly one kind of client: a remote Artemis with a human in front of it. So
+ * each is an opt-in the caller declares on the request, and neither is ever
+ * inferred — see `ArtemisRemoteOptions` in protocol for why a socket cannot
+ * tell a phone from a CI job.
+ *
+ *  - `artemis.remote.permissions` emits the request to the client instead of
+ *    denying it, and lets the run park. Answering happens out of band, on
+ *    `POST /api/v0/runs/{runId}/permission`, because the answer routinely
+ *    arrives on a different connection from the one that asked — the stream
+ *    this turn is writing to may already be dead.
+ *  - `artemis.remote.detach` makes a disconnect leave the run alone. This
+ *    module's part is small and precise: it stops interrupting on teardown and
+ *    reports the detach to whoever is keeping the deadline. It does *not* take
+ *    ownership of the run's eventual death, because a generator nobody is
+ *    pulling from cannot enforce a timeout — see `runs.ts`.
+ *
+ * A request that sets neither is served byte for byte as it was before either
+ * existed, which is the property the whole design is arranged around.
+ *
+ * None of this is the *remote bridge* (`remote.ts`), which serves a window
+ * rather than a provider adapter, makes both promises unconditionally, and
+ * keeps its own run registry with its own grace period. The two surfaces share
+ * an engine and share no bookkeeping.
  */
 
 import type {
   AgentEvent,
   ArtemisActivity,
   ArtemisChatExtensions,
+  ArtemisPermissionNotice,
   Attachment,
   OpenAiChatChunk,
   OpenAiChatMessage,
@@ -57,6 +87,23 @@ import type {
 /* -------------------------------------------------------------------------- */
 /* The seam                                                                   */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * The standing answer to a prompt nobody is present for.
+ *
+ * Exported because it is given in two places that must not drift: here, the
+ * instant a request arrives on a turn that did not ask for prompts, and in
+ * `runs.ts`, when a turn that *did* ask has waited past its deadline. Both are
+ * the same sentence to the model — "there is no one here" — and a model that
+ * learned to route around one wording and met another would have to learn
+ * twice.
+ *
+ * Written for the model rather than for a log: it names the constraint and
+ * offers two ways forward, so the agent treats it as a closed door rather than
+ * as a fault it should retry.
+ */
+export const UNATTENDED_PERMISSION_MESSAGE =
+  'This turn is running through the Artemis HTTP server, where no one is present to approve tool use. Continue without this action, or explain what you would need.';
 
 /** What one turn needs from the engine. */
 export interface RunSource {
@@ -181,6 +228,20 @@ export interface TurnRequest {
   readonly ignored: readonly string[];
   /** Aborts when the client hangs up. */
   readonly signal?: { readonly aborted: boolean; addEventListener?: unknown };
+  /**
+   * Told when a client walked away from a run it asked to keep.
+   *
+   * The one thing this module cannot do for itself. Detaching is a *transfer*:
+   * from here, where the run's lifetime is bounded by a generator somebody is
+   * pulling from, to something that outlives the request and can still enforce
+   * a deadline. Handing over is the whole of the handover — nothing is called
+   * back, and the run is no longer this turn's to end.
+   *
+   * Only ever called when the caller set `artemis.remote.detach`, and only for
+   * a run that was still going. A turn that finished normally is disposed here
+   * as it always was.
+   */
+  readonly onDetach?: (runId: RunId) => void;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -285,6 +346,40 @@ export type TurnEvent =
   | { readonly kind: 'activity'; readonly activity: ArtemisActivity }
   | {
       /**
+       * The run this turn became, announced as soon as it has an id.
+       *
+       * First of everything, and unconditional — a caller that never uses the
+       * run surface pays one field on one chunk, and a caller that does has no
+       * other way to learn the address. `/v1/chat/completions` is the only
+       * route that mints a run for a completions caller, and until this existed
+       * the id it minted was knowable to nobody: such a client could watch a
+       * run it had started only by staying attached to it, which is precisely
+       * the thing that fails.
+       *
+       * Announced before the session id on purpose. The two arrive together for
+       * a fresh conversation, and of the pair this is the one that is useful
+       * immediately — interrupting, steering and approving all address the run,
+       * while the session id only matters once the turn is over.
+       */
+      readonly kind: 'run';
+      readonly runId: RunId;
+    }
+  | {
+      /**
+       * A permission prompt the run is parked on, or the news that it is not.
+       *
+       * Only for a turn that set `artemis.remote.permissions`; every other turn
+       * is denied on the spot and there is nothing to report. Both states are
+       * emitted, and the second is not a nicety: the request may be answered by
+       * a *different* client from the one watching this stream, or by the park
+       * deadline, and a watcher that only ever saw the question would hold an
+       * open card over a decision that was made minutes ago.
+       */
+      readonly kind: 'permission';
+      readonly notice: ArtemisPermissionNotice;
+    }
+  | {
+      /**
        * The session this turn is writing to, announced as soon as it is known
        * rather than only on `done`.
        *
@@ -314,6 +409,21 @@ export async function* runTurn(
 ): AsyncGenerator<TurnEvent> {
   const resuming = turn.extensions.sessionId !== undefined;
   const prompt = promptFromMessages(turn.request.messages, { resuming });
+  /*
+   * Read once, and read as `=== true`, so that a caller who sent `remote: {}`,
+   * or nothing at all, is on the old path by construction rather than by the
+   * absence of a branch somebody might later add.
+   *
+   * Detaching additionally requires somewhere to hand the run *to*. Skipping
+   * the interrupt without a handover would not be a weaker promise, it would be
+   * a leak: a run with no client, no owner and no deadline, held by the
+   * provider until the process dies. A build with nowhere to put it therefore
+   * ignores the request and ends the run as it always did, which is the honest
+   * degradation — the caller loses a feature rather than the server losing
+   * track of a subprocess.
+   */
+  const detachable = turn.extensions.remote?.detach === true && turn.onDetach !== undefined;
+  const remotePermissions = turn.extensions.remote?.permissions === true;
 
   /*
    * A queue, because events arrive by callback and are consumed by `for await`.
@@ -397,6 +507,7 @@ export async function* runTurn(
     }
 
     runId = handle.runId;
+    yield { kind: 'run', runId };
     if (handle.sessionId !== undefined) sessionId = String(handle.sessionId);
     if (sessionId !== undefined && sessionId !== announced) {
       announced = sessionId;
@@ -413,6 +524,15 @@ export async function* runTurn(
       if (pending.length === 0) {
         // Waiting for the next event, or for a client that has gone away.
         if (turn.signal?.aborted === true) {
+          /*
+           * A detachable run stops being this turn's business the moment its
+           * client goes: returning hands it to `finally`, which detaches rather
+           * than interrupts. Draining on would be worse than pointless — it
+           * holds the request handler open writing into a dead socket for as
+           * long as the agent keeps working, which for the case this feature
+           * exists for is hours.
+           */
+          if (detachable) return;
           await source.interrupt(runId).catch(() => undefined);
           // Keep draining: the run answers the interrupt with a `run.end`, and
           // leaving without it would strand the subscription.
@@ -473,19 +593,48 @@ export async function* runTurn(
 
         case 'permission.request':
           /*
-           * Denied, always, because there is nobody here to ask.
+           * Denied on the spot, unless the caller said there is somebody there.
            *
-           * The message is written for the *model*: it explains the constraint so
-           * the agent can choose another route, rather than reading as a fault.
+           * The default is the old one and the message is written for the
+           * *model*: it explains the constraint so the agent can choose another
+           * route, rather than reading as a fault.
+           *
+           * The opted-in path answers nothing here, and that is the design
+           * rather than an omission. The decision arrives on a different
+           * request — often on a different socket, minutes later, after this
+           * stream has died — so parking is simply *not replying*: the adapter
+           * is already blocked, and `runs.ts` holds the deadline that stops it
+           * being blocked forever. All this branch owes the client is the
+           * question.
            */
+          if (remotePermissions) {
+            yield { kind: 'permission', notice: { status: 'requested', request: event.request } };
+            break;
+          }
           deniedPermission = true;
           await source
             .respondToPermission(runId, String(event.requestId), {
               behavior: 'deny',
-              message:
-                'This turn is running through the Artemis HTTP server, where no one is present to approve tool use. Continue without this action, or explain what you would need.',
+              message: UNATTENDED_PERMISSION_MESSAGE,
             })
             .catch(() => undefined);
+          break;
+
+        case 'permission.resolved':
+          // Only for the client that was told about the request in the first
+          // place. A turn on the standing denial saw no question, so news that
+          // the question is closed would be an event about nothing.
+          if (remotePermissions) {
+            yield {
+              kind: 'permission',
+              notice: {
+                status: 'resolved',
+                requestId: event.requestId,
+                outcome: event.outcome,
+                ...(event.note === undefined ? {} : { note: event.note }),
+              },
+            };
+          }
           break;
 
         case 'usage':
@@ -520,11 +669,10 @@ export async function* runTurn(
         }
 
         default:
-          // `thinking.delta`, `tool.end`, `permission.resolved`,
-          // `background.tasks`. Not silently dropped by accident — none of them
-          // has a place in an OpenAI reply, and thinking in particular must not
-          // be concatenated into `content`, where a caller would read a model's
-          // private reasoning as its answer.
+          // `thinking.delta`, `tool.end`, `background.tasks`. Not silently
+          // dropped by accident — none of them has a place in an OpenAI reply,
+          // and thinking in particular must not be concatenated into `content`,
+          // where a caller would read a model's private reasoning as its answer.
           break;
       }
     }
@@ -548,10 +696,21 @@ export async function* runTurn(
      *
      * Found by the abort test, which passed the in-loop check and still saw the
      * run left running.
+     *
+     * The exception is a run whose caller asked to keep it. There the same
+     * teardown means the opposite thing — the client is gone and the work is
+     * meant to survive — so the run is handed on instead of ended, and nothing
+     * here disposes it: disposing would release the provider process the whole
+     * feature exists to keep. A turn that *finished* is disposed either way,
+     * because there is no work left to survive.
      */
     if (runId !== null) {
-      if (!ended) await source.interrupt(runId).catch(() => undefined);
-      await source.disposeRun(runId).catch(() => undefined);
+      if (!ended && detachable) {
+        turn.onDetach?.(runId);
+      } else {
+        if (!ended) await source.interrupt(runId).catch(() => undefined);
+        await source.disposeRun(runId).catch(() => undefined);
+      }
     }
   }
 }

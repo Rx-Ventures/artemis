@@ -74,6 +74,12 @@ services:
       # Uncomment to name the hosts this server answers to instead of `any`
       # (the default for a non-loopback bind):
       # ARTEMIS_ALLOWED_HOSTS: 'artemis.tailnet.example,100.101.102.103'
+      # How long a run whose client detached is kept before it is reaped, and
+      # how long a permission prompt waits for an answer. Both are ceilings on
+      # behaviour a completions client has to opt into per request; the defaults
+      # (6h, 15m) suit a laptop that sleeps and a person who answers prompts.
+      # ARTEMIS_DETACHED_RUN_TTL_MS: '21600000'
+      # ARTEMIS_PERMISSION_PARK_MS: '900000'
 
 volumes:
   artemis-data:

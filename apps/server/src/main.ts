@@ -25,6 +25,22 @@
  *                          protection for loopback binds, and a deliberately
  *                          reachable server is guarded by its bind + auth.
  *
+ * Two more govern the runs a completions client detaches from — a laptop that
+ * slept mid-turn — and both are ceilings rather than schedules. Neither applies
+ * to a caller that did not ask for the behaviour; see `ArtemisRemoteOptions`.
+ * Neither governs a *bridge*-started run either, which has its own sixty-second
+ * grace in `server/guard.ts`.
+ *
+ *   ARTEMIS_DETACHED_RUN_TTL_MS   how long a run nobody has come back for is
+ *                          kept before it is interrupted and disposed.
+ *                          Default 6h. The clock restarts every time the
+ *                          owning connection touches the run, so a client
+ *                          that is polling is never reaped mid-read.
+ *   ARTEMIS_PERMISSION_PARK_MS    how long a permission prompt waits for an
+ *                          answer, while a client is attached, before it is
+ *                          denied with the standing "nobody is here" message.
+ *                          Default 15m.
+ *
  * And one for deployments that cannot run this CLI interactively at all:
  *
  *   ARTEMIS_BOOTSTRAP_CONNECTIONS   a JSON array of connections to make sure

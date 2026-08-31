@@ -27,9 +27,11 @@
  *    The remote pins its working directory per connection token when the
  *    token is created; the `cwd` chosen here does not travel (there is
  *    deliberately no `cwd` on the wire — see `protocol/src/server.ts`).
- *  - **Permission prompts are auto-denied over there.** Nobody is present at
- *    the server to approve tool use, so `interactivePermissions` is false and
- *    no mode picker is offered.
+ *  - **Permission prompts come back to this machine.** A person is present
+ *    here even though the tool call runs over there, so a run opts into remote
+ *    permissions and the server puts each prompt on the wire instead of denying
+ *    it. The run's *mode* is still the serving user's — no mode picker — but the
+ *    approval itself is answered here, on a native run route.
  *  - **The conversation lives on the server.** It stores real sessions, so
  *    `resumeSession` is honestly true: the `artemis.sessionId` a turn reports
  *    is passed back to continue it — the one capability the raw local
@@ -47,11 +49,17 @@ import type {
   AgentError,
   AgentEvent,
   ArtemisActivity,
+  ArtemisPermissionNotice,
   Capabilities,
   MessageId,
+  PermissionDecision,
+  PermissionRequest,
+  PermissionRequestId,
+  ProviderEffortOption,
   ProviderId,
   RunEndReason,
   RunId,
+  RunsSendResponse,
   RunStatus,
   ServerSessionMessagesBody,
   ServerSessionsBody,
@@ -86,6 +94,7 @@ import type {
 } from '../types.js';
 import { splitEvents } from '../local/stream.js';
 import { parseServerModels } from './catalogue.js';
+import { guardRemoteDecision } from './permissions.js';
 import { readServerLine } from './stream.js';
 
 export const ARTEMIS_PROVIDER_ID: ProviderId = 'artemis';
@@ -114,16 +123,49 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // ledger — and replays their stored messages. This is what makes the same
   // conversations reachable from every machine holding the token.
   listSessions: true,
-  // Permission prompts are auto-denied at the server (nobody is present
-  // there), so offering an approval surface or a mode picker here would be
-  // claiming a control that does not exist. Empty modes, no interactivity.
-  interactivePermissions: false,
+  // A run that opts into remote permissions parks on a prompt instead of denying
+  // it: the request rides an empty-delta chunk in the `artemis` namespace, and
+  // the answer goes back on `POST /api/v0/runs/{id}/permission`. A person is
+  // present *here* — at this machine — even though the tool call runs on the
+  // server's, which is the whole difference from an unattended `curl`.
+  interactivePermissions: true,
+  // A message can be steered into the turn already in flight —
+  // `POST /api/v0/runs/{id}/messages` — so the composer stays live mid-run.
+  midRunSteering: true,
+  // Still empty, and deliberately: the server refuses a mode switch from a
+  // connection token (see `reviewPermissionDecision`), and a run's mode is the
+  // serving user's setting rather than this client's to pick. An approval
+  // surface needs no mode picker, so offering one would claim a control the wire
+  // refuses.
   permissionModes: [],
-  // The remote agent's own instructions are the serving user's settings; a
-  // `system` message would be folded into the prompt text over there, which
-  // is not what "append to the system prompt" promises.
+  // Still false, for the reason the module header gives: the remote agent's
+  // instructions are the serving user's settings, and the completions route
+  // deliberately takes no system prompt from an HTTP caller (see
+  // `RunSource.startRun`). A `systemPrompt` sent here would be silently dropped,
+  // which is the one failure this flag exists to prevent.
   systemPromptAppend: false,
 };
+
+/**
+ * The thinking levels a run may ask for, as one static descriptor list.
+ *
+ * The honest source of truth is per route — a server fronts Claude, Codex or a
+ * local endpoint, and each names its own scale — so the levels valid on a given
+ * model arrive live on {@link ProviderModelOption.effortLevels}, mapped from the
+ * server's `thinkingLevels`. What a *descriptor* needs is a label and a note for
+ * each id the picker might show, and those cannot be fetched before a profile is
+ * even chosen. This is the union the providers a server routes to actually use;
+ * a route that accepts none of them narrows the picker to nothing through its
+ * own empty `effortLevels`, and a level a route does not list is shown disabled
+ * rather than sent.
+ */
+const ARTEMIS_EFFORT_LEVELS: readonly ProviderEffortOption[] = [
+  { id: 'low', label: 'Low', note: 'Least reasoning, fastest reply.' },
+  { id: 'medium', label: 'Medium', note: 'A middle setting.' },
+  { id: 'high', label: 'High', note: 'More reasoning before answering.' },
+  { id: 'xhigh', label: 'Extra high', note: 'Deeper still, where the model offers it.' },
+  { id: 'max', label: 'Max', note: 'The most the model will spend.' },
+];
 
 /** No account to sign in to — the credential is the server's connection token. */
 function artemisCredentials(): ProviderCredentialSpec {
@@ -146,9 +188,11 @@ function artemisCredentials(): ProviderCredentialSpec {
       logoutArgs: [],
       howTo:
         'Nothing to sign in to here. Point this profile at a running Artemis server and paste one of its connection tokens as the API key.',
-      // Signed in exactly when the server answers, which the availability
-      // probe already establishes.
-      parseStatus: () => ({ loggedIn: true }),
+      // There is no account to probe: the credential is a connection token, and
+      // whether it works is what the availability probe already establishes. So
+      // the status is a constant, not a throwaway `true` spawned on every one of
+      // the profile screen's two-second polls. See `staticStatus`.
+      staticStatus: { loggedIn: true },
     },
   };
 }
@@ -238,6 +282,14 @@ class ArtemisRun implements Run {
   #sessionId: SessionId | undefined;
   #sessionAnnounced = false;
   #usage: UsageSnapshot | undefined;
+  /**
+   * The server's run id, learned off the stream the way the session id is and
+   * kept for the native `/api/v0/runs/{id}` routes. Distinct from {@link runId},
+   * which is this adapter's local id; the two never share a value.
+   */
+  #remoteRunId: RunId | undefined;
+  /** Open permission prompts, to move {@link status} in and out of `awaiting_permission`. */
+  #openPermissions = 0;
   readonly #queue = new AsyncQueue<AgentEvent>();
   readonly #abort = new AbortController();
   readonly #input: ResolvedRunInput;
@@ -286,6 +338,37 @@ class ArtemisRun implements Run {
     } as never);
   }
 
+  /**
+   * Draw or clear a permission card from a notice on the stream.
+   *
+   * The request is re-emitted verbatim but for its `runId`, which is re-stamped
+   * to *this* run so every event in the transcript agrees on one id. The
+   * server's `request.id` is left untouched and becomes the answer key:
+   * `respondToPermission` posts it straight back, because that is what the
+   * server matches on. Both states are emitted — a `resolved` may arrive from
+   * another client's answer or the park deadline, and a card left open over a
+   * decision already made is the one thing this event exists to prevent.
+   */
+  #notePermission(notice: ArtemisPermissionNotice): void {
+    if (notice.status === 'requested') {
+      this.#openPermissions += 1;
+      this.#status = 'awaiting_permission';
+      const request: PermissionRequest = { ...notice.request, runId: this.runId };
+      this.#emit({ type: 'permission.request', requestId: request.id, request } as never);
+      return;
+    }
+    this.#openPermissions = Math.max(0, this.#openPermissions - 1);
+    if (this.#openPermissions === 0 && this.#status === 'awaiting_permission') {
+      this.#status = 'running';
+    }
+    this.#emit({
+      type: 'permission.resolved',
+      requestId: notice.requestId as PermissionRequestId,
+      outcome: asResolvedOutcome(notice.outcome),
+      ...(notice.note === undefined ? {} : { note: notice.note }),
+    } as never);
+  }
+
   async #drive(): Promise<void> {
     try {
       // A resumed turn knows its session before the first byte arrives.
@@ -298,8 +381,20 @@ class ArtemisRun implements Run {
         ...(this.#input.resumeSessionId === undefined
           ? {}
           : { sessionId: this.#input.resumeSessionId }),
+        // The wire already carries thinking as `artemis.thinking`; the picker's
+        // choice is `input.effort`, validated against the route's own levels
+        // before it ever reaches here. A route that takes none has an empty
+        // effort list, so nothing is sent.
+        ...(this.#input.effort === undefined ? {} : { thinking: this.#input.effort }),
         ...(this.#input.fastMode === undefined ? {} : { fastMode: this.#input.fastMode }),
         ...(this.#input.ultracode === undefined ? {} : { ultracode: this.#input.ultracode }),
+        // Opt into the two behaviours a remote client needs and a script does
+        // not: a disconnect detaches the run rather than killing it, and a
+        // permission prompt comes back here to be answered instead of being
+        // denied on the spot. Both are ignored by a server too old to know them
+        // — which is the graceful degradation, an old server keeping today's
+        // read-only behaviour.
+        remote: { detach: true, permissions: true },
       };
       const response = await fetch(`${root}/v1/chat/completions`, {
         method: 'POST',
@@ -337,6 +432,10 @@ class ArtemisRun implements Run {
 
           if (delta.error !== undefined) throw adapterError('provider_unavailable', delta.error);
           if (delta.artemis?.sessionId !== undefined) this.#noteSession(delta.artemis.sessionId);
+          // Learned like the session id: the server announces it once and early,
+          // and every native run route addresses it from here on.
+          if (delta.artemis?.runId !== undefined) this.#remoteRunId = delta.artemis.runId as RunId;
+          if (delta.artemis?.permission !== undefined) this.#notePermission(delta.artemis.permission);
           // The final chunk's report replaces, not appends — it is the whole
           // list, arriving once.
           if (delta.artemis?.activity !== undefined) activity = delta.artemis.activity;
@@ -416,35 +515,127 @@ class ArtemisRun implements Run {
     }
   }
 
-  send(): Promise<SendResult> {
-    // Refused rather than queued: without `midRunSteering` the composer is
-    // already disabled, and a message silently delivered a turn later is
-    // worse than one plainly not accepted.
-    return Promise.reject(
-      adapterError('invalid_request', 'An Artemis server cannot take a message mid-turn.'),
-    );
+  /** POST to a native run route with this profile's token and a short timeout. */
+  async #post(url: string, body: unknown): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }> {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders(this.#input.env) },
+      body: JSON.stringify(body),
+      // Its own timeout, not the stream's abort: interrupt aborts the stream on
+      // purpose, and a message or an answer must still reach a run whose stream
+      // is being torn down in the same breath.
+      signal: AbortSignal.timeout(15_000),
+    });
   }
 
-  interrupt(): Promise<InterruptResult> {
-    // Aborting the request is the interrupt: the server treats a vanished
-    // client as "stop the run" — see the `finally` in `server/completions.ts`.
+  /** The address of a native route on this run, or the reason there is none yet. */
+  #runRoute(action: 'messages' | 'interrupt' | 'permission'): string {
+    const runId = this.#remoteRunId;
+    if (runId === undefined) {
+      throw adapterError(
+        'invalid_request',
+        'The Artemis server has not announced this run yet. Wait for it to start before steering, stopping or answering it.',
+      );
+    }
+    return `${baseUrl(this.#input.env)}${API_PREFIX}/runs/${encodeURIComponent(runId)}/${action}`;
+  }
+
+  async send(text: string): Promise<SendResult> {
+    const response = await this.#post(this.#runRoute('messages'), { text });
+    if (!response.ok) throw await runRouteError(response, 'steer this run');
+    const reply = (await response.json()) as Partial<RunsSendResponse>;
+    // Reported, not inferred: a server that filed the text for the next turn
+    // says so, and a caller told its correction landed when it did not would
+    // misread the next minute of the agent's work.
+    return { deliveredImmediately: reply.deliveredImmediately === true };
+  }
+
+  async interrupt(): Promise<InterruptResult> {
+    // With `detach` set, a vanished socket no longer means "stop" — it means
+    // "keep going". So the interrupt has to say so out loud, on the route the
+    // server keeps for exactly this. The abort that follows is what ends the
+    // *local* stream; a server too old for the run routes never announced an id,
+    // so it is stopped by that abort alone, as it always was.
+    if (this.#remoteRunId !== undefined) {
+      await this.#post(this.#runRoute('interrupt'), {}).catch(() => undefined);
+    }
     this.#abort.abort();
-    return Promise.resolve({ stillQueued: [] });
+    return { stillQueued: [] };
   }
 
-  respondToPermission(): Promise<void> {
-    // Never emitted here — prompts are denied at the server — so an answer is
-    // a caller confused about which run it is talking to.
-    return Promise.reject(
-      adapterError('invalid_request', 'Artemis-server runs have no permission prompts to answer.'),
-    );
+  async respondToPermission(
+    requestId: PermissionRequestId,
+    decision: PermissionDecision,
+  ): Promise<void> {
+    // Refuse client-side exactly what the server would refuse with a 400, so the
+    // UI never offers an option the wire cannot carry: no mode switch (and so no
+    // bypassPermissions), no directory grant, no durable scope. See
+    // `guardRemoteDecision`, which mirrors the server's `reviewPermissionDecision`.
+    guardRemoteDecision(decision);
+    const response = await this.#post(this.#runRoute('permission'), { requestId, decision });
+    if (!response.ok) throw await runRouteError(response, 'answer this prompt');
   }
 
   dispose(): Promise<void> {
+    // Aborting the stream is a *disconnect*, which on a detachable run is a
+    // detach rather than a stop — the run keeps working on the server for a
+    // while, reachable again by its id. Stopping for good is `interrupt`.
     this.#abort.abort();
     this.#queue.close();
     return Promise.resolve();
   }
+}
+
+/** The three outcomes a resolution carries; read one back safely. */
+const RESOLVED_OUTCOMES = ['allowed', 'denied', 'withdrawn'] as const;
+
+/**
+ * Coerce a wire outcome into the event's own union. An unknown value reads as
+ * `withdrawn` — "the choice was taken away" — which is the safe rendering of a
+ * resolution this build does not recognise: never a decision the user did not
+ * make.
+ */
+function asResolvedOutcome(value: string): (typeof RESOLVED_OUTCOMES)[number] {
+  return (RESOLVED_OUTCOMES as readonly string[]).includes(value)
+    ? (value as (typeof RESOLVED_OUTCOMES)[number])
+    : 'withdrawn';
+}
+
+/**
+ * Read a failure off a native run route.
+ *
+ * A 404 is the ownership check refusing an id that is not this connection's, or
+ * a run the server has already reaped — `invalid_request`, because the run the
+ * caller named is not there to act on. A 401/403 is the token; everything else
+ * is the server itself.
+ */
+async function runRouteError(
+  response: { readonly status: number; json(): Promise<unknown> },
+  action: string,
+): Promise<AdapterError> {
+  let detail: string | undefined;
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown } };
+    detail = typeof body.error?.message === 'string' ? body.error.message : undefined;
+  } catch {
+    /* a failure with no JSON body still gets a message below */
+  }
+  if (response.status === 401 || response.status === 403) {
+    return adapterError(
+      'auth',
+      `The Artemis server refused the request (${response.status}). Check this profile's connection token.`,
+    );
+  }
+  if (response.status === 404) {
+    return adapterError(
+      'invalid_request',
+      detail ?? 'The server has no such run for this connection — it may have ended or been reaped.',
+    );
+  }
+  return adapterError(
+    'provider_unavailable',
+    detail ?? `The Artemis server answered ${response.status} trying to ${action}.`,
+  );
 }
 
 /** Read a refusal body — `ServerErrorBody` when the server wrote one. */
@@ -538,6 +729,11 @@ export function createArtemisAdapter(): ProviderAdapter {
     label: 'Artemis Server',
     credentials: artemisCredentials(),
     capabilities: ARTEMIS_CAPABILITIES,
+    // Labelled levels for the thinking picker. Which of them a given route
+    // accepts is a live fact, mapped from the server's `thinkingLevels` onto
+    // each `ProviderModelOption.effortLevels`; this is only the vocabulary the
+    // picker draws them with. See `ARTEMIS_EFFORT_LEVELS`.
+    effortLevels: ARTEMIS_EFFORT_LEVELS,
 
     /*
      * Probes `/api/v0/connection` rather than the model list: it is the
@@ -669,10 +865,16 @@ export function createArtemisAdapter(): ProviderAdapter {
       // machine: silently dropping a setting here means it is silently
       // different over there.
       if (input.permissionMode !== undefined) {
+        // Refused rather than dropped — the strict-adapter rule, and load-bearing
+        // here: the completions route deliberately takes no permission mode from
+        // an HTTP caller (see `RunSource.startRun`), so a mode set here would run
+        // under the serving user's setting regardless, silently different from
+        // what was asked. A remote client answers prompts; it does not choose the
+        // mode they are asked in.
         return Promise.reject(
           adapterError(
             'invalid_request',
-            'Artemis-server runs take no permission mode: prompts are auto-denied at the server.',
+            "An Artemis-server run's permission mode is the serving user's setting — it cannot be chosen from here.",
           ),
         );
       }

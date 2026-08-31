@@ -11,7 +11,14 @@
  * has to become a real directory on this disk — created and reaped when it is
  * scratch space, checked when it is the user's own folder.
  *
- * `signin.ts` is the fourth, and it exists because a server has no terminal. A
+ * `runs.ts` is the fourth, and it is the one that only exists because clients
+ * are remote: it remembers which connection owns which completions-started
+ * run, so a run can be addressed after the request that started it is over,
+ * and it holds the two deadlines that keep "addressable later" from meaning
+ * "alive forever". The remote bridge's own runs are governed by `guard.ts`
+ * instead, and no run is ever in both.
+ *
+ * `signin.ts` is the fifth, and it exists because a server has no terminal. A
  * profile is worth serving once an account is signed into it, and in a
  * container there is nobody inside to run the login — so the login runs *here*,
  * driven by a person on a client somewhere else. It carries a verification URL
@@ -52,11 +59,22 @@ export {
   finishReasonFor,
   promptFromMessages,
   runTurn,
+  UNATTENDED_PERMISSION_MESSAGE,
   type RunSource,
   type TurnEvent,
   type TurnRequest,
   type TurnResult,
 } from './completions.js';
+
+export {
+  createRunDirectory,
+  reviewPermissionDecision,
+  DEFAULT_DETACHED_RUN_TTL_MS,
+  DEFAULT_PERMISSION_PARK_MS,
+  type DecisionReview,
+  type RunDirectory,
+  type RunDirectoryOptions,
+} from './runs.js';
 
 export {
   createSignInDirector,

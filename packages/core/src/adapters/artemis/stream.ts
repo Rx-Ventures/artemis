@@ -13,7 +13,7 @@
  * `error` object, which is the server saying the generation failed.
  */
 
-import type { ArtemisActivity } from '@rx-artemis/protocol';
+import type { ArtemisActivity, ArtemisPermissionNotice, PermissionRequest } from '@rx-artemis/protocol';
 
 /** The Artemis namespace, as much of it as a chunk carried. */
 export interface ServerExtensionsDelta {
@@ -21,6 +21,20 @@ export interface ServerExtensionsDelta {
   readonly resolvedModel?: string;
   readonly activity?: readonly ArtemisActivity[];
   readonly endReason?: string;
+  /**
+   * The server's own run id, announced once and early on a turn that opted into
+   * a remote feature. Distinct from the adapter's local run id — this is the
+   * address every native `/api/v0/runs/{id}` route takes, so it is learned off
+   * the stream and kept, exactly the way the session id is.
+   */
+  readonly runId?: string;
+  /**
+   * A permission prompt the run parked on, or the news that it no longer is.
+   * Only present when the request opted into remote permissions; on any other
+   * turn the server denies prompts on the spot and none of this crosses the
+   * wire.
+   */
+  readonly permission?: ArtemisPermissionNotice;
 }
 
 /** One delta lifted out of a stream chunk. */
@@ -53,6 +67,37 @@ function asString(value: unknown): string | undefined {
 }
 
 /**
+ * Read a permission notice off a chunk.
+ *
+ * Two states, and each is validated down to the one field the adapter cannot
+ * do without: a `requested` notice becomes a card the user must answer, so a
+ * request with no `id` — nothing to answer *with* — is dropped rather than
+ * drawn, and a `resolved` notice that clears a card needs the id it clears.
+ * The request itself is passed through verbatim: it is a full
+ * {@link PermissionRequest} the renderer draws from, and re-validating each of
+ * its fields here would be a second, staler copy of the protocol's own shape.
+ */
+function readPermissionNotice(value: unknown): ArtemisPermissionNotice | undefined {
+  const record = asRecord(value);
+  if (record === undefined) return undefined;
+
+  const status = asString(record['status']);
+  if (status === 'requested') {
+    const request = asRecord(record['request']);
+    if (request === undefined || asString(request['id']) === undefined) return undefined;
+    return { status: 'requested', request: request as unknown as PermissionRequest };
+  }
+  if (status === 'resolved') {
+    const requestId = asString(record['requestId']);
+    const outcome = asString(record['outcome']);
+    if (requestId === undefined || outcome === undefined) return undefined;
+    const note = asString(record['note']);
+    return { status: 'resolved', requestId, outcome, ...(note === undefined ? {} : { note }) };
+  }
+  return undefined;
+}
+
+/**
  * Read the `artemis` namespace off one chunk.
  *
  * Activity entries are rebuilt rather than trusted: each becomes an event the
@@ -71,6 +116,11 @@ function readExtensions(value: unknown): ServerExtensionsDelta | undefined {
   if (resolvedModel !== undefined) out.resolvedModel = resolvedModel;
   const endReason = asString(record['endReason']);
   if (endReason !== undefined) out.endReason = endReason;
+  const runId = asString(record['runId']);
+  if (runId !== undefined) out.runId = runId;
+
+  const permission = readPermissionNotice(record['permission']);
+  if (permission !== undefined) out.permission = permission;
 
   const activity = record['activity'];
   if (Array.isArray(activity)) {

@@ -817,6 +817,39 @@ export function summariseWorkspace(workspace: ServerWorkspace): string {
  * also using.
  *
  * ---------------------------------------------------------------------------
+ * WHAT A LEAKED TOKEN IS WORTH, RESTATED FOR REMOTE CLIENTS
+ * ---------------------------------------------------------------------------
+ *
+ * The paragraph above was written when a token could do exactly one thing: run
+ * a turn in one folder and read the answer. A token can now also approve the
+ * permission prompts those turns raise, steer a run mid-flight, and reattach to
+ * a run whose original client has gone — see {@link ArtemisRemoteOptions} for
+ * the completions surface, and the bridge's own routes for the other. Three
+ * things bound that, and they are the reason the widening is not a widening of
+ * *authority*:
+ *
+ *  1. **The folder is still the ceiling.** Approving a prompt approves a tool
+ *     call the agent already proposed, inside the directory this connection is
+ *     pinned to. There is no decision reachable from the wire that moves a run
+ *     outside it, and on the completions surface none that changes the run's
+ *     permission *mode* — approving a call one at a time is the whole of what a
+ *     provider-style caller may do, and `bypassPermissions` is refused at the
+ *     parser regardless of what else the request says.
+ *  2. **Runs are owned, not addressable.** Every run started through this port
+ *     belongs to the connection that started it; another token asking about it
+ *     gets the same 404 as one asking about a run that never existed. A leaked
+ *     token cannot enumerate, watch, or answer the prompts of anything but its
+ *     own conversations.
+ *  3. **Neither behaviour is on by default.** A request that does not ask for
+ *     them keeps today's answers: a permission prompt is denied where nobody
+ *     is present, and a disconnect ends the run.
+ *
+ * So the honest summary is unchanged in kind and larger in degree: a leaked
+ * token is an agent running in one folder, and it is now an agent someone else
+ * can also answer questions for. Revocation is still one deleted row, and it is
+ * still the whole remedy.
+ *
+ * ---------------------------------------------------------------------------
  * A CONNECTION WITHOUT A DIRECTORY IS STILL USEFUL
  * ---------------------------------------------------------------------------
  *
@@ -1234,6 +1267,81 @@ export interface ArtemisChatExtensions {
    * a request is a turn rather than a transcript.
    */
   readonly sessionId?: string;
+  /**
+   * What this caller is: a script that will wait for the reply, or a person at
+   * the other end of a network. See {@link ArtemisRemoteOptions}.
+   */
+  readonly remote?: ArtemisRemoteOptions;
+}
+
+/**
+ * The two promises the server will only make to a caller that asks for them.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY BOTH ARE OPT-IN AND NEITHER IS A DEFAULT
+ * ---------------------------------------------------------------------------
+ *
+ * Every other field in {@link ArtemisChatExtensions} is a *setting for the
+ * run*. These two are statements about **the client**, and they change what
+ * happens when the client stops being there — which is the one thing a server
+ * cannot infer. A shell script piping `curl` into `jq` and a phone on a train
+ * present identically at the socket, and the right answer for each is the
+ * opposite of the right answer for the other:
+ *
+ *  - The script's socket closing means the user pressed `^C`. Killing the run
+ *    is correct; leaving an agent editing their repository with nobody reading
+ *    the output is not.
+ *  - The phone's socket closing means a tunnel went down or a laptop lid shut.
+ *    Killing the run throws away work the user is coming back for.
+ *
+ * The same fork governs permission prompts. A script cannot answer one, so the
+ * server's standing answer — deny, with a sentence the model can route around —
+ * is the only safe one. A remote *client* can answer one, but only if the
+ * request is put in front of it and the run is left parked long enough for a
+ * human to look, which is a promise worth nothing to the script and everything
+ * to the person.
+ *
+ * So the caller declares which it is, and a caller that declares nothing gets
+ * the behaviour every existing client already depends on. Neither field is
+ * ever inferred from the request's shape: a streaming request from a browser is
+ * indistinguishable from a streaming request from CI.
+ *
+ * These govern the *completions* surface only. The remote bridge
+ * (`remote.ts`) is a different contract with a different client — a window,
+ * not a provider adapter — and it makes both promises unconditionally because
+ * there is no version of that client which is a script.
+ */
+export interface ArtemisRemoteOptions {
+  /**
+   * Survive the client going away.
+   *
+   * With this set, a disconnect **detaches** the run instead of interrupting
+   * it: the agent keeps working, its events keep accumulating in the run's
+   * replay buffer, and the client reattaches with
+   * `GET /api/v0/runs/{runId}/events?afterSeq=…` when it comes back. An
+   * explicit `POST /api/v0/runs/{runId}/interrupt` still stops it — detaching
+   * changes what a *silence* means, never what a decision means.
+   *
+   * A detached run does not live forever: the server reaps one that nobody has
+   * come back for, so a client that never returns cannot pin a provider process
+   * indefinitely. See `ARTEMIS_DETACHED_RUN_TTL_MS` on the server.
+   */
+  readonly detach?: boolean;
+  /**
+   * Put permission requests on the wire instead of denying them.
+   *
+   * With this set, a `permission.request` is emitted to the client — on the
+   * stream, in the Artemis namespace — and the run parks exactly as it would
+   * in the desktop app, until the client answers with
+   * `POST /api/v0/runs/{runId}/permission`. Unanswered requests are denied
+   * after a deadline rather than parking forever, because the provider process
+   * is blocked for as long as one is open.
+   *
+   * Setting this on a client that cannot render a prompt is worse than leaving
+   * it off: the run stalls for the whole deadline where it would have been told
+   * "no" immediately and carried on.
+   */
+  readonly permissions?: boolean;
 }
 
 /*
@@ -1301,7 +1409,31 @@ export function readChatExtensions(body: unknown): ArtemisChatExtensions {
     ...(typeof extensions['sessionId'] === 'string'
       ? { sessionId: extensions['sessionId'] as string }
       : {}),
+    ...readRemoteOptions(extensions['remote']),
   };
+}
+
+/**
+ * The remote block, present only when it says something.
+ *
+ * Absent rather than `{}` when nothing in it parsed, and that distinction is
+ * load-bearing rather than tidy: everything downstream reads
+ * `remote?.detach === true`, and a request that carried `remote: "yes"` or
+ * `remote: { detach: 1 }` must arrive as a caller who asked for nothing — the
+ * old behaviour, exactly — rather than as one who asked for something the
+ * server then half-honoured. Same rule as every other field here: unknown keys
+ * drop, wrong types drop, and a client that meant it sends a boolean.
+ */
+function readRemoteOptions(value: unknown): { remote?: ArtemisRemoteOptions } {
+  if (typeof value !== 'object' || value === null) return {};
+  const record = value as Record<string, unknown>;
+  const remote: ArtemisRemoteOptions = {
+    ...(typeof record['detach'] === 'boolean' ? { detach: record['detach'] } : {}),
+    ...(typeof record['permissions'] === 'boolean'
+      ? { permissions: record['permissions'] }
+      : {}),
+  };
+  return Object.keys(remote).length === 0 ? {} : { remote };
 }
 
 /** A port a user may actually bind. See {@link MIN_SERVER_PORT}. */
