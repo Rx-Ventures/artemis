@@ -90,6 +90,7 @@ import type {
   BackgroundTask,
   Capabilities,
   JsonObject,
+  MessageId,
   PermissionDecision,
   PermissionMode,
   PermissionRequestId,
@@ -2389,6 +2390,30 @@ function startsTurn(message: SDKMessage): boolean {
   );
 }
 
+/**
+ * The prose of an echoed user turn, for recognising a message by its words.
+ *
+ * Only text is joined: images and documents were dropped on the way out of the
+ * union and there is nothing to compare them against. A message that was
+ * nothing but attachments therefore comes back as an empty string and matches
+ * nothing, which is the right answer — it has no words to be recognised by.
+ */
+function echoedText(message: { readonly message: { readonly content: unknown } }): string {
+  const content = message.message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { type: 'text'; text: string } =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join('');
+}
+
 interface ClaudeRunDeps {
   readonly now: () => number;
   readonly hostEnv?: EnvBundle;
@@ -2576,6 +2601,38 @@ class ClaudeProcess {
   /** The turn ended with steers pending and their queued turn has not opened yet. */
   #awaitingQueuedTurn = false;
   #queuedTurnTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Messages pushed at the CLI that it has not been seen to read yet.
+   *
+   * In send order, which is delivery order — the CLI's queue is FIFO — and keyed
+   * two ways because the correlation has two independent halves and either one
+   * alone has a hole in it.
+   *
+   * `uuid` is the identity this adapter stamps on the outgoing message. The
+   * CLI's queue is keyed on it: `still_queued` on an interrupt receipt lists
+   * *uuid-stamped* messages and, per the SDK's own note, "a message enqueued
+   * without a uuid still runs but is never listed". Artemis sent none until
+   * now, which quietly made {@link #providerQueued} unreachable for the app's
+   * own steers — the flag existed to catch a message the interrupt spared and
+   * could only ever have been set by the CLI's internal traffic.
+   *
+   * `text` is the fallback, because the uuid round-trip is the CLI's business
+   * rather than a contract: the echo is written from the transcript, and if it
+   * ever arrives re-minted, matching the exact words of the oldest unread
+   * message still identifies it. Both are checked; neither is trusted alone.
+   *
+   * Lives on the *process*, not the turn. A steer that misses every tool
+   * boundary is read by the next turn, so an entry routinely outlives the turn
+   * it was sent into — which is also why the entry carries the `messageId` it
+   * was filed under rather than trusting position: the id names the run the
+   * user typed into, and that run may already be over by the time it is read.
+   */
+  readonly #unread: {
+    readonly uuid: string;
+    readonly messageId: MessageId;
+    readonly text: string;
+  }[] = [];
 
   /** Where this run's files live, and how many it has written. */
   readonly #stagingDir: string;
@@ -3195,6 +3252,14 @@ class ClaudeProcess {
       this.#awaitingQueuedTurn = false;
       this.#pendingSteers = 0;
       this.#providerQueued = false;
+      /*
+       * Forgotten along with the count, and for the same reason: this is the
+       * adapter concluding that everything queued has been consumed. Anything
+       * still listed was read without the echo being recognised, and keeping
+       * it would leave a stale entry for a later message with the same words
+       * to be matched against — an old sentence stealing a new one's delivery.
+       */
+      this.#unread.length = 0;
       // Nothing came — the steer was consumed by the fold. Release the way the
       // settle grace does, unless another hold is still on.
       if (this.#state.ended && !this.#holdsWork() && !this.#awaitingSuggestion) {
@@ -3372,7 +3437,11 @@ class ClaudeProcess {
    * banner. Both windows here *are* that race: the run ended (or began
    * shutting down) between the keystroke and the call landing.
    */
-  async send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
+  async send(
+    text: string,
+    attachments?: readonly Attachment[],
+    messageId?: MessageId,
+  ): Promise<SendResult> {
     if (this.#state.ended) {
       throw adapterError(
         'invalid_request',
@@ -3438,11 +3507,100 @@ class ClaudeProcess {
       );
     }
 
-    this.#promptQueue.push(this.#userMessage(text, attachments, staged));
+    /*
+     * The identity the CLI will know this message by.
+     *
+     * Minted here rather than derived from `messageId`, because the field is
+     * typed `UUID` on the wire and Artemis's own ids are not shaped like one.
+     * The pairing is remembered instead — see {@link #unread} — which is all
+     * that is needed to answer in the caller's id space later.
+     */
+    const uuid = randomUUID();
+    this.#promptQueue.push(this.#userMessage(text, attachments, staged, uuid));
+    /*
+     * Recorded only when the caller named the message. A caller that did not
+     * want to hear about delivery is not made to: nothing is tracked, no
+     * `message.delivered` is emitted, and the behaviour is exactly what it was
+     * before this existed.
+     */
+    if (messageId !== undefined) this.#unread.push({ uuid, messageId, text });
     // Counted *after* the push it describes: this is what keeps the pump alive
     // past the next `result` if no tool boundary folds the message in first.
     this.#pendingSteers += 1;
     return { deliveredImmediately: false };
+  }
+
+  /**
+   * Notice the CLI reading a message this process is still waiting on.
+   *
+   * The one observable moment a fold has. The CLI echoes every user turn back
+   * on its own stream as it writes it to the transcript — including the ones
+   * Artemis itself sent, which `mapUserMessage` drops on sight so a window does
+   * not show someone their own words twice. That drop is right for the
+   * transcript and wrong for everything else: the echo is the *only* news that
+   * a queued message has been read, and throwing it away left a queued
+   * indicator with nothing to clear it but the end of the run. It went on
+   * saying "1 message queued" while the agent was plainly acting on the
+   * message, which is the bug this exists to fix.
+   *
+   * Read here rather than in the mapper on purpose. The mapper turns provider
+   * messages into transcript meaning, and this is not a row — it is a fact
+   * about timing that only the side holding the send bookkeeping can resolve.
+   *
+   * Replays are skipped: a resumed conversation reads its whole history back,
+   * and an old turn arriving as history is not this turn's message being taken
+   * up. So are synthesised turns, which the harness wrote rather than the user.
+   */
+  #observeDelivery(message: SDKMessage): readonly AgentEvent[] {
+    if (this.#unread.length === 0) return [];
+    /*
+     * Nothing may be emitted onto a finished turn, and an echo that lands
+     * between one turn's `result` and the next turn's `init` would be exactly
+     * that. The entry is deliberately left in place rather than consumed: the
+     * turn about to open is the one reading the message, and it will echo it
+     * again on a state that can carry the news.
+     */
+    if (this.#state.ended) return [];
+    if (message.type !== 'user') return [];
+    if ('isReplay' in message && message.isReplay === true) return [];
+    if (message.isSynthetic === true) return [];
+
+    const uuid = message.uuid;
+    const byId = this.#unread.findIndex((entry) => entry.uuid === uuid);
+    /*
+     * The fallback: the words, oldest first. Reached whenever the echo does not
+     * carry the id it was sent with, which is the ordinary case for a fold —
+     * the CLI takes a queued message as a `queued_command` attachment that
+     * keeps the original only as `source_uuid` and is minted under an id of its
+     * own. The uuid path alone would read every fold as "never delivered",
+     * which is the original bug with extra steps.
+     *
+     * Containment rather than equality, because the words arrive wrapped at
+     * both ends. A folded message is framed for the model — "The user sent a
+     * new message while you were working:" — and a message carrying files is
+     * sent with a line about them appended (`describeStagedAttachments`). What
+     * survives both is the user's own sentence, in the middle.
+     *
+     * Loose only in isolation: the candidates are the handful of messages this
+     * process sent and has not been told were read, so the question is which of
+     * those the echo is, not whether it is one of them.
+     */
+    const echo = echoedText(message);
+    const matched =
+      byId >= 0
+        ? byId
+        : this.#unread.findIndex((entry) => entry.text !== '' && echo.includes(entry.text));
+    if (matched < 0) return [];
+
+    const [entry] = this.#unread.splice(matched, 1);
+    if (entry === undefined) return [];
+    return [
+      {
+        type: 'message.delivered',
+        ...nextEventEnvelope(this.#state),
+        messageId: entry.messageId,
+      },
+    ];
   }
 
   /**
@@ -3498,7 +3656,23 @@ class ClaudeProcess {
        * released; a missed `true` costs the user's message.
        */
       if (stillQueued.length > 0) this.#providerQueued = true;
-      return { stillQueued };
+      /*
+       * Answered in the caller's id space, which it can only be now that the
+       * outgoing message carries an id at all: the receipt lists uuid-stamped
+       * messages, Artemis stamped none until `send` began doing so, and the
+       * list was therefore never able to name one of this app's own steers.
+       *
+       * Unknown uuids are dropped rather than passed through, on the SDK's own
+       * advice — the list may carry ids this client never sent (cron triggers,
+       * auto-resume continuations), and a caller matching them against its rows
+       * would find nothing and could not tell that from a bug. The count is
+       * still honest for what it names: these are the messages that survive.
+       */
+      const survived = stillQueued.flatMap((uuid) => {
+        const entry = this.#unread.find((one) => one.uuid === uuid);
+        return entry === undefined ? [] : [entry.messageId as string];
+      });
+      return { stillQueued: survived };
     } catch (error) {
       // The control channel did not answer. Do not leave the user holding a
       // Stop button that did nothing: force the transport down and let the pump
@@ -3646,6 +3820,15 @@ class ClaudeProcess {
         // turn and becomes its `session.started` rather than being dropped by a
         // mapper that is finished with the old state.
         if (startsTurn(message)) this.#ensureTurn();
+
+        /*
+         * After `#ensureTurn`, so a steer the CLI parked and is now running as
+         * a turn of its own reports its delivery on *that* turn's stream rather
+         * than on the closed state of the one it was typed into. Before the
+         * mapping below, so "your message was read" arrives ahead of the work
+         * the agent did about it.
+         */
+        for (const event of this.#observeDelivery(message)) this.#emit(event);
 
         let events: readonly AgentEvent[] = [];
         try {
@@ -3900,6 +4083,7 @@ class ClaudeProcess {
     text: string,
     attachments?: readonly Attachment[],
     staged: readonly StagedAttachment[] = [],
+    uuid?: string,
   ): SDKUserMessage {
     const all = attachments ?? [];
     const images = all.filter(isImageAttachment);
@@ -3946,6 +4130,15 @@ class ClaudeProcess {
       type: 'user',
       message: { role: 'user', content },
       parent_tool_use_id: null,
+      /*
+       * Stamped only where a caller asked to hear about delivery, which in
+       * practice means every mid-turn send. It is what puts the message in the
+       * CLI's *named* queue: an interrupt receipt lists uuid-stamped messages
+       * and, in the SDK's words, "a message enqueued without a uuid still runs
+       * but is never listed" — so an unstamped steer was invisible to the one
+       * signal that reports what an interrupt spared.
+       */
+      ...(uuid === undefined ? {} : { uuid: uuid as SDKUserMessage['uuid'] }),
     };
   }
 
@@ -4161,9 +4354,13 @@ class ClaudeTurn implements Run {
     return this.#events;
   }
 
-  async send(text: string, attachments?: readonly Attachment[]): Promise<SendResult> {
+  async send(
+    text: string,
+    attachments?: readonly Attachment[],
+    messageId?: MessageId,
+  ): Promise<SendResult> {
     this.#requireActive();
-    return this.#process.send(text, attachments);
+    return this.#process.send(text, attachments, messageId);
   }
 
   async interrupt(): Promise<InterruptResult> {

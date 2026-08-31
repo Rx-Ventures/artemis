@@ -104,6 +104,8 @@ function label(event: AgentEvent): string {
       return `${event.limit.status} on ${event.limit.windowId ?? 'an unnamed window'}`;
     case 'command.run':
       return `/${event.command.name}`;
+    case 'message.delivered':
+      return `read ${event.messageId}`;
     case 'run.end':
       return `${event.reason}${event.error === undefined ? '' : ` — ${event.error.message}`}`;
   }

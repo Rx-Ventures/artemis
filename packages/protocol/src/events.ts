@@ -55,6 +55,7 @@ export type AgentEventType =
   | 'plan.limit'
   | 'command.run'
   | 'background.tasks'
+  | 'message.delivered'
   | 'run.end';
 
 /** Every {@link AgentEventType}. Useful for validation at the IPC boundary. */
@@ -72,6 +73,7 @@ export const AGENT_EVENT_TYPES = [
   'plan.limit',
   'command.run',
   'background.tasks',
+  'message.delivered',
   'run.end',
 ] as const satisfies readonly AgentEventType[];
 
@@ -745,6 +747,45 @@ export interface BackgroundTasksEvent extends AgentEventBase {
 }
 
 /* -------------------------------------------------------------------------- */
+/* message.delivered                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A message the user sent into a running turn has been taken up by the provider.
+ *
+ * Not a transcript row — the row was drawn optimistically the moment the words
+ * were typed, and this says nothing new about what they were. What it carries
+ * is *timing*: a message sent mid-turn is queued until the provider reaches a
+ * point where it can read it, and until this arrives the only honest thing a
+ * UI can say about it is "waiting".
+ *
+ * The gap this closes is a real one. A mid-run message is folded into the
+ * running turn at a tool boundary, and that fold used to be invisible from
+ * outside the provider process: the CLI echoes the message back on its own
+ * stream, the Claude mapper drops the echo (correctly — a second row would show
+ * the user their own words twice), and nothing downstream ever learned the
+ * message had been read. A queued indicator built on the send alone therefore
+ * had nothing to clear it but the end of the run, and went on claiming a
+ * message was unread while the agent was visibly acting on it.
+ *
+ * `messageId` is the identity Artemis filed the message under — the same
+ * `${runId}:prompt:${n}` the retained prompt carries, and the same one a window
+ * claims optimistically when it draws the row. Not the provider's own id: the
+ * adapter is handed this one when the message is sent and translates back
+ * before emitting, so a consumer can match this against the row already on
+ * screen without knowing anything about provider id spaces.
+ *
+ * Emitted at most once per message, and only for messages the provider actually
+ * queued. A message a provider takes immediately never needs one: `send` has
+ * already answered `deliveredImmediately`.
+ */
+export interface MessageDeliveredEvent extends AgentEventBase {
+  readonly type: 'message.delivered';
+  /** The caller's id for the message, as handed to `send`. */
+  readonly messageId: MessageId;
+}
+
+/* -------------------------------------------------------------------------- */
 /* union                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -767,6 +808,7 @@ export type AgentEvent =
   | PlanLimitEvent
   | CommandRunEvent
   | BackgroundTasksEvent
+  | MessageDeliveredEvent
   | RunEndEvent;
 
 /** Look up an event variant by its `type`, e.g. `AgentEventOf<'tool.end'>`. */
