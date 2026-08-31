@@ -51,3 +51,39 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+
+  # The Linux sandbox, driven rather than asserted.
+  #
+  # `commandSandbox.ts` builds an argv, and no unit test can say whether that
+  # argv confines anything — that is a question only a kernel answers. The
+  # bubblewrap backend spent its life marked `unverified` for exactly this
+  # reason, and when it was finally driven it turned out to mount an empty
+  # tmpfs over its own workspace, so no command ran at all. A unit test on the
+  # argv would not have caught it; a unit test on the argv *passed* while it
+  # was broken.
+  #
+  # So this job runs `scripts/sandbox-check.ts`, which writes inside the
+  # workspace, tries to write outside it, and tries to reach a listener it
+  # starts itself — failing the job on any of those going the wrong way. It is
+  # what keeps the `verified` label on that backend earned instead of aging
+  # back into a claim.
+  #
+  # A separate job rather than a step in `checks`, for the reason the Windows
+  # suite is one: the `checks` status name is what branch protection knows, and
+  # a runner image that stops permitting unprivileged user namespaces should be
+  # visible without blocking every merge behind it.
+  sandbox-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+      - run: pnpm sandbox:check

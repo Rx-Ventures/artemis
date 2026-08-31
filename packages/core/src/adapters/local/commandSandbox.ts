@@ -10,7 +10,7 @@
  * | Platform | Mechanism                          | Status here            |
  * | -------- | ---------------------------------- | ---------------------- |
  * | macOS    | `sandbox-exec`, a Seatbelt profile | **verified** live      |
- * | Linux    | `bwrap` (bubblewrap) namespaces    | **unverified** — docs  |
+ * | Linux    | `bwrap` (bubblewrap) namespaces    | **verified** live      |
  * | Windows  | requires native code               | **cannot confine**     |
  *
  * So "OS agnostic" means one *interface* with a backend per platform, not one
@@ -26,13 +26,27 @@
  * That is the correct failure: the alternative is a silent downgrade from
  * sandboxed to not, on the platform least able to notice.
  *
- * ## What "unverified" means here, and why it is heavier than elsewhere
+ * ## What "unverified" meant here, and what retired it
  *
  * The Ollama catalogue being written from documentation risks a wrong model
  * list. A sandbox written from documentation risks *failing open* — appearing
- * to confine while confining nothing. So the Linux backend is marked unverified
- * in three places, and {@link describeConfinement} says so to the user rather
- * than only to a reader of this file. Drive it on Linux and update the table.
+ * to confine while confining nothing. So the Linux backend was marked
+ * unverified in three places, and {@link describeConfinement} said so to the
+ * user rather than only to a reader of this file, with a standing instruction
+ * to drive it on Linux and update the table.
+ *
+ * That has now been done, and it was worth doing: the argv written from
+ * documentation had a mount-ordering defect that made it fail *closed* and
+ * total — no command ran at all on the machines it was written for. See
+ * {@link BUBBLEWRAP} for what was wrong, what was driven, and the one thing
+ * the exercise does not prove. `scripts/sandbox-check.ts` is the check, and CI
+ * runs it on every push so the label stays earned.
+ *
+ * The `unverified` machinery stays in the types and in
+ * {@link describeConfinement} even with no backend using it. It is what a
+ * future backend — a Windows one, a Landlock one — gets to wear while it is
+ * being written, and deleting it would mean the next person writing a sandbox
+ * from documentation has nowhere to say so.
  */
 
 import { realpath } from 'node:fs/promises';
@@ -123,7 +137,7 @@ export const SEATBELT: SandboxBackend = {
 /* -------------------------------------------------------------------------- */
 
 /**
- * bubblewrap, from documentation. **Not driven against a Linux machine.**
+ * bubblewrap. **Driven, 2026-08-31** — see the verification note below.
  *
  * Chosen over Landlock because Landlock is a syscall and would need a native
  * module, while `bwrap` is a binary that is either installed or not — which the
@@ -132,28 +146,63 @@ export const SEATBELT: SandboxBackend = {
  *
  * `--unshare-net` is the load-bearing flag. `--die-with-parent` matters nearly
  * as much: without it a command that outlives the run keeps running after the
- * user has stopped watching.
+ * user has stopped watching. `--new-session` is bubblewrap's own recommendation
+ * and costs nothing here: it detaches the controlling terminal, which closes
+ * the TIOCSTI route by which a confined process can push characters into the
+ * terminal that started it, and the commands this wraps have piped stdio and no
+ * terminal to lose.
+ *
+ * ## Mount order is load-bearing, and it used to be wrong
+ *
+ * bwrap applies filesystem operations in argv order, so a later mount shadows
+ * an earlier one at the same path. This list used to bind the writable roots
+ * *before* `--tmpfs /tmp`, which mounted an empty tmpfs straight over any root
+ * that lived under `/tmp` — and on Linux `os.tmpdir()` is `/tmp`, so a run's
+ * own scratch directory is always there and a workspace often is. The result
+ * was not a weaker sandbox but a broken one: bwrap exited 1 with
+ * `Can't chdir to …: No such file or directory` and no command ran at all.
+ * The scaffolding mounts go first now, and the roots bind over them — bwrap
+ * creates the mountpoint inside the tmpfs, so a root under `/tmp` still lands.
+ *
+ * ## What "verified" is claiming here
+ *
+ * Driven on 2026-08-31 against bubblewrap 0.8.0 on Debian bookworm, with this
+ * exact argv: a command read and wrote inside the workspace, wrote to a scratch
+ * directory under `/tmp`, was **denied** a write outside the workspace, and was
+ * **denied** a loopback HTTP request that the same host answered 200 outside
+ * the sandbox. `scripts/sandbox-check.ts` is that check, and CI now runs it on
+ * every push so the claim keeps being re-earned rather than aging.
+ *
+ * The honest limit: that run was in a container on a Linux VM rather than on
+ * bare metal, so what it proves is what the namespaces *do* once created, not
+ * every distro's willingness to let an unprivileged process create them. The
+ * latter is what {@link SandboxBackend.probe} is for — a machine where `bwrap`
+ * cannot start reports `none` and the policy refuses to run commands.
  */
 export const BUBBLEWRAP: SandboxBackend = {
   platform: 'linux',
   name: 'bubblewrap (bwrap)',
-  verification: 'unverified',
+  verification: 'verified',
   probe: async (has) => ((await has('bwrap')) ? 'workspace' : 'none'),
   wrap: (command, roots) => [
     'bwrap',
     // Everything readable, nothing writable…
     '--ro-bind', '/', '/',
-    // …except the roots handed in — the workspace and the run's own scratch.
-    ...roots.flatMap((root) => ['--bind', root, root]),
+    // …then the scaffolding, which must be mounted before the roots below so
+    // that a root under one of these paths is not shadowed by it. See above.
     '--tmpfs', '/tmp',
     '--proc', '/proc',
     '--dev', '/dev',
+    // …and last the roots handed in — the workspace and the run's own scratch.
+    ...roots.flatMap((root) => ['--bind', root, root]),
     // The flag that turns "it edited a file wrong" into the only failure mode.
     '--unshare-net',
     '--unshare-ipc',
     '--unshare-uts',
     // A command that outlives the run is a command nobody can stop.
     '--die-with-parent',
+    // No controlling terminal to inject into. bubblewrap's own advice.
+    '--new-session',
     '--chdir', roots[0] ?? '/',
     '/bin/sh', '-c', command,
   ],

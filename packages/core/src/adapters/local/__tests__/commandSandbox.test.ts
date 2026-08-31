@@ -3,8 +3,14 @@
  *
  * The binary probe is injected, which is the only reason the Linux path can be
  * exercised from a machine that is not Linux. What that buys is real but
- * limited: these prove the *policy* is right — which flags, which refusals —
- * not that bubblewrap confines anything. Only the macOS backend has been driven.
+ * limited: these prove the *policy* is right — which flags, which order, which
+ * refusals — not that bubblewrap confines anything.
+ *
+ * That second half is `scripts/sandbox-check.ts`, which CI runs on Linux. The
+ * division is not academic: the mount-ordering defect these tests now cover
+ * shipped *past* a green suite here, because every flag it looked for was
+ * present and only their order was wrong. A unit test can hold the shape of an
+ * argv; only a kernel can say what it does.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -22,6 +28,7 @@ import {
   seatbeltProfile,
   WINDOWS_UNCONFINED,
   wrapCommand,
+  type ResolvedSandbox,
 } from '../commandSandbox.js';
 
 const yes = async (): Promise<boolean> => true;
@@ -42,8 +49,11 @@ describe('choosing a backend', () => {
 
   it('says which backends are unproven, rather than treating them as equal', () => {
     // A sandbox written from documentation can fail *open*, which is a heavier
-    // risk than an unverified model list.
-    expect(BUBBLEWRAP.verification).toBe('unverified');
+    // risk than an unverified model list — so the field exists and every
+    // backend has to answer it. bubblewrap wore `unverified` until it was
+    // driven on 2026-08-31; see the note on BUBBLEWRAP for what that proved
+    // and what it did not.
+    expect(BUBBLEWRAP.verification).toBe('verified');
     expect(SEATBELT.verification).toBe('verified');
   });
 });
@@ -150,7 +160,7 @@ describe('the Seatbelt profile', () => {
   });
 });
 
-describe('the bubblewrap invocation — UNVERIFIED', () => {
+describe('the bubblewrap invocation', () => {
   const argv = BUBBLEWRAP.wrap('npm test', ['/work/project']);
 
   it('NETWORK: unshares it, which is the load-bearing flag', () => {
@@ -164,10 +174,43 @@ describe('the bubblewrap invocation — UNVERIFIED', () => {
     expect(line).toContain('--bind /work/project /work/project');
   });
 
+  /*
+   * The defect that made "unverified" worth having. bwrap applies mounts in
+   * argv order, so `--tmpfs /tmp` after a writable root under `/tmp` mounts an
+   * empty filesystem straight over it — and on Linux `os.tmpdir()` is `/tmp`,
+   * so a run's scratch directory is *always* under it. Driven on 2026-08-31,
+   * the old order failed with `Can't chdir to …: No such file or directory`
+   * and ran nothing at all.
+   *
+   * Asserted as positions rather than presence, because presence is exactly
+   * what the broken version also had.
+   */
+  it('MOUNT ORDER: scaffolds /tmp, /proc and /dev before binding the roots over them', () => {
+    // Both roots under /tmp: the scratch directory always is on Linux, and a
+    // workspace often is.
+    const scratchArgv = BUBBLEWRAP.wrap('npm test', ['/tmp/work/project', '/tmp/run-scratch']);
+    const lastScaffold = Math.max(
+      scratchArgv.indexOf('--tmpfs'),
+      scratchArgv.indexOf('--proc'),
+      scratchArgv.indexOf('--dev'),
+    );
+
+    for (const root of ['/tmp/work/project', '/tmp/run-scratch']) {
+      const bind = scratchArgv.findIndex(
+        (arg, index) => arg === '--bind' && scratchArgv[index + 1] === root,
+      );
+      expect(bind).toBeGreaterThan(lastScaffold);
+    }
+  });
+
   it('dies with its parent, so a command cannot outlive the run', () => {
     // Without this a command nobody is watching keeps running after the user
     // has stopped the turn.
     expect(argv).toContain('--die-with-parent');
+  });
+
+  it('takes no controlling terminal, closing the TIOCSTI route back to ours', () => {
+    expect(argv).toContain('--new-session');
   });
 
   it('runs in the workspace and passes the command through', () => {
@@ -183,11 +226,30 @@ describe('describeConfinement', () => {
     expect(text).toMatch(/network blocked/);
   });
 
-  it('WARNS the user when the backend is unproven, not just the code reader', async () => {
-    const text = describeConfinement(await resolveSandbox('linux', yes));
+  /*
+   * The caveat outlives the backend that needed it. bubblewrap wore
+   * `unverified` until it was driven on 2026-08-31, so Linux no longer gets
+   * this sentence — but the machinery that produces it is what a *future*
+   * backend gets to wear while it is being written, and a test that only
+   * asserted "Linux warns" would have been deleted along with the label.
+   * So it is asserted against a backend that is unverified by construction.
+   */
+  it('WARNS the user when the backend is unproven, not just the code reader', () => {
+    const unproven: ResolvedSandbox = {
+      backend: { ...BUBBLEWRAP, verification: 'unverified' },
+      confinement: 'workspace',
+    };
+    const text = describeConfinement(unproven);
 
     expect(text).toMatch(/not been verified/);
     expect(text).toMatch(/unproven/);
+  });
+
+  it('and says nothing of the sort once a backend has been driven', async () => {
+    const text = describeConfinement(await resolveSandbox('linux', yes));
+
+    expect(text).toContain('bubblewrap');
+    expect(text).not.toMatch(/unproven/);
   });
 
   it('tells a Linux user the fix is to install bwrap', async () => {
