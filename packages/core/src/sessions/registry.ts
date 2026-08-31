@@ -212,10 +212,19 @@ export interface RunLifecycleBase {
  *
  * Four transitions plus one promotion, together the run's whole biography:
  *
+ * - `run.requested` — {@link RunRegistry.start} was asked. Logged before the
+ *   credential resolution and the adapter's own construction, which is the
+ *   one stretch of a run's life the log used to be blind to: everything in it
+ *   ran before `run.started` was stamped, so a stall there — a key manager
+ *   round trip, a keychain that will not answer, a plugin scan on a slow disk
+ *   — left a user watching "starting the provider" over a log that says the
+ *   run started instantly. The gap between this line and `run.started` is
+ *   that stretch, measured.
  * - `run.started` — {@link RunRegistry.start} accepted it. Carries
  *   `resumeSessionId` when the run continues a stored conversation, so a
  *   continuation is distinguishable from a fresh session before any session id
- *   is known.
+ *   is known — and `resolveMs`, the requested-to-started stretch as one
+ *   number, so a slow start is attributable without timestamp arithmetic.
  * - `run.session` — the provider announced which session the run writes into.
  *   Logged separately because a fresh run has no session id at start, and a
  *   crash between start and end would otherwise leave no way to connect the
@@ -229,7 +238,12 @@ export interface RunLifecycleBase {
  *   the adapter's process alive on purpose, `mode: 'disposed'` tore it down.
  */
 export type RunLifecycleEvent =
-  | (RunLifecycleBase & { readonly kind: 'run.started'; readonly resumeSessionId?: SessionId })
+  | (RunLifecycleBase & { readonly kind: 'run.requested'; readonly resumeSessionId?: SessionId })
+  | (RunLifecycleBase & {
+      readonly kind: 'run.started';
+      readonly resumeSessionId?: SessionId;
+      readonly resolveMs?: number;
+    })
   | (RunLifecycleBase & { readonly kind: 'run.session'; readonly sessionId: SessionId })
   | (RunLifecycleBase & { readonly kind: 'run.adopted' })
   | (RunLifecycleBase & {
@@ -568,6 +582,19 @@ export class RunRegistry {
     // Reserve before awaiting, so two concurrent starts with the same
     // caller-supplied id cannot both get through.
     this.#starting.add(runId);
+    // Before the first await, so the stretch between here and `run.started` —
+    // credential resolution, the seam count, the adapter's own construction —
+    // is on the record even when something in it hangs and `run.started`
+    // never lands. See the lifecycle union's comment for why this line exists.
+    this.#noteLifecycle({
+      kind: 'run.requested',
+      runId,
+      profileId: input.profileId,
+      providerId: input.providerId,
+      cwd: input.cwd,
+      ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
+    });
+    const requestedAt = this.#now();
     let run: Run;
     // See `RunHandle.historyOffset`. A new session has nothing before it, so
     // the seam is 0 and no read is needed.
@@ -636,6 +663,7 @@ export class RunRegistry {
       profileId: input.profileId,
       providerId: input.providerId,
       cwd: input.cwd,
+      resolveMs: this.#now() - requestedAt,
       // The one content-free fact that separates a continuation from a fresh
       // session before any session id is announced.
       ...(input.resumeSessionId === undefined ? {} : { resumeSessionId: input.resumeSessionId }),
