@@ -58,15 +58,20 @@
  * THE TOOL LISTS ARE SHOWN, DISABLED, AND SAY WHY
  * ---------------------------------------------------------------------------
  *
- * `RunInput` carries `allowedTools`, `disallowedTools` and
- * `additionalDirectories`, but nothing in the renderer store holds them and no
- * IPC call writes them — the fields exist in the protocol and no UI fills them
- * in. A textarea wired to nothing would take a user's carefully written deny
- * list and drop it on close, which is the worst outcome available. So the
- * controls are here, disabled, each carrying the sentence that says what would
- * have to exist for them to work. That is the same rule every capability-gated
- * control in this app follows, applied to a gap in Artemis rather than a gap in
- * the provider.
+ * `RunInput` carries `allowedTools` and `disallowedTools`, but nothing in the
+ * renderer store holds them and no IPC call writes them — the fields exist in
+ * the protocol and no UI fills them in. A textarea wired to nothing would take
+ * a user's carefully written deny list and drop it on close, which is the worst
+ * outcome available. So the controls are here, disabled, each carrying the
+ * sentence that says what would have to exist for them to work. That is the
+ * same rule every capability-gated control in this app follows, applied to a
+ * gap in Artemis rather than a gap in the provider.
+ *
+ * `additionalDirectories` is no longer one of them. The working-directory pane
+ * fills it in per session — folders picked there, plus the enabled team memory
+ * banks the main process merges into every run — so this pane says where that
+ * control lives instead of offering a second, disconnected copy of it. Two
+ * editors for one field is how a setting gets lost.
  */
 
 import type { ReactElement } from 'react';
@@ -258,16 +263,16 @@ export function PermissionsSection(): ReactElement {
           placeholder={'Bash(rm:*)\nWebFetch'}
           description="Tool names that are always refused. Applied after the allow list, so it wins."
         />
-        <ToolPolicyField
-          id="settings-additional-directories"
-          label="Additional directories"
-          placeholder={'/Users/you/notes'}
-          description="Absolute paths outside the working directory that the agent may read and write."
-        />
         <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
           Until these are real settings, tool policy comes from wherever the provider’s own CLI
-          reads it — its config file for this project. Artemis sends no allow list, no deny list and no
-          extra directories, so nothing here is silently overriding what you configured there.
+          reads it — its config file for this project. Artemis sends no allow list and no deny list,
+          so nothing here is silently overriding what you configured there.
+        </p>
+        <p className="px-3 py-2.5 text-2xs leading-relaxed text-ink-faint">
+          <span className="text-ink-muted">Additional directories</span> are set per session, not
+          here: open the directory chip above the composer and use{' '}
+          <span className="text-ink-muted">Additional folders</span> to let a run read outside the
+          project. Enabled team memory banks are attached there automatically.
         </p>
       </SettingsGroup>
     </SettingsPane>
