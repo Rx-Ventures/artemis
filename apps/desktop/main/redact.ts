@@ -95,6 +95,17 @@ const SECRET_VALUE_RULES: readonly { readonly rule: string; readonly pattern: Re
     rule: 'inline credential assignment',
     pattern: /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret)\s*[=:]\s*["']?[A-Za-z0-9_\-.]{20,}/i,
   },
+  // The two key managers' own token prefixes. `hvs.` is an OpenBao/Vault
+  // service token and `hvb.` a batch one; Doppler stamps the token's kind into
+  // the prefix (`dp.st.` service, `dp.pt.` personal, and the rest).
+  //
+  // Defence in depth, and deliberately the *weaker* half of this feature's
+  // protection: a manager token that reached a payload has already escaped the
+  // mechanism that was supposed to hold it, and the mechanism that actually
+  // holds it is the live-value registry below — which knows this machine's
+  // exact strings rather than a shape they usually have.
+  { rule: 'openbao/vault token (hvs.…)', pattern: /\bhv[sb]\.[A-Za-z0-9._-]{20,}/ },
+  { rule: 'doppler token (dp.…)', pattern: /\bdp\.(st|ct|pt|sa|scim|audit)\.[A-Za-z0-9._-]{10,}/ },
 ];
 
 /** Global-flagged twins of {@link SECRET_VALUE_RULES}, for {@link scrubSecrets}. */
@@ -108,14 +119,80 @@ export function looksLikeSecretValue(value: string): boolean {
 }
 
 /**
+ * The exact strings this process is holding a secret in, right now.
+ *
+ * `memoryBanks.ts` had the idea first and had it narrowly: it derives the
+ * literal tokens in an environment block from the *names* of the variables
+ * carrying them, and scrubs those exact strings out of a child's stderr. That
+ * works because a git token's whole life is one spawn.
+ *
+ * A value resolved from a key manager has a life that is not one spawn — it is
+ * fetched, used, and dropped, and in between it can appear in a log line, an
+ * exception from an HTTP client, or a receipt assembled from three sources. So
+ * the same idea is generalised by exactly one step: instead of deriving the
+ * literals from one environment block, a resolver *registers* what it is
+ * holding for as long as it holds it, and every shape-based scrub in the app
+ * removes those literals first.
+ *
+ * A count rather than a set membership, because the same value can be live
+ * twice — two banks pointed at one secret — and the first `dispose` must not
+ * unprotect the second holder.
+ *
+ * Empty in the ordinary case, so the cost of consulting it is an empty-map
+ * check on a path that already runs several regular expressions.
+ */
+const liveSecrets = new Map<string, number>();
+
+/**
+ * Protect one literal value until the returned function is called.
+ *
+ * Deliberately not exposed as "add" and "remove": handing back the undo is
+ * what makes the lifetime a scope rather than a pair of calls someone can get
+ * out of step. Idempotent — calling the returned function twice releases one
+ * registration, not two.
+ *
+ * Short strings are ignored. A one- or two-character "secret" is not one, and
+ * scrubbing it out of every log line would corrupt unrelated text while
+ * protecting nothing.
+ */
+export function registerLiveSecret(value: string): () => void {
+  if (value.length < 8) return () => undefined;
+  liveSecrets.set(value, (liveSecrets.get(value) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const held = liveSecrets.get(value) ?? 0;
+    if (held <= 1) liveSecrets.delete(value);
+    else liveSecrets.set(value, held - 1);
+  };
+}
+
+/** How many literals are currently protected. For tests and diagnostics only. */
+export function liveSecretCount(): number {
+  return liveSecrets.size;
+}
+
+/**
  * Replace anything credential-shaped with a placeholder.
  *
  * Used on strings headed for a log or an `AgentError.message`. Never used on
  * transcript content — mangling the model's own output is worse than the
  * problem it would solve.
+ *
+ * Two passes, and the order is the point: the exact values this process is
+ * currently holding go first, because they are known to be secrets and may
+ * have no recognisable shape at all (a git token is often just base64), and
+ * the shape rules follow for the credentials Artemis never held but a remote
+ * might have quoted back.
  */
 export function scrubSecrets(value: string): string {
   let out = value;
+  if (liveSecrets.size > 0) {
+    for (const secret of liveSecrets.keys()) {
+      if (out.includes(secret)) out = out.split(secret).join('[redacted]');
+    }
+  }
   for (const pattern of SCRUB_PATTERNS) {
     pattern.lastIndex = 0;
     out = out.replace(pattern, '[redacted]');
@@ -183,6 +260,20 @@ export const RESPONSE_SCAN_POLICY: ScanPolicy = {
     'apitoken',
     'secret',
     'privatekey',
+    // Added with the key managers. These are the field names the two managers
+    // put their own tokens in — OpenBao's login answer carries `client_token`,
+    // its header is `X-Vault-Token`, and Doppler calls a service token
+    // `serviceToken` — so any of them on a renderer-bound payload means a
+    // provider's raw response was passed through instead of rebuilt.
+    //
+    // `caPem` is deliberately **not** here. It is a public certificate, it is
+    // the evidence the user is asked to look at before trusting a server, and
+    // a rule that refused it would refuse the connection list.
+    'client_token',
+    'clienttoken',
+    'x-vault-token',
+    'vaulttoken',
+    'servicetoken',
   ]),
   // Session titles and first prompts are user text; a user may have pasted a
   // key into a prompt and we still have to list their history. `name` and

@@ -28,6 +28,11 @@
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
+    "./secrets": {
+      "types": "./dist/secrets/index.d.ts",
+      "import": "./dist/secrets/index.js",
+      "default": "./dist/secrets/index.js"
+    },
     "./sessions": {
       "types": "./dist/sessions/index.d.ts",
       "import": "./dist/sessions/index.js",

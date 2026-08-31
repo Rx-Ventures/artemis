@@ -778,6 +778,34 @@ export function createRemoteBridge(
       setMasterEnabled: async () => absent(LOCAL_SETTINGS_REASON),
     },
 
+    /*
+     * Absent rather than empty, which is the one place this namespace differs
+     * from `memoryBanks` above.
+     *
+     * A bank list can honestly answer "none here" for a machine with no CLI.
+     * A key-manager list cannot: the serving machine may well have several,
+     * and its runs are resolving references against them right now. Answering
+     * `[]` would be this window claiming to have looked. So every method says
+     * where the answer lives instead, including the reads — the pane renders
+     * that sentence, and a sentence is what the user needs.
+     *
+     * The two that could in principle cross the wire — a TLS handshake and a
+     * reference test — deliberately do not. Both would run from *this*
+     * computer, against a vault only the serving machine can reach and with a
+     * credential only the serving machine holds, so a green answer here would
+     * be evidence about the wrong machine.
+     */
+    secrets: {
+      listConnections: async () => absent(LOCAL_SETTINGS_REASON),
+      saveConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      deleteConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      verifyConnection: async () => absent(LOCAL_SETTINGS_REASON),
+      fetchServerCert: async () =>
+        absent('The handshake would run from this computer, not from the machine that will use it.'),
+      testRef: async () =>
+        absent('A reference resolves on the machine whose runs need it, with the credential it holds.'),
+    },
+
     agentPrompts: {
       list: async () =>
         absent('Standing instructions are composed on the serving machine, where runs start.'),

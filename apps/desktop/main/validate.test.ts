@@ -17,6 +17,12 @@ import {
   validateMemoryBankSetEnabled,
   validateMemoryBanksSetMasterEnabled,
   validateMemoryBanksVerifyRemote,
+  validateSecretsConnectionDelete,
+  validateSecretsConnectionSave,
+  validateSecretsConnectionVerify,
+  validateSecretsConnectionsList,
+  validateSecretsFetchServerCert,
+  validateSecretsRefTest,
   validateSessionsSubagentMessages,
   validateTerminalClose,
   validateTerminalList,
@@ -1305,5 +1311,298 @@ describe('validateAgentPromptsSave', () => {
     expect(() => validateAgentPromptsSave(row({ overridden: 'true', markdown: 'forged' }))).toThrow(
       ValidationError,
     );
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Key managers                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The reference grammar, at the boundary.
+ *
+ * Every string in a `SecretRef` is interpolated into a URL path or query on
+ * its way to a key manager, so the refusals here are not tidiness — a `..`
+ * segment is a request addressed to a different endpoint of the same server,
+ * and a control character is a request split in two. The rule itself lives in
+ * `protocol/secretRefs.ts` so that the renderer's disabled Test button and
+ * this validator cannot drift apart; what these tests pin is that the
+ * validator actually *applies* it, and rebuilds rather than passes through.
+ */
+describe('validateSecretsRefTest', () => {
+  const openbao = (over: Record<string, unknown> = {}) => ({
+    ref: {
+      provider: 'openbao',
+      connectionId: 'conn-1',
+      mount: 'secret',
+      path: 'claude/artemis',
+      key: 'git_token',
+      ...over,
+    },
+  });
+
+  it('rebuilds an OpenBao reference field by field, dropping anything else', () => {
+    const request = validateSecretsRefTest(openbao({ kvVersion: 'auto', smuggled: 'x' }));
+    expect(request.ref).toEqual({
+      provider: 'openbao',
+      connectionId: 'conn-1',
+      mount: 'secret',
+      path: 'claude/artemis',
+      key: 'git_token',
+      kvVersion: 'auto',
+    });
+    expect(request.ref).not.toHaveProperty('smuggled');
+  });
+
+  it('rebuilds a Doppler reference, keeping project and config only when given', () => {
+    expect(
+      validateSecretsRefTest({
+        ref: { provider: 'doppler', connectionId: 'conn-2', name: 'GIT_TOKEN', smuggled: 1 },
+      }).ref,
+    ).toEqual({ provider: 'doppler', connectionId: 'conn-2', name: 'GIT_TOKEN' });
+
+    expect(
+      validateSecretsRefTest({
+        ref: {
+          provider: 'doppler',
+          connectionId: 'conn-2',
+          name: 'GIT_TOKEN',
+          project: 'app',
+          config: 'dev',
+        },
+      }).ref,
+    ).toEqual({
+      provider: 'doppler',
+      connectionId: 'conn-2',
+      name: 'GIT_TOKEN',
+      project: 'app',
+      config: 'dev',
+    });
+  });
+
+  it('refuses a ".." segment in a mount or a path', () => {
+    // The refusal this grammar exists for: `secret/../sys` addresses a
+    // different endpoint of the same server.
+    expect(() => validateSecretsRefTest(openbao({ path: '../sys/seal' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ mount: 'kv/../secret' }))).toThrow(ValidationError);
+    // A segment that merely *contains* dots is a legitimate path.
+    expect(validateSecretsRefTest(openbao({ path: 'a..b/c' })).ref).toMatchObject({ path: 'a..b/c' });
+  });
+
+  it('refuses an absolute path, a backslash and a control character', () => {
+    expect(() => validateSecretsRefTest(openbao({ path: '/claude/artemis' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ mount: 'sec\\ret' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ path: 'a\r\nHost: evil' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ key: 'git\u0007token' }))).toThrow(ValidationError);
+  });
+
+  it('refuses an unknown provider and a nonsense kvVersion', () => {
+    expect(() => validateSecretsRefTest(openbao({ provider: 'hashicorp' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ kvVersion: 3 }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ kvVersion: '2' }))).toThrow(ValidationError);
+  });
+
+  it('requires every field the reference is made of', () => {
+    expect(() => validateSecretsRefTest(openbao({ mount: '' }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest(openbao({ key: undefined }))).toThrow(ValidationError);
+    expect(() => validateSecretsRefTest({ ref: { provider: 'doppler', connectionId: 'c' } })).toThrow(
+      ValidationError,
+    );
+  });
+});
+
+/**
+ * The save channel — the one place on this surface a credential travels, and
+ * therefore the one validated hardest.
+ */
+describe('validateSecretsConnectionSave', () => {
+  const base = {
+    label: 'Work vault',
+    provider: 'openbao',
+    address: 'https://vault.example.com:8200',
+    authMethod: 'userpass',
+    username: 'demo',
+  };
+
+  it('rebuilds the connection, dropping fields the contract does not name', () => {
+    const saved = validateSecretsConnectionSave({
+      ...base,
+      credential: { password: 'hunter2-and-then-some' },
+      smuggled: 'x',
+    });
+    expect(saved).toEqual({
+      label: 'Work vault',
+      provider: 'openbao',
+      address: 'https://vault.example.com:8200',
+      authMethod: 'userpass',
+      username: 'demo',
+      credential: { password: 'hunter2-and-then-some' },
+    });
+  });
+
+  it('refuses a credential that is both a password and a token', () => {
+    // Two answers to one question; whichever main preferred would be a silent
+    // decision about where the user's secret goes.
+    expect(() =>
+      validateSecretsConnectionSave({ ...base, credential: { password: 'p', token: 't' } }),
+    ).toThrow(ValidationError);
+  });
+
+  it('drops an empty credential object rather than storing an empty secret', () => {
+    // Absent means "leave the stored one alone"; an empty one would be a
+    // credential that authenticates as nobody.
+    expect(validateSecretsConnectionSave({ ...base, credential: {} })).not.toHaveProperty('credential');
+  });
+
+  it('refuses an address carrying a credential', () => {
+    // A manager address spelled `user:pass@host` would put a secret into the
+    // plain JSON file this whole feature exists to keep secrets out of.
+    expect(() =>
+      validateSecretsConnectionSave({ ...base, address: 'https://user:pass@vault.example.com:8200' }),
+    ).toThrow(ValidationError);
+  });
+
+  it('refuses a wrong scheme, and requires an address for a self-hosted manager', () => {
+    expect(() => validateSecretsConnectionSave({ ...base, address: 'ws://vault.example.com' })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateSecretsConnectionSave({ ...base, address: '' })).toThrow(ValidationError);
+    // Doppler's address is fixed, so an empty one is allowed and defaulted in
+    // main — the form does not ask for it.
+    expect(
+      validateSecretsConnectionSave({
+        label: 'Team Doppler',
+        provider: 'doppler',
+        address: '',
+        authMethod: 'token',
+        credential: { token: 'dp.st.dev.xxxxxxxxxxxx' },
+      }).address,
+    ).toBe('');
+  });
+
+  it('requires a username for a username-and-password login', () => {
+    expect(() => validateSecretsConnectionSave({ ...base, username: undefined })).toThrow(
+      ValidationError,
+    );
+    expect(() => validateSecretsConnectionSave({ ...base, username: '   ' })).toThrow(ValidationError);
+  });
+
+  it('refuses a caPem that is not a certificate', () => {
+    expect(() => validateSecretsConnectionSave({ ...base, caPem: 'trust me' })).toThrow(ValidationError);
+    expect(
+      validateSecretsConnectionSave({
+        ...base,
+        caPem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
+      }).caPem,
+    ).toContain('BEGIN CERTIFICATE');
+  });
+
+  it('refuses an unknown provider or auth method rather than defaulting one', () => {
+    expect(() => validateSecretsConnectionSave({ ...base, provider: 'vault' })).toThrow(ValidationError);
+    expect(() => validateSecretsConnectionSave({ ...base, authMethod: 'oidc' })).toThrow(ValidationError);
+  });
+
+  it('caps the credential without trimming it', () => {
+    // A token is whatever the manager issued: quietly removing whitespace from
+    // a secret is how a value that looks right fails to authenticate.
+    const padded = '  dp.st.dev.xxxxxxxxxxxx  ';
+    expect(
+      validateSecretsConnectionSave({
+        ...base,
+        authMethod: 'token',
+        credential: { token: padded },
+      }).credential?.token,
+    ).toBe(padded);
+    expect(() =>
+      validateSecretsConnectionSave({ ...base, credential: { password: 'x'.repeat(8193) } }),
+    ).toThrow(ValidationError);
+  });
+});
+
+describe('the remaining key-manager channels', () => {
+  it('accepts an empty listing request, because main owns the registry', () => {
+    expect(validateSecretsConnectionsList(undefined)).toEqual({});
+    expect(validateSecretsConnectionsList({ sneak: 1 })).toEqual({});
+  });
+
+  it('takes an id and nothing else for delete and verify', () => {
+    expect(validateSecretsConnectionDelete({ id: 'conn-1', extra: 2 })).toEqual({ id: 'conn-1' });
+    expect(validateSecretsConnectionVerify({ id: 'conn-1', extra: 2 })).toEqual({ id: 'conn-1' });
+    expect(() => validateSecretsConnectionDelete({})).toThrow(ValidationError);
+  });
+
+  it('holds the certificate fetch to the same URL rules as an address', () => {
+    // A renderer must not be able to open a socket to an address the address
+    // validator would refuse.
+    expect(validateSecretsFetchServerCert({ address: '  https://vault.example.com:8200 ' })).toEqual({
+      address: 'https://vault.example.com:8200',
+    });
+    expect(() => validateSecretsFetchServerCert({ address: 'ftp://vault.example.com' })).toThrow(
+      ValidationError,
+    );
+    expect(() =>
+      validateSecretsFetchServerCert({ address: 'https://user:pass@vault.example.com' }),
+    ).toThrow(ValidationError);
+  });
+});
+
+/**
+ * The join channel's new alternative: an address instead of a secret.
+ *
+ * The rule under test is `oneof` — a request carrying both a token and a
+ * reference is two answers to one question, and one carrying neither is an
+ * `auth` that authenticates as nobody.
+ */
+describe('validateMemoryBankAdd with a secret reference', () => {
+  const join = (auth: unknown) => ({
+    mode: 'join',
+    slug: 'team',
+    role: 'readwrite',
+    remote: 'https://git.example.com/team/bank.git',
+    auth,
+  });
+
+  const ref = {
+    provider: 'openbao',
+    connectionId: 'conn-1',
+    mount: 'secret',
+    path: 'claude/artemis',
+    key: 'git_token',
+  };
+
+  it('carries a reference through, rebuilt', () => {
+    const request = validateMemoryBankAdd(join({ ref: { ...ref, smuggled: 'x' } }));
+    expect(request.auth).toEqual({ ref });
+    expect(request.auth?.token).toBeUndefined();
+  });
+
+  it('keeps the username beside a reference, because git still echoes it', () => {
+    expect(validateMemoryBankAdd(join({ ref, username: '  bank-deploy  ' })).auth).toEqual({
+      ref,
+      username: 'bank-deploy',
+    });
+  });
+
+  it('refuses a token and a reference together', () => {
+    expect(() => validateMemoryBankAdd(join({ token: 'abc', ref }))).toThrow(ValidationError);
+  });
+
+  it('refuses an auth that carries neither', () => {
+    expect(() => validateMemoryBankAdd(join({ username: 'x-access-token' }))).toThrow(ValidationError);
+  });
+
+  it('applies the reference grammar here too, not only on the test channel', () => {
+    expect(() => validateMemoryBankAdd(join({ ref: { ...ref, path: '../sys/seal' } }))).toThrow(
+      ValidationError,
+    );
+  });
+
+  it('accepts a reference on the verify channel, which never stores one', () => {
+    expect(
+      validateMemoryBanksVerifyRemote({
+        remote: 'https://git.example.com/team/bank.git',
+        auth: { ref },
+      }).auth,
+    ).toEqual({ ref });
   });
 });

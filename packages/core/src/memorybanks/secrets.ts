@@ -41,14 +41,17 @@
  * the honest record of that: a value in this file that is *not* encrypted is a
  * value nothing in Artemis is pretending to protect.
  *
- * ## The seam this leaves open
+ * ## The seam this left open, now taken
  *
  * {@link MemoryBankCredential} is deliberately a *record about* an
- * authentication, not a string. The next phase lets a bank name a key held by
- * the machine's own key manager instead of one held here, and that is a second
- * variant of this record rather than a second store: everything above the
- * interface asks "how do I authenticate to this bank", and only the
- * implementation cares whether the answer was decrypted or fetched.
+ * authentication, not a string — and it is now a union of two, because a bank
+ * may name a key held by the machine's own key manager instead of one held
+ * here. That is a second variant of this record rather than a second store:
+ * everything above the interface asks "how do I authenticate to this bank",
+ * and only the implementation cares whether the answer was decrypted or
+ * fetched. A bank on the `ref` variant has **no secret stored on this
+ * machine** — see `secrets/credentials.ts` for why that is the point of the
+ * whole arrangement rather than a nicety.
  *
  * ## Why an interface
  *
@@ -59,20 +62,56 @@
  * double.
  */
 
+import type { SecretRef } from '@rx-artemis/protocol';
+
 /**
- * How to authenticate to one bank's remote.
+ * How to authenticate to one bank's remote — the value, or where to get it.
  *
- * Both halves travel together because they are used together and are only
- * meaningful together — a token with the wrong username fails on GitLab in a
- * way that reads as a bad token.
+ * A discriminated union rather than an optional field, because the two
+ * variants are stored differently and mean different things about what this
+ * machine is holding. `token` is the value, encrypted here, and the bank's
+ * sync works for as long as that token does. `ref` is an address in the
+ * machine's own key manager: nothing secret is stored for that bank at all,
+ * and every sync resolves the current value at the moment git needs it — so a
+ * token rotated in the manager is a token Artemis is already using.
+ *
+ * This is the variant the seam described in the file header was left open
+ * for, and it is the one that makes `secrets/credentials.ts`'s argument true:
+ * a machine with a key manager configured stores one credential instead of one
+ * per private bank.
+ *
+ * The username travels on both because it is used with both and is only
+ * meaningful alongside a token — a token with the wrong username fails on
+ * GitLab in a way that reads as a bad token — and because it is never a
+ * secret however the token was obtained.
  */
-export interface MemoryBankCredential {
-  /** The access token. The only field here that is a secret. */
+export type MemoryBankCredential = StoredTokenCredential | SecretRefCredential;
+
+/** A token this machine holds, encrypted. */
+export interface StoredTokenCredential {
+  readonly kind: 'token';
+  /** The access token. The only field in this file that is a secret. */
   readonly token: string;
   /**
    * The username git presents alongside it — `x-access-token` unless the host
    * demands its own. Never a secret; see the file header.
    */
+  readonly username: string;
+}
+
+/**
+ * A token this machine does **not** hold, and knows where to find.
+ *
+ * Nothing here is a secret, which is why the whole record can be written in
+ * clear beside the encrypted ones without changing what the file's `0600` is
+ * protecting. It is stored in the same file all the same, because "how does
+ * this bank authenticate" is one question and answering it from two places is
+ * how the two answers start disagreeing.
+ */
+export interface SecretRefCredential {
+  readonly kind: 'ref';
+  readonly ref: SecretRef;
+  /** @see StoredTokenCredential.username */
   readonly username: string;
 }
 

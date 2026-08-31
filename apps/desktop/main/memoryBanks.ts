@@ -49,11 +49,13 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import type { MemoryBankCredential, MemoryBankSecrets } from '@rx-artemis/core';
+import type { MemoryBankCredential, MemoryBankSecrets, ResolvedSecret } from '@rx-artemis/core';
 import type {
   MemoryBankActionResponse,
   MemoryBankAddRequest,
+  MemoryBankAuthInput,
   MemoryBankCheck,
+  MemoryBankCredentialState,
   MemoryBankForgetRequest,
   MemoryBankInfo,
   MemoryBankMemory,
@@ -68,6 +70,7 @@ import type {
   MemoryBankVerifyRemoteResponse,
   MemoryBanksSetMasterEnabledRequest,
   MemoryBanksStatus,
+  SecretRef,
 } from '@rx-artemis/protocol';
 
 import { WorkspaceError } from './errors.js';
@@ -762,17 +765,51 @@ let artemisRoot: string | null = null;
 let bankSecrets: MemoryBankSecrets | null = null;
 
 /**
+ * How to turn a {@link SecretRef} into the token it names.
+ *
+ * A function rather than an import of `secretManagers.ts`, for
+ * {@link bankSecrets}'s reason and one more: that module reads a registry off
+ * disk and opens sockets, and this one is unit-tested against canned CLI
+ * output in a plain Node process. Injecting the capability keeps the tests
+ * honest and keeps the dependency pointing one way.
+ *
+ * `null` is a complete state. A machine with no key manager configured has no
+ * bank on the `ref` variant either, so nothing ever asks.
+ */
+export type SecretRefResolver = (ref: SecretRef) => Promise<ResolvedSecret>;
+
+let refResolver: SecretRefResolver | null = null;
+
+/**
+ * Why each bank's reference last failed to resolve, if it did.
+ *
+ * Deliberately in memory and deliberately not persisted: this is a *condition*
+ * — the vault was sealed, the network was down — and a condition read back
+ * from disk at startup would be reported as current when it is history. It is
+ * cleared by the next successful resolution and surfaced by
+ * {@link readMemoryBanksStatus}, which is where a person looks when a bank has
+ * stopped syncing.
+ */
+const refProblems = new Map<string, string>();
+
+/**
  * Tell this module where Artemis keeps its own state. Called once, at startup.
  *
- * Three facts, one call, because they all come from the same place and are all
+ * Four facts, one call, because they all come from the same place and are all
  * unknowable to a module that may not import `electron`: where the master
- * switch is written, what the CLI should be told `ARTEMIS_ROOT` is, and where
- * to find a bank's stored git credential.
+ * switch is written, what the CLI should be told `ARTEMIS_ROOT` is, where to
+ * find a bank's stored git credential, and how to resolve one that is held in
+ * a key manager instead.
  */
-export function configureMemoryBanks(userDataDir: string, secrets?: MemoryBankSecrets): void {
+export function configureMemoryBanks(
+  userDataDir: string,
+  secrets?: MemoryBankSecrets,
+  resolveRef?: SecretRefResolver,
+): void {
   switchFile = join(userDataDir, SWITCH_FILE);
   artemisRoot = userDataDir;
   bankSecrets = secrets ?? null;
+  refResolver = resolveRef ?? null;
   cachedEnabled = null;
 }
 
@@ -934,7 +971,38 @@ export async function readMemoryBanksStatus(): Promise<MemoryBanksStatus> {
     return { cliAvailable, masterEnabled: isMasterEnabled(), banks: [], profiles: [] };
   }
   const text = await runCli(resolveCli(), ['status', '--json'], 30_000);
-  return parseBanksStatus(text, isMasterEnabled(), cliAvailable);
+  return withCredentialState(parseBanksStatus(text, isMasterEnabled(), cliAvailable));
+}
+
+/**
+ * Decorate the CLI's answer with what Artemis knows about each bank's
+ * credential.
+ *
+ * Decoration rather than a field `parseBanksStatus` fills in, because that
+ * function is pure and is the unit under test: it takes the CLI's JSON as text
+ * and answers from it alone. Where a bank's credential comes from is not in
+ * that JSON and never will be — the CLI knows nothing about any of this.
+ *
+ * Never decrypts. `has` answers whether a token is stored, and the *kind* of
+ * credential comes from the record's own discriminator, which a reference-held
+ * bank carries in clear because a reference is not a secret.
+ */
+async function withCredentialState(status: MemoryBanksStatus): Promise<MemoryBanksStatus> {
+  if (bankSecrets === null) return status;
+  const store = bankSecrets;
+  const banks: MemoryBankInfo[] = [];
+  for (const bank of status.banks) {
+    const stored = (await store.has(bank.slug)) ? await store.read(bank.slug) : null;
+    const problem = refProblems.get(bank.slug);
+    const credential: MemoryBankCredentialState =
+      stored === null
+        ? { kind: 'none' }
+        : stored.kind === 'token'
+          ? { kind: 'stored' }
+          : { kind: 'ref', ...(problem === undefined ? {} : { problem }) };
+    banks.push({ ...bank, credential });
+  }
+  return { ...status, banks };
 }
 
 export async function readMemoryBankMemories(slug: string): Promise<MemoryBankMemory[]> {
@@ -1042,7 +1110,7 @@ function bankRemote(bankPath: string): string | null {
  * write this; here it is also the rule that keeps a secret out of memory when
  * nothing was going to use it.
  */
-async function credentialFor(slug: string): Promise<GitCredential | null> {
+async function credentialFor(slug: string): Promise<ResolvedCredential | null> {
   if (bankSecrets === null) return null;
   const bank = readRegistry().banks.find((entry) => entry.slug === slug);
   if (bank === undefined) return null;
@@ -1052,29 +1120,115 @@ async function credentialFor(slug: string): Promise<GitCredential | null> {
   if (origin === null) return null;
   const stored = await bankSecrets.read(slug);
   if (stored === null) return null;
-  return { origin, token: stored.token, username: stored.username };
+
+  if (stored.kind === 'token') {
+    refProblems.delete(slug);
+    return {
+      credential: { origin, token: stored.token, username: stored.username },
+      dispose: () => undefined,
+    };
+  }
+  return resolveBankRef(slug, origin, stored.ref, stored.username);
 }
 
 /**
- * The environment for a spawn that addresses one bank, or every bank.
+ * Turn a bank's secret reference into a usable git credential — or degrade.
+ *
+ * **Never throws, and never blocks.** A bank whose manager is unreachable,
+ * sealed, or refusing is a bank that does not sync this time round; it is not
+ * a failed run, not a dialog, and not something to retry in a loop (the sync
+ * throttle stands, and every terminal problem is terminal). The run that
+ * happened to trigger the sync has nothing to do with the vault being down.
+ *
+ * And there is **no fallback to a cached value**. Keeping the last resolved
+ * token to use "just this once" would reintroduce exactly the thing a key
+ * manager removes: a credential this machine holds after the manager has
+ * stopped vouching for it. A bank that cannot resolve is a bank with no
+ * credential, which for a private remote means the sync fails and says so.
+ *
+ * What survives is the *sentence*, recorded per slug, so the pane can tell the
+ * three failures apart when a person eventually looks.
+ */
+async function resolveBankRef(
+  slug: string,
+  origin: string,
+  ref: SecretRef,
+  username: string,
+): Promise<ResolvedCredential | null> {
+  if (refResolver === null) {
+    refProblems.set(slug, 'This machine has no key manager configured, so its reference cannot be resolved.');
+    return null;
+  }
+  try {
+    const resolved = await refResolver(ref);
+    refProblems.delete(slug);
+    return {
+      credential: { origin, token: resolved.value, username },
+      dispose: () => resolved.dispose(),
+    };
+  } catch (error) {
+    const said = scrubSecrets(error instanceof Error ? error.message : String(error));
+    refProblems.set(slug, said);
+    log.warn(`'${slug}' could not resolve its key-manager reference; it will not sync. ${said}`);
+    return null;
+  }
+}
+
+/**
+ * A credential and the end of holding it.
+ *
+ * The `dispose` half is new with references: a resolved value is registered
+ * with the literal-secret scrub for as long as it is live, and the spawn it
+ * was resolved for is the whole of that lifetime. A stored token's `dispose`
+ * is a no-op, which is the honest answer — it was already on disk.
+ */
+interface ResolvedCredential {
+  readonly credential: GitCredential;
+  dispose(): void;
+}
+
+/**
+ * The environment for a spawn that addresses one bank, or every bank, and the
+ * end of the secrets in it.
  *
  * The every-bank case is the background sync's: one CLI pass covers all of
  * them, so all of their origins have to be configured up front. `list()` is
  * asked first and never decrypts, so a machine whose banks are all public
  * pays one file read and no decryption at all.
+ *
+ * Callers must `dispose` when the spawn is done. That is what ends the scrub
+ * registration for anything resolved out of a key manager — see
+ * `secretManagers.ts` — and it is why this returns a pair rather than a bare
+ * environment block.
  */
-async function bankCredentialEnv(slug?: string): Promise<GitCredentialEnv> {
-  if (bankSecrets === null) return {};
+async function bankCredentialEnv(slug?: string): Promise<BankEnvironment> {
+  const nothing: BankEnvironment = { env: {}, dispose: () => undefined };
+  if (bankSecrets === null) return nothing;
+
+  const resolved: ResolvedCredential[] = [];
   if (slug !== undefined) {
-    const credential = await credentialFor(slug);
-    return credential === null ? {} : gitCredentialEnv(credential);
+    const one = await credentialFor(slug);
+    if (one !== null) resolved.push(one);
+  } else {
+    for (const stored of await bankSecrets.list()) {
+      const one = await credentialFor(stored);
+      if (one !== null) resolved.push(one);
+    }
   }
-  const credentials: GitCredential[] = [];
-  for (const stored of await bankSecrets.list()) {
-    const credential = await credentialFor(stored);
-    if (credential !== null) credentials.push(credential);
-  }
-  return gitCredentialsEnv(credentials);
+  if (resolved.length === 0) return nothing;
+
+  return {
+    env: gitCredentialsEnv(resolved.map((entry) => entry.credential)),
+    dispose: () => {
+      for (const entry of resolved) entry.dispose();
+    },
+  };
+}
+
+/** An environment block and the end of the secrets in it. @see bankCredentialEnv */
+interface BankEnvironment {
+  readonly env: GitCredentialEnv;
+  dispose(): void;
 }
 
 /**
@@ -1088,10 +1242,19 @@ async function bankCredentialEnv(slug?: string): Promise<GitCredentialEnv> {
  * dropped. Silently ignoring it would produce the worst version of this
  * failure: a clone that prompts for an ssh key it does not have, while the
  * pane shows a token the user is sure they supplied.
+ *
+ * A *reference* is resolved here and now, and its failure **is** fatal to the
+ * join — the opposite of {@link resolveBankRef}'s rule, and deliberately so. A
+ * join is a person pressing a button and watching; a sync is a background pass
+ * nobody asked for. Degrading in front of the watching person would clone a
+ * private repository with no credential and report git's own confusion instead
+ * of "your vault is sealed".
  */
-function requestedCredential(request: MemoryBankAddRequest): GitCredential | null {
+async function requestedCredential(request: MemoryBankAddRequest): Promise<ResolvedCredential | null> {
   const auth = request.auth;
-  if (auth === undefined || auth.token.length === 0) return null;
+  if (auth === undefined) return null;
+  if (auth.ref === undefined && (auth.token === undefined || auth.token.length === 0)) return null;
+
   const remote = request.remote ?? '';
   const origin = credentialOrigin(remote);
   if (origin === null) {
@@ -1101,7 +1264,24 @@ function requestedCredential(request: MemoryBankAddRequest): GitCredential | nul
         'without a token, or use the repository’s https:// URL.',
     );
   }
-  return { origin, token: auth.token, username: auth.username ?? DEFAULT_GIT_USERNAME };
+  const username = auth.username ?? DEFAULT_GIT_USERNAME;
+  if (auth.ref !== undefined) {
+    if (refResolver === null) {
+      throw new WorkspaceError(
+        'This process cannot reach the key managers, so a stored reference cannot be resolved. ' +
+          'Report this — it means the secret managers were not configured at startup.',
+      );
+    }
+    const resolved = await refResolver(auth.ref);
+    return {
+      credential: { origin, token: resolved.value, username },
+      dispose: () => resolved.dispose(),
+    };
+  }
+  return {
+    credential: { origin, token: auth.token ?? '', username },
+    dispose: () => undefined,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1216,6 +1396,13 @@ function lastLine(text: string): string {
  * The token supplied for the probe is not stored. Verifying is a question,
  * and a question that quietly wrote a credential to disk would be a different
  * feature; the token is stored when a bank is actually joined with it.
+ *
+ * A *reference* is resolved for the probe and disposed the moment it is over —
+ * which is the honest version of the same rule: the value is borrowed for one
+ * `ls-remote` and this machine keeps neither the value nor a note that it
+ * worked. A resolution that fails is reported as an `auth-required` outcome
+ * rather than thrown, because from the user's side that is what it is: the
+ * remote needs a credential and this one could not be produced.
  */
 export async function verifyMemoryBankRemote(
   request: MemoryBankVerifyRemoteRequest,
@@ -1223,8 +1410,9 @@ export async function verifyMemoryBankRemote(
   const remote = request.remote.trim();
   const auth = request.auth;
   let env: GitCredentialEnv = {};
+  let release: () => void = () => undefined;
 
-  if (auth !== undefined && auth.token.length > 0) {
+  if (auth !== undefined && (auth.ref !== undefined || (auth.token ?? '').length > 0)) {
     const origin = credentialOrigin(remote);
     if (origin === null) {
       return {
@@ -1235,10 +1423,54 @@ export async function verifyMemoryBankRemote(
           'authenticates with a key instead',
       };
     }
-    env = gitCredentialEnv({ origin, token: auth.token, username: auth.username ?? DEFAULT_GIT_USERNAME });
+    const username = auth.username ?? DEFAULT_GIT_USERNAME;
+    if (auth.ref !== undefined) {
+      if (refResolver === null) {
+        return {
+          outcome: 'auth-required',
+          headPresent: false,
+          detail: 'this process cannot reach the key managers, so the reference could not be resolved',
+        };
+      }
+      try {
+        const resolved = await refResolver(auth.ref);
+        release = () => resolved.dispose();
+        env = gitCredentialEnv({ origin, token: resolved.value, username });
+      } catch (error) {
+        return {
+          outcome: 'auth-required',
+          headPresent: false,
+          detail: scrubSecrets(error instanceof Error ? error.message : String(error)),
+        };
+      }
+    } else {
+      env = gitCredentialEnv({ origin, token: auth.token ?? '', username });
+    }
   }
 
   const secrets = tokensIn(env);
+  try {
+    return await probeRemote(remote, env, secrets);
+  } finally {
+    // The borrowed value's lifetime ends with the probe, whichever way the
+    // probe went. See this function's comment.
+    release();
+  }
+}
+
+/**
+ * One `git ls-remote`, categorised.
+ *
+ * Split out of {@link verifyMemoryBankRemote} so that its caller's `finally`
+ * has one statement to guard rather than a forty-line body — the disposal is
+ * the thing that must not be skipped, and burying it under the error mapping
+ * is how it stops happening on the path nobody tests.
+ */
+async function probeRemote(
+  remote: string,
+  env: GitCredentialEnv,
+  secrets: readonly string[],
+): Promise<MemoryBankVerifyRemoteResponse> {
   try {
     const { stdout, stderr } = await execFileAsync('git', ['ls-remote', '--exit-code', remote, 'HEAD'], {
       timeout: VERIFY_TIMEOUT_MS,
@@ -1335,36 +1567,56 @@ export async function addMemoryBank(request: MemoryBankAddRequest): Promise<Memo
   // `sync` reach the remote too — a bank whose credential arrived only in time
   // for the clone would join successfully and then fail on its own first sync,
   // which is the confusing half of a two-step failure.
-  const credential = requestedCredential(request);
-  const credentialEnv = credential === null ? {} : gitCredentialEnv(credential);
+  //
+  // Disposed in a `finally`, because a value resolved out of a key manager is
+  // registered with the literal-secret scrub until it is: a join that threw
+  // partway through would otherwise leave this process scrubbing a string
+  // nothing is using any more.
+  const resolved = await requestedCredential(request);
+  const credentialEnv = resolved === null ? {} : gitCredentialEnv(resolved.credential);
+  try {
+    // The bootstrap CLI does the registration; the bank's own copy (cloned or
+    // freshly embedded) takes over from the next call on.
+    await runCli(resolveCli(), setupArgs, request.mode === 'join' ? 300_000 : 60_000, credentialEnv);
+    steps.push(
+      request.mode === 'join'
+        ? `Joined ${request.remote ?? ''} at ${path} as '${request.slug}'.`
+        : request.mode === 'create'
+          ? `Created a bank at ${path} as '${request.slug}'.`
+          : `Adopted the bank at ${path} as '${request.slug}'.`,
+    );
 
-  // The bootstrap CLI does the registration; the bank's own copy (cloned or
-  // freshly embedded) takes over from the next call on.
-  await runCli(resolveCli(), setupArgs, request.mode === 'join' ? 300_000 : 60_000, credentialEnv);
-  steps.push(
-    request.mode === 'join'
-      ? `Joined ${request.remote ?? ''} at ${path} as '${request.slug}'.`
-      : request.mode === 'create'
-        ? `Created a bank at ${path} as '${request.slug}'.`
-        : `Adopted the bank at ${path} as '${request.slug}'.`,
-  );
+    // Stored here rather than at the end, because *this* is the step that
+    // proved the credential works. A wiring or sync failure after a successful
+    // clone leaves a real bank on disk that the user will retry; one that had
+    // forgotten its credential would retry into an authentication error.
+    //
+    // What is stored is the *request's* answer, not the resolved value: a bank
+    // joined with a reference records the reference, so nothing secret lands
+    // on this machine at all and every later sync asks the manager afresh.
+    if (request.auth !== undefined && resolved !== null) {
+      await storeCredential(
+        request.slug,
+        request.auth,
+        resolved.credential.username ?? DEFAULT_GIT_USERNAME,
+      );
+      steps.push(
+        request.auth.ref === undefined
+          ? 'Its access token is stored encrypted, so background syncs keep working.'
+          : 'It remembers where the token lives rather than the token, so rotating it in the key manager is enough.',
+      );
+    }
 
-  // Stored here rather than at the end, because *this* is the step that proved
-  // the token works. A wiring or sync failure after a successful clone leaves
-  // a real bank on disk that the user will retry; one that had forgotten its
-  // credential would retry into an authentication error.
-  if (credential !== null) {
-    await storeCredential(request.slug, credential);
-    steps.push('Its access token is stored encrypted, so background syncs keep working.');
+    await runCli(resolveCli(path), ['--bank', request.slug, 'enable'], 60_000, credentialEnv);
+    steps.push('Wired every profile (managed block, /cerebro command, session-start sync hook).');
+
+    const synced = (
+      await runCli(resolveCli(path), ['--bank', request.slug, 'sync', '--force'], 180_000, credentialEnv)
+    ).trim();
+    steps.push(synced.length > 0 ? synced : 'Installed into project memory.');
+  } finally {
+    resolved?.dispose();
   }
-
-  await runCli(resolveCli(path), ['--bank', request.slug, 'enable'], 60_000, credentialEnv);
-  steps.push('Wired every profile (managed block, /cerebro command, session-start sync hook).');
-
-  const synced = (
-    await runCli(resolveCli(path), ['--bank', request.slug, 'sync', '--force'], 180_000, credentialEnv)
-  ).trim();
-  steps.push(synced.length > 0 ? synced : 'Installed into project memory.');
 
   if (!hadBanks && !isMasterEnabled()) {
     writeSwitch(true);
@@ -1382,7 +1634,11 @@ export async function addMemoryBank(request: MemoryBankAddRequest): Promise<Memo
  * with a bank that works exactly once — until the window closes and the next
  * background sync meets a private remote with nothing to present.
  */
-async function storeCredential(slug: string, credential: GitCredential): Promise<void> {
+async function storeCredential(
+  slug: string,
+  auth: MemoryBankAuthInput,
+  username: string,
+): Promise<void> {
   if (bankSecrets === null) {
     throw new WorkspaceError(
       'This process cannot store an access token, so the bank would stop syncing when Artemis ' +
@@ -1390,13 +1646,19 @@ async function storeCredential(slug: string, credential: GitCredential): Promise
         'configured at startup.',
     );
   }
-  const record: MemoryBankCredential = {
-    token: credential.token,
-    // Resolved rather than carried through as optional: what is stored is what
-    // git will be presented with on every later sync, and "whatever the default
-    // was on the day it was joined" is not a thing to record.
-    username: credential.username ?? DEFAULT_GIT_USERNAME,
-  };
+  // The *request's* answer, not the resolved value. A bank joined with a
+  // reference stores the reference and nothing else — which is the whole
+  // arrangement: no secret lands on this machine, and a token rotated in the
+  // manager is picked up by the next sync without anyone touching Artemis.
+  //
+  // The username is resolved rather than carried through as optional: what is
+  // stored is what git will be presented with on every later sync, and
+  // "whatever the default was on the day it was joined" is not a thing to
+  // record.
+  const record: MemoryBankCredential =
+    auth.ref === undefined
+      ? { kind: 'token', token: auth.token ?? '', username }
+      : { kind: 'ref', ref: auth.ref, username };
   try {
     await bankSecrets.write(slug, record);
   } catch (error) {
@@ -1413,14 +1675,18 @@ export async function setMemoryBankEnabled(
   request: MemoryBankSetEnabledRequest,
 ): Promise<MemoryBankActionResponse> {
   if (request.enabled) {
-    const credentialEnv = await bankCredentialEnv(request.slug);
-    await runCli(resolveCli(), ['--bank', request.slug, 'enable'], 60_000, credentialEnv);
-    const synced = (
-      await runCli(resolveCli(), ['--bank', request.slug, 'sync', '--force'], 180_000, credentialEnv)
-    ).trim();
-    return {
-      message: `'${request.slug}' is on. ${synced.length > 0 ? synced : 'Installed into project memory.'}`,
-    };
+    const credentials = await bankCredentialEnv(request.slug);
+    try {
+      await runCli(resolveCli(), ['--bank', request.slug, 'enable'], 60_000, credentials.env);
+      const synced = (
+        await runCli(resolveCli(), ['--bank', request.slug, 'sync', '--force'], 180_000, credentials.env)
+      ).trim();
+      return {
+        message: `'${request.slug}' is on. ${synced.length > 0 ? synced : 'Installed into project memory.'}`,
+      };
+    } finally {
+      credentials.dispose();
+    }
   }
   await runCli(resolveCli(), ['--bank', request.slug, 'disable'], 60_000);
   return {
@@ -1448,10 +1714,15 @@ export function setMasterEnabled(
 
 export async function syncMemoryBank(request: MemoryBankSyncRequest): Promise<MemoryBankActionResponse> {
   const args = request.slug !== undefined ? ['--bank', request.slug] : [];
-  const output = (
-    await runCli(resolveCli(), [...args, 'sync', '--force'], 180_000, await bankCredentialEnv(request.slug))
-  ).trim();
-  return { message: output.length > 0 ? output : 'Already up to date.' };
+  const credentials = await bankCredentialEnv(request.slug);
+  try {
+    const output = (
+      await runCli(resolveCli(), [...args, 'sync', '--force'], 180_000, credentials.env)
+    ).trim();
+    return { message: output.length > 0 ? output : 'Already up to date.' };
+  } finally {
+    credentials.dispose();
+  }
 }
 
 /**
@@ -1463,8 +1734,13 @@ export async function retireMemoryBankMemory(
 ): Promise<MemoryBankActionResponse> {
   const args = ['--bank', request.slug, 'retire', request.name];
   if (request.reason !== undefined) args.push('--reason', request.reason);
-  const output = (await runCli(resolveCli(), args, 120_000, await bankCredentialEnv(request.slug))).trim();
-  return { message: output.length > 0 ? output : `Retired ${request.name}.` };
+  const credentials = await bankCredentialEnv(request.slug);
+  try {
+    const output = (await runCli(resolveCli(), args, 120_000, credentials.env)).trim();
+    return { message: output.length > 0 ? output : `Retired ${request.name}.` };
+  } finally {
+    credentials.dispose();
+  }
 }
 
 /**
@@ -1478,8 +1754,12 @@ export async function forgetMemoryBank(request: MemoryBankForgetRequest): Promis
   // Resolved before the registry entry goes, because that entry is how the
   // bank's origin is found — and after `forget` there is nothing left to scope
   // a credential to.
-  const credentialEnv = await bankCredentialEnv(request.slug);
-  await runCli(cli, ['--bank', request.slug, 'disable'], 60_000, credentialEnv);
+  const credentials = await bankCredentialEnv(request.slug);
+  try {
+    await runCli(cli, ['--bank', request.slug, 'disable'], 60_000, credentials.env);
+  } finally {
+    credentials.dispose();
+  }
   steps.push(`Unwired '${request.slug}' from every profile.`);
   try {
     await runCli(cli, ['--bank', request.slug, 'uninstall', '--all-projects'], 120_000);
@@ -1568,8 +1848,20 @@ export function syncMemoryBanksInBackground(): void {
   // Every private bank's credential goes in, because one spawn covers every
   // enabled bank — see `bankCredentialEnv`. A machine with none composes an
   // empty block and spawns exactly what it spawned before any of this existed.
+  //
+  // A bank whose key-manager reference will not resolve is simply not in the
+  // block: `credentialFor` degrades rather than throws, so the other banks
+  // still sync and the one that could not says why in the pane. There is no
+  // retry here beyond the throttle above — a sealed vault does not become
+  // unsealed by being asked twice in a minute.
   void bankCredentialEnv()
-    .then((credentialEnv) => runCli(cli, ['sync', '--quiet'], 180_000, credentialEnv))
+    .then(async (credentials) => {
+      try {
+        return await runCli(cli, ['sync', '--quiet'], 180_000, credentials.env);
+      } finally {
+        credentials.dispose();
+      }
+    })
     .then((output) => {
       const said = output.trim();
       if (said.length > 0) log.info(`memory-banks sync: ${said}`);

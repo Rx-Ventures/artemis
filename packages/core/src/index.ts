@@ -13,6 +13,10 @@
  * ├── profiles ──────────────────────────────────────────────────────────┤
  * │ ProfileStore    CRUD over account records — a label and a config dir │
  * │ resolveEnv      profile → the env bundle a run executes with         │
+ * ├── secrets ───────────────────────────────────────────────────────────┤
+ * │ SecretManagerProvider  OpenBao and Doppler, over an injected         │
+ * │                 transport: config + credential + reference → value,  │
+ * │                 and a *category* for every way that can fail         │
  * ├── sessions ──────────────────────────────────────────────────────────┤
  * │ RunRegistry     live runs by id, event fan-out, guaranteed teardown  │
  * │ SessionNamer    names a new session from its opening message         │
@@ -51,6 +55,7 @@
 export * from './adapters/index.js';
 export * from './memorybanks/index.js';
 export * from './profiles/index.js';
+export * from './secrets/index.js';
 export * from './sessions/index.js';
 export * from './server/index.js';
 export * from './workspace/index.js';

@@ -47,13 +47,20 @@
 import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import type {
+  MemoryBankAuthInput,
   MemoryBankInfo,
   MemoryBankMemory,
   MemoryBankRole,
   MemoryBankVerifyRemoteResponse,
+  SecretConnectionState,
+  SecretField,
+  SecretRef,
+  SecretRefTestResult,
 } from '@rx-artemis/protocol';
+import { secretRefProblem } from '@rx-artemis/protocol';
 
 import type { MemoryBanksPane } from '../../hooks/useMemoryBanks';
+import { useSecretManagers } from '../../hooks/useSecretManagers';
 import { CodeBlock, Fold, Row, StatusDot, ToneBadge } from '../primitives';
 import { SettingsGroup } from './pane';
 import {
@@ -195,6 +202,18 @@ function BankCard({
         <ToneBadge tone="neutral">{bank.role === 'readonly' ? 'read-only' : 'read-write'}</ToneBadge>
         {bank.isDefault ? <ToneBadge tone="neutral">default</ToneBadge> : null}
         {!bank.exists ? <ToneBadge tone="signal">missing on disk</ToneBadge> : null}
+        {/*
+          Worth its own badge because it is the fact this feature exists to
+          produce: a bank marked this way keeps no secret on this machine at
+          all. And when its reference stops resolving the badge turns, because
+          a bank that has quietly stopped syncing is exactly the thing a person
+          opens this pane to find out about.
+        */}
+        {bank.credential?.kind === 'ref' ? (
+          <ToneBadge tone={bank.credential.problem === undefined ? 'cyan' : 'signal'}>
+            {bank.credential.problem === undefined ? 'key manager' : 'key manager unreachable'}
+          </ToneBadge>
+        ) : null}
         <span className="ml-auto flex items-center gap-1">
           {bank.enabled ? (
             <Button
@@ -247,6 +266,17 @@ function BankCard({
             {working ? 'Wiring…' : 'Wire profiles'}
           </Button>
         </div>
+      ) : null}
+      {/*
+        A reference that stopped resolving degrades this one bank and says so
+        on its own row: no dialog, no retry loop, no stale fallback. The
+        resolver runs inside the sync that starts every run, and a vault being
+        sealed is not a reason a run fails to start.
+      */}
+      {bank.credential?.problem !== undefined ? (
+        <p className="text-2xs leading-relaxed text-signal">
+          Its token could not be fetched, so this bank is not syncing: {bank.credential.problem}
+        </p>
       ) : null}
       <Fold
         summary={<span className="text-2xs">memories</span>}
@@ -534,6 +564,141 @@ type Verification =
   | { readonly state: 'done'; readonly result: MemoryBankVerifyRemoteResponse }
   | { readonly state: 'failed'; readonly message: string };
 
+/** What testing a secret reference came to. @see RefFields */
+type RefTest =
+  | { readonly state: 'checking' }
+  | { readonly state: 'done'; readonly result: SecretRefTestResult }
+  | { readonly state: 'failed'; readonly message: string };
+
+/**
+ * Point this bank at a secret in a key manager, instead of at a token.
+ *
+ * Three parts, in the order a person fills them: which manager, where in it,
+ * and — the part that makes the whole thing usable — a Test that resolves the
+ * reference for real and throws the value away. Without it the first time a
+ * user finds out they wrote `git-token` for `git_token` is a background sync
+ * that quietly stopped, days later, with nobody watching.
+ *
+ * The fields come from the provider's descriptor, so this renders OpenBao's
+ * mount/path/key and Doppler's name/project/config without knowing which it is
+ * looking at.
+ */
+function RefFields({
+  connections,
+  providerFields,
+  connectionId,
+  onConnection,
+  values,
+  onValue,
+  canTest,
+  test,
+  onTest,
+}: {
+  readonly connections: readonly SecretConnectionState[];
+  readonly providerFields: readonly SecretField[];
+  readonly connectionId: string;
+  readonly onConnection: (id: string) => void;
+  readonly values: Readonly<Record<string, string>>;
+  readonly onValue: (id: string, next: string) => void;
+  readonly canTest: boolean;
+  readonly test: RefTest | null;
+  readonly onTest: () => void;
+}): ReactElement {
+  if (connections.length === 0) {
+    return (
+      <p className="text-2xs leading-relaxed text-amber">
+        No key manager is connected on this machine yet. Open <em>Key managers</em> in the list on
+        the left, connect OpenBao or Doppler, and this bank can hold the secret&apos;s address
+        instead of the secret.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-1">
+        {connections.map((entry) => (
+          <Button
+            key={entry.connection.id}
+            size="sm"
+            variant={connectionId === entry.connection.id ? 'default' : 'ghost'}
+            className="text-2xs"
+            onClick={() => onConnection(entry.connection.id)}
+          >
+            {entry.connection.label}
+          </Button>
+        ))}
+      </div>
+
+      {connectionId.length === 0 ? (
+        <p className="text-2xs leading-relaxed text-ink-faint">
+          Choose which manager holds this bank&apos;s token.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            {providerFields.map((field) => (
+              <Input
+                key={field.id}
+                value={values[field.id] ?? ''}
+                onChange={(event) => onValue(field.id, event.target.value)}
+                placeholder={field.placeholder ?? field.label.toLowerCase()}
+                spellCheck={false}
+                className="w-44 text-xs md:text-xs"
+                aria-label={field.label}
+              />
+            ))}
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-2xs"
+              disabled={!canTest || test?.state === 'checking'}
+              onClick={onTest}
+            >
+              {test?.state === 'checking' ? 'Testing…' : 'Test'}
+            </Button>
+          </div>
+          <p className="text-2xs leading-relaxed text-ink-faint">
+            Nothing secret is stored for this bank — only this address. Every sync fetches the
+            current value, so rotating it in the manager is all the rotation there is.
+          </p>
+          {test !== null ? <RefTestResult test={test} /> : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the Test came to, in the three ways it can come to something.
+ *
+ * The key names are the reason this is worth rendering at all: "no key named
+ * git-token; it has git_token, username" is a sentence that fixes the problem,
+ * where "could not read the secret" is a sentence that starts an
+ * investigation. Names only — a value never appears here, on either outcome.
+ */
+function RefTestResult({ test }: { readonly test: RefTest }): ReactElement {
+  if (test.state === 'checking') {
+    return <p className="text-2xs leading-relaxed text-ink-faint">Resolving it…</p>;
+  }
+  if (test.state === 'failed') {
+    return <p className="text-2xs leading-relaxed text-signal">{test.message}</p>;
+  }
+  const { found, keysAtPath, problem } = test.result;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className={`text-2xs leading-relaxed ${found ? 'text-mint' : 'text-signal'}`}>
+        {found ? 'Resolved. The value was fetched and discarded — it is not stored anywhere.' : problem}
+      </p>
+      {keysAtPath !== undefined && keysAtPath.length > 0 ? (
+        <p className="text-2xs leading-relaxed text-ink-faint">
+          Keys at that path: {keysAtPath.join(', ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function AddGroup({
   pane,
   first,
@@ -568,6 +733,24 @@ function AddGroup({
   const [username, setUsername] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [verification, setVerification] = useState<Verification | null>(null);
+  /**
+   * Where the token comes from: typed here, or fetched from a key manager.
+   *
+   * `'token'` by default and unchanged for every existing user — a machine
+   * with no manager configured meets the form it always met. The alternative
+   * is the better arrangement and is offered rather than imposed, because
+   * choosing it is a decision about where your credential lives.
+   */
+  const [source, setSource] = useState<'token' | 'ref'>('token');
+  const secrets = useSecretManagers();
+  const [connectionId, setConnectionId] = useState('');
+  const [refValues, setRefValues] = useState<Record<string, string>>({});
+  const [refTest, setRefTest] = useState<RefTest | null>(null);
+
+  const connection = secrets.connections.find((entry) => entry.connection.id === connectionId);
+  const refProvider = secrets.providers.find(
+    (entry) => entry.id === connection?.connection.provider,
+  );
 
   const failed = new Set(
     (pane.preflight?.checks ?? []).filter((check) => check.state === 'fail').map((check) => check.id),
@@ -622,17 +805,71 @@ function AddGroup({
   const canVerify = /^[a-z][a-z0-9+.-]*:\/\/[^/\s]+/i.test(trimmedRemote) || /^[^\s:]+@[^\s:]+:.+/.test(trimmedRemote);
 
   /**
+   * The reference the form currently describes, or `null`.
+   *
+   * Rebuilt from the provider's declared field ids rather than from a
+   * hard-coded shape, so the same form serves OpenBao's mount/path/key and
+   * Doppler's name/project/config — see `KeyManagersSection` for why that
+   * matters more than it looks.
+   */
+  const draftRef = ((): SecretRef | null => {
+    if (connection === undefined) return null;
+    const value = (id: string): string => (refValues[id] ?? '').trim();
+    if (connection.connection.provider === 'openbao') {
+      if (value('mount').length === 0 || value('path').length === 0 || value('key').length === 0) {
+        return null;
+      }
+      return {
+        provider: 'openbao',
+        connectionId: connection.connection.id,
+        mount: value('mount'),
+        path: value('path'),
+        key: value('key'),
+      };
+    }
+    if (value('name').length === 0) return null;
+    return {
+      provider: 'doppler',
+      connectionId: connection.connection.id,
+      name: value('name'),
+      ...(value('project').length > 0 ? { project: value('project') } : {}),
+      ...(value('config').length > 0 ? { config: value('config') } : {}),
+    };
+  })();
+
+  /** The same grammar main validates against, so the button and the handler agree. */
+  const refProblem = draftRef === null ? 'incomplete' : secretRefProblem(draftRef);
+
+  /**
    * The credential as the protocol wants it, or nothing at all.
    *
-   * `undefined` rather than `{ token: '' }` when the field is empty: an absent
-   * key is how both the validator and main say "this bank has no token", and
-   * an empty one would be a credential that authenticates as nobody.
+   * `undefined` rather than an empty token when nothing is supplied: an absent
+   * key is how both the validator and main say "this bank has no credential",
+   * and an empty one would be a credential that authenticates as nobody.
+   *
+   * Exactly one of the two variants, which is also what the validator
+   * enforces — a request carrying both would be two answers to one question.
    */
-  const credential = ((): { token: string; username?: string } | undefined => {
-    if (token.length === 0) return undefined;
+  const credential = ((): MemoryBankAuthInput | undefined => {
     const chosen = username.trim();
+    if (source === 'ref') {
+      if (draftRef === null || refProblem !== null) return undefined;
+      return chosen.length > 0 ? { ref: draftRef, username: chosen } : { ref: draftRef };
+    }
+    if (token.length === 0) return undefined;
     return chosen.length > 0 ? { token, username: chosen } : { token };
   })();
+
+  const testRef = async (): Promise<void> => {
+    if (draftRef === null) return;
+    setRefTest({ state: 'checking' });
+    const result = await secrets.testRef(draftRef);
+    setRefTest(
+      result.ok
+        ? { state: 'done', result: result.value }
+        : { state: 'failed', message: result.error.message },
+    );
+  };
 
   const verify = async (): Promise<void> => {
     setVerification({ state: 'checking' });
@@ -662,10 +899,14 @@ function AddGroup({
       setPath('');
       setReadonly(false);
       // The token has done its one job and main has stored it; a copy left in
-      // a mounted form is a copy nothing needs.
+      // a mounted form is a copy nothing needs. The reference is cleared for a
+      // weaker reason — it is not a secret — but for the same one that clears
+      // the slug: this form is now describing a bank that exists.
       setToken('');
       setUsername('');
       setVerification(null);
+      setRefValues({});
+      setRefTest(null);
     }
   };
 
@@ -763,34 +1004,100 @@ function AddGroup({
 
         {mode === 'join' ? (
           <div className="flex flex-col gap-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                type="password"
-                value={token}
-                onChange={(event) => {
-                  setToken(event.target.value);
+            {/*
+              Where the credential comes from, offered before it is asked for.
+              Two buttons rather than a disclosure, because this is a decision
+              about where your token lives rather than an advanced option — and
+              a user who has connected a manager should meet the better answer
+              without going looking for it.
+            */}
+            <div className="flex items-center gap-1">
+              {(['token', 'ref'] as const).map((candidate) => (
+                <Button
+                  key={candidate}
+                  size="sm"
+                  variant={source === candidate ? 'default' : 'ghost'}
+                  className="text-2xs"
+                  onClick={() => {
+                    setSource(candidate);
+                    setVerification(null);
+                  }}
+                >
+                  {candidate === 'token' ? 'Paste a token' : 'From a key manager'}
+                </Button>
+              ))}
+            </div>
+
+            {source === 'ref' ? (
+              <RefFields
+                connections={secrets.connections}
+                providerFields={refProvider?.refFields ?? []}
+                connectionId={connectionId}
+                onConnection={(next) => {
+                  setConnectionId(next);
+                  setRefValues({});
+                  setRefTest(null);
                   setVerification(null);
                 }}
-                placeholder="access token (optional — for private repos)"
-                autoComplete="off"
-                spellCheck={false}
-                className="w-80 text-xs md:text-xs"
-                aria-label="Access token (optional — for private repos)"
+                values={refValues}
+                onValue={(id, next) => {
+                  setRefValues((current) => ({ ...current, [id]: next }));
+                  setRefTest(null);
+                  setVerification(null);
+                }}
+                canTest={draftRef !== null && refProblem === null}
+                test={refTest}
+                onTest={() => void testRef()}
               />
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-2xs text-ink-faint"
-                onClick={() => setShowAdvanced((open) => !open)}
-              >
-                {showAdvanced ? 'Hide username' : 'Username…'}
-              </Button>
-            </div>
-            <p className="text-2xs leading-relaxed text-ink-faint">
-              Stored encrypted on this machine and used only for this bank&apos;s remote — background
-              syncs need it too, so it outlives this form. An ssh remote needs no token: it
-              authenticates with your key.
-            </p>
+            ) : (
+              <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  type="password"
+                  value={token}
+                  onChange={(event) => {
+                    setToken(event.target.value);
+                    setVerification(null);
+                  }}
+                  placeholder="access token (optional — for private repos)"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-80 text-xs md:text-xs"
+                  aria-label="Access token (optional — for private repos)"
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-2xs text-ink-faint"
+                  onClick={() => setShowAdvanced((open) => !open)}
+                >
+                  {showAdvanced ? 'Hide username' : 'Username…'}
+                </Button>
+              </div>
+              <p className="text-2xs leading-relaxed text-ink-faint">
+                Stored encrypted on this machine and used only for this bank&apos;s remote — background
+                syncs need it too, so it outlives this form. An ssh remote needs no token: it
+                authenticates with your key.
+              </p>
+              </>
+            )}
+            {/*
+              The username matters just as much for a reference — GitLab reads
+              it, and git quotes it back — so the way to reach it cannot live
+              only beside the token field.
+            */}
+            {source === 'ref' ? (
+              <div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-2xs text-ink-faint"
+                  onClick={() => setShowAdvanced((open) => !open)}
+                >
+                  {showAdvanced ? 'Hide username' : 'Username…'}
+                </Button>
+              </div>
+            ) : null}
             {showAdvanced ? (
               <div className="flex flex-col gap-1">
                 <Input

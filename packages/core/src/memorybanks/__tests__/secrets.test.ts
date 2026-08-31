@@ -29,8 +29,8 @@ beforeEach(() => {
 
 describe('MemoryBankSecrets', () => {
   it('reads back what it stored, both halves', async () => {
-    await secrets.write('team', { token: TOKEN, username: 'x-access-token' });
-    expect(await secrets.read('team')).toEqual({ token: TOKEN, username: 'x-access-token' });
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
+    expect(await secrets.read('team')).toEqual({ kind: 'token', token: TOKEN, username: 'x-access-token' });
   });
 
   it('answers null for a bank that has none', async () => {
@@ -41,21 +41,21 @@ describe('MemoryBankSecrets', () => {
   });
 
   it('replaces rather than accumulates, so a rotated token is the only one', async () => {
-    await secrets.write('team', { token: TOKEN, username: 'x-access-token' });
-    await secrets.write('team', { token: 'rotated', username: 'bank-deploy' });
-    expect(await secrets.read('team')).toEqual({ token: 'rotated', username: 'bank-deploy' });
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
+    await secrets.write('team', { kind: 'token', token: 'rotated', username: 'bank-deploy' });
+    expect(await secrets.read('team')).toEqual({ kind: 'token', token: 'rotated', username: 'bank-deploy' });
     expect(await secrets.list()).toEqual(['team']);
   });
 
   it('keeps banks apart', async () => {
-    await secrets.write('team', { token: TOKEN, username: 'x-access-token' });
-    await secrets.write('client-docs', { token: 'other', username: 'x-access-token' });
-    expect((await secrets.read('client-docs'))?.token).toBe('other');
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
+    await secrets.write('client-docs', { kind: 'token', token: 'other', username: 'x-access-token' });
+    expect(await secrets.read('client-docs')).toMatchObject({ kind: 'token', token: 'other' });
     expect(await secrets.list()).toEqual(['team', 'client-docs']);
   });
 
   it('answers has() and list() for stored banks without producing the token', async () => {
-    await secrets.write('team', { token: TOKEN, username: 'x-access-token' });
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
     expect(await secrets.has('team')).toBe(true);
     expect(await secrets.list()).toEqual(['team']);
     // Neither answer is a credential, which is the whole reason they are not
@@ -63,9 +63,44 @@ describe('MemoryBankSecrets', () => {
     expect(JSON.stringify(await secrets.list())).not.toContain(TOKEN);
   });
 
+  it('stores a reference instead of a token, which is the point of the second variant', async () => {
+    // The whole arrangement in one assertion: this bank authenticates to a
+    // private remote and nothing secret was written down for it. What came
+    // back is an address, and `JSON.stringify` of the store's contents cannot
+    // contain a credential because there is not one to contain.
+    await secrets.write('team', {
+      kind: 'ref',
+      username: 'x-access-token',
+      ref: {
+        provider: 'openbao',
+        connectionId: 'conn-1',
+        mount: 'secret',
+        path: 'claude/artemis',
+        key: 'git_token',
+      },
+    });
+    const stored = await secrets.read('team');
+    expect(stored).toMatchObject({ kind: 'ref', username: 'x-access-token' });
+    expect(JSON.stringify(stored)).not.toContain(TOKEN);
+    expect(await secrets.has('team')).toBe(true);
+  });
+
+  it('replaces a token with a reference, which is how a bank stops holding one', async () => {
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
+    await secrets.write('team', {
+      kind: 'ref',
+      username: 'x-access-token',
+      ref: { provider: 'doppler', connectionId: 'conn-2', name: 'GIT_TOKEN' },
+    });
+    // Replaced, not merged: a record that kept the old token beside the new
+    // reference would be a machine still holding the credential it was just
+    // told to stop holding.
+    expect(JSON.stringify(await secrets.read('team'))).not.toContain(TOKEN);
+  });
+
   it('clears idempotently, because forgetting a bank must not depend on order', async () => {
     await secrets.clear('team');
-    await secrets.write('team', { token: TOKEN, username: 'x-access-token' });
+    await secrets.write('team', { kind: 'token', token: TOKEN, username: 'x-access-token' });
     await secrets.clear('team');
     await secrets.clear('team');
     expect(await secrets.read('team')).toBeNull();

@@ -38,6 +38,16 @@ import type { ProfileDraft, ProfileMetadata, ProfilePatch } from './profile.js';
 import type { ProviderDescriptor, ProviderId, ProviderModelOption } from './provider.js';
 import type { RoutineDraft, RoutineId, RoutinePatch, RoutinesState } from './routine.js';
 import type { RunHandle, RunInput } from './run.js';
+import type {
+  SecretAuthMethod,
+  SecretConnection,
+  SecretProviderDescriptor,
+  SecretProviderId,
+  SecretRef,
+  SecretRefTestResult,
+  SecretServerCertificate,
+  SecretVerifyResult,
+} from './secretRefs.js';
 import type { UpdateProgress } from './update.js';
 import type {
   ServerAllowance,
@@ -493,6 +503,53 @@ export const IPC = {
    */
   agentPromptsList: 'artemis:agent-prompts:list',
   agentPromptsSave: 'artemis:agent-prompts:save',
+
+  /**
+   * The machine's key managers.
+   *
+   * Six channels, and the shape of the set is the design: five of them move
+   * *configuration* — which managers exist, what they are called, what their
+   * TLS is checked against — and exactly one moves a credential, in one
+   * direction, once. {@link secretsConnectionSave} carries a password or a
+   * token from the renderer to main on its way to encrypted storage, and no
+   * response on any of the six has a field it could come back in.
+   *
+   * What crosses the other way is deliberately thin and deliberately useful:
+   * an identity, a policy list, an expiry, a certificate the user is being
+   * asked to judge, and — from {@link secretsRefTest} — the *names* of the
+   * keys at a path. A name is not a secret, and it is the whole of what makes
+   * "that path has `git_token`, not `git-token`" answerable without a value
+   * ever leaving the manager.
+   *
+   * Verification is its own channel rather than a flag on save because the
+   * two fail differently and a user needs to retry only one of them: a
+   * connection whose address is right and whose password has since expired is
+   * saved correctly and verifies badly, and re-saving it would ask for a
+   * password the user has already typed.
+   */
+  secretsConnectionsList: 'artemis:secrets:connections:list',
+  secretsConnectionSave: 'artemis:secrets:connection:save',
+  secretsConnectionDelete: 'artemis:secrets:connection:delete',
+  secretsConnectionVerify: 'artemis:secrets:connection:verify',
+  /**
+   * Fetch a server's certificate so a person can look at it.
+   *
+   * A TLS handshake and nothing else: the socket is closed before a byte of
+   * HTTP is written on it, so this can never be a request made without
+   * verification. It exists because the alternative to showing a user the
+   * fingerprint they are about to trust is trusting it silently, and an app
+   * that pins whatever answered first has not verified anything — it has
+   * described not verifying in a way that sounds like verifying.
+   */
+  secretsFetchServerCert: 'artemis:secrets:fetch-server-cert',
+  /**
+   * Does this reference resolve, and if not, why not?
+   *
+   * Runs the same resolution a real use runs — same request, same error
+   * mapping — and throws the value away without reading it. A test that took
+   * a shortcut would be a test of the shortcut.
+   */
+  secretsRefTest: 'artemis:secrets:ref:test',
 
   /**
    * The local HTTP server, which publishes Artemis's accounts to other
@@ -2182,6 +2239,36 @@ export interface MemoryBankInfo {
   readonly validationErrors: number;
   /** Projects whose Artemis memory currently carries this bank's install. */
   readonly projects: number;
+  /**
+   * Where this bank's git credential comes from, and what came of the last
+   * attempt to use it.
+   *
+   * Optional because it is not the CLI's answer: `parseBanksStatus` builds
+   * every other field on this record out of `status --json` and stays pure,
+   * and this one is decorated on afterwards from Artemis's own stores. Absent
+   * means nobody has looked, which is a different state from
+   * {@link MemoryBankCredentialState.kind} being `none`.
+   */
+  readonly credential?: MemoryBankCredentialState;
+}
+
+/**
+ * How one bank authenticates, and why it currently cannot.
+ *
+ * The `problem` field is the visible half of a rule stated in
+ * `main/memoryBanks.ts`: a bank whose secret reference will not resolve
+ * **degrades**, it does not fail. Nothing blocks, nothing dialogs, no run
+ * waits — the sync for that bank quietly does not happen and this sentence
+ * says why, in the pane, the next time a person looks. It distinguishes the
+ * three outcomes that have three different remedies (the manager is
+ * unreachable, the manager refused, the manager is sealed) because rendering
+ * them identically is how a user spends an afternoon on the wrong one.
+ */
+export interface MemoryBankCredentialState {
+  /** `ref` means nothing secret is stored for this bank — only an address. */
+  readonly kind: 'none' | 'stored' | 'ref';
+  /** Only ever set for `ref`, and only when the last resolution failed. */
+  readonly problem?: string;
 }
 
 /** One Artemis profile, as the banks see it: which blocks it carries. */
@@ -2286,20 +2373,46 @@ export interface MemoryBankAddRequest {
 }
 
 /**
- * A git credential as the renderer supplies it.
+ * A git credential as the renderer supplies it — either the secret itself, or
+ * the address of one.
  *
- * The username is separate from the token and is **never** a secret: git
- * echoes it into its own prompts and error strings, which is exactly the text
- * a failed clone folds into a receipt. Hosts differ on what it must be —
- * GitHub and Forgejo ignore it for token auth (hence the `x-access-token`
- * default main applies), GitLab deploy tokens and Bitbucket app passwords
- * require the account's own — so it is offered rather than assumed.
+ * The two variants are the same decision made two ways, and the second is the
+ * one worth having. `token` is the value, typed once, encrypted against the
+ * bank's slug, and thereafter Artemis's to keep safe and the user's to
+ * remember to rotate. `ref` is a {@link SecretRef}: nothing secret is stored
+ * at all, every sync resolves the current value out of the machine's key
+ * manager, and a token rotated in the manager is a token Artemis is already
+ * using. Storing an address instead of a credential is the whole reason the
+ * key-manager surface exists.
+ *
+ * **Exactly one of them.** Not both — a request carrying a value *and* an
+ * address is two answers to one question, and whichever the implementation
+ * happened to prefer would be a silent choice about where the user's secret
+ * lives. Not neither, on a request that supplies auth at all: an `auth` with
+ * no credential in it is an empty claim, and main refuses it rather than
+ * joining a private bank as nobody.
+ *
+ * The username is separate from both and is **never** a secret: git echoes it
+ * into its own prompts and error strings, which is exactly the text a failed
+ * clone folds into a receipt. Hosts differ on what it must be — GitHub and
+ * Forgejo ignore it for token auth (hence the `x-access-token` default main
+ * applies), GitLab deploy tokens and Bitbucket app passwords require the
+ * account's own — so it is offered rather than assumed.
  */
-export interface MemoryBankAuthInput {
-  readonly token: string;
-  /** Defaults to `x-access-token` when omitted. Never a place to put a token. */
-  readonly username?: string;
-}
+export type MemoryBankAuthInput =
+  | {
+      readonly token: string;
+      readonly ref?: undefined;
+      /** Defaults to `x-access-token` when omitted. Never a place to put a token. */
+      readonly username?: string;
+    }
+  | {
+      readonly token?: undefined;
+      /** Where the token lives, resolved in main at the moment git needs it. */
+      readonly ref: SecretRef;
+      /** Defaults to `x-access-token` when omitted. Never a place to put a token. */
+      readonly username?: string;
+    };
 
 /**
  * Ask whether a remote is readable, before committing to a clone.
@@ -2403,6 +2516,153 @@ export interface MemoryBanksSetMasterEnabledRequest {
 }
 
 export type MemoryBanksSetMasterEnabledResponse = MemoryBankActionResponse;
+
+/* -------------------------------------------------------------------------- */
+/* Key managers                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One configured manager, as a row in the pane.
+ *
+ * The connection, whether a credential is stored, and what the last verify
+ * came to — and none of the three is the credential. `hasCredential` is a
+ * boolean because a boolean is the whole of what the pane asks; answering it
+ * by decrypting would be putting a secret in memory for the sake of exposure.
+ */
+export interface SecretConnectionState {
+  readonly connection: SecretConnection;
+  readonly hasCredential: boolean;
+  /**
+   * The last verify, kept across restarts.
+   *
+   * Persisted deliberately. A pane that showed nothing until the user pressed
+   * Verify would teach them that pressing Verify is how you find out anything,
+   * which is exactly the habit that makes an expired token invisible: the row
+   * that says "expired last Tuesday" is the one worth opening.
+   */
+  readonly lastVerify: SecretVerifyRecord | null;
+}
+
+/** A {@link SecretVerifyResult} with the moment it was true. */
+export interface SecretVerifyRecord {
+  /** Epoch milliseconds. */
+  readonly at: number;
+  readonly result: SecretVerifyResult;
+}
+
+/**
+ * Everything the pane needs to draw itself.
+ *
+ * The provider descriptors ride along with every listing rather than living in
+ * the renderer, because a form built from a hard-coded field list is a form
+ * that knows one provider properly and the next one approximately. See
+ * {@link SecretProviderDescriptor}.
+ */
+export interface SecretsConnectionsResponse {
+  readonly connections: readonly SecretConnectionState[];
+  readonly providers: readonly SecretProviderDescriptor[];
+}
+
+/** Empty; main owns the registry's location. */
+export type SecretsConnectionsListRequest = Record<string, never>;
+export type SecretsConnectionsListResponse = SecretsConnectionsResponse;
+
+/**
+ * The credential, on its one trip from the renderer to encrypted storage.
+ *
+ * Two fields rather than one, because they are not the same thing and are not
+ * kept the same way. A `token` is stored as given. A `password` is **not
+ * stored at all**: main spends it immediately on a login and keeps the token
+ * that login minted, so a machine holding a `userpass` connection holds a
+ * credential that expires on its own rather than one that works forever.
+ */
+export interface SecretCredentialInput {
+  /** For `userpass`. Spent on a login and never written down. */
+  readonly password?: string;
+  /** For `token`. Stored encrypted. */
+  readonly token?: string;
+}
+
+/**
+ * Create or replace a connection.
+ *
+ * `id` absent creates one; present replaces that one in place, which is what
+ * keeps every {@link SecretRef} pointing at it valid across an address change
+ * or a certificate rotation.
+ *
+ * `credential` absent on an update means "leave the stored one alone" rather
+ * than "clear it" — a user fixing a typo in a label should not have to retype
+ * a password, and a save that silently emptied the credential would be a
+ * connection that verifies today and stops overnight.
+ */
+export interface SecretsConnectionSaveRequest {
+  readonly id?: string;
+  readonly label: string;
+  readonly provider: SecretProviderId;
+  readonly address: string;
+  /** The certificate the user confirmed. See {@link SecretServerCertificate}. */
+  readonly caPem?: string;
+  readonly authMethod: SecretAuthMethod;
+  readonly username?: string;
+  readonly credential?: SecretCredentialInput;
+}
+
+/**
+ * What landed, plus what verifying it came to.
+ *
+ * The verify is part of the response rather than a second round trip because
+ * saving a connection *is* asking whether it works — for `userpass` it is
+ * literally the login that mints the token — and a pane that had to ask again
+ * would show a row with no answer in it for as long as the second call took.
+ *
+ * The config is saved even when the verify fails. That is deliberate: the
+ * common failure is a certificate the machine does not trust yet, and the
+ * remedy for it is a button on the row that would not exist if the row had
+ * been thrown away.
+ */
+export interface SecretsConnectionSaveResponse extends SecretsConnectionsResponse {
+  /** The saved connection's id — minted here when the request had none. */
+  readonly id: string;
+  readonly verify: SecretVerifyResult;
+}
+
+/** Forget a connection and its credential. Refs that named it stop resolving. */
+export interface SecretsConnectionDeleteRequest {
+  readonly id: string;
+}
+
+export type SecretsConnectionDeleteResponse = SecretsConnectionsResponse;
+
+/** Ask one connection whether it still works. */
+export interface SecretsConnectionVerifyRequest {
+  readonly id: string;
+}
+
+export interface SecretsConnectionVerifyResponse extends SecretsConnectionsResponse {
+  readonly verify: SecretVerifyResult;
+}
+
+/**
+ * Look at a server's certificate before trusting it.
+ *
+ * Takes an address rather than a connection id, because the moment this is
+ * needed is the moment the connection does not verify yet — often before it
+ * has been saved at all.
+ */
+export interface SecretsFetchServerCertRequest {
+  readonly address: string;
+}
+
+export interface SecretsFetchServerCertResponse {
+  readonly certificate: SecretServerCertificate;
+}
+
+/** Resolve a reference and throw the value away. See `IPC.secretsRefTest`. */
+export interface SecretsRefTestRequest {
+  readonly ref: SecretRef;
+}
+
+export type SecretsRefTestResponse = SecretRefTestResult;
 
 /* -------------------------------------------------------------------------- */
 /* Agent prompts                                                              */
@@ -2707,6 +2967,12 @@ export type IpcRequestMap = {
   [IPC.memoryBankSetEnabled]: MemoryBankSetEnabledRequest;
   [IPC.memoryBankForget]: MemoryBankForgetRequest;
   [IPC.memoryBanksSetMasterEnabled]: MemoryBanksSetMasterEnabledRequest;
+  [IPC.secretsConnectionsList]: SecretsConnectionsListRequest;
+  [IPC.secretsConnectionSave]: SecretsConnectionSaveRequest;
+  [IPC.secretsConnectionDelete]: SecretsConnectionDeleteRequest;
+  [IPC.secretsConnectionVerify]: SecretsConnectionVerifyRequest;
+  [IPC.secretsFetchServerCert]: SecretsFetchServerCertRequest;
+  [IPC.secretsRefTest]: SecretsRefTestRequest;
   [IPC.agentPromptsList]: AgentPromptsListRequest;
   [IPC.agentPromptsSave]: AgentPromptsSaveRequest;
   [IPC.serverStatus]: ServerStatusRequest;
@@ -2802,6 +3068,12 @@ export type IpcResponseMap = {
   [IPC.memoryBankSetEnabled]: MemoryBankSetEnabledResponse;
   [IPC.memoryBankForget]: MemoryBankForgetResponse;
   [IPC.memoryBanksSetMasterEnabled]: MemoryBanksSetMasterEnabledResponse;
+  [IPC.secretsConnectionsList]: SecretsConnectionsListResponse;
+  [IPC.secretsConnectionSave]: SecretsConnectionSaveResponse;
+  [IPC.secretsConnectionDelete]: SecretsConnectionDeleteResponse;
+  [IPC.secretsConnectionVerify]: SecretsConnectionVerifyResponse;
+  [IPC.secretsFetchServerCert]: SecretsFetchServerCertResponse;
+  [IPC.secretsRefTest]: SecretsRefTestResponse;
   [IPC.agentPromptsList]: AgentPromptsListResponse;
   [IPC.agentPromptsSave]: AgentPromptsSaveResponse;
   [IPC.serverStatus]: ServerStateResponse;
@@ -3118,6 +3390,40 @@ export interface ArtemisBridge {
     list(request: AgentPromptsListRequest): Promise<IpcResult<AgentPromptsListResponse>>;
     /** Replace the library. Answers with what landed, which may differ. */
     save(request: AgentPromptsSaveRequest): Promise<IpcResult<AgentPromptsSaveResponse>>;
+  };
+
+  /**
+   * The machine's key managers — so that Artemis can stop storing secrets.
+   *
+   * Every method here moves configuration except `saveConnection`, which
+   * carries a credential one way, once. Nothing on this namespace returns a
+   * secret value: the strongest thing that comes back is a list of key
+   * *names* at a path, from `testRef`, which is what makes a mistyped key
+   * diagnosable without a value ever leaving the manager. See {@link IPC}.
+   */
+  readonly secrets: {
+    /** Configured connections and the provider descriptors the form is built from. */
+    listConnections(
+      request: SecretsConnectionsListRequest,
+    ): Promise<IpcResult<SecretsConnectionsListResponse>>;
+    /** Create or replace a connection; verify it; answer with both. */
+    saveConnection(
+      request: SecretsConnectionSaveRequest,
+    ): Promise<IpcResult<SecretsConnectionSaveResponse>>;
+    /** Forget a connection and its credential. */
+    deleteConnection(
+      request: SecretsConnectionDeleteRequest,
+    ): Promise<IpcResult<SecretsConnectionDeleteResponse>>;
+    /** Ask one connection whether it still works, and under whose authority. */
+    verifyConnection(
+      request: SecretsConnectionVerifyRequest,
+    ): Promise<IpcResult<SecretsConnectionVerifyResponse>>;
+    /** A TLS handshake, for a person to look at. Sends no request bytes. */
+    fetchServerCert(
+      request: SecretsFetchServerCertRequest,
+    ): Promise<IpcResult<SecretsFetchServerCertResponse>>;
+    /** Resolve a reference and discard the value. Never returns one. */
+    testRef(request: SecretsRefTestRequest): Promise<IpcResult<SecretsRefTestResponse>>;
   };
 
   /**

@@ -212,6 +212,7 @@ export type SettingsSection =
   | 'permissions'
   | 'agents'
   | 'cerebro'
+  | 'secrets'
   | 'server'
   | 'remote'
   | 'routines'
@@ -242,6 +243,7 @@ const SETTINGS_SECTION_HOMES: Readonly<Record<SettingsSection, SettingsSection>>
   permissions: 'permissions',
   agents: 'agents',
   cerebro: 'agents',
+  secrets: 'secrets',
   server: 'server',
   remote: 'remote',
   routines: 'routines',
@@ -1438,6 +1440,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'permissions',
   'agents',
   'cerebro',
+  'secrets',
   'server',
   'remote',
   'routines',

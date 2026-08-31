@@ -95,6 +95,12 @@ import {
   type MemoryBankVerifyRemoteRequest,
   type MemoryBanksPreflightRequest,
   type MemoryBanksSetMasterEnabledRequest,
+  type SecretsConnectionDeleteRequest,
+  type SecretsConnectionSaveRequest,
+  type SecretsConnectionVerifyRequest,
+  type SecretsConnectionsListRequest,
+  type SecretsFetchServerCertRequest,
+  type SecretsRefTestRequest,
   type MemoryBanksStatusRequest,
   type SharedConfigStatusRequest,
   type Unsubscribe,
@@ -704,6 +710,28 @@ const bridge: ArtemisBridge = Object.freeze({
     setEnabled: (request: MemoryBankSetEnabledRequest) => invoke(IPC.memoryBankSetEnabled, request),
     forget: (request: MemoryBankForgetRequest) => invoke(IPC.memoryBankForget, request),
     setMasterEnabled: (request: MemoryBanksSetMasterEnabledRequest) => invoke(IPC.memoryBanksSetMasterEnabled, request),
+  }),
+
+  /**
+   * The machine's key managers.
+   *
+   * Six literal channels, and — like every other namespace here — nothing that
+   * lets the caller name a channel. `saveConnection` is the one method on the
+   * whole bridge that carries a credential renderer-to-main, and it has no
+   * counterpart: nothing in this namespace returns a secret value.
+   */
+  secrets: Object.freeze({
+    listConnections: (request: SecretsConnectionsListRequest) =>
+      invoke(IPC.secretsConnectionsList, request),
+    saveConnection: (request: SecretsConnectionSaveRequest) =>
+      invoke(IPC.secretsConnectionSave, request),
+    deleteConnection: (request: SecretsConnectionDeleteRequest) =>
+      invoke(IPC.secretsConnectionDelete, request),
+    verifyConnection: (request: SecretsConnectionVerifyRequest) =>
+      invoke(IPC.secretsConnectionVerify, request),
+    fetchServerCert: (request: SecretsFetchServerCertRequest) =>
+      invoke(IPC.secretsFetchServerCert, request),
+    testRef: (request: SecretsRefTestRequest) => invoke(IPC.secretsRefTest, request),
   }),
 
   /** The standing-instruction library. Read and replaced whole; see {@link IPC}. */
