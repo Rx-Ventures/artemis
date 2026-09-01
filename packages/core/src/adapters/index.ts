@@ -35,3 +35,5 @@ export * from './signIn.js';
 // The remote-account calls only, not the adapter itself — that is reached
 // through the registry like every other provider.
 export * from './artemis/admin.js';
+
+export { artemisEndpoint, artemisAuthHeaders } from './artemis/adapter.js';

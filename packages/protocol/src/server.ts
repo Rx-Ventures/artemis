@@ -541,6 +541,17 @@ export interface ServerSignInStatus {
   readonly error?: string;
   /** Set once `state` is `done`. */
   readonly account?: ServerSignInAccount;
+  /**
+   * The loopback port the provider's login serves its OAuth on, while the
+   * flow is live.
+   *
+   * Present only for providers whose login runs a local web server (Codex's
+   * `localhost:1455`). The serving Artemis proxies that port under
+   * `…/signin/oauth/`, and a client that can should listen on the same local
+   * port and forward — the URL the CLI printed then works verbatim on the
+   * machine where the person is.
+   */
+  readonly loopbackPort?: number;
   /** Epoch ms the subprocess was spawned. */
   readonly startedAt: number;
   /**

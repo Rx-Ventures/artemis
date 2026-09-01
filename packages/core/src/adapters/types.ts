@@ -861,6 +861,19 @@ export interface ProviderSignInSpec {
   readonly parseStatus?: (result: ProbeResult) => AuthStatus;
 
   /**
+   * The localhost port the login's own OAuth server listens on, when the CLI
+   * runs one.
+   *
+   * Claude's flow prints a provider URL and takes a pasted code back — it
+   * works from any machine. Codex's flow starts a web server on the machine
+   * running the CLI and prints `http://localhost:1455/…`, which is only
+   * meaningful *there*. Declaring the port is what lets a serving Artemis
+   * proxy it and a client forward it, so the printed address works on the
+   * machine where the person actually is. Omit for flows that need none.
+   */
+  readonly loopbackPort?: number;
+
+  /**
    * The answer for a provider that has *no* sign-in to probe.
    *
    * The Artemis-server and local-endpoint profiles authenticate with a token or

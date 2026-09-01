@@ -44,6 +44,7 @@ import { createRemoteAccess } from './remoteAccess.js';
  */
 const FLAVOUR: string = typeof __ARTEMIS_FLAVOUR__ === 'string' ? __ARTEMIS_FLAVOUR__ : '';
 import { EngineHost } from './engine.js';
+import { stopAllSignInForwarders } from './signInLoopback.js';
 import {
   broadcast,
   forwardAgentEvents,
@@ -622,6 +623,9 @@ app.on('before-quit', (event) => {
   // adapter make the app unquittable.
   event.preventDefault();
   stopEventForwarding?.();
+  // Local ends of any loopback sign-ins: plain HTTP servers on fixed ports,
+  // exactly the kind of thing that must not outlive the app that opened them.
+  stopAllSignInForwarders();
   stopSuggestionForwarding?.();
   stopTerminalForwarding?.();
   stopBrowserForwarding?.();

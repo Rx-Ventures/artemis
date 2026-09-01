@@ -249,6 +249,15 @@ export interface SignInDirector {
   submitCode(profileId: string, code: string): ServerSignInStatus;
   /** Kill the subprocess. Idempotent. */
   cancel(profileId: string): ServerSignInStatus | undefined;
+  /**
+   * The loopback port this account's *live* flow serves its OAuth on.
+   *
+   * `undefined` for a settled flow, a flow for someone else, and a provider
+   * whose login runs no server — which is what makes it the one gate the
+   * proxy route needs: a defined answer both authorises the relay and names
+   * its target.
+   */
+  loopbackPort(profileId: string): number | undefined;
   /** Stop everything. Called from the server's own `close`. */
   close(): void;
 }
@@ -440,6 +449,11 @@ export function createSignInDirector(options: SignInDirectorOptions = {}): SignI
     ...(flow.codeError === undefined ? {} : { codeError: flow.codeError }),
     ...(flow.error === undefined ? {} : { error: flow.error }),
     ...(flow.account === undefined ? {} : { account: flow.account }),
+    // Only while live: a settled flow's server is gone, and advertising the
+    // port after would invite a forwarder to relay into nothing.
+    ...(flow.credentials.signIn.loopbackPort === undefined || isSignInSettled(flow.state)
+      ? {}
+      : { loopbackPort: flow.credentials.signIn.loopbackPort }),
     startedAt: flow.startedAt,
     expiresAt: flow.expiresAt,
   });
@@ -667,6 +681,12 @@ export function createSignInDirector(options: SignInDirectorOptions = {}): SignI
       // CLI does with it is the CLI's business.
       stdin.write(`${code}\n`);
       return snapshot(flow);
+    },
+
+    loopbackPort(profileId) {
+      if (current === null || current.profileId !== (profileId as never)) return undefined;
+      if (isSignInSettled(current.state)) return undefined;
+      return current.credentials.signIn.loopbackPort;
     },
 
     cancel(profileId) {
