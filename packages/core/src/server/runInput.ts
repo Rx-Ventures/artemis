@@ -53,7 +53,8 @@
  * PATHS ARE VALIDATED HERE AND CONFINED BY THE CALLER
  * ---------------------------------------------------------------------------
  *
- * This file proves `cwd` and every `additionalDirectories` entry is an absolute
+ * This file proves `cwd` (when the caller sends one — see {@link
+ * ParsedRunInput}) and every `additionalDirectories` entry is an absolute
  * path of sane length. It does *not* know the connection's pin, so it does not
  * decide whether they are allowed — the route does that, running every one of
  * them through the same confinement, so that a path-bearing field cannot reach
@@ -199,6 +200,12 @@ function requireAbsolutePath(value: unknown, field: string): string {
   // carrying one is not the path that was validated.
   if (path.includes('\0')) throw new RunInputError(field, 'must not contain a NUL byte');
   return path;
+}
+
+/** {@link requireAbsolutePath}, for a field the caller may honestly omit. */
+function optionalAbsolutePath(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requireAbsolutePath(value, field);
 }
 
 function optionalAbsolutePathArray(value: unknown, field: string): readonly string[] | undefined {
@@ -348,13 +355,25 @@ function optionalAttachments(value: unknown, field: string): readonly Attachment
 /* -------------------------------------------------------------------------- */
 
 /**
- * Build a `RunInput` out of a request body, copying only what is written here.
+ * A validated body, with `cwd` still open.
+ *
+ * `cwd` is the one field the route completes rather than the caller: the pin
+ * decides where a run is rooted, so a caller may omit it — a Windows client's
+ * local directory names a path on the wrong machine, and "the pin, wherever
+ * that is" is the only honest thing such a caller can say. When present it is
+ * held to the serving side's rule (absolute, POSIX) and confined to the pin by
+ * the route.
+ */
+export type ParsedRunInput = Omit<RunInput, 'cwd'> & { readonly cwd?: string };
+
+/**
+ * Build a run input out of a request body, copying only what is written here.
  *
  * @throws {RunInputError} with a field name and a sentence, which the route
  *   turns into a 400. The caller learns which field it got wrong, because a
  *   bare "invalid body" against a twenty-field object is not a diagnosis.
  */
-export function readRunInput(body: unknown): RunInput {
+export function readRunInput(body: unknown): ParsedRunInput {
   const outer = requireObject(body, 'body');
   const input = requireObject(outer['input'], 'input');
 
@@ -385,7 +404,7 @@ export function readRunInput(body: unknown): RunInput {
   const draft: Record<string, unknown> = {
     providerId,
     profileId: requireString(input['profileId'], 'input.profileId', LIMITS.id),
-    cwd: requireAbsolutePath(input['cwd'], 'input.cwd'),
+    cwd: optionalAbsolutePath(input['cwd'], 'input.cwd'),
     prompt,
     attachments: optionalAttachments(input['attachments'], 'input.attachments'),
     runId: optionalString(input['runId'], 'input.runId', LIMITS.id),
@@ -449,10 +468,10 @@ export function readRunInput(body: unknown): RunInput {
  * list without being added to this one is a visibly incomplete change.
  */
 export function pathsOf(
-  input: RunInput,
+  input: ParsedRunInput,
 ): readonly { readonly field: string; readonly path: string }[] {
   return [
-    { field: 'input.cwd', path: input.cwd },
+    ...(input.cwd === undefined ? [] : [{ field: 'input.cwd', path: input.cwd }]),
     ...(input.additionalDirectories ?? []).map((path, index) => ({
       field: `input.additionalDirectories[${index}]`,
       path,

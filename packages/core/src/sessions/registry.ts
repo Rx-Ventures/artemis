@@ -563,7 +563,15 @@ export class RunRegistry {
     // Before `resolveRun`, so a typo in a folder name costs neither a
     // credential decryption nor a subprocess — and so the failure is a sentence
     // about a directory rather than an ENOENT the provider blames on itself.
-    await this.#assertWorkingDirectory(input.cwd);
+    //
+    // Skipped for a remote session store, where the cwd names a directory on
+    // the *serving* machine: nothing here will spawn in it, the wire never
+    // carries it, and demanding it exist locally refuses every served session
+    // — a Windows client resuming one pinned to `/work/app` would stat
+    // `C:\work\app` and fail on a directory it was never going to use.
+    if (adapter.credentials.sessionStore !== 'remote') {
+      await this.#assertWorkingDirectory(input.cwd);
+    }
 
     const runId = input.runId ?? this.#newRunId();
     if (this.#runs.has(runId) || this.#starting.has(runId)) {

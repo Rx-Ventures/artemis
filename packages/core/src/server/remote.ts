@@ -82,7 +82,7 @@ import type {
 } from './http.js';
 import { workspaceKeyFor } from './ledger.js';
 import { CORS_HEADERS, fail, ok } from './replies.js';
-import { pathsOf, readRunInput, RunInputError } from './runInput.js';
+import { pathsOf, readRunInput, RunInputError, type ParsedRunInput } from './runInput.js';
 import { TooManyRemoteTerminalsError, UnknownRemoteTerminalError } from './terminals.js';
 import { WorkspaceUnavailableError } from './workspaces.js';
 
@@ -436,7 +436,7 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
   const startUserRun = context.runs?.startUserRun;
   if (!controlEnabled(context) || startUserRun === undefined) return notControllable();
 
-  let runInput: RunInput;
+  let runInput: ParsedRunInput;
   try {
     runInput = readRunInput(request.body);
   } catch (error) {
@@ -446,7 +446,7 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
       'invalid_body',
       error instanceof RunInputError
         ? error.message
-        : 'The body must be `{ input }` carrying providerId, profileId, cwd and prompt.',
+        : 'The body must be `{ input }` carrying providerId, profileId and prompt.',
     );
   }
 
@@ -539,7 +539,10 @@ async function handleStartRun(input: RemoteRequestInput): Promise<ServerReply> {
    * folder instead is a run whose grant was quietly changed under it.
    */
   const extraRoots: string[] = [];
-  for (const { field, path } of pathsOf(runInput).slice(1)) {
+  // Everything path-bearing except the cwd, which `resolvePinnedCwd` already
+  // settled — by field name rather than position, because a body that omitted
+  // its cwd has no entry to skip.
+  for (const { field, path } of pathsOf(runInput).filter((p) => p.field !== 'input.cwd')) {
     if (connection.workspace.kind !== 'directory') {
       return fail(
         403,

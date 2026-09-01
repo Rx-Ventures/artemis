@@ -498,9 +498,19 @@ export function createRemoteBridge(
 
     runs: {
       start: async (request) => {
+        /*
+         * The cwd is the serving machine's to spell. A pane that has lived
+         * locally can hold this window's own directory — `C:\Users\…` on a
+         * Windows machine — which names a path on the wrong computer and
+         * which the server rightly refuses as not absolute. Anything that is
+         * not already in the far side's POSIX shape is left off the wire, and
+         * the connection's pin decides where the run is rooted.
+         */
+        const { cwd, ...rest } = request.input;
+        const input = cwd !== undefined && cwd.startsWith('/') ? request.input : rest;
         const reply = await http<ServerRunBody>(REMOTE_RUNS_PATH, {
           method: 'POST',
-          body: { input: request.input },
+          body: { input },
         });
         return reply.ok ? ok({ run: reply.value.run }) : reply;
       },
