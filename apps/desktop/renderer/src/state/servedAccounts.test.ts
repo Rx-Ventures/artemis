@@ -51,8 +51,18 @@ describe('servedAccountLabel', () => {
 
   it('reads the note prefix an older server encodes', () => {
     expect(servedAccountLabel(option({ id: 'a/x', note: 'Work — Fast and steady.' }))).toBe('Work');
-    expect(servedAccountLabel(option({ id: 'a/x', note: 'Work' }))).toBe('Work');
-    expect(servedAccountLabel(option({ id: 'a/x', note: '' }))).toBeNull();
+  });
+
+  it('never mistakes a separator-less note for a name — the slug is the most it claims', () => {
+    // The real case: `unlistedModel` wears a sentence as its note, and the
+    // status bar once printed that sentence as the account's name.
+    const unlisted = option({
+      id: 'work-max/opus',
+      note: 'Chosen earlier; this account’s current model list does not include it.',
+    });
+    expect(servedAccountLabel(unlisted)).toBe('work-max');
+    expect(servedAccountLabel(option({ id: 'a/x', note: 'Work' }))).toBe('a');
+    expect(servedAccountLabel(option({ id: 'bare', note: '' }))).toBeNull();
   });
 });
 

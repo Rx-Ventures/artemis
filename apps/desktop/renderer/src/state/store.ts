@@ -5970,15 +5970,23 @@ export function installPlanUsageFeed(): () => void {
      * several contradictory gauges.
      */
     if (accountId !== undefined) {
-      useApp.setState((s) => ({
-        planUsageByServerAccount: {
-          ...s.planUsageByServerAccount,
-          [`${profileId}/${accountId}`]: {
-            usage,
-            label: accountLabel ?? accountId,
+      useApp.setState((s) => {
+        /*
+         * Never backwards, same as `acceptPlanUsage` below: the poll's sweep
+         * and the meter's explicit refresh are two in-flight fan-outs, and
+         * the one that started first can land last. `fetchedAt` is the
+         * serving host's own stamp, so it orders readings from both.
+         */
+        const key = `${profileId}/${accountId}`;
+        const previous = s.planUsageByServerAccount[key];
+        if (previous !== undefined && usage.fetchedAt < previous.usage.fetchedAt) return s;
+        return {
+          planUsageByServerAccount: {
+            ...s.planUsageByServerAccount,
+            [key]: { usage, label: accountLabel ?? accountId },
           },
-        },
-      }));
+        };
+      });
       return;
     }
     // Only when the reading actually landed: a cycle discarded for being older

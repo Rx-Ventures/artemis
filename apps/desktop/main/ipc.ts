@@ -1168,7 +1168,16 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
           (candidate) => candidate.id === request.profileId,
         );
         if (profile?.providerId === 'artemis') {
-          await broadcastPlanUsageReading(engine, request.profileId, profile.providerId);
+          try {
+            await broadcastPlanUsageReading(engine, request.profileId, profile.providerId);
+          } catch (error) {
+            // Routine, not exceptional: a server that predates /usage answers
+            // 501, and an unreachable one refuses outright. The meter shows
+            // whatever it last knew either way, so this is a debug fact — an
+            // error-level line per popover open would be noise about a
+            // version skew the next server deploy resolves.
+            log.debug(`Could not read served plan usage for ${request.profileId}`, error);
+          }
           return { usage: null };
         }
         return {

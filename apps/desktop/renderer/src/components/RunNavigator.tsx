@@ -698,7 +698,7 @@ function ProfileItem({
 function ModelColumn(): ReactElement {
   const pane = usePaneRef();
   const profileId = usePane((s) => s.activeProfileId);
-  const fullCatalogue = usePane(activeModels);
+  const catalogue = usePane(activeModels);
   const fullQuick = usePane(quickModels);
   const selected = usePane(activeModel);
   const providerLabel = usePane(activeProviderLabel);
@@ -715,23 +715,26 @@ function ModelColumn(): ReactElement {
    * At a server the flattened catalogue holds every account's copy of every
    * model, so two Claude accounts list "Opus 5" twice with nothing visible to
    * tell the rows apart. The account column above already made that choice —
-   * this column answers *within* it, exactly as its own doc promises. The
-   * pins narrow the same way, falling back to the scoped catalogue rather
-   * than the whole one when none of them survive the narrowing.
+   * so the *default* list narrows to it: the pins that belong to the account,
+   * or its whole slice of the catalogue when no pin survives the narrowing.
+   * The search deliberately does not narrow — its placeholder says "all
+   * models", `navigatorModelRows`'s own doc promises the whole catalogue, and
+   * a hit in another account is a legitimate way to switch account and model
+   * in one pick (the account radio follows the selection's slug). The counts
+   * stay full-catalogue for the same reason: "N more" is the door to
+   * everything this server serves, not to the slice already showing.
    */
   const activeSlug = atServer ? servedAccountSlug(selected) : null;
-  const catalogue = useMemo(
-    () => scopedToServedAccount(fullCatalogue, activeSlug),
-    [fullCatalogue, activeSlug],
-  );
   const quick = useMemo(() => {
     if (activeSlug === null) return fullQuick;
-    const scoped = fullQuick.filter((model) => servedAccountSlug(model) === activeSlug);
-    return scoped.length > 0 ? scoped : catalogue;
+    const scopedQuick = fullQuick.filter((model) => servedAccountSlug(model) === activeSlug);
+    return scopedQuick.length > 0 ? scopedQuick : scopedToServedAccount(catalogue, activeSlug);
   }, [fullQuick, activeSlug, catalogue]);
 
   // At a server the gauge that gates a row is its own account's, not the
-  // profile's — the profile map has no entry for a server on purpose.
+  // profile's — the profile map has no entry for a server on purpose. This is
+  // the *selected* account's reading, for the footer's recommendation; each
+  // row reads its own below.
   const usage = atServer
     ? (profileId === null ? undefined : servedGaugeFor(gauges, profileId, selected)?.usage)
     : profileUsage;
@@ -819,7 +822,19 @@ function ModelColumn(): ReactElement {
         onValueChange={(value) => setModel(value, pane)}
       >
         {listed.map((model) => (
-          <ModelFactRow key={model.id} model={model} usage={usage ?? null} now={now} />
+          <ModelFactRow
+            key={model.id}
+            model={model}
+            // A search can surface another account's rows, and a row's
+            // exhaustion and pressure belong to the account that would be
+            // billed — its own, not the one currently picked.
+            usage={
+              (atServer && profileId !== null
+                ? servedGaugeFor(gauges, profileId, model)?.usage
+                : usage) ?? null
+            }
+            now={now}
+          />
         ))}
       </DropdownMenuRadioGroup>
 

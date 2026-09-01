@@ -39,17 +39,19 @@ export function servedAccountSlug(model: ProviderModelOption | null | undefined)
 /**
  * The display name of the account behind an option, however old the server.
  *
- * The fallback reads the note the adapter composes — `"<account> — <note>"`,
- * or the bare account name when the route had no note of its own. A note that
- * never carried an account reads as one here too; that ambiguity is why the
- * explicit field exists, and the callers all treat `null` and a wrong-looking
- * label the same way: by not narrowing.
+ * The fallback reads the note the adapter composes — `"<account> — <note>"` —
+ * but only when the separator is actually there. A note without one is *some
+ * sentence*, not a name: `unlistedModel`'s "Chosen earlier; this account's
+ * current model list does not include it." is a note exactly like any other,
+ * and treating it as the account name printed that whole sentence into the
+ * status bar. Without the separator the slug is the most that can honestly be
+ * claimed, and the explicit field is why new servers never land here at all.
  */
 export function servedAccountLabel(model: ProviderModelOption | null | undefined): string | null {
   if (model === null || model === undefined) return null;
   if (model.accountLabel !== undefined) return model.accountLabel;
   if (model.note.includes(' — ')) return model.note.split(' — ')[0] ?? null;
-  return model.note.length > 0 ? model.note : null;
+  return servedAccountSlug(model);
 }
 
 /**

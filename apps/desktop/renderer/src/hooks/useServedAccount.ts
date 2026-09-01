@@ -30,10 +30,21 @@ export function useServedAccount(): {
   const profileId = usePane((s) => s.activeProfileId);
   const atServer = usePane((s) => activeProfile(s)?.providerId === 'artemis');
   const selected = usePane(activeModel);
-  const gauges = useApp((s) => s.planUsageByServerAccount);
+  /*
+   * The join runs inside the selector so the subscription is to one entry's
+   * identity, not to the whole map: the poller replaces the map once per
+   * account per cycle, and this hook sits in the always-mounted status bar of
+   * every pane — including panes that are not at a server at all. The entry
+   * object survives spreads that touch other keys, so only a reading for
+   * *this* account re-renders anything.
+   */
+  const gauge = useApp((s) =>
+    atServer && profileId !== null
+      ? servedGaugeFor(s.planUsageByServerAccount, profileId, selected)
+      : undefined,
+  );
 
   if (!atServer || profileId === null) return { atServer: false, label: null, gauge: undefined };
-  const gauge = servedGaugeFor(gauges, profileId, selected);
   // The gauge's label is the server's own current name for the account; the
   // catalogue's copy stands in until a reading lands.
   return { atServer: true, label: gauge?.label ?? servedAccountLabel(selected), gauge };

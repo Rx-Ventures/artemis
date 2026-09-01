@@ -1478,7 +1478,14 @@ export interface ProviderAdapter {
   /**
    * How much of a plan's capacity this profile has consumed.
    *
-   * Present **iff** {@link Capabilities.planUsageReporting} is true. Distinct
+   * Present **iff** {@link Capabilities.planUsageReporting} is true — with one
+   * named exception: the artemis adapter declares the capability and does NOT
+   * implement this, because a server profile's readings are per *served
+   * account*, a fan-out this single-reading signature cannot carry. Its
+   * callers (the plan-usage poller and `IPC.usagePlanRefresh`) branch on the
+   * provider id and use `readRemotePlanUsage` instead; a caller that reaches
+   * this method for artemis gets the capability-off answer below, which is
+   * the safe wrong answer rather than a crash. Distinct
    * from the per-run counts on `usage` events: this describes the *account*.
    *
    * Three obligations:
