@@ -416,9 +416,16 @@ export function browserTools(runId: RunId, context: BrowserToolContext) {
  * the embedded tab looked, from inside the run, like a browser like any
  * other. The instructions are the one place to say whose browser this is
  * *before* that mistake is made, and what to say instead when the user wants
- * their own.
+ * their own. The remedies are scoped honestly: the Chrome bridge takes
+ * effect on Claude sessions running on this machine, and saying so here is
+ * what stops the model sending a Codex or server-session user to a toggle
+ * that cannot help them.
+ *
+ * Exported for the test that pins this text: it is anti-hallucination copy,
+ * and a rewrite that drops "not the user's browser" would quietly reintroduce
+ * the failure above.
  */
-const INSTRUCTIONS =
+export const INSTRUCTIONS =
   'Drives the EMBEDDED browser tab in the Artemis dock — a pane inside the ' +
   'Artemis window itself, which the user can see. This is NOT the user’s ' +
   'own Chrome or default browser: it has none of their logins, extensions or ' +
@@ -426,8 +433,12 @@ const INSTRUCTIONS =
   'user a page was opened in their browser when you used these tools. If the ' +
   'user asks for a page in THEIR browser (e.g. “my Chrome”) and these are ' +
   'your only browser tools, say that this session can only drive the embedded ' +
-  'dock browser — they can enable “Browse with your Chrome” or “Open pages ' +
-  'in your default browser” under Settings → Permissions. ' +
+  'dock browser, and point them at Settings → Permissions & access: “Open ' +
+  'pages in your default browser” works for any session (the page opens for ' +
+  'them; you cannot read it), and “Browse with your Chrome” gives Claude ' +
+  'sessions running on this machine real control of their Chrome via the ' +
+  'Claude in Chrome extension — it does not apply to other providers or to ' +
+  'sessions running on an Artemis Server. ' +
   'Prefer browser_read over browser_screenshot: it is far cheaper and is ' +
   'usually enough. Reach for a screenshot when the question is about ' +
   'layout, styling, or something that went wrong visually.';
