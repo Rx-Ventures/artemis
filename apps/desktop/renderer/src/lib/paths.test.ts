@@ -57,3 +57,18 @@ describe('sortFoldersByName', () => {
     expect(input).toEqual(['/w/zebra', '/w/alpha']);
   });
 });
+
+describe('pathPlatformFor', () => {
+  it('answers the serving machine’s rule in remote mode, the window’s otherwise', async () => {
+    const { pathPlatformFor, isAbsolutePath } = await import('./paths');
+    expect(pathPlatformFor('remote', 'win32')).toBe('linux');
+    expect(pathPlatformFor('remote', 'darwin')).toBe('linux');
+    expect(pathPlatformFor('preload', 'win32')).toBe('win32');
+    expect(pathPlatformFor('mock', 'darwin')).toBe('darwin');
+
+    // The consequence that matters: a Windows window connected to a server
+    // must accept the only path shape the far side will take.
+    expect(isAbsolutePath('/srv/work', pathPlatformFor('remote', 'win32'))).toBe(true);
+    expect(isAbsolutePath('C:\\Users\\d', pathPlatformFor('preload', 'win32'))).toBe(true);
+  });
+});

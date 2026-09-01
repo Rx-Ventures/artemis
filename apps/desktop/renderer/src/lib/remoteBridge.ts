@@ -231,6 +231,25 @@ export function createRemoteBridge(
     return connectionPromise;
   }
 
+  /**
+   * Is this the far machine's own directory — the pin, or inside it?
+   *
+   * Lexical on purpose, like the server's own `confineToRoot`: the question
+   * here is only "did this path come from the serving side" (the chooser
+   * hands out the pin verbatim), not "is it safe" — the server still confines
+   * whatever is sent. Anything unanswerable — no cwd, a non-POSIX shape, a
+   * connection read that failed, a pin that is not a directory — answers
+   * `false`, and a `false` cwd is omitted from the wire, which roots the run
+   * at the pin: the safest thing a wrong-machine path could become.
+   */
+  async function cwdBelongsToPin(cwd: string | undefined): Promise<boolean> {
+    if (cwd === undefined || !cwd.startsWith('/')) return false;
+    const info = await connectionInfo();
+    if (!info.ok || info.value.workspace.kind !== 'directory') return false;
+    const root = info.value.workspace.path;
+    return cwd === root || cwd.startsWith(`${root}/`);
+  }
+
   /* ------------------------------------------------------------------ */
   /* The event stream                                                   */
   /* ------------------------------------------------------------------ */
@@ -499,15 +518,18 @@ export function createRemoteBridge(
     runs: {
       start: async (request) => {
         /*
-         * The cwd is the serving machine's to spell. A pane that has lived
-         * locally can hold this window's own directory — `C:\Users\…` on a
-         * Windows machine — which names a path on the wrong computer and
-         * which the server rightly refuses as not absolute. Anything that is
-         * not already in the far side's POSIX shape is left off the wire, and
-         * the connection's pin decides where the run is rooted.
+         * The cwd is the serving machine's to spell, and the pin's to
+         * permit. A pane that has lived locally holds this window's own
+         * directory — a Windows path names the wrong computer outright, and
+         * a Mac's POSIX path only *looks* like the right shape while still
+         * naming the wrong disk (`/Users/me/app` posted at a `/srv/work`
+         * pin earns a 403 on the first prompt). The only cwd worth sending
+         * is one already inside the connection's pin — this bridge's own
+         * chooser can produce nothing else — so anything outside it is left
+         * off the wire and the pin decides where the run roots.
          */
         const { cwd, ...rest } = request.input;
-        const input = cwd !== undefined && cwd.startsWith('/') ? request.input : rest;
+        const input = (await cwdBelongsToPin(cwd)) ? request.input : rest;
         const reply = await http<ServerRunBody>(REMOTE_RUNS_PATH, {
           method: 'POST',
           body: { input },

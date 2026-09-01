@@ -107,15 +107,6 @@ export class RunInputError extends Error {
   }
 }
 
-/**
- * Every path-bearing field of the validated input, so the route can confine
- * them without knowing which keys those are.
- */
-export interface ReadRunInputResult {
-  /** Validated, allowlisted — but *not yet* confined to the connection's pin. */
-  readonly input: RunInput;
-}
-
 /* -------------------------------------------------------------------------- */
 /* Field readers                                                              */
 /* -------------------------------------------------------------------------- */
@@ -360,9 +351,10 @@ function optionalAttachments(value: unknown, field: string): readonly Attachment
  * `cwd` is the one field the route completes rather than the caller: the pin
  * decides where a run is rooted, so a caller may omit it — a Windows client's
  * local directory names a path on the wrong machine, and "the pin, wherever
- * that is" is the only honest thing such a caller can say. When present it is
- * held to the serving side's rule (absolute, POSIX) and confined to the pin by
- * the route.
+ * that is" is the only honest thing such a caller can say. Omitted means
+ * absent or `null`, the same pair every optional field here accepts. When
+ * present it is held to the serving side's rule (absolute, POSIX) and
+ * confined to the pin by the route.
  */
 export type ParsedRunInput = Omit<RunInput, 'cwd'> & { readonly cwd?: string };
 
@@ -456,7 +448,7 @@ export function readRunInput(body: unknown): ParsedRunInput {
   for (const key of Object.keys(draft)) {
     if (draft[key] === undefined) delete draft[key];
   }
-  return draft as unknown as RunInput;
+  return draft as unknown as ParsedRunInput;
 }
 
 /**

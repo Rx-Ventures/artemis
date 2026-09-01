@@ -136,4 +136,4 @@ export {
   type TerminalSource,
 } from './terminals.js';
 
-export { pathsOf, readRunInput, RunInputError } from './runInput.js';
+export { pathsOf, readRunInput, RunInputError, type ParsedRunInput } from './runInput.js';

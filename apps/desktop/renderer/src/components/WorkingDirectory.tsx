@@ -51,6 +51,7 @@ import {
   inferHomeDirectory,
   isAbsolutePath,
   lastSegment,
+  pathPlatformFor,
   shortenPath,
   sortFoldersByName,
   type Platform,
@@ -109,14 +110,9 @@ export function DirectoryChooser({
   const cwd = usePane((s) => s.cwd);
   const localPlatform = useApp((s) => s.platform);
   const bridgeMode = useApp((s) => s.bridgeMode);
-  /*
-   * A remote bridge's directories live on the *serving* machine, whose rule
-   * is POSIX by the server's own contract — so a typed path is judged by that
-   * rule, not by how this window's OS spells an absolute path. Without this a
-   * Windows window connected to a server rejects `/srv/work` — the only kind
-   * of path the far side will accept.
-   */
-  const platform = bridgeMode === 'remote' ? 'linux' : localPlatform;
+  // The serving machine's rule in remote mode, this window's otherwise —
+  // `pathPlatformFor` carries the why.
+  const platform = pathPlatformFor(bridgeMode, localPlatform);
   const [draft, setDraft] = useState(cwd);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
