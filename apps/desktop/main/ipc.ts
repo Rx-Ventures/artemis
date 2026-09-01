@@ -82,6 +82,7 @@ import {
   WorkspaceError,
 } from './errors.js';
 import { createLogger } from './log.js';
+import { broadcastPlanUsageReading } from './planUsagePoll.js';
 import { grantPreview } from './preview.js';
 import type { BrowserHost } from './browser.js';
 import { checkFiles, listDirectory, readTextFile } from './files.js';
@@ -1154,9 +1155,26 @@ export function registerIpcHandlers(options: IpcLayerOptions): IpcLayer {
      */
     [IPC.usagePlanRefresh]: {
       validate: validateUsagePlan,
-      handle: async (request) => ({
-        usage: await engine.require().refreshPlanUsage({ profileId: request.profileId }),
-      }),
+      handle: async (request) => {
+        /*
+         * An Artemis Server profile is several accounts behind one id, and
+         * its gauges travel the push channel keyed by served account — an
+         * invoke reply can carry only one reading. A refresh against one
+         * therefore fans out the poller's own read and answers `null`; the
+         * readings land in the renderer's served-account map through the
+         * same feed the poll fills.
+         */
+        const profile = (await engine.require().listProfiles({})).find(
+          (candidate) => candidate.id === request.profileId,
+        );
+        if (profile?.providerId === 'artemis') {
+          await broadcastPlanUsageReading(engine, request.profileId, profile.providerId);
+          return { usage: null };
+        }
+        return {
+          usage: await engine.require().refreshPlanUsage({ profileId: request.profileId }),
+        };
+      },
     },
 
     /* ---------------------------------------------------------------- */

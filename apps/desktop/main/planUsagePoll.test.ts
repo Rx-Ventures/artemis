@@ -34,7 +34,7 @@ vi.mock('./redact.js', () => ({
   RESPONSE_SCAN_POLICY: {},
 }));
 
-const { startPlanUsagePolling } = await import('./planUsagePoll');
+const { broadcastPlanUsageReading, startPlanUsagePolling } = await import('./planUsagePoll');
 
 /* -------------------------------------------------------------------------- */
 /* A stand-in engine that records what was asked of it                        */
@@ -235,6 +235,53 @@ describe('the plan usage poll', () => {
     // A merge that races the shutdown — the engine-side unsubscribe has
     // happened, but a listener already mid-call must still land nowhere.
     liveListener?.({ profileId: 'a', usage: { available: true, windows: [], fetchedAt: 1 } });
+    expect(broadcasts).toEqual([]);
+  });
+});
+
+describe('broadcastPlanUsageReading', () => {
+  const usage = { available: true, windows: [], fetchedAt: 1 };
+  const rows = [
+    { profileId: 'acct-a', label: 'Work', usage },
+    { profileId: 'acct-b', label: 'Personal', usage },
+  ];
+
+  function remoteEngine(): never {
+    return {
+      ready: true,
+      require: () => ({
+        readRemotePlanUsage: () => Promise.resolve(rows),
+        refreshPlanUsage: ({ profileId }: { profileId: string }) => {
+          reads.push(profileId);
+          return Promise.resolve(usage);
+        },
+      }),
+    } as never;
+  }
+
+  it('fans an Artemis Server profile out into one push per served account', async () => {
+    // This is the read `IPC.usagePlanRefresh` borrows: the served gauges
+    // travel the push channel keyed by account, so an explicit refresh must
+    // produce exactly the pushes a poll cycle would.
+    await broadcastPlanUsageReading(remoteEngine(), 'server-1', 'artemis');
+
+    expect(reads).toEqual([]);
+    expect(broadcasts.map((b) => b.payload)).toEqual([
+      { profileId: 'server-1', usage, accountId: 'acct-a', accountLabel: 'Work' },
+      { profileId: 'server-1', usage, accountId: 'acct-b', accountLabel: 'Personal' },
+    ]);
+  });
+
+  it('reads and pushes one profile-keyed gauge for a local provider', async () => {
+    await broadcastPlanUsageReading(remoteEngine(), 'p1', 'claude');
+
+    expect(reads).toEqual(['p1']);
+    expect(broadcasts.map((b) => b.payload)).toEqual([{ profileId: 'p1', usage }]);
+  });
+
+  it('pushes nothing once cancelled', async () => {
+    await broadcastPlanUsageReading(remoteEngine(), 'server-1', 'artemis', () => true);
+    await broadcastPlanUsageReading(remoteEngine(), 'p1', 'claude', () => true);
     expect(broadcasts).toEqual([]);
   });
 });

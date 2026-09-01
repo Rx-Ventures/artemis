@@ -44,6 +44,15 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
     // The serving profile, named so two accounts offering the same model can
     // be told apart in the picker. The route encodes it too, but as a slug.
     const profileLabel = asString(model['profileLabel']);
+    // The serving profile's identity, carried whole onto the option: the id is
+    // what joins a route to the server's usage gauges, the slug is the route
+    // prefix made explicit, and the label repeats `profileLabel` where the UI
+    // can read it without parsing it back out of `note`. The slug falls back
+    // to the route's own prefix so it holds even against an older server.
+    const profileId = asString(model['profileId']);
+    const profileSlug =
+      asString(model['profileSlug']) ??
+      (route.includes('/') ? route.slice(0, route.indexOf('/')) : undefined);
     // The thinking levels this route accepts, as bare ids. The picker draws the
     // labels from the descriptor's own list and shows only these enabled — see
     // `ARTEMIS_EFFORT_LEVELS`. Absent thinking levels leave the field off, which
@@ -62,6 +71,9 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
         ? {}
         : { resolvedModel: asString(model['resolvedModel']) as string }),
       note: profileLabel !== undefined && note !== '' ? `${profileLabel} — ${note}` : (profileLabel ?? note),
+      ...(profileId === undefined ? {} : { accountId: profileId }),
+      ...(profileSlug === undefined ? {} : { accountSlug: profileSlug }),
+      ...(profileLabel === undefined ? {} : { accountLabel: profileLabel }),
       ...(typeof model['tier'] === 'number' ? { tier: model['tier'] } : {}),
       ...(typeof model['fastMode'] === 'boolean' ? { supportsFastMode: model['fastMode'] } : {}),
       ...(typeof model['ultracode'] === 'boolean' ? { supportsUltracode: model['ultracode'] } : {}),

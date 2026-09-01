@@ -63,6 +63,7 @@ import {
   activeCapabilities,
   activeModel,
   activeModels,
+  activeProfile,
   activeProviderLabel,
   activeThinkingLevel,
   isLive,
@@ -87,6 +88,14 @@ import {
   type ModelPressure,
 } from '../state/modelFacts';
 import { hiddenModelCount, navigatorColumns, navigatorFooter, navigatorModelRows } from '../state/runNavigator';
+import {
+  groupServedAccounts,
+  scopedToServedAccount,
+  servedAccountSlug,
+  servedGaugeFor,
+  type ServedAccount,
+} from '../state/servedAccounts';
+import { useServedAccount } from '../hooks/useServedAccount';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { UsageRing, meterSlots, toneFor } from './PlanUsageMeter';
 import { ProfileSwatch } from './primitives';
@@ -267,37 +276,22 @@ function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): Re
   const live = usePane(isLive);
   const gauges = useApp((s) => s.planUsageByServerAccount);
 
-  const accounts = useMemo(() => {
-    const groups = new Map<string, { label: string; models: string[] }>();
-    for (const model of catalogue) {
-      const slash = model.id.indexOf('/');
-      if (slash <= 0) continue;
-      const slug = model.id.slice(0, slash);
-      let group = groups.get(slug);
-      if (group === undefined) {
-        // The catalogue writes "<account label> — <note>" into every row's
-        // note; the prefix is the display name the server uses for the
-        // account, and the slug is only its address.
-        const label = model.note.includes(' — ') ? model.note.split(' — ')[0]! : (model.note || slug);
-        group = { label, models: [] };
-        groups.set(slug, group);
-      }
-      group.models.push(model.id);
-    }
-    return [...groups.entries()].map(([slug, group]) => ({ slug, ...group }));
-  }, [catalogue]);
+  const accounts = useMemo(() => groupServedAccounts(catalogue), [catalogue]);
 
-  const gaugeFor = (label: string): { readonly usage: PlanUsage } | undefined => {
+  // Exact join on the serving side's id where the catalogue carries one; the
+  // label match is the fallback for a server old enough not to send it.
+  const gaugeFor = (account: ServedAccount): { readonly usage: PlanUsage } | undefined => {
+    if (account.id !== undefined) {
+      const exact = gauges[`${profileId}/${account.id}`];
+      if (exact !== undefined) return exact;
+    }
     for (const [key, entry] of Object.entries(gauges)) {
-      if (key.startsWith(`${profileId}/`) && entry.label === label) return entry;
+      if (key.startsWith(`${profileId}/`) && entry.label === account.label) return entry;
     }
     return undefined;
   };
 
-  const activeSlug =
-    selected !== null && selected !== undefined && selected.id.includes('/')
-      ? (selected.id.split('/')[0] ?? null)
-      : null;
+  const activeSlug = servedAccountSlug(selected);
 
   return (
     <>
@@ -319,7 +313,7 @@ function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): Re
           }}
         >
           {accounts.map((account) => {
-            const gauge = gaugeFor(account.label);
+            const gauge = gaugeFor(account);
             const window = gauge === undefined ? null : bindingWindow(gauge.usage);
             return (
               <DropdownMenuRadioItem
@@ -330,8 +324,9 @@ function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): Re
               >
                 <span className="min-w-0 flex-1 truncate">{account.label}</span>
                 {window !== null && window.utilization !== null ? (
+                  /* `utilization` is already 0–100 — see `PlanUsageWindow`. */
                   <span className={cn('ml-2 font-mono text-2xs', toneFor(window.utilization))}>
-                    {String(Math.round(window.utilization * 100))}%
+                    {String(Math.round(window.utilization))}%
                   </span>
                 ) : null}
               </DropdownMenuRadioItem>
@@ -347,6 +342,7 @@ function ProfileColumn(): ReactElement {
   const pane = usePaneRef();
   const profiles = useApp((s) => s.profiles);
   const providers = useApp((s) => s.providers);
+  const platform = useApp((s) => s.platform);
   const activeId = usePane((s) => s.activeProfileId);
   const live = usePane(isLive);
 
@@ -389,7 +385,10 @@ function ProfileColumn(): ReactElement {
             onValueChange={(value) => setRunLocation(value as 'local' | ProfileId, pane)}
           >
             <DropdownMenuRadioItem value="local" className="text-2xs" disabled={live}>
-              This Mac
+              {/* The window's own machine, named in its own vocabulary — a
+                  Windows user reading "This Mac" concludes the row is someone
+                  else's computer. */}
+              {platform === 'darwin' ? 'This Mac' : platform === 'win32' ? 'This PC' : 'This machine'}
             </DropdownMenuRadioItem>
             {servers.map((server) => (
               <DropdownMenuRadioItem
@@ -699,16 +698,43 @@ function ProfileItem({
 function ModelColumn(): ReactElement {
   const pane = usePaneRef();
   const profileId = usePane((s) => s.activeProfileId);
-  const catalogue = usePane(activeModels);
-  const quick = usePane(quickModels);
+  const fullCatalogue = usePane(activeModels);
+  const fullQuick = usePane(quickModels);
   const selected = usePane(activeModel);
   const providerLabel = usePane(activeProviderLabel);
+  const atServer = usePane((s) => activeProfile(s)?.providerId === 'artemis');
   // What the *run* reports it is actually using, which can differ from what
   // was asked for — the provider may substitute. Shown once it is known.
   const running = usePane((s) => s.run?.model);
-  const usage = useApp((s) =>
+  const gauges = useApp((s) => s.planUsageByServerAccount);
+  const profileUsage = useApp((s) =>
     profileId === null ? undefined : s.planUsageByProfile[profileId],
   );
+
+  /*
+   * At a server the flattened catalogue holds every account's copy of every
+   * model, so two Claude accounts list "Opus 5" twice with nothing visible to
+   * tell the rows apart. The account column above already made that choice —
+   * this column answers *within* it, exactly as its own doc promises. The
+   * pins narrow the same way, falling back to the scoped catalogue rather
+   * than the whole one when none of them survive the narrowing.
+   */
+  const activeSlug = atServer ? servedAccountSlug(selected) : null;
+  const catalogue = useMemo(
+    () => scopedToServedAccount(fullCatalogue, activeSlug),
+    [fullCatalogue, activeSlug],
+  );
+  const quick = useMemo(() => {
+    if (activeSlug === null) return fullQuick;
+    const scoped = fullQuick.filter((model) => servedAccountSlug(model) === activeSlug);
+    return scoped.length > 0 ? scoped : catalogue;
+  }, [fullQuick, activeSlug, catalogue]);
+
+  // At a server the gauge that gates a row is its own account's, not the
+  // profile's — the profile map has no entry for a server on purpose.
+  const usage = atServer
+    ? (profileId === null ? undefined : servedGaugeFor(gauges, profileId, selected)?.usage)
+    : profileUsage;
 
   const [query, setQuery] = useState('');
   // Captured per mount — Radix mounts this content on open, so exhaustion and
@@ -1026,12 +1052,16 @@ function NavigatorFooter(): ReactElement | null {
   const window = usePane(learnedContextWindow);
   const profileId = usePane((s) => s.activeProfileId);
   const planSupported = usePane((s) => activeCapabilities(s).planUsageReporting);
-  const usage = useApp((s) =>
+  const profileUsage = useApp((s) =>
     profileId === null ? null : (s.planUsageByProfile[profileId] ?? null),
   );
+  // At a server the meters describe the account behind the pick above, whose
+  // reading lives in the served map — the profile map holds nothing for it.
+  const served = useServedAccount();
   const pane = usePaneRef();
   const mode = usePane((s) => s.permissionMode);
 
+  const usage = served.atServer ? (served.gauge?.usage ?? null) : profileUsage;
   const slots = planSupported && usage?.available === true ? meterSlots(usage) : [];
   const anything =
     fastPresence !== 'absent' || modes.length > 0 || window !== undefined || slots.length > 0;

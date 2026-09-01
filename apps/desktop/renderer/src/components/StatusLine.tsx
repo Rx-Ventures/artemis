@@ -104,6 +104,7 @@ import {
   useApp,
 } from '../state/store';
 import { usePermissionModes } from '../hooks/useCapability';
+import { useServedAccount } from '../hooks/useServedAccount';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { COLUMN_MAX } from './Transcript';
 import { WithReason } from './disabled-reason';
@@ -337,6 +338,19 @@ function ProfileSegment(): ReactElement {
   const profile = usePane(activeProfile);
   const status = useApp((s) => (profile ? s.authByProfile[profile.id] : undefined));
   const signedOut = status !== undefined && !status.loggedIn;
+  /*
+   * At a server the profile's own label names the *place* ("Artemis Server"),
+   * not the account about to be charged — the question this segment exists
+   * for. The account rides the active pick, so it is appended the way the
+   * catalogue's notes already spell it: "Artemis Server — work max".
+   */
+  const served = useServedAccount();
+  const label =
+    profile === undefined
+      ? 'no profile'
+      : served.label === null
+        ? profile.label
+        : `${profile.label} — ${served.label}`;
 
   return (
     <DropdownMenu>
@@ -361,7 +375,7 @@ function ProfileSegment(): ReactElement {
           // gets the weight rather than the model beside it.
           className={cn(signedOut && 'text-amber', profile && 'font-medium text-ink')}
         >
-          {profile?.label ?? 'no profile'}
+          {label}
         </SegmentTrigger>
       </DropdownMenuTrigger>
       <RunNavigatorContent />
