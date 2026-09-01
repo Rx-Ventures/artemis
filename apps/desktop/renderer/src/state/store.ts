@@ -1159,6 +1159,15 @@ export interface AppState {
    * curates by hand. That curation is {@link forgetFolders}, in Appearance.
    */
   readonly recentFolders: readonly string[];
+  /**
+   * Where new conversations run: `'local'`, or the id of an Artemis Server
+   * profile. The selector's top tier when a server profile exists, and the
+   * seed every {@link newSession} consults — the choice outlives the session
+   * that made it, which is the whole point of a *location*.
+   */
+  readonly runLocation: 'local' | ProfileId;
+  /** The local account to come back to when leaving a server. */
+  readonly lastLocalProfileId: ProfileId | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1485,6 +1494,13 @@ const RUN_SUMMARIES: readonly RunSummary[] = ['always', 'failures', 'never'];
  * left.
  */
 interface Prefs {
+  /**
+   * Where new conversations run: this machine, or an Artemis Server profile
+   * named by id. Sticky by design — see {@link setRunLocation}.
+   */
+  readonly runLocation?: string;
+  /** The local account to come back to when leaving a server. */
+  readonly lastLocalProfileId?: string;
   /**
    * The last directory worked in, restored as the starting point for the first
    * session of the next launch.
@@ -1966,6 +1982,10 @@ function loadPrefs(): Prefs {
     // on a control the user opens to get *out* of a bad directory.
     recentFolders: stringList(raw['recentFolders']),
     modelBySession: modelChoiceMap(raw['modelBySession']),
+    ...(typeof raw['runLocation'] === 'string' ? { runLocation: raw['runLocation'] } : {}),
+    ...(typeof raw['lastLocalProfileId'] === 'string'
+      ? { lastLocalProfileId: raw['lastLocalProfileId'] }
+      : {}),
   };
 }
 
@@ -2104,6 +2124,8 @@ function savePrefs(): void {
     sharedClaudeConfig: s.sharedClaudeConfig,
     sharedClaudeConfigAcknowledged: s.sharedClaudeConfigAcknowledged,
     contextWindows: s.contextWindows,
+    runLocation: s.runLocation,
+    ...(s.lastLocalProfileId === null ? {} : { lastLocalProfileId: s.lastLocalProfileId }),
   };
   const json = JSON.stringify(prefs);
   const file = prefsFile();
@@ -2365,6 +2387,12 @@ export const useApp = create<AppState>(() => ({
   pinnedSessions: prefs.pinnedSessions ?? [],
   pinnedCollapsed: prefs.pinnedCollapsed ?? false,
   recentFolders: initialRecentFolders(prefs),
+  // 'local' when unset or when the stored value is garbage; whether a stored
+  // server id still names a real, enabled profile is judged where it is used
+  // (`newSession`, the column) — a location can outlive its server and the
+  // honest fallback there is this machine.
+  runLocation: (prefs.runLocation ?? 'local') as 'local' | ProfileId,
+  lastLocalProfileId: (prefs.lastLocalProfileId as ProfileId | undefined) ?? null,
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -7578,6 +7606,50 @@ function applyProfile(pane: Pane, profile: ProfileMetadata): void {
  * render of a profile that has since been deleted, and honouring it would point
  * the app at an account that is not there.
  */
+/** The Artemis Server profiles a location tier can offer, enabled ones only. */
+export function serverLocationProfiles(profiles: readonly ProfileMetadata[]): readonly ProfileMetadata[] {
+  return profiles.filter((p) => p.providerId === 'artemis' && isProfileEnabled(p));
+}
+
+/**
+ * Choose where new conversations run: this machine, or a serving Artemis.
+ *
+ * Sticky by design — the choice is a *location*, not a per-session setting,
+ * so it outlives the session that made it and seeds every {@link newSession}
+ * until changed. Switching also moves the focused pane's account, under
+ * {@link setProfile}'s own rules (a live run refuses the move, exactly as it
+ * refuses any account switch). Leaving a server remembers the local account
+ * being left so 'Local' means "back where I was", not "somewhere local".
+ */
+export function setRunLocation(location: 'local' | ProfileId, pane: Pane = focusedPane()): void {
+  const s = useApp.getState();
+  const current = paneState(pane).activeProfileId;
+  const currentProfile = s.profiles.find((p) => p.id === current);
+
+  if (location === 'local') {
+    useApp.setState({ runLocation: 'local' });
+    const back =
+      s.profiles.find((p) => p.id === s.lastLocalProfileId && isProfileEnabled(p)) ??
+      s.profiles.find((p) => p.providerId !== 'artemis' && isProfileEnabled(p));
+    if (back !== undefined && back.id !== current) setProfile(back.id, pane);
+    savePrefs();
+    return;
+  }
+
+  const server = s.profiles.find((p) => p.id === location && p.providerId === 'artemis');
+  if (server === undefined) return;
+  useApp.setState({
+    runLocation: location,
+    // Only a local account is worth coming back to; hopping between two
+    // servers must not overwrite the way home.
+    ...(currentProfile !== undefined && currentProfile.providerId !== 'artemis'
+      ? { lastLocalProfileId: currentProfile.id }
+      : {}),
+  });
+  if (current !== location) setProfile(location, pane);
+  savePrefs();
+}
+
 export function setProfile(profileId: ProfileId, pane: Pane = focusedPane()): void {
   const state = paneState(pane);
   const profile = state.profiles.find((p) => p.id === profileId);
@@ -8791,6 +8863,24 @@ export function toggleQuickModel(id: string, pane: Pane = focusedPane()): void {
     profileId,
     current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id],
   );
+}
+
+/**
+ * The per-profile spellings, for a settings pane curating an account that is
+ * not the pane's own. Same store, same rules — these exist because the quick
+ * curator stopped being scoped to the focused pane the day it learned to show
+ * every profile's catalogue.
+ */
+export function toggleQuickModelFor(profileId: ProfileId, id: string): void {
+  const current = useApp.getState().quickModelIdsByProfile[profileId] ?? [];
+  writeQuickModels(
+    profileId,
+    current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id],
+  );
+}
+
+export function setQuickModelsFor(profileId: ProfileId, ids: readonly string[]): void {
+  writeQuickModels(profileId, [...ids]);
 }
 
 /** Replace one profile's pinned set — for a settings pane that edits it as a list. */
@@ -10010,6 +10100,26 @@ export function newSession(
       // An open picker was a question about the conversation being erased.
       handoffOffer: null,
     });
+  }
+
+  /*
+   * The location outranks the local recommendation: a person who chose to
+   * work on their server has said where new conversations go, and the
+   * recommender's job there is picking the *account on the server* — which
+   * the served-usage gauges answer in the column — not dragging them back to
+   * a local profile with more headroom. A stored location whose server has
+   * since been deleted or disabled falls through to the local path.
+   */
+  const location = useApp.getState().runLocation;
+  if (location !== 'local') {
+    const server = useApp
+      .getState()
+      .profiles.find((p) => p.id === location && p.providerId === 'artemis' && isProfileEnabled(p));
+    if (server !== undefined) {
+      if (server.id !== paneState(target).activeProfileId) applyProfile(target, server);
+      useApp.setState({ paletteOpen: false });
+      return target;
+    }
   }
 
   if (adoptRecommendedProfile) {

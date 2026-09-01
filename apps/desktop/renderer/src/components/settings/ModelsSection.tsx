@@ -51,24 +51,25 @@
  * gets one, which happens to sort the providers correctly without naming them.
  */
 
-import { useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { BoxesIcon, RefreshCwIcon, SearchIcon, TriangleAlertIcon } from 'lucide-react';
-import type { PlanUsage, ProviderModelOption } from '@rx-artemis/protocol';
+import type { PlanUsage, ProfileId, ProviderModelOption } from '@rx-artemis/protocol';
+import { isProfileEnabled } from '@rx-artemis/protocol';
 
 import { ReasonButton } from '../disabled-reason';
 import { ToneBadge } from '../primitives';
 import { PressureDot } from '../RunNavigator';
 import { toneFor } from '../PlanUsageMeter';
 import { SettingsGroup, SettingsPane } from './pane';
+import { call, resolveBridge } from '../../lib/bridge';
 import {
   activeEffortLevels,
   activeModels,
   activeProviderLabel,
-  paneQuickModelIds,
   refreshModels,
   setModel,
-  setQuickModels,
-  toggleQuickModel,
+  setQuickModelsFor,
+  toggleQuickModelFor,
   useApp,
 } from '../../state/store';
 import { modelExhaustion, modelPressure } from '../../state/modelFacts';
@@ -89,12 +90,71 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
 export function ModelsSection(): ReactElement {
-  const catalogue = usePane(activeModels);
+  const paneCatalogue = usePane(activeModels);
   const efforts = usePane(activeEffortLevels);
-  const providerLabel = usePane(activeProviderLabel);
-  const profileId = usePane((s) => s.activeProfileId);
-  const loading = usePane((s) => s.modelsLoading);
-  const error = usePane((s) => s.modelsError);
+  const paneProviderLabel = usePane(activeProviderLabel);
+  const paneProfileId = usePane((s) => s.activeProfileId);
+  const paneLoading = usePane((s) => s.modelsLoading);
+  const paneError = usePane((s) => s.modelsError);
+  const profiles = useApp((s) => s.profiles);
+  const providers = useApp((s) => s.providers);
+
+  /*
+   * Which account is being curated. The pane's own by default — the old
+   * behaviour exactly — and any enabled profile on request, because the quick
+   * picker this section feeds is per profile and a curator that could only
+   * reach the active one showed "only claude models" to anyone whose active
+   * profile was Claude. An override's catalogue is fetched here, not through
+   * the pane: curating an account must not switch the conversation onto it.
+   */
+  const [override, setOverride] = useState<ProfileId | null>(null);
+  const [fetched, setFetched] = useState<{
+    readonly forProfile: ProfileId;
+    readonly models: readonly ProviderModelOption[];
+    readonly live: boolean;
+    readonly error: string | null;
+  } | null>(null);
+  const curatable = useMemo(() => profiles.filter((p) => isProfileEnabled(p)), [profiles]);
+  const curatedId = override ?? paneProfileId;
+
+  useEffect(() => {
+    if (override === null) return;
+    let stale = false;
+    setFetched(null);
+    const { bridge } = resolveBridge();
+    const profile = profiles.find((p) => p.id === override);
+    if (!bridge || profile === undefined) return;
+    void call(() =>
+      bridge.providers.models({ providerId: profile.providerId, profileId: profile.id }),
+    ).then((result) => {
+      if (stale) return;
+      if (!result.ok) {
+        setFetched({ forProfile: override, models: [], live: false, error: result.error.message });
+        return;
+      }
+      setFetched({
+        forProfile: override,
+        models: result.value.models,
+        live: result.value.live === true,
+        error: null,
+      });
+    });
+    return () => {
+      stale = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [override]);
+
+  const overridden = override !== null && fetched?.forProfile === override;
+  const catalogue = override === null ? paneCatalogue : (overridden ? fetched.models : []);
+  const providerLabel =
+    override === null
+      ? paneProviderLabel
+      : (providers.find((p) => p.id === profiles.find((x) => x.id === override)?.providerId)?.label ??
+        'This provider');
+  const profileId = curatedId;
+  const loading = override === null ? paneLoading : !overridden;
+  const error = override === null ? paneError : (overridden ? fetched.error : null);
   /**
    * Whether this list came off the installed CLI.
    *
@@ -115,6 +175,25 @@ export function ModelsSection(): ReactElement {
       title="Models"
       description={`Everything ${providerLabel} will run for this profile, and which of them reach the picker under the composer.`}
       actions={
+        <>
+          {curatable.length > 1 ? (
+            <select
+              value={curatedId ?? ''}
+              onChange={(event) =>
+                setOverride(
+                  event.target.value === (paneProfileId ?? '') ? null : (event.target.value as ProfileId),
+                )
+              }
+              className="h-8 rounded border border-line bg-transparent px-1 text-xs text-ink"
+              aria-label="Profile to curate"
+            >
+              {curatable.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
         <ReasonButton
           size="sm"
           variant="outline"
@@ -125,6 +204,7 @@ export function ModelsSection(): ReactElement {
           {loading ? <Spinner className="size-3.5" /> : <RefreshCwIcon />}
           {loading ? 'Asking…' : 'Refresh'}
         </ReasonButton>
+        </>
       }
     >
       <Provenance live={live} providerLabel={providerLabel} error={error} />
@@ -143,7 +223,7 @@ export function ModelsSection(): ReactElement {
           </EmptyHeader>
         </Empty>
       ) : (
-        <Catalogue catalogue={catalogue} efforts={efforts} />
+        <Catalogue catalogue={catalogue} efforts={efforts} curatedProfileId={profileId} />
       )}
     </SettingsPane>
   );
@@ -222,13 +302,19 @@ function matches(model: ProviderModelOption, query: string): boolean {
 function Catalogue({
   catalogue,
   efforts,
+  curatedProfileId,
 }: {
   readonly catalogue: readonly ProviderModelOption[];
   readonly efforts: ReturnType<typeof activeEffortLevels>;
+  readonly curatedProfileId: ProfileId | null;
 }): ReactElement {
-  // Per profile, resolved through this pane — two columns on two accounts pin
-  // separately, and the settings pane edits the one it is looking at.
-  const quickIds = usePane(paneQuickModelIds);
+  // Per profile — the one being curated, which is the pane's own unless the
+  // section's switcher pointed it elsewhere. Pins for another account write
+  // to that account's entry and never touch the conversation.
+  const profileId = curatedProfileId;
+  const quickIds = useApp((s) =>
+    profileId === null ? [] : (s.quickModelIdsByProfile[profileId] ?? []),
+  );
   const selectedId = usePane((s) => s.model);
   const curated = quickIds.length > 0;
   /*
@@ -237,7 +323,6 @@ function Catalogue({
     Read-only: this pane renders the whole catalogue at once, and a fetch per
     row would spawn a subprocess per model.
   */
-  const profileId = usePane((s) => s.activeProfileId);
   const usage = useApp((s) =>
     profileId === null ? null : (s.planUsageByProfile[profileId] ?? null),
   );
@@ -272,7 +357,10 @@ function Catalogue({
             // active, "pin all" meaning "pin all four hundred" would be a
             // destructive misread of a button the user pressed while looking at
             // six rows — so the label counts, and the count is the filtered one.
-            onClick={() => setQuickModels([...new Set([...quickIds, ...shown.map((m) => m.id)])])}
+            onClick={() => {
+              if (profileId !== null)
+                setQuickModelsFor(profileId, [...new Set([...quickIds, ...shown.map((m) => m.id)])]);
+            }}
           >
             {query === '' ? 'Pin all' : `Pin these ${shown.length}`}
           </ReasonButton>
@@ -281,7 +369,7 @@ function Catalogue({
             variant="ghost"
             disabled={!curated}
             disabledReason="Nothing is pinned yet."
-            onClick={() => setQuickModels([])}
+            onClick={() => { if (profileId !== null) setQuickModelsFor(profileId, []); }}
           >
             Clear
           </ReasonButton>
@@ -321,6 +409,7 @@ function Catalogue({
             pinned={quickIds.includes(model.id)}
             selected={model.id === selectedId}
             usage={usage}
+            profileId={profileId}
             now={now}
           />
         ))}
@@ -383,6 +472,7 @@ function ModelRow({
   selected,
   usage,
   now,
+  profileId,
 }: {
   readonly model: ProviderModelOption;
   readonly efforts: ReturnType<typeof activeEffortLevels>;
@@ -390,6 +480,7 @@ function ModelRow({
   readonly selected: boolean;
   readonly usage: PlanUsage | null;
   readonly now: number;
+  readonly profileId: ProfileId | null;
 }): ReactElement {
   const effort = effortSummary(model, efforts);
   const name = model.displayName ?? model.label;
@@ -405,7 +496,7 @@ function ModelRow({
           // this control — so the checkbox states its own purpose rather than
           // announcing as an unnamed tick box.
           aria-label={`Show ${name} in the quick picker`}
-          onCheckedChange={() => toggleQuickModel(model.id)}
+          onCheckedChange={() => { if (profileId !== null) toggleQuickModelFor(profileId, model.id); }}
         />
       </ItemMedia>
 
