@@ -70,6 +70,8 @@ import {
   openSettings,
   planRecommendation,
   quickModels,
+  serverLocationProfiles,
+  setRunLocation,
   setFastMode,
   setModel,
   setPermissionMode,
@@ -249,6 +251,98 @@ function profilesByProvider(
  *   The column still opens: it also holds Manage and every account's sign-in
  *   state, none of which a run has any bearing on.
  */
+/**
+ * The server's accounts, as the first column when the pane runs there.
+ *
+ * Rows are the catalogue's own grouping: every route is `account/model`, so
+ * the accounts are the route prefixes and picking one picks its first model
+ * (the model column then narrows within it). Each row wears the account's
+ * gauge from the served-usage map, matched by label — the server enforces
+ * label uniqueness for exactly this reason (a slug is an address).
+ */
+function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): ReactElement {
+  const pane = usePaneRef();
+  const catalogue = usePane(activeModels);
+  const selected = usePane(activeModel);
+  const live = usePane(isLive);
+  const gauges = useApp((s) => s.planUsageByServerAccount);
+
+  const accounts = useMemo(() => {
+    const groups = new Map<string, { label: string; models: string[] }>();
+    for (const model of catalogue) {
+      const slash = model.id.indexOf('/');
+      if (slash <= 0) continue;
+      const slug = model.id.slice(0, slash);
+      let group = groups.get(slug);
+      if (group === undefined) {
+        // The catalogue writes "<account label> — <note>" into every row's
+        // note; the prefix is the display name the server uses for the
+        // account, and the slug is only its address.
+        const label = model.note.includes(' — ') ? model.note.split(' — ')[0]! : (model.note || slug);
+        group = { label, models: [] };
+        groups.set(slug, group);
+      }
+      group.models.push(model.id);
+    }
+    return [...groups.entries()].map(([slug, group]) => ({ slug, ...group }));
+  }, [catalogue]);
+
+  const gaugeFor = (label: string): { readonly usage: PlanUsage } | undefined => {
+    for (const [key, entry] of Object.entries(gauges)) {
+      if (key.startsWith(`${profileId}/`) && entry.label === label) return entry;
+    }
+    return undefined;
+  };
+
+  const activeSlug =
+    selected !== null && selected !== undefined && selected.id.includes('/')
+      ? (selected.id.split('/')[0] ?? null)
+      : null;
+
+  return (
+    <>
+      <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">
+        Account on this server
+      </DropdownMenuLabel>
+      {accounts.length === 0 ? (
+        <p className="px-2 py-1.5 text-2xs leading-snug text-ink-faint">
+          The server serves no models yet. Sign an account in from its profile card.
+        </p>
+      ) : (
+        <DropdownMenuRadioGroup
+          value={activeSlug ?? ''}
+          onValueChange={(slug) => {
+            const account = accounts.find((candidate) => candidate.slug === slug);
+            if (account !== undefined && account.models[0] !== undefined && !live) {
+              setModel(account.models[0], pane);
+            }
+          }}
+        >
+          {accounts.map((account) => {
+            const gauge = gaugeFor(account.label);
+            const window = gauge === undefined ? null : bindingWindow(gauge.usage);
+            return (
+              <DropdownMenuRadioItem
+                key={account.slug}
+                value={account.slug}
+                className="text-2xs"
+                disabled={live}
+              >
+                <span className="min-w-0 flex-1 truncate">{account.label}</span>
+                {window !== null && window.utilization !== null ? (
+                  <span className={cn('ml-2 font-mono text-2xs', toneFor(window.utilization))}>
+                    {String(Math.round(window.utilization * 100))}%
+                  </span>
+                ) : null}
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      )}
+    </>
+  );
+}
+
 function ProfileColumn(): ReactElement {
   const pane = usePaneRef();
   const profiles = useApp((s) => s.profiles);
@@ -256,9 +350,27 @@ function ProfileColumn(): ReactElement {
   const activeId = usePane((s) => s.activeProfileId);
   const live = usePane(isLive);
 
+  /*
+   * The location tier. A server is a *place that runs accounts*, not an
+   * account — so when one is configured it gets the tier above the account
+   * list, and its profile row leaves the Local sections entirely. Where the
+   * pane currently runs is read off the active profile rather than the
+   * sticky preference, so the tier can never disagree with the pane it
+   * describes; the sticky value is what `newSession` consults.
+   */
+  const servers = useMemo(() => serverLocationProfiles(profiles), [profiles]);
+  const activeProfile = profiles.find((p) => p.id === activeId);
+  const atServer = activeProfile?.providerId === 'artemis' ? activeProfile.id : null;
+
   const selectable = useMemo(
-    () => profiles.filter((p) => isProfileEnabled(p) || p.id === activeId),
-    [profiles, activeId],
+    () =>
+      profiles.filter(
+        (p) =>
+          (isProfileEnabled(p) || p.id === activeId) &&
+          // With a tier to hold them, servers are locations, not rows here.
+          (servers.length === 0 || p.providerId !== 'artemis'),
+      ),
+    [profiles, activeId, servers],
   );
   const sections = useMemo(
     () => profilesByProvider(selectable, providers),
@@ -267,6 +379,37 @@ function ProfileColumn(): ReactElement {
 
   return (
     <Column>
+      {servers.length > 0 ? (
+        <>
+          <DropdownMenuLabel className="chrome-label text-2xs text-ink-faint">
+            Where
+          </DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={atServer ?? 'local'}
+            onValueChange={(value) => setRunLocation(value as 'local' | ProfileId, pane)}
+          >
+            <DropdownMenuRadioItem value="local" className="text-2xs" disabled={live}>
+              This Mac
+            </DropdownMenuRadioItem>
+            {servers.map((server) => (
+              <DropdownMenuRadioItem
+                key={server.id}
+                value={server.id}
+                className="text-2xs"
+                disabled={live}
+              >
+                {server.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+        </>
+      ) : null}
+
+      {atServer !== null ? (
+        <ServerAccountRows profileId={atServer} />
+      ) : (
+        <>
       {/* Suppressed rather than disabled while a run is going: this row is an
           action ("take me there") and there is nowhere to be taken. The line
           below says why, which is more use than a greyed shortcut. */}
@@ -331,6 +474,8 @@ function ProfileColumn(): ReactElement {
             </Fragment>
           ))}
         </DropdownMenuRadioGroup>
+      )}
+        </>
       )}
 
       <DropdownMenuSeparator />
