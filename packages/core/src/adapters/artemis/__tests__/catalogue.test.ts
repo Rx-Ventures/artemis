@@ -38,12 +38,46 @@ describe('parseServerModels', () => {
         displayName: 'Claude Sonnet 5',
         resolvedModel: 'claude-sonnet-5',
         note: 'Work — Fast and steady.',
+        accountSlug: 'work',
+        accountLabel: 'Work',
         tier: 1,
         supportsFastMode: false,
         supportsUltracode: true,
         adaptiveThinking: false,
       },
     ]);
+  });
+
+  it('carries the serving profile whole — id, slug and label', () => {
+    const [option] = parseServerModels({
+      models: [
+        {
+          route: 'work-max/opus',
+          label: 'Opus 5',
+          note: 'Deep work.',
+          profileId: 'e4966faa-6e1a-4713-afb9-292dea6a05a7',
+          profileSlug: 'work-max',
+          profileLabel: 'work max',
+        },
+      ],
+    });
+    expect(option?.accountId).toBe('e4966faa-6e1a-4713-afb9-292dea6a05a7');
+    expect(option?.accountSlug).toBe('work-max');
+    expect(option?.accountLabel).toBe('work max');
+  });
+
+  it('reads the slug off the route against a server that never sent one', () => {
+    const [prefixed, bare] = parseServerModels({
+      models: [
+        { route: 'work-max/opus', label: 'Opus 5', note: '' },
+        { route: 'no-slash', label: 'Odd', note: '' },
+      ],
+    });
+    expect(prefixed?.accountSlug).toBe('work-max');
+    expect(prefixed !== undefined && 'accountId' in prefixed).toBe(false);
+    expect(prefixed !== undefined && 'accountLabel' in prefixed).toBe(false);
+    // A route with no prefix names no account, and must not invent one.
+    expect(bare !== undefined && 'accountSlug' in bare).toBe(false);
   });
 
   it('maps thinkingLevels to the effort ids each route accepts', () => {
