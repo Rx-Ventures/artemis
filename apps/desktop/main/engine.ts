@@ -117,6 +117,7 @@ import { AgentPromptStore } from './agentPrompts.js';
 import { anyBankAvailable, banksForRun, configureMemoryBanks, isMasterEnabled, promptBanks, syncMemoryBanksInBackground } from './memoryBanks.js';
 import { EngineUnavailableError, ValidationError } from './errors.js';
 import { createLogger } from './log.js';
+import { ensureSignInForwarder, stopSignInForwarder } from './signInLoopback.js';
 import { createMemoryBankSecrets } from './memoryBankSecrets.js';
 import { createProfileSecrets } from './profileSecrets.js';
 import { configureSecretManagers, resolveSecretRef } from './secretManagers.js';
@@ -971,6 +972,30 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     return [...bridged, ...marketplace];
   };
 
+  /**
+   * Keep the local end of a loopback sign-in in step with the flow.
+   *
+   * Reads the same status object the card renders: a live flow that names a
+   * port gets a forwarder, and a settled or portless one gets any forwarder
+   * torn down. Driven from both the start call and the status poll, because
+   * either can be the first to see the port — or the settle.
+   */
+  const syncSignInForwarder = (
+    accountId: string,
+    status: { readonly state?: string; readonly loopbackPort?: number } | null,
+    env: EnvBundle,
+  ): void => {
+    const port = status?.loopbackPort;
+    const settled =
+      status === null ||
+      status.state === 'done' ||
+      status.state === 'failed' ||
+      status.state === 'cancelled' ||
+      status.state === 'expired';
+    if (port !== undefined && !settled) ensureSignInForwarder({ accountId, port, env });
+    else stopSignInForwarder(accountId);
+  };
+
   const runs = new RunRegistry({
     resolveAdapter: (id) => providers.get(id),
     // The only path a credential takes into a run. `providerId` is read, not
@@ -1555,17 +1580,27 @@ function createEngine(options: EngineOptions): ArtemisEngine {
     deleteRemoteAccount: async (profileId, accountId) =>
       deleteRemoteAccount(await remoteEnvFor(profileId), accountId),
 
-    startRemoteSignIn: async (profileId, accountId) =>
-      startRemoteSignIn(await remoteEnvFor(profileId), accountId),
+    startRemoteSignIn: async (profileId, accountId) => {
+      const env = await remoteEnvFor(profileId);
+      const status = await startRemoteSignIn(env, accountId);
+      syncSignInForwarder(accountId, status, env);
+      return status;
+    },
 
-    remoteSignInStatus: async (profileId, accountId) =>
-      readRemoteSignIn(await remoteEnvFor(profileId), accountId),
+    remoteSignInStatus: async (profileId, accountId) => {
+      const env = await remoteEnvFor(profileId);
+      const status = await readRemoteSignIn(env, accountId);
+      syncSignInForwarder(accountId, status, env);
+      return status;
+    },
 
     submitRemoteSignInCode: async (profileId, accountId, code) =>
       submitRemoteSignInCode(await remoteEnvFor(profileId), accountId, code),
 
-    cancelRemoteSignIn: async (profileId, accountId) =>
-      cancelRemoteSignIn(await remoteEnvFor(profileId), accountId),
+    cancelRemoteSignIn: async (profileId, accountId) => {
+      stopSignInForwarder(accountId);
+      return cancelRemoteSignIn(await remoteEnvFor(profileId), accountId);
+    },
 
     getSessionMessages: async (query) => {
       const profile = await profiles.require(query.profileId);

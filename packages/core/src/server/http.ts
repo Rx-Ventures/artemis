@@ -1832,7 +1832,7 @@ async function handleProfileAdminRoute(
   connection: ServerConnection,
   path: string,
   method: string,
-): Promise<ServerReply> {
+): Promise<ServerReply | ServerStreamReply> {
   const missing = (): ServerReply =>
     fail(404, 'invalid_request_error', 'unknown_endpoint', `No route for ${path}.`);
 
@@ -1871,8 +1871,13 @@ async function handleProfileAdminRoute(
   const rest = path.slice(`${apiPrefix}/profiles/`.length);
   const separator = rest.indexOf('/');
   const action = separator < 0 ? '' : rest.slice(separator + 1);
-  // Enumerated, so an unknown sub-path 404s before an id is even decoded.
-  if (action !== '' && action !== 'signin' && action !== 'signin/code') return missing();
+  // Enumerated, so an unknown sub-path 404s before an id is even decoded. The
+  // oauth prefix is the one open-ended member: everything under it is a path
+  // on the login's own loopback server, relayed below.
+  const oauthRelay = action === 'signin/oauth' || action.startsWith('signin/oauth/');
+  if (action !== '' && action !== 'signin' && action !== 'signin/code' && !oauthRelay) {
+    return missing();
+  }
 
   let profileId: string;
   try {
@@ -1881,6 +1886,66 @@ async function handleProfileAdminRoute(
     return fail(400, 'invalid_request_error', 'invalid_url', 'The account id could not be parsed.');
   }
   if (profileId.length === 0) return missing();
+
+  /*
+   * The login's own web pages, relayed.
+   *
+   * A provider like Codex signs in through a server its CLI runs on the
+   * serving machine's loopback — an address only that machine can open. While
+   * such a flow is live, everything under `signin/oauth/` is relayed to it:
+   * the client forwards the same port locally, the person's browser talks to
+   * the client, and the OAuth round trip lands where the CLI is listening.
+   *
+   * GET and HEAD only. The flows this exists for complete over redirects and
+   * query strings; refusing writes keeps the relay from becoming a general
+   * tunnel into the serving machine's loopback. The director's answer is the
+   * whole gate: a defined port both authorises the relay and names its
+   * target, and everything else is the enumeration-proof 404.
+   */
+  if (oauthRelay) {
+    if (method !== 'GET' && method !== 'HEAD') {
+      return fail(405, 'invalid_request_error', 'method_not_allowed', 'The sign-in relay takes GET.');
+    }
+    const port = signIns.loopbackPort(profileId);
+    if (port === undefined) return missing();
+    const sub = action === 'signin/oauth' ? '/' : action.slice('signin/oauth'.length);
+    const query = request.url.includes('?') ? request.url.slice(request.url.indexOf('?')) : '';
+    let upstream: Response;
+    try {
+      upstream = await fetch(`http://127.0.0.1:${String(port)}${sub}${query}`, {
+        method,
+        // Redirects go back to the person's browser untouched: a Location the
+        // relay followed itself would complete the provider's hop server-side
+        // and strand the flow's own callback.
+        redirect: 'manual',
+        headers: {
+          ...(request.headers['accept'] === undefined ? {} : { accept: request.headers['accept'] }),
+          ...(request.headers['cookie'] === undefined ? {} : { cookie: request.headers['cookie'] }),
+        },
+      });
+    } catch {
+      return fail(
+        502,
+        'invalid_request_error',
+        'relay_failed',
+        'The sign-in flow is no longer listening. Start the sign-in again.',
+      );
+    }
+    const passed: Record<string, string> = {};
+    for (const name of ['content-type', 'location', 'set-cookie', 'cache-control']) {
+      const value = upstream.headers.get(name);
+      if (value !== null) passed[name] = value;
+    }
+    const text = method === 'HEAD' ? '' : await upstream.text();
+    return {
+      status: upstream.status,
+      headers: passed,
+      connectionId: connection.id,
+      stream: (async function* () {
+        if (text.length > 0) yield text;
+      })(),
+    };
+  }
 
   /*
    * The account itself: PATCH changes it, DELETE removes it.

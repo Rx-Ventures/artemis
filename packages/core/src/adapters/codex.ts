@@ -334,6 +334,11 @@ export const CODEX_CREDENTIALS: ProviderCredentialSpec = {
   signIn: {
     executable: CODEX_EXECUTABLE,
     loginArgs: ['login'],
+    // `codex login` serves its OAuth on localhost:1455 and prints that URL.
+    // Declared so a serving Artemis can proxy the port and a client can
+    // forward it — without this, the printed address only works inside the
+    // machine (or container) running the CLI.
+    loopbackPort: 1455,
     statusArgs: ['login', 'status'],
     logoutArgs: ['logout'],
     parseStatus: parseCodexAuthStatus,
