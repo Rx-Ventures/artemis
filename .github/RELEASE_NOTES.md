@@ -1,6 +1,15 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.1
+
+**Archiving a conversation on a server sticks.** The tag was written and
+reported successfully, and the next listing showed the conversation live
+again — the wire shape for a served session had no field to carry a tag
+home, so the row builder dropped what the store had just been told. Deleting
+looked like the only verb that worked because deletion shows in the absence
+of a row and a tag only shows in the presence of one.
+
 ## What's new in 2.4.0
 
 **Your window hears its runs again.** The one-line bug behind a day of
