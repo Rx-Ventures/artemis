@@ -32,10 +32,28 @@ export function separatorFor(platform: Platform): string {
 }
 
 /**
+ * The platform whose path rules apply to the pane's working directories.
+ *
+ * A local bridge's paths are this window's own, spelled the way its OS spells
+ * them. A remote bridge's directories live on the *serving* machine, which is
+ * POSIX by the server's own contract — its validators accept nothing else —
+ * so validating a typed path there must not ask how this window's OS spells
+ * an absolute path: a Windows window connected to a server would reject
+ * `/srv/work`, the only shape the far side will take. One function, so the
+ * next component that needs the rule cannot fork it.
+ */
+export function pathPlatformFor(bridgeMode: string, platform: Platform): Platform {
+  return bridgeMode === 'remote' ? 'linux' : platform;
+}
+
+/**
  * Is this an absolute path, on the given platform?
  *
  * Mirrors what `node:path.isAbsolute` would say, which is what the main process
- * actually enforces. Deliberately platform-specific rather than "starts with a
+ * actually enforces — for the machine the paths belong to, which in remote
+ * bridge mode is the serving one: pass the platform through
+ * {@link pathPlatformFor} rather than reading the window's own. Deliberately
+ * platform-specific rather than "starts with a
  * slash or has a drive letter": telling a macOS user that `C:\src` is fine and
  * then having the backend reject it is worse than rejecting it here.
  */

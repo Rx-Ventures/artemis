@@ -51,6 +51,7 @@ import {
   inferHomeDirectory,
   isAbsolutePath,
   lastSegment,
+  pathPlatformFor,
   shortenPath,
   sortFoldersByName,
   type Platform,
@@ -107,7 +108,11 @@ export function DirectoryChooser({
 }: DirectoryChooserProps): ReactElement {
   const pane = usePaneRef();
   const cwd = usePane((s) => s.cwd);
-  const platform = useApp((s) => s.platform);
+  const localPlatform = useApp((s) => s.platform);
+  const bridgeMode = useApp((s) => s.bridgeMode);
+  // The serving machine's rule in remote mode, this window's otherwise —
+  // `pathPlatformFor` carries the why.
+  const platform = pathPlatformFor(bridgeMode, localPlatform);
   const [draft, setDraft] = useState(cwd);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

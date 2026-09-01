@@ -104,6 +104,15 @@ describe('the run-start allowlist', () => {
   it('refuses a relative or NUL-bearing path', () => {
     expect(() => readRunInput({ input: { ...base, cwd: 'relative' } })).toThrow(/cwd/);
     expect(() => readRunInput({ input: { ...base, cwd: '/w/x\0/etc' } })).toThrow(/NUL/);
+    // A Windows client's local directory is still refused when *sent* — the
+    // omission below is the escape, not a laxer rule.
+    expect(() => readRunInput({ input: { ...base, cwd: 'C:\\Users\\x' } })).toThrow(/cwd/);
+  });
+
+  it('lets a caller omit the cwd entirely — the pin will decide', () => {
+    const { cwd: _cwd, ...rest } = base;
+    const parsed = readRunInput({ input: rest });
+    expect(parsed.cwd).toBeUndefined();
   });
 
   it('bounds the prompt, the system prompt and the metadata', () => {
@@ -192,6 +201,29 @@ describe('POST /api/v0/runs, against the pin', () => {
     });
     expect(reply.status).toBe(200);
     expect(started[0]?.additionalDirectories).toEqual([resolve('/w/vendor'), resolve('/w/docs')]);
+  });
+
+  it('roots a run at the pin when the body names no cwd', async () => {
+    // The Windows-client case: the pane's local directory names a path on the
+    // wrong machine, so the bridge leaves it off and the pin answers.
+    started.length = 0;
+    const { cwd: _cwd, ...rest } = base;
+    const reply = await post(rest);
+    expect(reply.status).toBe(200);
+    expect(started[0]?.cwd).toBe(resolve('/w'));
+  });
+
+  it('still confines extra roots when the cwd is absent', async () => {
+    // The list is filtered by field name, not position — an omitted cwd must
+    // not shift the first extra root out of confinement.
+    started.length = 0;
+    const { cwd: _cwd, ...rest } = base;
+    const ok = await post({ ...rest, additionalDirectories: ['/w/vendor'] });
+    expect(ok.status).toBe(200);
+    expect(started[0]?.additionalDirectories).toEqual([resolve('/w/vendor')]);
+
+    const escape = await post({ ...rest, additionalDirectories: ['/etc'] });
+    expect(escape.status).toBe(403);
   });
 
   it('refuses extra roots on a connection with no directory to widen', async () => {
