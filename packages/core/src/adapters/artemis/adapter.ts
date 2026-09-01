@@ -144,12 +144,12 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // A message can be steered into the turn already in flight —
   // `POST /api/v0/runs/{id}/messages` — so the composer stays live mid-run.
   midRunSteering: true,
-  // Still empty, and deliberately: the server refuses a mode switch from a
-  // connection token (see `reviewPermissionDecision`), and a run's mode is the
-  // serving user's setting rather than this client's to pick. An approval
-  // surface needs no mode picker, so offering one would claim a control the wire
-  // refuses.
-  permissionModes: [],
+  // The person answering the prompts picks how they are asked. Carried on the
+  // wire as a request; the server drops modes the serving provider lacks, and
+  // an older server drops the field entirely — both degrade to the serving
+  // user's setting. The trust argument is on the wire type: a client that can
+  // approve every remote prompt already holds everything a mode grants.
+  permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],
   // Still false, for the reason the module header gives: the remote agent's
   // instructions are the serving user's settings, and the completions route
   // deliberately takes no system prompt from an HTTP caller (see
@@ -407,6 +407,13 @@ class ArtemisRun implements Run {
         // — which is the graceful degradation, an old server keeping today's
         // read-only behaviour.
         remote: { detach: true, permissions: true },
+        // A request, dropped by the server when the serving provider lacks
+        // the mode — and by an older server that has never heard the field.
+        // Either way the run opens in the serving user's setting, which is
+        // yesterday's behaviour exactly.
+        ...(this.#input.permissionMode === undefined
+          ? {}
+          : { permissionMode: this.#input.permissionMode }),
       };
       const response = await fetch(`${root}/v1/chat/completions`, {
         method: 'POST',
@@ -978,20 +985,6 @@ export function createArtemisAdapter(): ProviderAdapter {
       // follows, and doubly important where the run happens on another
       // machine: silently dropping a setting here means it is silently
       // different over there.
-      if (input.permissionMode !== undefined) {
-        // Refused rather than dropped — the strict-adapter rule, and load-bearing
-        // here: the completions route deliberately takes no permission mode from
-        // an HTTP caller (see `RunSource.startRun`), so a mode set here would run
-        // under the serving user's setting regardless, silently different from
-        // what was asked. A remote client answers prompts; it does not choose the
-        // mode they are asked in.
-        return Promise.reject(
-          adapterError(
-            'invalid_request',
-            "An Artemis-server run's permission mode is the serving user's setting — it cannot be chosen from here.",
-          ),
-        );
-      }
       if (input.forkSession === true || input.rewindToMessageId !== undefined) {
         return Promise.reject(
           adapterError('invalid_request', 'The Artemis server cannot fork or rewind a session yet.'),

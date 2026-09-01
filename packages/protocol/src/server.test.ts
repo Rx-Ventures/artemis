@@ -113,6 +113,16 @@ describe('readChatExtensions', () => {
     expect(readChatExtensions({})).toEqual({});
   });
 
+  it('carries a requested permission mode, and drops a non-string one', () => {
+    expect(readChatExtensions({ artemis: { permissionMode: 'acceptEdits' } })).toEqual({
+      permissionMode: 'acceptEdits',
+    });
+    // The value is not validated against a mode list here on purpose: which
+    // modes exist is the serving provider's fact, and the host is the one
+    // that clamps against it. What this parser refuses is only the caller bug.
+    expect(readChatExtensions({ artemis: { permissionMode: 7 } })).toEqual({});
+  });
+
   it('drops a remote block that says nothing it can act on', () => {
     // Same rule as every other field: unknown keys drop, wrong types drop, and
     // a client that meant it sends a boolean. Half-honouring `detach: 1` would

@@ -282,9 +282,22 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     );
   });
 
+  /**
+   * A requested permission mode, kept only when the serving provider really
+   * has it. Dropping rather than erroring is the wire's own convention — an
+   * unsupported mode leaves the run in the serving user's setting, which is
+   * exactly what every request got before modes could travel.
+   */
+  const clampMode = (providerId: ProviderId, mode: string | undefined): string | undefined => {
+    if (mode === undefined) return undefined;
+    const capabilities = providers.get(providerId)?.capabilities;
+    return capabilities?.permissionModes.includes(mode as never) === true ? mode : undefined;
+  };
+
   const runSource: RunSource = {
-    startRun: (input) =>
-      runs.start({
+    startRun: (input) => {
+      const permissionMode = clampMode(input.providerId as ProviderId, input.permissionMode);
+      return runs.start({
         providerId: input.providerId as ProviderId,
         profileId: input.profileId as ProfileId,
         cwd: input.cwd,
@@ -296,7 +309,9 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
         ...(input.resumeSessionId === undefined
           ? {}
           : { resumeSessionId: input.resumeSessionId as never }),
-      } as never),
+        ...(permissionMode === undefined ? {} : { permissionMode: permissionMode as never }),
+      } as never);
+    },
     subscribe: (listener) => runs.subscribe(listener),
     interrupt: async (runId) => {
       await runs.interrupt(runId as RunId);

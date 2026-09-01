@@ -381,10 +381,15 @@ describe('what a run refuses up front', () => {
     ).rejects.toMatchObject({ agentError: { code: 'invalid_request' } });
   });
 
-  it('a permission mode, which the server would silently not honour', async () => {
-    await expect(
-      adapter.createRun({ ...base, permissionMode: 'default' } as unknown as ResolvedRunInput),
-    ).rejects.toMatchObject({ agentError: { code: 'invalid_request' } });
+  it('no longer refuses a permission mode: the wire carries it now', async () => {
+    // The refusal existed while the completions route took no mode from an
+    // HTTP caller; both ends speak it today, and an older server drops the
+    // field — degradation, not silent difference. The run must accept it.
+    const run = await adapter.createRun({
+      ...base,
+      permissionMode: 'acceptEdits',
+    } as unknown as ResolvedRunInput);
+    expect(run).toBeDefined();
   });
 
   it('fork and rewind, which the wire cannot carry yet', async () => {
