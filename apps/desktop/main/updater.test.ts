@@ -22,11 +22,16 @@
  *    to be final: a machine that saw 1.10.1 kept being handed 1.10.1 after
  *    1.11.0 shipped, because both the menu's check and the install trusted the
  *    version they already had.
+ *  - `removeTree` must remove a tree on the platform running the suite. It
+ *    shelled out to a hardcoded `/bin/rm`, so on Windows it rejected on every
+ *    call, and the `finally` that ran it turned a check that had read the feed
+ *    into one reporting it unreachable — for three releases, because the cases
+ *    below that drive a real check were skipped off macOS.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -54,6 +59,7 @@ const {
   feedToInstall,
   fetchAnonymously,
   fetchAsset,
+  removeTree,
   sha512Of,
   throttleProgress,
 } = await import('./updater');
@@ -80,6 +86,34 @@ async function serve(handler: Parameters<typeof createServer>[1]): Promise<strin
 function stubFetchWith(body: string): void {
   vi.stubGlobal('fetch', (() => Promise.resolve(new Response(body))) as typeof fetch);
 }
+
+/** The staging directories a check makes, and is supposed to take away again. */
+function leftoverCheckDirs(): string[] {
+  return readdirSync(tmpdir()).filter((entry) => entry.startsWith('artemis-update-check-'));
+}
+
+describe('removeTree', () => {
+  it('removes a populated tree on the platform it is running on', async () => {
+    // `/bin/rm` was unconditional through 2.4.2, so on Windows this rejected
+    // with ENOENT for a path that plainly exists — and the updater awaited it
+    // in a `finally`, which is how a check that had read the feed came back
+    // saying the feed could not be reached.
+    const dir = await mkdtemp(join(tmpdir(), 'artemis-test-remove-'));
+    await mkdir(join(dir, 'nested'), { recursive: true });
+    await writeFile(join(dir, 'nested', 'artifact.bin'), randomBytes(32));
+
+    await expect(removeTree(dir)).resolves.toBeUndefined();
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('treats an absent path as already removed', async () => {
+    // The `-f` half of `-rf`, which the callers rely on: two of the three run
+    // in a `finally` that can be reached before the directory was ever made.
+    const gone = join(tmpdir(), `artemis-test-absent-${randomBytes(8).toString('hex')}`);
+
+    await expect(removeTree(gone)).resolves.toBeUndefined();
+  });
+});
 
 describe('fetchAnonymously', () => {
   it('gives up on a server that accepts the connection and never answers', async () => {
@@ -249,79 +283,119 @@ describe('feedToInstall', () => {
   });
 });
 
-// Each of these drives a real check against a stubbed feed, so they need the
-// platform the updater actually supports.
-describe.runIf(process.platform === 'darwin')('checking again over a standing offer', () => {
-  const feedFor = (version: string): string =>
-    `version: ${version}\npath: Artemis-${version}-arm64-mac.zip\nsha512: irrelevant\n`;
+// Each of these drives a real check against a stubbed feed, so they need a
+// platform the updater actually supports — which is *both* of them, and used
+// to be read as macOS alone. That reading is what let an unconditional
+// `/bin/rm` in the cleanup path turn every Windows check into an unreachable
+// feed across three releases: the tests that would have caught it on the spot
+// were the ones being skipped there.
+describe.runIf(process.platform === 'darwin' || process.platform === 'win32')(
+  'checking again over a standing offer',
+  () => {
+    // The feed names the artifact this platform installs, because a feed naming
+    // any other extension is refused by `parseUpdateFeed` and would make every
+    // case below pass for the wrong reason.
+    const feedFor = (version: string): string => {
+      const artifact =
+        process.platform === 'win32'
+          ? `Artemis-${version}-x64-setup.exe`
+          : `Artemis-${version}-arm64-mac.zip`;
+      return `version: ${version}\npath: ${artifact}\nsha512: irrelevant\n`;
+    };
 
-  const updaterInTemp = async (): Promise<ReturnType<typeof createUpdater>> =>
-    createUpdater({
-      userDataDir: await mkdtemp(join(tmpdir(), 'artemis-test-recheck-')),
-      broadcast: () => undefined,
+    const updaterInTemp = async (): Promise<ReturnType<typeof createUpdater>> =>
+      createUpdater({
+        userDataDir: await mkdtemp(join(tmpdir(), 'artemis-test-recheck-')),
+        broadcast: () => undefined,
+      });
+
+    it('reports what it read rather than an unreachable feed', async () => {
+      // The plainest thing a check can be asked, and the one that was false on
+      // Windows for three releases: the feed downloaded, parsed and compared
+      // fine, and then the cleanup that ran after the answer was in hand threw
+      // and took the answer with it.
+      const updater = await updaterInTemp();
+      stubFetchWith(feedFor('9.9.9'));
+
+      await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '9.9.9' });
     });
 
-  it('replaces the offer when a newer release has shipped since', async () => {
-    const updater = await updaterInTemp();
-    stubFetchWith(feedFor('9.9.9'));
-    await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '9.9.9' });
+    it('leaves nothing of its own behind in the temp directory', async () => {
+      // Each check works in a fresh `artemis-update-check-` directory and is
+      // meant to take it away again. The husks are what a failing cleanup
+      // leaves, and on Windows there was one per check, forever.
+      const updater = await updaterInTemp();
+      const before = leftoverCheckDirs();
+      stubFetchWith(feedFor('9.9.9'));
 
-    stubFetchWith(feedFor('10.0.0'));
-    await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '10.0.0' });
-    expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
-  });
+      await updater.checkNow();
 
-  it('leaves the card exactly as it was when the feed cannot be read', async () => {
-    const updater = await updaterInTemp();
-    stubFetchWith(feedFor('9.9.9'));
-    await updater.checkNow();
+      expect(leftoverCheckDirs()).toEqual(before);
+    });
 
-    // A proxy's error page, or anything else that is not a feed.
-    stubFetchWith('<html><body>404</body></html>');
-    await expect(updater.checkNow()).resolves.toEqual({ kind: 'unreachable' });
-    expect(updater.state()).toMatchObject({ phase: 'available', version: '9.9.9' });
-  });
+    it('replaces the offer when a newer release has shipped since', async () => {
+      const updater = await updaterInTemp();
+      stubFetchWith(feedFor('9.9.9'));
+      await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '9.9.9' });
 
-  /*
-   * The periodic check, driven for real: `start()` puts the first one 15
-   * seconds out, so the clock is faked to get there. Nothing else in the path
-   * is timer-driven — the stubbed fetch, `mkdtemp` and `/bin/rm` all run on the
-   * event loop — which is why `waitFor` can pick up the result afterwards.
-   */
-  it('refreshes a card nobody has touched when a newer release ships', async () => {
-    vi.useFakeTimers();
-    const updater = await updaterInTemp();
-    try {
+      stubFetchWith(feedFor('10.0.0'));
+      await expect(updater.checkNow()).resolves.toEqual({ kind: 'offered', version: '10.0.0' });
+      expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
+    });
+
+    it('leaves the card exactly as it was when the feed cannot be read', async () => {
+      const updater = await updaterInTemp();
       stubFetchWith(feedFor('9.9.9'));
       await updater.checkNow();
-      expect(updater.state().version).toBe('9.9.9');
 
-      // The card sits there. A newer release ships, and the timer is the only
-      // thing that notices — which is the case this whole path exists for.
-      stubFetchWith(feedFor('10.0.0'));
-      updater.start();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await vi.waitFor(() => {
-        expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
-      });
-    } finally {
-      updater.stop();
-      vi.useRealTimers();
-    }
-  });
+      // A proxy's error page, or anything else that is not a feed.
+      stubFetchWith('<html><body>404</body></html>');
+      await expect(updater.checkNow()).resolves.toEqual({ kind: 'unreachable' });
+      expect(updater.state()).toMatchObject({ phase: 'available', version: '9.9.9' });
+    });
 
-  it('takes the card down when the feed no longer offers anything newer', async () => {
-    // The offered release was pulled after it was published: the card is
-    // holding a version that would 404 at the download, so it comes down.
-    const updater = await updaterInTemp();
-    stubFetchWith(feedFor('9.9.9'));
-    await updater.checkNow();
+    /*
+     * The periodic check, driven for real: `start()` puts the first one 15
+     * seconds out, so the clock is faked to get there. Nothing else in the path
+     * is timer-driven — the stubbed fetch, `mkdtemp` and the tree removal all
+     * run on the event loop — which is why `waitFor` can pick up the result
+     * afterwards.
+     */
+    it('refreshes a card nobody has touched when a newer release ships', async () => {
+      vi.useFakeTimers();
+      const updater = await updaterInTemp();
+      try {
+        stubFetchWith(feedFor('9.9.9'));
+        await updater.checkNow();
+        expect(updater.state().version).toBe('9.9.9');
 
-    stubFetchWith(feedFor('0.1.0')); // …which is the running version.
-    await expect(updater.checkNow()).resolves.toEqual({ kind: 'current' });
-    expect(updater.state().phase).toBe('idle');
-  });
-});
+        // The card sits there. A newer release ships, and the timer is the only
+        // thing that notices — which is the case this whole path exists for.
+        stubFetchWith(feedFor('10.0.0'));
+        updater.start();
+        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.waitFor(() => {
+          expect(updater.state()).toMatchObject({ phase: 'available', version: '10.0.0' });
+        });
+      } finally {
+        updater.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it('takes the card down when the feed no longer offers anything newer', async () => {
+      // The offered release was pulled after it was published: the card is
+      // holding a version that would 404 at the download, so it comes down.
+      const updater = await updaterInTemp();
+      stubFetchWith(feedFor('9.9.9'));
+      await updater.checkNow();
+
+      stubFetchWith(feedFor('0.1.0')); // …which is the running version.
+      await expect(updater.checkNow()).resolves.toEqual({ kind: 'current' });
+      expect(updater.state().phase).toBe('idle');
+    });
+  },
+);
 
 /* -------------------------------------------------------------------------- */
 /* Progress                                                                   */

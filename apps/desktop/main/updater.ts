@@ -65,9 +65,10 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
-// `rm` is used only on the pending-update directory, which holds a single
-// downloaded installer. Removing a tree that can hold an *app bundle* still
-// goes through `removeTree` below, for a reason documented there.
+// `rm` is what clears the pending-update directory, which holds a single
+// downloaded installer, and what `removeTree` reduces to off macOS. Removing a
+// tree that can hold an *app bundle* is the case that cannot use it directly,
+// for a reason documented on `removeTree` below.
 import {
   copyFile,
   mkdir,
@@ -315,15 +316,15 @@ export interface UpdaterOptions {
 }
 
 /**
- * Delete a directory tree, through `/bin/rm` rather than `fs.rm`.
+ * Delete a directory tree: `/bin/rm` on macOS, `fs.rm` everywhere else.
  *
- * ## Not `fs.rm`, and not as a matter of taste
+ * ## Not `fs.rm` on macOS, and not as a matter of taste
  *
  * Electron patches `fs` so that an `.asar` archive is transparently a
- * *directory*. Every tree this module removes can contain one — a parked app
- * bundle and the staging directory both hold `Contents/Resources/app.asar` —
- * so a recursive `fs.rm` descends *into* the archive rather than unlinking it,
- * cannot empty the directory it believes it is looking at, and fails with
+ * *directory*. Every tree removed on the macOS path can contain one — a parked
+ * app bundle and the staging directory both hold `Contents/Resources/app.asar`
+ * — so a recursive `fs.rm` descends *into* the archive rather than unlinking
+ * it, cannot empty the directory it believes it is looking at, and fails with
  * `ENOTEMPTY`. `force: true` does not cover that: it swallows `ENOENT` only.
  *
  * What shipped, from the updater's first release through 0.5.0, was therefore a
@@ -333,15 +334,36 @@ export interface UpdaterOptions {
  * `process.noAsar = true` fixes it too, and is worse here: it is a
  * process-global flag, so holding it across an `await` disables asar resolution
  * for everything else in the main process, including a window loading its
- * renderer entry from inside `app.asar`. `/bin/rm` holds no opinion about asar,
- * is the idiom `ditto` and `gh` above already establish for this module, and
- * exists on the only platform the updater runs on.
+ * renderer entry from inside `app.asar`. `/bin/rm` holds no opinion about asar
+ * and is the idiom `ditto` above already establishes for the macOS install.
  *
- * Used for every tree here, including the one that holds nothing but a feed
- * file. "Which of these can contain an .asar?" is the question that produced
- * the bug, and it is better not to leave it standing.
+ * ## Why the branch exists
+ *
+ * `/bin/rm` was unconditional through 2.4.2, on the reasoning that it "exists
+ * on the only platform the updater runs on" — which was false the moment
+ * {@link supported} started answering `true` for `win32`. On Windows that path
+ * resolves against the current drive as `C:\bin\rm`, so every call rejected
+ * with `ENOENT`, and because {@link createUpdater}'s `readFeed` awaited this in
+ * a `finally`, a feed that had downloaded and parsed perfectly was discarded
+ * and reported as an unreachable one. Every Windows install from 2.3.0 to 2.4.2
+ * therefore claimed it could not reach the update server, on a machine that had
+ * just reached it, and could only be updated by hand.
+ *
+ * Windows needs no subprocess to get this right. Nothing it removes holds an
+ * `.asar`: its artifact is a setup exe, so the staging tree holds that, the
+ * check tree holds a feed file, and the parked-bundle sweep is macOS-only. The
+ * reason for shelling out simply does not arise, and `fs.rm` is already the
+ * idiom `sweepLeftovers` uses on `pendingDir` for exactly that reason.
+ *
+ * Exported so the Windows CI job can pin it. "Which of these can contain an
+ * .asar?" is the question that produced the 0.5.0 bug and "which platform is
+ * this?" is the question that produced this one; neither is left standing.
  */
-async function removeTree(path: string): Promise<void> {
+export async function removeTree(path: string): Promise<void> {
+  if (process.platform !== 'darwin') {
+    await rm(path, { recursive: true, force: true });
+    return;
+  }
   await execFileAsync('/bin/rm', ['-rf', path], { timeout: 5 * 60 * 1000 });
 }
 
@@ -354,17 +376,28 @@ async function removeTree(path: string): Promise<void> {
 // with behaviour worth pinning — the timeout and the basename reduction — are
 // exported where a test can reach them.
 
-/** An executable `gh`, from PATH or the usual homes, or null. */
+/**
+ * An executable `gh`, from PATH or the usual homes, or null.
+ *
+ * `gh.exe` first on Windows, because a bare `gh` is not a program there and
+ * the installed CLI is `gh.exe` — so the fallback route this function exists
+ * to find was never once found on Windows, and every anonymous failure went
+ * straight to the user as a dead end. It stays in the candidate list behind
+ * `.exe` only to cover a shim someone put on PATH themselves.
+ */
 function resolveGh(): string | null {
+  const names = process.platform === 'win32' ? ['gh.exe', 'gh'] : ['gh'];
   const fromPath = (process.env['PATH'] ?? '').split(delimiter);
   for (const dir of [...fromPath, ...EXTRA_BIN_DIRS]) {
     if (dir === '') continue;
-    const candidate = join(dir, 'gh');
-    try {
-      accessSync(candidate, fsConstants.X_OK);
-      return candidate;
-    } catch {
-      // keep looking
+    for (const name of names) {
+      const candidate = join(dir, name);
+      try {
+        accessSync(candidate, fsConstants.X_OK);
+        return candidate;
+      } catch {
+        // keep looking
+      }
     }
   }
   return null;
@@ -691,7 +724,15 @@ export function createUpdater(options: UpdaterOptions): Updater {
       const file = await fetchAsset(feedName(), await tagToCheck(), dir, FEED_FETCH_TIMEOUT_MS);
       return parseUpdateFeed(await readFile(file, 'utf8'), artifactExtension());
     } finally {
-      await removeTree(dir);
+      // Left as a `.catch`, like the staging sweep below and for a sharper
+      // reason: this `finally` runs after the answer is already in hand, so a
+      // throw from it replaces a good feed with a failure the caller can only
+      // read as "unreachable". A check that reached the feed must not be able
+      // to report otherwise because a temp directory outlived it, which is
+      // precisely what an unconditional `/bin/rm` did to Windows.
+      await removeTree(dir).catch((error: unknown) => {
+        log.warn('Could not clear the update check directory.', error);
+      });
     }
   }
 
