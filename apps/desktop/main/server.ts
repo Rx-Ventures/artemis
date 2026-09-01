@@ -320,6 +320,9 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
         ...(input.resumeSessionId === undefined
           ? {}
           : { resumeSessionId: input.resumeSessionId as never }),
+        ...(input.permissionMode === undefined
+          ? {}
+          : { permissionMode: input.permissionMode as never }),
       } as never);
     },
     subscribe: (listener) => options.engine.require().subscribe(listener),

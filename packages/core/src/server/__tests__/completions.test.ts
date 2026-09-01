@@ -196,6 +196,16 @@ describe('a turn', () => {
     expect(done.result.sessionId).toBe('sess-9');
   });
 
+  it('hands a requested permission mode to the run, and omits an absent one', async () => {
+    const source = fakeRuns([{ type: 'run.end', reason: 'completed' }] as Partial<AgentEvent>[]);
+    await drain(source, turn({ extensions: { permissionMode: 'acceptEdits' } }));
+    expect(source.started[0]?.input).toMatchObject({ permissionMode: 'acceptEdits' });
+
+    const plain = fakeRuns([{ type: 'run.end', reason: 'completed' }] as Partial<AgentEvent>[]);
+    await drain(plain);
+    expect(plain.started[0]?.input).not.toHaveProperty('permissionMode');
+  });
+
   it('announces a fresh session the moment it exists, not only on done', async () => {
     // A client whose stream dies mid-turn would otherwise learn the id never —
     // and the Artemis-driving-Artemis adapter builds its `session.started`

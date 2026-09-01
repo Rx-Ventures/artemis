@@ -111,8 +111,13 @@ export interface RunSource {
    * Start a run and resolve once it is registered.
    *
    * The shape is deliberately narrower than `RunInput`: this module may not
-   * choose a permission mode, a system prompt or a set of tools, because those
-   * are the user's settings and an HTTP caller is not the user.
+   * choose a system prompt or a set of tools, because those are the user's
+   * settings and an HTTP caller is not the user. The permission mode joined
+   * the shape once remote permission answering existed: a caller trusted to
+   * approve every prompt was already trusted with everything a mode grants,
+   * and refusing the mode only made the approvals more tedious. A host
+   * honours it insofar as the serving provider supports it, and drops it
+   * otherwise.
    */
   startRun(input: {
     readonly providerId: string;
@@ -124,6 +129,7 @@ export interface RunSource {
     readonly fastMode?: boolean;
     readonly ultracode?: boolean;
     readonly resumeSessionId?: string;
+    readonly permissionMode?: string;
   }): Promise<RunHandle>;
 
   /** Every event from every run. Filtered by `runId` here. */
@@ -491,6 +497,9 @@ export async function* runTurn(
         ...(turn.extensions.sessionId === undefined
           ? {}
           : { resumeSessionId: turn.extensions.sessionId }),
+        ...(turn.extensions.permissionMode === undefined
+          ? {}
+          : { permissionMode: turn.extensions.permissionMode }),
       });
     } catch (error) {
       yield {

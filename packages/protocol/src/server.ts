@@ -1332,6 +1332,17 @@ export interface ArtemisChatExtensions {
    * the other end of a network. See {@link ArtemisRemoteOptions}.
    */
   readonly remote?: ArtemisRemoteOptions;
+  /**
+   * The permission mode the run should open in.
+   *
+   * A request, like everything else here: the serving side honours it only
+   * insofar as the account's own provider supports the mode, and drops it
+   * otherwise — the old behaviour, where a run opens in the serving user's
+   * setting. Carrying it grants a caller nothing it did not have: a client
+   * that answers remote permission prompts can already approve every one,
+   * so even the widest mode is a convenience, not a capability.
+   */
+  readonly permissionMode?: string;
 }
 
 /**
@@ -1468,6 +1479,9 @@ export function readChatExtensions(body: unknown): ArtemisChatExtensions {
       : {}),
     ...(typeof extensions['sessionId'] === 'string'
       ? { sessionId: extensions['sessionId'] as string }
+      : {}),
+    ...(typeof extensions['permissionMode'] === 'string'
+      ? { permissionMode: extensions['permissionMode'] as string }
       : {}),
     ...readRemoteOptions(extensions['remote']),
   };
