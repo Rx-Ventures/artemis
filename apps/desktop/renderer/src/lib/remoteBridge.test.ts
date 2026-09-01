@@ -365,6 +365,14 @@ describe('control verbs on the wire', () => {
   });
 
   it('starts a run by shipping the whole RunInput', async () => {
+    replies.set('/api/v0/connection', [
+      jsonResponse(200, {
+        id: 'c1',
+        label: 'Kronos',
+        workspace: { kind: 'directory', path: '/w' },
+        canRunTurns: true,
+      }),
+    ]);
     replies.set('/api/v0/runs', [
       jsonResponse(200, {
         object: 'artemis.run',
@@ -386,8 +394,69 @@ describe('control verbs on the wire', () => {
       (entry) => entry.method === 'POST' && entry.url.endsWith('/api/v0/runs'),
     );
     expect(request?.body).toMatchObject({
-      input: { prompt: 'hello', permissionMode: 'default' },
+      input: { prompt: 'hello', permissionMode: 'default', cwd: '/w' },
     });
+  });
+
+  /*
+   * The cwd rule on the wire: a pane's directory is sent only when it already
+   * belongs to the serving machine — the pin, or inside it. Everything else
+   * names a path on the wrong computer (a Windows pane's C:\…, a Mac pane's
+   * leftover /Users/…) and earns either a 400 or a 403 from a server that
+   * never had that directory; omitting it roots the run at the pin instead.
+   */
+  it('sends a cwd that lives inside the pin', async () => {
+    replies.set('/api/v0/connection', [
+      jsonResponse(200, {
+        id: 'c1',
+        label: 'Kronos',
+        workspace: { kind: 'directory', path: '/srv/repo' },
+        canRunTurns: true,
+      }),
+    ]);
+    replies.set('/api/v0/runs', [
+      jsonResponse(200, {
+        object: 'artemis.run',
+        run: { runId: 'r9', providerId: 'claude', profileId: 'prof-a' },
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    await bridge.runs.start({
+      input: { providerId: 'claude', profileId: 'prof-a', cwd: '/srv/repo/app', prompt: 'hi' },
+    });
+    const request = requests.find(
+      (entry) => entry.method === 'POST' && entry.url.endsWith('/api/v0/runs'),
+    );
+    expect((request?.body as { input: { cwd?: string } }).input.cwd).toBe('/srv/repo/app');
+  });
+
+  it.each([
+    ['a Windows pane directory', 'C:\\Users\\d\\app'],
+    ['a Mac pane directory outside the pin', '/Users/d/app'],
+    ['a sibling sharing the pin’s prefix', '/srv/repo-other'],
+  ])('leaves %s off the wire and lets the pin root the run', async (_label, cwd) => {
+    replies.set('/api/v0/connection', [
+      jsonResponse(200, {
+        id: 'c1',
+        label: 'Kronos',
+        workspace: { kind: 'directory', path: '/srv/repo' },
+        canRunTurns: true,
+      }),
+    ]);
+    replies.set('/api/v0/runs', [
+      jsonResponse(200, {
+        object: 'artemis.run',
+        run: { runId: 'r9', providerId: 'claude', profileId: 'prof-a' },
+      }),
+    ]);
+    const bridge = bridgeUnderTest();
+    await bridge.runs.start({
+      input: { providerId: 'claude', profileId: 'prof-a', cwd, prompt: 'hi' },
+    });
+    const request = requests.find(
+      (entry) => entry.method === 'POST' && entry.url.endsWith('/api/v0/runs'),
+    );
+    expect('cwd' in (request?.body as { input: object }).input).toBe(false);
   });
 });
 

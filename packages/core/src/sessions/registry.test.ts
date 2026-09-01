@@ -188,6 +188,8 @@ function harness(
     historyLimit?: number;
     endedRetention?: number;
     adapter?: Partial<{ createRun: () => Promise<FakeRun> }>;
+    /** Where the adapter keeps its sessions — `'remote'` models the artemis adapter. */
+    sessionStore?: 'local' | 'remote';
     /** Build runs that can be released without being torn down — see {@link FakeTurn}. */
     releasable?: boolean;
     /** Present only when a test is about the history seam; absent models a provider that cannot count. */
@@ -205,6 +207,10 @@ function harness(
   const adapter = {
     id: 'claude',
     capabilities: options.capabilities ?? FULL_CAPABILITIES,
+    credentials: {
+      configDirVar: 'TEST_CONFIG_DIR',
+      ...(options.sessionStore === undefined ? {} : { sessionStore: options.sessionStore }),
+    },
     createRun: (runInput: ResolvedRunInput) => {
       calls.push('createRun');
       resolved.push(runInput);
@@ -410,6 +416,32 @@ describe('RunRegistry — starting', () => {
     // Refused before the adapter saw it — nothing was spawned.
     expect(resolved).toHaveLength(0);
     expect(registry.activeCount).toBe(0);
+  });
+
+  it('never checks the directory for a remote session store', async () => {
+    /*
+     * A served session's cwd names a directory on the *serving* machine.
+     * Resuming one from Windows carries `/work/app`, which the local stat
+     * would resolve against the current drive and refuse — for a directory
+     * nothing here was ever going to spawn in. The wire never carries it;
+     * the server pins its own.
+     */
+    const check = vi.fn(() => ({
+      ok: false as const,
+      path: '/work/app',
+      problem: 'does_not_exist' as const,
+      message: 'That directory does not exist: /work/app',
+    }));
+    const { registry, resolved } = harness({
+      sessionStore: 'remote',
+      checkWorkingDirectory: check,
+    });
+
+    const handle = await registry.start(input({ cwd: '/work/app' }));
+
+    expect(handle.runId).toBe('run-1');
+    expect(check).not.toHaveBeenCalled();
+    expect(resolved).toHaveLength(1);
   });
 
   it('checks the working directory before resolving credentials', async () => {
