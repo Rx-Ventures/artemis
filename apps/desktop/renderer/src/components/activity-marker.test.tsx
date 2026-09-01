@@ -165,9 +165,12 @@ describe('the activity marker', () => {
     // One marker for the work, and both blocks of reasoning readable without a
     // click. Reasoning is what the model was working out and belongs in the
     // conversation; the marker is the account of how, and belongs under it.
+    //
+    // Both blocks in one row, since the call that separated them is in the
+    // marker rather than between them on screen — see `thinkingRow` in
+    // `state/transcript.ts`.
     expect(screen.getByText('Read a file, searched the code')).not.toBeNull();
-    expect(screen.getByText('where does this live')).not.toBeNull();
-    expect(screen.getByText('now the other file')).not.toBeNull();
+    expect(screen.getByText('where does this live now the other file')).not.toBeNull();
   });
 
   it('gives back the calls, and only the calls, when the marker is opened', () => {

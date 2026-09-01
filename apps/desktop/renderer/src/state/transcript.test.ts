@@ -351,11 +351,21 @@ describe('TranscriptModel activity groups', () => {
     )) {
       model.apply(event);
     }
+    model.flush();
 
     // The interleaving the marker used to swallow whole. Reasoning is what the
     // model was working out and reads in order with the prose around it; the
     // calls are the account of how, and collect underneath.
-    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'k:m1:2', 'g:t:c1']);
+    //
+    // One row for the three blocks, because the calls that separated them are
+    // not on screen between them — they are in the marker below. Three folds
+    // holding a sentence each was a column of chrome down the side of one train
+    // of thought.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+    expect(model.getItem('k:m1:0')).toMatchObject({
+      kind: 'thinking',
+      text: 'where does this live\n\nnow the other file\n\nthat explains it',
+    });
 
     const group = model.getGroup('g:t:c1');
     expect(group?.ids).toEqual(['t:c1', 't:c2']);
@@ -431,9 +441,10 @@ describe('TranscriptModel activity groups', () => {
         model.apply(event);
       }
 
-      // Both thoughts keep their place in order, and the three calls that used
-      // to be two markers around them are one marker underneath.
-      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'g:t:c1']);
+      // Both thoughts keep their place in order — in one row, since nothing was
+      // said between them — and the three calls that used to be two markers
+      // around them are one marker underneath.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
       expect(model.getGroup('g:t:c1')?.counts).toEqual({ search: 2, read: 1 });
       expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2', 't:c3']);
     });
@@ -452,7 +463,7 @@ describe('TranscriptModel activity groups', () => {
         model.apply(event);
       }
 
-      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'g:t:c1']);
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
       expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
     });
 
@@ -572,6 +583,107 @@ describe('TranscriptModel activity groups', () => {
 
       expect(model.getRowsSnapshot().filter((id) => id.startsWith('g:'))).toEqual(['g:t:c1']);
       expect(model.getGroup('g:t:c1')?.ids).toEqual(['t:c1', 't:c2']);
+    });
+  });
+
+  /*
+   * One stretch of reasoning is one row.
+   *
+   * A turn emits `thinking / tool / thinking / tool …` and the calls sink to the
+   * marker at the foot of the run — so the blocks end up adjacent on screen, and
+   * a row apiece meant a dozen folds down the side of the pane holding a
+   * sentence each. What separates two stretches is the agent *saying* something,
+   * which is the only boundary a reader can see.
+   */
+  describe('a run of thinking blocks', () => {
+    it('gathers into the row the first of them opened', () => {
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'first, look'),
+        ...call('c1', 'Grep'),
+        thought('m2', 0, 'now the other file'),
+      )) {
+        model.apply(event);
+      }
+      model.flush();
+
+      // Across messages, too: each turn of the tool loop is its own provider
+      // message, so a stretch that survives two calls is three message ids.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1']);
+      expect(model.getItem('k:m1:0')).toMatchObject({
+        text: 'first, look\n\nnow the other file',
+      });
+      expect(model.getItem('k:m2:0')).toBeUndefined();
+    });
+
+    it('is live again when the model goes back to thinking', () => {
+      // A call between two blocks settles the first (`settleStreaming`). The
+      // row is being written to again, so the pulse beside it has to come back
+      // on — otherwise a turn that is still thinking looks finished.
+      const model = build();
+      for (const event of stream(thought('m1', 0, 'first, look'), ...call('c1', 'Grep'))) {
+        model.apply(event);
+      }
+      model.flush();
+      expect(model.getItem('k:m1:0')).toMatchObject({ streaming: false });
+
+      model.apply(stream(thought('m2', 0, 'now the other file'))[0] as AgentEvent);
+      model.flush();
+
+      expect(model.getItem('k:m1:0')).toMatchObject({ streaming: true });
+    });
+
+    it('starts a fresh row once the agent has said something', () => {
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'the user wants the short answer'),
+        { type: 'text.complete', messageId: 'm1', role: 'assistant', blockIndex: 1, text: 'no' },
+        thought('m2', 0, 'though they may want the why'),
+      )) {
+        model.apply(event);
+      }
+      model.flush();
+
+      // The answer is the boundary. Merging across it would put reasoning the
+      // model did *after* speaking into the paragraph it wrote before.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'a:m1:1', 'k:m2:0']);
+    });
+
+    it('never merges a redaction into prose, or prose into a redaction', () => {
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'first, look'),
+        { type: 'thinking.delta', messageId: 'm1', blockIndex: 1, text: '', redacted: true },
+        thought('m1', 2, 'that explains it'),
+      )) {
+        model.apply(event);
+      }
+      model.flush();
+
+      // "The provider withheld this one" is a notice about a block, so it can
+      // neither be glued onto the end of prose it is not about nor swallow the
+      // prose that follows it.
+      expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'k:m1:1', 'k:m1:2']);
+      expect(model.getItem('k:m1:0')).toMatchObject({ text: 'first, look' });
+      expect(model.getItem('k:m1:2')).toMatchObject({ text: 'that explains it' });
+    });
+
+    it('keeps writing to the row a later delta of a merged block belongs to', () => {
+      // The per-token path after a merge: the block has no row of its own, and
+      // its second chunk still has to land at the end of the row it joined.
+      const model = build();
+      for (const event of stream(
+        thought('m1', 0, 'first, look'),
+        thought('m1', 1, 'then'),
+        thought('m1', 1, ' the other file'),
+      )) {
+        model.apply(event);
+      }
+      model.flush();
+
+      expect(model.getItem('k:m1:0')).toMatchObject({
+        text: 'first, look\n\nthen the other file',
+      });
     });
   });
 
@@ -770,18 +882,11 @@ describe('TranscriptModel artifacts', () => {
       model.apply(event);
     }
 
-    // The three thoughts stay in the thread in the order the model wrote them;
-    // the marker and its tiles land beneath the lot, and the tiles are still in
-    // the order they were made rather than interleaved with the reasoning.
-    expect(model.getRowsSnapshot()).toEqual([
-      'k:m1:0',
-      'k:m1:1',
-      'k:m1:2',
-      'g:t:c1',
-      't:c2',
-      't:c3',
-      't:c4',
-    ]);
+    // The reasoning stays in the thread in the order the model wrote it — one
+    // row, since the agent said nothing between the three blocks; the marker and
+    // its tiles land beneath the lot, and the tiles are still in the order they
+    // were made rather than interleaved with the reasoning.
+    expect(model.getRowsSnapshot()).toEqual(['k:m1:0', 'g:t:c1', 't:c2', 't:c3', 't:c4']);
   });
 
   it('produces no marker when the burst was nothing but artifacts', () => {

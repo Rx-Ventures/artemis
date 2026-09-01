@@ -72,6 +72,10 @@ const REASONING =
 const SECOND_THOUGHT =
   'That leaves the resume case, which reads the same draft back out of preferences on boot';
 
+/** Reasoning written as markdown, which is how a lot of it arrives. */
+const HEADED = 'Planning the retry path';
+const LISTED = 'the send path clears the attachment';
+
 function stream(...drafts: Array<Omit<AgentEvent, 'runId' | 'seq' | 'ts'>>): AgentEvent[] {
   return drafts.map((draft, index) => ({
     ...draft,
@@ -209,15 +213,38 @@ describe('with the switch on', () => {
     );
     render(<Transcript />);
 
-    // Both stretches of reasoning readable and in order, with the three calls
-    // that used to be two markers *between* them folded underneath instead.
-    expect(bodyOf(REASONING)).not.toBeNull();
-    expect(bodyOf(SECOND_THOUGHT)).not.toBeNull();
-    // Nothing was unfolded to achieve it. That the three became *one* marker
-    // rather than two is asserted in `transcript.test.ts` against the row ids,
-    // where it can be checked without depending on the summary's wording.
+    // Both stretches of reasoning readable and in order, and in *one* block:
+    // the calls that separated them are folded into the marker underneath, so a
+    // row apiece would have been two folds around a train of thought nothing
+    // interrupted. That they merged in the model is asserted in
+    // `transcript.test.ts` against the row ids.
+    expect(bodyOf(`${REASONING} ${SECOND_THOUGHT}`)).not.toBeNull();
+    // Nothing was unfolded to achieve it.
     expect(screen.queryByText('Grep')).toBeNull();
     expect(screen.queryByText('Read')).toBeNull();
+  });
+
+  it('renders reasoning the model wrote as markdown as markdown', () => {
+    // Settled by the call after it, because markdown is parsed once a block is
+    // finished and never per frame while it streams — the transcript's rule 3,
+    // which reasoning follows for the same reason an answer does.
+    play(thought(0, `**${HEADED}**\n\n- ${LISTED}`), ...call('c1', 'Grep'));
+    render(<Transcript />);
+
+    // The model writes its reasoning in markdown constantly, and the asterisks
+    // and hyphens were being left for the reader to parse by eye.
+    expect(screen.getByText(HEADED).tagName).toBe('STRONG');
+    expect(screen.getByText(LISTED).closest('li')).not.toBeNull();
+  });
+
+  it('leaves prose that is not markdown alone', () => {
+    // The other half of the same promise. Reasoning is full of `snake_case`,
+    // pasted output and bare paths, none of which the model meant as markup —
+    // so a block showing no markdown tell is never handed to the parser.
+    play(thought(0, REASONING));
+    render(<Transcript />);
+
+    expect(bodyOf(REASONING).tagName).toBe('DIV');
   });
 
   it('draws it as muted prose rather than as the answer', () => {

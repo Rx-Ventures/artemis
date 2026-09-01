@@ -959,6 +959,24 @@
   }
 
   /*
+   * Markdown that is an aside rather than the answer — the model's reasoning,
+   * which arrives as markdown constantly and is drawn in `--ink-muted`.
+   *
+   * One rule, because one rule is all that breaks: `.md` pins headings to
+   * `--ink` so they lift off the paragraph under them, and a heading inside
+   * reasoning that came out in the answer's colour would be the one line of a
+   * muted block reading as the loudest thing on screen. Inheriting instead keeps
+   * the weight and the size — which is what actually marks a heading — and lets
+   * the caller's colour carry the whole block.
+   */
+  .md-quiet h1,
+  .md-quiet h2,
+  .md-quiet h3,
+  .md-quiet h4 {
+    color: inherit;
+  }
+
+  /*
    * The Markdown editor's writing surface.
    *
    * Deliberately only three rules, because the editor renders into `.md` — the
