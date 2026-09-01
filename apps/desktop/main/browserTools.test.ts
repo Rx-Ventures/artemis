@@ -27,6 +27,7 @@ import {
   agentBrowserServers,
   browserTools,
   externalBrowserTools,
+  INSTRUCTIONS,
   type BrowserToolContext,
 } from './browserTools';
 
@@ -378,5 +379,33 @@ describe('the external open tool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('the shell refused');
+  });
+});
+
+/*
+ * The anti-hallucination copy is load-bearing: an agent once told a user a
+ * page was open "in your Chrome" after driving this embedded tab. These pins
+ * are not about wording taste — they are the three claims that stop that
+ * lie from coming back, and the scoping that keeps the offered remedy from
+ * sending a Codex or server-session user to a toggle that cannot help them.
+ */
+describe('what the model is told about whose browser this is', () => {
+  it('the instructions say this is not the user’s browser, and forbid claiming it is', () => {
+    expect(INSTRUCTIONS).toContain('NOT the user’s');
+    expect(INSTRUCTIONS).toContain('Never tell the user a page was opened in their browser');
+  });
+
+  it('the offered remedies are scoped to where they actually work', () => {
+    expect(INSTRUCTIONS).toContain('Permissions & access');
+    expect(INSTRUCTIONS).toContain('Claude sessions running on this machine');
+    expect(INSTRUCTIONS).toContain('does not apply to other providers');
+  });
+
+  it('the open and navigate tools name the embedded tab, not a browser in general', () => {
+    const context = fakeContext().context;
+    const open = browserTools(RUN, context).find((one) => one.name === 'browser_open');
+    const navigate = browserTools(RUN, context).find((one) => one.name === 'browser_navigate');
+    expect(open?.description).toContain('not their own browser');
+    expect(navigate?.description).toContain('embedded dock browser');
   });
 });
