@@ -624,6 +624,18 @@ export interface ServerSessionSummary {
    */
   readonly profileId?: string;
   readonly providerId?: string;
+  /**
+   * The provider's own tag on this conversation, when it has one.
+   *
+   * What archiving is built on: `POST …/sessions/{id}/tag` writes it and this
+   * is how it is read back. Without it the write lands in the store and no
+   * client can ever see that it did — a session archives and reappears
+   * unarchived on the next listing, which is exactly the bug this closes.
+   * Passed through untouched, like every other reader of the field: Artemis
+   * writes {@link ARCHIVED_TAG} and a tag set from the provider's own CLI is
+   * not Artemis's to reinterpret.
+   */
+  readonly tag?: string;
   /** Where the conversation ran, on the serving machine. */
   readonly cwd: string;
   /**

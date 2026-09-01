@@ -2221,6 +2221,10 @@ async function describeScopedSessions(
       // the account's own, which is the only one it could have been.
       profileId: entry.profileId,
       providerId: String(profile?.provider.id ?? summary.providerId),
+      // The store's own tag, so a client can tell an archived conversation
+      // from a live one. The tag route writes this; dropping it here made
+      // that write invisible.
+      ...(summary.tag === undefined ? {} : { tag: summary.tag }),
       cwd: entry.cwd,
       ...(entry.origin === 'bridge' ? { origin: 'bridge' as const } : {}),
     });

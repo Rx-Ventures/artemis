@@ -212,3 +212,24 @@ describe('session mutations', () => {
     });
   });
 });
+
+describe('the archived flag survives the wire', () => {
+  it('maps a tag back onto the summary so isArchived can answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          object: 'artemis.sessions',
+          sessions: [
+            { id: 'sess-a', title: 'Archived', updatedAt: 1, cwd: '/w', tag: 'archived' },
+            { id: 'sess-b', title: 'Live', updatedAt: 2, cwd: '/w' },
+          ],
+        }),
+      ),
+    );
+    const adapter = createArtemisAdapter();
+    const page = await adapter.listSessions?.({ profileId: 'p' as never, cwd: '/w', env: ENV });
+    expect(page?.sessions[0]).toMatchObject({ id: 'sess-a', tag: 'archived' });
+    expect(page?.sessions[1]).not.toHaveProperty('tag');
+  });
+});

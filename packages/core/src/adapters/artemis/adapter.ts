@@ -770,6 +770,9 @@ async function fetchServerSessions(
       cwd: typeof row.cwd === 'string' ? row.cwd : '',
       title: typeof row.title === 'string' && row.title.length > 0 ? row.title : row.id,
       ...(typeof row.firstPrompt === 'string' ? { firstPrompt: row.firstPrompt } : {}),
+      // Carried through so `isArchived` can answer for a served conversation
+      // the same way it answers for a local one.
+      ...(typeof row.tag === 'string' ? { tag: row.tag } : {}),
       updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : 0,
     });
   }
