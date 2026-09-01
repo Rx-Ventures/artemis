@@ -364,6 +364,28 @@ export interface ProviderModelOption {
   readonly adaptiveThinking?: boolean;
 
   /**
+   * The serving-side account this option runs as, when the catalogue was read
+   * from another Artemis (the `artemis` adapter). A server flattens every
+   * account × model into one list of routes, so two accounts offering the same
+   * model produce two options whose {@link label}s are identical — these three
+   * fields are what lets the UI group, filter and name them by account instead
+   * of guessing from the route's slug prefix or the {@link note}'s wording.
+   *
+   * `accountId` is the serving Artemis's own profile id — the same id its
+   * usage report keys gauges by, which is what makes an exact join possible.
+   * `accountSlug` is the route prefix (`work-max` in `work-max/opus`).
+   * `accountLabel` is the display name the server uses for the account.
+   *
+   * All absent for local providers, and individually absent when an older
+   * server omits the field — consumers must fall back rather than assume.
+   */
+  readonly accountId?: string;
+  /** See {@link accountId}. */
+  readonly accountSlug?: string;
+  /** See {@link accountId}. */
+  readonly accountLabel?: string;
+
+  /**
    * Where this model sits in its provider's own lineup, `0` being the smallest
    * and cheapest tier that provider ships.
    *

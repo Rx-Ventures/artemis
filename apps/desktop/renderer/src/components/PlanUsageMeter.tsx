@@ -48,6 +48,7 @@ import {
 
 import { call, resolveBridge } from '../lib/bridge';
 import { formatTokens } from '../lib/format';
+import { useServedAccount } from '../hooks/useServedAccount';
 import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
 import { paneState } from '../state/pane';
@@ -595,8 +596,22 @@ export function PlanUsageMeter(): ReactElement | null {
   const supported = usePane((s) => activeCapabilities(s).planUsageReporting);
   const providerLabel = usePane(activeProviderLabel);
 
+  /*
+   * At an Artemis Server profile the reading belongs to the *served account*
+   * behind the active pick, not to the profile: the poller fans the server's
+   * usage report out into the served-account map, and the profile-keyed pair
+   * of sources below stays empty for it on purpose. The hook joins the pick
+   * to its gauge; `load('refresh')` still works, because main answers it for
+   * a server profile by re-running the same fan-out.
+   */
+  const served = useServedAccount();
+
   const [open, setOpen] = useState(false);
-  const { usage, refreshing, load } = usePlanUsage(profileId, () => paneState(pane).activeProfileId);
+  const { usage: profileUsage, refreshing, load } = usePlanUsage(
+    profileId,
+    () => paneState(pane).activeProfileId,
+  );
+  const usage = served.atServer ? (served.gauge?.usage ?? null) : profileUsage;
   // Only the popover's body reads this — the rings show percentages, which have
   // no clock in them — so the timer runs only while the popover is open.
   const now = useClock(open);
@@ -611,6 +626,18 @@ export function PlanUsageMeter(): ReactElement | null {
   useEffect(() => {
     if (open) void load('refresh');
   }, [open, load]);
+
+  /*
+   * A served gauge has no cache to paint from — main's plan-usage cache is
+   * profile-keyed and the poller's first sweep is minutes away in the worst
+   * case — so a server pane whose map is still empty asks once. One HTTP read
+   * of the server's own cache, not a CLI spawn; deps keep it to one ask per
+   * profile rather than one per render.
+   */
+  const servedEmpty = served.atServer && served.gauge === undefined;
+  useEffect(() => {
+    if (servedEmpty) void load('refresh');
+  }, [servedEmpty, load]);
 
   if (profileId === null) return null;
 

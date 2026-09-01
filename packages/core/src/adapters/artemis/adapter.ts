@@ -144,6 +144,12 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // A message can be steered into the turn already in flight —
   // `POST /api/v0/runs/{id}/messages` — so the composer stays live mid-run.
   midRunSteering: true,
+  // The server reports every served account's plan gauges on
+  // `GET /api/v0/usage`, fanned out by the desktop's poller into one push per
+  // account. The flag is what lets the status-bar meter mount at all; the
+  // readings themselves arrive keyed by served account, not by this profile,
+  // and the renderer joins them through the active model's `accountId`.
+  planUsageReporting: true,
   // The person answering the prompts picks how they are asked. Carried on the
   // wire as a request; the server drops modes the serving provider lacks, and
   // an older server drops the field entirely — both degrade to the serving
