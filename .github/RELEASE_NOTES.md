@@ -1,6 +1,33 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.5
+
+One change, to the thing you spend the most time looking at: the model's
+reasoning in the transcript.
+
+**A stretch of thinking is one passage.** A working turn thinks, runs a tool,
+thinks again — and the tool calls collect in the marker at the foot of the
+run, so what was left in the thread was a dozen folds in a row, each holding
+a sentence of a single train of thought. They are now one block, split into
+paragraphs where the model paused, and what ends it is the agent actually
+saying something. Reasoning still keeps its own row when a redaction breaks
+it, and a subagent's working-out is never folded into the main agent's.
+
+**It is rendered, not spelled out.** The model writes its reasoning in
+markdown most of the time, and you were reading the asterisks. Bold, headings,
+lists and code now render — but only for a block that genuinely is markdown,
+so the paths, `snake_case` and pasted output in ordinary reasoning are left
+exactly as written. The collapsed one-line preview drops the syntax too.
+
+**It reads in the thread, not beside it.** The rule down the left, the indent
+and the small italic are gone. Reasoning now sits on the same left edge and at
+the same size as everything else in the conversation, one colour down — the
+label in the gutter is what tells you it is not the answer.
+
+Turn it on, if it is not already, in Settings → Appearance → "Show the model's
+reasoning".
+
 ## What's new in 2.4.4
 
 Bug fixes, all in the seams between a desktop and the accounts an Artemis
