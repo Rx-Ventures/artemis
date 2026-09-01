@@ -1,6 +1,31 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.3
+
+One fix, on Windows only — and it is the one that stood between a Windows
+machine and every other fix reaching it.
+
+**Checking for updates works on Windows.** Since 2.3.0 every check there has
+answered "The update feed could not be reached", on machines that had just
+reached it. The feed was downloaded, parsed and compared correctly each
+time; what failed was the tidying-up afterwards, which reached for a program
+that only exists on macOS and took the finished answer down with it. The
+symptom was doubly misleading — the one thing named as the cause, the
+network, was the one thing that was working. Windows installs could only be
+updated by hand, and every check left another directory behind in `%TEMP%`.
+
+Cleanup now uses what the platform actually has, and a check that has read
+the feed can no longer report otherwise because clearing up after itself
+went wrong. The `%TEMP%` husks stop accumulating; existing ones are yours to
+delete.
+
+**Installing 2.4.3 on Windows is still a manual step.** The updater doing
+the checking is the one already installed, so 2.3.0, 2.4.0 and 2.4.2 cannot
+fetch their own fix — download the setup exe from the releases page once
+more. From 2.4.3 onwards the card appears on its own, as it always has on
+macOS.
+
 ## What's new in 2.4.2
 
 Fixes for how a served Artemis behaves — the server profile now does what it
