@@ -57,6 +57,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 
+import type { PlanUsage } from '@rx-artemis/protocol';
 import type {
   AgentEvent,
   OpenAiChatRequest,
@@ -74,6 +75,7 @@ import type {
   ServerProfileCreatedBody,
   ServerProfilesBody,
   ServerSessionDeletedBody,
+  ServerUsageBody,
   ServerSessionMessagesBody,
   ServerSessionRenamedBody,
   ServerSessionsBody,
@@ -219,6 +221,8 @@ export interface ServerContext {
    * to offer and no resumes to referee (a catalogue-only server).
    */
   readonly ledger?: SessionLedger;
+  /** How to read each account's plan gauge. Absent answers 501. */
+  readonly usage?: UsageSource;
   /** How to read stored sessions. Required alongside {@link ledger}. */
   readonly sessions?: SessionSource;
   /**
@@ -341,6 +345,20 @@ export interface SessionSource {
     readonly tag: string | null;
     readonly cwd?: string;
   }): Promise<boolean>;
+}
+
+/**
+ * The host's plan-usage reads, one per account, cached where they are made.
+ *
+ * A method rather than rows, because freshness is the host's business: the
+ * reading costs a CLI control call per account, so the host answers from a
+ * short cache and refreshes behind it. `undefined` marks a host that cannot
+ * read gauges at all, and the route answers 501.
+ */
+export interface UsageSource {
+  read(query: {
+    readonly profileIds: readonly string[];
+  }): Promise<readonly { readonly profileId: string; readonly label: string; readonly usage: PlanUsage }[]>;
 }
 
 /** True when this reply is written incrementally rather than as one body. */
@@ -813,6 +831,27 @@ export async function handleServerRequest(
    * same gate, so "not yours" and "not there" are one indistinguishable 404.
    * A token must not be able to sound out which session ids exist.
    */
+  /*
+   * The gauges: one row per account this connection can see whose provider
+   * reports plan capacity. What the profile menu reads for a local account,
+   * served for the remote ones — same shape, same staleness rules, the
+   * host's cache deciding what "fresh enough" means.
+   */
+  if (path === `${apiPrefix}/usage`) {
+    if (context.usage === undefined) {
+      return fail(
+        501,
+        'invalid_request_error',
+        'not_implemented',
+        'This Artemis build reads no plan gauges.',
+      );
+    }
+    const profiles = await visibleProfiles();
+    const rows = await context.usage.read({ profileIds: profiles.map((profile) => String(profile.id)) });
+    const body: ServerUsageBody = { object: 'artemis.usage', accounts: rows as never };
+    return answer(body);
+  }
+
   if (path === `${apiPrefix}/sessions`) {
     if (context.ledger === undefined || context.sessions === undefined) {
       return fail(
@@ -1184,6 +1223,8 @@ export interface ArtemisServerOptions {
   readonly ledger?: SessionLedger;
   /** How to read stored sessions. Required alongside {@link ledger}. */
   readonly sessions?: SessionSource;
+  /** How to read each account's plan gauge. Absent answers 501. */
+  readonly usage?: UsageSource;
   /** See {@link ServerContext.allowedHosts}. */
   readonly allowedHosts?: readonly string[] | 'any';
   /** See {@link ServerContext.feed}. */
@@ -1314,6 +1355,7 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
           ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
           ...(options.ledger === undefined ? {} : { ledger: options.ledger }),
           ...(options.sessions === undefined ? {} : { sessions: options.sessions }),
+          ...(options.usage === undefined ? {} : { usage: options.usage }),
           ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
           ...(options.feed === undefined ? {} : { feed: options.feed }),
           ...(options.remoteStream === undefined ? {} : { remoteStream: options.remoteStream }),

@@ -25,6 +25,7 @@
  * directory on the *server's* machine, and nothing here reads it.
  */
 
+import type { ServerUsageBody } from '@rx-artemis/protocol';
 import type {
   ProfileId,
   ServerProfile,
@@ -102,6 +103,20 @@ export async function createRemoteAccount(
     method: 'POST',
     body: request,
   });
+}
+
+/**
+ * The server's gauges: one row per visible account with a plan to read.
+ *
+ * What the desktop's poller fans out into per-account pushes — same
+ * `PlanUsage` shape a local profile's reading has, the serving host's cache
+ * deciding freshness.
+ */
+export async function readRemoteUsage(
+  env: ArtemisProfileEnv,
+  options?: { readonly signal?: AbortSignal },
+): Promise<ServerUsageBody> {
+  return call<ServerUsageBody>(env, `${API_PREFIX}/usage`, options);
 }
 
 /** Change one account: label, endpoint address, key — any subset. */

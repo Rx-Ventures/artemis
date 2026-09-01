@@ -2002,6 +2002,16 @@ export interface UsagePlanRequest {
 export interface PlanUsagePush {
   readonly profileId: ProfileId;
   readonly usage: PlanUsage;
+  /**
+   * The serving account this reading is about, when the profile is a window
+   * onto another machine's accounts rather than one account itself.
+   *
+   * Absent for a local profile — the old shape exactly. Present, with the
+   * label a card can draw, for each account behind an Artemis Server profile:
+   * one push per account, all under the one profile that names the server.
+   */
+  readonly accountId?: string;
+  readonly accountLabel?: string;
 }
 
 export interface UsagePlanResponse {

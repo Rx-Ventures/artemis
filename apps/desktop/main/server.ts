@@ -306,6 +306,35 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       ).tagged,
   };
 
+  /**
+   * The gauges for a desktop that serves. The engine's own cache answers —
+   * the same numbers this machine's windows read — with a refresh for a
+   * profile nobody local has looked at lately.
+   */
+  const usageSource = {
+    read: async (query: { readonly profileIds: readonly string[] }) => {
+      const rows = [];
+      // One listing for the labels, not one describe per row: the engine has
+      // no single-profile read on this surface, and the list is what the
+      // sidebar already pays for.
+      const labels = new Map(
+        (await options.engine.require().listProfiles({})).map((profile) => [
+          String(profile.id),
+          profile.label,
+        ]),
+      );
+      for (const profileId of query.profileIds) {
+        try {
+          const usage = await options.engine.require().refreshPlanUsage({ profileId: profileId as never });
+          rows.push({ profileId, label: labels.get(profileId) ?? profileId, usage });
+        } catch {
+          // Unreadable gauge: no row, account untouched.
+        }
+      }
+      return rows;
+    },
+  };
+
   const runs: RunSource = {
     startRun: async (input) => {
       return options.engine.require().startRun({
@@ -727,6 +756,7 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
       // `describeScopedSessions` and the resume gate.
       ledger,
       sessions: sessionSource,
+      usage: usageSource,
       onRequest: ({ rejected, connectionId }) => {
         // Counters only, never a log of what was asked — see `ServerTraffic`.
         traffic = {

@@ -135,8 +135,28 @@ export function startPlanUsagePolling(
   };
 
   /** Read one account and push what came back. Never throws. */
-  const readOne = async (profileId: ProfileId): Promise<void> => {
+  const readOne = async (profileId: ProfileId, providerId: string): Promise<void> => {
     try {
+      /*
+       * An Artemis Server profile is a window onto several accounts, so its
+       * reading is a fan-out: one push per served account, each carrying the
+       * account id and label beside the one profile that names the server.
+       * The serving host's cache decides freshness, which is what keeps this
+       * from costing a CLI spawn per account per tick on the far machine.
+       */
+      if (providerId === 'artemis') {
+        const rows = await engine.require().readRemotePlanUsage(profileId);
+        if (stopped) return;
+        for (const row of rows) {
+          push(profileId, {
+            profileId,
+            usage: row.usage,
+            accountId: row.profileId,
+            accountLabel: row.label,
+          });
+        }
+        return;
+      }
       const usage = await engine.require().refreshPlanUsage({ profileId });
       if (stopped) return;
       push(profileId, { profileId, usage });
@@ -183,7 +203,7 @@ export function startPlanUsagePolling(
         const profiles = await engine.require().listProfiles({});
         for (const profile of profiles) {
           if (stopped) return;
-          await readOne(profile.id);
+          await readOne(profile.id, profile.providerId);
         }
         lastSweepAt = Date.now();
       } else {
@@ -191,9 +211,12 @@ export function startPlanUsagePolling(
         // this reads nothing at all, which is what makes the faster tick
         // affordable — the cost scales with work in flight, not with how many
         // profiles happen to be configured.
+        const known = new Map(
+          (await engine.require().listProfiles({})).map((profile) => [profile.id, profile.providerId]),
+        );
         for (const profileId of await busyProfiles()) {
           if (stopped) return;
-          await readOne(profileId);
+          await readOne(profileId, known.get(profileId) ?? 'claude');
         }
       }
     } catch (error) {

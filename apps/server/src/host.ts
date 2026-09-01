@@ -27,7 +27,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
+import type { PlanUsage, ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
   RunError,
   createCatalogue,
@@ -53,6 +53,7 @@ import {
   type ServerProfileRecord,
   type SessionLedger,
   type SessionSource,
+  type UsageSource,
   type WorkspaceResolver,
 } from '@rx-artemis/core';
 
@@ -74,6 +75,7 @@ export interface HeadlessHost {
   readonly ledger: SessionLedger;
   readonly runSource: RunSource;
   readonly sessionSource: SessionSource;
+  readonly usageSource: UsageSource;
   /** What the account-administration routes act through. See `signin.ts`. */
   readonly profileAdmin: ProfileAdmin;
   /** Every push the server can stream to a remote client. See `server/feed.ts`. */
@@ -294,6 +296,45 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     return capabilities?.permissionModes.includes(mode as never) === true ? mode : undefined;
   };
 
+  /**
+   * The gauges, read where the accounts are and cached where they are read.
+   *
+   * A reading is a CLI control call per account, so one is allowed to be a
+   * minute old — the same tolerance the desktop's own poller extends to an
+   * idle profile. Failures cache too, briefly, so an account whose CLI is
+   * wedged does not get probed on every request.
+   */
+  const USAGE_CACHE_MS = 60_000;
+  const usageCache = new Map<string, { at: number; row: { profileId: string; label: string; usage: PlanUsage } }>();
+  const usageSource: UsageSource = {
+    read: async (query) => {
+      const rows: { profileId: string; label: string; usage: PlanUsage }[] = [];
+      for (const profileId of query.profileIds) {
+        const cached = usageCache.get(profileId);
+        if (cached !== undefined && Date.now() - cached.at < USAGE_CACHE_MS) {
+          rows.push(cached.row);
+          continue;
+        }
+        try {
+          const profile = await profiles.require(profileId as ProfileId);
+          const adapter = providers.get(profile.providerId);
+          if (adapter?.fetchPlanUsage === undefined) continue;
+          const usage = await adapter.fetchPlanUsage({
+            profileId: profile.id,
+            env: await envFor(profile.id, profile.providerId),
+          } as never);
+          const row = { profileId, label: profile.label, usage };
+          usageCache.set(profileId, { at: Date.now(), row });
+          rows.push(row);
+        } catch {
+          // An unreadable gauge is a row that does not appear; the account
+          // itself is untouched, and the next request past the cache retries.
+        }
+      }
+      return rows;
+    },
+  };
+
   const runSource: RunSource = {
     startRun: (input) => {
       const permissionMode = clampMode(input.providerId as ProviderId, input.permissionMode);
@@ -474,6 +515,7 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
     ledger,
     runSource,
     sessionSource,
+    usageSource,
     profileAdmin,
     feed,
     guard,

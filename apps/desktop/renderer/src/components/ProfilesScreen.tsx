@@ -125,6 +125,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { bindingWindow } from '@rx-artemis/protocol';
+import { toneFor } from './PlanUsageMeter';
 
 /**
  * How often the sign-in step re-reads the config directory.
@@ -722,6 +724,36 @@ const SIGN_IN_POLL_MS = 1_200;
  * hands it to the system browser, so being a link is the whole of what is
  * needed.
  */
+/**
+ * One served account's gauge, from the poller's fan-out.
+ *
+ * The binding window — the one that will actually stop you — as a percentage,
+ * in the meter's own tones. Renders nothing while no reading has landed or
+ * the account has no plan to read: an empty chip would claim a fact nobody
+ * has.
+ */
+function ServerAccountGauge({
+  profileId,
+  accountId,
+}: {
+  readonly profileId: string;
+  readonly accountId: string;
+}): ReactElement | null {
+  const reading = useApp((s) => s.planUsageByServerAccount[`${profileId}/${accountId}`]);
+  if (reading === undefined || !reading.usage.available) return null;
+  const window = bindingWindow(reading.usage);
+  if (window === null || window.utilization === null) return null;
+  const percent = Math.round(window.utilization * 100);
+  return (
+    <span
+      className={cn('font-mono text-2xs', toneFor(window.utilization))}
+      title={`${window.label}: ${String(percent)}% used`}
+    >
+      {String(percent)}%
+    </span>
+  );
+}
+
 function ServerAccountsSection({ profileId }: { readonly profileId: string }): ReactElement | null {
   const [listing, setListing] = useState<ServerAccountsListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -913,6 +945,7 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
                           ? `${String(account.models.length)} models`
                           : 'no models confirmed'}
                       </span>
+                      <ServerAccountGauge profileId={profileId} accountId={account.id} />
                       {managed ? (
                         <span className="ml-auto flex items-center gap-1">
                           {endpoint ? (

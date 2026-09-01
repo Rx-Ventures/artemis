@@ -105,6 +105,7 @@ export {
   type ServerRequestInfo,
   type ServerStreamReply,
   type SessionSource,
+  type UsageSource,
 } from './http.js';
 
 export {
