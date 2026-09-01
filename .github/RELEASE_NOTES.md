@@ -1,6 +1,44 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.2
+
+Fixes for how a served Artemis behaves — the server profile now does what it
+always looked like it should.
+
+**Archiving a conversation on a server sticks.** The tag was written and
+reported successfully, and the next listing showed the conversation live
+again: the wire had no field to carry it home. Deleting only looked like the
+working verb because deletion shows in a row's absence, and a tag only in
+its presence.
+
+**The permission-mode picker works on server profiles.** The mode rides the
+wire as a request; the server honours what the serving provider supports and
+drops the rest, and an older server drops the field — both land in the old
+behaviour, the serving user's setting.
+
+**Every served account reports its usage.** One gauge per account, from the
+server's own short cache, in the server card and on the picker's account
+rows — where before the accounts behind a server had no numbers at all.
+
+**The picker treats a server as a place, not an account.** With a server
+configured, the account column starts with Where — This Mac, or the server
+by name — the server leaves the local account list, and at a server the
+column shows its accounts with their gauges. The choice is sticky: it seeds
+every new session until changed, outranks the local recommendation, and
+falls back cleanly when the server is gone. Leaving returns to the local
+account that was left.
+
+**The quick-access curator reaches every profile.** Settings → Models gains
+a profile switcher, fixing a curator that only ever showed the active
+profile's models — 'only claude models', for anyone whose active profile was
+Claude.
+
+**A Codex sign-in on a server completes.** Its login serves OAuth on the
+serving machine's own localhost, an address that was only true there; the
+printed URL now works verbatim in your browser, forwarded over the
+authenticated wire to where the CLI is listening.
+
 ## What's new in 2.4.0
 
 **Your window hears its runs again.** The one-line bug behind a day of
