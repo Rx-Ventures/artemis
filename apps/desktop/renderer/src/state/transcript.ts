@@ -39,6 +39,7 @@ import type {
   RunEndReason,
   RunId,
   StopReason,
+  ThinkingDeltaEvent,
   ToolEndStatus,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
@@ -107,6 +108,17 @@ export interface AssistantItem extends ItemBase {
 /** Extended thinking. Collapsed by default in the UI. */
 export interface ThinkingItem extends ItemBase {
   readonly kind: 'thinking';
+  /**
+   * The message and block this row *started* at.
+   *
+   * A row is not one provider block. A turn emits `thinking / tool / thinking /
+   * tool …`, the calls sink to the marker at the foot of the run, and what was
+   * left standing in the thread was a stack of folds each holding one paragraph
+   * of a single train of thought. Consecutive blocks are appended to the row the
+   * first of them opened — see {@link TranscriptModel.thinkingRow} — so a stretch
+   * of reasoning is one block of prose, and the thing that ends it is the agent
+   * saying something.
+   */
   readonly messageId: string;
   readonly blockIndex: number;
   readonly text: string;
@@ -461,6 +473,22 @@ export class TranscriptModel {
   /** Ordered block ids per assistant message, for `text.complete` without an index. */
   private messageBlocks = new Map<string, string[]>();
 
+  /**
+   * The reasoning row still being written to, and which blocks have joined it.
+   *
+   * A run of thinking blocks is one row (see {@link ThinkingItem.messageId}), so
+   * a delta has to be able to find the row its block was merged into on every
+   * later chunk — that is `thinkingMerged`, block id to row id.
+   *
+   * `thinkingStreak` is the row an *unseen* block joins, and it is cleared by
+   * {@link insert} the moment anything that is not reasoning or a tool call
+   * lands in the thread. That is the whole rule: the agent speaking ends the
+   * stretch, a tool call does not — calls sink to the marker at the foot of the
+   * run, so two blocks with a call between them are neighbours on screen.
+   */
+  private thinkingStreak: string | null = null;
+  private thinkingMerged = new Map<string, string>();
+
   /** Optimistic user items still waiting for the provider to echo them. */
   private unconfirmedUser: string[] = [];
 
@@ -783,6 +811,16 @@ export class TranscriptModel {
         this.messageBlocks.delete(messageId);
       }
     }
+    // Same argument for the reasoning merges: a block routed into a row that
+    // has been dropped would append the reasoning of a rewound turn onto
+    // nothing, and the open stretch cannot go on being open once its row is
+    // gone.
+    for (const [blockId, rowId] of this.thinkingMerged) {
+      if (!this.items.has(rowId)) this.thinkingMerged.delete(blockId);
+    }
+    if (this.thinkingStreak !== null && !this.items.has(this.thinkingStreak)) {
+      this.thinkingStreak = null;
+    }
 
     this.structural = true;
     this.markPending();
@@ -798,6 +836,8 @@ export class TranscriptModel {
     this.groupSnapshots = new Map();
     this.buffers = new Map();
     this.messageBlocks = new Map();
+    this.thinkingStreak = null;
+    this.thinkingMerged = new Map();
     this.unconfirmedUser = [];
     this.userClaims = new Map();
     this.streaming.clear();
@@ -895,31 +935,8 @@ export class TranscriptModel {
       }
 
       case 'thinking.delta': {
-        const id = this.blockId('k', event.messageId, event.blockIndex);
-        if (!this.items.has(id)) {
-          // A thinking block earns its row by having something in it. An event
-          // with neither text nor a redaction notice would open a fold that
-          // says "thinking…" and never fills, and the providers emit a lot of
-          // those — see `ThinkingDeltaEvent`. The mappers drop them at the
-          // source; this is the backstop that holds the invariant whatever a
-          // provider sends, and it is why the check is on *creation* rather
-          // than a later sweep: a block whose text arrives in a second delta is
-          // created by the delta that carries it, so nothing has to decide when
-          // an empty block has stayed empty long enough to retract.
-          if (event.text === '' && event.redacted !== true) break;
-          this.insert({
-            id,
-            ts: event.ts,
-            kind: 'thinking',
-            messageId: event.messageId,
-            blockIndex: event.blockIndex,
-            text: '',
-            streaming: true,
-            redacted: event.redacted === true,
-            ...(event.agentId === undefined ? {} : { agentId: event.agentId }),
-          });
-        }
-        this.append(id, event.text);
+        const id = this.thinkingRow(event);
+        if (id !== null) this.append(id, event.text);
         break;
       }
 
@@ -1145,6 +1162,18 @@ export class TranscriptModel {
       this.replace(item.id, item);
       return;
     }
+    /*
+     * The one place a stretch of reasoning ends, and the reason it is one place.
+     *
+     * Every row that stands in the thread — an answer, a prompt, a permission
+     * card, a notice, a run-end — arrives through here, so "anything but
+     * reasoning and tool calls breaks the streak" is a single line rather than a
+     * clause repeated in six `apply` cases and forgotten in the seventh. Tool
+     * calls are the exception because they do not stand in the thread: they sink
+     * to the marker at the foot of the run, which leaves the blocks either side
+     * of them adjacent on screen.
+     */
+    if (item.kind !== 'thinking' && item.kind !== 'tool') this.thinkingStreak = null;
     this.items.set(item.id, item);
     this.ids.push(item.id);
     if (item.kind === 'assistant' || item.kind === 'thinking') this.buffers.set(item.id, item.text);
@@ -1438,6 +1467,72 @@ export class TranscriptModel {
     const blocks = this.messageBlocks.get(messageId);
     if (blocks) blocks.push(id);
     else this.messageBlocks.set(messageId, [id]);
+  }
+
+  /**
+   * Which row a thinking delta is written into — a new one, or the stretch of
+   * reasoning already open.
+   *
+   * `null` means the event earns no row at all. A thinking block earns one by
+   * having something in it, and an event with neither text nor a redaction
+   * notice would open a fold that says "thinking…" and never fills; the
+   * providers emit a lot of those (see `ThinkingDeltaEvent`). The mappers drop
+   * them at the source and this is the backstop, checked on *creation* rather
+   * than by a later sweep: a block whose text arrives in a second delta is
+   * created by the delta that carries it, so nothing has to decide when an
+   * empty block has stayed empty long enough to retract.
+   *
+   * Everything else here is the merge. A block that has already been placed —
+   * as a row of its own or into one — goes back where it went, so the per-token
+   * path is one map lookup. A block arriving into an open stretch is appended to
+   * it after a blank line, which is what makes two paragraphs read as two
+   * paragraphs (and is what markdown needs to see to keep them apart).
+   *
+   * Redaction never merges, in either direction. "The provider withheld this
+   * one" is a notice about a *block*, so it cannot be glued onto the end of
+   * prose it is not about, and prose cannot be glued onto it — it ends the
+   * stretch and the next block starts a fresh row.
+   *
+   * Neither does reasoning from a different agent. A row carries one `agentId`,
+   * and a subagent's working-out appended to the main agent's would be two
+   * minds in one paragraph attributed to whichever spoke first.
+   */
+  private thinkingRow(event: ThinkingDeltaEvent): string | null {
+    const blockId = this.blockId('k', event.messageId, event.blockIndex);
+    if (this.items.has(blockId)) return blockId;
+    const merged = this.thinkingMerged.get(blockId);
+    if (merged !== undefined) return merged;
+    if (event.text === '' && event.redacted !== true) return null;
+
+    const open = this.thinkingStreak === null ? undefined : this.items.get(this.thinkingStreak);
+    if (
+      event.redacted !== true &&
+      open?.kind === 'thinking' &&
+      !open.redacted &&
+      open.agentId === event.agentId
+    ) {
+      this.thinkingMerged.set(blockId, open.id);
+      this.append(open.id, '\n\n');
+      // A tool call between the two settled the row (see `settleStreaming`), and
+      // it is being written to again — so it is live again, or the pulse beside
+      // it goes out for the rest of a turn that is still thinking.
+      if (!open.streaming) this.replace(open.id, { ...open, streaming: true });
+      return open.id;
+    }
+
+    this.insert({
+      id: blockId,
+      ts: event.ts,
+      kind: 'thinking',
+      messageId: event.messageId,
+      blockIndex: event.blockIndex,
+      text: '',
+      streaming: true,
+      redacted: event.redacted === true,
+      ...(event.agentId === undefined ? {} : { agentId: event.agentId }),
+    });
+    this.thinkingStreak = event.redacted === true ? null : blockId;
+    return blockId;
   }
 
   /**

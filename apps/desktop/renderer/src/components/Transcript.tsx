@@ -897,11 +897,40 @@ function AssistantRow({ item }: { readonly item: AssistantItem }): ReactElement 
   );
 }
 
+/**
+ * The marks a preview should not be showing the reader.
+ *
+ * Reasoning arrives as markdown often enough that the collapsed line was
+ * regularly `**Planning the retry path**` — the syntax spent on emphasis nobody
+ * can see in a 64-character excerpt. Only the unambiguous ones are stripped:
+ * a lone `*` or `_` is as likely to be a glob or a `snake_case` identifier as it
+ * is to be italics, and mangling a path to un-italicise nothing is a worse
+ * trade than leaving one asterisk in.
+ */
+const PREVIEW_MARKS = /^\s{0,3}(?:#{1,6}|>|[-*+]|\d+[.)])\s+|\*\*|__|~~|`/gm;
+
 /** The one line of it worth showing collapsed. */
 function thinkingPreview(item: ThinkingItem): string {
   if (item.redacted) return 'redacted by the provider';
-  return oneLine(item.text, 64) || 'thinking…';
+  return oneLine(item.text.replace(PREVIEW_MARKS, ''), 64) || 'thinking…';
 }
+
+/**
+ * Whether this block is markdown, or prose that merely contains a hyphen.
+ *
+ * The model writes its reasoning in markdown much of the time — bold headers on
+ * each move, numbered plans, a fenced snippet it is about to write — and
+ * rendering that as literal asterisks was the complaint. Parsing *everything*
+ * would be the shorter code and the wrong behaviour: plain reasoning is full of
+ * `snake_case`, indented pasted output and bare URLs, all of which markdown has
+ * opinions about, and none of which the model meant as markup.
+ *
+ * So the block has to show a tell. Each alternative below is a construct that
+ * does not occur by accident: paired emphasis, an ATX heading, a list marker at
+ * the start of a line, a fence, backticked code, a blockquote, a link.
+ */
+const MARKDOWN_TELL =
+  /\*\*[^*\n]+\*\*|(?:^|\n)\s{0,3}#{1,6}\s|(?:^|\n)\s{0,3}(?:[-*+]|\d+[.)])\s|```|`[^`\n]+`|(?:^|\n)\s{0,3}>\s|\[[^\]\n]+\]\([^)\s]+\)/;
 
 /** What a withheld block says instead of itself. */
 const REDACTED = 'This thinking block was encrypted or withheld by the provider.';
@@ -925,66 +954,62 @@ function RedactedBlock(): ReactElement {
 }
 
 /**
- * The block itself, marked by a rule rather than boxed in.
+ * How reasoning reads before it is markdown — and, for a block that never
+ * becomes markdown, permanently.
  *
- * Sans, like the answer it precedes. Thinking is the model talking to itself in
- * sentences, so it follows the same rule as every other stretch of prose in the
- * pane; the rule down the left and the 11px size are what mark it as private and
- * secondary, and the italic is 7D's own tell for it (`.thinkbody`,
- * docs/design/7d-full.html). The sage well this used to be was a grey slab in
- * the middle of the thread saying nothing the rule does not.
+ * The answer's own measure and leading, one colour down. Everything that used to
+ * separate the two is gone: the rule down the left, the 3px of indent it stood
+ * in, the 11px size and the italic. Each of them was a way of saying "this is an
+ * aside" a second time, and stacked they turned a long stretch of reasoning into
+ * a column of its own running down the side of the conversation — the thing to
+ * scroll past rather than the thing to read. The label in the gutter says what
+ * the row is; `--ink-muted` says it is not the answer; the text sits on the same
+ * left edge as every other sentence in the pane and reads like one.
+ */
+const THINKING_TEXT = 'text-sm leading-relaxed break-words whitespace-pre-wrap text-ink-muted';
+
+/**
+ * The block itself.
  *
- * This is the treatment for a block someone went and *opened* — inside a marker,
- * or by clicking a collapsed row. Thinking the reader asked to have on screen
- * permanently is {@link ThinkingProse}, and is a different shape for a reason
- * given there.
+ * Three ways it can be drawn, in the order they are tested:
+ *
+ *  - **A notice**, for a block the provider withheld — the one square surface
+ *    left in this row, and the reason it survived.
+ *  - **Plain text**, while it streams, when it is too large to parse, or when
+ *    it is prose rather than markup. Streaming stays plain per rule 3 in the
+ *    header: the text grows in place as the model writes it, at one text node
+ *    per flush rather than a parse per frame.
+ *  - **Markdown**, once the block is settled and shows a {@link MARKDOWN_TELL}.
+ *    The model writes its reasoning in markdown constantly and a fold full of
+ *    `**` and `-` was the reader doing the parsing by eye.
+ *
+ * `md-quiet` is what keeps a heading inside reasoning from being drawn in
+ * `--ink`: the markdown is styled like the answer's, in the aside's colour. No
+ * `files` or `repo` — a path the model muttered to itself is not an invitation
+ * to open a file, and the link machinery would be a subscription per span on
+ * text nobody is clicking.
  */
 function ThinkingBody({ item }: { readonly item: ThinkingItem }): ReactElement {
   if (item.redacted) return <RedactedBlock />;
+  if (item.streaming || item.text.length > MARKDOWN_LIMIT || !MARKDOWN_TELL.test(item.text)) {
+    return <div className={THINKING_TEXT}>{item.text}</div>;
+  }
   return (
-    <div className="border-l-2 border-line py-0.5 pl-3 text-2xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted italic">
-      {item.text}
+    <div className="md md-quiet text-ink-muted">
+      <Markdown>{item.text}</Markdown>
     </div>
   );
 }
 
 /**
- * The same block when the reader has asked to watch the model think.
+ * A stretch of reasoning, standing in the thread where the model wrote it.
  *
- * A well is the wrong container for this one. A well says "output, parked here,
- * open it if you want it" — right for a block behind a fold, wrong for the
- * thing the reader turned a setting on to read, and at the length real
- * reasoning runs to it becomes a grey slab between every pair of sentences the
- * agent actually said. So the box goes and a sage rule down the left stays:
- * enough to mark the column as an aside, nothing that has to be got past.
- *
- * Muted rather than sage, and this is the part the setting promises. Sage is a
- * *label* colour in this pane — it says "thinking" in the gutter and tints the
- * fold — and a whole paragraph of it reads as emphasis, which is the opposite
- * of the claim. `--ink-muted` is the app's word for "secondary text", so a
- * reader scanning the column can tell reasoning from answer without reading
- * either. The rule keeps the hue where it costs nothing.
- *
- * 12px, one step under the 13px the answer is set in and one over the 11px of
- * the chrome. The folded treatments can be 11px because nobody reads a fold;
- * this is prose someone opted into and has to hold up over a screenful.
- *
- * No `StreamingText` and no markdown, deliberately, per rules 3 and 4 in the
- * header: the text grows in place as the model writes it, which is the whole
- * request, and it costs one text node per flush rather than a parse.
- */
-function ThinkingProse({ item }: { readonly item: ThinkingItem }): ReactElement {
-  if (item.redacted) return <RedactedBlock />;
-  return (
-    <div className="border-l-2 border-sage/30 py-0.5 pl-3 text-xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
-      {item.text}
-    </div>
-  );
-}
-
-/**
- * Thinking that stands on its own — the reasoning before an answer, with no
- * tool call anywhere near it, or every block once the Appearance switch is on.
+ * One row per *stretch*, not per provider block: consecutive thinking blocks are
+ * merged in the model, so what used to be eight folds down the side of the pane
+ * — each holding one sentence, with the calls that separated them sunk into the
+ * marker below — is the paragraph of working-out it always was. The thing that
+ * ends a stretch is the agent saying something. See `thinkingRow` in
+ * `state/transcript.ts`.
  *
  * A bare fold on the spine rather than a card, because this is the only shape
  * it takes: reasoning is a message in the thread, sitting where the model wrote
@@ -1050,11 +1075,12 @@ function ThinkingRow({ item }: { readonly item: ThinkingItem }): ReactElement {
           </span>
         }
       >
-        {/* The reader asking for reasoning in general is what earns it the prose
-            treatment — 12px, in the sage aside. A block prised open out of
-            curiosity is the same shape one size down, in the neutral rule: still
-            an aside, but not one anybody asked to keep on screen. */}
-        {shown ? <ThinkingProse item={item} /> : <ThinkingBody item={item} />}
+        {/* One treatment, however the block came to be open. The switch decides
+            whether reasoning is on screen; it was never a reason for the prose
+            under it to be set differently, and the two shapes it used to have
+            differed by a pixel of type size and the colour of a rule that has
+            since gone. */}
+        <ThinkingBody item={item} />
       </Fold>
     </Line>
   );
