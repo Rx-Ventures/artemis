@@ -314,11 +314,19 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
   const usageSource = {
     read: async (query: { readonly profileIds: readonly string[] }) => {
       const rows = [];
+      // One listing for the labels, not one describe per row: the engine has
+      // no single-profile read on this surface, and the list is what the
+      // sidebar already pays for.
+      const labels = new Map(
+        (await options.engine.require().listProfiles({})).map((profile) => [
+          String(profile.id),
+          profile.label,
+        ]),
+      );
       for (const profileId of query.profileIds) {
         try {
-          const profile = await options.engine.require().describeProfile(profileId as never);
           const usage = await options.engine.require().refreshPlanUsage({ profileId: profileId as never });
-          rows.push({ profileId, label: profile.label, usage });
+          rows.push({ profileId, label: labels.get(profileId) ?? profileId, usage });
         } catch {
           // Unreadable gauge: no row, account untouched.
         }
