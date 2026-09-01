@@ -242,8 +242,10 @@ export function browserTools(runId: RunId, context: BrowserToolContext) {
   return [
       tool(
         'browser_open',
-        'Open the browser tab for this conversation, optionally at an address. ' +
-          'Reuses the tab if one is already open. The user sees this tab.',
+        'Open the embedded browser tab in the Artemis dock for this ' +
+          'conversation, optionally at an address. Reuses the tab if one is ' +
+          'already open. The user sees this tab inside the Artemis window — ' +
+          'it is not their own browser.',
         { url: z.string().optional().describe('Address to open, e.g. http://localhost:5173') },
         async ({ url }) => {
           if (url !== undefined && browserUrlFor(url) === null) {
@@ -261,7 +263,7 @@ export function browserTools(runId: RunId, context: BrowserToolContext) {
 
       tool(
         'browser_navigate',
-        'Go to an address in this conversation’s browser tab.',
+        'Go to an address in this conversation’s embedded dock browser tab.',
         { url: z.string().describe('Address to open. Must be http or https.') },
         async ({ url }) => {
           try {
@@ -406,9 +408,26 @@ export function browserTools(runId: RunId, context: BrowserToolContext) {
   ];
 }
 
-/** What the model is told this server is for. */
+/**
+ * What the model is told this server is for.
+ *
+ * The second sentence exists because of a real failure: asked to open a page
+ * "in my Chrome", an agent used these tools and assured the user it had —
+ * the embedded tab looked, from inside the run, like a browser like any
+ * other. The instructions are the one place to say whose browser this is
+ * *before* that mistake is made, and what to say instead when the user wants
+ * their own.
+ */
 const INSTRUCTIONS =
-  'Drives the browser tab in the Artemis dock, which the user can see. ' +
+  'Drives the EMBEDDED browser tab in the Artemis dock — a pane inside the ' +
+  'Artemis window itself, which the user can see. This is NOT the user’s ' +
+  'own Chrome or default browser: it has none of their logins, extensions or ' +
+  'open tabs, and nothing done here appears in their browser. Never tell the ' +
+  'user a page was opened in their browser when you used these tools. If the ' +
+  'user asks for a page in THEIR browser (e.g. “my Chrome”) and these are ' +
+  'your only browser tools, say that this session can only drive the embedded ' +
+  'dock browser — they can enable “Browse with your Chrome” or “Open pages ' +
+  'in your default browser” under Settings → Permissions. ' +
   'Prefer browser_read over browser_screenshot: it is far cheaper and is ' +
   'usually enough. Reach for a screenshot when the question is about ' +
   'layout, styling, or something that went wrong visually.';

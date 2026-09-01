@@ -210,7 +210,10 @@ export function PermissionsSection(): ReactElement {
                 using other tabs. Needs the extension installed and a profile signed in with an
                 account — a profile using an API key keeps this off, silently, because the
                 extension cannot authenticate with one. The embedded dock browser is not offered
-                to these runs.
+                to these runs. Applies to Claude accounts running on this machine: a session on an
+                Artemis Server account runs on the server, which cannot reach this browser. After
+                the first Chrome-enabled run, restart Chrome once so it picks up the connector,
+                then approve the connection in the extension when asked.
               </ItemDescription>
             </ItemContent>
             <ItemActions>
