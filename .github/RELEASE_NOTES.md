@@ -1,6 +1,51 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.4
+
+Bug fixes, all in the seams between a desktop and the accounts an Artemis
+Server serves — plus the one that kept Windows machines out entirely.
+
+**Remote sessions start from Windows.** They never reached the server: the
+desktop demanded the *local* disk contain the server's working directory
+before it would ask the server anything, and on Windows the server's
+`/work/app` reads as a path on the current drive that does not exist. A
+session run elsewhere never needs a local directory, so the check no longer
+applies to it — and a run posted to a server with no usable directory of its
+own now roots at the connection's pinned workspace instead of being refused.
+Typing a server path into the directory field on a Windows machine also
+stopped being rejected for having the server's own shape.
+
+**The usage rings work at a server.** The bottom-right meter used to say a
+server profile "does not report plan usage" while the server was reporting
+it for every account it serves. The rings now follow the account behind your
+current pick, refresh on demand, and the same reading gates each model row.
+
+**Percentages are percentages again.** The account picker and the server
+profile card could read 1100% — the server already reports 0–100 and two new
+display sites multiplied by 100 again. Both fixed.
+
+**The profile chip names the account.** At a server it used to say only
+"Artemis Server"; it now says which account is about to be charged —
+"Artemis Server — work max".
+
+**One account's models, once.** With two Claude accounts served, every model
+appeared twice with nothing to tell the rows apart. The model column now
+narrows to the account picked above it; the search still reaches everything
+the server serves, and rows found in another account wear that account's
+own gauge.
+
+**The embedded browser stopped impersonating yours.** Asked to open a page
+"in my Chrome", an agent could drive the embedded dock tab and assure you it
+had used your browser. The embedded tools now tell the model exactly whose
+browser they are — and what to offer instead: "Browse with your Chrome"
+(Claude sessions on this machine, via the Claude in Chrome extension) or
+"Open pages in your default browser", both under Settings → Permissions &
+access. If the extension does not connect on the first Chrome-enabled run,
+restart Chrome once and approve the connection when it asks.
+
+Also: the run location row says "This PC" on Windows instead of "This Mac".
+
 ## What's new in 2.4.3
 
 One fix, on Windows only — and it is the one that stood between a Windows
