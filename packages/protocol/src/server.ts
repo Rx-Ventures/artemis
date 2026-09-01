@@ -67,6 +67,7 @@
  * "yes, something is listening" and nothing else.
  */
 
+import type { PlanUsage } from './usage.js';
 import type { AgentEvent } from './events.js';
 import type { ProfileId } from './ids.js';
 import type { Capabilities, ProviderId, ProviderKind } from './provider.js';
@@ -674,6 +675,22 @@ export interface ServerSessionMessagesBody {
   readonly object: 'artemis.session.messages';
   readonly events: readonly AgentEvent[];
   readonly hasMore: boolean;
+}
+
+/**
+ * Body of `GET /api/v0/usage`.
+ *
+ * One row per account this connection can see whose provider reports plan
+ * capacity. Served from a short cache on purpose: the reading costs a CLI
+ * control call per account, and a gauge is allowed to be a minute old.
+ */
+export interface ServerUsageBody {
+  readonly object: 'artemis.usage';
+  readonly accounts: readonly {
+    readonly profileId: ProfileId;
+    readonly label: string;
+    readonly usage: PlanUsage;
+  }[];
 }
 
 /**

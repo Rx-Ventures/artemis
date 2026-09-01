@@ -167,6 +167,7 @@ async function serve(): Promise<void> {
     workspaces: host.workspaces,
     ledger: host.ledger,
     sessions: host.sessionSource,
+    usage: host.usageSource,
     feed: host.feed,
     guard: host.guard,
     onRemoteAccess: host.recordAccess,

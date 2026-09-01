@@ -89,6 +89,7 @@ import {
   ProfileStore,
   profileConfigDir,
   readRemoteAccounts,
+  readRemoteUsage,
   readRemoteSignIn,
   resolveEnv,
   resolveStoreEnv,
@@ -468,6 +469,10 @@ export interface ArtemisEngine {
     patch: { readonly label?: string; readonly baseUrl?: string; readonly apiKey?: string },
   ): Promise<ServerProfileCreatedBody>;
   deleteRemoteAccount(profileId: ProfileId, accountId: string): Promise<{ readonly removed: boolean }>;
+  /** The server's gauges, one row per visible account with a plan to read. */
+  readRemotePlanUsage(
+    profileId: ProfileId,
+  ): Promise<readonly { readonly profileId: string; readonly label: string; readonly usage: PlanUsage }[]>;
   startRemoteSignIn(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus>;
   remoteSignInStatus(profileId: ProfileId, accountId: string): Promise<ServerSignInStatus | null>;
   submitRemoteSignInCode(
@@ -1579,6 +1584,8 @@ function createEngine(options: EngineOptions): ArtemisEngine {
       updateRemoteAccount(await remoteEnvFor(profileId), accountId, patch),
     deleteRemoteAccount: async (profileId, accountId) =>
       deleteRemoteAccount(await remoteEnvFor(profileId), accountId),
+    readRemotePlanUsage: async (profileId) =>
+      (await readRemoteUsage(await remoteEnvFor(profileId))).accounts,
 
     startRemoteSignIn: async (profileId, accountId) => {
       const env = await remoteEnvFor(profileId);

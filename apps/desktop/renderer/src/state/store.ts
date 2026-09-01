@@ -714,6 +714,14 @@ export interface AppState {
    * as a fresh one.
    */
   readonly planUsageByProfile: Readonly<Record<ProfileId, PlanUsage>>;
+  /**
+   * Gauges for accounts served by an Artemis Server profile, keyed
+   * `profileId/accountId`. A separate map from {@link planUsageByProfile} on
+   * purpose — see `installPlanUsageFeed` for why the two must not mix.
+   */
+  readonly planUsageByServerAccount: Readonly<
+    Record<string, { readonly usage: PlanUsage; readonly label: string }>
+  >;
 
   /**
    * Model ids the user pinned to the status-line picker, in no particular
@@ -2292,6 +2300,7 @@ export const useApp = create<AppState>(() => ({
   profiles: [],
   authByProfile: {},
   planUsageByProfile: {},
+  planUsageByServerAccount: {},
 
   quickModelIdsByProfile: prefs.quickModelIdsByProfile ?? {},
   modelBySession: prefs.modelBySession ?? {},
@@ -5923,7 +5932,27 @@ function acceptPlanUsage(profileId: ProfileId, usage: PlanUsage): boolean {
 export function installPlanUsageFeed(): () => void {
   const { bridge } = resolveBridge();
   if (!bridge) return () => undefined;
-  return bridge.usagePlan.onChange(({ profileId, usage }) => {
+  return bridge.usagePlan.onChange(({ profileId, usage, accountId, accountLabel }) => {
+    /*
+     * A push carrying an account id is one served account's gauge, filed in
+     * its own map under `profile/account`. It deliberately does not enter
+     * `planUsageByProfile`: that map's consumers — the recommender, handoff,
+     * the meters — reason about *local* accounts, and a server's reading
+     * under the server-profile key would make one profile appear to have
+     * several contradictory gauges.
+     */
+    if (accountId !== undefined) {
+      useApp.setState((s) => ({
+        planUsageByServerAccount: {
+          ...s.planUsageByServerAccount,
+          [`${profileId}/${accountId}`]: {
+            usage,
+            label: accountLabel ?? accountId,
+          },
+        },
+      }));
+      return;
+    }
     // Only when the reading actually landed: a cycle discarded for being older
     // than what is already held has told the ranking nothing new, and a handoff
     // decided on a superseded number is the thing this ordering protects.
