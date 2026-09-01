@@ -67,6 +67,63 @@ import { assertNoSecrets, RESPONSE_SCAN_POLICY } from './redact.js';
 
 const log = createLogger('plan-usage');
 
+/** Scan a reading for credentials, then broadcast it to every window. */
+function push(profileId: ProfileId, payload: PlanUsagePush): void {
+  try {
+    // The same standard the equivalent *response* is held to — see
+    // `RESPONSE_SCAN_POLICY`, which already accounts for this shape
+    // (`unavailableReason` is one of its content keys). A push is not a
+    // weaker boundary than an invoke reply just because nobody asked for it.
+    assertNoSecrets(payload, IPC_PUSH.planUsage, RESPONSE_SCAN_POLICY);
+  } catch (error) {
+    log.error(`Dropped plan usage for ${profileId}: it failed its credential-safety check`, error);
+    return;
+  }
+  broadcast(IPC_PUSH.planUsage, payload);
+}
+
+/**
+ * Read one profile's plan usage and broadcast what came back — the poller's
+ * own read, callable on demand.
+ *
+ * Exported for `IPC.usagePlanRefresh`: a renderer refreshing an Artemis Server
+ * profile needs exactly this behaviour, because the served gauges travel the
+ * push channel keyed by account and an invoke reply can carry only one
+ * reading. `cancelled` lets the poller drop a push that resolves after it is
+ * disposed; failures propagate to the caller, which decides whether they are
+ * routine.
+ */
+export async function broadcastPlanUsageReading(
+  engine: EngineHost,
+  profileId: ProfileId,
+  providerId: string,
+  cancelled: () => boolean = () => false,
+): Promise<void> {
+  /*
+   * An Artemis Server profile is a window onto several accounts, so its
+   * reading is a fan-out: one push per served account, each carrying the
+   * account id and label beside the one profile that names the server.
+   * The serving host's cache decides freshness, which is what keeps this
+   * from costing a CLI spawn per account per tick on the far machine.
+   */
+  if (providerId === 'artemis') {
+    const rows = await engine.require().readRemotePlanUsage(profileId);
+    if (cancelled()) return;
+    for (const row of rows) {
+      push(profileId, {
+        profileId,
+        usage: row.usage,
+        accountId: row.profileId,
+        accountLabel: row.label,
+      });
+    }
+    return;
+  }
+  const usage = await engine.require().refreshPlanUsage({ profileId });
+  if (cancelled()) return;
+  push(profileId, { profileId, usage });
+}
+
 /**
  * How long after the app starts the first cycle runs.
  *
@@ -120,46 +177,10 @@ export function startPlanUsagePolling(
     timer = setTimeout(() => void cycle(), delayMs);
   };
 
-  const push = (profileId: ProfileId, payload: PlanUsagePush): void => {
-    try {
-      // The same standard the equivalent *response* is held to — see
-      // `RESPONSE_SCAN_POLICY`, which already accounts for this shape
-      // (`unavailableReason` is one of its content keys). A push is not a
-      // weaker boundary than an invoke reply just because nobody asked for it.
-      assertNoSecrets(payload, IPC_PUSH.planUsage, RESPONSE_SCAN_POLICY);
-    } catch (error) {
-      log.error(`Dropped plan usage for ${profileId}: it failed its credential-safety check`, error);
-      return;
-    }
-    broadcast(IPC_PUSH.planUsage, payload);
-  };
-
   /** Read one account and push what came back. Never throws. */
   const readOne = async (profileId: ProfileId, providerId: string): Promise<void> => {
     try {
-      /*
-       * An Artemis Server profile is a window onto several accounts, so its
-       * reading is a fan-out: one push per served account, each carrying the
-       * account id and label beside the one profile that names the server.
-       * The serving host's cache decides freshness, which is what keeps this
-       * from costing a CLI spawn per account per tick on the far machine.
-       */
-      if (providerId === 'artemis') {
-        const rows = await engine.require().readRemotePlanUsage(profileId);
-        if (stopped) return;
-        for (const row of rows) {
-          push(profileId, {
-            profileId,
-            usage: row.usage,
-            accountId: row.profileId,
-            accountLabel: row.label,
-          });
-        }
-        return;
-      }
-      const usage = await engine.require().refreshPlanUsage({ profileId });
-      if (stopped) return;
-      push(profileId, { profileId, usage });
+      await broadcastPlanUsageReading(engine, profileId, providerId, () => stopped);
     } catch (error) {
       // Routine: a profile pointed at a directory the CLI cannot read, a
       // provider that has been uninstalled, an account signed out. The next

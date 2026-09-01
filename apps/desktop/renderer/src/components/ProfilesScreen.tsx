@@ -432,7 +432,13 @@ function ProfileCard({
           report, and an empty meter under a sign-in button reads as a limit of
           zero rather than as an unanswered question.
         */}
-        {signedIn ? (
+        {/*
+          Not for a server profile, though its provider now reports plan usage:
+          a server's readings are per served account and live on the account
+          rows below, where each wears its own gauge. One meter for "the
+          server" would claim a single answer for several accounts.
+        */}
+        {signedIn && profile.providerId !== 'artemis' ? (
           <div className="mt-1 border-t border-hairline pt-2">
             <ProfilePlanUsage
               profileId={profile.id}
@@ -743,7 +749,8 @@ function ServerAccountGauge({
   if (reading === undefined || !reading.usage.available) return null;
   const window = bindingWindow(reading.usage);
   if (window === null || window.utilization === null) return null;
-  const percent = Math.round(window.utilization * 100);
+  // `utilization` is already 0–100 — see `PlanUsageWindow`.
+  const percent = Math.round(window.utilization);
   return (
     <span
       className={cn('font-mono text-2xs', toneFor(window.utilization))}
