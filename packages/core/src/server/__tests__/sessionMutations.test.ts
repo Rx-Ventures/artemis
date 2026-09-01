@@ -68,6 +68,9 @@ function ledgerWith(sessionId: string): SessionLedger {
   return {
     get: (id) => (id === sessionId ? (entry as never) : undefined),
     mayAccess: (scope, id) => id === sessionId && scope.workspaceKey === entry.workspaceKey,
+    // The listing route walks the ledger rather than asking per id.
+    listFor: (scope: { workspaceKey: string }) =>
+      scope.workspaceKey === entry.workspaceKey ? [entry] : [],
   } as never;
 }
 
@@ -184,6 +187,55 @@ describe('delete', () => {
     expect(reply.status).toBe(200);
     expect(reply.body).toMatchObject({ deleted: false });
     expect(recorded.access).toEqual([]);
+  });
+});
+
+describe('the listing', () => {
+  it('carries the store\u2019s tag, so an archived conversation reads as archived', async () => {
+    // The write half was never the bug: `tagged: true` came back all along
+    // while the listing dropped the field, so a session archived and
+    // reappeared unarchived on the next read.
+    const { ask } = harness({
+      list: async () => ({
+        sessions: [
+          {
+            id: 'sess-1',
+            title: 'Archived one',
+            updatedAt: 10,
+            providerId: 'claude',
+            profileId: 'prof-a',
+            cwd: '/w',
+            tag: 'archived',
+          } as never,
+        ],
+        hasMore: false,
+      }),
+    });
+    const reply = await ask('/api/v0/sessions', 'GET');
+    expect(reply.status).toBe(200);
+    expect((reply.body as { sessions: { tag?: string }[] }).sessions[0]?.tag).toBe('archived');
+  });
+
+  it('leaves the field off entirely for an untagged conversation', async () => {
+    const { ask } = harness({
+      list: async () => ({
+        sessions: [
+          {
+            id: 'sess-1',
+            title: 'Plain',
+            updatedAt: 10,
+            providerId: 'claude',
+            profileId: 'prof-a',
+            cwd: '/w',
+          } as never,
+        ],
+        hasMore: false,
+      }),
+    });
+    const reply = await ask('/api/v0/sessions', 'GET');
+    expect((reply.body as { sessions: Record<string, unknown>[] }).sessions[0]).not.toHaveProperty(
+      'tag',
+    );
   });
 });
 
