@@ -41,8 +41,8 @@ import { CheckIcon, ShieldAlertIcon, TriangleAlertIcon, XIcon } from 'lucide-rea
 import type { PermissionRuleUpdate } from '@rx-artemis/protocol';
 
 import { formatJson } from '../lib/format';
-import { DEFAULT_DENIAL, respondToPermission } from '../state/store';
-import { usePaneRef } from '../state/paneContext';
+import { DEFAULT_DENIAL, activeProfile, respondToPermission } from '../state/store';
+import { usePane, usePaneRef } from '../state/paneContext';
 import type { PermissionItem } from '../state/transcript';
 import { InlinePlan } from './InlinePlan';
 import { InlineQuestion } from './InlineQuestion';
@@ -53,6 +53,39 @@ import { Kbd } from '@/components/ui/kbd';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+
+/**
+ * The suggested rule changes, as a remote run may actually receive them.
+ *
+ * A suggestion arrives from the provider CLI carrying its own scope, and that
+ * scope is frequently durable — `project`, `local`, `user` — because locally
+ * those are exactly what "stop asking me about this" should write. Across a
+ * connection token they are not available: a durable rule writes to the
+ * *serving* machine's settings, which is someone else's disk, and both the
+ * server's parser and `guardRemoteDecision` refuse the whole decision when one
+ * appears.
+ *
+ * The refusal is right and stays. What was wrong is that the button offering
+ * them was drawn anyway, so "Allow for this session" on a remote run failed
+ * every time with a message about durable scopes, leaving "Approve once" as
+ * the only answer that worked — once per prompt, forever.
+ *
+ * Narrowing rather than hiding, because `session` is what the button already
+ * promises. The rule still stops the run asking again; it simply stops at the
+ * end of the run instead of being written down. That is the whole of what a
+ * connection token can offer, and it is most of what the user wanted.
+ */
+export function scopedForRun(
+  suggestions: readonly PermissionRuleUpdate[],
+  remote: boolean,
+): readonly PermissionRuleUpdate[] {
+  if (!remote) return suggestions;
+  return suggestions.map((update) =>
+    update.scope === undefined || update.scope === 'once' || update.scope === 'session'
+      ? update
+      : { ...update, scope: 'session' as const },
+  );
+}
 
 export function InlinePermission({ item }: { readonly item: PermissionItem }): ReactElement {
   /*
@@ -112,6 +145,9 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
   // must stay answerable while the user works on the right, so the decision is
   // routed by the pane the card is rendered in rather than by what has focus.
   const pane = usePaneRef();
+  // The same question the navigator asks: a profile belongs to one provider,
+  // and `artemis` is the one that reaches another machine.
+  const remote = usePane((state) => activeProfile(state)?.providerId === 'artemis');
 
   const decide = (run: () => Promise<string | null>): void => {
     if (busy) return;
@@ -148,7 +184,7 @@ function PendingPrompt({ item }: { readonly item: PermissionItem }): ReactElemen
       ),
     );
 
-  const suggestions = request.suggestions ?? [];
+  const suggestions = scopedForRun(request.suggestions ?? [], remote);
 
   return (
     <div
