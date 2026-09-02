@@ -738,6 +738,41 @@ const SIGN_IN_POLL_MS = 1_200;
  * the account has no plan to read: an empty chip would claim a fact nobody
  * has.
  */
+/**
+ * What a served account's row says about its sign-in, and how loudly.
+ *
+ * Four answers, because there are four states and the two that used to be
+ * conflated are the ones that matter. `live` — "the account confirmed this
+ * catalogue" — was standing in for this, and for a provider whose model list
+ * needs no credential to enumerate it reads as signed in when the account has
+ * no credential at all. That is how a server with one broken account showed
+ * five identical rows, every one offering "Sign in again".
+ *
+ * An absent `auth` is a server too old to be asked, or one that cannot probe.
+ * It says so rather than picking whichever guess looks tidier — which is the
+ * one thing it must not share with {@link describeAccount}, the local-profile
+ * counterpart, where an absent status means the poll has not answered *yet*
+ * and "checking…" is the truth.
+ */
+export function describeAccountAuth(auth: AuthStatusInfo | undefined): {
+  readonly text: string;
+  readonly tone: string;
+  readonly detail?: string;
+} {
+  if (auth === undefined) return { text: 'sign-in not checked', tone: 'text-ink-faint' };
+  // A failed read is not a signed-out account: sending someone to a login that
+  // cannot work is worse than saying the check itself is broken.
+  if (auth.error !== undefined) {
+    return { text: 'sign-in unreadable', tone: 'text-amber', detail: auth.error };
+  }
+  if (!auth.loggedIn) return { text: 'signed out', tone: 'text-amber' };
+  return {
+    text: 'signed in',
+    tone: 'text-ink-faint',
+    ...(auth.email === undefined ? {} : { detail: auth.email }),
+  };
+}
+
 function ServerAccountGauge({
   profileId,
   accountId,
@@ -912,6 +947,7 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
             */
             const endpoint = account.provider.kind !== 'hosted';
             const managed = listing.manageProfiles && signingIn === null;
+            const auth = describeAccountAuth(account.auth);
             return (
               <li key={account.id} className="flex flex-col gap-1 text-2xs">
                 <div className="flex items-center gap-2">
@@ -942,15 +978,18 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
                       <span className="text-ink">{account.label}</span>
                       <span className="font-mono text-ink-faint">{account.provider.label}</span>
                       {/*
-                        `live` is the server's own word for "the account confirmed
-                        this catalogue", the closest thing it publishes to "this
-                        one is signed in" — a signed-out directory cannot
-                        enumerate.
+                        `live` says whether the *catalogue* was confirmed by the
+                        account, which is all it ever said. It used to double as
+                        the sign-in state too; `auth` answers that now, and the
+                        two are drawn as the separate facts they are.
                       */}
                       <span className="font-mono text-ink-faint">
                         {account.live
                           ? `${String(account.models.length)} models`
                           : 'no models confirmed'}
+                      </span>
+                      <span className={cn('font-mono', auth.tone)} title={auth.detail}>
+                        {auth.text}
                       </span>
                       <ServerAccountGauge profileId={profileId} accountId={account.id} />
                       {managed ? (
@@ -975,7 +1014,7 @@ function ServerAccountsSection({ profileId }: { readonly profileId: string }): R
                               disabled={busy}
                               onClick={() => void begin(account.id)}
                             >
-                              {account.live ? 'Sign in again' : 'Sign in'}
+                              {account.auth?.loggedIn === true ? 'Sign in again' : 'Sign in'}
                             </Button>
                           )}
                           <Button

@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import type { PlanUsage, ProfileId, ProviderId, RunId } from '@rx-artemis/protocol';
 import {
   RunError,
+  checkAuthStatus,
   createCatalogue,
   createDefaultProviderRegistry,
   createPushFeed,
@@ -141,6 +142,21 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
         return adapter.listModels({
           env: await envFor(profileId, providerId),
           cwd: dataDir,
+        });
+      },
+      // The same probe the sign-in director polls, so the listing and the
+      // login agree about what "signed in" means. A serving account that was
+      // created and never signed in is the case this exists for: its routes
+      // are published, they 401 on the first token, and nothing anywhere said
+      // so.
+      checkAuth: async ({ providerId, profileId }) => {
+        const profile = (await profiles.list()).find((candidate) => candidate.id === profileId);
+        if (profile === undefined) {
+          return { loggedIn: false, error: 'This account is no longer configured.' };
+        }
+        return checkAuthStatus({
+          credentials: credentialsFor(providerId),
+          configDir: profiles.configDirFor(profile),
         });
       },
     },

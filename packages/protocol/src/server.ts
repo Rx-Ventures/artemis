@@ -67,6 +67,7 @@
  * "yes, something is listening" and nothing else.
  */
 
+import type { AuthStatusInfo } from './ipc.js';
 import type { PlanUsage } from './usage.js';
 import type { AgentEvent } from './events.js';
 import type { ProfileId } from './ids.js';
@@ -335,6 +336,26 @@ export interface ServerProfile {
    * settings screen does.
    */
   readonly live: boolean;
+  /**
+   * Whether this account's directory actually holds a credential.
+   *
+   * Not derivable from {@link live}, which is what the surfaces used to guess
+   * from, and the guess was wrong in the direction that matters. `live` says
+   * "the account confirmed this catalogue", and for a provider whose model
+   * list needs no credential to enumerate — codex — a signed-out account
+   * confirms a full list and reads as signed in. Every row then offers "Sign
+   * in again" and the one account that could not run anything looked like all
+   * the others.
+   *
+   * `loggedIn: false` is a successful read of a signed-out directory;
+   * {@link AuthStatusInfo.error} is a failure to read at all. The two are kept
+   * apart here for the reason they are kept apart everywhere else — a broken
+   * CLI reported as "signed out" sends someone to a login that cannot work.
+   *
+   * Absent when this build did not ask. A server that cannot probe says
+   * nothing rather than claiming everything is fine.
+   */
+  readonly auth?: AuthStatusInfo;
   /** What the provider behind this account can do. See {@link Capabilities}. */
   readonly capabilities: Capabilities;
   /**
