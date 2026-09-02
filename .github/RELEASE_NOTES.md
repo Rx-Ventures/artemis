@@ -1,6 +1,29 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.6
+
+Two fixes. Install this one if you are on 2.4.2 or later.
+
+**Settings opens again.** Opening Settings could blank the entire window —
+not the pane, the whole app, with no error anyone could read. The Models pane
+read its shortlist through a store selector that built a new empty list every
+time it was asked, and React eventually gave up and unmounted everything. The
+trigger was the most ordinary state there is: an account that has never
+pinned a model. If you had pinned one, you never saw it, which is how this
+survived four releases — it has been in every build since 2.4.2.
+
+**A model the account offers stops disappearing.** While a new model is
+rolling out, the provider does not answer the same way twice: asked four
+times in a row, the same account returned the old Fable and then Fable 5.1
+three times. The picker took whichever answer arrived last, so a model could
+be there, then gone after something incidental refreshed the list. A live
+answer now only ever adds — the list keeps the provider's own order, and
+anything it offered earlier and forgot this time is carried along behind it.
+A model genuinely withdrawn is gone at the next launch.
+
+Also: the bundled Claude CLI moves to 2.1.258.
+
 ## What's new in 2.4.5
 
 One change, to the thing you spend the most time looking at: the model's
