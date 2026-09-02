@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { RunInput } from '@rx-artemis/protocol';
 
-import { mergeAdditionalDirectories, withSystemPromptAppended } from './engine.js';
+import { mergeAdditionalDirectories, rememberModels, withSystemPromptAppended } from './engine.js';
 
 const RUN: RunInput = {
   providerId: 'claude',
@@ -119,5 +119,57 @@ describe('mergeAdditionalDirectories', () => {
       '/work/extra',
       '/home/me/Documents/team',
     ]);
+  });
+});
+
+/**
+ * The third pure transform, and the one with a fact about the world behind it:
+ * a provider's catalogue is not stable while a model is rolling out. Two asks a
+ * minute apart, same binary and same account, disagreed about whether
+ * `claude-fable-5-1` existed (observed 2026-09-01). The picker must not be a
+ * coin flip, and above all a model already on screen must not vanish because an
+ * incidental refetch landed on the other answer.
+ */
+describe('rememberModels', () => {
+  const model = (id: string) => ({ id, label: id });
+  const FABLE_5 = model('claude-fable-5[1m]');
+  const FABLE_5_1 = model('claude-fable-5-1[1m]');
+  const SONNET = model('sonnet');
+
+  it('takes the fresh list whole when nothing has been seen before', () => {
+    const fresh = [FABLE_5_1, SONNET];
+    // Reference-identical: a first answer is the answer, not a merge with an
+    // empty set.
+    expect(rememberModels(undefined, fresh)).toBe(fresh);
+    expect(rememberModels([], fresh)).toBe(fresh);
+  });
+
+  it('hands back the fresh list untouched when it already holds everything', () => {
+    const fresh = [FABLE_5_1, SONNET];
+    expect(rememberModels([SONNET], fresh)).toBe(fresh);
+  });
+
+  it('carries a model this answer forgot, so the rollout cannot take it away', () => {
+    // The failure this exists to prevent: 5.1 was on screen, an unrelated
+    // refetch got the other backend, and the row disappeared.
+    expect(rememberModels([FABLE_5_1, SONNET], [FABLE_5, SONNET])).toEqual([
+      FABLE_5,
+      SONNET,
+      FABLE_5_1,
+    ]);
+  });
+
+  it("keeps the provider's own order for what it just said", () => {
+    // The fresh list leads, in the order it arrived: that is the provider's
+    // opinion about what to show first, and a carried model is the exception
+    // rather than a peer.
+    expect(rememberModels([SONNET], [FABLE_5_1, FABLE_5]).slice(0, 2)).toEqual([
+      FABLE_5_1,
+      FABLE_5,
+    ]);
+  });
+
+  it('merges a model that came back rather than listing it twice', () => {
+    expect(rememberModels([FABLE_5_1], [FABLE_5_1, SONNET])).toEqual([FABLE_5_1, SONNET]);
   });
 });

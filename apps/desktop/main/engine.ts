@@ -621,6 +621,45 @@ export interface ArtemisEngine {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Every model this account has offered, not merely the ones it offered *this
+ * time*.
+ *
+ * A provider's catalogue is not the constant it looks like. While a model is
+ * rolling out, two consecutive asks — same binary, same account, same minute —
+ * come back with different lineups, because the answer is served and the
+ * backends disagree for as long as the rollout runs. Observed directly on
+ * 2026-09-01: four asks in a row returned `claude-fable-5`, then
+ * `claude-fable-5-1` three times.
+ *
+ * Replacing the remembered list with the newest answer means the picker is a
+ * coin flip. A user who asked at the wrong moment does not see the new model
+ * at all, and — worse — a user who *had* it watches it disappear when
+ * something incidental triggers another fetch, which reads as Artemis losing
+ * a model rather than the provider being mid-rollout.
+ *
+ * So a live answer adds and never subtracts. The fresh list keeps its own
+ * order, since that is the provider's opinion of what to show first; models
+ * remembered from earlier answers and missing from this one are carried on the
+ * end rather than dropped. Both are real models the account has offered and
+ * either can be run.
+ *
+ * The memory is the process's, so it is not a cache that can go permanently
+ * stale: a model genuinely withdrawn is gone at the next launch, which is the
+ * right lifetime for a fact this provisional. Identity is the option's `id` —
+ * the provider's own value for the row — so the same model arriving twice
+ * merges rather than doubling.
+ */
+export function rememberModels(
+  remembered: readonly ProviderModelOption[] | undefined,
+  fresh: readonly ProviderModelOption[],
+): readonly ProviderModelOption[] {
+  if (remembered === undefined || remembered.length === 0) return fresh;
+  const offered = new Set(fresh.map((model) => model.id));
+  const carried = remembered.filter((model) => !offered.has(model.id));
+  return carried.length === 0 ? fresh : [...fresh, ...carried];
+}
+
+/**
  * Build the engine.
  *
  * @throws {EngineUnavailableError} — but only through {@link EngineHost.start},
@@ -1242,13 +1281,11 @@ function createEngine(options: EngineOptions): ArtemisEngine {
           cwd: query.cwd ?? userDataDir,
         });
         // Only the confirmed list is worth remembering; see `modelCatalogues`.
-        if (catalogue.live) {
-          modelCatalogues.set(
-            catalogueKey(query.providerId, query.profileId),
-            catalogue.models,
-          );
-        }
-        return catalogue;
+        if (!catalogue.live) return catalogue;
+        const key = catalogueKey(query.providerId, query.profileId);
+        const models = rememberModels(modelCatalogues.get(key), catalogue.models);
+        modelCatalogues.set(key, models);
+        return { ...catalogue, models };
       } catch (error) {
         // The contract says it should not reject; if one does, that is a bug in
         // the adapter and not a reason to leave the picker empty.
