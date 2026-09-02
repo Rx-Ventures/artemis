@@ -643,7 +643,7 @@ describe('POST /v1/chat/completions', () => {
     invalidate: () => undefined,
   };
 
-  async function serve(source: RunSource) {
+  async function serve(source: RunSource, extra: { onError?: (error: unknown) => void } = {}) {
     const { createArtemisServer } = await import('../http.js');
     const { createWorkspaceResolver } = await import('../workspaces.js');
     const server = createArtemisServer({
@@ -653,6 +653,7 @@ describe('POST /v1/chat/completions', () => {
       catalogue: CATALOGUE,
       runs: source,
       workspaces: createWorkspaceResolver(),
+      ...extra,
     });
     const port = await server.listen();
     return { server, url: `http://127.0.0.1:${port}/v1/chat/completions` };
@@ -698,6 +699,74 @@ describe('POST /v1/chat/completions', () => {
         usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
         artemis: { sessionId: 'sess-1', endReason: 'completed' },
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('puts the reason on the final chunk when a streamed run fails', async () => {
+    /*
+     * The failure this whole field exists for. A stream cannot answer 502, so
+     * before it the reason had nowhere to go: the caller got `endReason:
+     * "error"` on an empty delta and nothing else, while the non-streaming
+     * path returned the very same sentence as a 502 body. Every remote failure
+     * therefore reached a desktop as an unexplained one — including the plain
+     * case of an account on the server that was never signed in.
+     */
+    const source = fakeRuns([
+      {
+        type: 'run.end',
+        reason: 'error',
+        error: { code: 'unknown', message: 'unexpected status 401 Unauthorized' },
+      },
+    ] as Partial<AgentEvent>[]);
+
+    const { server, url } = await serve(source);
+    try {
+      const response = await post(url, {
+        model: 'work-max/opus',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      });
+      const chunks = (await response.text())
+        .split('\n\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice(6));
+
+      const final = JSON.parse(chunks.at(-2) as string);
+      expect(final.artemis.endReason).toBe('error');
+      expect(final.artemis.error).toBe('unexpected status 401 Unauthorized');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('says a failed run out loud on the serving machine', async () => {
+    // The other half: the reason travelled *away* from the server and was kept
+    // nowhere on it, so whoever ran the server could not find out that one of
+    // the accounts it serves had stopped working.
+    const seen: string[] = [];
+    const source = fakeRuns([
+      {
+        type: 'run.end',
+        reason: 'error',
+        error: { code: 'unknown', message: 'unexpected status 401 Unauthorized' },
+      },
+    ] as Partial<AgentEvent>[]);
+
+    const { server, url } = await serve(source, {
+      onError: (error) => seen.push(error instanceof Error ? error.message : String(error)),
+    });
+    try {
+      const response = await post(url, {
+        model: 'work-max/opus',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      });
+      await response.text();
+
+      // Names the route, so a server with five accounts says which one broke.
+      expect(seen).toEqual(['run on work-max/opus failed: unexpected status 401 Unauthorized']);
     } finally {
       await server.close();
     }

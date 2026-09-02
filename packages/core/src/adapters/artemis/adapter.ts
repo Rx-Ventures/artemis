@@ -444,6 +444,17 @@ class ArtemisRun implements Run {
       let text = '';
       let activity: readonly ArtemisActivity[] = [];
       let endReason: string | undefined;
+      /*
+       * The server's own account of why the run failed.
+       *
+       * Servers from 2.4.6 back send nothing here, which is what the fallback
+       * message below is for — and what it used to be the *only* case of. The
+       * old sentence claimed the detail was in the reply text; it never was,
+       * because a run that fails before generating has no text, which is the
+       * shape of every failure worth explaining (a signed-out account, a
+       * refused model, a workspace that is not there).
+       */
+      let remoteError: string | undefined;
 
       stream: for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
         buffer += decoder.decode(chunk, { stream: true });
@@ -465,6 +476,7 @@ class ArtemisRun implements Run {
           // list, arriving once.
           if (delta.artemis?.activity !== undefined) activity = delta.artemis.activity;
           if (delta.artemis?.endReason !== undefined) endReason = delta.artemis.endReason;
+          if (delta.artemis?.error !== undefined) remoteError = delta.artemis.error;
           if (delta.usage !== undefined) this.#usage = toUsage(delta.usage);
           if (delta.thinking !== undefined) {
             this.#emit({
@@ -519,7 +531,8 @@ class ArtemisRun implements Run {
               error: {
                 code: 'unknown',
                 message:
-                  'The remote run failed. The server reported the detail in the reply text, when it had one.',
+                  remoteError ??
+                  'The remote run failed, and this server did not say why. Servers before 2.4.7 send no reason; its own logs will have one.',
               } satisfies AgentError,
             }
           : {}),

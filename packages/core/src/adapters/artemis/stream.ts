@@ -35,6 +35,15 @@ export interface ServerExtensionsDelta {
    * wire.
    */
   readonly permission?: ArtemisPermissionNotice;
+  /**
+   * Why the run failed, when {@link endReason} is `error`.
+   *
+   * Distinct from {@link ServerStreamDelta.error}, which is the server saying
+   * the *stream* failed. This one says the run did, and it is the sentence the
+   * serving machine would have put in a 502 had the caller not asked for a
+   * stream.
+   */
+  readonly error?: string;
 }
 
 /** One delta lifted out of a stream chunk. */
@@ -118,6 +127,8 @@ function readExtensions(value: unknown): ServerExtensionsDelta | undefined {
   if (endReason !== undefined) out.endReason = endReason;
   const runId = asString(record['runId']);
   if (runId !== undefined) out.runId = runId;
+  const error = asString(record['error']);
+  if (error !== undefined) out.error = error;
 
   const permission = readPermissionNotice(record['permission']);
   if (permission !== undefined) out.permission = permission;
