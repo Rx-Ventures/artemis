@@ -1,6 +1,34 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.7
+
+Everything here is about working against an Artemis server, and about one
+thing: the desktop could not see what the server already knew.
+
+**A failed remote run says why.** It used to end with "The remote run failed.
+The server reported the detail in the reply text, when it had one" — and there
+was never one, because a run that fails before it generates has no text. The
+server had the reason all along and dropped it on the way to the wire, so a
+signed-out account on the far end and a refused model looked identical, and
+both looked like nothing. The reason now travels with the failure and is what
+you see.
+
+**The server says it too.** A failed run is written to the serving machine's
+log, naming the route: the reason used to travel only away from the one machine
+that could act on it, so a server whose account had stopped working had no way
+to mention it.
+
+**Accounts on a server show their real sign-in state.** Every one of them
+offered "Sign in again" and a model count, whatever shape it was in — an
+account created and never signed in looked exactly like the ones that worked.
+Rows now say signed in, signed out, or that the check itself could not be read,
+and an older server that cannot be asked says that rather than guessing.
+
+**A server's accounts are grouped by provider**, the way local accounts always
+have been — Claude, Codex, a local runtime — instead of one flat list. A server
+holding one provider is unchanged, and so is one too old to say.
+
 ## What's new in 2.4.6
 
 Two fixes. Install this one if you are on 2.4.2 or later.
