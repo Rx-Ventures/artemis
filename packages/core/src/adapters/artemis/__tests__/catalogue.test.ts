@@ -66,6 +66,37 @@ describe('parseServerModels', () => {
     expect(option?.accountLabel).toBe('work max');
   });
 
+  it('carries the account’s provider, so the picker can group by it', () => {
+    // The server has always sent this — `ServerModel.providerId` is required —
+    // and the parser dropped it, which is why a server's accounts were the one
+    // account list in the app that could not be grouped by provider.
+    const [option] = parseServerModels({
+      models: [
+        {
+          route: 'rx-codex/gpt-5.2',
+          label: 'GPT-5.2',
+          note: '',
+          profileId: 'p1',
+          providerId: 'codex',
+        },
+      ],
+    });
+    expect(option?.accountProviderId).toBe('codex');
+  });
+
+  it('drops a provider id it does not recognise rather than inventing a section', () => {
+    // A server one version ahead may serve a provider this build has no name
+    // for. Absent lands as "ungrouped", which the picker draws bare.
+    const [ahead, older] = parseServerModels({
+      models: [
+        { route: 'a/m', label: 'M', note: '', providerId: 'something-new' },
+        { route: 'b/m', label: 'M', note: '' },
+      ],
+    });
+    expect(ahead !== undefined && 'accountProviderId' in ahead).toBe(false);
+    expect(older !== undefined && 'accountProviderId' in older).toBe(false);
+  });
+
   it('reads the slug off the route against a server that never sent one', () => {
     const [prefixed, bare] = parseServerModels({
       models: [

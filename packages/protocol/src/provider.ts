@@ -384,6 +384,20 @@ export interface ProviderModelOption {
   readonly accountSlug?: string;
   /** See {@link accountId}. */
   readonly accountLabel?: string;
+  /**
+   * The provider the serving-side account belongs to — `claude`, `codex`, a
+   * local runtime.
+   *
+   * A server flattens accounts from several providers into one list of routes,
+   * and without this the fact is unrecoverable: the route prefix is an account
+   * slug, and the model id (`opus`, `gpt-5.2`) is a naming convention rather
+   * than a guarantee. So the picker could group *local* accounts by provider,
+   * the way it always has, and could only show a server's as one flat list.
+   *
+   * The server has always sent it — `ServerModel.providerId` is required — and
+   * this is the field that carries it the rest of the way.
+   */
+  readonly accountProviderId?: ProviderId;
 
   /**
    * Where this model sits in its provider's own lineup, `0` being the smallest

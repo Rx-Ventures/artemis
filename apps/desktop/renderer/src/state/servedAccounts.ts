@@ -17,7 +17,12 @@
  * sends none of the explicit fields.
  */
 
-import type { PlanUsage, ProviderModelOption } from '@rx-artemis/protocol';
+import type {
+  PlanUsage,
+  ProviderDescriptor,
+  ProviderId,
+  ProviderModelOption,
+} from '@rx-artemis/protocol';
 
 /** One served account's gauge, as `installPlanUsageFeed` files it. */
 export interface ServedGauge {
@@ -83,6 +88,8 @@ export interface ServedAccount {
   readonly label: string;
   /** The serving side's profile id, absent against an older server. */
   readonly id?: string;
+  /** The provider this account belongs to, absent against an older server. */
+  readonly providerId?: ProviderId;
   readonly models: readonly string[];
 }
 
@@ -95,7 +102,10 @@ export interface ServedAccount {
 export function groupServedAccounts(
   catalogue: readonly ProviderModelOption[],
 ): readonly ServedAccount[] {
-  const groups = new Map<string, { label: string; id?: string; models: string[] }>();
+  const groups = new Map<
+    string,
+    { label: string; id?: string; providerId?: ProviderId; models: string[] }
+  >();
   for (const model of catalogue) {
     const slug = servedAccountSlug(model);
     if (slug === null) continue;
@@ -104,6 +114,9 @@ export function groupServedAccounts(
       group = {
         label: servedAccountLabel(model) ?? slug,
         ...(model.accountId === undefined ? {} : { id: model.accountId }),
+        ...(model.accountProviderId === undefined
+          ? {}
+          : { providerId: model.accountProviderId }),
         models: [],
       };
       groups.set(slug, group);
@@ -111,6 +124,86 @@ export function groupServedAccounts(
     group.models.push(model.id);
   }
   return [...groups.entries()].map(([slug, group]) => ({ slug, ...group }));
+}
+
+/**
+ * One provider's accounts on a server, as the picker's account column draws it.
+ */
+export interface ServedAccountSection {
+  /** `null` for the ungrouped case — see {@link sectionServedAccounts}. */
+  readonly providerId: ProviderId | null;
+  /** The section heading, or `null` when there is nothing to head. */
+  readonly label: string | null;
+  readonly accounts: readonly ServedAccount[];
+}
+
+/**
+ * A server's accounts, grouped by the provider each belongs to.
+ *
+ * The local account column has always done this: a profile belongs to exactly
+ * one CLI, so grouping by provider is what makes one flat list readable and
+ * puts "switching account can switch CLI" in front of the person doing it. At a
+ * server the same list arrived ungrouped, because the catalogue did not carry
+ * the provider — the route prefix is an account slug and the model id is a
+ * naming convention, so there was nothing to group *by*. With
+ * `accountProviderId` on the option there is, and the two columns can say the
+ * same thing the same way.
+ *
+ * Section order follows `providers` — the order `providers:list` reported —
+ * so the sections do not reshuffle as accounts are signed in. A provider the
+ * descriptor list does not name still gets a section, keyed by its raw id,
+ * because an account is not worth hiding for belonging to a provider this
+ * build has no adapter for; that is exactly when someone needs to see it.
+ *
+ * The single-section answer is deliberate rather than a special case. One
+ * section is a heading over the whole list, which is chrome that says nothing,
+ * so it comes back with a `null` label and the caller draws the rows bare —
+ * the same list it drew before. That covers the common server (every account
+ * on one provider) and the old server (no provider on any option) with one
+ * rule instead of two.
+ */
+export function sectionServedAccounts(
+  accounts: readonly ServedAccount[],
+  providers: readonly ProviderDescriptor[],
+): readonly ServedAccountSection[] {
+  const known = accounts.filter(
+    (account): account is ServedAccount & { providerId: ProviderId } =>
+      account.providerId !== undefined,
+  );
+  // Nothing to group by: an older server, and the list stands as it always has.
+  if (known.length === 0) {
+    return accounts.length === 0
+      ? []
+      : [{ providerId: null, label: null, accounts }];
+  }
+
+  const order = new Map<ProviderId, string>();
+  for (const provider of providers) order.set(provider.id, provider.label);
+  for (const account of known) {
+    if (!order.has(account.providerId)) order.set(account.providerId, account.providerId);
+  }
+
+  const sections: ServedAccountSection[] = [];
+  for (const [id, label] of order) {
+    const owned = accounts.filter((account) => account.providerId === id);
+    if (owned.length > 0) sections.push({ providerId: id, label, accounts: owned });
+  }
+
+  /*
+   * Accounts from a server that sends the provider on some rows and not
+   * others — a catalogue served mid-upgrade. They are listed last and
+   * unheaded rather than dropped or filed under a guess.
+   */
+  const ungrouped = accounts.filter((account) => account.providerId === undefined);
+  if (ungrouped.length > 0) {
+    sections.push({ providerId: null, label: null, accounts: ungrouped });
+  }
+
+  // A single section is a heading over everything, which says nothing.
+  if (sections.length === 1 && sections[0] !== undefined) {
+    return [{ ...sections[0], label: null }];
+  }
+  return sections;
 }
 
 /**
