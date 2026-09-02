@@ -331,6 +331,23 @@ export interface ArtemisResponseExtensions {
   readonly permission?: ArtemisPermissionNotice;
   /** The true reason the run ended, when `finish_reason` had to flatten it. */
   readonly endReason?: string;
+  /**
+   * Why the run failed, when {@link endReason} is `error`.
+   *
+   * The streaming path had no way to say this. A failed turn ended with
+   * `finish_reason: "stop"` and `endReason: "error"` on an empty delta, and the
+   * server's own account of the failure — which it had, and which the
+   * non-streaming path returns as a 502 body — was dropped on the floor. Every
+   * streaming client was therefore left to invent a sentence, and the one
+   * Artemis invented ("the server reported the detail in the reply text, when
+   * it had one") was wrong: there was no detail in the text, because a run that
+   * fails before it generates has no text.
+   *
+   * Present only on the final chunk, and only on failure. Already scrubbed to
+   * the same standard as any other reply: it is the provider's own message, not
+   * an exception trace, and it names no path or credential.
+   */
+  readonly error?: string;
 }
 
 export interface OpenAiChatChoice {

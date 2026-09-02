@@ -36,6 +36,7 @@
  */
 
 import type {
+  AuthStatusInfo,
   ProfileMetadata,
   ProviderDescriptor,
   ProviderId,
@@ -73,6 +74,21 @@ export interface CatalogueSource {
     readonly providerId: ProviderId;
     readonly profileId: ProfileId;
   }): Promise<{ readonly models: readonly ProviderModelOption[]; readonly live: boolean }>;
+  /**
+   * Does one account's directory hold a credential?
+   *
+   * Slow in the same way {@link listModels} is — it spawns the provider's CLI
+   * to ask — which is why it is answered on the same cached build rather than
+   * per request. Optional: a source that cannot probe leaves it off, and every
+   * consumer treats an absent answer as "not checked" rather than as healthy.
+   *
+   * Contractually never throws, for the same reason the sign-in probe does not:
+   * every caller is a surface that has to render something either way.
+   */
+  checkAuth?(query: {
+    readonly providerId: ProviderId;
+    readonly profileId: ProfileId;
+  }): Promise<AuthStatusInfo>;
 }
 
 export interface CatalogueOptions {
@@ -125,6 +141,26 @@ export function createCatalogue(options: CatalogueOptions): Catalogue {
         const descriptor = descriptors.get(profile.providerId);
         const slug = slugs.get(profile.id) ?? profile.id;
 
+        /*
+         * Asked alongside the model list, not after it. Both spawn a
+         * subprocess for the same account, and serialising them would double
+         * the wall-clock of a cold catalogue for no reason — the two questions
+         * are independent.
+         */
+        const authPromise: Promise<AuthStatusInfo | undefined> =
+          source.checkAuth === undefined
+            ? Promise.resolve(undefined)
+            : source
+                .checkAuth({ providerId: profile.providerId, profileId: profile.id })
+                .catch((error: unknown) => ({
+                  // A probe that threw is not a signed-out account. Documented
+                  // as never throwing, but this is a subprocess on a path that
+                  // must answer, so the contract is enforced rather than
+                  // trusted.
+                  loggedIn: false,
+                  error: error instanceof Error ? error.message : String(error),
+                }));
+
         const fallback: readonly ProviderModelOption[] = descriptor?.models ?? [];
         let models = fallback;
         let live = false;
@@ -154,6 +190,8 @@ export function createCatalogue(options: CatalogueOptions): Catalogue {
           // which is exactly what the engine would have answered itself.
         }
 
+        const auth = await authPromise;
+
         return {
           id: profile.id,
           slug,
@@ -172,6 +210,7 @@ export function createCatalogue(options: CatalogueOptions): Catalogue {
               : { unavailableReason: descriptor.unavailableReason }),
           disabled: profile.disabled === true,
           live,
+          ...(auth === undefined ? {} : { auth }),
           capabilities: descriptor?.capabilities ?? EMPTY_CAPABILITIES,
           ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
           models: models.map((model) =>

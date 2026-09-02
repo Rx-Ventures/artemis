@@ -513,6 +513,11 @@ export function createServerHost(options: ServerHostOptions): ServerHost {
           providerId: query.providerId,
           profileId: query.profileId,
         }),
+      // The engine's own probe — the same one the profile screen polls in this
+      // window — so a remote client is told what a local one would see rather
+      // than having to infer it from the catalogue.
+      checkAuth: async (query) =>
+        (await options.engine.require().authStatus(query.profileId)).status,
     },
   });
 

@@ -26,7 +26,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 /** What the fake server answers, rewritten per test. */
 let manageProfiles = true;
@@ -148,6 +148,8 @@ beforeEach(() => {
       live: true,
       capabilities: {},
       models: [{ id: 'opus' }],
+      // Signed in, which is what "Sign in again" below depends on.
+      auth: { loggedIn: true },
     },
   ];
   signIn = null;
@@ -156,12 +158,96 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** The account row a label sits in — each account is one `li`. */
+function rowFor(label: HTMLElement): HTMLElement {
+  const row = label.closest('li');
+  if (row === null) throw new Error('the account label is not in a row');
+  return row;
+}
+
 describe('the accounts-on-this-server section', () => {
   it('lists what the server serves, for an Artemis Server profile', async () => {
     seed();
     expect(await screen.findByText('Accounts on this server')).toBeTruthy();
     expect(await screen.findByText('work')).toBeTruthy();
     expect(await screen.findByText('1 models')).toBeTruthy();
+  });
+
+  it('tells a signed-out account apart from a working one', async () => {
+    /*
+     * The bug: `live` was standing in for "signed in", and codex enumerates its
+     * models without a credential — so an account that had been created and
+     * never signed in confirmed a full catalogue and rendered exactly like the
+     * three that worked. Five rows, five "Sign in again" buttons, no way to
+     * tell which one was about to 401.
+     */
+    accounts = [
+      {
+        id: 'remote-work',
+        slug: 'work',
+        label: 'work',
+        provider: { id: 'claude', label: 'Claude', kind: 'hosted' },
+        available: true,
+        disabled: false,
+        live: true,
+        capabilities: {},
+        models: [{ id: 'opus' }],
+        auth: { loggedIn: true, email: 'someone@example.com' },
+      },
+      {
+        id: 'remote-codex',
+        slug: 'rx-codex',
+        label: 'rx codex',
+        provider: { id: 'codex', label: 'Codex', kind: 'hosted' },
+        available: true,
+        disabled: false,
+        // Confirmed a catalogue it needed no credential to enumerate.
+        live: true,
+        capabilities: {},
+        models: [{ id: 'gpt-5.2' }],
+        auth: { loggedIn: false },
+      },
+    ];
+    seed();
+
+    // Scoped to each row: the profile card above has a sign-in line of its own.
+    const codex = rowFor(await screen.findByText('rx codex'));
+    const work = rowFor(await screen.findByText('work'));
+
+    expect(within(work).getByText('signed in')).toBeTruthy();
+    expect(within(codex).getByText('signed out')).toBeTruthy();
+
+    // And the offer differs: one is a re-login, the other has never had one.
+    expect(within(work).getByRole('button', { name: 'Sign in again' })).toBeTruthy();
+    expect(within(codex).getByRole('button', { name: 'Sign in' })).toBeTruthy();
+  });
+
+  it('does not report an unreadable probe as a signed-out account', async () => {
+    // Sending someone to a login that cannot work is worse than saying the
+    // check is broken. `error` and `loggedIn: false` are different answers.
+    accounts = [
+      {
+        ...(accounts[0] as Record<string, unknown>),
+        auth: { loggedIn: false, error: 'Could not run the codex CLI.' },
+      },
+    ];
+    seed();
+
+    const row = rowFor(await screen.findByText('work'));
+    expect(within(row).getByText('sign-in unreadable')).toBeTruthy();
+    expect(within(row).queryByText('signed out')).toBeNull();
+  });
+
+  it('says nothing it does not know against a server too old to be asked', async () => {
+    // No `auth` at all. The old code guessed from `live` and got it wrong; the
+    // honest answer is that nobody checked.
+    accounts = [{ ...(accounts[0] as Record<string, unknown>), auth: undefined }];
+    seed();
+
+    const row = rowFor(await screen.findByText('work'));
+    expect(within(row).getByText('sign-in not checked')).toBeTruthy();
+    expect(within(row).queryByText('signed in')).toBeNull();
+    expect(within(row).queryByText('signed out')).toBeNull();
   });
 
   it('is absent for a profile whose account lives on this machine', async () => {

@@ -334,6 +334,64 @@ describe('refusals and losses', () => {
     expect(end.error?.message).toContain('gone/away');
   });
 
+  it('shows the reason a failed run gave, rather than a sentence about it', async () => {
+    /*
+     * The whole point of `artemis.error`. Before it, this arrived as
+     * `endReason: 'error'` on an empty delta and the adapter answered with a
+     * fixed line claiming the detail was in the reply text — which it never
+     * was, because a run that fails before generating has no text. A signed-out
+     * account on the server read, on the desktop, as "the remote run failed".
+     */
+    const { origin } = await serve((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+      response.write(sse(chunk({ role: 'assistant' })));
+      response.write(
+        sse(
+          chunk(
+            {},
+            {
+              finish_reason: 'stop',
+              artemis: {
+                endReason: 'error',
+                error: 'unexpected status 401 Unauthorized: Missing bearer authentication',
+              },
+            },
+          ),
+        ),
+      );
+      response.write(sse('[DONE]'));
+      response.end();
+    });
+
+    const events = await drive(origin);
+    const end = events.at(-1) as Extract<AgentEvent, { type: 'run.end' }>;
+
+    expect(end.type).toBe('run.end');
+    expect(end.reason).toBe('error');
+    expect(end.error?.message).toBe(
+      'unexpected status 401 Unauthorized: Missing bearer authentication',
+    );
+  });
+
+  it('says so plainly when an older server sends no reason', async () => {
+    // Every server up to 2.4.6. The fallback must not repeat the old claim that
+    // the detail is in the text: it says where the reason actually is instead.
+    const { origin } = await serve((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+      response.write(sse(chunk({ role: 'assistant' })));
+      response.write(sse(chunk({}, { finish_reason: 'stop', artemis: { endReason: 'error' } })));
+      response.write(sse('[DONE]'));
+      response.end();
+    });
+
+    const events = await drive(origin);
+    const end = events.at(-1) as Extract<AgentEvent, { type: 'run.end' }>;
+
+    expect(end.reason).toBe('error');
+    expect(end.error?.message).toContain('did not say why');
+    expect(end.error?.message).not.toContain('reply text');
+  });
+
   it('ends interrupted when asked to stop mid-stream', async () => {
     const { origin } = await serve((_request, response) => {
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
