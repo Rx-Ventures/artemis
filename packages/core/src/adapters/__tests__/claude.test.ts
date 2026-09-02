@@ -2142,6 +2142,55 @@ describe('attaching to a live process', () => {
     expect(events[0]?.seq).toBe(0);
   });
 
+  it('spawns fresh when a turn asks for a bypass the live process cannot enter', async () => {
+    /*
+     * The SDK's `allowDangerouslySkipPermissions` is a spawn-time option and
+     * `setPermissionMode` cannot supply it, so a process started on any other
+     * mode refuses the switch for as long as it lives — quietly, because
+     * `#applySettings` swallows a failed setter. The chip said
+     * bypassPermissions, the CLI stayed on acceptEdits, and every tool call
+     * kept asking; sending another message changed nothing, because the same
+     * warm process served that turn too.
+     */
+    const { adapter, first } = await firstTurn({ permissionMode: 'acceptEdits' });
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }));
+
+    // A second `query()`, carrying the opt-in the mode requires…
+    expect(second.harness().options['permissionMode']).toBe('bypassPermissions');
+    expect(second.harness().options['allowDangerouslySkipPermissions']).toBe(true);
+    // …and it is the same conversation, resumed, not a new one.
+    expect(second.harness().options['resume']).toBe('sess-abc');
+    // The old process was never asked for a mode it would have refused.
+    expect(first.fake.modes).not.toContain('bypassPermissions');
+  });
+
+  it('keeps the live process when a turn leaves bypassPermissions', async () => {
+    // Tightening asks no permission of anyone, so `setPermissionMode` does it
+    // in place. Respawning here would throw away a warm conversation to apply
+    // a change the process can make itself.
+    const { adapter, first } = await firstTurn({ permissionMode: 'bypassPermissions' });
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'acceptEdits' }));
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.modes).toContain('acceptEdits');
+  });
+
+  it('keeps the live process when the bypass was there from the start', async () => {
+    // Spawned with the opt-in, so the mode is already available to it and
+    // nothing needs replacing.
+    const { adapter, first } = await firstTurn({ permissionMode: 'bypassPermissions' });
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }));
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.closed).toBe(false);
+  });
+
   it('spawns a fresh process when the last one is gone', async () => {
     const adapter = createClaudeAdapter();
     const { harness } = installQuery();
