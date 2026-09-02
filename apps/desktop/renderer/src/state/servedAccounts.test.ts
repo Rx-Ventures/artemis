@@ -12,10 +12,12 @@ import type { PlanUsage, ProviderModelOption } from '@rx-artemis/protocol';
 
 import {
   groupServedAccounts,
+  sectionServedAccounts,
   scopedToServedAccount,
   servedAccountLabel,
   servedAccountSlug,
   servedGaugeFor,
+  type ServedAccount,
 } from './servedAccounts';
 
 function option(partial: Partial<ProviderModelOption> & { id: string }): ProviderModelOption {
@@ -125,5 +127,98 @@ describe('scopedToServedAccount', () => {
   it('returns the list whole for null, and for a slug that matches nothing', () => {
     expect(scopedToServedAccount(catalogue, null)).toBe(catalogue);
     expect(scopedToServedAccount(catalogue, 'gone')).toBe(catalogue);
+  });
+});
+
+describe('sectionServedAccounts', () => {
+  const providers = [
+    { id: 'claude', label: 'Claude' },
+    { id: 'codex', label: 'Codex' },
+    { id: 'llamacpp', label: 'llama.cpp' },
+  ] as unknown as Parameters<typeof sectionServedAccounts>[1];
+
+  const account = (slug: string, providerId?: string): ServedAccount =>
+    ({ slug, label: slug, models: [`${slug}/m`], ...(providerId === undefined ? {} : { providerId }) }) as ServedAccount;
+
+  it('groups a mixed server the way the local account column groups profiles', () => {
+    // The case this exists for: one server, five accounts, three providers.
+    // It used to render as one undifferentiated list.
+    const sections = sectionServedAccounts(
+      [
+        account('work', 'claude'),
+        account('local-ai', 'llamacpp'),
+        account('rx-codex', 'codex'),
+        account('personal', 'claude'),
+      ],
+      providers,
+    );
+
+    expect(sections.map((s) => [s.label, s.accounts.map((a) => a.slug)])).toEqual([
+      ['Claude', ['work', 'personal']],
+      ['Codex', ['rx-codex']],
+      ['llama.cpp', ['local-ai']],
+    ]);
+  });
+
+  it('follows the descriptor order rather than the catalogue order', () => {
+    // Otherwise the headings reshuffle as accounts are signed in.
+    const sections = sectionServedAccounts(
+      [account('rx-codex', 'codex'), account('work', 'claude')],
+      providers,
+    );
+
+    expect(sections.map((s) => s.label)).toEqual(['Claude', 'Codex']);
+  });
+
+  it('leaves one provider unheaded', () => {
+    // A heading over the whole list is chrome that says nothing, and this is
+    // what keeps the common single-provider server looking as it always did.
+    const sections = sectionServedAccounts(
+      [account('work', 'claude'), account('personal', 'claude')],
+      providers,
+    );
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.label).toBeNull();
+    expect(sections[0]?.accounts.map((a) => a.slug)).toEqual(['work', 'personal']);
+  });
+
+  it('keeps a provider this build has no name for, under its raw id', () => {
+    // An account is not worth hiding because the build has no adapter for its
+    // provider — that is exactly when someone needs to see it.
+    const sections = sectionServedAccounts(
+      [account('work', 'claude'), account('future', 'opencode')],
+      providers,
+    );
+
+    expect(sections.map((s) => s.label)).toEqual(['Claude', 'opencode']);
+  });
+
+  it('shows an older server’s accounts as the one flat list they were', () => {
+    // No option carries a provider, so there is nothing to group by and the
+    // column must not grow a heading claiming otherwise.
+    const sections = sectionServedAccounts([account('work'), account('personal')], providers);
+
+    expect(sections).toEqual([
+      { providerId: null, label: null, accounts: [account('work'), account('personal')] },
+    ]);
+  });
+
+  it('lists accounts from a half-upgraded catalogue last, unheaded', () => {
+    // Some rows carry a provider and some do not. Neither dropping the
+    // remainder nor filing it under a guess is honest.
+    const sections = sectionServedAccounts(
+      [account('work', 'claude'), account('mystery')],
+      providers,
+    );
+
+    expect(sections.map((s) => [s.label, s.accounts.map((a) => a.slug)])).toEqual([
+      ['Claude', ['work']],
+      [null, ['mystery']],
+    ]);
+  });
+
+  it('has no sections at all when the server serves nothing', () => {
+    expect(sectionServedAccounts([], providers)).toEqual([]);
   });
 });

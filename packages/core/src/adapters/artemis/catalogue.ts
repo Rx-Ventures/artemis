@@ -13,6 +13,7 @@
  * cannot read is dropped rather than failing the list.
  */
 
+import { isProviderId } from '@rx-artemis/protocol';
 import type { ProviderModelOption } from '@rx-artemis/protocol';
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -50,6 +51,13 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
     // can read it without parsing it back out of `note`. The slug falls back
     // to the route's own prefix so it holds even against an older server.
     const profileId = asString(model['profileId']);
+    // The account's provider, so the picker can group a server's accounts the
+    // way it groups local ones. Validated against the known set rather than
+    // passed through: it is a union everywhere above here, and a server one
+    // version ahead may serve a provider this build has no name for — which
+    // must land as "ungrouped", not as a section headed by a raw id.
+    const rawProvider = asString(model['providerId']);
+    const providerId = rawProvider !== undefined && isProviderId(rawProvider) ? rawProvider : undefined;
     const profileSlug =
       asString(model['profileSlug']) ??
       (route.includes('/') ? route.slice(0, route.indexOf('/')) : undefined);
@@ -74,6 +82,7 @@ export function parseServerModels(body: unknown): readonly ProviderModelOption[]
       ...(profileId === undefined ? {} : { accountId: profileId }),
       ...(profileSlug === undefined ? {} : { accountSlug: profileSlug }),
       ...(profileLabel === undefined ? {} : { accountLabel: profileLabel }),
+      ...(providerId === undefined ? {} : { accountProviderId: providerId }),
       ...(typeof model['tier'] === 'number' ? { tier: model['tier'] } : {}),
       ...(typeof model['fastMode'] === 'boolean' ? { supportsFastMode: model['fastMode'] } : {}),
       ...(typeof model['ultracode'] === 'boolean' ? { supportsUltracode: model['ultracode'] } : {}),

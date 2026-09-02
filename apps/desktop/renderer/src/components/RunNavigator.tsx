@@ -91,6 +91,7 @@ import { hiddenModelCount, navigatorColumns, navigatorFooter, navigatorModelRows
 import {
   groupServedAccounts,
   scopedToServedAccount,
+  sectionServedAccounts,
   servedAccountSlug,
   servedGaugeFor,
   type ServedAccount,
@@ -277,6 +278,15 @@ function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): Re
   const gauges = useApp((s) => s.planUsageByServerAccount);
 
   const accounts = useMemo(() => groupServedAccounts(catalogue), [catalogue]);
+  // The local provider list names the sections. The ids are the same union on
+  // both sides — one product — so a server's `codex` account files under the
+  // heading this build calls Codex, and a provider it has never heard of keeps
+  // its raw id rather than vanishing.
+  const providers = useApp((s) => s.providers);
+  const sections = useMemo(
+    () => sectionServedAccounts(accounts, providers),
+    [accounts, providers],
+  );
 
   // Exact join on the serving side's id where the catalogue carries one; the
   // label match is the fallback for a server old enough not to send it.
@@ -312,26 +322,41 @@ function ServerAccountRows({ profileId }: { readonly profileId: ProfileId }): Re
             }
           }}
         >
-          {accounts.map((account) => {
-            const gauge = gaugeFor(account);
-            const window = gauge === undefined ? null : bindingWindow(gauge.usage);
-            return (
-              <DropdownMenuRadioItem
-                key={account.slug}
-                value={account.slug}
-                className="text-2xs"
-                disabled={live}
-              >
-                <span className="min-w-0 flex-1 truncate">{account.label}</span>
-                {window !== null && window.utilization !== null ? (
-                  /* `utilization` is already 0–100 — see `PlanUsageWindow`. */
-                  <span className={cn('ml-2 font-mono text-2xs', toneFor(window.utilization))}>
-                    {String(Math.round(window.utilization))}%
-                  </span>
-                ) : null}
-              </DropdownMenuRadioItem>
-            );
-          })}
+          {/*
+           * Sectioned by provider, the same as the local account column above.
+           * One section comes back unheaded, so a server whose accounts are all
+           * on one provider — and any server too old to say — draws exactly the
+           * flat list it always did.
+           */}
+          {sections.map((section, index) => (
+            <Fragment key={section.providerId ?? `ungrouped-${String(index)}`}>
+              {section.label === null ? null : (
+                <DropdownMenuLabel className="text-2xs text-ink-faint">
+                  {section.label}
+                </DropdownMenuLabel>
+              )}
+              {section.accounts.map((account) => {
+                const gauge = gaugeFor(account);
+                const window = gauge === undefined ? null : bindingWindow(gauge.usage);
+                return (
+                  <DropdownMenuRadioItem
+                    key={account.slug}
+                    value={account.slug}
+                    className="text-2xs"
+                    disabled={live}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{account.label}</span>
+                    {window !== null && window.utilization !== null ? (
+                      /* `utilization` is already 0–100 — see `PlanUsageWindow`. */
+                      <span className={cn('ml-2 font-mono text-2xs', toneFor(window.utilization))}>
+                        {String(Math.round(window.utilization))}%
+                      </span>
+                    ) : null}
+                  </DropdownMenuRadioItem>
+                );
+              })}
+            </Fragment>
+          ))}
         </DropdownMenuRadioGroup>
       )}
     </>
