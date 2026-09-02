@@ -281,6 +281,16 @@ function Provenance({
 const SEARCH_THRESHOLD = 12;
 
 /**
+ * "This profile has pinned nothing", with a stable identity.
+ *
+ * A selector that allocates cannot be read through a store hook — see the note
+ * at its use below, and `NO_OPTIONS` in the store, which names the render loop
+ * this prevents. The sibling routines pane keeps its own copy of this constant
+ * for the same reason.
+ */
+const NO_PINS: readonly string[] = [];
+
+/**
  * Match a model against a typed query.
  *
  * Searches the id as well as the names, because with a large catalogue the id
@@ -312,8 +322,25 @@ function Catalogue({
   // section's switcher pointed it elsewhere. Pins for another account write
   // to that account's entry and never touch the conversation.
   const profileId = curatedProfileId;
+  /*
+   * `NO_PINS`, never a fresh `[]`, and this is the whole reason the pane could
+   * not be opened.
+   *
+   * A zustand selector's result is compared by identity to decide whether to
+   * re-render. Both branches here used to allocate — `[]` for a pane with no
+   * profile, `?? []` for a profile that has pinned nothing — so the value
+   * changed on every read, `useSyncExternalStore` reported a new snapshot on
+   * every check, and React looped to its update-depth ceiling and unmounted the
+   * tree. The window went blank, and it went blank for the commonest state
+   * there is: an account that has never pinned a model. Anyone who *had*
+   * pinned one read a stored array and never saw it.
+   *
+   * One frozen constant for both branches. The same hazard, the same fix, and
+   * the same reasoning as `NO_OPTIONS` and `paneQuickModelIds` in the store —
+   * see the note beside `NO_OPTIONS`, which describes this exact loop.
+   */
   const quickIds = useApp((s) =>
-    profileId === null ? [] : (s.quickModelIdsByProfile[profileId] ?? []),
+    profileId === null ? NO_PINS : (s.quickModelIdsByProfile[profileId] ?? NO_PINS),
   );
   const selectedId = usePane((s) => s.model);
   const curated = quickIds.length > 0;
