@@ -296,6 +296,17 @@ export interface ServerContext {
   readonly profileAdmin?: ProfileAdmin;
   /** The one sign-in this server will drive at a time. See `signin.ts`. */
   readonly signIns?: SignInDirector;
+  /**
+   * Where a run that failed is recorded on the serving machine.
+   *
+   * Separate from a transport fault: this one *did* reach its caller, as a
+   * reason on the final chunk. It is reported here as well because the two
+   * audiences are different people — the caller learns their turn failed, and
+   * whoever runs the server learns that an account it serves is broken, which
+   * until now it had no way to find out. A server whose only account failing is
+   * a signed-out one should not need a packet capture to say so.
+   */
+  readonly onRunFailure?: (error: unknown) => void;
 }
 
 /**
@@ -1367,6 +1378,10 @@ export function createArtemisServer(options: ArtemisServerOptions): ArtemisServe
             : { onRemoteAccess: options.onRemoteAccess }),
           ...(profileAdmin === undefined ? {} : { profileAdmin }),
           ...(signIns === undefined ? {} : { signIns }),
+          // Same sink as a transport fault: a host that wanted one stream of
+          // things-that-went-wrong should not have to subscribe twice, and the
+          // notice is already a sentence naming the route it belongs to.
+          ...(options.onError === undefined ? {} : { onRunFailure: options.onError }),
         },
       );
     } catch (error) {
@@ -2516,7 +2531,16 @@ async function handleChatCompletions(
         connection: 'keep-alive',
       },
       connectionId: connection.id,
-      stream: streamTurn({ id, created, turn, runs: context.runs, model, record, claim }),
+      stream: streamTurn({
+        id,
+        created,
+        turn,
+        runs: context.runs,
+        model,
+        record,
+        claim,
+        ...(context.onRunFailure === undefined ? {} : { report: context.onRunFailure }),
+      }),
     };
   }
 
@@ -2574,6 +2598,8 @@ async function* streamTurn(input: {
   readonly record?: (sessionId: string) => void;
   /** Called once with the run's id, before anything else is written. */
   readonly claim?: (runId: string) => void;
+  /** Where a failed run is said out loud on the serving machine. */
+  readonly report?: (error: unknown) => void;
 }): AsyncIterable<string> {
   const { id, created, model } = input;
 
@@ -2648,6 +2674,14 @@ async function* streamTurn(input: {
       if (event.kind === 'done') {
         const { result } = event;
         if (result.sessionId !== undefined) input.record?.(result.sessionId);
+        // Said out loud on the way past. A streamed failure reaches its caller,
+        // so it is not what `onError` was written for — but it left no trace
+        // anywhere on the serving machine either, and "the run failed" with the
+        // reason only ever travelling *away* from the server is what made this
+        // undiagnosable from the side that could actually fix it.
+        if (result.error !== undefined) {
+          input.report?.(new Error(`run on ${model.route} failed: ${result.error}`));
+        }
         yield sseEvent(
           chatChunk({
             id,
@@ -2660,6 +2694,18 @@ async function* streamTurn(input: {
               ...(result.sessionId === undefined ? {} : { sessionId: result.sessionId }),
               ...(result.activity.length === 0 ? {} : { activity: result.activity }),
               endReason: result.endReason,
+              /*
+               * The reason, on the only chunk that can carry it.
+               *
+               * A stream cannot answer 502 — the 200 went out with the headers
+               * — so where the whole-response path returns `result.error` as
+               * the body of one, this is the only place the same sentence can
+               * be said. Without it a streaming client sees `endReason:
+               * "error"` on an empty delta and has nothing to render but a
+               * guess, which is exactly what every remote failure looked like:
+               * a run that never started, reported as an unexplained one.
+               */
+              ...(result.error === undefined ? {} : { error: result.error }),
             },
           }),
         );

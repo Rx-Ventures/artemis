@@ -796,6 +796,12 @@ export function chatResponse(input: {
       ...(input.ignored.length === 0 ? {} : { ignored: input.ignored }),
       ...(result.activity.length === 0 ? {} : { activity: result.activity }),
       endReason: result.endReason,
+      // Only reached when the turn produced text *and* failed — a failure with
+      // nothing to show for it never gets here, because the handler turns that
+      // into a 502 whose body is this same string. Carrying it here is what
+      // makes the two paths agree: a caller should not have to know whether the
+      // reason arrives as a status code or as a field.
+      ...(result.error === undefined ? {} : { error: result.error }),
     },
   };
 }
