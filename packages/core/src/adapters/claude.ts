@@ -1233,6 +1233,27 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         alive = undefined;
       }
 
+      /*
+       * The same release, for the other turn a live process cannot take: one
+       * asking for `bypassPermissions` of a process spawned without the opt-in.
+       * `canServe` would refuse it and the fresh spawn would resume the file
+       * — but the retained process would still be holding it, exactly the
+       * two-writers state the block above exists to prevent, reached through a
+       * third door. So it is released first, on the same terms: a process
+       * merely retained goes quietly; one mid-turn or holding work refuses and
+       * says why, because a release there destroys what retention protects.
+       */
+      if (alive !== undefined && alive.needsFreshSpawnFor(input)) {
+        if (alive.midTurn || alive.busyWithWork) {
+          throw adapterError(
+            'invalid_request',
+            'This conversation still has work running — stop it before switching it to bypass permissions, which needs a fresh process.',
+          );
+        }
+        alive.release();
+        alive = undefined;
+      }
+
       if (alive !== undefined && alive.canServe(input, configDir)) {
         diagnostic?.(
           `Run ${input.runId}: continuing on the process already serving session ${input.resumeSessionId ?? '—'}.`,
@@ -2979,6 +3000,22 @@ class ClaudeProcess {
   }
 
   /**
+   * Must this turn be served by a fresh spawn, whatever else `canServe` says?
+   *
+   * True for exactly one turn: one asking for `bypassPermissions` of a process
+   * that was spawned without the opt-in. Public rather than folded into
+   * `canServe` because the pool has to act on the same fact *before* it asks
+   * — releasing this process, the way it releases one a hand-off leaves behind
+   * — and two copies of the predicate would be two things to keep in step.
+   */
+  needsFreshSpawnFor(input: ResolvedRunInput): boolean {
+    return (
+      input.permissionMode === 'bypassPermissions' &&
+      this.#input.permissionMode !== 'bypassPermissions'
+    );
+  }
+
+  /**
    * Can this process serve the turn described by `input`?
    *
    * The identity checks are the same three facts a session id resolves under —
@@ -3023,12 +3060,7 @@ class ClaudeProcess {
      * The reverse never needs this: leaving bypass for a stricter mode is what
      * `setPermissionMode` is for, and tightening asks no permission of anyone.
      */
-    if (
-      input.permissionMode === 'bypassPermissions' &&
-      this.#input.permissionMode !== 'bypassPermissions'
-    ) {
-      return false;
-    }
+    if (this.needsFreshSpawnFor(input)) return false;
     if (this.#sessionId === undefined) return false;
     if (input.resumeSessionId !== this.#sessionId) return false;
     if (input.cwd !== this.#input.cwd) return false;

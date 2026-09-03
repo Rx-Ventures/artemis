@@ -2153,17 +2153,38 @@ describe('attaching to a live process', () => {
      * warm process served that turn too.
      */
     const { adapter, first } = await firstTurn({ permissionMode: 'acceptEdits' });
+    // The work settles; the process is merely retained — the state a mode
+    // switch actually lands in, and the one the pool may release.
+    first.fake.messages.push(tasksChanged([]));
+    await vi.waitFor(() => expect(first.fake.closed).toBe(false));
     const second = installQuery();
 
     await adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }));
 
-    // A second `query()`, carrying the opt-in the mode requires…
+    // Release before resume: the old transport is down, so the fresh spawn
+    // resumes a file nobody else is writing…
+    await vi.waitFor(() => expect(first.fake.closed).toBe(true));
+    // …and it carries the opt-in the mode requires, on the same conversation.
     expect(second.harness().options['permissionMode']).toBe('bypassPermissions');
     expect(second.harness().options['allowDangerouslySkipPermissions']).toBe(true);
-    // …and it is the same conversation, resumed, not a new one.
     expect(second.harness().options['resume']).toBe('sess-abc');
     // The old process was never asked for a mode it would have refused.
     expect(first.fake.modes).not.toContain('bypassPermissions');
+  });
+
+  it('refuses the switch while the conversation still holds work', async () => {
+    // Releasing a process with a background task would destroy the very thing
+    // retention exists to protect; spawning alongside it would put two writers
+    // on one transcript. Same terms as a hand-off: stop the work, then switch.
+    const { adapter, first } = await firstTurn({ permissionMode: 'acceptEdits' });
+    const second = installQuery();
+
+    await expect(adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }))).rejects.toThrow(
+      /stop it before switching/,
+    );
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.closed).toBe(false);
   });
 
   it('keeps the live process when a turn leaves bypassPermissions', async () => {
