@@ -2395,6 +2395,20 @@ async function handleChatCompletions(
   }
 
   const extensions = readChatExtensions(body);
+  // Bounded where the request is validated, per the wire type's promise. The
+  // whole body is already capped, but a system prompt is the one caller-supplied
+  // string large enough to be worth its own limit — mirroring `runInput.ts`'s
+  // `LIMITS.systemPrompt`, so the completions and bridge surfaces agree.
+  if (extensions.systemPrompt !== undefined && extensions.systemPrompt.length > 200_000) {
+    return attribute(
+      fail(
+        400,
+        'invalid_request_error',
+        'invalid_body',
+        '`artemis.systemPrompt` is too long (max 200000 characters).',
+      ),
+    );
+  }
   /*
    * `ignoreUnsupported` is read here rather than in `readChatExtensions`
    * because it is not a *setting for the run* — it changes how this request is

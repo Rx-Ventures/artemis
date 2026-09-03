@@ -206,6 +206,16 @@ describe('a turn', () => {
     expect(plain.started[0]?.input).not.toHaveProperty('permissionMode');
   });
 
+  it('hands appended standing instructions to the run, and omits an absent one', async () => {
+    const source = fakeRuns([{ type: 'run.end', reason: 'completed' }] as Partial<AgentEvent>[]);
+    await drain(source, turn({ extensions: { systemPrompt: 'Follow the house style.' } }));
+    expect(source.started[0]?.input).toMatchObject({ systemPrompt: 'Follow the house style.' });
+
+    const plain = fakeRuns([{ type: 'run.end', reason: 'completed' }] as Partial<AgentEvent>[]);
+    await drain(plain);
+    expect(plain.started[0]?.input).not.toHaveProperty('systemPrompt');
+  });
+
   it('announces a fresh session the moment it exists, not only on done', async () => {
     // A client whose stream dies mid-turn would otherwise learn the id never —
     // and the Artemis-driving-Artemis adapter builds its `session.started`
