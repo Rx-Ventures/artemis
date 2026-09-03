@@ -421,6 +421,32 @@ describe('refusals and losses', () => {
   });
 });
 
+describe('the request body it sends', () => {
+  it('carries appended standing instructions as artemis.systemPrompt', async () => {
+    let sent: unknown;
+    const { origin } = await serve((_request, response, body) => {
+      sent = body;
+      happyStream(response);
+    });
+    await drive(origin, { systemPrompt: { kind: 'append', text: 'Follow the house style.' } });
+    expect((sent as { artemis?: { systemPrompt?: string } }).artemis?.systemPrompt).toBe(
+      'Follow the house style.',
+    );
+  });
+
+  it('sends no systemPrompt when the run carries a default one', async () => {
+    let sent: unknown;
+    const { origin } = await serve((_request, response, body) => {
+      sent = body;
+      happyStream(response);
+    });
+    await drive(origin, { systemPrompt: { kind: 'default' } });
+    expect((sent as { artemis?: Record<string, unknown> }).artemis ?? {}).not.toHaveProperty(
+      'systemPrompt',
+    );
+  });
+});
+
 describe('what a run refuses up front', () => {
   const adapter = createArtemisAdapter();
   const base = {
@@ -456,6 +482,15 @@ describe('what a run refuses up front', () => {
         ...base,
         resumeSessionId: 'sess-abc',
         forkSession: true,
+      } as unknown as ResolvedRunInput),
+    ).rejects.toMatchObject({ agentError: { code: 'invalid_request' } });
+  });
+
+  it('a replacing system prompt, which would displace the serving preset', async () => {
+    await expect(
+      adapter.createRun({
+        ...base,
+        systemPrompt: { kind: 'replace', text: 'You are a pirate.' },
       } as unknown as ResolvedRunInput),
     ).rejects.toMatchObject({ agentError: { code: 'invalid_request' } });
   });

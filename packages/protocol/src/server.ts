@@ -1381,6 +1381,22 @@ export interface ArtemisChatExtensions {
    * so even the widest mode is a convenience, not a capability.
    */
   readonly permissionMode?: string;
+  /**
+   * Standing instructions to append to the run's system prompt.
+   *
+   * Composed on the *client* — the machine that has the prompt library and
+   * knows this machine's memory banks — and carried here so a served run reads
+   * the same conventions a local one would. It is appended on top of the
+   * serving provider's own preset, never a replacement: a caller cannot displace
+   * the coding-agent instructions the provider relies on to use its tools.
+   *
+   * A request, like everything else here. An older server drops the field, so a
+   * newer client degrades to a run with no standing instructions rather than
+   * failing — exactly what a server that never had them does today. Carrying it
+   * grants the caller nothing new: it is the caller's own text, applied to the
+   * caller's own run, and bounded in size where the request is validated.
+   */
+  readonly systemPrompt?: string;
 }
 
 /**
@@ -1520,6 +1536,9 @@ export function readChatExtensions(body: unknown): ArtemisChatExtensions {
       : {}),
     ...(typeof extensions['permissionMode'] === 'string'
       ? { permissionMode: extensions['permissionMode'] as string }
+      : {}),
+    ...(typeof extensions['systemPrompt'] === 'string' && extensions['systemPrompt'].length > 0
+      ? { systemPrompt: extensions['systemPrompt'] as string }
       : {}),
     ...readRemoteOptions(extensions['remote']),
   };

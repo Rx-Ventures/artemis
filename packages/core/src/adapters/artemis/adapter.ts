@@ -156,12 +156,15 @@ export const ARTEMIS_CAPABILITIES: Capabilities = {
   // user's setting. The trust argument is on the wire type: a client that can
   // approve every remote prompt already holds everything a mode grants.
   permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],
-  // Still false, for the reason the module header gives: the remote agent's
-  // instructions are the serving user's settings, and the completions route
-  // deliberately takes no system prompt from an HTTP caller (see
-  // `RunSource.startRun`). A `systemPrompt` sent here would be silently dropped,
-  // which is the one failure this flag exists to prevent.
-  systemPromptAppend: false,
+  // The client composes its standing instructions — the prompt library, and the
+  // memory-bank prompt rendered against this machine's own banks — and the
+  // adapter carries them to the server as `artemis.systemPrompt`, where they are
+  // appended on top of the serving provider's preset. Only an append crosses: a
+  // `replace` is refused in `createRun`, since it would displace the coding
+  // agent's own instructions on a machine the caller does not own. An older
+  // server drops the field, degrading to a run with no standing instructions —
+  // the behaviour before this existed.
+  systemPromptAppend: true,
 };
 
 /**
@@ -420,6 +423,13 @@ class ArtemisRun implements Run {
         ...(this.#input.permissionMode === undefined
           ? {}
           : { permissionMode: this.#input.permissionMode }),
+        // Standing instructions, composed by the engine into an `append` before
+        // the run reached this adapter. Only the append text crosses; a
+        // `replace` was refused in `createRun`. An older server ignores the
+        // field, which is the graceful degradation.
+        ...(this.#input.systemPrompt?.kind === 'append'
+          ? { systemPrompt: this.#input.systemPrompt.text }
+          : {}),
       };
       const response = await fetch(`${root}/v1/chat/completions`, {
         method: 'POST',
@@ -1007,6 +1017,14 @@ export function createArtemisAdapter(): ProviderAdapter {
       if (input.forkSession === true || input.rewindToMessageId !== undefined) {
         return Promise.reject(
           adapterError('invalid_request', 'The Artemis server cannot fork or rewind a session yet.'),
+        );
+      }
+      if (input.systemPrompt?.kind === 'replace') {
+        return Promise.reject(
+          adapterError(
+            'invalid_request',
+            'The Artemis server can only append standing instructions, not replace the system prompt: the serving provider relies on its own preset to use its tools.',
+          ),
         );
       }
       if (input.model === undefined || input.model.trim() === '') {

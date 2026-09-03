@@ -367,6 +367,12 @@ export function createHeadlessHost(dataDir: string): HeadlessHost {
           ? {}
           : { resumeSessionId: input.resumeSessionId as never }),
         ...(permissionMode === undefined ? {} : { permissionMode: permissionMode as never }),
+        // The client's own standing instructions, applied as an append on top of
+        // the serving provider's preset. The wire and the adapter both refuse a
+        // replacement, so an append is the only shape that reaches here.
+        ...(input.systemPrompt === undefined
+          ? {}
+          : { systemPrompt: { kind: 'append', text: input.systemPrompt } as const }),
       } as never);
     },
     subscribe: (listener) => runs.subscribe(listener),
