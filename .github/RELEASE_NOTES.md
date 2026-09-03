@@ -1,6 +1,31 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.4.8
+
+Permission modes, and two ways they quietly did not take effect.
+
+**Switching a conversation to bypass permissions now works.** It did nothing
+before: the chip changed, the process did not, and every tool call went on
+asking — including on the next message, because Artemis keeps the CLI warm
+between turns and the same process served that one too. The mode needs an
+opt-in that can only be given when the process starts, so a conversation begun
+on any other mode has a CLI that will refuse the switch for as long as it
+lives. Asking for it now starts a fresh one on the same conversation. A
+conversation still running background work says so instead, and leaving bypass
+for a stricter mode keeps the process it has.
+
+**An Artemis server stops offering a mode it cannot honour.** A server running
+as root cannot serve bypass permissions at all — the CLI refuses the flag
+there — so its published capabilities no longer claim otherwise.
+
+**"Allow for this session" works against a server.** The rules a run suggests
+are usually written to last, which a connection token cannot do on someone
+else's machine, so the whole answer was refused and "Approve once" was the only
+one that ever landed. Suggestions are now narrowed to the run, and the parts
+that cannot cross at all — changing the run's mode, widening its directories —
+are dropped rather than sent to be refused.
+
 ## What's new in 2.4.7
 
 Everything here is about working against an Artemis server, and about one
