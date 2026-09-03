@@ -1233,6 +1233,27 @@ export function createClaudeAdapter(options?: ClaudeAdapterOptions): ProviderAda
         alive = undefined;
       }
 
+      /*
+       * The same release, for the other turn a live process cannot take: one
+       * asking for `bypassPermissions` of a process spawned without the opt-in.
+       * `canServe` would refuse it and the fresh spawn would resume the file
+       * — but the retained process would still be holding it, exactly the
+       * two-writers state the block above exists to prevent, reached through a
+       * third door. So it is released first, on the same terms: a process
+       * merely retained goes quietly; one mid-turn or holding work refuses and
+       * says why, because a release there destroys what retention protects.
+       */
+      if (alive !== undefined && alive.needsFreshSpawnFor(input)) {
+        if (alive.midTurn || alive.busyWithWork) {
+          throw adapterError(
+            'invalid_request',
+            'This conversation still has work running — stop it before switching it to bypass permissions, which needs a fresh process.',
+          );
+        }
+        alive.release();
+        alive = undefined;
+      }
+
       if (alive !== undefined && alive.canServe(input, configDir)) {
         diagnostic?.(
           `Run ${input.runId}: continuing on the process already serving session ${input.resumeSessionId ?? '—'}.`,
@@ -2979,6 +3000,22 @@ class ClaudeProcess {
   }
 
   /**
+   * Must this turn be served by a fresh spawn, whatever else `canServe` says?
+   *
+   * True for exactly one turn: one asking for `bypassPermissions` of a process
+   * that was spawned without the opt-in. Public rather than folded into
+   * `canServe` because the pool has to act on the same fact *before* it asks
+   * — releasing this process, the way it releases one a hand-off leaves behind
+   * — and two copies of the predicate would be two things to keep in step.
+   */
+  needsFreshSpawnFor(input: ResolvedRunInput): boolean {
+    return (
+      input.permissionMode === 'bypassPermissions' &&
+      this.#input.permissionMode !== 'bypassPermissions'
+    );
+  }
+
+  /**
    * Can this process serve the turn described by `input`?
    *
    * The identity checks are the same three facts a session id resolves under —
@@ -3001,6 +3038,29 @@ class ClaudeProcess {
     // provider serialises the two CLIs on its own transcript.
     if (!this.#state.ended) return false;
     if (input.forkSession === true) return false;
+    /*
+     * `bypassPermissions` needs an opt-in this process may not have.
+     *
+     * The SDK requires `allowDangerouslySkipPermissions: true` alongside that
+     * mode, and it is a *spawn-time* option: `setPermissionMode` takes a mode and
+     * nothing else, so there is no way to supply the opt-in to a process that is
+     * already running. `buildClaudeOptions` sets it from the turn that spawned the
+     * process, which means a conversation begun on any other mode has a CLI that
+     * will refuse the switch for as long as it lives.
+     *
+     * It refused quietly. `#applySettings` reports a failed setter to the
+     * diagnostic channel and swallows it — right for a speed knob, wrong here —
+     * so the chip changed to bypassPermissions, the process stayed on the old
+     * mode, and every tool call kept asking. The mode looked broken rather than
+     * unapplied, and sending another message did not help, because the same
+     * warm process served that turn too.
+     *
+     * Refusing to serve sends the turn down the fresh-spawn path with
+     * `--resume`, which spawns *with* the opt-in and genuinely enters the mode.
+     * The reverse never needs this: leaving bypass for a stricter mode is what
+     * `setPermissionMode` is for, and tightening asks no permission of anyone.
+     */
+    if (this.needsFreshSpawnFor(input)) return false;
     if (this.#sessionId === undefined) return false;
     if (input.resumeSessionId !== this.#sessionId) return false;
     if (input.cwd !== this.#input.cwd) return false;

@@ -2142,6 +2142,76 @@ describe('attaching to a live process', () => {
     expect(events[0]?.seq).toBe(0);
   });
 
+  it('spawns fresh when a turn asks for a bypass the live process cannot enter', async () => {
+    /*
+     * The SDK's `allowDangerouslySkipPermissions` is a spawn-time option and
+     * `setPermissionMode` cannot supply it, so a process started on any other
+     * mode refuses the switch for as long as it lives — quietly, because
+     * `#applySettings` swallows a failed setter. The chip said
+     * bypassPermissions, the CLI stayed on acceptEdits, and every tool call
+     * kept asking; sending another message changed nothing, because the same
+     * warm process served that turn too.
+     */
+    const { adapter, first } = await firstTurn({ permissionMode: 'acceptEdits' });
+    // The work settles; the process is merely retained — the state a mode
+    // switch actually lands in, and the one the pool may release.
+    first.fake.messages.push(tasksChanged([]));
+    await vi.waitFor(() => expect(first.fake.closed).toBe(false));
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }));
+
+    // Release before resume: the old transport is down, so the fresh spawn
+    // resumes a file nobody else is writing…
+    await vi.waitFor(() => expect(first.fake.closed).toBe(true));
+    // …and it carries the opt-in the mode requires, on the same conversation.
+    expect(second.harness().options['permissionMode']).toBe('bypassPermissions');
+    expect(second.harness().options['allowDangerouslySkipPermissions']).toBe(true);
+    expect(second.harness().options['resume']).toBe('sess-abc');
+    // The old process was never asked for a mode it would have refused.
+    expect(first.fake.modes).not.toContain('bypassPermissions');
+  });
+
+  it('refuses the switch while the conversation still holds work', async () => {
+    // Releasing a process with a background task would destroy the very thing
+    // retention exists to protect; spawning alongside it would put two writers
+    // on one transcript. Same terms as a hand-off: stop the work, then switch.
+    const { adapter, first } = await firstTurn({ permissionMode: 'acceptEdits' });
+    const second = installQuery();
+
+    await expect(adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }))).rejects.toThrow(
+      /stop it before switching/,
+    );
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.closed).toBe(false);
+  });
+
+  it('keeps the live process when a turn leaves bypassPermissions', async () => {
+    // Tightening asks no permission of anyone, so `setPermissionMode` does it
+    // in place. Respawning here would throw away a warm conversation to apply
+    // a change the process can make itself.
+    const { adapter, first } = await firstTurn({ permissionMode: 'bypassPermissions' });
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'acceptEdits' }));
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.modes).toContain('acceptEdits');
+  });
+
+  it('keeps the live process when the bypass was there from the start', async () => {
+    // Spawned with the opt-in, so the mode is already available to it and
+    // nothing needs replacing.
+    const { adapter, first } = await firstTurn({ permissionMode: 'bypassPermissions' });
+    const second = installQuery();
+
+    await adapter.createRun(nextTurn({ permissionMode: 'bypassPermissions' }));
+
+    expect(() => second.harness()).toThrow(/never called/);
+    expect(first.fake.closed).toBe(false);
+  });
+
   it('spawns a fresh process when the last one is gone', async () => {
     const adapter = createClaudeAdapter();
     const { harness } = installQuery();
