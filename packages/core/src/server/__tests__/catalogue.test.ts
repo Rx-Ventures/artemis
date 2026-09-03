@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type {
   ProfileId,
+  ServerProfile,
   ProfileMetadata,
   ProviderDescriptor,
   ProviderModelOption,
@@ -218,5 +219,64 @@ describe('createCatalogue', () => {
     expect(entry?.available).toBe(false);
     expect(entry?.unavailableReason).toMatch(/no adapter/i);
     expect(entry?.models).toEqual([]);
+  });
+});
+
+describe('permission modes a host cannot honour', () => {
+  const claudeCaps = {
+    ...NO_CAPABILITIES,
+    permissionModes: ['plan', 'default', 'acceptEdits', 'bypassPermissions'],
+  } as unknown as ServerProfile['capabilities'];
+
+  async function modesFor(providerId: string, uid: number | undefined) {
+    const real = process.getuid;
+    if (uid === undefined) {
+      // Windows has no getuid, and the question does not arise there.
+      delete (process as { getuid?: unknown }).getuid;
+    } else {
+      (process as { getuid?: () => number }).getuid = () => uid;
+    }
+    try {
+      const catalogue = createCatalogue({
+        source: {
+          listProfiles: async () => [
+            { id: 'p1', label: 'work', providerId, configDir: '/data/profiles/work' },
+          ] as never,
+          listProviders: async () =>
+            [{ id: providerId, label: providerId, kind: 'hosted', available: true, capabilities: claudeCaps, models: [] }] as never,
+          listModels: async () => ({ models: [], live: true }),
+        },
+      });
+      const [profile] = await catalogue.read();
+      return profile?.capabilities.permissionModes ?? [];
+    } finally {
+      if (real === undefined) delete (process as { getuid?: unknown }).getuid;
+      else (process as { getuid?: () => number }).getuid = real;
+    }
+  }
+
+  it('drops bypassPermissions when the server runs as root', async () => {
+    /*
+     * Claude Code refuses `--dangerously-skip-permissions` outright under root
+     * — "cannot be used with root/sudo privileges for security reasons", exit
+     * 1 — and the containerised server runs as root. The mode was advertised,
+     * chosen, sent, and then killed the run on spawn, with nothing upstream
+     * able to know it never could have worked.
+     */
+    expect(await modesFor('claude', 0)).toEqual(['plan', 'default', 'acceptEdits']);
+  });
+
+  it('leaves every mode alone for an ordinary user', async () => {
+    expect(await modesFor('claude', 1000)).toContain('bypassPermissions');
+  });
+
+  it('leaves every mode alone where there is no uid to read', async () => {
+    // Windows. Absent must read as "not root" — the answer that changes nothing.
+    expect(await modesFor('claude', undefined)).toContain('bypassPermissions');
+  });
+
+  it('does not touch a provider whose CLI has no such rule', async () => {
+    // The refusal is Claude Code's, not a property of running as root.
+    expect(await modesFor('codex', 0)).toContain('bypassPermissions');
   });
 });

@@ -37,6 +37,7 @@
 
 import type {
   AuthStatusInfo,
+  Capabilities,
   ProfileMetadata,
   ProviderDescriptor,
   ProviderId,
@@ -211,7 +212,10 @@ export function createCatalogue(options: CatalogueOptions): Catalogue {
           disabled: profile.disabled === true,
           live,
           ...(auth === undefined ? {} : { auth }),
-          capabilities: descriptor?.capabilities ?? EMPTY_CAPABILITIES,
+          capabilities: honourableModes(
+            descriptor?.capabilities ?? EMPTY_CAPABILITIES,
+            profile.providerId,
+          ),
           ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
           models: models.map((model) =>
             toServerModel({ model, profile, slug, descriptor }),
@@ -305,6 +309,53 @@ function toServerModel(input: {
  * `NO_CAPABILITIES` only because that constant is typed as the mutable shape
  * and this one is a literal the compiler can keep readonly.
  */
+/**
+ * Is this process running as root?
+ *
+ * `getuid` is absent on Windows, where the question does not arise in this
+ * form — a desktop-hosted server there is not "root" in the sense any provider
+ * CLI checks for. Absent therefore reads as "no", which is the answer that
+ * changes nothing.
+ */
+function runningAsRoot(): boolean {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
+/**
+ * The permission modes this *host* can actually honour, out of the ones the
+ * provider offers.
+ *
+ * `bypassPermissions` is the only one that depends on more than the adapter.
+ * Claude Code refuses `--dangerously-skip-permissions` outright when it is
+ * running as root — "cannot be used with root/sudo privileges for security
+ * reasons", exit 1 — and the containerised server runs as root, so the mode
+ * was advertised, chosen, sent, and then killed the run on spawn. The desktop
+ * had no way to know: the capability list said the mode was available, because
+ * until now nothing asked whether the machine underneath agreed.
+ *
+ * Filtered here so the wire tells the truth: `GET /api/v0/profiles` is what a
+ * client reads to learn what an account can do, and a list that names a mode
+ * the host will kill on spawn is a list that lies. Today the desktop picker
+ * still draws its modes from the `artemis` adapter's static descriptor rather
+ * than from this — so this is the server's half of the answer, and the run
+ * itself still fails with the CLI's own reason (carried since 2.4.7) until the
+ * picker learns to intersect the two. The lasting fix is not to run the server
+ * as root at all, at which point this filter has nothing to remove.
+ */
+function honourableModes(
+  capabilities: Capabilities,
+  providerId: ProviderId,
+): Capabilities {
+  if (providerId !== 'claude' || !runningAsRoot()) return capabilities;
+  if (!capabilities.permissionModes.includes('bypassPermissions')) return capabilities;
+  return {
+    ...capabilities,
+    permissionModes: capabilities.permissionModes.filter(
+      (mode) => mode !== 'bypassPermissions',
+    ),
+  };
+}
+
 const EMPTY_CAPABILITIES = {
   interactivePermissions: false,
   partialMessages: false,
