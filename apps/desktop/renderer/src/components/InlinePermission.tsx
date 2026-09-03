@@ -74,16 +74,38 @@ import { cn } from '@/lib/utils';
  * promises. The rule still stops the run asking again; it simply stops at the
  * end of the run instead of being written down. That is the whole of what a
  * connection token can offer, and it is most of what the user wanted.
+ *
+ * Rule *kinds* the token cannot carry at any scope are dropped instead — see
+ * the filter. A card left with no suggestions draws no button, which is the
+ * honest state: there is nothing here a remote answer could say.
  */
 export function scopedForRun(
   suggestions: readonly PermissionRuleUpdate[],
   remote: boolean,
 ): readonly PermissionRuleUpdate[] {
   if (!remote) return suggestions;
-  return suggestions.map((update) =>
-    update.scope === undefined || update.scope === 'once' || update.scope === 'session'
-      ? update
-      : { ...update, scope: 'session' as const },
+  return (
+    suggestions
+      /*
+       * Two kinds cannot be narrowed, only dropped. A mode switch changes how
+       * the run asks — the serving user's setting, not this client's to change —
+       * and a directory grant widens the connection's pinned workspace by the
+       * very thing the workspace constrains. The guard refuses both at any
+       * scope, and the CLI does suggest them: `setMode` on a prompt it thinks
+       * is noisy, `addDirectories` for an edit outside the working directory.
+       * Left in, they would fail the decision exactly as a durable scope did.
+       */
+      .filter(
+        (update) =>
+          update.type !== 'setMode' &&
+          update.type !== 'addDirectories' &&
+          update.type !== 'removeDirectories',
+      )
+      .map((update) =>
+        update.scope === undefined || update.scope === 'once' || update.scope === 'session'
+          ? update
+          : { ...update, scope: 'session' as const },
+      )
   );
 }
 

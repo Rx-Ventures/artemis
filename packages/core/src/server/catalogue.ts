@@ -333,9 +333,14 @@ function runningAsRoot(): boolean {
  * had no way to know: the capability list said the mode was available, because
  * until now nothing asked whether the machine underneath agreed.
  *
- * Filtered here rather than refused at the run, because a mode that cannot work
- * should not be offered in the first place — the picker reads this list, and a
- * control that is absent asks no questions that a control that fails does.
+ * Filtered here so the wire tells the truth: `GET /api/v0/profiles` is what a
+ * client reads to learn what an account can do, and a list that names a mode
+ * the host will kill on spawn is a list that lies. Today the desktop picker
+ * still draws its modes from the `artemis` adapter's static descriptor rather
+ * than from this — so this is the server's half of the answer, and the run
+ * itself still fails with the CLI's own reason (carried since 2.4.7) until the
+ * picker learns to intersect the two. The lasting fix is not to run the server
+ * as root at all, at which point this filter has nothing to remove.
  */
 function honourableModes(
   capabilities: Capabilities,

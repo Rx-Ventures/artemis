@@ -38,6 +38,26 @@ describe('scopedForRun', () => {
     expect(scopedForRun(kept, true)).toEqual(kept);
   });
 
+  it('drops the kinds a connection token cannot carry at any scope', () => {
+    // A mode switch and a directory grant are refused by the guard however
+    // they are scoped, and the CLI suggests both — the fixtures in
+    // `claude.test.ts` show it offering `setMode` and `addDirectories`.
+    // Narrowing their scope would still fail the decision; only dropping
+    // them lets the rules beside them go through.
+    const mode = { type: 'setMode', mode: 'acceptEdits', scope: 'project' } as unknown as PermissionRuleUpdate;
+    const dirs = { type: 'addDirectories', directories: ['/etc'], scope: 'session' } as unknown as PermissionRuleUpdate;
+    const gone = { type: 'removeDirectories', directories: ['/etc'], scope: 'once' } as unknown as PermissionRuleUpdate;
+
+    const kept = scopedForRun([mode, rule('project'), dirs, gone], true);
+
+    expect(kept).toEqual([{ ...rule('project'), scope: 'session' }]);
+  });
+
+  it('can leave nothing, which is the cue to draw no button', () => {
+    const mode = { type: 'setMode', mode: 'acceptEdits', scope: 'session' } as unknown as PermissionRuleUpdate;
+    expect(scopedForRun([mode], true)).toEqual([]);
+  });
+
   it('changes nothing at all on a local run', () => {
     // Durable is the right answer on your own machine, and is the whole point
     // of the suggestion. Identity, not a copy: nothing here needs rebuilding.
