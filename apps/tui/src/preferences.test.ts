@@ -30,7 +30,9 @@ describe('tuiStateDir', () => {
   });
 
   it('lets ARTEMIS_TUI_STATE_DIR override everything', () => {
-    expect(tuiStateDir({ platform: 'linux', home, env: { ARTEMIS_TUI_STATE_DIR: '/elsewhere' } })).toBe('/elsewhere');
+    // Already absolute, so resolving it is the identity — on either platform.
+    const elsewhere = sep === '\\' ? 'D:\\elsewhere' : '/elsewhere';
+    expect(tuiStateDir({ platform: 'linux', home, env: { ARTEMIS_TUI_STATE_DIR: elsewhere } })).toBe(elsewhere);
   });
 });
 
