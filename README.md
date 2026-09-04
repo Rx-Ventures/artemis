@@ -169,9 +169,9 @@ Inside it, `/profile`, `/model` and `/mode` open pickers for the account, the
 model (with its effort and speed where the model has them) and the permission
 mode, and whichever you last chose is what the next launch opens as. `/resume`
 lists this directory's stored conversations and picks one up (`artemis -c`
-opens the newest straight away); `/cwd <path>` moves to another directory and
-starts fresh there; `/attach <path>` sends an image or file with the next
-message; `/tasks` shows background work and, for a delegated agent, what it
+opens the newest straight away); `/cwd`, and the rail's "in another folder…",
+choose where to work — a folder you have used before, or one found by
+browsing; `/attach <path>` sends an image or file with the next message; `/tasks` shows background work and, for a delegated agent, what it
 did; `/usage` shows the plan's windows. `/new` starts over, `/help` lists the
 rest. Typing `/` also offers your own skills and the provider's commands, by
 the name you would think of: `/code-review` finds

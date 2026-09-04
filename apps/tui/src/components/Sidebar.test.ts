@@ -37,6 +37,8 @@ function script(rows: readonly RailRow[]): readonly string[] {
     switch (row.kind) {
       case 'new':
         return 'new';
+      case 'new-elsewhere':
+        return 'new-elsewhere';
       case 'folder':
         return `folder:${row.label}${row.open ? '' : '(folded)'}`;
       case 'session':
@@ -60,7 +62,7 @@ describe('railRows', () => {
       identity,
     );
 
-    expect(script(rows)).toEqual(['new', 'folder:api', 'session:a', 'folder:web', 'session:w', 'folder:zebra', 'session:z']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:api', 'session:a', 'folder:web', 'session:w', 'folder:zebra', 'session:z']);
   });
 
   it('draws no folder for a project with nothing in it, wherever you are standing', () => {
@@ -70,7 +72,7 @@ describe('railRows', () => {
     // the rail is a list of conversations rather than of places.
     const rows = railRows([session({ id: 'z', cwd: '/w/zebra', updatedAt: 1 })], ALL_OPEN, identity);
 
-    expect(script(rows)).toEqual(['new', 'folder:zebra', 'session:z']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:zebra', 'session:z']);
   });
 
   it('sorts by the name the heading shows, not the path under it', () => {
@@ -79,7 +81,7 @@ describe('railRows', () => {
       identity,
     );
 
-    expect(script(rows)).toEqual(['new', 'folder:alpha(folded)', 'folder:zebra(folded)']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:alpha(folded)', 'folder:zebra(folded)']);
   });
 
   it('orders conversations inside a folder newest first, whatever order they arrived in', () => {
@@ -92,7 +94,7 @@ describe('railRows', () => {
       identity,
     );
 
-    expect(script(rows)).toEqual(['new', 'folder:api', 'session:newest', 'session:middle', 'session:old']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:api', 'session:newest', 'session:middle', 'session:old']);
   });
 
   it('keeps a fixed order when two conversations share a timestamp', () => {
@@ -111,15 +113,15 @@ describe('railRows', () => {
       projectOf,
     );
 
-    expect(script(rows)).toEqual(['new', 'folder:api', 'session:branch', 'session:main']);
-    expect(rows[1]).toMatchObject({ kind: 'folder', count: 2 });
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:api', 'session:branch', 'session:main']);
+    expect(rows[2]).toMatchObject({ kind: 'folder', count: 2 });
   });
 
   it('shows the newest few of a big folder and a row for the rest, until expanded', () => {
     const many = Array.from({ length: 11 }, (_, i) => session({ id: `s${String(i)}`, cwd: '/w/api', updatedAt: i }));
 
     const capped = railRows(many, ALL_OPEN, identity);
-    expect(script(capped).slice(2)).toEqual([
+    expect(script(capped).slice(3)).toEqual([
       'session:s10',
       'session:s9',
       'session:s8',
@@ -130,10 +132,11 @@ describe('railRows', () => {
       'session:s3',
       'more:3',
     ]);
-    expect(capped[1]).toMatchObject({ kind: 'folder', count: 11 });
+    expect(capped[2]).toMatchObject({ kind: 'folder', count: 11 });
 
     const expanded = railRows(many, ALL_OPEN, identity, () => undefined, new Set(['/w/api']));
-    expect(script(expanded)).toHaveLength(2 + 11);
+    // Two openers, the folder heading, then every conversation.
+    expect(script(expanded)).toHaveLength(3 + 11);
     expect(script(expanded).at(-1)).toBe('session:s0');
   });
 
@@ -145,8 +148,8 @@ describe('railRows', () => {
 
     // `web` was open and empty; it is not drawn at all, so the folded `api`
     // is the only heading and it still carries what it is hiding.
-    expect(script(rows)).toEqual(['new', 'folder:api(folded)']);
-    expect(rows[1]).toMatchObject({ kind: 'folder', count: 2 });
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:api(folded)']);
+    expect(rows[2]).toMatchObject({ kind: 'folder', count: 2 });
   });
 
   it('files an archived conversation into its own folder at the foot, not its project', () => {
@@ -162,7 +165,7 @@ describe('railRows', () => {
     // Newest first would have put `put-away` at the top of `api`; archiving
     // is what takes it out of the project altogether, and the archive sorts
     // last however the projects are named.
-    expect(script(rows)).toEqual(['new', 'folder:api', 'session:live', 'folder:archived', 'session:put-away']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:api', 'session:live', 'folder:archived', 'session:put-away']);
   });
 
   it('keeps the archive folded away, and out of the way, until it is asked for', () => {
@@ -174,7 +177,7 @@ describe('railRows', () => {
 
     // The project it came from has nothing left in it, so it is not drawn at
     // all — one archived conversation must not leave an empty heading behind.
-    expect(script(rows)).toEqual(['new', 'folder:archived(folded)']);
+    expect(script(rows)).toEqual(['new', 'new-elsewhere', 'folder:archived(folded)']);
   });
 
   it('labels a row from another account and leaves the current account’s alone', () => {
@@ -187,8 +190,8 @@ describe('railRows', () => {
       (s) => (s.profileId === 'prof_work' ? 'work' : undefined),
     );
 
-    expect(rows[2]).toMatchObject({ kind: 'session' });
-    expect(rows[2]).not.toHaveProperty('account');
-    expect(rows[3]).toMatchObject({ kind: 'session', account: 'work' });
+    expect(rows[3]).toMatchObject({ kind: 'session' });
+    expect(rows[3]).not.toHaveProperty('account');
+    expect(rows[4]).toMatchObject({ kind: 'session', account: 'work' });
   });
 });

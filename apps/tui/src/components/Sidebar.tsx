@@ -15,6 +15,10 @@
  * A folder shows its newest few and then an "… n more" row; Enter on that
  * shows the rest.
  *
+ * The two rows at the top are the two ways to begin: here, or somewhere else.
+ * The second opens the folder chooser, because the folder you want is a thing
+ * to pick from a list rather than a path to type out.
+ *
  * A folder with nothing in it is not drawn at all — including the one you are
  * standing in. A heading over no rows is a promise of contents, and the
  * directory you are working in is already named in the header and on the
@@ -46,6 +50,7 @@ import { ACCENT } from '../theme.js';
 
 export type RailRow =
   | { readonly kind: 'new' }
+  | { readonly kind: 'new-elsewhere' }
   | { readonly kind: 'folder'; readonly project: string; readonly label: string; readonly count: number; readonly open: boolean }
   | { readonly kind: 'session'; readonly session: SessionSummary; readonly account?: string }
   | { readonly kind: 'more'; readonly project: string; readonly hidden: number };
@@ -120,7 +125,7 @@ export function railRows(
   const folders = [...byProject.entries()].sort(([a], [b]) => compareFolderNames(a, b));
   if (archived.length > 0) folders.push([ARCHIVED_FOLDER, archived]);
 
-  const rows: RailRow[] = [{ kind: 'new' }];
+  const rows: RailRow[] = [{ kind: 'new' }, { kind: 'new-elsewhere' }];
   for (const [project, list] of folders) {
     // An empty folder is not drawn: a heading over no rows promises contents
     // it does not have, and the only folder that could be empty is the one the
@@ -191,7 +196,7 @@ export function Sidebar({
       <Text color={ACCENT} bold>
         CONVERSATIONS
       </Text>
-      {loading && rows.length <= 2 && <Text dimColor>  reading…</Text>}
+      {loading && !rows.some((row) => row.kind === 'session') && <Text dimColor>  reading…</Text>}
       {visible.map((row, i) => {
         const index = first + i;
         const isSelected = focused && index === selected;
@@ -203,6 +208,15 @@ export function Sidebar({
                 <Text color={ACCENT}>{cursor} </Text>
                 <Text color={isSelected ? ACCENT : undefined} bold={isSelected} dimColor={!isSelected}>
                   + new conversation
+                </Text>
+              </Text>
+            );
+          case 'new-elsewhere':
+            return (
+              <Text key="new-elsewhere">
+                <Text color={ACCENT}>{cursor} </Text>
+                <Text color={isSelected ? ACCENT : undefined} bold={isSelected} dimColor={!isSelected}>
+                  + in another folder…
                 </Text>
               </Text>
             );

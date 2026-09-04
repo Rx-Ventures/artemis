@@ -44,7 +44,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'attach', usage: '/attach <path>', summary: 'Send an image or file with the next message' },
   { name: 'tasks', usage: '/tasks', summary: 'Background work: what is running, and what a delegated agent did' },
   { name: 'usage', usage: '/usage', summary: "The account's plan windows and how full they are" },
-  { name: 'cwd', usage: '/cwd [path]', summary: 'Show the working directory, or move to one and start fresh there' },
+  { name: 'cwd', usage: '/cwd', summary: 'Choose where to work: a folder you have used, or browse for one' },
   { name: 'new', usage: '/new', summary: 'Start a fresh conversation on the same account' },
   { name: 'help', usage: '/help', summary: 'List these commands' },
   { name: 'quit', usage: '/quit', summary: 'Leave' },

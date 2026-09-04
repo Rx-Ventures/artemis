@@ -66,6 +66,8 @@ import {
 import { formatDuration, formatRelative, formatUntil, oneLine } from '@rx-artemis/transcript';
 import { isArchived } from '@rx-artemis/protocol';
 
+import { browseRowLabel, browseRows, browseStart, recentDirectories, shortenPath } from './directories.js';
+
 import { readAttachment } from './attachments.js';
 import { CATALOGUE_KEY, commandsKey, modelsKey, usageKey } from './cache.js';
 import { checkForUpdate, currentVersion, installRoot } from './update.js';
@@ -80,9 +82,10 @@ import { Header } from './components/Header.js';
 import { PermissionCard } from './components/PermissionCard.js';
 import { Picker, type PickerItem } from './components/Picker.js';
 import { Sidebar, railRows, type RailRow } from './components/Sidebar.js';
-import { basename, join, resolve } from 'node:path';
+import { basename } from 'node:path';
 import { homedir } from 'node:os';
-import { stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { describeWorkspace } from '@rx-artemis/core';
 import { StatusBar } from './components/StatusBar.js';
 import { ReplayRows, TranscriptViewport } from './components/Transcript.js';
@@ -119,6 +122,9 @@ interface ReplayModal {
 
 type Modal = PickerModal | LoadingModal | ReplayModal;
 type Focus = 'composer' | 'sidebar';
+
+/** The row that leaves the recents list for the filesystem. Not a path, so it cannot be one. */
+const BROWSE_KEY = '\u0000browse';
 
 const MODE_LABEL: Readonly<Record<PermissionMode, string>> = {
   default: 'Ask',
@@ -934,34 +940,32 @@ export function App({ launched }: AppProps): React.JSX.Element {
   }, [conversation]);
 
   /**
-   * Work somewhere else, starting fresh there.
+   * Work in `target`, starting fresh there.
    *
    * A conversation belongs to the directory it started in — that is what the
    * provider files it under and what the rail groups it by — so moving is a
-   * new conversation rather than the same one relocated. `~` is expanded and
-   * a relative path is resolved against where the agent is now, which is what
-   * `cd` would do and therefore what anyone typing this expects.
+   * new conversation rather than the same one relocated, and the message says
+   * so. The path arrives already chosen from a list, but it is still checked:
+   * a recent folder is a folder that existed when a conversation ran in it,
+   * which is not the same as one that exists now.
    */
   const moveToDirectory = useCallback(
-    async (path: string) => {
+    async (target: string) => {
       if (conversation.isLive) {
         setNotice('Wait for this turn to finish before moving to another directory.');
         return;
       }
-      const home = homedir();
-      const expanded = path === '~' ? home : path.startsWith('~/') ? join(home, path.slice(2)) : path;
-      const target = resolve(state.settings.cwd, expanded);
+      if (target === state.settings.cwd) {
+        startNew();
+        return;
+      }
       try {
         if (!(await stat(target)).isDirectory()) {
           say('error', `${target} is not a directory.`);
           return;
         }
       } catch {
-        say('error', `${target} does not exist, or cannot be read.`);
-        return;
-      }
-      if (target === state.settings.cwd) {
-        say('info', `Already working in ${target}.`);
+        say('error', `${target} is gone, or cannot be read.`);
         return;
       }
       const outcome = conversation.updateSettings({ cwd: target });
@@ -975,6 +979,91 @@ export function App({ launched }: AppProps): React.JSX.Element {
     [conversation, state.settings.cwd, say, startNew],
   );
 
+  /**
+   * Walk the filesystem for a folder nothing has run in yet.
+   *
+   * One picker per directory, rebuilt on each step, rather than a component
+   * with its own cursor: the rows are a list to choose from like every other
+   * list in here, and reusing the picker means the scrolling, the keys and the
+   * look are the ones already learned. The first row chooses where you have
+   * arrived, so accepting a folder is Enter and there is no second key.
+   */
+  const openBrowser = useCallback(
+    (path: string): void => {
+      void (async () => {
+        const home = homedir();
+        let entries: Dirent[];
+        try {
+          entries = await readdir(path, { withFileTypes: true });
+        } catch {
+          say('error', `Cannot read ${path}.`);
+          setModal(null);
+          return;
+        }
+        const rows = browseRows(path, entries);
+        setModal({
+          kind: 'picker',
+          title: `Browse — ${shortenPath(path, home)}`,
+          items: rows.map((row, i) => ({
+            key: String(i),
+            label: browseRowLabel(row, home),
+            ...(row.kind === 'choose' ? { detail: shortenPath(path, home) } : {}),
+          })),
+          hint: '↑↓ move · Enter open · first row chooses · Esc back',
+          onSelect: (item) => {
+            const row = rows[Number(item.key)];
+            if (row === undefined) return;
+            if (row.kind === 'choose') {
+              setModal(null);
+              void moveToDirectory(row.path);
+              return;
+            }
+            openBrowser(row.path);
+          },
+        });
+      })();
+    },
+    [say, moveToDirectory],
+  );
+
+  /**
+   * Where to work: the folders already worked in, and browsing for one that
+   * is not there yet.
+   *
+   * Recents first and browsing last, because the folder someone wants is
+   * nearly always one they have been in before — the same order, and the same
+   * reasoning, as the control above the desktop's composer.
+   */
+  const openDirectoryPicker = useCallback(() => {
+    const home = homedir();
+    const recents = recentDirectories(sessions, state.settings.cwd, home);
+    setModal({
+      kind: 'picker',
+      title: 'New conversation in…',
+      initialKey: state.settings.cwd,
+      items: [
+        ...recents.map((recent) => ({
+          key: recent.path,
+          label: recent.label,
+          ...(recent.path === state.settings.cwd
+            ? { detail: 'here' }
+            : recent.count > 0
+              ? { detail: `${formatRelative(recent.updatedAt)} · ${String(recent.count)}` }
+              : {}),
+        })),
+        { key: BROWSE_KEY, label: 'Browse folders…', detail: 'somewhere new' },
+      ],
+      onSelect: (item) => {
+        if (item.key === BROWSE_KEY) {
+          openBrowser(browseStart(state.settings.cwd));
+          return;
+        }
+        setModal(null);
+        void moveToDirectory(item.key);
+      },
+    });
+  }, [sessions, state.settings.cwd, moveToDirectory, openBrowser]);
+
   const runCommand = useCallback(
     (command: Command) => {
       switch (command.name) {
@@ -982,11 +1071,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
           say('info', 'Commands', COMMANDS.map((spec) => `${spec.usage.padEnd(16)} ${spec.summary}`).join('\n'));
           return;
         case 'cwd':
-          if (command.args.length > 0) {
-            void moveToDirectory(command.args);
-            return;
-          }
-          say('info', `Working in ${state.settings.cwd}`);
+          openDirectoryPicker();
           return;
         case 'quit':
           exit();
@@ -1164,6 +1249,9 @@ export function App({ launched }: AppProps): React.JSX.Element {
         case 'new':
           startNew();
           return;
+        case 'new-elsewhere':
+          openDirectoryPicker();
+          return;
         case 'folder':
           setFocus('sidebar');
           setOpenFolders((current) => {
@@ -1221,7 +1309,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
           return;
       }
     },
-    [startNew, state.sessionId, state.settings.cwd, state.settings.profileId, accounts, descriptors, conversation, loadSession],
+    [startNew, openDirectoryPicker, state.sessionId, state.settings.cwd, state.settings.profileId, accounts, descriptors, conversation, loadSession],
   );
 
   useInput((input, key) => {
@@ -1340,6 +1428,16 @@ export function App({ launched }: AppProps): React.JSX.Element {
           {modal?.kind === 'picker' && (
             <Box paddingX={1} flexShrink={0}>
               <Picker
+                /*
+                 * Keyed by title, so that a picker showing a *different*
+                 * list starts at the top of it. The folder browser replaces
+                 * its rows on every step, and a cursor kept from the last
+                 * directory can sit past the end of a smaller one — a
+                 * selection you cannot see and an Enter that does nothing. A
+                 * picker refreshed in place keeps its title, and so keeps
+                 * its cursor, which is the case this must not disturb.
+                 */
+                key={modal.title}
                 title={modal.title}
                 items={modal.items}
                 {...(modal.initialKey === undefined ? {} : { initialKey: modal.initialKey })}

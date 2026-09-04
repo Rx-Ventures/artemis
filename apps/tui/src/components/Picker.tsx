@@ -11,10 +11,20 @@
  * The initial selection is the caller's to set. For a destructive choice that
  * means the safe row, so that Enter pressed once too often does nothing worse
  * than nothing.
+ *
+ * A list longer than the window scrolls rather than growing: the folder
+ * browser can offer a directory with hundreds of entries, and a list of
+ * conversations grows without limit, either of which would otherwise push the
+ * top of the picker — its title — off the screen. The selection is kept
+ * roughly centred and what is out of sight is counted above and below, so the
+ * list never silently ends.
  */
 
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+
+/** Rows on screen at once before the list starts scrolling. */
+const DEFAULT_MAX_ROWS = 12;
 
 export interface PickerItem<K extends string = string> {
   readonly key: K;
@@ -38,7 +48,23 @@ export interface PickerProps<K extends string = string> {
   readonly onCancel: () => void;
   /** Shown under the list; defaults to the key legend. */
   readonly hint?: string;
+  /** Rows visible at once; the rest scroll. */
+  readonly maxRows?: number;
   readonly isActive?: boolean;
+}
+
+/**
+ * The slice of a list to draw so that `index` is visible and, where the list
+ * is long enough, roughly centred.
+ *
+ * Derived rather than remembered: a scroll offset held in state can disagree
+ * with the selection — after the items change under it, which is exactly what
+ * the folder browser does on every step into a directory.
+ */
+export function pickerWindow(index: number, count: number, maxRows: number): { readonly top: number; readonly size: number } {
+  const size = Math.max(1, Math.min(maxRows, count));
+  const top = Math.max(0, Math.min(index - Math.floor(size / 2), count - size));
+  return { top, size };
 }
 
 export function Picker<K extends string = string>({
@@ -48,13 +74,22 @@ export function Picker<K extends string = string>({
   onSelect,
   onCancel,
   hint,
+  maxRows = DEFAULT_MAX_ROWS,
   isActive = true,
 }: PickerProps<K>): React.JSX.Element {
   const initial = Math.max(
     0,
     items.findIndex((item) => item.key === initialKey),
   );
-  const [index, setIndex] = useState(initial);
+  const [selected, setSelected] = useState(initial);
+  /*
+   * Clamped rather than trusted: a picker refreshed in place can be handed a
+   * shorter list than the one its cursor was last on, and a cursor past the
+   * end is a selection nobody can see and an Enter that does nothing.
+   */
+  const index = Math.max(0, Math.min(selected, items.length - 1));
+  const { top, size } = pickerWindow(index, items.length, maxRows);
+  const visible = items.slice(top, top + size);
 
   useInput(
     (input, key) => {
@@ -63,11 +98,11 @@ export function Picker<K extends string = string>({
         return;
       }
       if (key.upArrow || input === 'k') {
-        setIndex((current) => (current - 1 + items.length) % Math.max(1, items.length));
+        setSelected(() => (index - 1 + items.length) % Math.max(1, items.length));
         return;
       }
       if (key.downArrow || input === 'j') {
-        setIndex((current) => (current + 1) % Math.max(1, items.length));
+        setSelected(() => (index + 1) % Math.max(1, items.length));
         return;
       }
       if (key.return) {
@@ -82,7 +117,9 @@ export function Picker<K extends string = string>({
     <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
       <Text bold>{title}</Text>
       {items.length === 0 && <Text dimColor>Nothing to choose from.</Text>}
-      {items.map((item, i) => {
+      {top > 0 && <Text dimColor>{`  ↑ ${String(top)} more`}</Text>}
+      {visible.map((item, offset) => {
+        const i = top + offset;
         const selected = i === index;
         const marker = selected ? '❯' : ' ';
         const colour = item.danger === true ? 'red' : selected ? 'cyan' : undefined;
@@ -103,6 +140,7 @@ export function Picker<K extends string = string>({
           </Box>
         );
       })}
+      {top + size < items.length && <Text dimColor>{`  ↓ ${String(items.length - top - size)} more`}</Text>}
       <Text dimColor>{hint ?? '↑↓ move · Enter choose · Esc back'}</Text>
     </Box>
   );
