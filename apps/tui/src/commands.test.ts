@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { COMMANDS, completeCommand, parseCommand } from './commands.js';
+import { COMMANDS, completeCommand, parseCommand, completeProviderCommand } from './commands.js';
 
 describe('parseCommand', () => {
   it('recognises every listed command by name', () => {
@@ -39,5 +39,34 @@ describe('completeCommand', () => {
     expect(completeCommand('')).toHaveLength(COMMANDS.length);
     expect(completeCommand('/mo').map((command) => command.name)).toEqual(['model', 'mode']);
     expect(completeCommand('zzz')).toEqual([]);
+  });
+});
+
+/*
+ * Reaching a bridged skill by the name a person thinks of.
+ *
+ * Skills arrive from the content bridge fully qualified — the marketplace's
+ * name, a colon, then the command — and reported as "I cannot see my skills
+ * when I type /". They were reachable, but only by typing the plugin's name
+ * first, which is not how anyone looks for `code-review`.
+ */
+describe('completeProviderCommand', () => {
+  const commands = ['deep-research', 'artemis-skills:code-review', 'artemis-skills:grilling', 'compact'];
+
+  it('finds a skill by the part after the colon', () => {
+    expect(completeProviderCommand('/code', commands)).toEqual(['artemis-skills:code-review']);
+    expect(completeProviderCommand('/gril', commands)).toEqual(['artemis-skills:grilling']);
+  });
+
+  it('still matches the whole name, and puts those first', () => {
+    expect(completeProviderCommand('/artemis-skills:gril', commands)).toEqual(['artemis-skills:grilling']);
+    // `c` matches `compact` outright and `code-review` after its colon; the
+    // one that matched as typed leads.
+    expect(completeProviderCommand('/c', commands)).toEqual(['compact', 'artemis-skills:code-review']);
+  });
+
+  it('lists everything for a bare slash, and nothing for a miss', () => {
+    expect(completeProviderCommand('/', commands)).toEqual(commands);
+    expect(completeProviderCommand('/nothing-like-this', commands)).toEqual([]);
   });
 });

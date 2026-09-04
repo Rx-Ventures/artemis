@@ -44,7 +44,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'attach', usage: '/attach <path>', summary: 'Send an image or file with the next message' },
   { name: 'tasks', usage: '/tasks', summary: 'Background work: what is running, and what a delegated agent did' },
   { name: 'usage', usage: '/usage', summary: "The account's plan windows and how full they are" },
-  { name: 'cwd', usage: '/cwd', summary: 'Show the working directory the agent is in' },
+  { name: 'cwd', usage: '/cwd [path]', summary: 'Show the working directory, or move to one and start fresh there' },
   { name: 'new', usage: '/new', summary: 'Start a fresh conversation on the same account' },
   { name: 'help', usage: '/help', summary: 'List these commands' },
   { name: 'quit', usage: '/quit', summary: 'Leave' },
@@ -99,4 +99,27 @@ export function parseCommand(text: string): Command | null {
 export function completeCommand(prefix: string): readonly CommandSpec[] {
   const needle = prefix.replace(/^\//, '').toLowerCase();
   return COMMANDS.filter((command) => command.name.startsWith(needle));
+}
+
+/**
+ * The provider's own commands that match what has been typed — matched on the
+ * name a person would think of.
+ *
+ * A bridged skill arrives fully qualified: `artemis-skills:code-review`. Nobody
+ * reaches for that by typing the marketplace's name first, and matching only
+ * on the whole string means the rows a user is actually looking for are
+ * unreachable unless they already know which plugin owns them. So the part
+ * after the colon matches too, and a whole-name match sorts first because
+ * someone who did type the prefix meant it.
+ */
+export function completeProviderCommand(prefix: string, commands: readonly string[]): readonly string[] {
+  const needle = prefix.replace(/^\//, '').toLowerCase();
+  const whole: string[] = [];
+  const suffix: string[] = [];
+  for (const name of commands) {
+    const lower = name.toLowerCase();
+    if (lower.startsWith(needle)) whole.push(name);
+    else if (lower.slice(lower.indexOf(':') + 1).startsWith(needle)) suffix.push(name);
+  }
+  return [...whole, ...suffix];
 }

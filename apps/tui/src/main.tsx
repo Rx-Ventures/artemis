@@ -169,6 +169,7 @@ async function main(): Promise<number> {
     return 0;
   } finally {
     await launched.cache.flush();
+    await launched.preferences.flush();
     await launched.host.dispose();
   }
 }

@@ -152,6 +152,8 @@ export class Conversation {
   #tasks: readonly BackgroundTask[] = [];
   #planUsage: PlanUsage | null = null;
   #slashCommands: readonly string[] = [];
+  /** A run has reported its own commands, which outrank every seed. */
+  #slashCommandsFromRun = false;
   /** The run that most recently ended; background work it started is stopped through it. */
   #lastRunId: RunId | undefined;
   #snapshot: ConversationState;
@@ -293,6 +295,21 @@ export class Conversation {
   }
 
   /** A fetched snapshot replaces whatever `plan.limit` events had folded. */
+  /**
+   * Seed the provider's command list before any run has reported one.
+   *
+   * Ignored once a run *has* spoken, and only then: what a live session says
+   * it has is the truth. Anything else — a list remembered from the last
+   * launch, then the fresh one that replaces it a second later — is a
+   * standing-in answer that a better standing-in answer may overwrite. See
+   * `TuiHost.listCommands` for why the seed exists at all.
+   */
+  seedSlashCommands(commands: readonly string[]): void {
+    if (this.#slashCommandsFromRun || commands.length === 0) return;
+    this.#slashCommands = commands;
+    this.#notify();
+  }
+
   setPlanUsage(usage: PlanUsage | null): void {
     this.#planUsage = usage;
     this.#notify();
@@ -461,10 +478,14 @@ export class Conversation {
         if (event.permissionMode !== undefined) {
           this.#settings = { ...this.#settings, permissionMode: event.permissionMode };
         }
-        if (event.slashCommands !== undefined) this.#slashCommands = event.slashCommands;
+        if (event.slashCommands !== undefined) {
+          this.#slashCommands = event.slashCommands;
+          this.#slashCommandsFromRun = true;
+        }
         break;
       case 'session.commands':
         this.#slashCommands = event.slashCommands;
+        this.#slashCommandsFromRun = true;
         break;
       case 'permission.request':
         this.#pending = [...this.#pending, event.request];

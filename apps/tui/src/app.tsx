@@ -64,9 +64,10 @@ import {
   type SessionSummary,
 } from '@rx-artemis/protocol';
 import { formatDuration, formatRelative, formatUntil, oneLine } from '@rx-artemis/transcript';
+import { isArchived } from '@rx-artemis/protocol';
 
 import { readAttachment } from './attachments.js';
-import { CATALOGUE_KEY, modelsKey, usageKey } from './cache.js';
+import { CATALOGUE_KEY, commandsKey, modelsKey, usageKey } from './cache.js';
 import { checkForUpdate, currentVersion, installRoot } from './update.js';
 import { COMMANDS, parseCommand, type Command } from './commands.js';
 import { Conversation, type ConversationSettings } from './conversation.js';
@@ -79,7 +80,9 @@ import { Header } from './components/Header.js';
 import { PermissionCard } from './components/PermissionCard.js';
 import { Picker, type PickerItem } from './components/Picker.js';
 import { Sidebar, railRows, type RailRow } from './components/Sidebar.js';
-import { basename } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { stat } from 'node:fs/promises';
 import { describeWorkspace } from '@rx-artemis/core';
 import { StatusBar } from './components/StatusBar.js';
 import { ReplayRows, TranscriptViewport } from './components/Transcript.js';
@@ -159,7 +162,7 @@ const SCROLL_STEP = 2;
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function App({ launched }: AppProps): React.JSX.Element {
-  const { host, descriptors, cache } = launched;
+  const { host, descriptors, cache, preferences } = launched;
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
 
@@ -173,6 +176,15 @@ export function App({ launched }: AppProps): React.JSX.Element {
     // frame; the fresh one replaces it a moment later. See `cache.ts`.
     const remembered = cache.get<PlanUsage>(usageKey(launched.settings.profileId));
     if (remembered !== undefined && Date.now() - remembered.at < USAGE_SEED_MAX_AGE_MS) created.setPlanUsage(remembered.value);
+    /*
+     * And the commands, for the same reason and more urgently: `/` is the
+     * first thing many people type, and a menu missing their own skills until
+     * a subprocess has answered is a menu that is wrong exactly when it is
+     * read. Remembered ones paint with the first frame; the fresh list
+     * replaces them a second later, and a run's own list outranks both.
+     */
+    const commands = cache.get<readonly string[]>(commandsKey(launched.settings.profileId, launched.settings.cwd));
+    if (commands !== undefined) created.seedSlashCommands(commands.value);
     return created;
   }, [host, launched.settings, cache]);
   useEffect(() => () => conversation.dispose(), [conversation]);
@@ -289,6 +301,36 @@ export function App({ launched }: AppProps): React.JSX.Element {
   useEffect(() => {
     if (state.status === 'idle' && state.sessionId !== undefined) void refreshRail();
   }, [state.status, state.sessionId, refreshRail]);
+  /*
+   * Whatever the settings line says is what the next launch opens as.
+   *
+   * Watched here rather than written at each picker, because there are five
+   * ways to change these — three pickers, a flag on a slash command, and
+   * opening someone else's conversation from the rail — and a save at each is
+   * five chances to forget one. The model is stored against the account it
+   * belongs to; see `preferences.ts`.
+   */
+  useEffect(() => {
+    const { profileId, permissionMode, model, modelLabel, effort, fastMode, ultracode } = state.settings;
+    preferences.save({ profileId, permissionMode });
+    preferences.saveModelFor(profileId, {
+      ...(model === undefined ? {} : { model }),
+      ...(modelLabel === undefined ? {} : { modelLabel }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(fastMode === undefined ? {} : { fastMode }),
+      ...(ultracode === undefined ? {} : { ultracode }),
+    });
+  }, [
+    preferences,
+    state.settings.profileId,
+    state.settings.permissionMode,
+    state.settings.model,
+    state.settings.modelLabel,
+    state.settings.effort,
+    state.settings.fastMode,
+    state.settings.ultracode,
+  ]);
+
   // The working directory can change without the list doing so (`/cwd`).
   useEffect(() => {
     void resolveProjectRoots([state.settings.cwd]);
@@ -307,8 +349,8 @@ export function App({ launched }: AppProps): React.JSX.Element {
     [accounts, state.settings.profileId],
   );
   const rail: readonly RailRow[] = useMemo(
-    () => railRows(sessions, state.settings.cwd, openFolders, projectOf, accountOf, expandedFolders),
-    [sessions, state.settings.cwd, openFolders, projectOf, accountOf, expandedFolders],
+    () => railRows(sessions, openFolders, projectOf, accountOf, expandedFolders),
+    [sessions, openFolders, projectOf, accountOf, expandedFolders],
   );
 
   /* ---------------------------------------------------------------------- */
@@ -342,6 +384,37 @@ export function App({ launched }: AppProps): React.JSX.Element {
     [cache, conversation],
   );
 
+  /**
+   * The provider's own slash commands — the user's skills among them — read
+   * now and remembered, so the next launch in this directory has them before
+   * the first frame rather than a second after it.
+   */
+  const refreshCommands = useCallback(async (): Promise<void> => {
+    const { profileId, providerId, cwd } = state.settings;
+    try {
+      const commands = await host.listCommands(profileId, providerId, cwd);
+      if (commands.length === 0) return;
+      cache.set(commandsKey(profileId, cwd), commands);
+      conversation.seedSlashCommands(commands);
+    } catch {
+      // The menu keeps whatever it had; a run will report the rest.
+    }
+  }, [host, cache, conversation, state.settings]);
+
+  /*
+   * Asked again when the account or the directory changes, because both
+   * change the answer: commands are discovered relative to a working
+   * directory, and an account's plugins are its own. The cached list for
+   * wherever we have arrived goes up first, as at launch.
+   */
+  useEffect(() => {
+    const { profileId, cwd } = state.settings;
+    const remembered = cache.get<readonly string[]>(commandsKey(profileId, cwd));
+    if (remembered !== undefined) conversation.seedSlashCommands(remembered.value);
+    const timer = setTimeout(() => void refreshCommands(), 1_500);
+    return () => clearTimeout(timer);
+  }, [cache, conversation, refreshCommands, state.settings.profileId, state.settings.cwd]);
+
   /** The account's model list, read now and remembered for the next `/model` and the next launch. */
   const readModels = useCallback(async (): Promise<ModelListing> => {
     const listing = await host.listModels(state.settings.profileId, state.settings.providerId);
@@ -349,29 +422,35 @@ export function App({ launched }: AppProps): React.JSX.Element {
     return listing;
   }, [host, cache, state.settings.profileId, state.settings.providerId]);
 
-  // A beat after the first frame — the CLI probe must not race the screen —
-  // and after every turn ends, since the turn is what moved it. Then, still
-  // in the background, the model list if the remembered one is a day old or
-  // missing: one more subprocess now so that `/model` costs none later.
+  /*
+   * What the screen needs but did not wait for, a beat after the first frame
+   * so the probes do not race it: the plan windows, and — when the remembered
+   * model list is a day old or missing — a fresh one, so that `/model` costs
+   * nothing later. The commands have an effect of their own above, because
+   * they have to be re-asked when the directory changes.
+   *
+   * Concurrently, because they are independent CLI calls and running them in
+   * a line made the last of them seconds late.
+   */
   useEffect(() => {
     const timer = setTimeout(() => {
-      void (async () => {
-        await refreshPlanUsage(true);
-        const known = cache.get(modelsKey(state.settings.profileId));
-        if (known === undefined || Date.now() - known.at > MODELS_WARM_MAX_AGE_MS) {
-          try {
-            await readModels();
-          } catch {
-            // The picker will ask again when it is opened.
-          }
-        }
-        // An installed copy learns, once a day, whether a newer release
-        // exists; a checkout does not need telling. See `update.ts`.
-        if (installRoot() !== undefined) {
+      const known = cache.get(modelsKey(state.settings.profileId));
+      void Promise.all([
+        refreshPlanUsage(true),
+        known === undefined || Date.now() - known.at > MODELS_WARM_MAX_AGE_MS
+          ? // The picker will ask again when it is opened.
+            readModels().catch(() => undefined)
+          : undefined,
+      ]).then(
+        async () => {
+          // An installed copy learns, once a day, whether a newer release
+          // exists; a checkout does not need telling. See `update.ts`.
+          if (installRoot() === undefined) return;
           const newer = await checkForUpdate(currentVersion(), cache);
           if (newer !== null) setUpdate(newer);
-        }
-      })();
+        },
+        () => undefined,
+      );
     }, 1_500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -854,6 +933,48 @@ export function App({ launched }: AppProps): React.JSX.Element {
     else setScroll(0);
   }, [conversation]);
 
+  /**
+   * Work somewhere else, starting fresh there.
+   *
+   * A conversation belongs to the directory it started in — that is what the
+   * provider files it under and what the rail groups it by — so moving is a
+   * new conversation rather than the same one relocated. `~` is expanded and
+   * a relative path is resolved against where the agent is now, which is what
+   * `cd` would do and therefore what anyone typing this expects.
+   */
+  const moveToDirectory = useCallback(
+    async (path: string) => {
+      if (conversation.isLive) {
+        setNotice('Wait for this turn to finish before moving to another directory.');
+        return;
+      }
+      const home = homedir();
+      const expanded = path === '~' ? home : path.startsWith('~/') ? join(home, path.slice(2)) : path;
+      const target = resolve(state.settings.cwd, expanded);
+      try {
+        if (!(await stat(target)).isDirectory()) {
+          say('error', `${target} is not a directory.`);
+          return;
+        }
+      } catch {
+        say('error', `${target} does not exist, or cannot be read.`);
+        return;
+      }
+      if (target === state.settings.cwd) {
+        say('info', `Already working in ${target}.`);
+        return;
+      }
+      const outcome = conversation.updateSettings({ cwd: target });
+      if (!outcome.ok) {
+        setNotice(outcome.reason);
+        return;
+      }
+      startNew();
+      say('info', `Working in ${target}. New conversation.`);
+    },
+    [conversation, state.settings.cwd, say, startNew],
+  );
+
   const runCommand = useCallback(
     (command: Command) => {
       switch (command.name) {
@@ -861,6 +982,10 @@ export function App({ launched }: AppProps): React.JSX.Element {
           say('info', 'Commands', COMMANDS.map((spec) => `${spec.usage.padEnd(16)} ${spec.summary}`).join('\n'));
           return;
         case 'cwd':
+          if (command.args.length > 0) {
+            void moveToDirectory(command.args);
+            return;
+          }
           say('info', `Working in ${state.settings.cwd}`);
           return;
         case 'quit':
@@ -964,6 +1089,73 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const modalOpen = modal !== null || pendingRequest !== undefined;
   const sidebarActive = focus === 'sidebar' && showSidebar && !modalOpen;
   const composerActive = focus === 'composer' && !modalOpen;
+
+  /**
+   * Put a conversation away, or take it back out.
+   *
+   * A tag written into the provider's own store — the same one the desktop
+   * writes — so a row archived here is archived there. Nothing is destroyed
+   * and the conversation is still resumable from the archive folder, which is
+   * what makes this the safe half of the pair and why it asks nothing before
+   * doing it.
+   */
+  const archiveRailSession = useCallback(
+    async (session: SessionSummary) => {
+      const archived = isArchived(session);
+      if (host.capabilitiesFor(session.providerId)?.tagSession !== true) {
+        setNotice(`${state.settings.providerLabel} cannot archive a conversation.`);
+        return;
+      }
+      try {
+        const done = await host.archiveSession(session.profileId, session.providerId, session.id, session.cwd, !archived);
+        if (!done) {
+          setNotice('That conversation could not be archived; it may already be gone.');
+          return;
+        }
+        say('info', `${archived ? 'Restored' : 'Archived'} ${oneLine(session.title, 60)}.`);
+        await refreshRail();
+      } catch (error) {
+        say('error', `Could not archive that conversation: ${describeError(error)}`);
+      }
+    },
+    [host, state.settings.providerLabel, say, refreshRail],
+  );
+
+  /**
+   * Destroy a conversation, after asking.
+   *
+   * The transcript file goes and nothing here can bring it back, which is the
+   * whole difference from archiving and the reason this is the one rail
+   * action that confirms first — with the safe row selected, so Enter pressed
+   * once too often does nothing.
+   */
+  const deleteRailSession = useCallback(
+    (session: SessionSummary) => {
+      if (host.capabilitiesFor(session.providerId)?.deleteSession !== true) {
+        setNotice(`${state.settings.providerLabel} cannot delete a stored conversation.`);
+        return;
+      }
+      confirm(`Delete "${oneLine(session.title, 50)}"? This cannot be undone.`, 'Delete it', true, () => {
+        void (async () => {
+          try {
+            const done = await host.deleteSession(session.profileId, session.providerId, session.id, session.cwd);
+            if (!done) {
+              setNotice('That conversation could not be deleted; it may already be gone.');
+              return;
+            }
+            // The screen is showing what was just destroyed; there is no
+            // conversation left to be in.
+            if (session.id === state.sessionId) startNew();
+            say('info', `Deleted ${oneLine(session.title, 60)}.`);
+            await refreshRail();
+          } catch (error) {
+            say('error', `Could not delete that conversation: ${describeError(error)}`);
+          }
+        })();
+      });
+    },
+    [host, state.settings.providerLabel, state.sessionId, confirm, say, refreshRail, startNew],
+  );
 
   const chooseRailRow = useCallback(
     (row: RailRow) => {
@@ -1083,11 +1275,15 @@ export function App({ launched }: AppProps): React.JSX.Element {
     }
 
     if (sidebarActive) {
+      const row = rail[railIndex];
       if (key.upArrow || input === 'k') setRailIndex((i) => (i - 1 + rail.length) % Math.max(1, rail.length));
       else if (key.downArrow || input === 'j') setRailIndex((i) => (i + 1) % Math.max(1, rail.length));
       else if (key.return) {
-        const row = rail[railIndex];
         if (row !== undefined) chooseRailRow(row);
+      } else if (input === 'a' && row?.kind === 'session') {
+        void archiveRailSession(row.session);
+      } else if (input === 'd' && row?.kind === 'session') {
+        deleteRailSession(row.session);
       } else if (key.escape) setFocus('composer');
       return;
     }
@@ -1179,7 +1375,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
               state={state}
               {...(flash === undefined ? {} : { flash })}
               {...(update === undefined ? {} : { update })}
-              {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · Esc back' } : scroll > 0 ? { hint: 'scrolled · Esc to follow' } : {})}
+              {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · a archive · d delete · Esc back' } : scroll > 0 ? { hint: 'scrolled · Esc to follow' } : {})}
             />
           </Box>
         </Box>

@@ -16,7 +16,7 @@
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 
-import { completeCommand } from '../commands.js';
+import { completeCommand, completeProviderCommand } from '../commands.js';
 import { ACCENT } from '../theme.js';
 
 export interface ComposerProps {
@@ -52,9 +52,15 @@ export function Composer({
       ? []
       : [
           ...completeCommand(value),
-          ...providerCommands
-            .filter((name) => name.toLowerCase().startsWith(typed))
-            .map((name) => ({ name, usage: `/${name}`, summary: 'provider command' })),
+          ...completeProviderCommand(value, providerCommands).map((name) => ({
+            name,
+            usage: `/${name}`,
+            // The plugin's name is already the front half of the row; saying
+            // it again in the description column is noise. What the column is
+            // for is the distinction the name does not carry — whether this
+            // came from the user's own skills or from the provider itself.
+            summary: name.includes(':') ? 'skill' : 'provider command',
+          })),
         ].slice(0, 10);
 
   useInput(
@@ -119,6 +125,11 @@ export function Composer({
     { isActive },
   );
 
+  // Wide enough for the longest row on offer, so the descriptions line up:
+  // a bridged `/marketplace:command` is far longer than `/help`, and a fixed
+  // column put the two halves of those rows flush against each other.
+  const nameColumn = completions.reduce((widest, command) => Math.max(widest, command.usage.length), 0) + 1;
+
   const before = value.slice(0, cursor);
   const at = value.slice(cursor, cursor + 1) || ' ';
   const after = value.slice(cursor + 1);
@@ -147,7 +158,7 @@ export function Composer({
         <Box flexDirection="column" paddingLeft={2}>
           {completions.map((command) => (
             <Text key={command.usage} dimColor>
-              {command.usage.padEnd(18)} {command.summary}
+              {command.usage.padEnd(nameColumn)} {command.summary}
             </Text>
           ))}
         </Box>

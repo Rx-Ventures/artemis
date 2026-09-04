@@ -1,8 +1,8 @@
 /**
  * The last answer to every slow question, kept between launches.
  *
- * Plan usage, an account's model list and the account catalogue each cost a
- * subprocess — the provider's CLI, asked over its control channel — and take
+ * Plan usage, an account's model list, its slash commands and the account
+ * catalogue each cost a subprocess — the provider's CLI, asked over its control channel — and take
  * a second or more apiece, more on a slower machine. Nothing about them moves
  * fast: a model list changes when a provider ships a model, the catalogue when
  * an account is added, and the plan windows with use, which is minutes. Yet
@@ -73,6 +73,12 @@ export interface Reading<T> {
 export const usageKey = (profileId: string): string => `usage:${profileId}`;
 export const modelsKey = (profileId: string): string => `models:${profileId}`;
 export const CATALOGUE_KEY = 'catalogue';
+/**
+ * Keyed by directory as well as account: the provider discovers commands
+ * relative to a working directory, so two projects on one account are two
+ * questions with two answers.
+ */
+export const commandsKey = (profileId: string, cwd: string): string => `commands:${profileId}:${cwd}`;
 
 const FILE_VERSION = 1;
 const FILE_NAME = 'readings.json';

@@ -6,8 +6,8 @@
  * pick the account the conversation opens on, and turn all of that into the
  * settings a `Conversation` starts with.
  *
- * The launch path reads *two files* — `profiles.json` and the cache of last
- * readings — and spawns nothing. Listing models and probing sign-in state each
+ * The launch path reads *three files* — `profiles.json`, the cache of last
+ * readings and what was last chosen — and spawns nothing. Listing models and probing sign-in state each
  * cost a subprocess per account, so they wait until a picker asks; a person
  * who typed `artemis` should be looking at a prompt, not a progress bar.
  *
@@ -21,6 +21,7 @@ import { basename, resolve } from 'node:path';
 import { isPermissionMode, type PermissionMode, type ProviderDescriptor, type ProviderId } from '@rx-artemis/protocol';
 
 import { ReadingCache, tuiCacheDir } from './cache.js';
+import { PreferencesStore, tuiStateDir } from './preferences.js';
 import type { ConversationSettings } from './conversation.js';
 import { createTuiHost, type TuiHost } from './host.js';
 
@@ -35,6 +36,8 @@ export interface LaunchOptions {
   readonly resume?: string;
   /** Where the last slow readings are kept. Defaults to the platform's cache directory. */
   readonly cacheDir?: string;
+  /** Where the remembered account, model and mode are kept. Defaults to the platform's state directory. */
+  readonly stateDir?: string;
 }
 
 export interface Launched {
@@ -42,6 +45,8 @@ export interface Launched {
   readonly settings: ConversationSettings;
   /** The last plan reading, model list and catalogue, from the previous launch. */
   readonly cache: ReadingCache;
+  /** The account, model and mode this opened as, to be kept current as they change. */
+  readonly preferences: PreferencesStore;
   /** What the status bar calls the working directory. */
   readonly workspace: string;
   readonly descriptors: ReadonlyMap<ProviderId, ProviderDescriptor>;
@@ -83,6 +88,9 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     };
   }
 
+  const preferences = new PreferencesStore(options.stateDir ?? tuiStateDir());
+  const remembered = preferences.get();
+
   const wanted = options.profile?.trim().toLowerCase();
   let chosen =
     wanted === undefined || wanted.length === 0
@@ -90,17 +98,25 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
       : profiles.find((profile) => profile.label.trim().toLowerCase() === wanted || profile.id === options.profile);
 
   /*
-   * No account named: open as the one that last worked *here*, then the one
-   * that last worked anywhere, then the first that is not hidden. The
-   * desktop recommends an account the same way; "first in the file" is the
-   * one answer nobody means, and it is what made the terminal open on the
+   * No account named: the one it was last left as, then the one that last
+   * worked *here*, then the one that last worked anywhere, then the first
+   * that is not hidden.
+   *
+   * What was last chosen comes first because it was chosen — someone who
+   * switched account meant it, and being asked to switch again at every
+   * launch is the complaint this order answers. The rest is the fallback for
+   * a first launch, and it is the desktop's own rule: "first in the file" is
+   * the one answer nobody means, and it is what made the terminal open on the
    * wrong account and show none of the conversations a person expected.
    */
   if (chosen === undefined && (wanted === undefined || wanted.length === 0)) {
     const usable = profiles.filter((profile) => profile.disabled !== true);
-    const recent = await host.listSessionsAcross(usable.map((profile) => ({ id: profile.id, providerId: profile.providerId })));
-    const here = recent.find((session) => session.cwd === cwd) ?? recent[0];
-    chosen = usable.find((profile) => profile.id === here?.profileId) ?? usable[0] ?? profiles[0];
+    chosen = usable.find((profile) => profile.id === remembered.profileId);
+    if (chosen === undefined) {
+      const recent = await host.listSessionsAcross(usable.map((profile) => ({ id: profile.id, providerId: profile.providerId })));
+      const here = recent.find((session) => session.cwd === cwd) ?? recent[0];
+      chosen = usable.find((profile) => profile.id === here?.profileId) ?? usable[0] ?? profiles[0];
+    }
   }
 
   if (chosen === undefined) {
@@ -117,7 +133,16 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
   const descriptors = new Map<ProviderId, ProviderDescriptor>(described.map((descriptor) => [descriptor.id, descriptor]));
   const descriptor = descriptors.get(chosen.providerId);
 
+  /*
+   * The mode is remembered, but only as far as the provider will take it: an
+   * account switched to one that has fewer modes must not open on a mode its
+   * adapter would reject, and `default` is the one every provider has.
+   */
   let permissionMode: PermissionMode = 'default';
+  const modes = descriptor?.capabilities.permissionModes ?? [];
+  if (isPermissionMode(remembered.permissionMode) && modes.includes(remembered.permissionMode)) {
+    permissionMode = remembered.permissionMode;
+  }
   if (options.mode !== undefined) {
     if (!isPermissionMode(options.mode)) {
       await host.dispose();
@@ -126,6 +151,8 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     permissionMode = options.mode;
   }
 
+  // The model is per account — see `preferences.ts` — and a flag outranks it.
+  const model = preferences.modelFor(chosen.id) ?? {};
   const settings: ConversationSettings = {
     profileId: chosen.id,
     providerId: chosen.providerId,
@@ -133,7 +160,11 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     providerLabel: descriptor?.label ?? chosen.providerId,
     cwd,
     permissionMode,
-    ...(options.model === undefined ? {} : { model: options.model, modelLabel: options.model }),
+    ...(model.model === undefined ? {} : { model: model.model, modelLabel: model.modelLabel ?? model.model }),
+    ...(model.effort === undefined ? {} : { effort: model.effort }),
+    ...(model.fastMode === true ? { fastMode: true } : {}),
+    ...(model.ultracode === true ? { ultracode: true } : {}),
+    ...(options.model === undefined ? {} : { model: options.model, modelLabel: options.model, effort: undefined }),
   };
 
   return {
@@ -142,6 +173,7 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
       host,
       settings,
       cache: new ReadingCache(options.cacheDir ?? tuiCacheDir()),
+      preferences,
       workspace: basename(cwd) || cwd,
       descriptors,
       ...(options.resume === undefined ? {} : { resume: options.resume }),

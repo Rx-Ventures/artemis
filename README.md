@@ -167,11 +167,17 @@ with a status line beneath.
 
 Inside it, `/profile`, `/model` and `/mode` open pickers for the account, the
 model (with its effort and speed where the model has them) and the permission
-mode. `/resume` lists this directory's stored conversations and picks one up
-(`artemis -c` opens the newest straight away); `/attach <path>` sends an image
-or file with the next message; `/tasks` shows background work and, for a
-delegated agent, what it did; `/usage` shows the plan's windows. `/new` starts
-over, `/help` lists the rest. Esc interrupts a turn; Ctrl+C twice quits. Permission prompts appear inline and open on *Deny*, so a
+mode, and whichever you last chose is what the next launch opens as. `/resume`
+lists this directory's stored conversations and picks one up (`artemis -c`
+opens the newest straight away); `/cwd <path>` moves to another directory and
+starts fresh there; `/attach <path>` sends an image or file with the next
+message; `/tasks` shows background work and, for a delegated agent, what it
+did; `/usage` shows the plan's windows. `/new` starts over, `/help` lists the
+rest. Typing `/` also offers your own skills and the provider's commands, by
+the name you would think of: `/code-review` finds
+`artemis-skills:code-review`. In the rail, `a` archives a conversation and `d`
+deletes one; archiving writes the same tag the desktop reads, so a
+conversation put away in either is put away in both. Esc interrupts a turn; Ctrl+C twice quits. Permission prompts appear inline and open on *Deny*, so a
 stray Enter never authorises anything. For scripts,
 `artemis --print "<message>"` runs one turn, writes the answer to stdout and
 denies any prompt it would have had to ask you about.

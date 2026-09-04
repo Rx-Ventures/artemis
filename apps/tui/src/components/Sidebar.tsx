@@ -15,6 +15,16 @@
  * A folder shows its newest few and then an "… n more" row; Enter on that
  * shows the rest.
  *
+ * A folder with nothing in it is not drawn at all — including the one you are
+ * standing in. A heading over no rows is a promise of contents, and the
+ * directory you are working in is already named in the header and on the
+ * settings line; it does not need a third, empty announcement of itself.
+ *
+ * Archived conversations leave their project for a folder of their own at the
+ * foot of the rail, which starts folded. Archiving writes a tag into the
+ * provider's own store — the same tag the desktop writes — so a row put away
+ * here is put away there, and neither app keeps a list of the other's rows.
+ *
  * One cursor walks the whole rail — "new", then each folder's heading and
  * its conversations — and Enter does the one thing that row means. The rail
  * draws the cursor only while it has focus (Tab), so the composer's cursor and
@@ -29,7 +39,7 @@ import { basename } from 'node:path';
 import { homedir } from 'node:os';
 
 import { Box, Text } from 'ink';
-import type { SessionSummary } from '@rx-artemis/protocol';
+import { isArchived, type SessionSummary } from '@rx-artemis/protocol';
 import { compareFolderNames, formatRelative, oneLine } from '@rx-artemis/transcript';
 
 import { ACCENT } from '../theme.js';
@@ -42,6 +52,15 @@ export type RailRow =
 
 /** How many conversations a folder shows before "… n more"; Enter on that row shows the rest. */
 const PER_FOLDER = 8;
+
+/**
+ * The archive's stand-in for a project root.
+ *
+ * Not a path, and it cannot be one: it has to sort last and it has to be
+ * impossible for a real directory to collide with. A leading NUL does both —
+ * no filesystem produces it, and it sorts after every printable name.
+ */
+export const ARCHIVED_FOLDER = '\u0000archived';
 
 /** Newest first; a session id is unique per account, so the account breaks a timestamp tie. */
 function newestFirst(a: SessionSummary, b: SessionSummary): number {
@@ -60,7 +79,9 @@ export function shortenPath(path: string): string {
  * `projectOf` maps a working directory to the project it belongs to — the
  * repository root, or the main checkout for a linked worktree — and is what
  * keeps worktrees together. A directory nobody has resolved yet is its own
- * project until the answer lands.
+ * project until the answer lands. Which folder is *open* is the caller's, not
+ * this function's: the app seeds it with the project the working directory is
+ * in, and Enter changes it from there.
  *
  * Folders sort by name — the same comparator as every folder list in the
  * desktop — and so never move when a conversation is worked on; the current
@@ -77,7 +98,6 @@ export function shortenPath(path: string): string {
  */
 export function railRows(
   sessions: readonly SessionSummary[],
-  currentCwd: string,
   open: ReadonlySet<string>,
   projectOf: (cwd: string) => string,
   /** Label for a session's account when it is not the current one; `undefined` when it is. */
@@ -85,21 +105,35 @@ export function railRows(
   expanded: ReadonlySet<string> = new Set(),
 ): readonly RailRow[] {
   const byProject = new Map<string, SessionSummary[]>();
+  const archived: SessionSummary[] = [];
   for (const session of sessions) {
+    if (isArchived(session)) {
+      archived.push(session);
+      continue;
+    }
     const project = projectOf(session.cwd);
     const list = byProject.get(project) ?? [];
     list.push(session);
     byProject.set(project, list);
   }
-  const current = projectOf(currentCwd);
-  if (!byProject.has(current)) byProject.set(current, []);
 
   const folders = [...byProject.entries()].sort(([a], [b]) => compareFolderNames(a, b));
+  if (archived.length > 0) folders.push([ARCHIVED_FOLDER, archived]);
 
   const rows: RailRow[] = [{ kind: 'new' }];
   for (const [project, list] of folders) {
+    // An empty folder is not drawn: a heading over no rows promises contents
+    // it does not have, and the only folder that could be empty is the one the
+    // working directory is in, which is already named twice on screen.
+    if (list.length === 0) continue;
     const isOpen = open.has(project);
-    rows.push({ kind: 'folder', project, label: basename(project) || project, count: list.length, open: isOpen });
+    rows.push({
+      kind: 'folder',
+      project,
+      label: project === ARCHIVED_FOLDER ? 'archived' : basename(project) || project,
+      count: list.length,
+      open: isOpen,
+    });
     if (!isOpen) continue;
     const ordered = [...list].sort(newestFirst);
     const shown = expanded.has(project) ? ordered : ordered.slice(0, PER_FOLDER);
@@ -232,7 +266,7 @@ export function Sidebar({
         }
       })}
       <Box flexGrow={1} />
-      <Text dimColor>{focused ? '↑↓ · Enter · Esc' : 'Tab: conversations'}</Text>
+      <Text dimColor>{focused ? '↑↓ · Enter · a · d · Esc' : 'Tab: conversations'}</Text>
     </Box>
   );
 }

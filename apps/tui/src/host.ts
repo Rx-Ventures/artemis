@@ -34,6 +34,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { ARCHIVED_TAG } from '@rx-artemis/protocol';
 import type {
   AgentEvent,
   Capabilities,
@@ -117,6 +118,30 @@ export interface TuiHost {
     agentId: string,
     cwd: string,
   ): Promise<readonly AgentEvent[]>;
+  /**
+   * Archive a stored conversation, or take it back out — a tag written into
+   * the provider's own store, which is how the desktop archives too, so the
+   * two agree without either owning a list of the other's rows.
+   */
+  archiveSession(
+    profileId: ProfileId,
+    providerId: ProviderId,
+    sessionId: SessionId,
+    cwd: string,
+    archived: boolean,
+  ): Promise<boolean>;
+  /** Destroy a stored conversation. The transcript file goes; nothing here can undo it. */
+  deleteSession(profileId: ProfileId, providerId: ProviderId, sessionId: SessionId, cwd: string): Promise<boolean>;
+  /**
+   * The provider's own slash commands, before a run exists to report them.
+   *
+   * A live run announces its commands and the composer uses those; until the
+   * first message there is no run, and without this the menu offered only the
+   * TUI's own handful — with the user's skills and bridged commands, the rows
+   * they were actually reaching for, missing until after they had sent
+   * something. Costs one CLI call, so it is asked for off the launch path.
+   */
+  listCommands(profileId: ProfileId, providerId: ProviderId, cwd: string): Promise<readonly string[]>;
   /** The account's plan windows, or `null` when the provider reports none. One CLI call. */
   fetchPlanUsage(profileId: ProfileId, providerId: ProviderId): Promise<PlanUsage | null>;
   dispose(): Promise<void>;
@@ -320,6 +345,39 @@ export function createTuiHost(dataDir: string, options: TuiHostOptions = {}): Tu
         runId: randomUUID() as RunId,
       });
       return page.events;
+    },
+    listCommands: async (profileId, providerId, cwd) => {
+      const adapter = providers.get(providerId);
+      const listCommands = adapter?.listCommands?.bind(adapter);
+      if (listCommands === undefined) return [];
+      try {
+        // The same plugins a run here would load, which is the whole point:
+        // the user's skills and commands arrive on that channel, and a list
+        // without them is missing exactly the rows they are reaching for.
+        const [env, plugins] = await Promise.all([
+          envFor(profileId, providerId),
+          contentPluginsFor(profileId, providerId),
+        ]);
+        return await listCommands({ env, cwd, plugins });
+      } catch {
+        // A menu that cannot be filled is a menu with the built-ins in it.
+        return [];
+      }
+    },
+    archiveSession: async (profileId, providerId, sessionId, cwd, archived) => {
+      const adapter = providers.get(providerId);
+      if (adapter?.tagSession === undefined) return false;
+      return adapter.tagSession({
+        sessionId,
+        cwd,
+        env: await historyEnvFor(profileId, providerId),
+        tag: archived ? ARCHIVED_TAG : null,
+      });
+    },
+    deleteSession: async (profileId, providerId, sessionId, cwd) => {
+      const adapter = providers.get(providerId);
+      if (adapter?.deleteSession === undefined) return false;
+      return adapter.deleteSession({ sessionId, cwd, env: await historyEnvFor(profileId, providerId) });
     },
     fetchPlanUsage: async (profileId, providerId) => {
       const adapter = providers.get(providerId);
