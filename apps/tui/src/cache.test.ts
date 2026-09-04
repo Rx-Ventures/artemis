@@ -5,7 +5,7 @@
 
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,7 +26,8 @@ describe('tuiCacheDir', () => {
   });
 
   it('lets ARTEMIS_TUI_CACHE_DIR override everything', () => {
-    expect(tuiCacheDir({ platform: 'darwin', home, env: { ARTEMIS_TUI_CACHE_DIR: '/elsewhere' } })).toBe('/elsewhere');
+    // Resolved to an absolute path, which on Windows gains the drive.
+    expect(tuiCacheDir({ platform: 'darwin', home, env: { ARTEMIS_TUI_CACHE_DIR: '/elsewhere' } })).toBe(resolve('/elsewhere'));
   });
 });
 
