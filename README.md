@@ -125,6 +125,52 @@ pnpm build       # production bundles into apps/desktop/out
 pnpm smoke       # headless end-to-end run, no Electron (see below)
 ```
 
+### From the terminal
+
+The same engine, the same profiles, no window: `apps/tui` is a terminal UI in
+the shape of the provider CLIs themselves, with the accounts you have signed
+in through the desktop app available to switch between.
+
+```bash
+pnpm build:libs                     # the shared packages it is built on
+pnpm tui                            # build and open a conversation in this directory
+ln -s "$PWD/apps/tui/dist/main.js" ~/.local/bin/artemis-tui   # then from anywhere
+```
+
+The bin is published under two names, `artemis` and `artemis-tui`. On a
+machine with the desktop app installed, `/usr/bin/artemis` is the desktop's
+own launcher and wins the name; use `artemis-tui` there.
+
+It takes the whole terminal, in your terminal's own colours: a header with the
+mark and the working directory; a rail on the left listing every conversation
+across all your accounts, grouped by project with worktrees folded into their
+repository as the desktop does (Tab focuses it, Enter opens one, switching
+account and working directory to wherever it ran); the conversation, anchored to the bottom and
+scrolled with PgUp/PgDn/End; a composer; and under it the line that says what
+the next message goes out as — account, model, permission mode, plan usage —
+with a status line beneath.
+
+Inside it, `/profile`, `/model` and `/mode` open pickers for the account, the
+model (with its effort and speed where the model has them) and the permission
+mode. `/resume` lists this directory's stored conversations and picks one up
+(`artemis -c` opens the newest straight away); `/attach <path>` sends an image
+or file with the next message; `/tasks` shows background work and, for a
+delegated agent, what it did; `/usage` shows the plan's windows. `/new` starts
+over, `/help` lists the rest. Esc interrupts a turn; Ctrl+C twice quits. Permission prompts appear inline and open on *Deny*, so a
+stray Enter never authorises anything. For scripts,
+`artemis --print "<message>"` runs one turn, writes the answer to stdout and
+denies any prompt it would have had to ask you about.
+
+With no `--profile`, it opens as the account that last worked in that
+directory. Your skills, slash commands and marketplace plugins reach every
+turn through the same content bridge the desktop uses, so the model sees what
+it sees there.
+
+It reads the desktop app's data directory — `~/.config/Artemis` on Linux,
+`~/Library/Application Support/Artemis` on macOS, `%APPDATA%\Artemis` on
+Windows — so an account signed in there works here the same minute. It never
+writes to that directory. `ARTEMIS_DATA_DIR` points it elsewhere.
+
 ### Adding an account
 
 Artemis has no credentials of its own and cannot do anything until you give it
@@ -336,6 +382,8 @@ refusing to render the conversation would help nobody.
 
 ```
 packages/protocol/     shared types only — zero runtime deps, imported by everything
+packages/transcript/   the AgentEvent → transcript-rows model, tool/diff/format helpers;
+                       framework-free and Node-free, drawn by both the renderer and the TUI
 packages/core/         headless engine; never imports electron
   src/adapters/        the provider seam: types.ts, registry.ts, one file per provider
     acp/               the Agent Client Protocol, shared by every ACP provider
@@ -347,6 +395,8 @@ apps/desktop/
   main/                Electron main process — hosts core, owns the IPC boundary
   preload/             contextBridge; the renderer's entire view of the outside
   renderer/            React + Vite + Tailwind
+apps/server/           headless HTTP server over the same engine
+apps/tui/              the terminal UI (Ink) over the same engine; bin `artemis`
 scripts/smoke.ts           headless end-to-end run against Claude, no Electron
 scripts/opencode-smoke.ts  the same for OpenCode, and it checks the event
                            stream's shape rather than trusting it
