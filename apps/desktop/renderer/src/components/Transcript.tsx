@@ -164,7 +164,7 @@ import { useActivityGroup, useTranscriptItem, useTranscriptRows } from '../hooks
 import { recallFold, rememberFold } from '../lib/foldMemory';
 import { formatBytes } from '../lib/attachments';
 import { detectArtifact } from '../lib/artifact';
-import { detectFileEdit } from '../lib/diff';
+import { detectFileEdit } from '@rx-artemis/transcript';
 import { previewablePath } from '../lib/preview';
 import {
   activeCapabilities,
@@ -188,13 +188,13 @@ import {
   formatUsd,
   oneLine,
   summarizeToolInput,
-} from '../lib/format';
+} from '@rx-artemis/transcript';
 import {
   TOOL_CATEGORY_ORDER,
   classifyTool,
   describeActivity,
   type ToolCategory,
-} from '../lib/tools';
+} from '@rx-artemis/transcript';
 import {
   isGroupId,
   type ActivityGroup,
@@ -206,7 +206,7 @@ import {
   type ThinkingItem,
   type ToolItem,
   type UserItem,
-} from '../state/transcript';
+} from '@rx-artemis/transcript';
 import { DiffView } from './DiffView';
 import { ActivityIndicator } from './Activity';
 import { ConversationLoading, EmptyState } from './EmptyState';

@@ -7,7 +7,7 @@ import {
   syncScheduler,
   type AssistantItem,
   type ToolItem,
-} from './transcript';
+} from './transcript.js';
 
 const RUN = 'run_1';
 

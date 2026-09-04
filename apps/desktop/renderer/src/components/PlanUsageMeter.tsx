@@ -47,7 +47,7 @@ import {
 } from '@rx-artemis/protocol';
 
 import { call, resolveBridge } from '../lib/bridge';
-import { formatTokens } from '../lib/format';
+import { formatTokens } from '@rx-artemis/transcript';
 import { useServedAccount } from '../hooks/useServedAccount';
 import { activeCapabilities, activeProviderLabel, useApp } from '../state/store';
 import { usePane, usePaneRef } from '../state/paneContext';
