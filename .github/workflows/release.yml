@@ -215,7 +215,7 @@ jobs:
             apps/desktop/release/*.pacman
             apps/desktop/release/latest-mac-*.yml
             apps/desktop/release/latest.yml
-            apps/tui/release/*.tar.gz
+            apps/desktop/release/artemis-tui-*.tar.gz
 
   publish:
     needs: build
@@ -282,7 +282,9 @@ jobs:
 
           # One asset at a time: a retry then costs the file that failed
           # rather than all 700MB of them.
-          for asset in dist/*; do
+          # Files, wherever the artifact put them: a directory here is not an
+          # asset, and uploading one fails the whole release.
+          for asset in $(find dist -type f | sort); do
             for attempt in 1 2 3; do
               if gh release upload "$GITHUB_REF_NAME" "$asset" --clobber; then
                 break

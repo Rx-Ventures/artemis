@@ -18,13 +18,17 @@
  * once per release runner, as the desktop's own packaging does. The copy is
  * stamped with the desktop's version: a release is one version across
  * everything it ships, and the tag names it. The result is
- * `apps/tui/release/artemis-tui-<version>-<platform>-<arch>.tar.gz`, a name
- * `install.sh` at the repository root knows.
+ * `artemis-tui-<version>-<platform>-<arch>.tar.gz` — a name `install.sh` at
+ * the repository root knows — written into `apps/desktop/release/` beside
+ * the desktop's own artifacts, and deliberately there: the release workflow
+ * uploads that directory as one flat artifact, and a second directory made
+ * the artifact keep both parents, which the publish step then tried to
+ * upload as files named `desktop` and `tui`.
  *
  * Runs from the repository root: `pnpm exec tsx scripts/package-tui.ts`.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,7 +39,7 @@ interface Manifest {
   readonly files?: readonly string[];
 }
 
-const RELEASE_DIR = join('apps', 'tui', 'release');
+const RELEASE_DIR = join('apps', 'desktop', 'release');
 const WORKSPACE_DIRS: Readonly<Record<string, string>> = {
   '@rx-artemis/tui': join('apps', 'tui'),
   '@rx-artemis/protocol': join('packages', 'protocol'),
@@ -124,8 +128,11 @@ if (!reported.includes(version)) {
   process.exit(1);
 }
 
-rmSync(RELEASE_DIR, { recursive: true, force: true });
+// Only our own leftovers go; the desktop's artifacts are already here.
 mkdirSync(RELEASE_DIR, { recursive: true });
+for (const entry of readdirSync(RELEASE_DIR)) {
+  if (entry.startsWith('artemis-tui-') && entry.endsWith('.tar.gz')) rmSync(join(RELEASE_DIR, entry));
+}
 run('tar', ['-czf', join(RELEASE_DIR, tarball), '-C', stageParent, 'artemis-tui']);
 rmSync(stageParent, { recursive: true, force: true });
 console.log(join(RELEASE_DIR, tarball));
