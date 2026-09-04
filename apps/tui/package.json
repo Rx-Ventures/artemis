@@ -6,6 +6,9 @@
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/main.js",
+  "files": [
+    "dist"
+  ],
   "bin": {
     "artemis": "./dist/main.js",
     "artemis-tui": "./dist/main.js"

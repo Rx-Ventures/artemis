@@ -131,6 +131,19 @@ The same engine, the same profiles, no window: `apps/tui` is a terminal UI in
 the shape of the provider CLIs themselves, with the accounts you have signed
 in through the desktop app available to switch between.
 
+To install it on a machine that has the desktop app:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seth-torrence/artemis/main/install.sh | bash
+```
+
+That downloads the self-contained build for your platform from the latest
+release into `~/.local/share/artemis-tui`, fetches a Node 22 runtime beside it
+if the machine has none new enough, and writes `artemis-tui` into
+`~/.local/bin`. Every release ships builds for macOS on Apple silicon and
+Linux on x64; `ARTEMIS_TUI_VERSION=2.5.0` pins one. Removing those two paths is
+the uninstall. On Windows, or to run the current source:
+
 ```bash
 pnpm build:libs                     # the shared packages it is built on
 pnpm tui                            # build and open a conversation in this directory
