@@ -1,6 +1,43 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.6.0
+
+The terminal app remembers what you chose, offers your own skills, and lets
+you choose where to work from a list.
+
+**It opens as you left it.** The account, model and permission mode you last
+chose are what the next launch starts in, so setting them is work you do once
+rather than at every launch. `--profile`, `--model` and `--mode` still win: a
+flag is what you say when you mean this launch, not from now on. The model is
+remembered per account, because a model belongs to the provider that named
+it.
+
+**Your skills are in the `/` menu.** They always reached the model, but the
+menu did not know them until after your first message — the list arrived only
+with a run. It is now read up front through the same channel a run uses,
+remembered per account and directory, and drawn with the first frame. A
+bridged skill is found by the name you would think of, so `/code-review`
+finds `artemis-skills:code-review` without your knowing which marketplace
+owns it.
+
+**Choose where to work from a list, not a path.** `/cwd`, and a new
+"+ in another folder…" row at the top of the rail, offer the folders you have
+already worked in — newest first, with the one you are in marked "here" — and
+a browser for one that is not there yet. The browser walks the filesystem a
+directory at a time; the first row chooses where you have arrived, so
+accepting a folder is Enter. Long lists scroll instead of running off the
+screen.
+
+**Archive and delete from the rail.** `a` archives the selected conversation
+and `d` deletes it. Archiving writes the same tag the desktop reads, so a
+conversation put away in either is put away in both, and it moves to an
+archive folder at the foot of the rail. Deleting destroys the transcript, so
+it asks first.
+
+**A folder with nothing in it is no longer drawn.** Including the one you are
+standing in — a heading over no rows promised contents it did not have.
+
 ## What's new in 2.5.0
 
 Artemis runs in the terminal.
