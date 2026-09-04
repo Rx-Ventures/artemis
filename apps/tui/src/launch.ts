@@ -6,10 +6,10 @@
  * pick the account the conversation opens on, and turn all of that into the
  * settings a `Conversation` starts with.
  *
- * The launch path reads *one file* — `profiles.json` — and spawns nothing.
- * Listing models and probing sign-in state each cost a subprocess per account,
- * so they wait until a picker asks; a person who typed `artemis` should be
- * looking at a prompt, not a progress bar.
+ * The launch path reads *two files* — `profiles.json` and the cache of last
+ * readings — and spawns nothing. Listing models and probing sign-in state each
+ * cost a subprocess per account, so they wait until a picker asks; a person
+ * who typed `artemis` should be looking at a prompt, not a progress bar.
  *
  * Failures here are sentences, not stacks. There is no window to log into and
  * the person is right there; what they need is the thing to do next.
@@ -20,6 +20,7 @@ import { basename, resolve } from 'node:path';
 
 import { isPermissionMode, type PermissionMode, type ProviderDescriptor, type ProviderId } from '@rx-artemis/protocol';
 
+import { ReadingCache, tuiCacheDir } from './cache.js';
 import type { ConversationSettings } from './conversation.js';
 import { createTuiHost, type TuiHost } from './host.js';
 
@@ -32,11 +33,15 @@ export interface LaunchOptions {
   readonly mode?: string;
   /** A stored session id to open on, or `'latest'` for the newest one in this directory. */
   readonly resume?: string;
+  /** Where the last slow readings are kept. Defaults to the platform's cache directory. */
+  readonly cacheDir?: string;
 }
 
 export interface Launched {
   readonly host: TuiHost;
   readonly settings: ConversationSettings;
+  /** The last plan reading, model list and catalogue, from the previous launch. */
+  readonly cache: ReadingCache;
   /** What the status bar calls the working directory. */
   readonly workspace: string;
   readonly descriptors: ReadonlyMap<ProviderId, ProviderDescriptor>;
@@ -136,6 +141,7 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     launched: {
       host,
       settings,
+      cache: new ReadingCache(options.cacheDir ?? tuiCacheDir()),
       workspace: basename(cwd) || cwd,
       descriptors,
       ...(options.resume === undefined ? {} : { resume: options.resume }),

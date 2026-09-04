@@ -160,6 +160,7 @@ async function main(): Promise<number> {
     await instance.waitUntilExit();
     return 0;
   } finally {
+    await launched.cache.flush();
     await launched.host.dispose();
   }
 }

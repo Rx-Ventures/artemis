@@ -171,6 +171,14 @@ It reads the desktop app's data directory — `~/.config/Artemis` on Linux,
 Windows — so an account signed in there works here the same minute. It never
 writes to that directory. `ARTEMIS_DATA_DIR` points it elsewhere.
 
+What it does keep is one small cache of its own: the last plan reading, model
+list and account catalogue, each of which costs a subprocess to read. The
+next launch opens on those and refreshes them behind the screen, so the line
+under the composer is filled from the first frame and `/model` and `/profile`
+open at once. It lives under the platform's cache directory —
+`~/.cache/artemis/tui`, `~/Library/Caches/Artemis/tui`,
+`%LOCALAPPDATA%\Artemis\tui` — and losing it costs one slow launch.
+
 ### Adding an account
 
 Artemis has no credentials of its own and cannot do anything until you give it

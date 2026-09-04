@@ -56,17 +56,21 @@ import {
   type Attachment,
   type BackgroundTask,
   type PermissionMode,
+  type PlanUsage,
   type ProfileMetadata,
   type ProviderModelOption,
+  type ServerProfile,
   type SessionId,
   type SessionSummary,
 } from '@rx-artemis/protocol';
 import { formatDuration, formatRelative, formatUntil, oneLine } from '@rx-artemis/transcript';
 
 import { readAttachment } from './attachments.js';
+import { CATALOGUE_KEY, modelsKey, usageKey } from './cache.js';
 import { COMMANDS, parseCommand, type Command } from './commands.js';
 import { Conversation, type ConversationSettings } from './conversation.js';
 import type { Launched } from './launch.js';
+import type { ModelListing } from './host.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { ACCENT } from './theme.js';
 import { Composer } from './components/Composer.js';
@@ -90,6 +94,12 @@ interface PickerModal {
   readonly initialKey?: string;
   readonly hint?: string;
   readonly onSelect: (item: PickerItem) => void;
+  /**
+   * Which opening this is. A picker that opened on a cached answer is
+   * refreshed in place when the fresh one lands — but only if it is still
+   * the picker on screen, which the token is how the refresh can tell.
+   */
+  readonly token?: number;
 }
 
 interface LoadingModal {
@@ -127,6 +137,12 @@ const MODE_DETAIL: Readonly<Record<PermissionMode, string>> = {
 const QUIT_WINDOW_MS = 2_000;
 /** A plan-usage read is a CLI call; one a minute is the desktop's own tolerance. */
 const PLAN_USAGE_MIN_INTERVAL_MS = 60_000;
+/** A cached plan reading older than this is not shown while the fresh one is read: the windows will have moved. */
+const USAGE_SEED_MAX_AGE_MS = 24 * 60 * 60_000;
+/** A model list older than this is re-read at launch, in the background, so `/model` has a fresh one. */
+const MODELS_WARM_MAX_AGE_MS = 24 * 60 * 60_000;
+/** The key legend, for a picker whose hint has something else to say first. */
+const PICKER_KEYS = '↑↓ · Enter · Esc';
 /** Below this many columns the rail is dropped; the pickers cover the same ground. */
 const SIDEBAR_MIN_COLUMNS = 96;
 const SIDEBAR_WIDTH = 32;
@@ -137,19 +153,22 @@ const SCROLL_STEP = 5;
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function App({ launched }: AppProps): React.JSX.Element {
-  const { host, descriptors } = launched;
+  const { host, descriptors, cache } = launched;
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
 
-  const conversation = useMemo(
-    () =>
-      new Conversation({
-        driver: host.runs,
-        settings: launched.settings,
-        capabilitiesFor: (id) => host.capabilitiesFor(id),
-      }),
-    [host, launched.settings],
-  );
+  const conversation = useMemo(() => {
+    const created = new Conversation({
+      driver: host.runs,
+      settings: launched.settings,
+      capabilitiesFor: (id) => host.capabilitiesFor(id),
+    });
+    // The last plan reading fills the line under the composer from the first
+    // frame; the fresh one replaces it a moment later. See `cache.ts`.
+    const remembered = cache.get<PlanUsage>(usageKey(launched.settings.profileId));
+    if (remembered !== undefined && Date.now() - remembered.at < USAGE_SEED_MAX_AGE_MS) created.setPlanUsage(remembered.value);
+    return created;
+  }, [host, launched.settings, cache]);
   useEffect(() => () => conversation.dispose(), [conversation]);
 
   const state = useSyncExternalStore(conversation.subscribe, conversation.getState);
@@ -163,6 +182,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const [pendingAttachments, setPendingAttachments] = useState<readonly { name: string; attachment: Attachment }[]>([]);
   const quitArmed = useRef<ReturnType<typeof setTimeout> | null>(null);
   const planFetchedAt = useRef(0);
+  const pickerToken = useRef(0);
 
   const pendingRequest = state.pendingPermissions[0];
   const workspace = basename(state.settings.cwd) || state.settings.cwd;
@@ -285,17 +305,51 @@ export function App({ launched }: AppProps): React.JSX.Element {
       try {
         const usage = await host.fetchPlanUsage(state.settings.profileId, state.settings.providerId);
         conversation.setPlanUsage(usage);
+        // Only a real reading is worth remembering; "could not read" is not.
+        if (usage !== null && usage.available) cache.set(usageKey(state.settings.profileId), usage);
       } catch {
         // A gauge that cannot be read is a gauge that is not shown.
       }
     },
-    [host, state.settings.profileId, state.settings.providerId, conversation],
+    [host, cache, state.settings.profileId, state.settings.providerId, conversation],
   );
 
+  /** What the line under the composer shows for an account before its fresh reading lands. */
+  const seedPlanUsage = useCallback(
+    (profileId: string) => {
+      const remembered = cache.get<PlanUsage>(usageKey(profileId));
+      conversation.setPlanUsage(
+        remembered !== undefined && Date.now() - remembered.at < USAGE_SEED_MAX_AGE_MS ? remembered.value : null,
+      );
+    },
+    [cache, conversation],
+  );
+
+  /** The account's model list, read now and remembered for the next `/model` and the next launch. */
+  const readModels = useCallback(async (): Promise<ModelListing> => {
+    const listing = await host.listModels(state.settings.profileId, state.settings.providerId);
+    if (listing.live) cache.set(modelsKey(state.settings.profileId), listing);
+    return listing;
+  }, [host, cache, state.settings.profileId, state.settings.providerId]);
+
   // A beat after the first frame — the CLI probe must not race the screen —
-  // and after every turn ends, since the turn is what moved it.
+  // and after every turn ends, since the turn is what moved it. Then, still
+  // in the background, the model list if the remembered one is a day old or
+  // missing: one more subprocess now so that `/model` costs none later.
   useEffect(() => {
-    const timer = setTimeout(() => void refreshPlanUsage(true), 1_500);
+    const timer = setTimeout(() => {
+      void (async () => {
+        await refreshPlanUsage(true);
+        const known = cache.get(modelsKey(state.settings.profileId));
+        if (known === undefined || Date.now() - known.at > MODELS_WARM_MAX_AGE_MS) {
+          try {
+            await readModels();
+          } catch {
+            // The picker will ask again when it is opened.
+          }
+        }
+      })();
+    }, 1_500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -438,7 +492,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
           return;
         }
         planFetchedAt.current = 0;
-        conversation.setPlanUsage(null);
+        seedPlanUsage(profile.id);
         say('info', `Now running as ${profile.label} (${profile.providerLabel}). New conversation.`);
       };
       if (conversation.isLive) {
@@ -449,13 +503,19 @@ export function App({ launched }: AppProps): React.JSX.Element {
         apply();
       }
     },
-    [state.settings.profileId, state.sessionId, conversation, confirm, say],
+    [state.settings.profileId, state.sessionId, conversation, confirm, say, seedPlanUsage],
   );
 
+  /*
+   * The two pickers that cost a subprocess open on the remembered answer and
+   * refresh in place, so the wait is paid behind a usable list rather than in
+   * front of an empty one. The first launch on a machine still waits: there is
+   * nothing to show yet, and a picker with no rows would be worse than a line
+   * saying why.
+   */
   const openProfilePicker = useCallback(async () => {
-    setModal({ kind: 'loading', title: 'Accounts — asking each one how it is…' });
-    try {
-      const [catalogue, metadata] = await Promise.all([host.catalogue.read(), host.profiles.listMetadata()]);
+    const token = ++pickerToken.current;
+    const present = (catalogue: readonly ServerProfile[], metadata: readonly ProfileMetadata[]): Omit<PickerModal, 'kind'> => {
       const keyed = new Map(metadata.map((profile) => [profile.id, profile]));
       const items: PickerItem[] = catalogue.map((row) => {
         const meta = keyed.get(row.id);
@@ -473,22 +533,39 @@ export function App({ launched }: AppProps): React.JSX.Element {
           ...(reason === undefined ? {} : { reason }),
         };
       });
-      openPicker({
+      return {
         title: 'Accounts',
         items,
         initialKey: state.settings.profileId,
+        token,
         onSelect: (item) => {
           setModal(null);
           const row = catalogue.find((candidate) => candidate.id === item.key);
           if (row === undefined) return;
           switchAccount({ id: row.id, label: row.label, providerId: row.provider.id, providerLabel: row.provider.label });
         },
-      });
+      };
+    };
+    const remembered = cache.get<readonly ServerProfile[]>(CATALOGUE_KEY);
+    if (remembered === undefined) setModal({ kind: 'loading', title: 'Accounts — asking each one how it is…' });
+    else openPicker({ ...present(remembered.value, await host.profiles.listMetadata()), hint: `asking each one how it is… · ${PICKER_KEYS}` });
+    try {
+      const [catalogue, metadata] = await Promise.all([host.catalogue.read(), host.profiles.listMetadata()]);
+      cache.set(CATALOGUE_KEY, catalogue);
+      const fresh = present(catalogue, metadata);
+      if (remembered === undefined) openPicker(fresh);
+      else setModal((current) => (current?.kind === 'picker' && current.token === token ? { ...current, ...fresh, hint: undefined } : current));
     } catch (error) {
-      setModal(null);
-      say('error', `Could not list accounts: ${describeError(error)}`);
+      if (remembered === undefined) {
+        setModal(null);
+        say('error', `Could not list accounts: ${describeError(error)}`);
+      } else {
+        setModal((current) =>
+          current?.kind === 'picker' && current.token === token ? { ...current, hint: `could not ask — this is the last answer · ${PICKER_KEYS}` } : current,
+        );
+      }
     }
-  }, [host, state.settings.profileId, openPicker, switchAccount, say]);
+  }, [host, cache, state.settings.profileId, openPicker, switchAccount, say]);
 
   const openSpeedPicker = useCallback(
     (model: ProviderModelOption) => {
@@ -539,9 +616,8 @@ export function App({ launched }: AppProps): React.JSX.Element {
   );
 
   const openModelPicker = useCallback(async () => {
-    setModal({ kind: 'loading', title: 'Models — asking the account…' });
-    try {
-      const listing = await host.listModels(state.settings.profileId, state.settings.providerId);
+    const token = ++pickerToken.current;
+    const present = (listing: ModelListing): Omit<PickerModal, 'kind'> => {
       const items: PickerItem[] = [
         { key: '', label: 'Provider default', detail: 'whatever the CLI would pick' },
         ...listing.models.map((model) => ({
@@ -550,10 +626,11 @@ export function App({ launched }: AppProps): React.JSX.Element {
           detail: model.displayName !== undefined && model.displayName !== model.label ? model.displayName : model.note,
         })),
       ];
-      openPicker({
+      return {
         title: listing.live ? 'Models' : 'Models (built-in list — the account did not confirm it)',
         items,
         initialKey: state.settings.model ?? '',
+        token,
         onSelect: (item) => {
           setModal(null);
           if (item.key === '') {
@@ -565,12 +642,26 @@ export function App({ launched }: AppProps): React.JSX.Element {
           conversation.updateSettings({ model: model.id, modelLabel: model.label, effort: undefined, fastMode: undefined, ultracode: undefined });
           openEffortPicker(model);
         },
-      });
+      };
+    };
+    const remembered = cache.get<ModelListing>(modelsKey(state.settings.profileId));
+    if (remembered === undefined) setModal({ kind: 'loading', title: 'Models — asking the account…' });
+    else openPicker({ ...present(remembered.value), hint: `asking the account… · ${PICKER_KEYS}` });
+    try {
+      const fresh = present(await readModels());
+      if (remembered === undefined) openPicker(fresh);
+      else setModal((current) => (current?.kind === 'picker' && current.token === token ? { ...current, ...fresh, hint: undefined } : current));
     } catch (error) {
-      setModal(null);
-      say('error', `Could not list models: ${describeError(error)}`);
+      if (remembered === undefined) {
+        setModal(null);
+        say('error', `Could not list models: ${describeError(error)}`);
+      } else {
+        setModal((current) =>
+          current?.kind === 'picker' && current.token === token ? { ...current, hint: `could not ask — this is the last list · ${PICKER_KEYS}` } : current,
+        );
+      }
     }
-  }, [host, state.settings.profileId, state.settings.providerId, state.settings.model, openPicker, conversation, openEffortPicker, say]);
+  }, [cache, readModels, state.settings.profileId, state.settings.model, openPicker, conversation, openEffortPicker, say]);
 
   const applyMode = useCallback(
     (mode: PermissionMode) => {
@@ -898,7 +989,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
             patch.fastMode = undefined;
             patch.ultracode = undefined;
             planFetchedAt.current = 0;
-            conversation.setPlanUsage(null);
+            seedPlanUsage(profile.id);
           }
           if (row.session.cwd !== state.settings.cwd) patch.cwd = row.session.cwd;
           if (Object.keys(patch).length > 0) {
