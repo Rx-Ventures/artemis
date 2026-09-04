@@ -42,6 +42,8 @@ export interface StatusBarProps {
   readonly flash?: string;
   /** What the keys do right now, e.g. for the sidebar. */
   readonly hint?: string;
+  /** A newer release than this copy, when the daily check found one. */
+  readonly update?: string;
 }
 
 /**
@@ -92,7 +94,7 @@ function describeStatus(state: ConversationState): string {
   }
 }
 
-export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Element {
+export function StatusBar({ state, flash, hint, update }: StatusBarProps): React.JSX.Element {
   const { settings, usage } = state;
   const mode = settings.permissionMode;
   const tokens = totalInputTokens(usage?.tokens);
@@ -164,6 +166,7 @@ export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Ele
           )}
           {cost !== undefined && <Text dimColor>{' · '}{formatUsd(cost)}</Text>}
           {liveTasks > 0 && <Text color="cyan">{` · ${String(liveTasks)} task${liveTasks === 1 ? '' : 's'}`}</Text>}
+          {update !== undefined && <Text color="yellow">{` · ${update} is out: artemis-tui --update`}</Text>}
           <Text dimColor>{' · /help'}</Text>
         </Text>
         </Box>

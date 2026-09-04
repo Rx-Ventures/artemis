@@ -67,6 +67,7 @@ import { formatDuration, formatRelative, formatUntil, oneLine } from '@rx-artemi
 
 import { readAttachment } from './attachments.js';
 import { CATALOGUE_KEY, modelsKey, usageKey } from './cache.js';
+import { checkForUpdate, currentVersion, installRoot } from './update.js';
 import { COMMANDS, parseCommand, type Command } from './commands.js';
 import { Conversation, type ConversationSettings } from './conversation.js';
 import type { Launched } from './launch.js';
@@ -182,6 +183,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const [modal, setModal] = useState<Modal | null>(null);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [flash, setFlash] = useState<string | undefined>(undefined);
+  const [update, setUpdate] = useState<string | undefined>(undefined);
   const [focus, setFocus] = useState<Focus>('composer');
   const [scroll, setScroll] = useState(0);
   /** How far back the viewport can go, as it last measured itself. */
@@ -362,6 +364,12 @@ export function App({ launched }: AppProps): React.JSX.Element {
           } catch {
             // The picker will ask again when it is opened.
           }
+        }
+        // An installed copy learns, once a day, whether a newer release
+        // exists; a checkout does not need telling. See `update.ts`.
+        if (installRoot() !== undefined) {
+          const newer = await checkForUpdate(currentVersion(), cache);
+          if (newer !== null) setUpdate(newer);
         }
       })();
     }, 1_500);
@@ -1170,6 +1178,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
             <StatusBar
               state={state}
               {...(flash === undefined ? {} : { flash })}
+              {...(update === undefined ? {} : { update })}
               {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · Esc back' } : scroll > 0 ? { hint: 'scrolled · Esc to follow' } : {})}
             />
           </Box>

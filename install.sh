@@ -9,7 +9,8 @@
 # the machine has none new enough, and writes `artemis-tui` — and `artemis`,
 # unless something else already answers to that name — into ~/.local/bin.
 # Nothing is written anywhere else, and removing those two directories is the
-# whole uninstall.
+# whole uninstall. Running it again — or `artemis-tui --update`, which does
+# exactly that — moves to the latest release.
 #
 # The terminal UI reads the accounts the Artemis desktop app signed in, so it
 # expects the desktop app to be installed on the same machine, or
@@ -119,9 +120,13 @@ fi
 ln -sfn "$dest" "$TUI_HOME/current"
 mkdir -p "$BIN_DIR"
 
+# ARTEMIS_TUI_INSTALL tells the program it is an installed copy and where:
+# `artemis-tui --update` runs the installer that shipped inside the build.
 write_launcher() {
   cat >"$1" <<LAUNCHER
 #!/bin/sh
+ARTEMIS_TUI_INSTALL="$TUI_HOME"
+export ARTEMIS_TUI_INSTALL
 exec "$node_bin" "$TUI_HOME/current/dist/main.js" "\$@"
 LAUNCHER
   chmod +x "$1"

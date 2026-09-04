@@ -103,6 +103,8 @@ run('pnpm', ['install', '--prod', '--ignore-workspace', '--config.node-linker=ho
 rmSync(join(stage, 'pnpm-lock.yaml'), { force: true });
 
 cpSync(join('apps', 'tui', 'dist'), join(stage, 'dist'), { recursive: true });
+// The installer travels with the build: `artemis-tui --update` runs this copy.
+cpSync('install.sh', join(stage, 'install.sh'));
 for (const name of workspacePackages) {
   if (name === '@rx-artemis/tui') continue;
   const from = WORKSPACE_DIRS[name] as string;

@@ -141,8 +141,10 @@ That downloads the self-contained build for your platform from the latest
 release into `~/.local/share/artemis-tui`, fetches a Node 22 runtime beside it
 if the machine has none new enough, and writes `artemis-tui` into
 `~/.local/bin`. Every release ships builds for macOS on Apple silicon and
-Linux on x64; `ARTEMIS_TUI_VERSION=2.5.0` pins one. Removing those two paths is
-the uninstall. On Windows, or to run the current source:
+Linux on x64; `ARTEMIS_TUI_VERSION=2.5.0` pins one. `artemis-tui --update` moves to the
+latest release, and an installed copy checks once a day whether there is one,
+saying so in the status line and downloading nothing until asked. Removing
+those two paths is the uninstall. On Windows, or to run the current source:
 
 ```bash
 pnpm build:libs                     # the shared packages it is built on

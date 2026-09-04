@@ -17,13 +17,13 @@
  * by `app.tsx`.
  */
 
-import { createRequire } from 'node:module';
 
 import { render } from 'ink';
 
 import { App } from './app.js';
 import { artemisDataDir } from './dataDir.js';
 import { launch } from './launch.js';
+import { currentVersion, installRoot, runUpdate } from './update.js';
 import { runPrint } from './print.js';
 
 interface Args {
@@ -35,6 +35,7 @@ interface Args {
   readonly resume?: string;
   readonly help: boolean;
   readonly version: boolean;
+  readonly update: boolean;
 }
 
 const USAGE = `Usage: artemis [options]
@@ -46,6 +47,7 @@ const USAGE = `Usage: artemis [options]
   -c, --continue      pick up the newest conversation in this directory
   -r, --resume <id>   pick up a particular stored conversation
   -p, --print <text>  send one message, write the answer to stdout, exit
+  --update            replace an installed copy with the latest release
   -v, --version
   -h, --help
 
@@ -53,7 +55,7 @@ Data directory: ${artemisDataDir()}  (set ARTEMIS_DATA_DIR to move it)
 `;
 
 function parseArgs(argv: readonly string[]): Args | string {
-  const out: { -readonly [K in keyof Args]: Args[K] } = { help: false, version: false };
+  const out: { -readonly [K in keyof Args]: Args[K] } = { help: false, version: false, update: false };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? '';
@@ -66,6 +68,9 @@ function parseArgs(argv: readonly string[]): Args | string {
       case '-v':
       case '--version':
         out.version = true;
+        break;
+      case '--update':
+        out.update = true;
         break;
       case '--profile':
         out.profile = next();
@@ -102,11 +107,6 @@ function parseArgs(argv: readonly string[]): Args | string {
   return out;
 }
 
-function version(): string {
-  const require = createRequire(import.meta.url);
-  const pkg = require('../package.json') as { version?: string };
-  return pkg.version ?? '0.0.0';
-}
 
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -119,8 +119,16 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.version) {
-    process.stdout.write(`artemis ${version()}\n`);
+    process.stdout.write(`artemis ${currentVersion()}\n`);
     return 0;
+  }
+  if (parsed.update) {
+    const root = installRoot();
+    if (root === undefined) {
+      process.stderr.write('This copy runs from a source checkout; update it with git pull, then pnpm tui.\n');
+      return 1;
+    }
+    return runUpdate(root);
   }
 
   const result = await launch({
