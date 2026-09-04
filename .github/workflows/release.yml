@@ -141,6 +141,12 @@ jobs:
           sudo apt-get install --yes libarchive-tools
       - run: pnpm run build
       - run: pnpm --filter @rx-artemis/desktop exec electron-builder ${{ matrix.build-args }} --publish never
+      # The terminal UI, as one self-contained tarball for this runner's
+      # platform — see scripts/package-tui.ts. Not on Windows: the TUI has
+      # never been run there, and install.sh is a bash script.
+      - if: runner.os != 'Windows'
+        name: Package the terminal UI
+        run: pnpm exec tsx scripts/package-tui.ts
       # One feed per mac architecture. electron-builder always writes
       # `latest-mac.yml`; the updater asks for `latest-mac-<arch>.yml`, so a
       # machine can only ever be offered its own architecture's artifact.
@@ -209,6 +215,7 @@ jobs:
             apps/desktop/release/*.pacman
             apps/desktop/release/latest-mac-*.yml
             apps/desktop/release/latest.yml
+            apps/tui/release/*.tar.gz
 
   publish:
     needs: build

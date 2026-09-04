@@ -43,7 +43,7 @@ import type {
   ToolEndStatus,
   UsageSnapshot,
 } from '@rx-artemis/protocol';
-import { classifyTool, type ActivityCounts, type ToolCategory } from '../lib/tools';
+import { classifyTool, type ActivityCounts, type ToolCategory } from './tools.js';
 
 /* -------------------------------------------------------------------------- */
 /* Items                                                                      */
