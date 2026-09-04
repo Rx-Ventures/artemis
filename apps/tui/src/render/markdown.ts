@@ -63,66 +63,94 @@ function inline(text: string): string {
     .join('');
 }
 
+/**
+ * One rendered line: what hangs in the margin — a bullet, a number, a quote
+ * bar, a fence gutter — and the text beside it. A terminal wraps a long line
+ * back to column zero, under the bullet; a renderer that keeps the two apart
+ * can wrap the text under itself instead, which is what makes a list read as
+ * a list. `hang` is the prefix's visible width, so the caller need not
+ * measure through the escape codes.
+ */
+export interface MarkdownLine {
+  readonly prefix: string;
+  readonly hang: number;
+  readonly body: string;
+}
+
+const line = (body: string, prefix = '', hang = 0): MarkdownLine => ({ prefix, hang, body });
+
+/** The rendered markdown as one string, lines joined. */
 export function renderMarkdown(source: string): string {
-  const out: string[] = [];
+  return renderMarkdownLines(source)
+    .map((entry) => entry.prefix + entry.body)
+    .join('\n');
+}
+
+export function renderMarkdownLines(source: string): readonly MarkdownLine[] {
+  const out: MarkdownLine[] = [];
   let fence: string | null = null;
 
   for (const raw of source.split('\n')) {
-    const line = raw.replace(/\r$/, '');
+    const text = raw.replace(/\r$/, '');
 
     if (fence !== null) {
-      if (FENCE.test(line) && line.trim().startsWith(fence)) {
+      if (FENCE.test(text) && text.trim().startsWith(fence)) {
         fence = null;
         continue;
       }
-      out.push(`${DIM}│${RESET} ${line}`);
+      out.push(line(text, `${DIM}│${RESET} `, 2));
       continue;
     }
 
-    const open = FENCE.exec(line);
+    const open = FENCE.exec(text);
     if (open !== null) {
       fence = open[1] ?? '```';
       const lang = open[2] ?? '';
-      out.push(`${DIM}│${lang.length > 0 ? ` ${lang}` : ''}${RESET}`);
+      out.push(line(`${DIM}│${lang.length > 0 ? ` ${lang}` : ''}${RESET}`));
       continue;
     }
 
-    if (RULE.test(line)) {
-      out.push(`${DIM}${'─'.repeat(24)}${RESET}`);
+    if (RULE.test(text)) {
+      out.push(line(`${DIM}${'─'.repeat(24)}${RESET}`));
       continue;
     }
 
-    const heading = HEADING.exec(line);
+    const heading = HEADING.exec(text);
     if (heading !== null) {
-      const text = inline(heading[2] ?? '');
+      const inner = inline(heading[2] ?? '');
       out.push(
-        (heading[1]?.length ?? 2) === 1
-          ? `${BOLD}${UNDERLINE}${text}${UNDERLINE_OFF}${BOLD_OFF}`
-          : `${BOLD}${text}${BOLD_OFF}`,
+        line(
+          (heading[1]?.length ?? 2) === 1
+            ? `${BOLD}${UNDERLINE}${inner}${UNDERLINE_OFF}${BOLD_OFF}`
+            : `${BOLD}${inner}${BOLD_OFF}`,
+        ),
       );
       continue;
     }
 
-    const bullet = BULLET.exec(line);
+    const bullet = BULLET.exec(text);
     if (bullet !== null) {
-      out.push(`${bullet[1] ?? ''}${DIM}•${RESET} ${inline(bullet[2] ?? '')}`);
+      const indent = bullet[1] ?? '';
+      out.push(line(inline(bullet[2] ?? ''), `${indent}${DIM}•${RESET} `, indent.length + 2));
       continue;
     }
 
-    const ordered = ORDERED.exec(line);
+    const ordered = ORDERED.exec(text);
     if (ordered !== null) {
-      out.push(`${ordered[1] ?? ''}${DIM}${ordered[2]}.${RESET} ${inline(ordered[3] ?? '')}`);
+      const indent = ordered[1] ?? '';
+      const number = `${ordered[2] ?? ''}.`;
+      out.push(line(inline(ordered[3] ?? ''), `${indent}${DIM}${number}${RESET} `, indent.length + number.length + 1));
       continue;
     }
 
-    const quote = QUOTE.exec(line);
+    const quote = QUOTE.exec(text);
     if (quote !== null) {
-      out.push(`${DIM}▎ ${inline(quote[1] ?? '')}${RESET}`);
+      out.push(line(`${inline(quote[1] ?? '')}${RESET}`, `${DIM}▎ `, 2));
       continue;
     }
 
-    out.push(inline(line));
+    out.push(line(inline(text)));
   }
 
-  return out.join('\n');
+  return out;
 }

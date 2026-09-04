@@ -14,14 +14,20 @@
  * Pending permission rows draw nothing here; the card that answers them is a
  * separate live component, and drawing the request twice would be worse than
  * either once.
+ *
+ * The rows are drawn in the shape of the provider CLIs' own transcripts — a
+ * marker in the gutter, content hanging under it, results on a connector —
+ * because that is the shape their users already read fluently. See the note
+ * over the rows for the one layout rule that keeps the viewport honest.
  */
 
-import { useMemo, useSyncExternalStore } from 'react';
-import { Box, Text } from 'ink';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Box, Text, measureElement, type DOMElement } from 'ink';
 
 import type { AgentError, AgentEvent } from '@rx-artemis/protocol';
 import {
   TranscriptModel,
+  classifyTool,
   describeActivity,
   detectFileEdit,
   formatDuration,
@@ -33,11 +39,12 @@ import {
   syncScheduler,
   totalInputTokens,
   type ActivityGroup,
+  type ToolCategory,
   type TranscriptItem,
 } from '@rx-artemis/transcript';
 
 import { renderDiff } from '../render/diff.js';
-import { renderMarkdown } from '../render/markdown.js';
+import { renderMarkdownLines } from '../render/markdown.js';
 
 /* -------------------------------------------------------------------------- */
 /* Settling                                                                   */
@@ -92,57 +99,148 @@ function rowSettled(id: string, transcript: TranscriptModel): boolean {
 /* Rows                                                                       */
 /* -------------------------------------------------------------------------- */
 
-const TOOL_GLYPH: Record<string, { glyph: string; color?: string; dim?: boolean }> = {
-  running: { glyph: '◌', color: 'cyan' },
-  ok: { glyph: '✓', color: 'green' },
-  error: { glyph: '✗', color: 'red' },
-  denied: { glyph: '⊘', color: 'yellow' },
-  cancelled: { glyph: '∅', dim: true },
-};
+/*
+ * The shape every row shares is the provider CLIs' own, because that is the
+ * shape people already read: a marker in a two-column gutter — `⏺` for a
+ * block, `>` for what the person typed, `∴` for thought — and content that
+ * wraps under itself, never under the marker. Under a tool call, a `⎿`
+ * connector hangs what it returned. A blank line separates blocks, and the
+ * colour of the marker is the status: green for a call that returned, red
+ * for one that failed, cyan while it runs. Text is left in the terminal's
+ * foreground; dim is for what is secondary, never for what is being said.
+ *
+ * Every row is `flexShrink={0}`, and this is not a nicety. Ink gives a Box
+ * `flexShrink: 1` by default, and the viewport below is a column of fixed
+ * height: a conversation taller than the screen had every row squeezed to a
+ * fraction of its height while its text kept its full size and spilled over
+ * the rows beneath — which read as the transcript overwriting itself. Rows
+ * keep their size; the viewport clips.
+ */
 
-function ErrorLine({ error }: { readonly error: AgentError | undefined }): React.JSX.Element | null {
-  if (error === undefined) return null;
+/** A marker in the gutter and content that wraps under itself. */
+function Block({
+  marker,
+  color,
+  dim,
+  spaced = true,
+  children,
+}: {
+  readonly marker: string;
+  readonly color?: string;
+  readonly dim?: boolean;
+  /** A blank line above. Off for a line that belongs to the block before it. */
+  readonly spaced?: boolean;
+  readonly children: React.ReactNode;
+}): React.JSX.Element {
   return (
-    <Text color="red">
-      {'    '}
-      {oneLine(error.message, 200)}
-    </Text>
+    <Box flexDirection="row" marginTop={spaced ? 1 : 0} flexShrink={0}>
+      <Box width={2} flexShrink={0}>
+        <Text color={color} dimColor={dim}>
+          {marker}
+        </Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+        {children}
+      </Box>
+    </Box>
   );
 }
 
+/** What a call returned, hung under it on a connector. */
+function Returned({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+  return (
+    <Box flexDirection="row" flexShrink={0}>
+      <Box width={3} flexShrink={0}>
+        <Text dimColor>⎿ </Text>
+      </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+        {children}
+      </Box>
+    </Box>
+  );
+}
+
+const TOOL_MARK: Record<string, { color?: string; dim?: boolean }> = {
+  running: { color: 'cyan' },
+  ok: { color: 'green' },
+  error: { color: 'red' },
+  denied: { color: 'yellow' },
+  cancelled: { dim: true },
+};
+
+/** How many lines of a result are shown before "… +n lines". */
+const RESULT_LINES = 3;
+/*
+ * What a call returned is a preview, and a preview is one line per line: a
+ * diff row or a result line longer than the screen is cut, not wrapped,
+ * because a wrapped line of code reads as two lines of code.
+ */
+
+/**
+ * How much of a diff is shown. An edit is usually small and the change is
+ * the point, so most of it fits; a whole written file is content rather than
+ * change, and a screenful of `+` lines says nothing a count does not.
+ */
+const EDIT_LINES = 20;
+const WRITE_LINES = 6;
+
 function ToolRow({ item }: { readonly item: Extract<TranscriptItem, { kind: 'tool' }> }): React.JSX.Element {
-  const style = TOOL_GLYPH[item.status] ?? TOOL_GLYPH['ok'];
-  const title = item.title ?? `${item.name} ${summarizeToolInput(item.input)}`.trim();
+  const mark = TOOL_MARK[item.status] ?? TOOL_MARK['ok'];
+  const summary = summarizeToolInput(item.input);
   const edit = detectFileEdit(item.name, item.input);
   const resultLines =
     edit === null && item.status === 'ok' && item.resultText !== undefined
-      ? item.resultText.split('\n').filter((line) => line.trim().length > 0).slice(0, 3)
+      ? item.resultText.split('\n').filter((line) => line.trim().length > 0)
       : [];
+  const hidden = Math.max(0, resultLines.length - RESULT_LINES);
   return (
-    <Box flexDirection="column">
+    <Block marker="⏺" color={mark?.color} dim={mark?.dim}>
       <Text>
-        <Text color={style?.color} dimColor={style?.dim}>
-          {style?.glyph ?? '•'}{' '}
-        </Text>
-        <Text bold={item.status === 'running'}>{oneLine(title, 160)}</Text>
-        {item.durationMs !== undefined && <Text dimColor>{`  ${formatDuration(item.durationMs)}`}</Text>}
+        {item.title !== undefined ? (
+          <Text bold>{oneLine(item.title, 160)}</Text>
+        ) : (
+          <>
+            <Text bold>{item.name}</Text>
+            {summary.length > 0 && <Text dimColor>({oneLine(summary, 140)})</Text>}
+          </>
+        )}
+        {item.durationMs !== undefined && item.durationMs >= 1_000 && <Text dimColor>{`  ${formatDuration(item.durationMs)}`}</Text>}
       </Text>
       {edit !== null && (
-        <Box flexDirection="column" paddingLeft={2}>
-          {renderDiff(edit).map((line, i) => (
-            <Text key={i}>{line}</Text>
+        <Returned>
+          {renderDiff(edit, edit.removed === 0 ? WRITE_LINES : EDIT_LINES).map((line, i) => (
+            <Text key={i} wrap="truncate">
+              {line}
+            </Text>
           ))}
-        </Box>
+        </Returned>
       )}
-      {resultLines.map((line, i) => (
-        <Text key={i} dimColor>
-          {'    '}
-          {oneLine(line, 160)}
-        </Text>
-      ))}
-      {item.status === 'denied' && <Text color="yellow">{'    '}denied</Text>}
-      <ErrorLine error={item.error} />
-    </Box>
+      {resultLines.length > 0 && (
+        <Returned>
+          {resultLines.slice(0, RESULT_LINES).map((line, i) => (
+            <Text key={i} dimColor wrap="truncate">
+              {oneLine(line, 160)}
+            </Text>
+          ))}
+          {hidden > 0 && <Text dimColor>{`… +${String(hidden)} line${hidden === 1 ? '' : 's'}`}</Text>}
+        </Returned>
+      )}
+      {item.status === 'denied' && (
+        <Returned>
+          <Text color="yellow">Denied</Text>
+        </Returned>
+      )}
+      {item.status === 'cancelled' && (
+        <Returned>
+          <Text dimColor>Cancelled</Text>
+        </Returned>
+      )}
+      {item.error !== undefined && (
+        <Returned>
+          <Text color="red">Error: {oneLine(item.error.message, 300)}</Text>
+        </Returned>
+      )}
+    </Block>
   );
 }
 
@@ -150,74 +248,81 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
   switch (item.kind) {
     case 'user':
       return (
-        <Box marginTop={1}>
-          <Text color="cyan" bold>
-            {'> '}
-          </Text>
+        <Block marker=">" dim>
           <Text dimColor={item.pending}>{item.text}</Text>
-        </Box>
+        </Block>
       );
     case 'assistant':
       if (item.text.length === 0) return null;
       return (
-        <Box marginTop={1} paddingLeft={2}>
-          <Text dimColor={item.synthetic === true}>{renderMarkdown(item.text)}</Text>
-        </Box>
+        <Block marker="⏺">
+          {renderMarkdownLines(item.text).map((line, i) =>
+            line.hang === 0 ? (
+              // An empty Text has no height; a blank line needs one space to be a line.
+              <Text key={i} dimColor={item.synthetic === true}>
+                {line.body.length === 0 ? ' ' : line.body}
+              </Text>
+            ) : (
+              <Box key={i} flexDirection="row" flexShrink={0}>
+                <Box width={line.hang} flexShrink={0}>
+                  <Text>{line.prefix}</Text>
+                </Box>
+                <Box flexGrow={1} flexShrink={1}>
+                  <Text dimColor={item.synthetic === true}>{line.body.length === 0 ? ' ' : line.body}</Text>
+                </Box>
+              </Box>
+            ),
+          )}
+        </Block>
       );
     case 'thinking':
       return (
-        <Text dimColor italic>
-          {'  ∴ '}
-          {item.redacted ? 'thinking (redacted)' : oneLine(item.text, 120)}
-        </Text>
+        <Block marker="∴" dim>
+          <Text dimColor italic>
+            {item.redacted ? 'Thinking (redacted)' : oneLine(item.text, 200)}
+          </Text>
+        </Block>
       );
     case 'tool':
-      return (
-        <Box paddingLeft={2}>
-          <ToolRow item={item} />
-        </Box>
-      );
+      return <ToolRow item={item} />;
     case 'permission':
       if (item.state === 'pending') return null;
       return (
-        <Text dimColor>
-          {'  ⚿ '}
-          {item.request.toolName} — {item.state}
-          {item.note !== undefined ? `: ${oneLine(item.note, 120)}` : ''}
-        </Text>
+        <Block marker="⚿" dim spaced={false}>
+          <Text dimColor>
+            {item.request.toolName} — {item.state}
+            {item.note !== undefined ? `: ${oneLine(item.note, 120)}` : ''}
+          </Text>
+        </Block>
       );
     case 'notice': {
       const color = item.level === 'error' ? 'red' : item.level === 'warn' ? 'yellow' : undefined;
       return (
-        <Box flexDirection="column" marginTop={1}>
+        <Block marker={item.level === 'error' ? '✗' : item.level === 'warn' ? '!' : 'ℹ'} color={color} dim={item.level === 'info'}>
           <Text color={color} dimColor={item.level === 'info'}>
-            {item.level === 'error' ? '✗ ' : item.level === 'warn' ? '! ' : 'ℹ '}
             {item.text}
           </Text>
           {item.detail?.split('\n').map((line, i) => (
             <Text key={i} dimColor>
-              {'  '}
               {line}
             </Text>
           ))}
-        </Box>
+        </Block>
       );
     }
     case 'command':
       return (
-        <Box flexDirection="column" marginTop={1}>
+        <Block marker="/" dim>
           <Text dimColor>
-            {'/'}
             {item.name}
             {item.args !== undefined ? ` ${item.args}` : ''}
           </Text>
           {item.output !== undefined && item.output.length > 0 && (
             <Text color={item.failed === true ? 'red' : undefined} dimColor={item.failed !== true}>
-              {'  '}
               {item.output}
             </Text>
           )}
-        </Box>
+        </Block>
       );
     case 'run-end': {
       const tokens = totalInputTokens(item.usage?.tokens);
@@ -227,17 +332,20 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
         item.usage?.costUsd !== undefined ? formatUsd(item.usage.costUsd) : undefined,
       ].filter((part): part is string => part !== undefined);
       if (item.reason === 'completed') {
-        return <Text dimColor>{`  ✓ done${parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}`}</Text>;
+        return (
+          <Block marker="" dim spaced={false}>
+            <Text dimColor>{parts.join(' · ')}</Text>
+          </Block>
+        );
       }
       return (
-        <Box flexDirection="column">
+        <Block marker="✗" color={item.reason === 'error' ? 'red' : 'yellow'} spaced={false}>
           <Text color={item.reason === 'error' ? 'red' : 'yellow'}>
-            {'  '}
-            {item.reason === 'interrupted' ? 'interrupted' : item.reason.replace(/_/g, ' ')}
+            {item.reason === 'interrupted' ? 'Interrupted' : item.reason.replace(/_/g, ' ')}
             {parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}
           </Text>
-          <ErrorLine error={item.error} />
-        </Box>
+          {item.error !== undefined && <Text color="red">{oneLine(item.error.message, 300)}</Text>}
+        </Block>
       );
     }
     default:
@@ -245,22 +353,38 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
   }
 }
 
-function GroupRow({
-  group,
-  members,
-}: {
-  readonly group: ActivityGroup;
-  readonly members: readonly TranscriptItem[];
-}): React.JSX.Element {
+type ToolRowItem = Extract<TranscriptItem, { kind: 'tool' }>;
+
+/**
+ * A run's calls, folded as the desktop folds them.
+ *
+ * What has finished is one line — "Ran 12 commands, read 3 files" — and what
+ * is still running is drawn in full beneath it, so the eye has one place to
+ * look for what the agent is doing now and one number for how much it has
+ * done. A call folds into the count the moment it settles. A call that
+ * failed or was refused stays out, in full, with its error: the desktop's
+ * rule too, because the one call worth reading in a burst of forty is the
+ * one that went wrong.
+ */
+function GroupRow({ members }: { readonly group: ActivityGroup; readonly members: readonly TranscriptItem[] }): React.JSX.Element {
+  const calls = members.filter((member): member is ToolRowItem => member.kind === 'tool');
+  const folded = calls.filter((call) => call.status === 'ok' || call.status === 'cancelled');
+  const shown = calls.filter((call) => call.status !== 'ok' && call.status !== 'cancelled');
+  const counts: Partial<Record<ToolCategory, number>> = {};
+  for (const call of folded) {
+    const category = classifyTool(call.name);
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+  const summary = describeActivity(counts);
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text dimColor>
-        {'  '}
-        {describeActivity(group.counts, group.running > 0)}
-        {group.failed > 0 ? ` · ${String(group.failed)} failed` : ''}
-      </Text>
-      {members.map((member) => (
-        <ItemRow key={member.id} item={member} />
+    <Box flexDirection="column" flexShrink={0}>
+      {summary.length > 0 && (
+        <Block marker="⏺" color="green">
+          <Text>{summary}</Text>
+        </Block>
+      )}
+      {shown.map((call) => (
+        <ToolRow key={call.id} item={call} />
       ))}
     </Box>
   );
@@ -289,12 +413,33 @@ function LiveRow({ id, transcript }: { readonly id: string; readonly transcript:
 /* -------------------------------------------------------------------------- */
 
 /**
- * How many rows are ever handed to Ink at once.
+ * Rows in the order they began.
+ *
+ * The model files a run's calls under one group and parks that group at the
+ * foot of the run — the desktop's marker, which sits below the prose. Read
+ * top to bottom in a terminal, that puts "Ran 3 commands" after the answer
+ * the commands produced. Every row carries when it started, and ordering on
+ * that puts the fold where the first call was made: after the thought that
+ * led to it, before the text that came of it — with what is running now
+ * directly under the count. A stable sort, so rows that began together keep
+ * the model's order.
+ */
+function inOrderOfStart(ids: readonly string[], transcript: TranscriptModel): readonly string[] {
+  const startOf = (id: string): number => (isGroupId(id) ? transcript.getGroup(id)?.ts : transcript.getItem(id)?.ts) ?? 0;
+  return ids
+    .map((id, index) => ({ id, index, ts: startOf(id) }))
+    .sort((a, b) => a.ts - b.ts || a.index - b.index)
+    .map((entry) => entry.id);
+}
+
+/**
+ * How many rows are handed to Ink at once while following the conversation.
  *
  * A screen shows a few dozen lines; a conversation has hundreds of rows. Only
- * the tail — plus whatever the person has scrolled back to — is rendered, so
- * a token arriving in a long conversation costs a bounded amount of work
- * rather than a walk over everything that was ever said.
+ * the tail is rendered, so a token arriving in a long conversation costs a
+ * bounded amount of work rather than a walk over everything that was ever
+ * said. Scrolling back extends the window by this much at a time, as far up
+ * as the person goes, and following again lets it go.
  */
 const WINDOW_ROWS = 40;
 
@@ -302,8 +447,10 @@ export interface TranscriptViewportProps {
   readonly transcript: TranscriptModel;
   /** A run is in flight. */
   readonly live: boolean;
-  /** Rows scrolled back from the end. `0` follows the conversation. */
+  /** Lines scrolled back from the end. `0` follows the conversation. */
   readonly offset: number;
+  /** How far back it is possible to scroll, in lines, as of the last layout. */
+  readonly onExtent?: (extent: { readonly maxOffset: number; readonly viewportLines: number }) => void;
 }
 
 /**
@@ -311,38 +458,95 @@ export interface TranscriptViewportProps {
  *
  * Bottom-anchored by layout — `justifyContent: flex-end` inside an
  * `overflow: hidden` box — so the newest content is always visible and older
- * content is clipped off the top, which is what a chat pane does. Scrolling
- * back moves the window of rows, not the layout. The box takes whatever
- * height the column has left after the composer, the status line and any
- * open card: it grows to fill and shrinks to nothing, never the other way
- * round, so a tall permission card pushes the conversation up rather than the
- * composer off the screen.
+ * content is clipped off the top, which is what a chat pane does. The box
+ * takes whatever height the column has left after the composer, the status
+ * line and any open card: it grows to fill and shrinks to nothing, never the
+ * other way round, so a tall permission card pushes the conversation up
+ * rather than the composer off the screen.
+ *
+ * Scrolling is by *line*, not by row. A row can be a whole run's worth of
+ * tool calls — taller than the screen — and scrolling by rows meant the top
+ * of such a row could never be looked at: the pane always showed its foot.
+ * So the content column is pushed down by the offset with a negative bottom
+ * margin, the clip does the rest, and the column's measured height says how
+ * far up there is to go. Rows beyond the rendered window are brought in as
+ * the offset approaches the top of what is drawn.
  */
-export function TranscriptViewport({ transcript, live, offset }: TranscriptViewportProps): React.JSX.Element {
+export function TranscriptViewport({ transcript, live, offset, onExtent }: TranscriptViewportProps): React.JSX.Element {
   const rows = useSyncExternalStore(transcript.subscribeList, transcript.getRowsSnapshot);
-  // Never scroll past the first row: an over-eager PgUp on a short
-  // conversation should show its beginning, not an empty pane.
-  const clamped = Math.min(offset, Math.max(0, rows.length - 1));
-  const end = Math.max(0, rows.length - clamped);
-  const start = Math.max(0, end - WINDOW_ROWS);
-  const shown = rows.slice(start, end);
-  const above = start;
-  const below = rows.length - end;
+  const [windowRows, setWindowRows] = useState(WINDOW_ROWS);
+  const viewportRef = useRef<DOMElement>(null);
+  const contentRef = useRef<DOMElement>(null);
+  const [measured, setMeasured] = useState({ content: 0, viewport: 0 });
 
+  const following = offset === 0;
+  const start = Math.max(0, rows.length - (following ? WINDOW_ROWS : windowRows));
+  const shown = inOrderOfStart(rows.slice(start), transcript);
+
+  // Measured after every render: Ink lays out on commit, so the numbers are
+  // one frame behind at worst. Only a change is stored, or this would loop.
+  useEffect(() => {
+    const content = contentRef.current === null ? 0 : measureElement(contentRef.current).height;
+    const viewport = viewportRef.current === null ? 0 : measureElement(viewportRef.current).height;
+    setMeasured((current) => (current.content === content && current.viewport === viewport ? current : { content, viewport }));
+  });
+
+  const maxOffset = Math.max(0, measured.content - measured.viewport);
+  const clamped = Math.min(offset, maxOffset);
+  const nearTop = measured.content - measured.viewport - clamped < measured.viewport;
+
+  useEffect(() => {
+    onExtent?.({ maxOffset, viewportLines: measured.viewport });
+  }, [maxOffset, measured.viewport, onExtent]);
+
+  // More rows when the person is about to run out of what is drawn; fewer
+  // again once they are back at the end.
+  useEffect(() => {
+    if (following) {
+      if (windowRows !== WINDOW_ROWS) setWindowRows(WINDOW_ROWS);
+      return;
+    }
+    if (nearTop && start > 0) setWindowRows((current) => current + WINDOW_ROWS);
+  }, [following, nearTop, start, windowRows]);
+
+  const above = start > 0 || clamped < maxOffset;
+
+  // The clip and the "more below" line are siblings: a line drawn inside the
+  // clip would sit on top of a content line and let its tail show through.
   return (
-    <Box flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0} overflowY="hidden" justifyContent="flex-end" paddingX={1}>
-      {rows.length === 0 && (
-        <Box flexDirection="column" justifyContent="center" flexGrow={1} paddingLeft={1}>
-          <Text dimColor>Type a message to begin. /help lists commands.</Text>
-          <Text dimColor>Tab moves to the sidebar. Esc interrupts a turn. Ctrl+C twice quits.</Text>
+    <Box flexDirection="column" flexGrow={1} flexShrink={1} flexBasis={0} paddingX={1}>
+      <Box
+        ref={viewportRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        flexBasis={0}
+        overflowY="hidden"
+        justifyContent="flex-end"
+      >
+        {rows.length === 0 && (
+          <Box flexDirection="column" justifyContent="center" flexGrow={1} paddingLeft={1}>
+            <Text dimColor>Type a message to begin. /help lists commands.</Text>
+            <Text dimColor>Tab moves to the sidebar. ↑↓ or the wheel scroll back; Esc interrupts a turn. Ctrl+C twice quits.</Text>
+          </Box>
+        )}
+        <Box ref={contentRef} flexDirection="column" flexShrink={0} marginBottom={-clamped}>
+          {above && clamped > 0 && (
+            <Box flexShrink={0}>
+              <Text dimColor>{start > 0 ? '↑ earlier · keep scrolling' : '↑ earlier'}</Text>
+            </Box>
+          )}
+          {shown.map((id) => (
+            <Box key={id} flexDirection="column" flexShrink={0}>
+              <LiveRow id={id} transcript={transcript} />
+            </Box>
+          ))}
         </Box>
-      )}
-      {above > 0 && clamped > 0 && <Text dimColor>{`↑ ${String(above)} earlier rows · PgUp`}</Text>}
-      {shown.map((id) => (
-        <LiveRow key={id} id={id} transcript={transcript} />
-      ))}
-      {below > 0 && (
-        <Text color="yellow">{`↓ ${String(below)} newer rows${live ? ' · streaming' : ''} · End to follow`}</Text>
+      </Box>
+      {clamped > 0 && (
+        <Box flexShrink={0}>
+          <Text color="yellow">{`↓ ${String(clamped)} more line${clamped === 1 ? '' : 's'}${live ? ' · streaming' : ''} · Esc to follow`}</Text>
+        </Box>
       )}
     </Box>
   );
@@ -369,8 +573,7 @@ export function ReplayRows({ events, maxRows = 60 }: ReplayRowsProps): React.JSX
     const model = new TranscriptModel(syncScheduler);
     for (const event of events) model.apply(event);
     model.flush();
-    return model
-      .getRowsSnapshot()
+    return inOrderOfStart(model.getRowsSnapshot(), model)
       .map((id) => snapshotRow(id, model, id))
       .filter((snapshot): snapshot is Snapshot => snapshot !== null);
   }, [events]);

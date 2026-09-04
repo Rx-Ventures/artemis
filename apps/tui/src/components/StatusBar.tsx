@@ -14,7 +14,9 @@
  * next turn. `bypassPermissions` is painted red: it is the one mode where this
  * line is a warning, and it must never look like the others.
  *
- * Colours are the terminal's own.
+ * Colours are the terminal's own. Each half of each line truncates rather
+ * than wraps: a status line that folds onto a second row pushes the layout
+ * out of its fixed height, and a clipped account name costs less than that.
  */
 
 import { useEffect, useState } from 'react';
@@ -110,7 +112,8 @@ export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Ele
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box justifyContent="space-between">
-        <Text>
+        <Box flexShrink={1} minWidth={0}>
+        <Text wrap="truncate">
           <Text bold>{settings.profileLabel}</Text>
           <Text dimColor>{` ${settings.providerLabel}`}</Text>
           <Text dimColor>{' · '}</Text>
@@ -121,17 +124,21 @@ export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Ele
             {MODE_LABEL[mode]}
           </Text>
         </Text>
-        <Text>
-          {slots.map((slot, i) => (
-            <Text key={slot.id}>
-              {i > 0 && <Text dimColor>{' · '}</Text>}
-              <PlanReading slot={slot} />
-            </Text>
-          ))}
-        </Text>
+        </Box>
+        <Box flexShrink={0} marginLeft={1}>
+          <Text>
+            {slots.map((slot, i) => (
+              <Text key={slot.id}>
+                {i > 0 && <Text dimColor>{' · '}</Text>}
+                <PlanReading slot={slot} />
+              </Text>
+            ))}
+          </Text>
+        </Box>
       </Box>
       <Box justifyContent="space-between">
-        <Text>
+        <Box flexShrink={1} minWidth={0}>
+        <Text wrap="truncate">
           {flash !== undefined ? (
             <Text color="yellow">{flash}</Text>
           ) : (
@@ -147,6 +154,8 @@ export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Ele
             </>
           )}
         </Text>
+        </Box>
+        <Box flexShrink={0} marginLeft={1}>
         <Text>
           {tokens !== undefined && (
             <Text dimColor>
@@ -157,6 +166,7 @@ export function StatusBar({ state, flash, hint }: StatusBarProps): React.JSX.Ele
           {liveTasks > 0 && <Text color="cyan">{` · ${String(liveTasks)} task${liveTasks === 1 ? '' : 's'}`}</Text>}
           <Text dimColor>{' · /help'}</Text>
         </Text>
+        </Box>
       </Box>
     </Box>
   );

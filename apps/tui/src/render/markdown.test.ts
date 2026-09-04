@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BOLD, BOLD_OFF, CYAN, DIM, FG_OFF, ITALIC, ITALIC_OFF, RESET } from './ansi.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, renderMarkdownLines } from './markdown.js';
 
 describe('renderMarkdown', () => {
   it('renders emphasis and code spans, and leaves plain text alone', () => {
@@ -52,5 +52,14 @@ describe('renderMarkdown', () => {
 
   it('leaves an unmatched marker alone', () => {
     expect(renderMarkdown('a **b')).toBe('a **b');
+  });
+
+  it('keeps what hangs in the margin apart from the text, with its width', () => {
+    expect(renderMarkdownLines('- one\n  2. two\n> q\nplain')).toEqual([
+      { prefix: `${DIM}•${RESET} `, hang: 2, body: 'one' },
+      { prefix: `  ${DIM}2.${RESET} `, hang: 5, body: 'two' },
+      { prefix: `${DIM}▎ `, hang: 2, body: `q${RESET}` },
+      { prefix: '', hang: 0, body: 'plain' },
+    ]);
   });
 });

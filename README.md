@@ -146,7 +146,7 @@ mark and the working directory; a rail on the left listing every conversation
 across all your accounts, grouped by project with worktrees folded into their
 repository as the desktop does (Tab focuses it, Enter opens one, switching
 account and working directory to wherever it ran); the conversation, anchored to the bottom and
-scrolled with PgUp/PgDn/End; a composer; and under it the line that says what
+scrolled with the arrow keys or the mouse wheel, Shift+arrow by the half-screen, Esc back to the end; a composer; and under it the line that says what
 the next message goes out as — account, model, permission mode, plan usage —
 with a status line beneath.
 

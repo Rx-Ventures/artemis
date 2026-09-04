@@ -24,7 +24,12 @@ export interface HeaderProps {
 }
 
 export function Header({ cwd, columns, tall }: HeaderProps): React.JSX.Element {
-  const where = <Text dimColor>{shortenPath(cwd)}</Text>;
+  // The directory keeps its place; the tagline gives way first, then clips.
+  const where = (
+    <Box flexShrink={0} marginLeft={2}>
+      <Text dimColor>{shortenPath(cwd)}</Text>
+    </Box>
+  );
 
   if (!tall || columns < 70) {
     return (
@@ -37,12 +42,14 @@ export function Header({ cwd, columns, tall }: HeaderProps): React.JSX.Element {
         borderRight={false}
         borderDimColor
       >
-        <Text>
-          <Text color={ACCENT} bold>
-            ▲ ARTEMIS
+        <Box flexShrink={1} minWidth={0}>
+          <Text wrap="truncate">
+            <Text color={ACCENT} bold>
+              ▲ ARTEMIS
+            </Text>
+            <Text dimColor>{'  '}{TAGLINE}</Text>
           </Text>
-          <Text dimColor>{'  '}{TAGLINE}</Text>
-        </Text>
+        </Box>
         {where}
       </Box>
     );
@@ -59,19 +66,23 @@ export function Header({ cwd, columns, tall }: HeaderProps): React.JSX.Element {
       borderRight={false}
       borderDimColor
     >
-      <Box flexDirection="row">
-        <Box flexDirection="column" marginRight={3}>
+      <Box flexDirection="row" flexShrink={1} minWidth={0}>
+        <Box flexDirection="column" marginRight={3} flexShrink={0}>
           {LOGO_LINES.map((line) => (
             <Text key={line} color={ACCENT} bold>
               {line}
             </Text>
           ))}
         </Box>
-        <Box flexDirection="column" justifyContent="flex-end">
-          <Text dimColor>{TAGLINE}</Text>
+        <Box flexDirection="column" justifyContent="flex-end" flexShrink={1} minWidth={0}>
+          <Text dimColor wrap="truncate">
+            {TAGLINE}
+          </Text>
         </Box>
       </Box>
-      <Box flexDirection="column" justifyContent="flex-end">{where}</Box>
+      <Box flexDirection="column" justifyContent="flex-end" flexShrink={0}>
+        {where}
+      </Box>
     </Box>
   );
 }

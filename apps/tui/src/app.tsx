@@ -17,8 +17,8 @@
  * permission card, when open, has them; otherwise focus is either the
  * composer or the sidebar (Tab toggles). Every child takes an `isActive` prop
  * and touches nothing when it is false, so two components never answer the
- * same keystroke. Esc, Ctrl+C, PgUp/PgDn/End are handled globally only when
- * no modal owns them.
+ * same keystroke. Esc, Ctrl+C and the scrolling arrows are handled globally
+ * only when no modal owns them.
  *
  * Slash commands are parsed before anything is sent. The switchers and
  * viewers are pickers over data the host already knows how to fetch:
@@ -143,12 +143,17 @@ const USAGE_SEED_MAX_AGE_MS = 24 * 60 * 60_000;
 const MODELS_WARM_MAX_AGE_MS = 24 * 60 * 60_000;
 /** The key legend, for a picker whose hint has something else to say first. */
 const PICKER_KEYS = '↑↓ · Enter · Esc';
-/** Below this many columns the rail is dropped; the pickers cover the same ground. */
-const SIDEBAR_MIN_COLUMNS = 96;
+/**
+ * Below this many columns the rail is dropped; the pickers cover the same
+ * ground. The conversation needs about ninety columns to read as prose, and
+ * the rail takes thirty-two.
+ */
+const SIDEBAR_MIN_COLUMNS = 120;
 const SIDEBAR_WIDTH = 32;
 /** Below this many rows the two-line logo becomes one word. */
 const TALL_HEADER_MIN_ROWS = 24;
-const SCROLL_STEP = 5;
+/** Lines one arrow press scrolls — a wheel tick arrives as a few of these. */
+const SCROLL_STEP = 2;
 
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -179,6 +184,16 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const [flash, setFlash] = useState<string | undefined>(undefined);
   const [focus, setFocus] = useState<Focus>('composer');
   const [scroll, setScroll] = useState(0);
+  /** How far back the viewport can go, as it last measured itself. */
+  const scrollExtent = useRef({ maxOffset: 0, viewportLines: 0 });
+  const onScrollExtent = useCallback((extent: { readonly maxOffset: number; readonly viewportLines: number }) => {
+    scrollExtent.current = extent;
+  }, []);
+  const scrollBy = useCallback((lines: number) => {
+    // Past the top is allowed by one screen: the viewport draws more rows as
+    // the offset nears the top of what it has, and clamps what it shows.
+    setScroll((current) => Math.max(0, Math.min(current + lines, scrollExtent.current.maxOffset + scrollExtent.current.viewportLines)));
+  }, []);
   const [pendingAttachments, setPendingAttachments] = useState<readonly { name: string; attachment: Attachment }[]>([]);
   const quitArmed = useRef<ReturnType<typeof setTimeout> | null>(null);
   const planFetchedAt = useRef(0);
@@ -1035,17 +1050,28 @@ export function App({ launched }: AppProps): React.JSX.Element {
       if (showSidebar) setFocus((current) => (current === 'composer' ? 'sidebar' : 'composer'));
       return;
     }
-    if (key.pageUp) {
-      setScroll((current) => current + SCROLL_STEP);
-      return;
-    }
-    if (key.pageDown) {
-      setScroll((current) => Math.max(0, current - SCROLL_STEP));
-      return;
-    }
-    if (key.end) {
-      setScroll(0);
-      return;
+    /*
+     * Scrolling the conversation. Arrows, because a laptop has no Page keys
+     * and because a terminal on the alternate screen turns the mouse wheel
+     * into arrow presses — so the wheel works without mouse reporting. Shift
+     * or Ctrl with an arrow moves half a screen; Esc, when nothing is
+     * running, follows the end again. The sidebar owns the arrows while it
+     * has focus.
+     */
+    if (!sidebarActive) {
+      const half = Math.max(SCROLL_STEP, Math.floor(scrollExtent.current.viewportLines / 2));
+      if (key.upArrow || key.pageUp) {
+        scrollBy(key.pageUp || key.shift || key.ctrl ? half : SCROLL_STEP);
+        return;
+      }
+      if (key.downArrow || key.pageDown) {
+        scrollBy(-(key.pageDown || key.shift || key.ctrl ? half : SCROLL_STEP));
+        return;
+      }
+      if (key.end || (key.escape && scroll > 0 && !conversation.isLive)) {
+        setScroll(0);
+        return;
+      }
     }
 
     if (sidebarActive) {
@@ -1089,7 +1115,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
         )}
 
         <Box flexDirection="column" width={mainWidth} height={bodyRows}>
-          <TranscriptViewport transcript={transcript} live={live} offset={scroll} />
+          <TranscriptViewport transcript={transcript} live={live} offset={scroll} onExtent={onScrollExtent} />
 
           {pendingRequest !== undefined && modal === null && (
             <Box paddingX={1} flexShrink={0}>
@@ -1144,7 +1170,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
             <StatusBar
               state={state}
               {...(flash === undefined ? {} : { flash })}
-              {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · Esc back' } : scroll > 0 ? { hint: 'scrolled · End to follow' } : {})}
+              {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · Esc back' } : scroll > 0 ? { hint: 'scrolled · Esc to follow' } : {})}
             />
           </Box>
         </Box>
