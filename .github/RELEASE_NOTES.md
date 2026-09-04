@@ -1,6 +1,37 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.5.0
+
+Artemis runs in the terminal.
+
+**A terminal UI, installed with one command.** `artemis-tui` is the same
+engine, the same signed-in accounts and the same permission controls as the
+desktop app, with no window: a full-screen terminal app in the shape of the
+provider CLIs. A rail on the left lists every conversation across all your
+accounts, grouped by project with worktrees folded into their repository;
+`/profile`, `/model` and `/mode` switch account, model and permission mode;
+`/resume`, `/attach`, `/tasks` and `/usage` cover the rest, and `--print`
+runs one turn for scripts. The line under the composer says what the next
+message goes out as, with the 5-hour, weekly and Fable windows at its right.
+Every release now ships a self-contained build for macOS on Apple silicon and
+Linux on x64, and this installs it:
+
+    curl -fsSL https://raw.githubusercontent.com/seth-torrence/artemis/main/install.sh | bash
+
+It keeps a Node runtime beside the build when the machine has none new
+enough, and never touches the system's. `artemis-tui --update` moves to the
+latest release, and an installed copy checks once a day whether there is one.
+Accounts come from the desktop app: sign in there, and the terminal has them
+the same minute.
+
+**Codex accounts get the 5-hour and weekly rings.** Codex describes its rate
+limits by duration rather than by name, so the status bar's meter matched
+neither and fell back to a single ring under a label like "5 hours". A window
+five hours long is the 5-hour limit and one a week long is the weekly; they
+now read as `5hr` and `Week` beside a Claude account's, in the desktop and in
+the terminal alike.
+
 ## What's new in 2.4.8
 
 Permission modes, and two ways they quietly did not take effect.
