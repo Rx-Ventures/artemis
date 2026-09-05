@@ -308,9 +308,19 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
     case 'thinking':
       return (
         <Block marker="∴" dim spaced>
-          <Text dimColor italic>
-            {item.redacted ? 'Thinking (redacted)' : oneLine(item.text, 200)}
-          </Text>
+          {/*
+           * Whole, and in the paragraphs it was written in. It used to be
+           * `oneLine(text, 200)`, which flattened the reasoning into a single
+           * line and then cut its tail off — and unlike the desktop, where a
+           * long block folds open on demand, a terminal row offered no way to
+           * ask for the rest, so the end of a thought was simply unreadable.
+           */}
+          {(item.redacted ? ['Thinking (redacted)'] : item.text.split('\n')).map((line, i) => (
+            // An empty Text has no height; a blank line needs one space to be a line.
+            <Text key={i} dimColor italic>
+              {line.length === 0 ? ' ' : line}
+            </Text>
+          ))}
         </Block>
       );
     case 'tool':
