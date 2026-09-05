@@ -1644,7 +1644,14 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
   const usage = item.usage;
   const failed = item.reason === 'error';
 
-  if (setting === 'never' ? !failed : setting === 'failures' && item.reason === 'completed') {
+  /*
+   * A run that produced nothing is never hidden, whatever the setting — the
+   * same rule failures get, and for the same reason. Hiding a clean run costs
+   * a visual boundary; hiding *this* one leaves the reader's message with no
+   * row under it at all, which is indistinguishable from the agent having
+   * ignored them. It was reported as exactly that.
+   */
+  if (!item.silent && (setting === 'never' ? !failed : setting === 'failures' && item.reason === 'completed')) {
     return null;
   }
   const accounting = setting !== 'never';
@@ -1673,7 +1680,7 @@ function RunEndRow({ item }: { readonly item: RunEndItem }): ReactElement | null
               <SparklesIcon className="size-3 text-mint" aria-hidden="true" />
             )}
             <span className="chrome-label text-ink-muted">
-              {item.reason.replace(/_/g, ' ')}
+              {item.silent ? 'no reply' : item.reason.replace(/_/g, ' ')}
             </span>
           </span>
           {accounting && item.durationMs !== undefined ? (

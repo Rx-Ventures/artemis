@@ -372,9 +372,16 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
         item.usage?.costUsd !== undefined ? formatUsd(item.usage.costUsd) : undefined,
       ].filter((part): part is string => part !== undefined);
       if (item.reason === 'completed') {
+        /*
+         * A turn that produced nothing is named rather than left as a bare
+         * duration. `52ms · 0 tok` under a message reads as the agent
+         * shrugging; what it usually means is that the provider had nothing
+         * to send — a message that was queued rather than answered, say. The
+         * two are indistinguishable unless one of them says so.
+         */
         return (
           <Block marker="" dim spaced={false}>
-            <Text dimColor>{parts.join(' · ')}</Text>
+            <Text dimColor>{[...(item.silent ? ['no reply'] : []), ...parts].join(' · ')}</Text>
           </Block>
         );
       }

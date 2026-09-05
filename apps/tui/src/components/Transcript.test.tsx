@@ -131,3 +131,32 @@ describe('thinking', () => {
     expect(lines.some((line) => line.includes('A second, separate idea.'))).toBe(true);
   });
 });
+
+/**
+ * A turn that produced nothing says so.
+ *
+ * Reported as the agent "spinning for a second and insta-stopping": all the
+ * transcript showed was a dim duration, which reads as a shrug rather than as
+ * the provider having had nothing to send.
+ */
+describe('a silent run', () => {
+  it('names it, rather than showing a bare duration', async () => {
+    const { lastFrame } = render(<ReplayRows events={stream({ type: 'run.end', reason: 'completed', durationMs: 52 })} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toMatch(/no reply/i);
+    expect(frame).toContain('52ms');
+  });
+
+  it('leaves an ordinary finished turn alone', async () => {
+    const { lastFrame } = render(
+      <ReplayRows
+        events={stream({ type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'On it.' }, { type: 'run.end', reason: 'completed', durationMs: 900 })}
+      />,
+    );
+    await tick();
+
+    expect(lastFrame() ?? '').not.toMatch(/no reply/i);
+  });
+});
