@@ -16,7 +16,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { basename, extname, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, extname, join, resolve } from 'node:path';
 
 import type { Attachment, ImageMediaType } from '@rx-artemis/protocol';
 
@@ -46,8 +47,24 @@ export type ReadAttachmentResult =
   | { readonly ok: true; readonly attachment: Attachment; readonly path: string }
   | { readonly ok: false; readonly reason: string };
 
-export async function readAttachment(path: string, cwd: string): Promise<ReadAttachmentResult> {
-  const full = resolve(cwd, path.trim());
+export interface ReadAttachmentOptions {
+  /** What `~` stands for. The real home directory unless a test says otherwise. */
+  readonly home?: string;
+}
+
+/**
+ * `~` is expanded first, because every shell the path was ever typed into
+ * expanded it: `/attach ~/shot.png` otherwise looked for a directory literally
+ * named `~` under the working directory and reported the file missing.
+ */
+export function expandHome(path: string, home: string): string {
+  if (path === '~') return home;
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(home, path.slice(2));
+  return path;
+}
+
+export async function readAttachment(path: string, cwd: string, options: ReadAttachmentOptions = {}): Promise<ReadAttachmentResult> {
+  const full = resolve(cwd, expandHome(path.trim(), options.home ?? homedir()));
   let size: number;
   try {
     const info = await stat(full);

@@ -70,3 +70,14 @@ describe('completeProviderCommand', () => {
     expect(completeProviderCommand('/nothing-like-this', commands)).toEqual([]);
   });
 });
+
+describe('what is left for the provider', () => {
+  it('does not swallow /plan, which is the provider’s own command', () => {
+    // The file's rule: a `/command` the TUI does not own goes to the agent,
+    // because providers have slash commands of their own. `/plan` was
+    // aliased to `/usage` — a plan-*limits* readout — and Claude Code's real
+    // `/plan` never arrived.
+    expect(parseCommand('/plan')).toBeNull();
+    expect(parseCommand('/plan add tests first')).toBeNull();
+  });
+});

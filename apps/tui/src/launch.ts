@@ -151,8 +151,13 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     permissionMode = options.mode;
   }
 
-  // The model is per account — see `preferences.ts` — and a flag outranks it.
-  const model = preferences.modelFor(chosen.id) ?? {};
+  /*
+   * The model is per account — see `preferences.ts` — and a flag outranks it,
+   * *whole*: effort, fast mode and ultracode were chosen for the remembered
+   * model and belong to it, so naming a different one on the command line
+   * starts that one plain rather than wearing the other's settings.
+   */
+  const model = options.model === undefined ? (preferences.modelFor(chosen.id) ?? {}) : { model: options.model, modelLabel: options.model };
   const settings: ConversationSettings = {
     profileId: chosen.id,
     providerId: chosen.providerId,
@@ -164,7 +169,6 @@ export async function launch(options: LaunchOptions): Promise<LaunchResult> {
     ...(model.effort === undefined ? {} : { effort: model.effort }),
     ...(model.fastMode === true ? { fastMode: true } : {}),
     ...(model.ultracode === true ? { ultracode: true } : {}),
-    ...(options.model === undefined ? {} : { model: options.model, modelLabel: options.model, effort: undefined }),
   };
 
   return {

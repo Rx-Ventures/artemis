@@ -33,3 +33,18 @@ describe('readAttachment', () => {
     expect(!directory.ok && directory.reason).toMatch(/not a file/);
   });
 });
+
+describe('a path the way a person types it', () => {
+  it('expands ~ to the home directory', async () => {
+    // `/attach ~/shot.png` resolved under the *working directory* — as a
+    // folder literally named `~` — and reported the file missing. Every shell
+    // a person has ever typed that into expanded it.
+    const home = await mkdtemp(join(tmpdir(), 'artemis-home-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'artemis-cwd-'));
+    await writeFile(join(home, 'notes.md'), '# hi');
+
+    const result = await readAttachment('~/notes.md', cwd, { home });
+
+    expect(result.ok && result.attachment).toMatchObject({ kind: 'file', name: 'notes.md' });
+  });
+});

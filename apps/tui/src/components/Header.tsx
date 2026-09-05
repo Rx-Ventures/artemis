@@ -14,7 +14,9 @@
 import { Box, Text } from 'ink';
 
 import { ACCENT, LOGO_LINES, TAGLINE } from '../theme.js';
-import { shortenPath } from './Sidebar.js';
+import { homedir } from 'node:os';
+
+import { shortenPath } from '../directories.js';
 
 export interface HeaderProps {
   readonly cwd: string;
@@ -27,7 +29,7 @@ export function Header({ cwd, columns, tall }: HeaderProps): React.JSX.Element {
   // The directory keeps its place; the tagline gives way first, then clips.
   const where = (
     <Box flexShrink={0} marginLeft={2}>
-      <Text dimColor>{shortenPath(cwd)}</Text>
+      <Text dimColor>{shortenPath(cwd, homedir())}</Text>
     </Box>
   );
 

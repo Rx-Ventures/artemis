@@ -294,7 +294,6 @@ export class Conversation {
     return { ok: true };
   }
 
-  /** A fetched snapshot replaces whatever `plan.limit` events had folded. */
   /**
    * Seed the provider's command list before any run has reported one.
    *
@@ -310,6 +309,7 @@ export class Conversation {
     this.#notify();
   }
 
+  /** A fetched snapshot replaces whatever `plan.limit` events had folded. */
   setPlanUsage(usage: PlanUsage | null): void {
     this.#planUsage = usage;
     this.#notify();
@@ -520,8 +520,9 @@ export class Conversation {
         this.#status = 'idle';
         this.#pending = [];
         this.#queued = 0;
-        // Released now rather than left for the registry's retention: this
-        // process holds one conversation and will never re-attach to it.
+        // Released now rather than left for the registry's retention: a run
+        // belongs to the one conversation that started it, and nothing else
+        // in this process will ever re-attach to it.
         if (ended !== undefined) void this.#driver.dispose(ended).catch(() => undefined);
         break;
       }

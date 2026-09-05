@@ -51,6 +51,7 @@ import { Box, Text } from 'ink';
 import { isArchived, type SessionSummary } from '@rx-artemis/protocol';
 import { compareFolderNames, formatRelative, oneLine } from '@rx-artemis/transcript';
 
+import { shortenPath } from '../directories.js';
 import { ACCENT } from '../theme.js';
 
 export type RailRow =
@@ -78,11 +79,6 @@ function newestFirst(a: SessionSummary, b: SessionSummary): number {
 }
 
 /** `~/code/repo` for a path under the home directory. */
-export function shortenPath(path: string): string {
-  const home = homedir();
-  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
-}
-
 /**
  * The rail's rows in cursor order.
  *
@@ -250,7 +246,7 @@ export function Sidebar({
                   </Text>
                   <Text dimColor>{` ${String(row.count)}`}</Text>
                 </Text>
-                {isSelected && <Text dimColor>{'    '}{oneLine(shortenPath(row.project), inner - 4)}</Text>}
+                {isSelected && <Text dimColor>{'    '}{oneLine(shortenPath(row.project, homedir()), inner - 4)}</Text>}
               </Box>
             );
           }

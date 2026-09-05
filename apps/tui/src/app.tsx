@@ -67,6 +67,7 @@ import { formatDuration, formatRelative, formatUntil, oneLine } from '@rx-artemi
 import { isArchived } from '@rx-artemis/protocol';
 
 import { browseRowLabel, browseRows, browseStart, recentDirectories, shortenPath } from './directories.js';
+import { prunePool, railActivityFor } from './pool.js';
 
 import { readAttachment } from './attachments.js';
 import { CATALOGUE_KEY, commandsKey, modelsKey, usageKey } from './cache.js';
@@ -81,7 +82,7 @@ import { Composer } from './components/Composer.js';
 import { Header } from './components/Header.js';
 import { PermissionCard } from './components/PermissionCard.js';
 import { Picker, type PickerItem } from './components/Picker.js';
-import { Sidebar, railRows, type RailActivity, type RailRow } from './components/Sidebar.js';
+import { Sidebar, railRows, type RailRow } from './components/Sidebar.js';
 import { basename } from 'node:path';
 import { homedir } from 'node:os';
 import { readdir, stat } from 'node:fs/promises';
@@ -218,35 +219,34 @@ export function App({ launched }: AppProps): React.JSX.Element {
    */
   const [pool, setPool] = useState<readonly Conversation[]>(() => [makeConversation(launched.settings)]);
   const [conversation, setConversation] = useState<Conversation>(() => pool[0] as Conversation);
-  /** The current conversation, readable from a callback that must not be rebuilt when it changes. */
+  /*
+   * Mirrors of the two states above, for callbacks that must read the
+   * *current* value without being rebuilt every time it changes — and for the
+   * unmount, which runs long after the closure that scheduled it was made.
+   */
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
+  const poolRef = useRef(pool);
+  poolRef.current = pool;
 
-  useEffect(() => {
-    const alive = pool;
-    return () => {
-      for (const parked of alive) parked.dispose();
-    };
-    // Disposal is the unmount's job; the switch below disposes what it drops.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(
+    () => () => {
+      for (const alive of poolRef.current) alive.dispose();
+    },
+    [],
+  );
 
   const switchTo = useCallback((next: Conversation) => {
-    const current = conversationRef.current;
-    if (next === current) return;
+    if (next === conversationRef.current) return;
+    // Decided by `prunePool`, disposed here: the rule is pure and tested, and
+    // a state updater with side effects is a thing React may run twice.
+    const { kept, dropped } = prunePool(poolRef.current, next, (parked) => parked.isLive);
+    for (const gone of dropped) gone.dispose();
+    poolRef.current = kept;
+    setPool(kept);
     conversationRef.current = next;
     setConversation(next);
     setScroll(0);
-    setPool((current_) => {
-      const kept = current_.filter((parked) => parked === next || parked === current || parked.isLive);
-      for (const dropped of current_) if (!kept.includes(dropped)) dropped.dispose();
-      // The one being left is kept only while it is still working.
-      if (!current.isLive && current !== next) {
-        current.dispose();
-        return [...kept.filter((parked) => parked !== current), ...(kept.includes(next) ? [] : [next])];
-      }
-      return kept.includes(next) ? kept : [...kept, next];
-    });
   }, []);
 
   const state = useSyncExternalStore(conversation.subscribe, conversation.getState);
@@ -257,30 +257,37 @@ export function App({ launched }: AppProps): React.JSX.Element {
    * long as it took to touch a key. One listener each, and the rail is honest.
    */
   const [parkedTick, setParkedTick] = useState(0);
+  const parkedWentIdle = useRef(false);
   useEffect(() => {
-    const offs = pool.filter((parked) => parked !== conversation).map((parked) =>
-      parked.subscribe(() => {
-        setParkedTick((n) => n + 1);
-      }),
-    );
+    const offs = pool
+      .filter((parked) => parked !== conversation)
+      .map((parked) => {
+        let was = parked.getState().status;
+        return parked.subscribe(() => {
+          const now = parked.getState().status;
+          // A parked turn finishing is the one change the rail's *list* has
+          // to hear about — its title and time have moved in the store — and
+          // the active conversation's own idle transitions are already
+          // watched. Flagged here, acted on below, so the effect that owns
+          // `refreshRail` does not have to be rebuilt per parked conversation.
+          if (was !== 'idle' && now === 'idle') parkedWentIdle.current = true;
+          was = now;
+          setParkedTick((n) => n + 1);
+        });
+      });
     return () => {
       for (const off of offs) off();
     };
   }, [pool, conversation]);
 
   /** What each conversation is doing, for the glyph in front of its title. */
-  const railActivity = useMemo(() => {
-    const map = new Map<string, RailActivity>();
-    for (const parked of pool) {
-      const { sessionId, pendingPermissions } = parked.getState();
-      if (sessionId === undefined) continue;
-      if (pendingPermissions.length > 0) map.set(sessionId, 'awaiting');
-      else if (parked.isLive) map.set(sessionId, 'running');
-    }
-    return map;
-    // `parkedTick` is the signal that a parked conversation moved.
+  const railActivity = useMemo(
+    () => railActivityFor(pool.map((parked) => parked.getState())),
+    // `parkedTick` is the signal that a parked conversation moved; `state`,
+    // that the one on screen did.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pool, parkedTick, state]);
+    [pool, parkedTick, state],
+  );
   const { transcript } = conversation;
 
   const [modal, setModal] = useState<Modal | null>(null);
@@ -392,6 +399,11 @@ export function App({ launched }: AppProps): React.JSX.Element {
   useEffect(() => {
     if (state.status === 'idle' && state.sessionId !== undefined) void refreshRail();
   }, [state.status, state.sessionId, refreshRail]);
+  useEffect(() => {
+    if (!parkedWentIdle.current) return;
+    parkedWentIdle.current = false;
+    void refreshRail();
+  }, [parkedTick, refreshRail]);
   /*
    * Whatever the settings line says is what the next launch opens as.
    *
@@ -599,10 +611,6 @@ export function App({ launched }: AppProps): React.JSX.Element {
 
   const openResumePicker = useCallback(
     async (latest = false) => {
-      if (conversation.isLive) {
-        setNotice('Wait for this turn to finish before switching conversations.');
-        return;
-      }
       setModal({ kind: 'loading', title: 'Conversations — reading the store…' });
       try {
         // The picker's own list: one account, this directory. The rail keeps
@@ -643,7 +651,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
         say('error', `Could not list conversations: ${describeError(error)}`);
       }
     },
-    [conversation, host, state.settings, state.sessionId, workspace, say, loadSession],
+    [host, state.settings, state.sessionId, workspace, say, loadSession],
   );
 
   // `artemis -c` / `--resume <id>`: act once the screen exists.
@@ -686,35 +694,45 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const switchAccount = useCallback(
     (profile: { readonly id: string; readonly label: string; readonly providerId: string; readonly providerLabel: string }) => {
       if (profile.id === state.settings.profileId) return;
+      const fresh: ConversationSettings = {
+        ...state.settings,
+        profileId: profile.id as never,
+        providerId: profile.providerId as never,
+        profileLabel: profile.label,
+        providerLabel: profile.providerLabel,
+        model: undefined,
+        modelLabel: undefined,
+        effort: undefined,
+        fastMode: undefined,
+        ultracode: undefined,
+      };
       const apply = (): void => {
-        const outcome = conversation.updateSettings({
-          profileId: profile.id as never,
-          providerId: profile.providerId as never,
-          profileLabel: profile.label,
-          providerLabel: profile.providerLabel,
-          model: undefined,
-          modelLabel: undefined,
-          effort: undefined,
-          fastMode: undefined,
-          ultracode: undefined,
-        });
-        if (!outcome.ok) {
-          setNotice(outcome.reason);
-          return;
-        }
         planFetchedAt.current = 0;
-        seedPlanUsage(profile.id);
+        /*
+         * A conversation belongs to the account it started on, so a new one
+         * is begun on the other account. While this one is still working it
+         * is parked rather than reset — the same rule as `startNew` — so
+         * switching account no longer has to wait for a turn to end.
+         */
+        if (conversation.isLive) {
+          switchTo(makeConversation(fresh));
+        } else {
+          const outcome = conversation.updateSettings(fresh);
+          if (!outcome.ok) {
+            setNotice(outcome.reason);
+            return;
+          }
+          seedPlanUsage(profile.id);
+        }
         say('info', `Now running as ${profile.label} (${profile.providerLabel}). New conversation.`);
       };
-      if (conversation.isLive) {
-        setNotice('A conversation belongs to the account it started on. Wait for this turn to finish.');
-      } else if (state.sessionId !== undefined) {
+      if (state.sessionId !== undefined && !conversation.isLive) {
         confirm('Switching account ends this conversation.', `Switch to ${profile.label} and start fresh`, false, apply);
       } else {
         apply();
       }
     },
-    [state.settings.profileId, state.sessionId, conversation, confirm, say, seedPlanUsage],
+    [state.settings, state.sessionId, conversation, confirm, say, seedPlanUsage, switchTo, makeConversation],
   );
 
   /*
@@ -1403,8 +1421,10 @@ export function App({ launched }: AppProps): React.JSX.Element {
             settings.effort = undefined;
             settings.fastMode = undefined;
             settings.ultracode = undefined;
+            // The conversation built for it seeds its own plan reading; the
+            // one on screen is being left and must not be handed another
+            // account's gauge.
             planFetchedAt.current = 0;
-            seedPlanUsage(profile.id);
           }
           void loadSession(row.session.id, row.session.title, settings);
           return;

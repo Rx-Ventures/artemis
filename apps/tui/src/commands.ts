@@ -68,7 +68,8 @@ const ALIASES: Readonly<Record<string, CommandName>> = {
   continue: 'resume',
   task: 'tasks',
   bg: 'tasks',
-  plan: 'usage',
+  // Not `plan`: that is the provider's own command (Claude Code's plan mode),
+  // and aliasing it here to a plan-*limits* readout swallowed it.
   limits: 'usage',
   file: 'attach',
   image: 'attach',
