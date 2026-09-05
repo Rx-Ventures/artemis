@@ -1,6 +1,42 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.7.0
+
+The terminal app lets you leave a turn running, and is easier to read while
+it does.
+
+**Switch conversations while one is working.** Switching used to be refused
+until a turn finished, which made the one thing worth doing during a long
+turn — going and reading something else — the one thing you could not do. Now
+the turn keeps running: its transcript goes on filling in the background and
+switching back is instant, with nothing re-read. Starting a new conversation,
+moving to another folder, and switching account all work the same way, and
+`/resume` no longer waits either.
+
+**The rail says what each conversation is doing.** `●` marks the one you are
+in, `◐` one still working, and a yellow `⚿` one that has stopped to ask
+permission — the last being the only warning that a turn has gone quiet
+waiting for an answer.
+
+**Four voices, four faces in the transcript.** The agent speaking and the
+agent running a command were both `⏺`, so at a glance they were the same row;
+tools now take `◆` and speech keeps `⏺`. Your own messages were `>` with the
+text dimmed — the faintest thing on a screen you scan to find them — and are
+now `▌` in the accent colour, in bold.
+
+**Plan windows have bars.** `5hr █░░░ 16% · Week █░░░ 8%`. The number stays,
+because a short bar cannot be precise and three numbers cannot be taken in at
+a glance. The bar lights its first cell for any use at all and holds its last
+back until the window really is full, so neither end of it lies, and it is
+dropped on a narrow terminal rather than crowding the line beside it.
+
+**Fixes.** A directory beside your home folder was renamed on screen —
+`/home/adamant` drew as `~mant`. `/plan` was swallowed by the terminal
+instead of reaching Claude Code. `/attach ~/file` looked for a folder
+literally called `~`. And `--model` inherited the previous model's fast mode
+and effort instead of starting the named one plain.
+
 ## What's new in 2.6.0
 
 The terminal app remembers what you chose, offers your own skills, and lets
