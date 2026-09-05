@@ -44,6 +44,47 @@ export interface StatusBarProps {
   readonly hint?: string;
   /** A newer release than this copy, when the daily check found one. */
   readonly update?: string;
+  /**
+   * The width this bar actually has — the terminal less the rail, not the
+   * terminal. Handing it the whole screen is how the bars came to cost
+   * "BYPASS PERMISSIONS" its tail on a terminal wide enough for both.
+   */
+  readonly columns?: number;
+}
+
+/**
+ * A window's fullness as a bar.
+ *
+ * Two rules keep it from lying, and both matter more than the arithmetic:
+ * any use at all lights the first cell, so a window that has been started on
+ * never reads as untouched; and the last cell is held back until the window
+ * really is full, so a full bar means full rather than "nearly".
+ */
+export function meterBar(utilization: number, cells: number): string {
+  if (cells <= 0) return '';
+  const exact = Math.round((utilization / 100) * cells);
+  const floor = utilization > 0 ? 1 : 0;
+  const ceiling = utilization >= 100 ? cells : cells - 1;
+  const filled = Math.max(floor, Math.min(exact, ceiling));
+  return '█'.repeat(filled) + '░'.repeat(cells - filled);
+}
+
+/**
+ * How many cells each bar gets, or none at all.
+ *
+ * The readings sit in a box that does not shrink, so every cell here is a
+ * column taken from the account and model line beside it, which truncates.
+ * Three bars cost three times what they look like they cost, and eight cells
+ * each was enough to push "BYPASS PERMISSIONS" — the one word on that line
+ * nobody should have to guess at — off the end of a 140-column terminal.
+ * `columns` is what this bar has rather than what the screen has, which is
+ * the other half of the same mistake. On a narrow terminal the number alone
+ * is worth more than a picture of it.
+ */
+export function meterCells(columns: number): number {
+  if (columns >= 118) return 5;
+  if (columns >= 98) return 4;
+  return 0;
 }
 
 /**
@@ -51,17 +92,28 @@ export interface StatusBarProps {
  * desktop's own thresholds, pessimistic on purpose because a reset can be
  * hours away. A window the provider is rejecting on is red whatever its
  * stale percentage reads, and says so.
+ *
+ * The bar is the same reading again, in a shape that can be taken in without
+ * being read: which window is filling up is then a glance rather than three
+ * numbers to compare. The number stays — it is the precise one, and the bar
+ * at this size cannot be.
  */
-function PlanReading({ slot }: { readonly slot: PlanMeterSlot }): React.JSX.Element {
+function PlanReading({ slot, cells }: { readonly slot: PlanMeterSlot; readonly cells: number }): React.JSX.Element {
   const { utilization, status } = slot.window;
   const rejected = status === 'rejected';
   const pct = utilization === null ? (rejected ? '!' : '—') : `${String(Math.round(utilization))}%`;
   const hot = rejected || (utilization !== null && utilization >= 90);
   const warm = !hot && utilization !== null && utilization >= 75;
+  const colour = hot ? 'red' : warm ? 'yellow' : undefined;
   return (
     <Text>
       <Text dimColor>{slot.label} </Text>
-      <Text color={hot ? 'red' : warm ? 'yellow' : undefined} bold={hot} dimColor={!hot && !warm}>
+      {cells > 0 && utilization !== null && (
+        <Text color={colour} dimColor={!hot && !warm}>
+          {meterBar(utilization, cells)}{' '}
+        </Text>
+      )}
+      <Text color={colour} bold={hot} dimColor={!hot && !warm}>
         {rejected ? `${pct} out` : pct}
       </Text>
     </Text>
@@ -94,7 +146,7 @@ function describeStatus(state: ConversationState): string {
   }
 }
 
-export function StatusBar({ state, flash, hint, update }: StatusBarProps): React.JSX.Element {
+export function StatusBar({ state, flash, hint, update, columns = 0 }: StatusBarProps): React.JSX.Element {
   const { settings, usage } = state;
   const mode = settings.permissionMode;
   const tokens = totalInputTokens(usage?.tokens);
@@ -132,7 +184,7 @@ export function StatusBar({ state, flash, hint, update }: StatusBarProps): React
             {slots.map((slot, i) => (
               <Text key={slot.id}>
                 {i > 0 && <Text dimColor>{' · '}</Text>}
-                <PlanReading slot={slot} />
+                <PlanReading slot={slot} cells={meterCells(columns)} />
               </Text>
             ))}
           </Text>

@@ -81,7 +81,7 @@ import { Composer } from './components/Composer.js';
 import { Header } from './components/Header.js';
 import { PermissionCard } from './components/PermissionCard.js';
 import { Picker, type PickerItem } from './components/Picker.js';
-import { Sidebar, railRows, type RailRow } from './components/Sidebar.js';
+import { Sidebar, railRows, type RailActivity, type RailRow } from './components/Sidebar.js';
 import { basename } from 'node:path';
 import { homedir } from 'node:os';
 import { readdir, stat } from 'node:fs/promises';
@@ -172,30 +172,115 @@ export function App({ launched }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
 
-  const conversation = useMemo(() => {
-    const created = new Conversation({
-      driver: host.runs,
-      settings: launched.settings,
-      capabilitiesFor: (id) => host.capabilitiesFor(id),
+  /**
+   * A conversation, ready to be shown.
+   *
+   * Everything it can already answer from the last launch is put in before it
+   * is drawn once: the plan reading under the composer, and the provider's
+   * commands, which `/` is often the first thing typed at. See `cache.ts`.
+   */
+  const makeConversation = useCallback(
+    (settings: ConversationSettings): Conversation => {
+      const created = new Conversation({
+        driver: host.runs,
+        settings,
+        capabilitiesFor: (id) => host.capabilitiesFor(id),
+      });
+      const remembered = cache.get<PlanUsage>(usageKey(settings.profileId));
+      if (remembered !== undefined && Date.now() - remembered.at < USAGE_SEED_MAX_AGE_MS) created.setPlanUsage(remembered.value);
+      const commands = cache.get<readonly string[]>(commandsKey(settings.profileId, settings.cwd));
+      if (commands !== undefined) created.seedSlashCommands(commands.value);
+      return created;
+    },
+    [host, cache],
+  );
+
+  /*
+   * More than one conversation is alive at a time, and only one is on screen.
+   * ------------------------------------------------------------------------
+   *
+   * Switching used to be refused while a turn was running, which made the one
+   * thing worth doing during a long turn — going and reading something else —
+   * the one thing you could not do. The registry never needed that: a run has
+   * one producer and any number of consumers, and "consumers come and go; the
+   * run does not care" (`sessions/registry.ts`). What tied a turn to the
+   * screen was this file holding exactly one `Conversation`.
+   *
+   * So it holds several. Each one subscribes to the registry and keeps only
+   * its own run's events, so a parked conversation goes on filling its own
+   * transcript — including a permission request, which is why the rail shows
+   * that too. Switching back is instant and complete, because nothing was
+   * torn down and nothing has to be re-read.
+   *
+   * The pool is bounded by disposing, on every switch, whatever is neither on
+   * screen nor working. What that throws away is a transcript the store
+   * already has, so the cost of being wrong is one read.
+   */
+  const [pool, setPool] = useState<readonly Conversation[]>(() => [makeConversation(launched.settings)]);
+  const [conversation, setConversation] = useState<Conversation>(() => pool[0] as Conversation);
+  /** The current conversation, readable from a callback that must not be rebuilt when it changes. */
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+
+  useEffect(() => {
+    const alive = pool;
+    return () => {
+      for (const parked of alive) parked.dispose();
+    };
+    // Disposal is the unmount's job; the switch below disposes what it drops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const switchTo = useCallback((next: Conversation) => {
+    const current = conversationRef.current;
+    if (next === current) return;
+    conversationRef.current = next;
+    setConversation(next);
+    setScroll(0);
+    setPool((current_) => {
+      const kept = current_.filter((parked) => parked === next || parked === current || parked.isLive);
+      for (const dropped of current_) if (!kept.includes(dropped)) dropped.dispose();
+      // The one being left is kept only while it is still working.
+      if (!current.isLive && current !== next) {
+        current.dispose();
+        return [...kept.filter((parked) => parked !== current), ...(kept.includes(next) ? [] : [next])];
+      }
+      return kept.includes(next) ? kept : [...kept, next];
     });
-    // The last plan reading fills the line under the composer from the first
-    // frame; the fresh one replaces it a moment later. See `cache.ts`.
-    const remembered = cache.get<PlanUsage>(usageKey(launched.settings.profileId));
-    if (remembered !== undefined && Date.now() - remembered.at < USAGE_SEED_MAX_AGE_MS) created.setPlanUsage(remembered.value);
-    /*
-     * And the commands, for the same reason and more urgently: `/` is the
-     * first thing many people type, and a menu missing their own skills until
-     * a subprocess has answered is a menu that is wrong exactly when it is
-     * read. Remembered ones paint with the first frame; the fresh list
-     * replaces them a second later, and a run's own list outranks both.
-     */
-    const commands = cache.get<readonly string[]>(commandsKey(launched.settings.profileId, launched.settings.cwd));
-    if (commands !== undefined) created.seedSlashCommands(commands.value);
-    return created;
-  }, [host, launched.settings, cache]);
-  useEffect(() => () => conversation.dispose(), [conversation]);
+  }, []);
 
   const state = useSyncExternalStore(conversation.subscribe, conversation.getState);
+
+  /*
+   * A parked conversation has no other way to reach the screen: nothing here
+   * re-renders when *its* run moves, so the rail would show it working for as
+   * long as it took to touch a key. One listener each, and the rail is honest.
+   */
+  const [parkedTick, setParkedTick] = useState(0);
+  useEffect(() => {
+    const offs = pool.filter((parked) => parked !== conversation).map((parked) =>
+      parked.subscribe(() => {
+        setParkedTick((n) => n + 1);
+      }),
+    );
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [pool, conversation]);
+
+  /** What each conversation is doing, for the glyph in front of its title. */
+  const railActivity = useMemo(() => {
+    const map = new Map<string, RailActivity>();
+    for (const parked of pool) {
+      const { sessionId, pendingPermissions } = parked.getState();
+      if (sessionId === undefined) continue;
+      if (pendingPermissions.length > 0) map.set(sessionId, 'awaiting');
+      else if (parked.isLive) map.set(sessionId, 'running');
+    }
+    return map;
+    // `parkedTick` is the signal that a parked conversation moved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pool, parkedTick, state]);
   const { transcript } = conversation;
 
   const [modal, setModal] = useState<Modal | null>(null);
@@ -469,29 +554,47 @@ export function App({ launched }: AppProps): React.JSX.Element {
   /* Resume                                                                  */
   /* ---------------------------------------------------------------------- */
 
+  /**
+   * Show a stored conversation, reading it in if it is not already alive.
+   *
+   * Three cases, in order: it is the one on screen, and nothing happens; it is
+   * one of the parked ones, and switching is instant because its transcript
+   * and its run were never let go of; or it is neither, and it is read from
+   * the store into a conversation of its own.
+   *
+   * `into` is the account and directory it belongs to, for a conversation
+   * from elsewhere in the rail. Without it the current ones are used, which is
+   * what `/resume` and `--resume` want — they only ever name a conversation
+   * from here.
+   */
   const loadSession = useCallback(
-    async (sessionId: SessionId, title: string): Promise<void> => {
-      if (conversation.isLive) {
-        setNotice('Wait for this turn to finish before switching conversations.');
+    async (sessionId: SessionId, title: string, into?: ConversationSettings): Promise<void> => {
+      const current = conversationRef.current;
+      if (current.getState().sessionId === sessionId) return;
+      const parked = pool.find((candidate) => candidate.getState().sessionId === sessionId);
+      if (parked !== undefined) {
+        switchTo(parked);
         return;
       }
+      const settings = into ?? current.getState().settings;
       setModal({ kind: 'loading', title: `Opening ${oneLine(title, 60)}…` });
       try {
-        const current = conversation.getState().settings;
-        const events = await host.sessionMessages(current.profileId, current.providerId, sessionId, current.cwd);
+        const events = await host.sessionMessages(settings.profileId, settings.providerId, sessionId, settings.cwd);
         setModal(null);
-        const outcome = conversation.loadHistory(sessionId, events);
+        const next = makeConversation(settings);
+        const outcome = next.loadHistory(sessionId, events);
         if (!outcome.ok) {
+          next.dispose();
           setNotice(outcome.reason);
           return;
         }
-        setScroll(0);
+        switchTo(next);
       } catch (error) {
         setModal(null);
         say('error', `Could not open that conversation: ${describeError(error)}`);
       }
     },
-    [host, state.settings, conversation, say],
+    [host, pool, makeConversation, switchTo, say],
   );
 
   const openResumePicker = useCallback(
@@ -933,11 +1036,23 @@ export function App({ launched }: AppProps): React.JSX.Element {
     [pendingAttachments, state.settings.cwd, state.settings.providerLabel, state.capabilities, say],
   );
 
+  /**
+   * Begin again, on the same account and in the same directory.
+   *
+   * A conversation still working is left to work — parked in the pool, shown
+   * in the rail — and the new one starts beside it. Only an idle conversation
+   * is reset in place, which costs nothing and keeps the pool small.
+   */
   const startNew = useCallback(() => {
-    const outcome = conversation.reset();
+    const current = conversationRef.current;
+    if (current.isLive) {
+      switchTo(makeConversation(current.getState().settings));
+      return;
+    }
+    const outcome = current.reset();
     if (!outcome.ok) setNotice(outcome.reason);
     else setScroll(0);
-  }, [conversation]);
+  }, [makeConversation, switchTo]);
 
   /**
    * Work in `target`, starting fresh there.
@@ -951,11 +1066,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
    */
   const moveToDirectory = useCallback(
     async (target: string) => {
-      if (conversation.isLive) {
-        setNotice('Wait for this turn to finish before moving to another directory.');
-        return;
-      }
-      if (target === state.settings.cwd) {
+      if (target === conversationRef.current.getState().settings.cwd) {
         startNew();
         return;
       }
@@ -968,15 +1079,13 @@ export function App({ launched }: AppProps): React.JSX.Element {
         say('error', `${target} is gone, or cannot be read.`);
         return;
       }
-      const outcome = conversation.updateSettings({ cwd: target });
-      if (!outcome.ok) {
-        setNotice(outcome.reason);
-        return;
-      }
-      startNew();
+      // A new conversation there, rather than this one moved: the directory
+      // is what the provider files a conversation under, and the one on
+      // screen may still be working in the directory it started in.
+      switchTo(makeConversation({ ...conversationRef.current.getState().settings, cwd: target }));
       say('info', `Working in ${target}. New conversation.`);
     },
-    [conversation, state.settings.cwd, say, startNew],
+    [makeConversation, switchTo, say, startNew],
   );
 
   /**
@@ -1267,42 +1376,37 @@ export function App({ launched }: AppProps): React.JSX.Element {
           return;
         case 'session': {
           if (row.session.id === state.sessionId) return;
-          if (conversation.isLive) {
-            setNotice('Wait for this turn to finish before switching conversations.');
-            return;
-          }
-          // A conversation lives in its account's store and where it ran:
-          // opening it switches to that account and moves the working
-          // directory there, as the desktop does. Chosen deliberately, so no
-          // confirmation — the switch is the means, not a side effect.
-          const patch: { -readonly [K in keyof ConversationSettings]?: ConversationSettings[K] } = {};
+          /*
+           * A conversation lives in its account's store and where it ran, so
+           * opening one from elsewhere in the rail is opening it on that
+           * account, in that directory — as the desktop does. Those go into
+           * the conversation being built for it rather than being patched
+           * onto the one on screen, which may still be working and is not
+           * the one moving.
+           */
+          const settings: { -readonly [K in keyof ConversationSettings]: ConversationSettings[K] } = {
+            ...state.settings,
+            cwd: row.session.cwd,
+          };
           if (row.session.profileId !== state.settings.profileId) {
             const profile = accounts.find((candidate) => candidate.id === row.session.profileId);
             if (profile === undefined) {
               setNotice('That conversation belongs to an account that is no longer configured.');
               return;
             }
-            patch.profileId = profile.id;
-            patch.providerId = profile.providerId;
-            patch.profileLabel = profile.label;
-            patch.providerLabel = descriptors.get(profile.providerId)?.label ?? profile.providerId;
-            patch.model = undefined;
-            patch.modelLabel = undefined;
-            patch.effort = undefined;
-            patch.fastMode = undefined;
-            patch.ultracode = undefined;
+            settings.profileId = profile.id;
+            settings.providerId = profile.providerId;
+            settings.profileLabel = profile.label;
+            settings.providerLabel = descriptors.get(profile.providerId)?.label ?? profile.providerId;
+            settings.model = undefined;
+            settings.modelLabel = undefined;
+            settings.effort = undefined;
+            settings.fastMode = undefined;
+            settings.ultracode = undefined;
             planFetchedAt.current = 0;
             seedPlanUsage(profile.id);
           }
-          if (row.session.cwd !== state.settings.cwd) patch.cwd = row.session.cwd;
-          if (Object.keys(patch).length > 0) {
-            const outcome = conversation.updateSettings(patch);
-            if (!outcome.ok) {
-              setNotice(outcome.reason);
-              return;
-            }
-          }
-          void loadSession(row.session.id, row.session.title);
+          void loadSession(row.session.id, row.session.title, settings);
           return;
         }
         default:
@@ -1399,6 +1503,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
             selected={railIndex}
             focused={sidebarActive}
             {...(state.sessionId === undefined ? {} : { activeSessionId: state.sessionId })}
+            activity={railActivity}
             currentProject={currentProject}
             width={SIDEBAR_WIDTH}
             height={bodyRows}
@@ -1471,6 +1576,7 @@ export function App({ launched }: AppProps): React.JSX.Element {
             />
             <StatusBar
               state={state}
+              columns={mainWidth}
               {...(flash === undefined ? {} : { flash })}
               {...(update === undefined ? {} : { update })}
               {...(sidebarActive ? { hint: 'sidebar: ↑↓ Enter · a archive · d delete · Esc back' } : scroll > 0 ? { hint: 'scrolled · Esc to follow' } : {})}

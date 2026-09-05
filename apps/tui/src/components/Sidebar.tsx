@@ -6,6 +6,11 @@
  * another account says so, and opening it switches to that account — and
  * are grouped by *project* — the repository, with every worktree of it folded
  * into the same folder — exactly as the desktop groups them: a worktree of
+ * The conversation you are in wears a `●`; one still working wears a `◐`,
+ * and one that has stopped to ask permission a yellow `⚿`. Those last two are
+ * how a turn you have switched away from stays visible — see `app.tsx` on the
+ * pool of conversations.
+ *
  * Artemis is still Artemis. Opening a conversation moves the working
  * directory to wherever it ran, worktree included. Folders are in name order
  * and hold still, as the desktop's are — a heading someone is reaching for
@@ -151,11 +156,23 @@ export function railRows(
   return rows;
 }
 
+/**
+ * What a conversation is doing, for the glyph in front of its title.
+ *
+ * `running` and `awaiting` are the two a *parked* conversation can be in
+ * — the ones that make switching away from a turn safe to do, because the
+ * rail is then the only place that says the turn is still going, or that it
+ * has stopped to ask something.
+ */
+export type RailActivity = 'running' | 'awaiting';
+
 export interface SidebarProps {
   readonly rows: readonly RailRow[];
   readonly selected: number;
   readonly focused: boolean;
   readonly activeSessionId?: string;
+  /** Conversations with a turn in flight, or stopped on a question, by session id. */
+  readonly activity?: ReadonlyMap<string, RailActivity>;
   /** The project the working directory belongs to. */
   readonly currentProject: string;
   readonly width: number;
@@ -168,6 +185,7 @@ export function Sidebar({
   selected,
   focused,
   activeSessionId,
+  activity,
   currentProject,
   width,
   height,
@@ -238,12 +256,23 @@ export function Sidebar({
           }
           case 'session': {
             const active = row.session.id === activeSessionId;
+            const doing = activity?.get(row.session.id);
+            /*
+             * One glyph, in front of the title, saying which conversation you
+             * are in and what the others are doing. Colour alone did not
+             * carry it: the row you are in was the accent and so was the row
+             * under the cursor, which is two different things wearing one
+             * face.
+             */
+            const glyph = doing === 'awaiting' ? '⚿' : doing === 'running' ? '◐' : active ? '●' : ' ';
+            const glyphColour = doing === 'awaiting' ? 'yellow' : doing === 'running' ? 'cyan' : ACCENT;
             return (
               <Box key={`session:${row.session.id}`} flexDirection="column">
                 <Text>
                   <Text color={ACCENT}>{cursor} </Text>
+                  <Text color={glyphColour} bold={active}>{glyph}</Text>
                   <Text color={isSelected || active ? ACCENT : undefined} bold={isSelected || active} dimColor={!isSelected && !active}>
-                    {'  '}
+                    {' '}
                     {oneLine(row.session.title, inner - 4 - (row.account === undefined ? 0 : row.account.length + 3))}
                   </Text>
                   {row.account !== undefined && <Text dimColor>{` · ${row.account}`}</Text>}

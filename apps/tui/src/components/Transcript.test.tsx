@@ -48,3 +48,46 @@ describe('the transcript fold', () => {
     expect(at('Bash(sleep 100)')).toBeLessThan(at('Still going.'));
   });
 });
+
+/**
+ * Four voices, four faces.
+ *
+ * Reported as: "messages from me, messages from the agent, thinking — it's
+ * all too similar looking." Two of them were literally the same glyph, and
+ * the person's own words were the dimmest thing on the screen.
+ */
+describe('who is speaking', () => {
+  it('gives the person, the agent, its tools and its thinking a mark each', async () => {
+    const events = stream(
+      { type: 'thinking.delta', messageId: 'm0', blockIndex: 0, text: 'Weighing it up.' },
+      { type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'Looking around.' },
+      { type: 'tool.start', toolCallId: 'c1', name: 'Bash', input: { command: 'sleep 100' } },
+    );
+    const { lastFrame } = render(<ReplayRows events={events} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+
+    const markerOf = (text: string): string | undefined =>
+      frame.split('\n').find((line) => line.includes(text))?.trimStart().slice(0, 1);
+
+    // The agent speaking and the agent running a command were both `⏺`, so at
+    // a glance they were the same row. Speech is what someone reads for, so
+    // speech kept the mark and the machinery took a new one.
+    expect(markerOf('Looking around.')).toBe('⏺');
+    expect(markerOf('Bash(sleep 100)')).toBe('◆');
+    expect(markerOf('Weighing it up.')).toBe('∴');
+  });
+
+  it('draws what the person said as the brightest row, not the faintest', async () => {
+    // It was `>` with the text dimmed. Their own words are the landmarks in a
+    // long transcript; they must not be the hardest thing on it to find.
+    const events = stream({ type: 'text.complete', messageId: 'u1', role: 'user', text: 'Count to three.' });
+    const { lastFrame } = render(<ReplayRows events={events} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Count to three.');
+    const line = frame.split('\n').find((candidate) => candidate.includes('Count to three.')) ?? '';
+    expect(line.trimStart().startsWith('▌')).toBe(true);
+  });
+});

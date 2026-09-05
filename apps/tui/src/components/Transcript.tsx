@@ -43,6 +43,7 @@ import {
   type TranscriptItem,
 } from '@rx-artemis/transcript';
 
+import { ACCENT } from '../theme.js';
 import { renderDiff } from '../render/diff.js';
 import { renderMarkdownLines } from '../render/markdown.js';
 
@@ -101,13 +102,28 @@ function rowSettled(id: string, transcript: TranscriptModel): boolean {
 
 /*
  * The shape every row shares is the provider CLIs' own, because that is the
- * shape people already read: a marker in a two-column gutter — `⏺` for a
- * block, `>` for what the person typed, `∴` for thought — and content that
+ * shape people already read: a marker in a two-column gutter and content that
  * wraps under itself, never under the marker. Under a tool call, a `⎿`
  * connector hangs what it returned. A blank line separates blocks, and the
- * colour of the marker is the status: green for a call that returned, red
- * for one that failed, cyan while it runs. Text is left in the terminal's
- * foreground; dim is for what is secondary, never for what is being said.
+ * colour of a tool's marker is its status: green for a call that returned,
+ * red for one that failed, cyan while it runs.
+ *
+ * Four voices, four faces, because they were reported as looking alike:
+ *
+ *  - `▌` in the accent, text bold — **what the person said**. It was `>` with
+ *    the text *dimmed*, which made someone's own words the faintest thing on
+ *    a screen they are scanning to find them. They are the landmarks in a
+ *    long transcript and they are now the brightest rows on it.
+ *  - `⏺` — **what the agent said**. Left as the CLIs draw it, and now the
+ *    agent's voice alone.
+ *  - `◆` — **a tool the agent reached for**. It was `⏺` too, so the agent
+ *    speaking and the agent running a command were the same row at a glance.
+ *    Speech is what someone is reading for, so speech kept the familiar mark
+ *    and the machinery took a new one.
+ *  - `∴`, dim and italic — **thought**, unchanged; it was already distinct.
+ *
+ * Text is otherwise left in the terminal's foreground; dim is for what is
+ * secondary, never for what is being said.
  *
  * Every row is `flexShrink={0}`, and this is not a nicety. Ink gives a Box
  * `flexShrink: 1` by default, and the viewport below is a column of fixed
@@ -160,6 +176,9 @@ function Returned({ children }: { readonly children: React.ReactNode }): React.J
   );
 }
 
+/** Every tool row and tool group, distinct from the `⏺` the agent speaks with. */
+const TOOL_MARKER = '◆';
+
 const TOOL_MARK: Record<string, { color?: string; dim?: boolean }> = {
   running: { color: 'cyan' },
   ok: { color: 'green' },
@@ -194,7 +213,7 @@ function ToolRow({ item }: { readonly item: Extract<TranscriptItem, { kind: 'too
       : [];
   const hidden = Math.max(0, resultLines.length - RESULT_LINES);
   return (
-    <Block marker="⏺" color={mark?.color} dim={mark?.dim}>
+    <Block marker={TOOL_MARKER} color={mark?.color} dim={mark?.dim}>
       <Text>
         {item.title !== undefined ? (
           <Text bold>{oneLine(item.title, 160)}</Text>
@@ -248,8 +267,10 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
   switch (item.kind) {
     case 'user':
       return (
-        <Block marker=">" dim>
-          <Text dimColor={item.pending}>{item.text}</Text>
+        <Block marker="▌" color={ACCENT}>
+          <Text bold dimColor={item.pending}>
+            {item.text}
+          </Text>
         </Block>
       );
     case 'assistant':
@@ -277,7 +298,7 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
       );
     case 'thinking':
       return (
-        <Block marker="∴" dim>
+        <Block marker="∴" dim spaced>
           <Text dimColor italic>
             {item.redacted ? 'Thinking (redacted)' : oneLine(item.text, 200)}
           </Text>
@@ -379,7 +400,7 @@ function GroupRow({ members }: { readonly group: ActivityGroup; readonly members
   return (
     <Box flexDirection="column" flexShrink={0}>
       {summary.length > 0 && (
-        <Block marker="⏺" color="green">
+        <Block marker={TOOL_MARKER} color="green">
           <Text>{summary}</Text>
         </Block>
       )}
