@@ -1,6 +1,22 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.7.1
+
+Two repairs to how the terminal app reads.
+
+**The plan meters have colour.** They went red at 90% and amber at 75%
+already, but below that the bar was dim grey — a gauge that looks switched
+off rather than one with room in it. The filled cells and the number now take
+green, amber and red on the same thresholds the desktop's rings use, while
+the empty cells stay dim so the bar reads as a level rather than a coloured
+block.
+
+**The agent's mark no longer runs into its text.** `⏺` has an emoji
+presentation in many terminal fonts — a rounded square with a hollow circle —
+and is drawn two cells wide where the gutter allows one, leaving no gap
+before the message. It is a plain `●` now, one cell wide everywhere.
+
 ## What's new in 2.7.0
 
 The terminal app lets you leave a turn running, and is easier to read while
