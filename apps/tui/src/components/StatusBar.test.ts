@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { meterBar, meterCells } from './StatusBar.js';
+import { meterBar, meterCells, meterTone } from './StatusBar.js';
 
 describe('meterBar', () => {
   it('fills in proportion', () => {
@@ -43,5 +43,31 @@ describe('meterCells', () => {
     expect(meterCells(120)).toBe(5);
     expect(meterCells(100)).toBe(4);
     expect(meterCells(80)).toBe(0);
+  });
+});
+
+/*
+ * Colour by pressure, as the desktop colours its rings — and the same
+ * thresholds, so an account is never amber in one app and red in the other.
+ * Below the warning bands the bar was dim grey, which read as a meter that
+ * was switched off rather than one that was fine.
+ */
+describe('meterTone', () => {
+  it('is green while there is room, yellow at 75 and red at 90', () => {
+    expect(meterTone(0)).toBe('green');
+    expect(meterTone(74.9)).toBe('green');
+    expect(meterTone(75)).toBe('yellow');
+    expect(meterTone(89.9)).toBe('yellow');
+    expect(meterTone(90)).toBe('red');
+  });
+
+  it('is red whatever the number says once the provider is rejecting', () => {
+    // A stale 40% on a window the provider has shut is the far end of the
+    // scale, not the middle.
+    expect(meterTone(40, 'rejected')).toBe('red');
+  });
+
+  it('has no tone for a window with no reading', () => {
+    expect(meterTone(null)).toBeUndefined();
   });
 });

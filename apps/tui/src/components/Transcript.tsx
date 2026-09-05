@@ -114,12 +114,13 @@ function rowSettled(id: string, transcript: TranscriptModel): boolean {
  *    the text *dimmed*, which made someone's own words the faintest thing on
  *    a screen they are scanning to find them. They are the landmarks in a
  *    long transcript and they are now the brightest rows on it.
- *  - `⏺` — **what the agent said**. Left as the CLIs draw it, and now the
- *    agent's voice alone.
- *  - `◆` — **a tool the agent reached for**. It was `⏺` too, so the agent
- *    speaking and the agent running a command were the same row at a glance.
- *    Speech is what someone is reading for, so speech kept the familiar mark
- *    and the machinery took a new one.
+ *  - `●` — **what the agent said**. The CLIs draw this as `⏺`, which many
+ *    terminal fonts render as a wide emoji glyph that swallows the gap before
+ *    the text; see `SPEECH_MARKER`.
+ *  - `◆` — **a tool the agent reached for**. It shared the agent's mark, so
+ *    the agent speaking and the agent running a command were the same row at
+ *    a glance. Speech is what someone is reading for, so speech kept the
+ *    circle and the machinery took a new one.
  *  - `∴`, dim and italic — **thought**, unchanged; it was already distinct.
  *
  * Text is otherwise left in the terminal's foreground; dim is for what is
@@ -176,7 +177,15 @@ function Returned({ children }: { readonly children: React.ReactNode }): React.J
   );
 }
 
-/** Every tool row and tool group, distinct from the `⏺` the agent speaks with. */
+/**
+ * The agent's voice. A plain circle, U+25CF, and not the CLIs' `⏺` (U+23FA):
+ * that one has an emoji presentation in many terminal fonts — a rounded
+ * square with a hollow circle — drawn two cells wide while the layout allots
+ * one, so the mark ran straight into the text with no gap. U+25CF is one cell
+ * everywhere a terminal runs.
+ */
+const SPEECH_MARKER = '●';
+/** Every tool row and tool group, distinct from the mark the agent speaks with. */
 const TOOL_MARKER = '◆';
 
 const TOOL_MARK: Record<string, { color?: string; dim?: boolean }> = {
@@ -276,7 +285,7 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
     case 'assistant':
       if (item.text.length === 0) return null;
       return (
-        <Block marker="⏺">
+        <Block marker={SPEECH_MARKER}>
           {renderMarkdownLines(item.text).map((line, i) =>
             line.hang === 0 ? (
               // An empty Text has no height; a blank line needs one space to be a line.

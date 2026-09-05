@@ -70,6 +70,22 @@ export function meterBar(utilization: number, cells: number): string {
 }
 
 /**
+ * Colour by pressure, in the terminal's own colours — and by the desktop's
+ * thresholds (`PlanUsageMeter.toneFor`), so an account is never amber in one
+ * app and red in the other. Pessimistic on purpose: a window at 75% is worth
+ * noticing before it stops you, because the reset can be hours away. The
+ * provider's verdict outranks the number — a window it is rejecting on is at
+ * the far end whatever its stale percentage reads.
+ */
+export function meterTone(utilization: number | null, status?: string): 'green' | 'yellow' | 'red' | undefined {
+  if (status === 'rejected') return 'red';
+  if (utilization === null) return undefined;
+  if (utilization >= 90) return 'red';
+  if (utilization >= 75) return 'yellow';
+  return 'green';
+}
+
+/**
  * How many cells each bar gets, or none at all.
  *
  * The readings sit in a box that does not shrink, so every cell here is a
@@ -102,18 +118,23 @@ function PlanReading({ slot, cells }: { readonly slot: PlanMeterSlot; readonly c
   const { utilization, status } = slot.window;
   const rejected = status === 'rejected';
   const pct = utilization === null ? (rejected ? '!' : '—') : `${String(Math.round(utilization))}%`;
-  const hot = rejected || (utilization !== null && utilization >= 90);
-  const warm = !hot && utilization !== null && utilization >= 75;
-  const colour = hot ? 'red' : warm ? 'yellow' : undefined;
+  const tone = meterTone(utilization, status);
+  const hot = tone === 'red';
+  // The filled cells carry the tone; the empty ones stay dim, so the bar
+  // reads as a level rather than a coloured block of fixed length.
+  const bar = utilization === null ? '' : meterBar(utilization, cells);
+  const filled = bar.replace(/░+$/, '');
+  const empty = bar.slice(filled.length);
   return (
     <Text>
       <Text dimColor>{slot.label} </Text>
       {cells > 0 && utilization !== null && (
-        <Text color={colour} dimColor={!hot && !warm}>
-          {meterBar(utilization, cells)}{' '}
+        <Text>
+          <Text color={tone}>{filled}</Text>
+          <Text dimColor>{empty}</Text>{' '}
         </Text>
       )}
-      <Text color={colour} bold={hot} dimColor={!hot && !warm}>
+      <Text color={tone} bold={hot} dimColor={tone === undefined}>
         {rejected ? `${pct} out` : pct}
       </Text>
     </Text>

@@ -70,10 +70,14 @@ describe('who is speaking', () => {
     const markerOf = (text: string): string | undefined =>
       frame.split('\n').find((line) => line.includes(text))?.trimStart().slice(0, 1);
 
-    // The agent speaking and the agent running a command were both `⏺`, so at
+    // The agent speaking and the agent running a command shared one mark, so at
     // a glance they were the same row. Speech is what someone reads for, so
     // speech kept the mark and the machinery took a new one.
-    expect(markerOf('Looking around.')).toBe('⏺');
+    // `●`, not `⏺`: U+23FA has an emoji presentation in many terminal fonts —
+    // a rounded square with a hollow circle, drawn two cells wide while the
+    // layout allots one — so the mark ran into the text with no gap. U+25CF
+    // is a plain circle and one cell everywhere.
+    expect(markerOf('Looking around.')).toBe('●');
     expect(markerOf('Bash(sleep 100)')).toBe('◆');
     expect(markerOf('Weighing it up.')).toBe('∴');
   });
