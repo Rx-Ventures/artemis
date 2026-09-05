@@ -95,3 +95,68 @@ describe('who is speaking', () => {
     expect(line.trimStart().startsWith('▌')).toBe(true);
   });
 });
+
+/**
+ * Thinking is shown whole.
+ *
+ * Reported as: "thinking blocks tend to cut themselves off after a certain
+ * length, I need to see all of the thinking." They were passed through
+ * `oneLine(text, 200)`, which both flattened the paragraphs and cut the tail
+ * — and unlike the desktop, which folds a long block open on demand, a
+ * terminal row had no way to ask for the rest.
+ */
+describe('thinking', () => {
+  it('does not cut a long block off', async () => {
+    const tail = 'PLANNEDCONCLUSION';
+    const long = `First I need to weigh the options. ${'Considering the trade-offs at length. '.repeat(12)}${tail}`;
+    expect(long.length).toBeGreaterThan(400);
+
+    const { lastFrame } = render(<ReplayRows events={stream({ type: 'thinking.delta', messageId: 'm0', blockIndex: 0, text: long })} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+
+    // The end of the thought is on screen, and nothing was elided.
+    expect(frame).toContain(tail);
+    expect(frame).not.toContain('…');
+  });
+
+  it('keeps the paragraphs it was written in', async () => {
+    const text = 'One idea.\n\nA second, separate idea.';
+    const { lastFrame } = render(<ReplayRows events={stream({ type: 'thinking.delta', messageId: 'm0', blockIndex: 0, text })} />);
+    await tick();
+    const lines = (lastFrame() ?? '').split('\n').map((line) => line.trim());
+
+    // Flattened to one line, two thoughts read as one run-on sentence.
+    expect(lines.some((line) => line.endsWith('One idea.'))).toBe(true);
+    expect(lines.some((line) => line.includes('A second, separate idea.'))).toBe(true);
+  });
+});
+
+/**
+ * A turn that produced nothing says so.
+ *
+ * Reported as the agent "spinning for a second and insta-stopping": all the
+ * transcript showed was a dim duration, which reads as a shrug rather than as
+ * the provider having had nothing to send.
+ */
+describe('a silent run', () => {
+  it('names it, rather than showing a bare duration', async () => {
+    const { lastFrame } = render(<ReplayRows events={stream({ type: 'run.end', reason: 'completed', durationMs: 52 })} />);
+    await tick();
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toMatch(/no reply/i);
+    expect(frame).toContain('52ms');
+  });
+
+  it('leaves an ordinary finished turn alone', async () => {
+    const { lastFrame } = render(
+      <ReplayRows
+        events={stream({ type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'On it.' }, { type: 'run.end', reason: 'completed', durationMs: 900 })}
+      />,
+    );
+    await tick();
+
+    expect(lastFrame() ?? '').not.toMatch(/no reply/i);
+  });
+});

@@ -1,6 +1,24 @@
 Internal build — unsigned, on purpose. Every artifact here is built on the
 machine it targets, and boots before it ships.
 
+## What's new in 2.7.2
+
+**A turn that produced nothing now says so.** A run can end having said
+nothing, run nothing and thought nothing — the provider queued the message
+rather than answering it — and all either app showed for that was a dim
+`52ms · 0 tok`. That reads as the agent shrugging, and there was no way to
+tell it apart from a turn whose accounting happens to be small. The terminal
+now leads that row with "no reply"; the desktop names it rather than calling
+it "completed" and, more to the point, stops hiding it, since a clean run's
+block is suppressed under two of the three run-summary settings and a message
+answered by silence was left with no row under it at all.
+
+**Thinking is shown whole.** Long reasoning was flattened into one line and
+then cut off at 200 characters. The desktop gets away with a preview because
+its block folds open on demand; a terminal row has no fold, so the end of a
+thought was simply unreadable. It now renders in full, in the paragraphs it
+was written in.
+
 ## What's new in 2.7.1
 
 Two repairs to how the terminal app reads.

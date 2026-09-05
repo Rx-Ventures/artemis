@@ -1226,3 +1226,62 @@ describe('sequence gaps across runs', () => {
     expect(noteRows(model)).toEqual([]);
   });
 });
+
+/**
+ * A run that produced nothing says so.
+ *
+ * Reported as an agent that "spun for a second and insta-stopped": the turn
+ * ended having said nothing, run nothing and thought nothing, and all the
+ * transcript showed for it was a dim `52ms · 0 tok · $0`. That reads as the
+ * agent shrugging, when what happened is that the provider had nothing to
+ * send — worth naming, because the two are indistinguishable otherwise.
+ */
+describe('a silent run', () => {
+  const ended = (model: TranscriptModel) => {
+    const ids = model.getRowsSnapshot();
+    return model.getItem(ids[ids.length - 1] as string);
+  };
+
+  it('is marked when the agent said, did and thought nothing', () => {
+    const model = build();
+    model.pushUserMessage('let me know when this is ready to install');
+    for (const event of stream({ type: 'run.end', reason: 'completed', durationMs: 52 })) model.apply(event);
+
+    expect(ended(model)).toMatchObject({ kind: 'run-end', silent: true });
+  });
+
+  it('is not marked when the agent spoke', () => {
+    const model = build();
+    for (const event of stream({ type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'On it.' }, { type: 'run.end', reason: 'completed' })) {
+      model.apply(event);
+    }
+
+    expect(ended(model)).toMatchObject({ kind: 'run-end', silent: false });
+  });
+
+  it('is not marked when the agent only used a tool', () => {
+    // Work without narration is still work: a turn that ran a command and
+    // said nothing about it has not gone silent in the sense that matters.
+    const model = build();
+    for (const event of stream(
+      { type: 'tool.start', toolCallId: 'c1', name: 'Bash', input: { command: 'ls' } },
+      { type: 'tool.end', toolCallId: 'c1', status: 'ok', resultText: 'README.md' },
+      { type: 'run.end', reason: 'completed' },
+    )) {
+      model.apply(event);
+    }
+
+    expect(ended(model)).toMatchObject({ kind: 'run-end', silent: false });
+  });
+
+  it('judges each run on its own, not on the one before it', () => {
+    const model = build();
+    for (const event of stream({ type: 'text.delta', messageId: 'm1', blockIndex: 0, text: 'On it.' }, { type: 'run.end', reason: 'completed' })) {
+      model.apply(event);
+    }
+    // A second run, which produces nothing.
+    model.apply({ type: 'run.end', reason: 'completed', runId: 'run_2', seq: 0, ts: 2000 } as AgentEvent);
+
+    expect(ended(model)).toMatchObject({ kind: 'run-end', silent: true });
+  });
+});

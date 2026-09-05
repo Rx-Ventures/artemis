@@ -308,9 +308,19 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
     case 'thinking':
       return (
         <Block marker="∴" dim spaced>
-          <Text dimColor italic>
-            {item.redacted ? 'Thinking (redacted)' : oneLine(item.text, 200)}
-          </Text>
+          {/*
+           * Whole, and in the paragraphs it was written in. It used to be
+           * `oneLine(text, 200)`, which flattened the reasoning into a single
+           * line and then cut its tail off — and unlike the desktop, where a
+           * long block folds open on demand, a terminal row offered no way to
+           * ask for the rest, so the end of a thought was simply unreadable.
+           */}
+          {(item.redacted ? ['Thinking (redacted)'] : item.text.split('\n')).map((line, i) => (
+            // An empty Text has no height; a blank line needs one space to be a line.
+            <Text key={i} dimColor italic>
+              {line.length === 0 ? ' ' : line}
+            </Text>
+          ))}
         </Block>
       );
     case 'tool':
@@ -362,9 +372,16 @@ function ItemRow({ item }: { readonly item: TranscriptItem }): React.JSX.Element
         item.usage?.costUsd !== undefined ? formatUsd(item.usage.costUsd) : undefined,
       ].filter((part): part is string => part !== undefined);
       if (item.reason === 'completed') {
+        /*
+         * A turn that produced nothing is named rather than left as a bare
+         * duration. `52ms · 0 tok` under a message reads as the agent
+         * shrugging; what it usually means is that the provider had nothing
+         * to send — a message that was queued rather than answered, say. The
+         * two are indistinguishable unless one of them says so.
+         */
         return (
           <Block marker="" dim spaced={false}>
-            <Text dimColor>{parts.join(' · ')}</Text>
+            <Text dimColor>{[...(item.silent ? ['no reply'] : []), ...parts].join(' · ')}</Text>
           </Block>
         );
       }
